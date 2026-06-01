@@ -3,6 +3,7 @@ name = "bob-cli"
 version = "0.1.0"
 edition = "2024"
 description = "Bob command-line tools"
+repository = "https://github.com/bbugyi200/bob-cli"
 default-run = "bob"
 include = [
     "/Cargo.toml",

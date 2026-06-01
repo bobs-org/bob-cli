@@ -18,4 +18,11 @@ package-list:
     cargo package --list
 
 install-smoke:
-    root="$(mktemp -d)"; cargo install --path . --root "${root}"; "${root}/bin/bob" pomodoro-runtimes --help >/dev/null
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(mktemp -d)"
+    cargo install --path . --locked --root "${root}"
+    "${root}/bin/bob" pomodoro-runtimes --help >/dev/null
+    BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "${root}/bin/bob" pomodoro >/dev/null
+    BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "${root}/bin/bob" tmux-pomodoro >/dev/null
+    "${root}/bin/bob_notify" --help >/dev/null
