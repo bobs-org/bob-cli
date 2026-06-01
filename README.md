@@ -49,9 +49,11 @@ is unset, unless `BOB_DAY_FILE` is set.
 bob pomodoro-runtimes [--check] [NOTE ...]
 ```
 
-Runs `ob sync`, then annotates completed Pomodoro ledger entries with runtime
-suffixes. With no `NOTE` arguments it uses today's Bob daily note. `--check`
-reports pending changes without writing them.
+Runs `ob sync` when the configured `ob` executable is available, then annotates
+completed Pomodoro ledger entries with runtime suffixes. Missing `ob` is skipped
+silently for this command; other sync failures still fail the command. With no
+`NOTE` arguments it uses today's Bob daily note. `--check` reports pending
+changes without writing them.
 
 ```bash
 bob notify PRE_CHECK_SLEEP POST_NOTIFY_SLEEP
@@ -94,7 +96,8 @@ are still useful for validating or forcing the embedded script fallback with
 
 The remaining runtime dependencies are:
 
-- `ob` from obsidian-headless for vault sync and runtime annotation
+- `ob` from obsidian-headless for `bob sync`; `bob pomodoro-runtimes` uses it
+  opportunistically before annotation and skips sync when `ob` is unavailable
 - `git` and `ssh` for `bob sync`
 - `notify-send` for desktop notifications from `bob notify`
 - `bash` only when `bob sync` needs to load `ob` through NVM or source
@@ -117,7 +120,8 @@ selection. Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 prefix such as `date --utc`, or a timestamp in the same formats accepted by
 `BOB_NOW`.
 
-`OB_COMMAND` overrides the `ob` executable used by `bob pomodoro-runtimes`.
+`OB_COMMAND` overrides the `ob` executable used by `bob pomodoro-runtimes`. If
+that executable is unavailable, runtime annotation continues without syncing.
 
 `BOB_SYNC_LOCK_FILE` overrides the lock path used by `bob sync`.
 

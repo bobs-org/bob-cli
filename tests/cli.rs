@@ -187,6 +187,88 @@ exit 64
 }
 
 #[test]
+fn pomodoro_runtimes_skips_missing_ob_command_and_updates_note() {
+    let temp = TempDir::new("bob-cli-runtimes-no-ob");
+    let path_without_ob = temp.path().join("empty-bin");
+    fs::create_dir_all(&path_without_ob).expect("create empty PATH dir");
+
+    let note = temp.path().join("needs_runtime_suffixes.md");
+    fs::copy(
+        fixture("pomodoro_runtimes/needs_runtime_suffixes.md"),
+        &note,
+    )
+    .expect("copy runtime fixture");
+
+    let output = bob_command()
+        .arg("pomodoro-runtimes")
+        .arg(&note)
+        .env_remove("BOB_CLI_USE_SCRIPT")
+        .env_remove("OB_COMMAND")
+        .env("PATH", &path_without_ob)
+        .env("BOB_DIR", temp.path())
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro-runtimes without ob");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("updated:"),
+        "expected missing-ob run to update note:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !stderr(&output).contains("ob command not found"),
+        "missing ob should be skipped silently:\n{}",
+        format_output(&output)
+    );
+
+    let contents = fs::read_to_string(&note).expect("read updated note");
+    assert!(contents.contains(&format!("## Pomodoros {STOPWATCH} 45m")));
+    assert!(contents.contains(&format!(
+        "Import Bob scripts (09:00-09:25) {STOPWATCH} 25m"
+    )));
+}
+
+#[test]
+fn script_pomodoro_runtimes_skips_missing_ob_command_and_updates_note() {
+    let temp = TempDir::new("bob-cli-script-runtimes-no-ob");
+    let note = temp.path().join("needs_runtime_suffixes.md");
+    fs::copy(
+        fixture("pomodoro_runtimes/needs_runtime_suffixes.md"),
+        &note,
+    )
+    .expect("copy runtime fixture");
+
+    let output = bob_command()
+        .arg("pomodoro-runtimes")
+        .arg(&note)
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("OB_COMMAND", temp.path().join("missing-ob"))
+        .env("BOB_DIR", temp.path())
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run script bob pomodoro-runtimes without ob");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("updated:"),
+        "expected script missing-ob run to update note:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !stderr(&output).contains("ob command not found"),
+        "missing script ob should be skipped silently:\n{}",
+        format_output(&output)
+    );
+
+    let contents = fs::read_to_string(&note).expect("read updated note");
+    assert!(contents.contains(&format!("## Pomodoros {STOPWATCH} 45m")));
+    assert!(contents.contains(&format!(
+        "Handle midnight runtime (23:50-00:10) {STOPWATCH} 20m"
+    )));
+}
+
+#[test]
 fn legacy_pomodoro_runtimes_shim_uses_native_implementation() {
     let temp = TempDir::new("bob-cli-runtimes-shim");
     let stub_bin = temp.path().join("bin");

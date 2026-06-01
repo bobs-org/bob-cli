@@ -80,11 +80,7 @@ def run_ob_sync(bob_dir: Path) -> bool:
     ob_command = os.environ.get("OB_COMMAND") or "ob"
     ob_path = shutil.which(ob_command)
     if ob_path is None:
-        print(
-            f"bob_pomodoro_runtimes: ob command not found: {ob_command}",
-            file=sys.stderr,
-        )
-        return False
+        return True
 
     try:
         completed = subprocess.run(

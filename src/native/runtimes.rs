@@ -170,13 +170,7 @@ fn run_ob_sync(bob_dir: &Path) -> bool {
 
     let output = match output {
         Ok(output) => output,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            eprintln!(
-                "{SCRIPT_NAME}: ob command not found: {}",
-                bob_env::os_to_string(&ob_command)
-            );
-            return false;
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return true,
         Err(error) => {
             eprintln!("{SCRIPT_NAME}: failed to run ob sync: {error}");
             return false;
