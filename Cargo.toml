@@ -8,8 +8,10 @@ include = [
     "/Cargo.toml",
     "/Cargo.lock",
     "/README.md",
+    "/justfile",
     "/src/**",
     "/scripts/**",
+    "/tests/**",
 ]
 
 [dependencies]
