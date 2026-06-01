@@ -1,3 +1,4 @@
+mod native;
 pub mod runner;
 pub mod scripts;
 

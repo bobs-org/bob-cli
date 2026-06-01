@@ -12,6 +12,8 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 const BOB_BIN: &str = env!("CARGO_BIN_EXE_bob");
+const BOB_POMODORO_RUNTIMES_BIN: &str =
+    env!("CARGO_BIN_EXE_bob_pomodoro_runtimes");
 const STOPWATCH: &str = "\u{23f1}\u{fe0f}";
 
 #[test]
@@ -20,6 +22,7 @@ fn cache_extraction_writes_expected_files_and_modes() {
     let output = bob_command()
         .arg("pomodoro-runtimes")
         .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
         .env("XDG_CACHE_HOME", temp.path())
         .output()
         .expect("run bob pomodoro-runtimes --help");
@@ -55,7 +58,29 @@ fn cache_extraction_writes_expected_files_and_modes() {
 }
 
 #[test]
-fn pass_through_arguments_and_exit_statuses_reach_python_script() {
+fn pomodoro_runtimes_help_runs_without_script_cache() {
+    let temp = TempDir::new("bob-cli-native-help");
+    let output = bob_command()
+        .arg("pomodoro-runtimes")
+        .arg("--help")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native bob pomodoro-runtimes --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("Annotate completed Bob Pomodoro"),
+        "expected native help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native help should not extract script assets"
+    );
+}
+
+#[test]
+fn pass_through_arguments_and_exit_statuses_reach_runtimes_command() {
     let temp = TempDir::new("bob-cli-runtimes-check");
     let stub_bin = temp.path().join("bin");
     fs::create_dir_all(&stub_bin).expect("create stub bin");
@@ -94,7 +119,7 @@ exit 64
     );
     assert!(
         stderr(&output).contains("would update"),
-        "expected Python script to receive --check:\n{}",
+        "expected runtimes command to receive --check:\n{}",
         format_output(&output)
     );
 }
@@ -162,6 +187,50 @@ exit 64
 }
 
 #[test]
+fn legacy_pomodoro_runtimes_shim_uses_native_implementation() {
+    let temp = TempDir::new("bob-cli-runtimes-shim");
+    let stub_bin = temp.path().join("bin");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_executable(
+        &stub_bin.join("ob"),
+        r#"#!/bin/sh
+if [ "$1" = "sync" ]; then
+  exit 0
+fi
+exit 64
+"#,
+    );
+
+    let note = temp.path().join("needs_runtime_suffixes.md");
+    fs::copy(
+        fixture("pomodoro_runtimes/needs_runtime_suffixes.md"),
+        &note,
+    )
+    .expect("copy runtime fixture");
+
+    let output = Command::new(BOB_POMODORO_RUNTIMES_BIN)
+        .arg("--check")
+        .arg(&note)
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("BOB_DIR", temp.path())
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run legacy bob_pomodoro_runtimes shim");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected child status 1, got:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("would update"),
+        "expected shim to run native check path:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
 fn pomodoro_runtimes_reports_missing_note_without_touching_real_vault() {
     let temp = TempDir::new("bob-cli-runtimes-missing");
     let stub_bin = temp.path().join("bin");
@@ -200,7 +269,7 @@ exit 64
 }
 
 #[test]
-fn tmux_pomodoro_uses_extracted_script_directory_on_path() {
+fn tmux_pomodoro_formats_native_pomodoro_status() {
     let temp = TempDir::new("bob-cli-tmux-path");
     let output = bob_command()
         .arg("tmux-pomodoro")

@@ -1,10 +1,10 @@
 # Bob CLI
 
 `bob-cli` installs the `bob` command and compatibility shims for the Bob Obsidian
-vault workflow. The MVP keeps the proven Bash and Python implementations as
-embedded script assets: the Rust CLI extracts those scripts into an
-`XDG_CACHE_HOME` cache directory at runtime, prepends that directory to `PATH`,
-and delegates to the selected script.
+vault workflow. The command implementations are native Rust by default. The
+earlier Bash and Python implementations remain embedded as a rollback path:
+set `BOB_CLI_USE_SCRIPT=1` to extract those scripts into `XDG_CACHE_HOME` and
+delegate to them.
 
 The preferred interface is `bob <subcommand>`. Legacy command names still exist
 as installed binaries for existing tmux, shell, and automation callers.
@@ -41,8 +41,9 @@ bob pomodoro
 ```
 
 Prints the current Pomodoro ledger entry from today's Bob daily note, including
-time remaining or recent overdue status. It defaults to `~/bob/YYYY/YYYYMMDD_day.md`
-unless `BOB_DAY_FILE` is set.
+time remaining or recent overdue status. It defaults to
+`$BOB_DIR/YYYY/YYYYMMDD_day.md`, or `~/bob/YYYY/YYYYMMDD_day.md` when `BOB_DIR`
+is unset, unless `BOB_DAY_FILE` is set.
 
 ```bash
 bob pomodoro-runtimes [--check] [NOTE ...]
@@ -83,20 +84,21 @@ bob_sync
 tmux_bob_pomodoro
 ```
 
-They delegate through the same embedded-script runner as `bob <subcommand>`.
+They call the same native Rust command implementations as `bob <subcommand>`.
 
 ## Runtime Dependencies
 
-The MVP still delegates to embedded Bash and Python scripts, so these tools must
-be available at runtime:
+Normal command execution no longer requires Bash, Python, or Perl. These tools
+are still useful for validating or forcing the embedded script fallback with
+`BOB_CLI_USE_SCRIPT=1`.
 
-- `bash` for `bob pomodoro`, `bob notify`, `bob sync`, and `bob tmux-pomodoro`
-- `python3` for `bob pomodoro-runtimes`
-- `perl` for Pomodoro ledger parsing inside `bob pomodoro`
+The remaining runtime dependencies are:
+
 - `ob` from obsidian-headless for vault sync and runtime annotation
 - `git` and `ssh` for `bob sync`
 - `notify-send` for desktop notifications from `bob notify`
-- `flock` for best-effort `bob sync` locking when available
+- `bash` only when `bob sync` needs to load `ob` through NVM or source
+  `~/.ssh-agent-thing`
 
 No old chezmoi script files are required after installation. Cargo installs the
 Rust binaries, and the binaries carry the script assets they need.
@@ -121,15 +123,16 @@ prefix such as `date --utc`, or a timestamp in the same formats accepted by
 
 `BOB_SYNC_COMMIT_MESSAGE` overrides the commit message used by `bob sync`.
 
+`BOB_CLI_USE_SCRIPT=1` forces the embedded Bash/Python fallback implementation.
+
 ## Migration Notes
 
 Use `bob pomodoro`, `bob pomodoro-runtimes`, `bob notify`, `bob sync`, and
 `bob tmux-pomodoro` for new integrations. The legacy command names are installed
 only as compatibility shims for existing callers.
 
-During the MVP, behavior remains script-backed. Native Rust implementations can
-replace individual commands later while keeping the public command names and
-tests stable.
+The original script implementations remain embedded only as a rollback path.
+New integrations should rely on the native Rust command behavior.
 
 ## Release Checklist
 

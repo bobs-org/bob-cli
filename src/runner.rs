@@ -9,29 +9,39 @@ use std::{
 
 use clap::{builder::OsStringValueParser, Arg, Command as ClapCommand};
 
+use crate::native::{self, NativeCommand};
 use crate::scripts::{embedded_assets, script_by_command, EmbeddedAsset};
 
-const SUBCOMMANDS: &[(&str, &str, &str)] = &[
+const SUBCOMMANDS: &[(&str, &str, &str, NativeCommand)] = &[
     (
         "pomodoro",
         "bob_pomodoro",
         "Show the current Bob Pomodoro status",
+        NativeCommand::Pomodoro,
     ),
     (
         "pomodoro-runtimes",
         "bob_pomodoro_runtimes",
         "Annotate Bob Pomodoro ledger entries with runtimes",
+        NativeCommand::PomodoroRuntimes,
     ),
     (
         "notify",
         "bob_notify",
         "Notify when the current Bob Pomodoro is complete",
+        NativeCommand::Notify,
     ),
-    ("sync", "bob_sync", "Sync the Bob Obsidian vault"),
+    (
+        "sync",
+        "bob_sync",
+        "Sync the Bob Obsidian vault",
+        NativeCommand::Sync,
+    ),
     (
         "tmux-pomodoro",
         "tmux_bob_pomodoro",
         "Print Bob Pomodoro status for tmux",
+        NativeCommand::TmuxPomodoro,
     ),
 ];
 
@@ -74,7 +84,9 @@ pub fn run_bob() -> i32 {
         return 2;
     };
 
-    let Some(script_command) = script_command_for_subcommand(subcommand) else {
+    let Some((script_command, native_command)) =
+        command_for_subcommand(subcommand)
+    else {
         eprintln!("bob: unknown subcommand: {subcommand}");
         return 2;
     };
@@ -84,12 +96,17 @@ pub fn run_bob() -> i32 {
         .map(|values| values.cloned().collect())
         .unwrap_or_default();
 
-    run_script_or_report("bob", script_command, args)
+    run_command_or_report("bob", script_command, native_command, args)
 }
 
 pub fn run_legacy(script_command: &'static str) -> i32 {
     let args = env::args_os().skip(1).collect();
-    run_script_or_report(script_command, script_command, args)
+    let Some(native_command) = native::command_for_script(script_command)
+    else {
+        return run_script_or_report(script_command, script_command, args);
+    };
+
+    run_command_or_report(script_command, script_command, native_command, args)
 }
 
 pub fn run_script(
@@ -144,7 +161,7 @@ fn build_cli() -> ClapCommand {
         .subcommand_required(true)
         .arg_required_else_help(true);
 
-    for (subcommand, _, about) in SUBCOMMANDS {
+    for (subcommand, _, about, _) in SUBCOMMANDS {
         command = command.subcommand(delegate_subcommand(subcommand, about));
     }
 
@@ -164,10 +181,27 @@ fn delegate_subcommand(name: &'static str, about: &'static str) -> ClapCommand {
         )
 }
 
-fn script_command_for_subcommand(subcommand: &str) -> Option<&'static str> {
-    SUBCOMMANDS.iter().find_map(|(name, script_command, _)| {
-        (*name == subcommand).then_some(*script_command)
-    })
+fn command_for_subcommand(
+    subcommand: &str,
+) -> Option<(&'static str, NativeCommand)> {
+    SUBCOMMANDS
+        .iter()
+        .find_map(|(name, script_command, _, native_command)| {
+            (*name == subcommand).then_some((*script_command, *native_command))
+        })
+}
+
+fn run_command_or_report(
+    invocation: &str,
+    script_command: &'static str,
+    native_command: NativeCommand,
+    args: Vec<OsString>,
+) -> i32 {
+    if use_script_fallback() {
+        return run_script_or_report(invocation, script_command, args);
+    }
+
+    native::run(native_command, args)
 }
 
 fn run_script_or_report(
@@ -182,6 +216,13 @@ fn run_script_or_report(
             1
         }
     }
+}
+
+fn use_script_fallback() -> bool {
+    matches!(
+        env::var("BOB_CLI_USE_SCRIPT").ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
+    )
 }
 
 fn script_cache_dir() -> PathBuf {
