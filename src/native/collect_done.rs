@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     env,
     ffi::{OsStr, OsString},
     fs, io,
@@ -59,6 +60,30 @@ struct FilePlan {
 enum ArchiveWrite {
     Created,
     Updated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GitState {
+    Worktree {
+        touched_paths: Vec<PathBuf>,
+        commit_message: String,
+    },
+    Skipped {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GitPrepareError {
+    DirtyCandidateFiles(Vec<String>),
+    Command(i32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitDetection {
+    Worktree,
+    NotWorktree,
+    MissingGit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,10 +153,29 @@ fn run_collect_done(args: Args) -> i32 {
     if plan.files.is_empty() {
         println!("moves:");
         println!("  none");
+        println!("git:");
+        println!("  skipped: no vault changes");
         println!("summary:");
         println!("  no task blocks met the threshold; no vault changes made.");
         return 0;
     }
+
+    let git_state = match prepare_git(&vault, &plan) {
+        Ok(git_state) => git_state,
+        Err(GitPrepareError::DirtyCandidateFiles(paths)) => {
+            println!("git:");
+            println!("  detected: git worktree");
+            println!("  refusing: pre-existing changes in candidate files");
+            eprintln!(
+                "{COMMAND_NAME}: refusing to modify candidate files with pre-existing git changes:"
+            );
+            for path in paths {
+                eprintln!("  {path}");
+            }
+            return 1;
+        }
+        Err(GitPrepareError::Command(exit_code)) => return exit_code,
+    };
 
     println!("moves:");
     let mut archives_created = 0;
@@ -153,6 +197,10 @@ fn run_collect_done(args: Args) -> i32 {
                 return 1;
             }
         }
+    }
+    println!("git:");
+    if let Err(exit_code) = finish_git(&vault, &git_state) {
+        return exit_code;
     }
     println!("summary:");
     println!("  moved task blocks: {}", plan.total_task_count());
@@ -244,6 +292,216 @@ fn apply_file_plan(vault: &Path, file: &FilePlan) -> io::Result<ArchiveWrite> {
     atomic_write(&source_path, &file.source_contents)?;
 
     Ok(archive_write)
+}
+
+fn prepare_git(
+    vault: &Path,
+    plan: &CollectionPlan,
+) -> Result<GitState, GitPrepareError> {
+    match detect_git_worktree(vault)? {
+        GitDetection::Worktree => {}
+        GitDetection::NotWorktree => {
+            return Ok(GitState::Skipped {
+                message: "warning: vault is not a git worktree; skipping commit and push"
+                    .to_string(),
+            });
+        }
+        GitDetection::MissingGit => {
+            return Ok(GitState::Skipped {
+                message:
+                    "warning: git command not found; skipping commit and push"
+                        .to_string(),
+            });
+        }
+    }
+
+    let touched_paths = touched_git_paths(plan);
+    let dirty_paths = dirty_candidate_paths(vault, &touched_paths)?;
+    if !dirty_paths.is_empty() {
+        return Err(GitPrepareError::DirtyCandidateFiles(dirty_paths));
+    }
+
+    Ok(GitState::Worktree {
+        touched_paths,
+        commit_message: collect_done_commit_message(),
+    })
+}
+
+fn detect_git_worktree(vault: &Path) -> Result<GitDetection, GitPrepareError> {
+    let output = git_command(vault)
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => Ok(GitDetection::Worktree),
+        Ok(_) => Ok(GitDetection::NotWorktree),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(GitDetection::MissingGit)
+        }
+        Err(error) => {
+            eprintln!("{COMMAND_NAME}: failed to run git rev-parse: {error}");
+            Err(GitPrepareError::Command(1))
+        }
+    }
+}
+
+fn touched_git_paths(plan: &CollectionPlan) -> Vec<PathBuf> {
+    let mut paths = BTreeSet::new();
+    for file in &plan.files {
+        paths.insert(file.relative_source_path.clone());
+        paths.insert(file.relative_archive_path.clone());
+    }
+    paths.into_iter().collect()
+}
+
+fn dirty_candidate_paths(
+    vault: &Path,
+    touched_paths: &[PathBuf],
+) -> Result<Vec<String>, GitPrepareError> {
+    let mut command = git_command(vault);
+    command
+        .arg("status")
+        .arg("--porcelain=v1")
+        .arg("--untracked-files=all")
+        .arg("--")
+        .args(touched_paths);
+    let output = command.output().map_err(|error| {
+        eprintln!("{COMMAND_NAME}: failed to run git status: {error}");
+        GitPrepareError::Command(1)
+    })?;
+
+    if !output.status.success() {
+        report_git_failure("git status", &output);
+        return Err(GitPrepareError::Command(bob_env::exit_code(
+            output.status,
+        )));
+    }
+
+    let status = String::from_utf8_lossy(&output.stdout);
+    Ok(status
+        .lines()
+        .map(|line| line.get(3..).unwrap_or(line).to_string())
+        .collect())
+}
+
+fn finish_git(vault: &Path, git_state: &GitState) -> Result<(), i32> {
+    match git_state {
+        GitState::Skipped { message } => {
+            println!("  {message}");
+            Ok(())
+        }
+        GitState::Worktree {
+            touched_paths,
+            commit_message,
+        } => {
+            println!("  detected: git worktree");
+            stage_git_paths(vault, touched_paths)?;
+            println!("  staged paths: {}", touched_paths.len());
+
+            if !git_has_staged_changes(vault, touched_paths)? {
+                println!("  skipped: no collection changes to commit");
+                return Ok(());
+            }
+
+            commit_git_paths(vault, commit_message, touched_paths)?;
+            println!("  committed: {commit_message}");
+            push_git(vault)?;
+            println!("  pushed");
+            Ok(())
+        }
+    }
+}
+
+fn stage_git_paths(vault: &Path, paths: &[PathBuf]) -> Result<(), i32> {
+    let mut command = git_command(vault);
+    command.arg("add").arg("--").args(paths);
+    run_git_success(command, "git add")
+}
+
+fn git_has_staged_changes(
+    vault: &Path,
+    paths: &[PathBuf],
+) -> Result<bool, i32> {
+    let mut command = git_command(vault);
+    command
+        .arg("diff")
+        .arg("--cached")
+        .arg("--quiet")
+        .arg("--exit-code")
+        .arg("--")
+        .args(paths);
+    let output = command.output().map_err(|error| {
+        eprintln!("{COMMAND_NAME}: failed to run git diff: {error}");
+        1
+    })?;
+
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => {
+            report_git_failure("git diff --cached", &output);
+            Err(bob_env::exit_code(output.status))
+        }
+    }
+}
+
+fn commit_git_paths(
+    vault: &Path,
+    message: &str,
+    paths: &[PathBuf],
+) -> Result<(), i32> {
+    let mut command = git_command(vault);
+    command
+        .arg("commit")
+        .arg("-m")
+        .arg(message)
+        .arg("--")
+        .args(paths);
+    run_git_success(command, "git commit")
+}
+
+fn push_git(vault: &Path) -> Result<(), i32> {
+    let mut command = git_command(vault);
+    command.arg("push");
+    run_git_success(command, "git push")
+}
+
+fn run_git_success(mut command: Command, action: &str) -> Result<(), i32> {
+    let output = command.output().map_err(|error| {
+        eprintln!("{COMMAND_NAME}: failed to run {action}: {error}");
+        1
+    })?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        report_git_failure(action, &output);
+        Err(bob_env::exit_code(output.status))
+    }
+}
+
+fn report_git_failure(action: &str, output: &Output) {
+    write_stderr_output(&merged_output(output));
+    eprintln!(
+        "{COMMAND_NAME}: {action} failed with exit code {}",
+        bob_env::exit_code(output.status)
+    );
+}
+
+fn git_command(vault: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(vault);
+    command
+}
+
+fn collect_done_commit_message() -> String {
+    format!(
+        "bob collect-done {}",
+        bob_env::current_datetime().format("%Y-%m-%d")
+    )
 }
 
 fn read_optional_string(path: &Path) -> io::Result<Option<String>> {

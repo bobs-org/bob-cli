@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     fs, io,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -299,6 +300,202 @@ exit 64
     assert!(
         !archive.exists(),
         "archive should not be created after failed sync"
+    );
+}
+
+#[test]
+fn collect_done_commits_and_pushes_collection_changes_only() {
+    let temp = TempDir::new("bob-cli-collect-done-git");
+    let stub_bin = temp.path().join("bin");
+    let (vault, remote) = init_git_vault_with_remote(&temp);
+    let source = vault.join("obsidian.md");
+    let unrelated = vault.join("unrelated.md");
+    let archive = vault.join("done/obsidian_done.md");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_successful_ob_stub(&stub_bin);
+    write_file(
+        &source,
+        "\
+- [x] done #task
+- [ ] active #task
+",
+    );
+    write_file(&unrelated, "- [ ] unrelated #task\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
+    write_file(&unrelated, "- [ ] unrelated #task\nlocal edit\n");
+
+    let output = bob_command()
+        .arg("collect-done")
+        .arg("--threshold=1")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-06-02")
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob collect-done in git repo");
+
+    assert_success(&output);
+    let output_text = stdout(&output);
+    assert!(
+        output_text.contains("git:")
+            && output_text.contains("committed: bob collect-done 2026-06-02")
+            && output_text.contains("pushed"),
+        "expected git section with commit and push:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("read source"),
+        "- [ ] active #task\n"
+    );
+    assert!(fs::read_to_string(&archive)
+        .expect("read archive")
+        .contains("- [x] done #task"));
+
+    let show = stdout(&git_in(
+        &vault,
+        ["show", "--name-only", "--format=%s", "HEAD"],
+    ));
+    assert!(
+        show.starts_with("bob collect-done 2026-06-02\n"),
+        "expected collect-done commit subject:\n{show}"
+    );
+    assert!(
+        show.contains("\nobsidian.md\n"),
+        "expected source in commit:\n{show}"
+    );
+    assert!(
+        show.contains("\ndone/obsidian_done.md\n"),
+        "expected archive in commit:\n{show}"
+    );
+    assert!(
+        !show.contains("unrelated.md"),
+        "unrelated dirty file must not be committed:\n{show}"
+    );
+
+    let remote_head =
+        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(remote_head, local_head, "push should update bare remote");
+
+    let status = stdout(&git_in(&vault, ["status", "--short"]));
+    assert!(
+        status.contains(" M unrelated.md"),
+        "unrelated dirty file should remain dirty:\n{status}"
+    );
+    assert!(
+        !status.contains("obsidian.md")
+            && !status.contains("done/obsidian_done.md"),
+        "collection paths should be clean after commit:\n{status}"
+    );
+}
+
+#[test]
+fn collect_done_warns_and_skips_git_for_non_repo_vault() {
+    let temp = TempDir::new("bob-cli-collect-done-non-repo");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    let source = vault.join("obsidian.md");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_successful_ob_stub(&stub_bin);
+    write_file(
+        &source,
+        "\
+- [x] done #task
+- [ ] active #task
+",
+    );
+
+    let output = bob_command()
+        .arg("collect-done")
+        .arg("--threshold=1")
+        .env("BOB_DIR", &vault)
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob collect-done outside git repo");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains(
+            "warning: vault is not a git worktree; skipping commit and push"
+        ),
+        "expected non-repo warning:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !vault.join(".git").exists(),
+        "collect-done must not initialize git"
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("read source"),
+        "- [ ] active #task\n"
+    );
+}
+
+#[test]
+fn collect_done_refuses_dirty_candidate_files_before_mutation() {
+    let temp = TempDir::new("bob-cli-collect-done-dirty-candidate");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    let source = vault.join("obsidian.md");
+    let archive = vault.join("done/obsidian_done.md");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_successful_ob_stub(&stub_bin);
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    write_file(
+        &source,
+        "\
+- [x] done #task
+- [ ] active #task
+",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    let dirty_source = "\
+- [x] done #task
+- [ ] active #task
+local edit
+";
+    write_file(&source, dirty_source);
+
+    let output = bob_command()
+        .arg("collect-done")
+        .arg("--threshold=1")
+        .env("BOB_DIR", &vault)
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob collect-done with dirty candidate");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected dirty candidate failure:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stdout(&output)
+            .contains("refusing: pre-existing changes in candidate files"),
+        "expected dirty candidate stdout:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("obsidian.md"),
+        "expected dirty candidate path in stderr:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("read source"),
+        dirty_source
+    );
+    assert!(
+        !archive.exists(),
+        "archive should not be created when candidate is dirty"
     );
 }
 
@@ -757,6 +954,71 @@ fn single_script_cache_dir(cache_home: &Path) -> PathBuf {
     entries.sort();
     assert_eq!(entries.len(), 1, "expected one script cache directory");
     entries.pop().expect("script cache directory")
+}
+
+fn init_git_vault_with_remote(temp: &TempDir) -> (PathBuf, PathBuf) {
+    let vault = temp.path().join("vault");
+    let remote = temp.path().join("remote.git");
+    fs::create_dir_all(&vault).expect("create vault");
+    git(["init", "-q", "--bare", path_str(&remote)]);
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["remote", "add", "origin", path_str(&remote)]);
+    (vault, remote)
+}
+
+fn write_successful_ob_stub(stub_bin: &Path) {
+    write_executable(
+        &stub_bin.join("ob"),
+        r#"#!/bin/sh
+if [ "$1" = "sync" ]; then
+  exit 0
+fi
+exit 64
+"#,
+    );
+}
+
+fn git<I, S>(args: I) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = Command::new("git")
+        .arg("-c")
+        .arg("color.ui=false")
+        .arg("-c")
+        .arg("color.status=false")
+        .args(args)
+        .output()
+        .expect("run git");
+    assert_success(&output);
+    output
+}
+
+fn git_in<I, S>(directory: &Path, args: I) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = Command::new("git")
+        .arg("-c")
+        .arg("color.ui=false")
+        .arg("-c")
+        .arg("color.status=false")
+        .arg("-C")
+        .arg(directory)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert_success(&output);
+    output
+}
+
+fn path_str(path: &Path) -> &str {
+    path.to_str()
+        .unwrap_or_else(|| panic!("path is not UTF-8: {}", path.display()))
 }
 
 fn path_with_prefix(prefix: &Path) -> String {
