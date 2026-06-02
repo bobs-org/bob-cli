@@ -2,8 +2,8 @@
 
 ## Pomodoros
 
-- [x] Import Bob scripts (09:00-09:25)
-- [x] Handle midnight runtime (23:50-00:10)
+- [x] (09:00-09:25) Import Bob scripts
+- [x] (23:50-00:10) Handle midnight runtime
 - [ ] Leave open item untouched (10:00-10:30)
 
 ## Later

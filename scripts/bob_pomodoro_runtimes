@@ -21,11 +21,12 @@ STOPWATCH = "⏱️"
 POMODOROS_HEADING_RE = re.compile(r"^(?P<base>##\s+Pomodoros)(?:\s.*)?$")
 LEVEL_TWO_HEADING_RE = re.compile(r"^##\s+")
 COMPLETED_LEDGER_RE = re.compile(r"^\s*[-*+]\s+\[[xX]\]\s+")
-# Strip either the legacy ` [runtime:: …]` field or the new ` ⏱️ …` suffix
+# Strip either the legacy ` [runtime:: …]` field or the old ` ⏱️ …` suffix
 # (with or without the U+FE0F variation selector) so a single run self-migrates.
-RUNTIME_SUFFIX_RE = re.compile(r"\s+(?:\[runtime::\s*[^\]]+\]|⏱️?\s*\S+)\s*$")
+LEGACY_RUNTIME_SUFFIX_RE = re.compile(r"\s+\[runtime::\s*[^\]]+\]\s*$")
+STOPWATCH_RUNTIME_SUFFIX_RE = re.compile(r"\s+⏱️?\s*\S+\s*$")
 TIME_RE = re.compile(
-    r"\((?P<start>\d{4}|\d{2}:\d{2})\s*-\s*(?P<end>\d{4}|\d{2}:\d{2})\)"
+    r"\((?P<range>(?P<start>\d{4}|\d{2}:\d{2})\s*-\s*(?P<end>\d{4}|\d{2}:\d{2}))(?P<trailing>\s*[^)]*)\)"
 )
 DATE_OVERRIDE_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}(?:[T ][0-2]\d:[0-5]\d(?::[0-5]\d)?)?$"
@@ -125,11 +126,7 @@ def parse_time(time_text: str) -> int | None:
     return hours * 60 + minutes
 
 
-def runtime_minutes(line: str) -> int | None:
-    match = TIME_RE.search(line)
-    if match is None:
-        return None
-
+def runtime_minutes(match: re.Match[str]) -> int | None:
     start = parse_time(match.group("start"))
     end = parse_time(match.group("end"))
     if start is None or end is None:
@@ -139,6 +136,17 @@ def runtime_minutes(line: str) -> int | None:
         end += 24 * 60
 
     return end - start
+
+
+def time_range_match(line: str) -> re.Match[str] | None:
+    match = TIME_RE.search(line)
+    if match is None:
+        return None
+
+    if runtime_minutes(match) is None:
+        return None
+
+    return match
 
 
 def format_runtime(minutes: int) -> str:
@@ -151,7 +159,24 @@ def format_runtime(minutes: int) -> str:
 
 
 def strip_runtime_suffix(line: str) -> str:
-    return RUNTIME_SUFFIX_RE.sub("", line)
+    trimmed = line.rstrip()
+    legacy_match = LEGACY_RUNTIME_SUFFIX_RE.search(trimmed)
+    if legacy_match is not None:
+        return trimmed[: legacy_match.start()].rstrip()
+
+    stopwatch_match = STOPWATCH_RUNTIME_SUFFIX_RE.search(trimmed)
+    if stopwatch_match is not None and not has_unclosed_parenthesis(
+        trimmed[: stopwatch_match.start()]
+    ):
+        return trimmed[: stopwatch_match.start()].rstrip()
+
+    return line
+
+
+def has_unclosed_parenthesis(value: str) -> bool:
+    last_open = value.rfind("(")
+    last_close = value.rfind(")")
+    return last_open != -1 and last_close < last_open
 
 
 def find_pomodoros_section(lines: list[str]) -> tuple[int, int] | None:
@@ -183,8 +208,6 @@ def updated_lines(lines: list[str]) -> list[str]:
 
     heading_index, end_index = section
     new_lines = list(lines)
-    total_minutes = 0
-    annotated_tasks = 0
 
     for index in range(heading_index + 1, end_index):
         content, newline = split_line_ending(new_lines[index])
@@ -192,25 +215,23 @@ def updated_lines(lines: list[str]) -> list[str]:
             continue
 
         stripped = strip_runtime_suffix(content)
-        minutes = runtime_minutes(stripped)
-        if minutes is None:
+        match = time_range_match(stripped)
+        if match is None:
             new_lines[index] = stripped + newline
             continue
 
-        total_minutes += minutes
-        annotated_tasks += 1
-        new_lines[index] = f"{stripped} {STOPWATCH} {format_runtime(minutes)}{newline}"
+        minutes = runtime_minutes(match)
+        assert minutes is not None
+        new_lines[index] = (
+            f"{stripped[: match.start()]}({match.group('range')} {STOPWATCH} "
+            f"{format_runtime(minutes)}){stripped[match.end() :]}{newline}"
+        )
 
     heading, newline = split_line_ending(new_lines[heading_index])
     heading_match = POMODOROS_HEADING_RE.match(heading)
     if heading_match is not None:
         base_heading = heading_match.group("base")
-        if annotated_tasks > 0:
-            new_lines[heading_index] = (
-                f"{base_heading} {STOPWATCH} {format_runtime(total_minutes)}{newline}"
-            )
-        else:
-            new_lines[heading_index] = f"{base_heading}{newline}"
+        new_lines[heading_index] = f"{base_heading}{newline}"
 
     return new_lines
 

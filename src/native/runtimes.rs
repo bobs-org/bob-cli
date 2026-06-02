@@ -213,9 +213,6 @@ fn updated_lines(lines: &[String]) -> Vec<String> {
     };
 
     let mut new_lines = lines.to_vec();
-    let mut total_minutes = 0;
-    let mut annotated_tasks = 0;
-
     for line in new_lines.iter_mut().take(end_index).skip(heading_index + 1) {
         let (content, newline) = split_line_ending(line);
         let content = content.to_string();
@@ -225,29 +222,24 @@ fn updated_lines(lines: &[String]) -> Vec<String> {
         }
 
         let stripped = strip_runtime_suffix(&content);
-        let Some(minutes) = runtime_minutes(&stripped) else {
+        let Some(range) = find_time_range(&stripped) else {
             *line = format!("{stripped}{newline}");
             continue;
         };
+        let minutes = runtime_minutes(range.start_minutes, range.end_minutes);
 
-        total_minutes += minutes;
-        annotated_tasks += 1;
+        let before_range = &stripped[..range.open + '('.len_utf8()];
+        let after_range = &stripped[range.close..];
         *line = format!(
-            "{stripped} {STOPWATCH} {}{newline}",
+            "{before_range}{} {STOPWATCH} {}{after_range}{newline}",
+            range.text,
             format_runtime(minutes)
         );
     }
 
     let (heading, newline) = split_line_ending(&new_lines[heading_index]);
     if let Some(base_heading) = pomodoros_heading_base(heading) {
-        if annotated_tasks > 0 {
-            new_lines[heading_index] = format!(
-                "{base_heading} {STOPWATCH} {}{newline}",
-                format_runtime(total_minutes)
-            );
-        } else {
-            new_lines[heading_index] = format!("{base_heading}{newline}");
-        }
+        new_lines[heading_index] = format!("{base_heading}{newline}");
     }
 
     new_lines
@@ -371,14 +363,27 @@ fn strip_stopwatch_runtime_suffix(line: &str) -> Option<&str> {
 
     let before_duration = before_duration.trim_end();
     if let Some(before_stopwatch) = before_duration.strip_suffix(STOPWATCH) {
+        if has_unclosed_parenthesis(before_stopwatch) {
+            return None;
+        }
         return Some(before_stopwatch.trim_end());
     }
     if let Some(before_stopwatch) = before_duration.strip_suffix(BARE_STOPWATCH)
     {
+        if has_unclosed_parenthesis(before_stopwatch) {
+            return None;
+        }
         return Some(before_stopwatch.trim_end());
     }
 
     None
+}
+
+fn has_unclosed_parenthesis(value: &str) -> bool {
+    let last_open = value.rfind('(');
+    let last_close = value.rfind(')');
+
+    matches!(last_open, Some(open) if last_close.map_or(true, |close| close < open))
 }
 
 fn split_last_whitespace(value: &str) -> Option<(&str, &str)> {
@@ -390,7 +395,16 @@ fn split_last_whitespace(value: &str) -> Option<(&str, &str)> {
     Some((&value[..index], value[index..].trim_start()))
 }
 
-fn runtime_minutes(line: &str) -> Option<i32> {
+#[derive(Debug)]
+struct TimeRange<'a> {
+    open: usize,
+    close: usize,
+    text: &'a str,
+    start_minutes: i32,
+    end_minutes: i32,
+}
+
+fn find_time_range(line: &str) -> Option<TimeRange<'_>> {
     let mut search_start = 0;
     while let Some(open_offset) = line[search_start..].find('(') {
         let open = search_start + open_offset;
@@ -399,16 +413,14 @@ fn runtime_minutes(line: &str) -> Option<i32> {
         let close = after_open + close_offset;
         let inside = &line[after_open..close];
 
-        if let Some((start, end)) = inside.split_once('-')
-            && let (Some(start), Some(mut end)) = (
-                parse_time_minutes(start.trim()),
-                parse_time_minutes(end.trim()),
-            )
-        {
-            if end < start {
-                end += 24 * 60;
-            }
-            return Some(end - start);
+        if let Some(parsed) = parse_time_range_contents(inside) {
+            return Some(TimeRange {
+                open,
+                close,
+                text: parsed.text,
+                start_minutes: parsed.start_minutes,
+                end_minutes: parsed.end_minutes,
+            });
         }
 
         search_start = close + ')'.len_utf8();
@@ -417,21 +429,80 @@ fn runtime_minutes(line: &str) -> Option<i32> {
     None
 }
 
-fn parse_time_minutes(value: &str) -> Option<i32> {
-    let normalized = value.replace(':', "");
-    if normalized.len() != 4
-        || !normalized.bytes().all(|byte| byte.is_ascii_digit())
-    {
+struct ParsedTimeRange<'a> {
+    text: &'a str,
+    start_minutes: i32,
+    end_minutes: i32,
+}
+
+fn parse_time_range_contents(inside: &str) -> Option<ParsedTimeRange<'_>> {
+    let start = first_non_whitespace(inside)?;
+    let after_leading = &inside[start..];
+    let (start_minutes, start_len) = parse_time_at_start(after_leading)?;
+    let after_start_index = start + start_len;
+    let after_start = &inside[after_start_index..];
+    let hyphen_offset = first_non_whitespace(after_start)?;
+    if after_start[hyphen_offset..].chars().next()? != '-' {
         return None;
     }
+    let after_hyphen_index = after_start_index + hyphen_offset + '-'.len_utf8();
+    let after_hyphen = &inside[after_hyphen_index..];
+    let end_offset = first_non_whitespace(after_hyphen)?;
+    let end_start_index = after_hyphen_index + end_offset;
+    let (end_minutes, end_len) =
+        parse_time_at_start(&inside[end_start_index..])?;
+    let end_index = end_start_index + end_len;
 
-    let hours: i32 = normalized[..2].parse().ok()?;
-    let minutes: i32 = normalized[2..].parse().ok()?;
+    Some(ParsedTimeRange {
+        text: inside[start..end_index].trim_end(),
+        start_minutes,
+        end_minutes,
+    })
+}
+
+fn first_non_whitespace(value: &str) -> Option<usize> {
+    value
+        .char_indices()
+        .find_map(|(index, char)| (!char.is_whitespace()).then_some(index))
+}
+
+fn parse_time_at_start(value: &str) -> Option<(i32, usize)> {
+    let bytes = value.as_bytes();
+    let (hours, minutes, len) = if bytes.get(..5).is_some_and(is_colon_time) {
+        (&value[..2], &value[3..5], 5)
+    } else if bytes.get(..4).is_some_and(is_compact_time) {
+        (&value[..2], &value[2..4], 4)
+    } else {
+        return None;
+    };
+
+    let hours: i32 = hours.parse().ok()?;
+    let minutes: i32 = minutes.parse().ok()?;
     if hours > 23 || minutes > 59 {
         return None;
     }
 
-    Some(hours * 60 + minutes)
+    Some((hours * 60 + minutes, len))
+}
+
+fn is_colon_time(bytes: &[u8]) -> bool {
+    bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2] == b':'
+        && bytes[3].is_ascii_digit()
+        && bytes[4].is_ascii_digit()
+}
+
+fn is_compact_time(bytes: &[u8]) -> bool {
+    bytes.iter().all(u8::is_ascii_digit)
+}
+
+fn runtime_minutes(start: i32, mut end: i32) -> i32 {
+    if end < start {
+        end += 24 * 60;
+    }
+
+    end - start
 }
 
 fn format_runtime(minutes: i32) -> String {

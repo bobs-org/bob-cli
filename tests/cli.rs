@@ -1046,11 +1046,25 @@ exit 64
     );
 
     let contents = fs::read_to_string(&note).expect("read updated note");
-    assert!(contents.contains(&format!("## Pomodoros {STOPWATCH} 50m")));
+    assert!(contents.contains("\n## Pomodoros\n"));
     assert!(contents.contains(&format!(
-        "Replace legacy runtime suffix (09:00-09:25) {STOPWATCH} 25m"
+        "- [x] (09:00-09:25 {STOPWATCH} 25m) Replace legacy runtime suffix"
     )));
+    assert!(contents.contains(&format!(
+        "- [x] (09:30-09:55 {STOPWATCH} 25m) Recalculate in-parentheses runtime"
+    )));
+    assert!(contents.contains(&format!(
+        "- [x] (10:00-10:10 {STOPWATCH} 10m) Remove trailing stopwatch suffix"
+    )));
+    assert!(
+        contents.contains(&format!("- [x] (10:15-10:40 {STOPWATCH} 25m)\n"))
+    );
     assert!(!contents.contains("[runtime::"));
+    assert!(!contents.contains(&format!("## Pomodoros {STOPWATCH}")));
+    assert!(!contents.contains(&format!("(09:30-09:55 {STOPWATCH} 10m)")));
+    assert!(!contents.contains(&format!("(10:15-10:40 {STOPWATCH} 5m)")));
+    assert!(!contents
+        .contains(&format!("Remove trailing stopwatch suffix {STOPWATCH} 5m")));
 
     let second = bob_command()
         .arg("pomodoro-runtimes")
@@ -1106,21 +1120,21 @@ fn pomodoro_runtimes_skips_missing_ob_command_and_updates_note() {
     );
 
     let contents = fs::read_to_string(&note).expect("read updated note");
-    assert!(contents.contains(&format!("## Pomodoros {STOPWATCH} 45m")));
+    assert!(contents.contains("\n## Pomodoros\n"));
     assert!(contents.contains(&format!(
-        "Import Bob scripts (09:00-09:25) {STOPWATCH} 25m"
+        "- [x] (09:00-09:25 {STOPWATCH} 25m) Import Bob scripts"
     )));
 }
 
 #[test]
 fn script_pomodoro_runtimes_skips_missing_ob_command_and_updates_note() {
     let temp = TempDir::new("bob-cli-script-runtimes-no-ob");
-    let note = temp.path().join("needs_runtime_suffixes.md");
+    let note = temp.path().join("legacy_runtime_suffixes.md");
     fs::copy(
-        fixture("pomodoro_runtimes/needs_runtime_suffixes.md"),
+        fixture("pomodoro_runtimes/legacy_runtime_suffixes.md"),
         &note,
     )
-    .expect("copy runtime fixture");
+    .expect("copy legacy runtime fixture");
 
     let output = bob_command()
         .arg("pomodoro-runtimes")
@@ -1145,10 +1159,12 @@ fn script_pomodoro_runtimes_skips_missing_ob_command_and_updates_note() {
     );
 
     let contents = fs::read_to_string(&note).expect("read updated note");
-    assert!(contents.contains(&format!("## Pomodoros {STOPWATCH} 45m")));
-    assert!(contents.contains(&format!(
-        "Handle midnight runtime (23:50-00:10) {STOPWATCH} 20m"
-    )));
+    assert!(contents.contains("\n## Pomodoros\n"));
+    assert!(
+        contents.contains(&format!("- [x] (10:15-10:40 {STOPWATCH} 25m)\n"))
+    );
+    assert!(!contents.contains("[runtime::"));
+    assert!(!contents.contains(&format!("(10:15-10:40 {STOPWATCH} 5m)")));
 }
 
 #[test]
