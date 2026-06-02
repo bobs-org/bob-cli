@@ -37,6 +37,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::CollectDone,
     },
     Subcommand {
+        name: "cronjob",
+        script_command: None,
+        about: "Run the nightly Obsidian sync and maintenance steps",
+        native_command: NativeCommand::Cronjob,
+    },
+    Subcommand {
         name: "notify",
         script_command: Some("bob_notify"),
         about: "Notify when the current Pomodoro is complete",
@@ -196,6 +202,7 @@ const HELP_TEMPLATE: &str = "\
 const AFTER_HELP: &str = "\
 Examples:
   bob collect-done --threshold 10  Archive tasks and maintain done links
+  bob cronjob                    Run the nightly sync and maintenance steps
   bob pomodoro                   Show today's Pomodoro status
   bob sync                       Sync the Obsidian vault
 

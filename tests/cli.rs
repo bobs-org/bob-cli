@@ -78,307 +78,6 @@ fn collect_done_help_is_native_only() {
 }
 
 #[test]
-fn collect_done_runs_sync_before_writing_archive_and_source_files() {
-    let temp = TempDir::new("bob-cli-collect-done-sync");
-    let stub_bin = temp.path().join("bin");
-    let vault = temp.path().join("vault");
-    let source = vault.join("foo/bar.md");
-    let archive = vault.join("done/foo/bar_done.md");
-    let log = temp.path().join("commands.log");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    write_file(
-        &source,
-        "\
-# Project
-
-- [x] done one #task
-  detail
-- [-] canceled two #task
-- [ ] active #task
-",
-    );
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-printf 'ob %s\n' "$*" >> "$STUB_LOG"
-if [ "$1" = "sync" ]; then
-  if [ -f "$ARCHIVE_FILE" ]; then
-    printf 'archive-exists-before-sync\n' >> "$STUB_LOG"
-  else
-    printf 'archive-missing-before-sync\n' >> "$STUB_LOG"
-  fi
-  if grep -q 'done one' "$SOURCE_FILE"; then
-    printf 'source-has-task-before-sync\n' >> "$STUB_LOG"
-  else
-    printf 'source-mutated-before-sync\n' >> "$STUB_LOG"
-  fi
-  exit 0
-fi
-exit 64
-"#,
-    );
-
-    let output = bob_command()
-        .arg("collect-done")
-        .arg("--threshold")
-        .arg("2")
-        .env("BOB_DIR", &vault)
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("STUB_LOG", &log)
-        .env("SOURCE_FILE", &source)
-        .env("ARCHIVE_FILE", &archive)
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob collect-done");
-
-    assert_success(&output);
-    let log_contents = fs::read_to_string(&log).expect("read stub log");
-    assert!(
-        log_contents.contains(&format!("ob sync --path {}", vault.display())),
-        "expected ob sync call:\n{log_contents}"
-    );
-    assert!(
-        log_contents.contains("archive-missing-before-sync"),
-        "archive should not be written before sync:\n{log_contents}"
-    );
-    assert!(
-        log_contents.contains("source-has-task-before-sync"),
-        "source should not be rewritten before sync:\n{log_contents}"
-    );
-
-    assert_eq!(
-        fs::read_to_string(&source).expect("read source"),
-        "\
----
-done_tasks: \"[[done/foo/bar_done]]\"
----
-
-# Project
-
-- [ ] active #task
-"
-    );
-    assert_eq!(
-        fs::read_to_string(&archive).expect("read archive"),
-        "\
----
-parent: \"[[foo/bar]]\"
-type: \"[[done]]\"
----
-
-- [x] done one #task
-  detail
-- [-] canceled two #task
-"
-    );
-    let stdout = stdout(&output);
-    assert!(
-        stdout.contains("sync:")
-            && stdout.contains("scan:")
-            && stdout.contains("moves:")
-            && stdout.contains("summary:"),
-        "expected collect-done output sections:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
-fn collect_done_runs_sync_before_metadata_only_source_writes() {
-    let temp = TempDir::new("bob-cli-collect-done-metadata-sync");
-    let stub_bin = temp.path().join("bin");
-    let vault = temp.path().join("vault");
-    let source = vault.join("obsidian.md");
-    let archive = vault.join("done/obsidian_done.md");
-    let log = temp.path().join("commands.log");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    write_file(&source, "- [ ] active #task\n");
-    write_file(
-        &archive,
-        "\
----
-parent: \"[[obsidian]]\"
-type: \"[[done]]\"
----
-
-- [x] archived #task
-",
-    );
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-printf 'ob %s\n' "$*" >> "$STUB_LOG"
-if [ "$1" = "sync" ]; then
-  if grep -q 'done_tasks' "$SOURCE_FILE"; then
-    printf 'source-mutated-before-sync\n' >> "$STUB_LOG"
-  else
-    printf 'source-needs-metadata-before-sync\n' >> "$STUB_LOG"
-  fi
-  exit 0
-fi
-exit 64
-"#,
-    );
-
-    let output = bob_command()
-        .arg("collect-done")
-        .arg("--threshold=10")
-        .env("BOB_DIR", &vault)
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("STUB_LOG", &log)
-        .env("SOURCE_FILE", &source)
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob collect-done metadata-only");
-
-    assert_success(&output);
-    let log_contents = fs::read_to_string(&log).expect("read stub log");
-    assert!(
-        log_contents.contains(&format!("ob sync --path {}", vault.display())),
-        "expected ob sync call:\n{log_contents}"
-    );
-    assert!(
-        log_contents.contains("source-needs-metadata-before-sync"),
-        "source should not be rewritten before sync:\n{log_contents}"
-    );
-    assert_eq!(
-        fs::read_to_string(&source).expect("read source"),
-        "\
----
-done_tasks: \"[[done/obsidian_done]]\"
----
-
-- [ ] active #task
-"
-    );
-    assert_eq!(
-        fs::read_to_string(&archive).expect("read archive"),
-        "\
----
-parent: \"[[obsidian]]\"
-type: \"[[done]]\"
----
-
-- [x] archived #task
-"
-    );
-    assert!(
-        stdout(&output).contains("source done_tasks updates: 1")
-            && stdout(&output).contains("moved task blocks: 0"),
-        "expected metadata-only summary:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
-fn collect_done_skips_missing_ob_command_and_writes_vault_changes() {
-    let temp = TempDir::new("bob-cli-collect-done-no-ob");
-    let vault = temp.path().join("vault");
-    let path_without_ob = temp.path().join("empty-bin");
-    let source = vault.join("obsidian.md");
-    let archive = vault.join("done/obsidian_done.md");
-    fs::create_dir_all(&path_without_ob).expect("create empty PATH dir");
-    write_file(
-        &source,
-        "\
-- [x] done #task
-- [ ] active #task
-",
-    );
-
-    let output = bob_command()
-        .arg("collect-done")
-        .arg("--threshold=1")
-        .env_remove("OB_COMMAND")
-        .env("BOB_DIR", &vault)
-        .env("PATH", &path_without_ob)
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob collect-done without ob");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains("skipped: ob command not found"),
-        "expected explicit missing-ob output:\n{}",
-        format_output(&output)
-    );
-    assert_eq!(
-        fs::read_to_string(&source).expect("read source"),
-        "\
----
-done_tasks: \"[[done/obsidian_done]]\"
----
-
-- [ ] active #task
-"
-    );
-    let archive_contents = fs::read_to_string(&archive).expect("read archive");
-    assert!(
-        archive_contents.contains("parent: \"[[obsidian]]\"")
-            && archive_contents.contains("type: \"[[done]]\""),
-        "expected archive metadata:\n{archive_contents}"
-    );
-}
-
-#[test]
-fn collect_done_failing_sync_stops_before_mutation() {
-    let temp = TempDir::new("bob-cli-collect-done-sync-fail");
-    let stub_bin = temp.path().join("bin");
-    let vault = temp.path().join("vault");
-    let source = vault.join("obsidian.md");
-    let archive = vault.join("done/obsidian_done.md");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    write_file(
-        &source,
-        "\
-- [x] done #task
-- [ ] active #task
-",
-    );
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-if [ "$1" = "sync" ]; then
-  printf 'sync failed\n' >&2
-  exit 42
-fi
-exit 64
-"#,
-    );
-
-    let output = bob_command()
-        .arg("collect-done")
-        .arg("--threshold=1")
-        .env("BOB_DIR", &vault)
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob collect-done with failing sync");
-
-    assert_eq!(
-        output.status.code(),
-        Some(42),
-        "expected sync failure exit code:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        stderr(&output).contains("ob sync failed with exit code 42"),
-        "expected sync failure message:\n{}",
-        format_output(&output)
-    );
-    assert_eq!(
-        fs::read_to_string(&source).expect("read source"),
-        "\
-- [x] done #task
-- [ ] active #task
-"
-    );
-    assert!(
-        !archive.exists(),
-        "archive should not be created after failed sync"
-    );
-}
-
-#[test]
 fn collect_done_commits_and_pushes_collection_changes_only() {
     let temp = TempDir::new("bob-cli-collect-done-git");
     let stub_bin = temp.path().join("bin");
@@ -1044,7 +743,7 @@ fn pomodoro_missing_day_file_is_a_successful_noop() {
 }
 
 #[test]
-fn bob_sync_uses_stubbed_ob_and_git_commands() {
+fn bob_sync_commits_and_pushes_without_running_ob() {
     let temp = TempDir::new("bob-cli-sync");
     let stub_bin = temp.path().join("bin");
     let vault = temp.path().join("vault");
@@ -1054,14 +753,13 @@ fn bob_sync_uses_stubbed_ob_and_git_commands() {
     fs::create_dir_all(&vault).expect("create vault");
     fs::create_dir_all(&home).expect("create home");
 
+    // An `ob` stub that fails loudly if invoked: standalone `bob sync` must no
+    // longer touch Obsidian (that moved up to `bob cronjob`).
     write_executable(
         &stub_bin.join("ob"),
         r#"#!/bin/sh
 printf 'ob %s\n' "$*" >> "$STUB_LOG"
-case "$1" in
-  sync|sync-status) exit 0 ;;
-esac
-exit 64
+exit 99
 "#,
     );
     write_executable(
@@ -1094,6 +792,7 @@ exit 64
         .arg("sync")
         .env("BOB_DIR", &vault)
         .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
+        .env_remove("OB_COMMAND")
         .env("HOME", &home)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("STUB_LOG", &log)
@@ -1104,10 +803,9 @@ exit 64
     assert_success(&output);
     let log_contents = fs::read_to_string(&log).expect("read stub command log");
     assert!(
-        log_contents.contains(&format!("ob sync --path {}", vault.display()))
+        !log_contents.contains("ob "),
+        "standalone sync must not invoke ob:\n{log_contents}"
     );
-    assert!(log_contents
-        .contains(&format!("ob sync-status --path {}", vault.display())));
     assert!(log_contents.contains(&format!(
         "git -C {} rev-parse --is-inside-work-tree",
         vault.display()
@@ -1135,6 +833,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
 
     let order = [
         "collect-done",
+        "cronjob",
         "notify",
         "pomodoro",
         "sync",
@@ -1168,6 +867,274 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         !output.stdout.contains(&0x1b),
         "piped help output must not contain ANSI escape codes:\n{help}"
     );
+}
+
+#[test]
+fn cronjob_runs_shared_sync_once_then_wrapped_steps_in_order() {
+    let temp = TempDir::new("bob-cli-cronjob-happy");
+    let stub_bin = temp.path().join("bin");
+    let (vault, remote) = init_git_vault_with_remote(&temp);
+    let home = temp.path().join("home");
+    let source = vault.join("obsidian.md");
+    let archive = vault.join("done/obsidian_done.md");
+    let extra = vault.join("extra.md");
+    let log = temp.path().join("commands.log");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    fs::create_dir_all(&home).expect("create home");
+    write_file(&source, &done_tasks_source(12));
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
+    // Untracked file the wrapped `sync` step should commit wholesale.
+    write_file(&extra, "- [ ] extra #task\n");
+    write_executable(
+        &stub_bin.join("ob"),
+        r#"#!/bin/sh
+printf 'ob %s\n' "$*" >> "$STUB_LOG"
+if [ "$1" = "sync" ]; then
+  if [ -f "$ARCHIVE_FILE" ]; then
+    printf 'archive-exists-before-sync\n' >> "$STUB_LOG"
+  else
+    printf 'archive-missing-before-sync\n' >> "$STUB_LOG"
+  fi
+fi
+case "$1" in
+  sync|sync-status) exit 0 ;;
+esac
+exit 64
+"#,
+    );
+
+    let output = bob_command()
+        .arg("cronjob")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-06-02")
+        .env("BOB_SYNC_COMMIT_MESSAGE", "bob sync 2026-06-02")
+        .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
+        .env("HOME", &home)
+        .env("OB_COMMAND", stub_bin.join("ob"))
+        .env("ARCHIVE_FILE", &archive)
+        .env("STUB_LOG", &log)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob cronjob");
+
+    assert_success(&output);
+    let out = stdout(&output);
+
+    // The shared Obsidian sync ran exactly once, before any wrapped step
+    // mutated the vault.
+    let log_contents = fs::read_to_string(&log).expect("read stub log");
+    let sync_calls = log_contents
+        .lines()
+        .filter(|line| line.starts_with("ob sync --path"))
+        .count();
+    assert_eq!(
+        sync_calls, 1,
+        "shared sync should run once:\n{log_contents}"
+    );
+    assert!(
+        log_contents.contains("archive-missing-before-sync"),
+        "wrapped steps must run after the shared sync:\n{log_contents}"
+    );
+
+    // collect-done committed first, then sync (sync is the newest commit).
+    let subjects = stdout(&git_in(&vault, ["log", "--format=%s"]));
+    let lines: Vec<&str> = subjects.lines().collect();
+    assert_eq!(
+        lines.first().copied(),
+        Some("bob sync 2026-06-02"),
+        "sync should be the most recent commit:\n{subjects}"
+    );
+    assert_eq!(
+        lines.get(1).copied(),
+        Some("bob collect-done 2026-06-02"),
+        "collect-done should be committed before sync:\n{subjects}"
+    );
+
+    // The wrapped sync step committed the untracked file wholesale.
+    let sync_show = stdout(&git_in(
+        &vault,
+        ["show", "--name-only", "--format=", "HEAD"],
+    ));
+    assert!(
+        sync_show.contains("extra.md"),
+        "sync step should commit the untracked file:\n{sync_show}"
+    );
+
+    let remote_head =
+        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(remote_head, local_head, "push should update bare remote");
+
+    // collect-done archived the done tasks and linked the source.
+    let archive_contents = fs::read_to_string(&archive).expect("read archive");
+    assert!(
+        archive_contents.contains("parent: \"[[obsidian]]\"")
+            && archive_contents.contains("- [x] done 1 #task"),
+        "expected archived tasks:\n{archive_contents}"
+    );
+    assert!(
+        fs::read_to_string(&source)
+            .expect("read source")
+            .contains("done_tasks: \"[[done/obsidian_done]]\""),
+        "expected source link in {}",
+        source.display()
+    );
+
+    // The summary reports every step passing, in plain text.
+    assert!(
+        out.contains("bob cronjob")
+            && out.contains("Obsidian sync (shared, runs once)")
+            && out.contains("collect-done")
+            && out.contains("All steps passed"),
+        "expected a structured cronjob summary:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !output.stdout.contains(&0x1b),
+        "piped cronjob output must not contain ANSI escape codes:\n{out}"
+    );
+}
+
+#[test]
+fn cronjob_failing_shared_sync_aborts_before_wrapped_steps() {
+    let temp = TempDir::new("bob-cli-cronjob-sync-fail");
+    let stub_bin = temp.path().join("bin");
+    let (vault, _remote) = init_git_vault_with_remote(&temp);
+    let home = temp.path().join("home");
+    let source = vault.join("obsidian.md");
+    let archive = vault.join("done/obsidian_done.md");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    fs::create_dir_all(&home).expect("create home");
+    write_file(&source, &done_tasks_source(12));
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    let head_before = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    write_executable(
+        &stub_bin.join("ob"),
+        r#"#!/bin/sh
+if [ "$1" = "sync" ]; then
+  printf 'sync failed\n' >&2
+  exit 42
+fi
+exit 64
+"#,
+    );
+
+    let output = bob_command()
+        .arg("cronjob")
+        .env("BOB_DIR", &vault)
+        .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
+        .env("HOME", &home)
+        .env("OB_COMMAND", stub_bin.join("ob"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob cronjob with failing sync");
+
+    assert_eq!(
+        output.status.code(),
+        Some(42),
+        "expected gate sync failure exit code:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains("Aborted") && out.contains("obsidian-sync"),
+        "expected an abort summary:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !out.contains("Collect done tasks") && !out.contains("step 1/2"),
+        "no wrapped step should run after a failed gate sync:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-parse", "HEAD"])),
+        head_before,
+        "a failed gate sync must not create commits"
+    );
+    assert!(
+        !archive.exists(),
+        "archive must not be created after a failed gate sync"
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("read source"),
+        done_tasks_source(12),
+        "source must be untouched after a failed gate sync"
+    );
+}
+
+#[test]
+fn cronjob_failed_step_still_runs_later_steps_and_exits_nonzero() {
+    let temp = TempDir::new("bob-cli-cronjob-step-fail");
+    let stub_bin = temp.path().join("bin");
+    let (vault, remote) = init_git_vault_with_remote(&temp);
+    let home = temp.path().join("home");
+    let source = vault.join("obsidian.md");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    fs::create_dir_all(&home).expect("create home");
+    write_file(&source, &done_tasks_source(12));
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
+    // A pre-existing edit to a collect-done candidate makes collect-done refuse
+    // (exit 1); the later sync step must still run and commit it.
+    let dirty_source = format!("{}local edit\n", done_tasks_source(12));
+    write_file(&source, &dirty_source);
+    write_successful_ob_stub(&stub_bin);
+
+    let output = bob_command()
+        .arg("cronjob")
+        .env("BOB_DIR", &vault)
+        .env("BOB_SYNC_COMMIT_MESSAGE", "bob sync 2026-06-02")
+        .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
+        .env("HOME", &home)
+        .env("OB_COMMAND", stub_bin.join("ob"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob cronjob with a failing wrapped step");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected the failing step's exit code:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains("\u{2717} collect-done"),
+        "expected a failed collect-done marker:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        out.contains("1 step failed"),
+        "expected a failure count in the summary:\n{}",
+        format_output(&output)
+    );
+
+    // The sync step still ran: the dirty edit was committed and pushed.
+    assert_eq!(
+        stdout(&git_in(&vault, ["log", "-1", "--format=%s"])).trim(),
+        "bob sync 2026-06-02",
+        "the later sync step should commit despite the earlier failure"
+    );
+    let remote_head =
+        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(
+        remote_head, local_head,
+        "sync step should push to the remote"
+    );
+}
+
+fn done_tasks_source(count: usize) -> String {
+    let mut text = String::new();
+    for index in 1..=count {
+        text.push_str(&format!("- [x] done {index} #task\n"));
+    }
+    text.push_str("- [ ] active #task\n");
+    text
 }
 
 fn bob_command() -> Command {

@@ -1,20 +1,20 @@
 use std::{
     collections::BTreeSet,
-    env,
     ffi::{OsStr, OsString},
     fs, io,
     path::{Component, Path, PathBuf},
     process::{self, Command, Output, Stdio},
 };
 
-use super::env as bob_env;
+use super::{
+    env as bob_env,
+    ob::{self, ChildEnv},
+};
 
 const COMMAND_NAME: &str = "bob collect-done";
-const DEFAULT_THRESHOLD: usize = 10;
+pub(crate) const DEFAULT_THRESHOLD: usize = 10;
 const ARCHIVE_TYPE_LINE: &str = "type: \"[[done]]\"";
 const DONE_TASKS_KEY: &str = "done_tasks:";
-const SYNC_ALREADY_RUNNING_MESSAGE: &str =
-    "Another sync instance is already running for this vault.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Args {
@@ -150,7 +150,10 @@ struct TaskLine {
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     match parse_args(args) {
-        ParseResult::Run(args) => run_collect_done(args),
+        ParseResult::Run(args) => {
+            let child_env = ob::child_env();
+            run_collection(args.threshold, &child_env)
+        }
         ParseResult::Help => {
             print_help();
             0
@@ -163,27 +166,18 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     }
 }
 
-fn run_collect_done(args: Args) -> i32 {
+/// Run the archive collection against the vault and commit/push the result.
+///
+/// This does **not** run `ob sync`; under `cronjob` the shared sync gate runs
+/// once up front. The standalone `run()` wraps this directly.
+pub(crate) fn run_collection(threshold: usize, child_env: &ChildEnv) -> i32 {
     let vault = bob_env::bob_dir();
 
     println!("Collect done tasks");
     println!("vault: {}", vault.display());
-    println!("threshold: {}", args.threshold);
-    println!("sync:");
-    match run_ob_sync(&vault) {
-        Ok(SyncOutcome::Ran) => {
-            println!("  completed: ob sync --path {}", vault.display());
-        }
-        Ok(SyncOutcome::SkippedMissingCommand) => {
-            println!("  skipped: ob command not found");
-        }
-        Ok(SyncOutcome::AlreadyRunning) => {
-            println!("  continuing: ob sync is already running");
-        }
-        Err(exit_code) => return exit_code,
-    }
+    println!("threshold: {threshold}");
 
-    let plan = match build_collection_plan(&vault, args.threshold) {
+    let plan = match build_collection_plan(&vault, threshold) {
         Ok(plan) => plan,
         Err(error) => {
             eprintln!(
@@ -218,7 +212,7 @@ fn run_collect_done(args: Args) -> i32 {
         return 0;
     }
 
-    let git_state = match prepare_git(&vault, &plan) {
+    let git_state = match prepare_git(&vault, child_env, &plan) {
         Ok(git_state) => git_state,
         Err(GitPrepareError::DirtyCandidateFiles(paths)) => {
             println!("git:");
@@ -280,7 +274,7 @@ fn run_collect_done(args: Args) -> i32 {
         }
     }
     println!("git:");
-    if let Err(exit_code) = finish_git(&vault, &git_state) {
+    if let Err(exit_code) = finish_git(&vault, child_env, &git_state) {
         return exit_code;
     }
     println!("summary:");
@@ -302,64 +296,11 @@ fn run_collect_done(args: Args) -> i32 {
     0
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SyncOutcome {
-    Ran,
-    SkippedMissingCommand,
-    AlreadyRunning,
-}
-
-fn run_ob_sync(vault: &Path) -> Result<SyncOutcome, i32> {
-    let ob_command = env::var_os("OB_COMMAND")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| OsString::from("ob"));
-
-    let output = Command::new(&ob_command)
-        .arg("sync")
-        .arg("--path")
-        .arg(vault)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
-
-    let output = match output {
-        Ok(output) => output,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(SyncOutcome::SkippedMissingCommand);
-        }
-        Err(error) => {
-            eprintln!("{COMMAND_NAME}: failed to run ob sync: {error}");
-            return Err(1);
-        }
-    };
-
-    let sync_output = merged_output(&output);
-    if output.status.success() {
-        write_stdout_output(&sync_output);
-        return Ok(SyncOutcome::Ran);
-    }
-
-    if sync_output.contains(SYNC_ALREADY_RUNNING_MESSAGE) {
-        return Ok(SyncOutcome::AlreadyRunning);
-    }
-
-    write_stderr_output(&sync_output);
-    let exit_code = bob_env::exit_code(output.status);
-    eprintln!("{COMMAND_NAME}: ob sync failed with exit code {exit_code}");
-    Err(exit_code)
-}
-
 fn merged_output(output: &Output) -> String {
     let mut merged = String::new();
     merged.push_str(&String::from_utf8_lossy(&output.stdout));
     merged.push_str(&String::from_utf8_lossy(&output.stderr));
     merged
-}
-
-fn write_stdout_output(output: &str) {
-    if !output.is_empty() {
-        print!("{output}");
-    }
 }
 
 fn write_stderr_output(output: &str) {
@@ -396,9 +337,10 @@ fn apply_file_plan(
 
 fn prepare_git(
     vault: &Path,
+    child_env: &ChildEnv,
     plan: &CollectionPlan,
 ) -> Result<GitState, GitPrepareError> {
-    match detect_git_worktree(vault)? {
+    match detect_git_worktree(vault, child_env)? {
         GitDetection::Worktree => {}
         GitDetection::NotWorktree => {
             return Ok(GitState::Skipped {
@@ -416,7 +358,7 @@ fn prepare_git(
     }
 
     let touched_paths = touched_git_paths(plan);
-    let dirty_paths = dirty_candidate_paths(vault, &touched_paths)?;
+    let dirty_paths = dirty_candidate_paths(vault, child_env, &touched_paths)?;
     if !dirty_paths.is_empty() {
         return Err(GitPrepareError::DirtyCandidateFiles(dirty_paths));
     }
@@ -427,8 +369,11 @@ fn prepare_git(
     })
 }
 
-fn detect_git_worktree(vault: &Path) -> Result<GitDetection, GitPrepareError> {
-    let output = git_command(vault)
+fn detect_git_worktree(
+    vault: &Path,
+    child_env: &ChildEnv,
+) -> Result<GitDetection, GitPrepareError> {
+    let output = ob::git_command(vault, child_env)
         .arg("rev-parse")
         .arg("--is-inside-work-tree")
         .stdout(Stdio::piped())
@@ -463,9 +408,10 @@ fn touched_git_paths(plan: &CollectionPlan) -> Vec<PathBuf> {
 
 fn dirty_candidate_paths(
     vault: &Path,
+    child_env: &ChildEnv,
     touched_paths: &[PathBuf],
 ) -> Result<Vec<String>, GitPrepareError> {
-    let mut command = git_command(vault);
+    let mut command = ob::git_command(vault, child_env);
     command
         .arg("status")
         .arg("--porcelain=v1")
@@ -491,7 +437,11 @@ fn dirty_candidate_paths(
         .collect())
 }
 
-fn finish_git(vault: &Path, git_state: &GitState) -> Result<(), i32> {
+fn finish_git(
+    vault: &Path,
+    child_env: &ChildEnv,
+    git_state: &GitState,
+) -> Result<(), i32> {
     match git_state {
         GitState::Skipped { message } => {
             println!("  {message}");
@@ -502,34 +452,39 @@ fn finish_git(vault: &Path, git_state: &GitState) -> Result<(), i32> {
             commit_message,
         } => {
             println!("  detected: git worktree");
-            stage_git_paths(vault, touched_paths)?;
+            stage_git_paths(vault, child_env, touched_paths)?;
             println!("  staged paths: {}", touched_paths.len());
 
-            if !git_has_staged_changes(vault, touched_paths)? {
+            if !git_has_staged_changes(vault, child_env, touched_paths)? {
                 println!("  skipped: no collection changes to commit");
                 return Ok(());
             }
 
-            commit_git_paths(vault, commit_message, touched_paths)?;
+            commit_git_paths(vault, child_env, commit_message, touched_paths)?;
             println!("  committed: {commit_message}");
-            push_git(vault)?;
+            push_git(vault, child_env)?;
             println!("  pushed");
             Ok(())
         }
     }
 }
 
-fn stage_git_paths(vault: &Path, paths: &[PathBuf]) -> Result<(), i32> {
-    let mut command = git_command(vault);
+fn stage_git_paths(
+    vault: &Path,
+    child_env: &ChildEnv,
+    paths: &[PathBuf],
+) -> Result<(), i32> {
+    let mut command = ob::git_command(vault, child_env);
     command.arg("add").arg("--").args(paths);
     run_git_success(command, "git add")
 }
 
 fn git_has_staged_changes(
     vault: &Path,
+    child_env: &ChildEnv,
     paths: &[PathBuf],
 ) -> Result<bool, i32> {
-    let mut command = git_command(vault);
+    let mut command = ob::git_command(vault, child_env);
     command
         .arg("diff")
         .arg("--cached")
@@ -554,10 +509,11 @@ fn git_has_staged_changes(
 
 fn commit_git_paths(
     vault: &Path,
+    child_env: &ChildEnv,
     message: &str,
     paths: &[PathBuf],
 ) -> Result<(), i32> {
-    let mut command = git_command(vault);
+    let mut command = ob::git_command(vault, child_env);
     command
         .arg("commit")
         .arg("-m")
@@ -567,8 +523,8 @@ fn commit_git_paths(
     run_git_success(command, "git commit")
 }
 
-fn push_git(vault: &Path) -> Result<(), i32> {
-    let mut command = git_command(vault);
+fn push_git(vault: &Path, child_env: &ChildEnv) -> Result<(), i32> {
+    let mut command = ob::git_command(vault, child_env);
     command.arg("push");
     run_git_success(command, "git push")
 }
@@ -593,12 +549,6 @@ fn report_git_failure(action: &str, output: &Output) {
         "{COMMAND_NAME}: {action} failed with exit code {}",
         bob_env::exit_code(output.status)
     );
-}
-
-fn git_command(vault: &Path) -> Command {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(vault);
-    command
 }
 
 fn collect_done_commit_message() -> String {
