@@ -8,7 +8,7 @@ Keep this fixture small so runner tests can copy it into a temporary Bob vault.
 
 - [x] Closed planning pass (0800-0830)
 - [ ] Import Bob scripts (0900-0930) [[project:: bob-cli]]
-- [ ] Review crate skeleton (0945-1015) [context:: terminal]
+- [ ] (0945-1015 [t:: 30m]) Review crate skeleton [context:: terminal]
 
 ## Later
 

@@ -49,12 +49,6 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Pomodoro,
     },
     Subcommand {
-        name: "pomodoro-runtimes",
-        script_command: Some("bob_pomodoro_runtimes"),
-        about: "Annotate Pomodoro ledger entries with runtimes",
-        native_command: NativeCommand::PomodoroRuntimes,
-    },
-    Subcommand {
         name: "sync",
         script_command: Some("bob_sync"),
         about: "Sync the Obsidian vault",
@@ -204,7 +198,6 @@ Examples:
   bob collect-done --threshold 10  Archive tasks and maintain done links
   bob pomodoro                   Show today's Pomodoro status
   bob sync                       Sync the Obsidian vault
-  bob pomodoro-runtimes --check  Preview ledger runtime updates (no writes)
 
 Run 'bob <command> --help' for more information on a command.";
 

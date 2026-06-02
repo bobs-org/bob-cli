@@ -2,8 +2,7 @@
 
 `bob-cli` installs the `bob` command and compatibility shims for the Bob Obsidian
 vault and Pomodoro workflow. The command implementations are native Rust by
-default. The earlier Bash and Python implementations remain embedded as a
-rollback path:
+default. The earlier shell implementations remain embedded as a rollback path:
 set `BOB_CLI_USE_SCRIPT=1` to extract those scripts into `XDG_CACHE_HOME` and
 delegate to them.
 
@@ -29,7 +28,6 @@ To smoke-test an install without replacing an existing user install:
 ```bash
 root="$(mktemp -d)"
 cargo install --path . --locked --root "$root"
-"$root/bin/bob" pomodoro-runtimes --help
 "$root/bin/bob" collect-done --help
 BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" pomodoro
 BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" tmux-pomodoro
@@ -78,16 +76,6 @@ time remaining or recent overdue status. It defaults to
 is unset, unless `BOB_DAY_FILE` is set.
 
 ```bash
-bob pomodoro-runtimes [--check] [NOTE ...]
-```
-
-Runs `ob sync` when the configured `ob` executable is available, then annotates
-completed Pomodoro ledger entries with runtime suffixes. Missing `ob` is skipped
-silently for this command; other sync failures still fail the command. With no
-`NOTE` arguments it uses today's Bob daily note. `--check` reports pending
-changes without writing them.
-
-```bash
 bob notify PRE_CHECK_SLEEP POST_NOTIFY_SLEEP
 ```
 
@@ -112,7 +100,6 @@ The installed compatibility shims are:
 
 ```text
 bob_pomodoro
-bob_pomodoro_runtimes
 bob_notify
 bob_sync
 tmux_bob_pomodoro
@@ -122,15 +109,14 @@ They call the same native Rust command implementations as `bob <subcommand>`.
 
 ## Runtime Dependencies
 
-Normal command execution no longer requires Bash, Python, or Perl. These tools
-are still useful for validating or forcing the embedded script fallback with
+Normal command execution no longer requires Bash or Perl. These tools are still
+useful for validating or forcing the embedded script fallback with
 `BOB_CLI_USE_SCRIPT=1`.
 
 The remaining runtime dependencies are:
 
 - `ob` from obsidian-headless for `bob sync` and pre-write
-  `bob collect-done` sync; `bob pomodoro-runtimes` uses it opportunistically
-  before annotation and skips sync when `ob` is unavailable
+  `bob collect-done` sync
 - `git` and `ssh` for `bob sync` and for `bob collect-done` commit/push
   behavior when the vault is a Git worktree
 - `notify-send` for desktop notifications from `bob notify`
@@ -155,23 +141,22 @@ message date. Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 prefix such as `date --utc`, or a timestamp in the same formats accepted by
 `BOB_NOW`.
 
-`OB_COMMAND` overrides the `ob` executable used by `bob pomodoro-runtimes` and
-`bob collect-done`. If that executable is unavailable, runtime annotation
-continues without syncing, and collection reports the skipped sync before
-scanning the vault.
+`OB_COMMAND` overrides the `ob` executable used by `bob collect-done`. If that
+executable is unavailable, collection reports the skipped sync before scanning
+the vault.
 
 `BOB_SYNC_LOCK_FILE` overrides the lock path used by `bob sync`.
 
 `BOB_SYNC_COMMIT_MESSAGE` overrides the commit message used by `bob sync`.
 
-`BOB_CLI_USE_SCRIPT=1` forces the embedded Bash/Python fallback implementation.
+`BOB_CLI_USE_SCRIPT=1` forces the embedded shell fallback implementation.
 
 ## Migration Notes
 
-Use `bob pomodoro`, `bob pomodoro-runtimes`, `bob notify`, `bob sync`, and
-`bob tmux-pomodoro` for new integrations, and run `bob collect-done` when done
-and canceled task blocks should be archived from the vault. The legacy command
-names are installed only as compatibility shims for existing callers.
+Use `bob pomodoro`, `bob notify`, `bob sync`, and `bob tmux-pomodoro` for new
+integrations, and run `bob collect-done` when done and canceled task blocks
+should be archived from the vault. The legacy command names are installed only
+as compatibility shims for existing callers.
 
 The original script implementations remain embedded only as a rollback path.
 New integrations should rely on the native Rust command behavior.
@@ -193,10 +178,10 @@ Run a local install smoke test:
 ```bash
 root="$(mktemp -d)"
 cargo install --path . --locked --root "$root"
-"$root/bin/bob" pomodoro-runtimes --help
 "$root/bin/bob" collect-done --help
 BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" pomodoro
 BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" tmux-pomodoro
+"$root/bin/bob_notify" --help
 ```
 
 Run a tmux status smoke test after installing locally:

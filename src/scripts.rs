@@ -1,7 +1,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptKind {
     Bash,
-    Python,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,13 +38,6 @@ pub const SCRIPT_ASSETS: &[ScriptAsset] = &[
         install_path: "bob_pomodoro",
         kind: ScriptKind::Bash,
         contents: include_bytes!("../scripts/bob_pomodoro"),
-    },
-    ScriptAsset {
-        command: "bob_pomodoro_runtimes",
-        source_path: "scripts/bob_pomodoro_runtimes",
-        install_path: "bob_pomodoro_runtimes",
-        kind: ScriptKind::Python,
-        contents: include_bytes!("../scripts/bob_pomodoro_runtimes"),
     },
     ScriptAsset {
         command: "bob_notify",

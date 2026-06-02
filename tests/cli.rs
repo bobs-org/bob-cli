@@ -13,27 +13,23 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 const BOB_BIN: &str = env!("CARGO_BIN_EXE_bob");
-const BOB_POMODORO_RUNTIMES_BIN: &str =
-    env!("CARGO_BIN_EXE_bob_pomodoro_runtimes");
-const STOPWATCH: &str = "\u{23f1}\u{fe0f}";
 
 #[test]
 fn cache_extraction_writes_expected_files_and_modes() {
     let temp = TempDir::new("bob-cli-cache");
     let output = bob_command()
-        .arg("pomodoro-runtimes")
+        .arg("notify")
         .arg("--help")
         .env("BOB_CLI_USE_SCRIPT", "1")
         .env("XDG_CACHE_HOME", temp.path())
         .output()
-        .expect("run bob pomodoro-runtimes --help");
+        .expect("run bob notify --help");
 
     assert_success(&output);
 
     let script_dir = single_script_cache_dir(temp.path());
     let executable_assets = [
         "bob_pomodoro",
-        "bob_pomodoro_runtimes",
         "bob_notify",
         "bob_sync",
         "tmux_bob_pomodoro",
@@ -56,28 +52,6 @@ fn cache_extraction_writes_expected_files_and_modes() {
         helper.display()
     );
     assert_unix_mode(&helper, 0o644);
-}
-
-#[test]
-fn pomodoro_runtimes_help_runs_without_script_cache() {
-    let temp = TempDir::new("bob-cli-native-help");
-    let output = bob_command()
-        .arg("pomodoro-runtimes")
-        .arg("--help")
-        .env("XDG_CACHE_HOME", temp.path())
-        .output()
-        .expect("run native bob pomodoro-runtimes --help");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains("Annotate completed Bob Pomodoro"),
-        "expected native help text:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        !temp.path().join("bob-cli/scripts").exists(),
-        "native help should not extract script assets"
-    );
 }
 
 #[test]
@@ -963,293 +937,6 @@ done_tasks: \"[[done/obsidian_done]]\"
 }
 
 #[test]
-fn pass_through_arguments_and_exit_statuses_reach_runtimes_command() {
-    let temp = TempDir::new("bob-cli-runtimes-check");
-    let stub_bin = temp.path().join("bin");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-if [ "$1" = "sync" ]; then
-  exit 0
-fi
-exit 64
-"#,
-    );
-
-    let note = temp.path().join("needs_runtime_suffixes.md");
-    fs::copy(
-        fixture("pomodoro_runtimes/needs_runtime_suffixes.md"),
-        &note,
-    )
-    .expect("copy runtime fixture");
-
-    let output = bob_command()
-        .arg("pomodoro-runtimes")
-        .arg("--check")
-        .arg(&note)
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("BOB_DIR", temp.path())
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob pomodoro-runtimes --check");
-
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "expected child status 1, got:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        stderr(&output).contains("would update"),
-        "expected runtimes command to receive --check:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
-fn pomodoro_runtimes_updates_notes_and_is_idempotent() {
-    let temp = TempDir::new("bob-cli-runtimes-update");
-    let stub_bin = temp.path().join("bin");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-if [ "$1" = "sync" ]; then
-  exit 0
-fi
-exit 64
-"#,
-    );
-
-    let note = temp.path().join("legacy_runtime_suffixes.md");
-    fs::copy(
-        fixture("pomodoro_runtimes/legacy_runtime_suffixes.md"),
-        &note,
-    )
-    .expect("copy legacy runtime fixture");
-
-    let first = bob_command()
-        .arg("pomodoro-runtimes")
-        .arg(&note)
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("BOB_DIR", temp.path())
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob pomodoro-runtimes");
-
-    assert_success(&first);
-    assert!(
-        stdout(&first).contains("updated:"),
-        "expected first run to update note:\n{}",
-        format_output(&first)
-    );
-
-    let contents = fs::read_to_string(&note).expect("read updated note");
-    assert!(contents.contains("\n## Pomodoros\n"));
-    assert!(contents.contains(&format!(
-        "- [x] (09:00-09:25 {STOPWATCH} 25m) Replace legacy runtime suffix"
-    )));
-    assert!(contents.contains(&format!(
-        "- [x] (09:30-09:55 {STOPWATCH} 25m) Recalculate in-parentheses runtime"
-    )));
-    assert!(contents.contains(&format!(
-        "- [x] (10:00-10:10 {STOPWATCH} 10m) Remove trailing stopwatch suffix"
-    )));
-    assert!(
-        contents.contains(&format!("- [x] (10:15-10:40 {STOPWATCH} 25m)\n"))
-    );
-    assert!(!contents.contains("[runtime::"));
-    assert!(!contents.contains(&format!("## Pomodoros {STOPWATCH}")));
-    assert!(!contents.contains(&format!("(09:30-09:55 {STOPWATCH} 10m)")));
-    assert!(!contents.contains(&format!("(10:15-10:40 {STOPWATCH} 5m)")));
-    assert!(!contents
-        .contains(&format!("Remove trailing stopwatch suffix {STOPWATCH} 5m")));
-
-    let second = bob_command()
-        .arg("pomodoro-runtimes")
-        .arg(&note)
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("BOB_DIR", temp.path())
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("rerun bob pomodoro-runtimes");
-
-    assert_success(&second);
-    assert!(
-        stdout(&second).is_empty(),
-        "second run should be idempotent:\n{}",
-        format_output(&second)
-    );
-}
-
-#[test]
-fn pomodoro_runtimes_skips_missing_ob_command_and_updates_note() {
-    let temp = TempDir::new("bob-cli-runtimes-no-ob");
-    let path_without_ob = temp.path().join("empty-bin");
-    fs::create_dir_all(&path_without_ob).expect("create empty PATH dir");
-
-    let note = temp.path().join("needs_runtime_suffixes.md");
-    fs::copy(
-        fixture("pomodoro_runtimes/needs_runtime_suffixes.md"),
-        &note,
-    )
-    .expect("copy runtime fixture");
-
-    let output = bob_command()
-        .arg("pomodoro-runtimes")
-        .arg(&note)
-        .env_remove("BOB_CLI_USE_SCRIPT")
-        .env_remove("OB_COMMAND")
-        .env("PATH", &path_without_ob)
-        .env("BOB_DIR", temp.path())
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob pomodoro-runtimes without ob");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains("updated:"),
-        "expected missing-ob run to update note:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        !stderr(&output).contains("ob command not found"),
-        "missing ob should be skipped silently:\n{}",
-        format_output(&output)
-    );
-
-    let contents = fs::read_to_string(&note).expect("read updated note");
-    assert!(contents.contains("\n## Pomodoros\n"));
-    assert!(contents.contains(&format!(
-        "- [x] (09:00-09:25 {STOPWATCH} 25m) Import Bob scripts"
-    )));
-}
-
-#[test]
-fn script_pomodoro_runtimes_skips_missing_ob_command_and_updates_note() {
-    let temp = TempDir::new("bob-cli-script-runtimes-no-ob");
-    let note = temp.path().join("legacy_runtime_suffixes.md");
-    fs::copy(
-        fixture("pomodoro_runtimes/legacy_runtime_suffixes.md"),
-        &note,
-    )
-    .expect("copy legacy runtime fixture");
-
-    let output = bob_command()
-        .arg("pomodoro-runtimes")
-        .arg(&note)
-        .env("BOB_CLI_USE_SCRIPT", "1")
-        .env("OB_COMMAND", temp.path().join("missing-ob"))
-        .env("BOB_DIR", temp.path())
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run script bob pomodoro-runtimes without ob");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains("updated:"),
-        "expected script missing-ob run to update note:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        !stderr(&output).contains("ob command not found"),
-        "missing script ob should be skipped silently:\n{}",
-        format_output(&output)
-    );
-
-    let contents = fs::read_to_string(&note).expect("read updated note");
-    assert!(contents.contains("\n## Pomodoros\n"));
-    assert!(
-        contents.contains(&format!("- [x] (10:15-10:40 {STOPWATCH} 25m)\n"))
-    );
-    assert!(!contents.contains("[runtime::"));
-    assert!(!contents.contains(&format!("(10:15-10:40 {STOPWATCH} 5m)")));
-}
-
-#[test]
-fn legacy_pomodoro_runtimes_shim_uses_native_implementation() {
-    let temp = TempDir::new("bob-cli-runtimes-shim");
-    let stub_bin = temp.path().join("bin");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-if [ "$1" = "sync" ]; then
-  exit 0
-fi
-exit 64
-"#,
-    );
-
-    let note = temp.path().join("needs_runtime_suffixes.md");
-    fs::copy(
-        fixture("pomodoro_runtimes/needs_runtime_suffixes.md"),
-        &note,
-    )
-    .expect("copy runtime fixture");
-
-    let output = Command::new(BOB_POMODORO_RUNTIMES_BIN)
-        .arg("--check")
-        .arg(&note)
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("BOB_DIR", temp.path())
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run legacy bob_pomodoro_runtimes shim");
-
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "expected child status 1, got:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        stderr(&output).contains("would update"),
-        "expected shim to run native check path:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
-fn pomodoro_runtimes_reports_missing_note_without_touching_real_vault() {
-    let temp = TempDir::new("bob-cli-runtimes-missing");
-    let stub_bin = temp.path().join("bin");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-if [ "$1" = "sync" ]; then
-  exit 0
-fi
-exit 64
-"#,
-    );
-
-    let missing = temp.path().join("missing-day.md");
-    let output = bob_command()
-        .arg("pomodoro-runtimes")
-        .arg(&missing)
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("BOB_DIR", temp.path())
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob pomodoro-runtimes with missing note");
-
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "expected missing note status 2:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        stderr(&output).contains("note not found"),
-        "expected missing note error:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
 fn tmux_pomodoro_formats_native_pomodoro_status() {
     let temp = TempDir::new("bob-cli-tmux-path");
     let output = bob_command()
@@ -1265,6 +952,25 @@ fn tmux_pomodoro_formats_native_pomodoro_status() {
 
     assert_success(&output);
     assert_eq!(stdout(&output), "[<65m] 0945-1015 Review crate skeleton | ");
+}
+
+#[test]
+fn script_pomodoro_accepts_inline_duration_field_in_time_range() {
+    let temp = TempDir::new("bob-cli-script-pomodoro");
+    let output = bob_command()
+        .arg("pomodoro")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env(
+            "BOB_DAY_FILE",
+            fixture("pomodoro/day_with_open_pomodoro.md"),
+        )
+        .env("BOB_NOW", "2026-06-01 09:10:01")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run script bob pomodoro");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[<65m] 0945-1015 Review crate skeleton\n");
 }
 
 #[test]
@@ -1376,7 +1082,6 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "collect-done",
         "notify",
         "pomodoro",
-        "pomodoro-runtimes",
         "sync",
         "tmux-pomodoro",
     ];
@@ -1396,7 +1101,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
     assert!(
         help.contains("Examples:")
             && help.contains("bob collect-done --threshold 10")
-            && help.contains("bob pomodoro-runtimes --check"),
+            && help.contains("bob pomodoro"),
         "expected an Examples section:\n{help}"
     );
     assert!(

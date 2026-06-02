@@ -29,10 +29,6 @@ name = "bob_pomodoro"
 path = "src/bin/bob_pomodoro.rs"
 
 [[bin]]
-name = "bob_pomodoro_runtimes"
-path = "src/bin/bob_pomodoro_runtimes.rs"
-
-[[bin]]
 name = "bob_notify"
 path = "src/bin/bob_notify.rs"
 

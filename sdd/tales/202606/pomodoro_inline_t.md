@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-02 11:41:53
-status: wip
+status: done
 prompt: sdd/prompts/202606/pomodoro_inline_t.md
 ---
 # Pomodoro Inline `t` Duration Plan

@@ -215,10 +215,9 @@ fn latest_ledger_pomodoro(
         }
 
         if let Some(task) = open_ledger_task(line)
-            && let Some((raw_start, raw_end, start, end)) =
-                task_time_range(task)
+            && let Some((raw_range, start, end)) = task_time_range(task)
         {
-            let cleaned_task = clean_task(task, raw_start, raw_end);
+            let cleaned_task = clean_task(task, raw_range);
             let range = format!("{start}-{end}");
             last = Some(LedgerPomodoro {
                 start,
@@ -274,7 +273,7 @@ fn open_ledger_task(line: &str) -> Option<&str> {
     Some(rest.trim_end())
 }
 
-fn task_time_range(task: &str) -> Option<(&str, &str, String, String)> {
+fn task_time_range(task: &str) -> Option<(&str, String, String)> {
     let mut search_start = 0;
     while let Some(open_offset) = task[search_start..].find('(') {
         let open = search_start + open_offset;
@@ -286,10 +285,11 @@ fn task_time_range(task: &str) -> Option<(&str, &str, String, String)> {
         if let Some((raw_start, raw_end)) = inside.split_once('-')
             && let (Some(start), Some(end)) = (
                 normalized_hhmm(raw_start.trim()),
-                normalized_hhmm(raw_end.trim()),
+                normalized_leading_hhmm(raw_end),
             )
         {
-            return Some((raw_start, raw_end, start, end));
+            let raw_range = &task[open..close + ')'.len_utf8()];
+            return Some((raw_range, start, end));
         }
 
         search_start = close + ')'.len_utf8();
@@ -303,9 +303,32 @@ fn normalized_hhmm(value: &str) -> Option<String> {
     Some(format!("{:02}{:02}", time.hour(), time.minute()))
 }
 
-fn clean_task(task: &str, raw_start: &str, raw_end: &str) -> String {
-    let without_range =
-        task.replacen(&format!("({raw_start}-{raw_end})"), "", 1);
+fn normalized_leading_hhmm(value: &str) -> Option<String> {
+    let trimmed = value.trim_start();
+    let end = trimmed
+        .find(|character: char| {
+            !(character.is_ascii_digit() || character == ':')
+        })
+        .unwrap_or(trimmed.len());
+
+    if end == 0 {
+        return None;
+    }
+
+    if end < trimmed.len()
+        && !trimmed[end..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+    {
+        return None;
+    }
+
+    normalized_hhmm(&trimmed[..end])
+}
+
+fn clean_task(task: &str, raw_range: &str) -> String {
+    let without_range = task.replacen(raw_range, "", 1);
     let without_bracket_fields = remove_field_links(&without_range);
     compress_whitespace(&without_bracket_fields)
 }

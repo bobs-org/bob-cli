@@ -100,13 +100,13 @@ function get_latest_ledger_pomodoro() {
       if ($line =~ /^\s*-\s+(?:\[([^\]]*)\]\s+)?(.*?)\s*$/) {
         my ($checkbox, $task) = ($1, $2);
         next if defined $checkbox && $checkbox =~ /^\s*[xX]\s*$/;
-        next unless $task =~ /\(($time_re)-($time_re)\)/;
+        next unless $task =~ /(\(($time_re)\s*-\s*($time_re)(?:\s+[^)]*)?\))/;
 
-        my ($raw_start, $raw_end) = ($1, $2);
+        my ($raw_range, $raw_start, $raw_end) = ($1, $2, $3);
         my ($start, $end) = (normalize_time($raw_start), normalize_time($raw_end));
         next unless defined $start && defined $end;
 
-        $task =~ s/\(\Q$raw_start\E-\Q$raw_end\E\)//;
+        $task =~ s/\Q$raw_range\E//;
         $task =~ s/\s+\[\[[A-Za-z0-9_-]+::\s*[^\]]+\]\]//g;
         $task =~ s/\s+\[[A-Za-z0-9_-]+::\s*[^\]]+\]//g;
         $task =~ s/\s+/ /g;
