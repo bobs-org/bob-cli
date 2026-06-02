@@ -33,7 +33,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
         name: "collect-done",
         script_command: None,
-        about: "Collect done and canceled tasks into archive notes",
+        about: "Archive done and canceled tasks and link sources",
         native_command: NativeCommand::CollectDone,
     },
     Subcommand {
@@ -201,7 +201,7 @@ const HELP_TEMPLATE: &str = "\
 
 const AFTER_HELP: &str = "\
 Examples:
-  bob collect-done --threshold 10  Archive done and canceled tasks
+  bob collect-done --threshold 10  Archive tasks and link sources
   bob pomodoro                   Show today's Pomodoro status
   bob sync                       Sync the Obsidian vault
   bob pomodoro-runtimes --check  Preview ledger runtime updates (no writes)

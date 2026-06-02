@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-02 08:52:25
-status: wip
+status: done
 prompt: sdd/prompts/202606/done_tasks_frontmatter.md
 ---
 # Plan: `bob collect-done` `done_tasks` frontmatter

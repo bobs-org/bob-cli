@@ -52,7 +52,10 @@ Archive paths mirror the source note path and add `_done` to the file stem. For
 example, `projects/foo.md` archives to `done/projects/foo_done.md`. Archive
 notes are created with `parent: "[[done]]"` frontmatter, and existing archive
 notes have that parent frontmatter inserted or repaired before new blocks are
-appended.
+appended. Source notes that have a matching archive note are linked back to it
+with `done_tasks`, such as `done_tasks: "[[done/projects/foo_done]]"`. Existing
+archive notes under `done/` are backfilled into source note frontmatter on
+future runs even when no task blocks meet the threshold.
 
 Before writing files, `bob collect-done` runs `ob sync --path <vault>` when the
 configured `ob` command is available. Missing `ob` is reported as a skipped sync.
@@ -207,5 +210,6 @@ to skip candidate files that are already dirty.
 
 For an end-to-end collection smoke test, install the local binary, run
 `bob collect-done` against `~/bob`, then verify that archive notes under
-`~/bob/done` include `parent: "[[done]]"`, source notes no longer contain the
-collected blocks, and the vault Git commit was pushed.
+`~/bob/done` include `parent: "[[done]]"`, source notes include matching
+`done_tasks` links and no longer contain the collected blocks, and the vault Git
+commit was pushed.

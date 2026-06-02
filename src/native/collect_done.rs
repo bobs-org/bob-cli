@@ -12,6 +12,7 @@ use super::env as bob_env;
 const COMMAND_NAME: &str = "bob collect-done";
 const DEFAULT_THRESHOLD: usize = 10;
 const ARCHIVE_PARENT_LINE: &str = "parent: \"[[done]]\"";
+const DONE_TASKS_KEY: &str = "done_tasks:";
 const SYNC_ALREADY_RUNNING_MESSAGE: &str =
     "Another sync instance is already running for this vault.";
 
@@ -39,6 +40,20 @@ impl CollectionPlan {
         self.files.iter().map(|file| file.task_count).sum()
     }
 
+    fn task_move_file_count(&self) -> usize {
+        self.files
+            .iter()
+            .filter(|file| file.writes_archive())
+            .count()
+    }
+
+    fn source_metadata_update_count(&self) -> usize {
+        self.files
+            .iter()
+            .filter(|file| file.source_metadata_updated)
+            .count()
+    }
+
     fn planned_bytes(&self) -> usize {
         self.files
             .iter()
@@ -54,6 +69,13 @@ struct FilePlan {
     task_count: usize,
     source_contents: String,
     archive_append: String,
+    source_metadata_updated: bool,
+}
+
+impl FilePlan {
+    fn writes_archive(&self) -> bool {
+        self.task_count > 0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,8 +168,12 @@ fn run_collect_done(args: Args) -> i32 {
 
     println!("scan:");
     println!("  markdown files: {}", plan.scanned_files);
-    println!("  files meeting threshold: {}", plan.files.len());
+    println!("  files meeting threshold: {}", plan.task_move_file_count());
     println!("  task blocks: {}", plan.total_task_count());
+    println!(
+        "  source done_tasks updates: {}",
+        plan.source_metadata_update_count()
+    );
     println!("  planned bytes: {}", plan.planned_bytes());
 
     if plan.files.is_empty() {
@@ -181,15 +207,24 @@ fn run_collect_done(args: Args) -> i32 {
     let mut archives_created = 0;
     let mut archives_updated = 0;
     for file in &plan.files {
-        println!(
-            "  {} -> {} ({} task blocks)",
-            file.relative_source_path.display(),
-            file.relative_archive_path.display(),
-            file.task_count
-        );
+        if file.writes_archive() {
+            println!(
+                "  {} -> {} ({} task blocks)",
+                file.relative_source_path.display(),
+                file.relative_archive_path.display(),
+                file.task_count
+            );
+        } else {
+            println!(
+                "  {} -> {} (done_tasks metadata)",
+                file.relative_source_path.display(),
+                file.relative_archive_path.display()
+            );
+        }
         match apply_file_plan(&vault, file) {
-            Ok(ArchiveWrite::Created) => archives_created += 1,
-            Ok(ArchiveWrite::Updated) => archives_updated += 1,
+            Ok(Some(ArchiveWrite::Created)) => archives_created += 1,
+            Ok(Some(ArchiveWrite::Updated)) => archives_updated += 1,
+            Ok(None) => {}
             Err(error) => {
                 eprintln!(
                     "{COMMAND_NAME}: failed to write vault changes: {error}"
@@ -205,6 +240,10 @@ fn run_collect_done(args: Args) -> i32 {
     println!("summary:");
     println!("  moved task blocks: {}", plan.total_task_count());
     println!("  source files updated: {}", plan.files.len());
+    println!(
+        "  source done_tasks updated: {}",
+        plan.source_metadata_update_count()
+    );
     println!("  archive files created: {archives_created}");
     println!("  archive files updated: {archives_updated}");
     0
@@ -276,19 +315,27 @@ fn write_stderr_output(output: &str) {
     }
 }
 
-fn apply_file_plan(vault: &Path, file: &FilePlan) -> io::Result<ArchiveWrite> {
+fn apply_file_plan(
+    vault: &Path,
+    file: &FilePlan,
+) -> io::Result<Option<ArchiveWrite>> {
     let source_path = vault.join(&file.relative_source_path);
     let archive_path = vault.join(&file.relative_archive_path);
-    let existing_archive = read_optional_string(&archive_path)?;
-    let archive_write = if existing_archive.is_some() {
-        ArchiveWrite::Updated
+    let archive_write = if file.writes_archive() {
+        let existing_archive = read_optional_string(&archive_path)?;
+        let archive_write = if existing_archive.is_some() {
+            ArchiveWrite::Updated
+        } else {
+            ArchiveWrite::Created
+        };
+        let archive_contents =
+            archive_contents(existing_archive.as_deref(), &file.archive_append);
+        atomic_write(&archive_path, &archive_contents)?;
+        Some(archive_write)
     } else {
-        ArchiveWrite::Created
+        None
     };
-    let archive_contents =
-        archive_contents(existing_archive.as_deref(), &file.archive_append);
 
-    atomic_write(&archive_path, &archive_contents)?;
     atomic_write(&source_path, &file.source_contents)?;
 
     Ok(archive_write)
@@ -352,7 +399,9 @@ fn touched_git_paths(plan: &CollectionPlan) -> Vec<PathBuf> {
     let mut paths = BTreeSet::new();
     for file in &plan.files {
         paths.insert(file.relative_source_path.clone());
-        paths.insert(file.relative_archive_path.clone());
+        if file.writes_archive() {
+            paths.insert(file.relative_archive_path.clone());
+        }
     }
     paths.into_iter().collect()
 }
@@ -586,6 +635,76 @@ fn archive_frontmatter(sample: &str) -> String {
     format!("---{newline}{ARCHIVE_PARENT_LINE}{newline}---{newline}{newline}")
 }
 
+fn ensure_source_done_tasks_frontmatter(contents: &str, link: &str) -> String {
+    let newline = preferred_line_ending(contents);
+    let done_tasks_line = done_tasks_frontmatter_line(link);
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+
+    if lines
+        .first()
+        .map(|line| is_frontmatter_marker(split_line_ending(line).0))
+        != Some(true)
+    {
+        let mut with_frontmatter =
+            source_done_tasks_frontmatter(contents, link);
+        with_frontmatter.push_str(contents);
+        return with_frontmatter;
+    }
+
+    let Some(closing_index) =
+        lines.iter().enumerate().skip(1).find_map(|(index, line)| {
+            is_frontmatter_marker(split_line_ending(line).0).then_some(index)
+        })
+    else {
+        let mut with_frontmatter =
+            source_done_tasks_frontmatter(contents, link);
+        with_frontmatter.push_str(contents);
+        return with_frontmatter;
+    };
+
+    let mut result = String::with_capacity(contents.len() + 80);
+    let mut done_tasks_written = false;
+
+    for (index, line) in lines.iter().enumerate() {
+        if index == 0 {
+            result.push_str(line);
+        } else if index < closing_index {
+            let (content, ending) = split_line_ending(line);
+            if is_done_tasks_frontmatter_line(content) {
+                result.push_str(&done_tasks_line);
+                result.push_str(if ending.is_empty() {
+                    newline
+                } else {
+                    ending
+                });
+                done_tasks_written = true;
+            } else {
+                result.push_str(line);
+            }
+        } else if index == closing_index {
+            if !done_tasks_written {
+                result.push_str(&done_tasks_line);
+                result.push_str(newline);
+            }
+            result.push_str(line);
+        } else {
+            result.push_str(line);
+        }
+    }
+
+    result
+}
+
+fn source_done_tasks_frontmatter(sample: &str, link: &str) -> String {
+    let newline = preferred_line_ending(sample);
+    let done_tasks_line = done_tasks_frontmatter_line(link);
+    format!("---{newline}{done_tasks_line}{newline}---{newline}{newline}")
+}
+
+fn done_tasks_frontmatter_line(link: &str) -> String {
+    format!("{DONE_TASKS_KEY} \"{link}\"")
+}
+
 fn append_archive_blocks(contents: &mut String, archive_append: &str) {
     if archive_append.is_empty() {
         return;
@@ -611,6 +730,10 @@ fn is_frontmatter_marker(content: &str) -> bool {
 
 fn is_parent_frontmatter_line(content: &str) -> bool {
     content.trim_start().starts_with("parent:")
+}
+
+fn is_done_tasks_frontmatter_line(content: &str) -> bool {
+    content.starts_with(DONE_TASKS_KEY)
 }
 
 fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
@@ -663,11 +786,6 @@ fn build_collection_plan(
 
     for path in &markdown_files {
         let contents = fs::read_to_string(path)?;
-        let transform = transform_markdown(&contents);
-        if transform.task_count < threshold {
-            continue;
-        }
-
         let relative_source_path = path
             .strip_prefix(vault)
             .map_err(|error| {
@@ -683,13 +801,43 @@ fn build_collection_plan(
             .to_path_buf();
         let relative_archive_path =
             archive_relative_path(&relative_source_path)?;
+        let transform = transform_markdown(&contents);
+        let moves_tasks = transform.task_count >= threshold;
+        let archive_exists = vault.join(&relative_archive_path).is_file();
+
+        let source_base = if moves_tasks {
+            transform.source_contents
+        } else {
+            contents
+        };
+        let (source_contents, source_metadata_updated) =
+            if moves_tasks || archive_exists {
+                let link = archive_wiki_link(&relative_archive_path)?;
+                let linked_source =
+                    ensure_source_done_tasks_frontmatter(&source_base, &link);
+                let source_metadata_updated = linked_source != source_base;
+                (linked_source, source_metadata_updated)
+            } else {
+                (source_base, false)
+            };
+        let task_count = if moves_tasks { transform.task_count } else { 0 };
+        let archive_append = if moves_tasks {
+            transform.archive_append
+        } else {
+            String::new()
+        };
+
+        if task_count == 0 && !source_metadata_updated {
+            continue;
+        }
 
         files.push(FilePlan {
             relative_source_path,
             relative_archive_path,
-            task_count: transform.task_count,
-            source_contents: transform.source_contents,
-            archive_append: transform.archive_append,
+            task_count,
+            source_contents,
+            archive_append,
+            source_metadata_updated,
         });
     }
 
@@ -772,6 +920,35 @@ fn archive_relative_path(source_relative_path: &Path) -> io::Result<PathBuf> {
     }
     archive_path.push(archive_name);
     Ok(archive_path)
+}
+
+fn archive_wiki_link(archive_relative_path: &Path) -> io::Result<String> {
+    let mut path_without_extension = archive_relative_path.to_path_buf();
+    path_without_extension.set_extension("");
+
+    let mut components = Vec::new();
+    for component in path_without_extension.components() {
+        let Component::Normal(part) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "archive path is not vault-relative: {}",
+                    archive_relative_path.display()
+                ),
+            ));
+        };
+        components.push(part.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "archive path is not valid UTF-8: {}",
+                    archive_relative_path.display()
+                ),
+            )
+        })?);
+    }
+
+    Ok(format!("[[{}]]", components.join("/")))
 }
 
 fn transform_markdown(contents: &str) -> Transform {
@@ -994,7 +1171,7 @@ fn print_help() {
         "\
 usage: {COMMAND_NAME} [--threshold N]
 
-Collect done and canceled Bob task blocks into archive notes.
+Collect done and canceled Bob task blocks into archive notes, and link sources.
 
 options:
   -h, --help       show this help message and exit
@@ -1006,7 +1183,8 @@ options:
 #[cfg(test)]
 mod tests {
     use super::{
-        archive_contents, archive_relative_path, build_collection_plan,
+        archive_contents, archive_relative_path, archive_wiki_link,
+        build_collection_plan, ensure_source_done_tasks_frontmatter,
         parse_args, transform_markdown, Args, ParseResult, DEFAULT_THRESHOLD,
     };
     use std::{
@@ -1162,6 +1340,18 @@ mod tests {
     }
 
     #[test]
+    fn maps_archive_notes_to_obsidian_wiki_links() {
+        assert_eq!(
+            archive_wiki_link(Path::new("done/obsidian_done.md")).unwrap(),
+            "[[done/obsidian_done]]"
+        );
+        assert_eq!(
+            archive_wiki_link(Path::new("done/foo/bar_done.md")).unwrap(),
+            "[[done/foo/bar_done]]"
+        );
+    }
+
+    #[test]
     fn creates_archive_frontmatter_for_new_archive_note() {
         let contents = archive_contents(None, "- [x] done #task\n");
 
@@ -1249,6 +1439,107 @@ parent: \"[[done]]\"
     }
 
     #[test]
+    fn adds_done_tasks_to_existing_source_frontmatter() {
+        let contents = ensure_source_done_tasks_frontmatter(
+            "\
+---
+title: Project
+---
+
+# Project
+",
+            "[[done/project_done]]",
+        );
+
+        assert_eq!(
+            contents,
+            "\
+---
+title: Project
+done_tasks: \"[[done/project_done]]\"
+---
+
+# Project
+"
+        );
+    }
+
+    #[test]
+    fn creates_source_frontmatter_for_done_tasks() {
+        let contents = ensure_source_done_tasks_frontmatter(
+            "# Project\n",
+            "[[done/project_done]]",
+        );
+
+        assert_eq!(
+            contents,
+            "\
+---
+done_tasks: \"[[done/project_done]]\"
+---
+
+# Project
+"
+        );
+    }
+
+    #[test]
+    fn replaces_stale_done_tasks_frontmatter() {
+        let contents = ensure_source_done_tasks_frontmatter(
+            "\
+---
+done_tasks: \"[[done/old_done]]\"
+title: Project
+---
+",
+            "[[done/project_done]]",
+        );
+
+        assert_eq!(
+            contents,
+            "\
+---
+done_tasks: \"[[done/project_done]]\"
+title: Project
+---
+"
+        );
+    }
+
+    #[test]
+    fn leaves_correct_done_tasks_frontmatter_unchanged() {
+        let original = "\
+---
+done_tasks: \"[[done/project_done]]\"
+title: Project
+---
+
+# Project
+";
+
+        assert_eq!(
+            ensure_source_done_tasks_frontmatter(
+                original,
+                "[[done/project_done]]"
+            ),
+            original
+        );
+    }
+
+    #[test]
+    fn preserves_crlf_when_adding_done_tasks_frontmatter() {
+        let contents = ensure_source_done_tasks_frontmatter(
+            "---\r\ntitle: Project\r\n---\r\n\r\n# Project\r\n",
+            "[[done/project_done]]",
+        );
+
+        assert_eq!(
+            contents,
+            "---\r\ntitle: Project\r\ndone_tasks: \"[[done/project_done]]\"\r\n---\r\n\r\n# Project\r\n"
+        );
+    }
+
+    #[test]
     fn scans_markdown_files_with_exclusions_and_threshold() {
         let vault = TempDir::new("bob-cli-collect-done-vault");
         write_file(
@@ -1278,7 +1569,15 @@ parent: \"[[done]]\"
             PathBuf::from("done/obsidian_done.md")
         );
         assert_eq!(file.task_count, 2);
-        assert!(file.source_contents.is_empty());
+        assert_eq!(
+            file.source_contents,
+            "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+"
+        );
         assert_eq!(
             file.archive_append,
             "\
@@ -1286,6 +1585,7 @@ parent: \"[[done]]\"
 - [-] two #task
 "
         );
+        assert!(file.source_metadata_updated);
     }
 
     #[test]
@@ -1304,6 +1604,109 @@ parent: \"[[done]]\"
             plan.files[0].relative_archive_path,
             PathBuf::from("done/foo/bar_done.md")
         );
+    }
+
+    #[test]
+    fn collecting_tasks_adds_done_tasks_to_source() {
+        let vault = TempDir::new("bob-cli-collect-done-source-link");
+        write_file(
+            &vault.path().join("foo/bar.md"),
+            "\
+- [x] nested #task
+- [ ] active #task
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert_eq!(plan.files.len(), 1);
+        let file = &plan.files[0];
+        assert_eq!(file.task_count, 1);
+        assert!(file.source_metadata_updated);
+        assert_eq!(
+            file.source_contents,
+            "\
+---
+done_tasks: \"[[done/foo/bar_done]]\"
+---
+
+- [ ] active #task
+"
+        );
+    }
+
+    #[test]
+    fn existing_archive_creates_metadata_only_source_update() {
+        let vault = TempDir::new("bob-cli-collect-done-backfill");
+        write_file(
+            &vault.path().join("obsidian.md"),
+            "\
+- [x] below threshold #task
+- [ ] active #task
+",
+        );
+        write_file(
+            &vault.path().join("done/obsidian_done.md"),
+            "- [x] old #task\n",
+        );
+
+        let plan = build_collection_plan(vault.path(), 2).expect("build plan");
+
+        assert_eq!(plan.files.len(), 1);
+        let file = &plan.files[0];
+        assert_eq!(file.task_count, 0);
+        assert!(file.archive_append.is_empty());
+        assert!(file.source_metadata_updated);
+        assert_eq!(
+            file.source_contents,
+            "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+- [x] below threshold #task
+- [ ] active #task
+"
+        );
+    }
+
+    #[test]
+    fn already_linked_source_with_existing_archive_is_not_planned() {
+        let vault = TempDir::new("bob-cli-collect-done-already-linked");
+        write_file(
+            &vault.path().join("obsidian.md"),
+            "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+- [ ] active #task
+",
+        );
+        write_file(
+            &vault.path().join("done/obsidian_done.md"),
+            "- [x] old #task\n",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert!(plan.files.is_empty());
+    }
+
+    #[test]
+    fn missing_archive_without_threshold_tasks_is_not_planned() {
+        let vault = TempDir::new("bob-cli-collect-done-missing-archive");
+        write_file(
+            &vault.path().join("obsidian.md"),
+            "\
+- [x] below threshold #task
+- [ ] active #task
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 2).expect("build plan");
+
+        assert!(plan.files.is_empty());
     }
 
     fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {

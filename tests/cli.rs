@@ -175,6 +175,10 @@ exit 64
     assert_eq!(
         fs::read_to_string(&source).expect("read source"),
         "\
+---
+done_tasks: \"[[done/foo/bar_done]]\"
+---
+
 # Project
 
 - [ ] active #task
@@ -199,6 +203,76 @@ parent: \"[[done]]\"
             && stdout.contains("moves:")
             && stdout.contains("summary:"),
         "expected collect-done output sections:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn collect_done_runs_sync_before_metadata_only_source_writes() {
+    let temp = TempDir::new("bob-cli-collect-done-metadata-sync");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    let source = vault.join("obsidian.md");
+    let archive = vault.join("done/obsidian_done.md");
+    let log = temp.path().join("commands.log");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_file(&source, "- [ ] active #task\n");
+    write_file(&archive, "- [x] archived #task\n");
+    write_executable(
+        &stub_bin.join("ob"),
+        r#"#!/bin/sh
+printf 'ob %s\n' "$*" >> "$STUB_LOG"
+if [ "$1" = "sync" ]; then
+  if grep -q 'done_tasks' "$SOURCE_FILE"; then
+    printf 'source-mutated-before-sync\n' >> "$STUB_LOG"
+  else
+    printf 'source-needs-metadata-before-sync\n' >> "$STUB_LOG"
+  fi
+  exit 0
+fi
+exit 64
+"#,
+    );
+
+    let output = bob_command()
+        .arg("collect-done")
+        .arg("--threshold=10")
+        .env("BOB_DIR", &vault)
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("STUB_LOG", &log)
+        .env("SOURCE_FILE", &source)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob collect-done metadata-only");
+
+    assert_success(&output);
+    let log_contents = fs::read_to_string(&log).expect("read stub log");
+    assert!(
+        log_contents.contains(&format!("ob sync --path {}", vault.display())),
+        "expected ob sync call:\n{log_contents}"
+    );
+    assert!(
+        log_contents.contains("source-needs-metadata-before-sync"),
+        "source should not be rewritten before sync:\n{log_contents}"
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("read source"),
+        "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+- [ ] active #task
+"
+    );
+    assert_eq!(
+        fs::read_to_string(&archive).expect("read archive"),
+        "- [x] archived #task\n"
+    );
+    assert!(
+        stdout(&output).contains("source done_tasks updates: 1")
+            && stdout(&output).contains("moved task blocks: 0"),
+        "expected metadata-only summary:\n{}",
         format_output(&output)
     );
 }
@@ -237,7 +311,13 @@ fn collect_done_skips_missing_ob_command_and_writes_vault_changes() {
     );
     assert_eq!(
         fs::read_to_string(&source).expect("read source"),
-        "- [ ] active #task\n"
+        "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+- [ ] active #task
+"
     );
     assert!(fs::read_to_string(&archive)
         .expect("read archive")
@@ -347,7 +427,13 @@ fn collect_done_commits_and_pushes_collection_changes_only() {
     );
     assert_eq!(
         fs::read_to_string(&source).expect("read source"),
-        "- [ ] active #task\n"
+        "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+- [ ] active #task
+"
     );
     assert!(fs::read_to_string(&archive)
         .expect("read archive")
@@ -392,6 +478,78 @@ fn collect_done_commits_and_pushes_collection_changes_only() {
 }
 
 #[test]
+fn collect_done_commits_metadata_only_source_updates() {
+    let temp = TempDir::new("bob-cli-collect-done-git-metadata");
+    let stub_bin = temp.path().join("bin");
+    let (vault, remote) = init_git_vault_with_remote(&temp);
+    let source = vault.join("obsidian.md");
+    let archive = vault.join("done/obsidian_done.md");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_successful_ob_stub(&stub_bin);
+    write_file(&source, "- [ ] active #task\n");
+    write_file(&archive, "- [x] archived #task\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
+
+    let output = bob_command()
+        .arg("collect-done")
+        .arg("--threshold=10")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-06-02")
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob collect-done metadata-only in git repo");
+
+    assert_success(&output);
+    let output_text = stdout(&output);
+    assert!(
+        output_text.contains("source done_tasks updates: 1")
+            && output_text.contains("committed: bob collect-done 2026-06-02")
+            && output_text.contains("pushed"),
+        "expected metadata commit and push:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("read source"),
+        "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+- [ ] active #task
+"
+    );
+    assert_eq!(
+        fs::read_to_string(&archive).expect("read archive"),
+        "- [x] archived #task\n"
+    );
+
+    let show = stdout(&git_in(
+        &vault,
+        ["show", "--name-only", "--format=%s", "HEAD"],
+    ));
+    assert!(
+        show.starts_with("bob collect-done 2026-06-02\n"),
+        "expected collect-done commit subject:\n{show}"
+    );
+    assert!(
+        show.contains("\nobsidian.md\n"),
+        "expected source in metadata commit:\n{show}"
+    );
+    assert!(
+        !show.contains("\ndone/obsidian_done.md\n"),
+        "metadata-only commit should not stage archive:\n{show}"
+    );
+
+    let remote_head =
+        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(remote_head, local_head, "push should update bare remote");
+}
+
+#[test]
 fn collect_done_warns_and_skips_git_for_non_repo_vault() {
     let temp = TempDir::new("bob-cli-collect-done-non-repo");
     let stub_bin = temp.path().join("bin");
@@ -430,7 +588,13 @@ fn collect_done_warns_and_skips_git_for_non_repo_vault() {
     );
     assert_eq!(
         fs::read_to_string(&source).expect("read source"),
-        "- [ ] active #task\n"
+        "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+- [ ] active #task
+"
     );
 }
 
@@ -496,6 +660,62 @@ local edit
     assert!(
         !archive.exists(),
         "archive should not be created when candidate is dirty"
+    );
+}
+
+#[test]
+fn collect_done_refuses_dirty_metadata_only_source_before_mutation() {
+    let temp = TempDir::new("bob-cli-collect-done-dirty-metadata");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    let source = vault.join("obsidian.md");
+    let archive = vault.join("done/obsidian_done.md");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_successful_ob_stub(&stub_bin);
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    write_file(&source, "- [ ] active #task\n");
+    write_file(&archive, "- [x] archived #task\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    let dirty_source = "- [ ] active #task\nlocal edit\n";
+    write_file(&source, dirty_source);
+
+    let output = bob_command()
+        .arg("collect-done")
+        .arg("--threshold=10")
+        .env("BOB_DIR", &vault)
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob collect-done with dirty metadata candidate");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected dirty candidate failure:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stdout(&output)
+            .contains("refusing: pre-existing changes in candidate files"),
+        "expected dirty candidate stdout:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("obsidian.md"),
+        "expected dirty candidate path in stderr:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("read source"),
+        dirty_source
+    );
+    assert_eq!(
+        fs::read_to_string(&archive).expect("read archive"),
+        "- [x] archived #task\n"
     );
 }
 
