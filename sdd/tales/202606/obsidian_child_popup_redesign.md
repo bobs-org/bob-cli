@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-03 11:54:19
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_child_popup_redesign.md
 ---
 # Obsidian Child Note Picker — Visual Redesign Plan
