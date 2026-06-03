@@ -78,7 +78,9 @@ vault-relative Markdown path per line, `json` output is stable for scripts, and
 `markdown` output prints Dataview-rendered Markdown. This command does not run
 `ob sync`; vault freshness is handled by the external background or cron sync
 path. An explicit `--engine dynomark` mode is available for
-partial-compatibility headless DQL paths and JSON output.
+partial-compatibility headless DQL paths and JSON output. Use
+`--engine native` for local headless `LIST` queries over frontmatter fields and
+parent wikilink chains.
 
 The full command contract and live smoke-test steps live in
 [`docs/dataview.md`](docs/dataview.md).
@@ -330,7 +332,8 @@ and expect the command to skip candidate files that are already dirty.
 Before running live `bob dataview` smoke tests, start desktop Obsidian, open the
 target vault, enable Dataview, and use the examples in
 [`docs/dataview.md`](docs/dataview.md). The default engine requires that live
-Obsidian session; `--engine dynomark` is only a partial headless fallback.
+Obsidian session; `--engine native` covers local frontmatter ancestry queries,
+while `--engine dynomark` is only a partial headless fallback.
 
 For an end-to-end collection smoke test, install the local binary, run
 `bob move-done-tasks` against `~/bob`, then verify that archive notes under

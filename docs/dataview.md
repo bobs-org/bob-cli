@@ -47,11 +47,13 @@ printf 'LIST FROM #waiting\n' | bob dataview --query-file -
 ## Options
 
 `--bob-dir <PATH>` sets the Bob vault root. It defaults to `BOB_DIR` or `~/bob`.
-The path is validated when it is supplied explicitly or when the `dynomark`
-engine is used.
+The path is validated when it is supplied explicitly or when the `dynomark` or
+`native` engine is used.
 
-`--engine <obsidian|dynomark>` selects the query engine. The default is
+`--engine <obsidian|dynomark|native>` selects the query engine. The default is
 `obsidian`; `dynomark` is an explicit partial-compatibility headless fallback.
+`native` is a local frontmatter/query subset for automation that cannot depend
+on a running Obsidian app.
 
 `--format <paths|json|markdown>` selects the output format. `paths` is the
 default. `markdown` requires a DQL query and the Obsidian engine.
@@ -83,7 +85,7 @@ owned by the external background or cron sync path.
 
 JSON output is a stable object for scripts. It includes:
 
-- `engine`: `obsidian` or `dynomark`
+- `engine`: `obsidian`, `dynomark`, or `native`
 - `query_kind`: `source` or `dql`
 - `format`: `json`
 - `paths`: extracted vault-relative note paths
@@ -132,3 +134,31 @@ remain Obsidian-only.
 Set `BOB_DATAVIEW_OBSIDIAN_COMMAND` to use a specific Obsidian CLI executable
 for the default engine. Set `BOB_DATAVIEW_VAULT` to choose the default vault
 name or ID forwarded to `obsidian eval`.
+
+## Headless native frontmatter queries
+
+Use `--engine native` when the query only needs local Markdown frontmatter and
+wikilink parent traversal. It does not call Obsidian, Dataview, or dynomark.
+
+```bash
+bob dataview --engine native --strict-paths --query '
+LIST
+FROM "ref"
+WHERE source_pdf
+  AND (
+    parent = [[ai_ref]]
+    OR parent.parent = [[ai_ref]]
+    OR parent.parent.parent = [[ai_ref]]
+    OR parent.parent.parent.parent = [[ai_ref]]
+    OR parent.parent.parent.parent.parent = [[ai_ref]]
+  )
+'
+```
+
+The native engine supports `LIST` queries with an optional quoted folder source
+such as `FROM "ref"`, plus `WHERE` expressions made from field truthiness,
+`field = [[wikilink]]`, string/boolean comparisons, `AND`, `OR`, and
+parentheses. Chained fields such as `parent.parent` resolve each intermediate
+frontmatter value as an Obsidian wikilink or bare note target. It supports
+`paths` and `json` output; source expressions and rendered Markdown remain
+Obsidian-only.

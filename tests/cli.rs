@@ -1160,17 +1160,33 @@ printf -- '- alpha.md\n'
 }
 
 #[test]
-fn dataview_dynomark_rejects_unsupported_combinations() {
+fn dataview_headless_engines_reject_unsupported_combinations() {
     let cases: &[(&[&str], &str)] = &[
         (
             &["dataview", "--engine", "dynomark", "--source", "#project"],
             "--engine dynomark supports DQL queries only",
         ),
         (
+            &["dataview", "--engine", "native", "--source", "#project"],
+            "--engine native supports DQL queries only",
+        ),
+        (
             &[
                 "dataview",
                 "--engine",
                 "dynomark",
+                "--format",
+                "markdown",
+                "--query",
+                "LIST FROM #project",
+            ],
+            "--format markdown requires the Obsidian engine",
+        ),
+        (
+            &[
+                "dataview",
+                "--engine",
+                "native",
                 "--format",
                 "markdown",
                 "--query",
@@ -1189,12 +1205,12 @@ fn dataview_dynomark_rejects_unsupported_combinations() {
         assert_eq!(
             output.status.code(),
             Some(2),
-            "unsupported dynomark combination should be a usage error:\n{}",
+            "unsupported headless combination should be a usage error:\n{}",
             format_output(&output)
         );
         assert!(
             stdout(&output).is_empty() && stderr(&output).contains(marker),
-            "expected dynomark validation error `{marker}`:\n{}",
+            "expected headless validation error `{marker}`:\n{}",
             format_output(&output)
         );
     }
@@ -1233,6 +1249,107 @@ fn dataview_dynomark_reports_missing_command() {
             && err.contains("dynomark command not found")
             && err.contains("BOB_DATAVIEW_DYNOMARK_COMMAND"),
         "missing dynomark error should be actionable:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn dataview_native_dql_paths_walks_parent_frontmatter_headlessly() {
+    let temp = TempDir::new("bob-cli-dataview-native-parents");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("ai_ref.md"), "---\n---\n");
+    write_file(&vault.join("sase.md"), "---\nparent: \"[[tools]]\"\n---\n");
+    write_file(
+        &vault.join("agent_ref.md"),
+        "---\nparent: \"[[ai_ref]]\"\n---\n",
+    );
+    write_file(
+        &vault.join("memory_ref.md"),
+        "---\nparent: \"[[agent_ref]]\"\n---\n",
+    );
+    write_file(
+        &vault.join("ref/papers/direct_ai.md"),
+        "---\nsource_pdf: lib/papers/direct-ai.pdf\nparent: \"[[ai_ref]]\"\n---\n",
+    );
+    write_file(
+        &vault.join("ref/papers/memory_os.md"),
+        "---\nsource_pdf: lib/papers/memory-os.pdf\nparent: \"[[memory_ref]]\"\n---\n",
+    );
+    write_file(
+        &vault.join("ref/papers/log_is_the_agent.md"),
+        "---\nsource_pdf: lib/papers/log-is-the-agent.pdf\nparent: \"[[sase]]\"\n---\n",
+    );
+    write_file(
+        &vault.join("ref/chat/obsidian-note-refactor.md"),
+        "---\nsource_pdf: lib/chat/obsidian-note-refactor.pdf\nparent: \"[[obsidian]]\"\n---\n",
+    );
+    write_file(
+        &vault.join("ref/papers/not_a_pdf.md"),
+        "---\nparent: \"[[memory_ref]]\"\n---\n",
+    );
+    let query = r#"
+LIST
+FROM "ref"
+WHERE source_pdf
+  AND (
+    parent = [[ai_ref]]
+    OR parent.parent = [[ai_ref]]
+    OR parent.parent.parent = [[ai_ref]]
+    OR parent.parent.parent.parent = [[ai_ref]]
+    OR parent.parent.parent.parent.parent = [[ai_ref]]
+  )
+"#;
+
+    let output = bob_command()
+        .arg("dataview")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .arg("--engine")
+        .arg("native")
+        .arg("--strict-paths")
+        .arg("--query")
+        .arg(query)
+        .output()
+        .expect("run native dataview parent query");
+
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        "ref/papers/direct_ai.md\nref/papers/memory_os.md\n",
+        "native parent query should only include source PDFs under ai_ref:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).is_empty(),
+        "native engine should keep stderr clean for supported queries:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn dataview_native_where_false_returns_no_rows() {
+    let temp = TempDir::new("bob-cli-dataview-native-false");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("ref/papers/memory_os.md"),
+        "---\nsource_pdf: lib/papers/memory-os.pdf\nparent: \"[[ai_ref]]\"\n---\n",
+    );
+
+    let output = bob_command()
+        .arg("dataview")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .arg("--engine")
+        .arg("native")
+        .arg("--query")
+        .arg("LIST FROM \"ref\" WHERE false")
+        .output()
+        .expect("run native dataview false query");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).is_empty() && stderr(&output).is_empty(),
+        "WHERE false should not return fallback rows:\n{}",
         format_output(&output)
     );
 }

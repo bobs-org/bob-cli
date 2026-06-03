@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env,
     ffi::{OsStr, OsString},
     fs,
@@ -224,6 +224,7 @@ enum OutputFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Engine {
     Dynomark,
+    Native,
     Obsidian,
 }
 
@@ -270,6 +271,7 @@ fn print_clap_error(error: clap::Error) -> i32 {
 fn run_request(request: &Request) -> Result<(), DataviewError> {
     match request.engine {
         Engine::Obsidian => run_obsidian(request),
+        Engine::Native => run_native(request),
         Engine::Dynomark => run_dynomark(request),
     }
 }
@@ -299,6 +301,20 @@ fn run_dynomark(request: &Request) -> Result<(), DataviewError> {
     let dynomark_output =
         parse_dynomark_stdout(&output.stdout, &request.vault.bob_dir);
     emit_dynomark_output(request, dynomark_output)
+}
+
+fn run_native(request: &Request) -> Result<(), DataviewError> {
+    let query = match &request.query {
+        QueryInput::Dql(input) => input.read_query()?,
+        QueryInput::Source(_) => unreachable!(
+            "native source expressions are rejected during argument parsing"
+        ),
+    };
+
+    let query = NativeQuery::parse(&query)?;
+    let vault = NativeVault::read(&request.vault.bob_dir)?;
+    let output = vault.evaluate(&query);
+    emit_native_output(request, output)
 }
 
 fn run_obsidian_eval(
@@ -608,6 +624,48 @@ fn emit_dynomark_output(
     }
 }
 
+fn emit_native_output(
+    request: &Request,
+    output: NativeOutput,
+) -> Result<(), DataviewError> {
+    match request.format {
+        OutputFormat::Paths => {
+            if !output.paths.is_empty() {
+                println!("{}", output.paths.join("\n"));
+            }
+            Ok(())
+        }
+        OutputFormat::Json => {
+            let values = output
+                .paths
+                .iter()
+                .map(|path| {
+                    serde_json::json!({
+                        "type": "link",
+                        "path": path,
+                        "display": null,
+                        "embed": false,
+                    })
+                })
+                .collect::<Vec<_>>();
+            print_json(serde_json::json!({
+                "engine": request.engine.as_str(),
+                "query_kind": "dql",
+                "format": request.format.as_str(),
+                "paths": output.paths,
+                "result": {
+                    "type": "list",
+                    "values": values,
+                },
+                "warnings": [],
+            }))
+        }
+        OutputFormat::Markdown => unreachable!(
+            "native markdown output is rejected during argument parsing"
+        ),
+    }
+}
+
 fn dynomark_warnings(request: &Request) -> Vec<String> {
     let mut warnings = vec![DYNOMARK_COMPAT_WARNING.to_string()];
     if request.vault.origin.is_some() {
@@ -674,6 +732,850 @@ struct DynomarkOutput {
     metadata: Vec<Value>,
     rendered: String,
     warnings: Vec<String>,
+}
+
+#[derive(Debug)]
+struct NativeOutput {
+    paths: Vec<String>,
+}
+
+#[derive(Debug)]
+struct NativeQuery {
+    source: Option<NativeSource>,
+    filter: Option<NativeExpr>,
+}
+
+#[derive(Debug)]
+struct NativeSource {
+    folder: String,
+}
+
+#[derive(Debug)]
+enum NativeExpr {
+    And(Box<NativeExpr>, Box<NativeExpr>),
+    Bool(bool),
+    Eq(Vec<String>, NativeValue),
+    Field(Vec<String>),
+    Or(Box<NativeExpr>, Box<NativeExpr>),
+}
+
+#[derive(Debug)]
+enum NativeValue {
+    Bool(bool),
+    Link(String),
+    String(String),
+}
+
+#[derive(Debug)]
+struct NativeVault {
+    pages: Vec<NativePage>,
+    by_path: HashMap<String, usize>,
+    by_stem: HashMap<String, Vec<usize>>,
+}
+
+#[derive(Debug)]
+struct NativePage {
+    path: String,
+    fields: HashMap<String, NativeFieldValue>,
+}
+
+#[derive(Debug)]
+enum NativeFieldValue {
+    Bool(bool),
+    Null,
+    String(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NativeToken {
+    And,
+    Bool(bool),
+    Dot,
+    Equal,
+    Eof,
+    From,
+    Identifier(String),
+    Link(String),
+    List,
+    LParen,
+    Or,
+    RParen,
+    String(String),
+    Where,
+}
+
+impl NativeQuery {
+    fn parse(query: &str) -> Result<Self, DataviewError> {
+        let tokens = NativeLexer::new(query)
+            .tokenize()
+            .map_err(native_query_error)?;
+        NativeParser::new(tokens)
+            .parse_query()
+            .map_err(native_query_error)
+    }
+}
+
+impl NativeVault {
+    fn read(bob_dir: &Path) -> Result<Self, DataviewError> {
+        let mut paths = Vec::new();
+        collect_native_markdown_paths(bob_dir, &mut paths)?;
+        paths.sort();
+
+        let mut pages = Vec::new();
+        for path in paths {
+            let contents = fs::read_to_string(&path).map_err(|error| {
+                DataviewError::NativeVaultRead {
+                    path: path.clone(),
+                    error,
+                }
+            })?;
+            let relative_path = path
+                .strip_prefix(bob_dir)
+                .map_err(|error| DataviewError::NativeQuery {
+                    message: format!(
+                        "vault path {} is outside {}: {error}",
+                        path.display(),
+                        bob_dir.display()
+                    ),
+                })?
+                .to_string_lossy()
+                .replace('\\', "/");
+            pages.push(NativePage {
+                path: relative_path,
+                fields: parse_native_frontmatter(&contents),
+            });
+        }
+
+        let mut by_path = HashMap::new();
+        let mut by_stem: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, page) in pages.iter().enumerate() {
+            by_path.insert(page.path.clone(), index);
+            if let Some(stem) = note_stem(&page.path) {
+                by_stem.entry(stem).or_default().push(index);
+            }
+        }
+
+        Ok(Self {
+            pages,
+            by_path,
+            by_stem,
+        })
+    }
+
+    fn evaluate(&self, query: &NativeQuery) -> NativeOutput {
+        let paths = self
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, page)| query.matches_source(page))
+            .filter(|(index, _)| query.matches_filter(self, *index))
+            .map(|(_, page)| page.path.clone())
+            .collect();
+
+        NativeOutput { paths }
+    }
+
+    fn field_chain_value(
+        &self,
+        page_index: usize,
+        chain: &[String],
+    ) -> Option<&NativeFieldValue> {
+        let mut page_index = page_index;
+        for (position, field) in chain.iter().enumerate() {
+            let value = self.pages.get(page_index)?.fields.get(field)?;
+            if position + 1 == chain.len() {
+                return Some(value);
+            }
+            page_index = self.resolve_field_link(value)?;
+        }
+
+        None
+    }
+
+    fn resolve_field_link(&self, value: &NativeFieldValue) -> Option<usize> {
+        match value {
+            NativeFieldValue::String(value) => self.resolve_link(value),
+            NativeFieldValue::Bool(_) | NativeFieldValue::Null => None,
+        }
+    }
+
+    fn resolve_link(&self, raw: &str) -> Option<usize> {
+        let target = native_link_target(raw)?;
+        let path = normalize_note_path(&target).ok()?;
+        if let Some(index) = self.by_path.get(&path) {
+            return Some(*index);
+        }
+
+        if target.contains('/') || target.contains('\\') {
+            return None;
+        }
+
+        let stem = path.strip_suffix(".md").unwrap_or(&path);
+        match self.by_stem.get(stem).map(Vec::as_slice) {
+            Some([index]) => Some(*index),
+            _ => None,
+        }
+    }
+
+    fn field_value_matches_link(
+        &self,
+        value: &NativeFieldValue,
+        expected: &str,
+    ) -> bool {
+        let NativeFieldValue::String(actual) = value else {
+            return false;
+        };
+
+        match (self.resolve_link(actual), self.resolve_link(expected)) {
+            (Some(actual), Some(expected)) => actual == expected,
+            _ => comparable_link_path(actual) == comparable_link_path(expected),
+        }
+    }
+}
+
+impl NativeQuery {
+    fn matches_source(&self, page: &NativePage) -> bool {
+        let Some(source) = &self.source else {
+            return true;
+        };
+        let prefix = format!("{}/", source.folder);
+        page.path.starts_with(&prefix)
+    }
+
+    fn matches_filter(&self, vault: &NativeVault, page_index: usize) -> bool {
+        self.filter
+            .as_ref()
+            .is_none_or(|expr| expr.evaluate(vault, page_index))
+    }
+}
+
+impl NativeExpr {
+    fn evaluate(&self, vault: &NativeVault, page_index: usize) -> bool {
+        match self {
+            Self::And(left, right) => {
+                left.evaluate(vault, page_index)
+                    && right.evaluate(vault, page_index)
+            }
+            Self::Bool(value) => *value,
+            Self::Eq(chain, value) => {
+                let Some(actual) = vault.field_chain_value(page_index, chain)
+                else {
+                    return false;
+                };
+                value.matches(vault, actual)
+            }
+            Self::Field(chain) => vault
+                .field_chain_value(page_index, chain)
+                .is_some_and(NativeFieldValue::is_truthy),
+            Self::Or(left, right) => {
+                left.evaluate(vault, page_index)
+                    || right.evaluate(vault, page_index)
+            }
+        }
+    }
+}
+
+impl NativeValue {
+    fn matches(&self, vault: &NativeVault, actual: &NativeFieldValue) -> bool {
+        match self {
+            Self::Bool(expected) => actual.as_bool() == Some(*expected),
+            Self::Link(expected) => {
+                vault.field_value_matches_link(actual, expected)
+            }
+            Self::String(expected) => {
+                actual.as_str() == Some(expected.as_str())
+            }
+        }
+    }
+}
+
+impl NativeFieldValue {
+    fn is_truthy(&self) -> bool {
+        match self {
+            Self::Bool(value) => *value,
+            Self::Null => false,
+            Self::String(value) => !value.is_empty(),
+        }
+    }
+
+    fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(value) => Some(*value),
+            Self::Null | Self::String(_) => None,
+        }
+    }
+
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value),
+            Self::Bool(_) | Self::Null => None,
+        }
+    }
+}
+
+struct NativeLexer<'a> {
+    chars: std::iter::Peekable<std::str::Chars<'a>>,
+}
+
+impl<'a> NativeLexer<'a> {
+    fn new(input: &'a str) -> Self {
+        Self {
+            chars: input.chars().peekable(),
+        }
+    }
+
+    fn tokenize(mut self) -> Result<Vec<NativeToken>, String> {
+        let mut tokens = Vec::new();
+        while let Some(ch) = self.chars.next() {
+            match ch {
+                ch if ch.is_whitespace() => {}
+                '(' => tokens.push(NativeToken::LParen),
+                ')' => tokens.push(NativeToken::RParen),
+                '.' => tokens.push(NativeToken::Dot),
+                '=' => tokens.push(NativeToken::Equal),
+                '"' => tokens
+                    .push(NativeToken::String(self.read_quoted_string('"')?)),
+                '\'' => tokens
+                    .push(NativeToken::String(self.read_quoted_string('\'')?)),
+                '[' if self.chars.peek() == Some(&'[') => {
+                    self.chars.next();
+                    tokens.push(NativeToken::Link(self.read_wikilink()?));
+                }
+                ch if is_native_identifier_start(ch) => {
+                    let identifier = self.read_identifier(ch);
+                    tokens.push(native_identifier_token(identifier));
+                }
+                other => {
+                    return Err(format!(
+                        "unsupported token {other:?}; native engine supports \
+                         LIST, FROM, WHERE, AND, OR, parentheses, field \
+                         names, strings, booleans, and wikilinks"
+                    ));
+                }
+            }
+        }
+        tokens.push(NativeToken::Eof);
+        Ok(tokens)
+    }
+
+    fn read_quoted_string(&mut self, quote: char) -> Result<String, String> {
+        let mut output = String::new();
+        while let Some(ch) = self.chars.next() {
+            if ch == quote {
+                return Ok(output);
+            }
+            if ch == '\\' && quote == '"' {
+                let Some(escaped) = self.chars.next() else {
+                    return Err("unterminated escape in string literal".into());
+                };
+                output.push(match escaped {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    other => other,
+                });
+            } else {
+                output.push(ch);
+            }
+        }
+
+        Err("unterminated string literal".into())
+    }
+
+    fn read_wikilink(&mut self) -> Result<String, String> {
+        let mut output = String::new();
+        while let Some(ch) = self.chars.next() {
+            if ch == ']' && self.chars.peek() == Some(&']') {
+                self.chars.next();
+                return Ok(output);
+            }
+            output.push(ch);
+        }
+
+        Err("unterminated wikilink literal".into())
+    }
+
+    fn read_identifier(&mut self, first: char) -> String {
+        let mut output = String::from(first);
+        while self
+            .chars
+            .peek()
+            .is_some_and(|ch| is_native_identifier_continue(*ch))
+        {
+            output.push(
+                self.chars
+                    .next()
+                    .expect("peek confirmed identifier character"),
+            );
+        }
+        output
+    }
+}
+
+struct NativeParser {
+    tokens: Vec<NativeToken>,
+    position: usize,
+}
+
+impl NativeParser {
+    fn new(tokens: Vec<NativeToken>) -> Self {
+        Self {
+            tokens,
+            position: 0,
+        }
+    }
+
+    fn parse_query(&mut self) -> Result<NativeQuery, String> {
+        self.expect_list()?;
+        let source = if self.take_from() {
+            Some(NativeSource {
+                folder: normalize_native_source_folder(
+                    &self.expect_string_source()?,
+                )?,
+            })
+        } else {
+            None
+        };
+        let filter = if self.take_where() {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        self.expect_eof()?;
+        Ok(NativeQuery { source, filter })
+    }
+
+    fn parse_expr(&mut self) -> Result<NativeExpr, String> {
+        self.parse_or()
+    }
+
+    fn parse_or(&mut self) -> Result<NativeExpr, String> {
+        let mut expr = self.parse_and()?;
+        while self.take_or() {
+            let right = self.parse_and()?;
+            expr = NativeExpr::Or(Box::new(expr), Box::new(right));
+        }
+        Ok(expr)
+    }
+
+    fn parse_and(&mut self) -> Result<NativeExpr, String> {
+        let mut expr = self.parse_primary()?;
+        while self.take_and() {
+            let right = self.parse_primary()?;
+            expr = NativeExpr::And(Box::new(expr), Box::new(right));
+        }
+        Ok(expr)
+    }
+
+    fn parse_primary(&mut self) -> Result<NativeExpr, String> {
+        match self.peek() {
+            NativeToken::Bool(value) => {
+                let value = *value;
+                self.position += 1;
+                Ok(NativeExpr::Bool(value))
+            }
+            NativeToken::Identifier(_) => {
+                let chain = self.parse_field_chain()?;
+                if self.take_equal() {
+                    Ok(NativeExpr::Eq(chain, self.parse_value()?))
+                } else {
+                    Ok(NativeExpr::Field(chain))
+                }
+            }
+            NativeToken::LParen => {
+                self.position += 1;
+                let expr = self.parse_expr()?;
+                self.expect_rparen()?;
+                Ok(expr)
+            }
+            token => Err(format!(
+                "expected expression, found {}; native engine supports field \
+                 truthiness, field = [[link]], AND, OR, booleans, and \
+                 parentheses",
+                native_token_name(token)
+            )),
+        }
+    }
+
+    fn parse_field_chain(&mut self) -> Result<Vec<String>, String> {
+        let mut chain = vec![self.expect_identifier()?];
+        while self.take_dot() {
+            chain.push(self.expect_identifier()?);
+        }
+        Ok(chain)
+    }
+
+    fn parse_value(&mut self) -> Result<NativeValue, String> {
+        match self.peek() {
+            NativeToken::Bool(value) => {
+                let value = *value;
+                self.position += 1;
+                Ok(NativeValue::Bool(value))
+            }
+            NativeToken::Link(value) => {
+                let value = value.clone();
+                self.position += 1;
+                Ok(NativeValue::Link(value))
+            }
+            NativeToken::String(value) => {
+                let value = value.clone();
+                self.position += 1;
+                Ok(NativeValue::String(value))
+            }
+            token => Err(format!(
+                "expected comparison value, found {}; native engine supports \
+                 booleans, strings, and wikilinks as comparison values",
+                native_token_name(token)
+            )),
+        }
+    }
+
+    fn expect_list(&mut self) -> Result<(), String> {
+        if matches!(self.peek(), NativeToken::List) {
+            self.position += 1;
+            return Ok(());
+        }
+        Err(format!(
+            "native engine supports LIST queries only; found {}",
+            native_token_name(self.peek())
+        ))
+    }
+
+    fn take_from(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::From))
+    }
+
+    fn take_where(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::Where))
+    }
+
+    fn take_and(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::And))
+    }
+
+    fn take_or(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::Or))
+    }
+
+    fn take_dot(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::Dot))
+    }
+
+    fn take_equal(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::Equal))
+    }
+
+    fn take(&mut self, predicate: impl FnOnce(&NativeToken) -> bool) -> bool {
+        if predicate(self.peek()) {
+            self.position += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect_identifier(&mut self) -> Result<String, String> {
+        let NativeToken::Identifier(identifier) = self.peek() else {
+            return Err(format!(
+                "expected field name, found {}",
+                native_token_name(self.peek())
+            ));
+        };
+        let identifier = identifier.clone();
+        self.position += 1;
+        Ok(identifier)
+    }
+
+    fn expect_string_source(&mut self) -> Result<String, String> {
+        let NativeToken::String(source) = self.peek() else {
+            return Err(format!(
+                "native engine supports quoted folder sources only, such as \
+                 FROM \"ref\"; found {}",
+                native_token_name(self.peek())
+            ));
+        };
+        let source = source.clone();
+        self.position += 1;
+        Ok(source)
+    }
+
+    fn expect_rparen(&mut self) -> Result<(), String> {
+        if matches!(self.peek(), NativeToken::RParen) {
+            self.position += 1;
+            return Ok(());
+        }
+        Err(format!(
+            "expected ')', found {}",
+            native_token_name(self.peek())
+        ))
+    }
+
+    fn expect_eof(&self) -> Result<(), String> {
+        if matches!(self.peek(), NativeToken::Eof) {
+            return Ok(());
+        }
+        Err(format!(
+            "unexpected {} after native query; native engine supports LIST \
+             FROM \"folder\" WHERE <expression>",
+            native_token_name(self.peek())
+        ))
+    }
+
+    fn peek(&self) -> &NativeToken {
+        self.tokens
+            .get(self.position)
+            .unwrap_or_else(|| self.tokens.last().expect("lexer adds EOF"))
+    }
+}
+
+fn native_query_error(message: String) -> DataviewError {
+    DataviewError::NativeQuery { message }
+}
+
+fn collect_native_markdown_paths(
+    directory: &Path,
+    paths: &mut Vec<PathBuf>,
+) -> Result<(), DataviewError> {
+    let entries = fs::read_dir(directory).map_err(|error| {
+        DataviewError::NativeVaultRead {
+            path: directory.to_path_buf(),
+            error,
+        }
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| DataviewError::NativeVaultRead {
+            path: directory.to_path_buf(),
+            error,
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            DataviewError::NativeVaultRead {
+                path: path.clone(),
+                error,
+            }
+        })?;
+        if file_type.is_dir() {
+            if !is_hidden_path_component(&entry.file_name()) {
+                collect_native_markdown_paths(&path, paths)?;
+            }
+        } else if file_type.is_file() && has_markdown_extension(&path) {
+            paths.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn is_hidden_path_component(component: &OsStr) -> bool {
+    component.to_string_lossy().starts_with('.')
+}
+
+fn has_markdown_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+}
+
+fn parse_native_frontmatter(
+    contents: &str,
+) -> HashMap<String, NativeFieldValue> {
+    let Some(frontmatter) = native_frontmatter_block(contents) else {
+        return HashMap::new();
+    };
+
+    let mut fields = HashMap::new();
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with('-')
+        {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        fields.insert(
+            key.to_string(),
+            parse_native_frontmatter_scalar(value.trim()),
+        );
+    }
+    fields
+}
+
+fn native_frontmatter_block(contents: &str) -> Option<&str> {
+    let marker_len = if contents.starts_with("---\r\n") {
+        5
+    } else if contents.starts_with("---\n") {
+        4
+    } else {
+        return None;
+    };
+
+    let rest = &contents[marker_len..];
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        let line_content = line.trim_end_matches(['\r', '\n']);
+        if line_content == "---" {
+            return Some(&rest[..offset]);
+        }
+        offset += line.len();
+    }
+
+    None
+}
+
+fn parse_native_frontmatter_scalar(raw: &str) -> NativeFieldValue {
+    let value = raw.trim();
+    if value.eq_ignore_ascii_case("null") || value == "~" {
+        return NativeFieldValue::Null;
+    }
+    if value.eq_ignore_ascii_case("true") {
+        return NativeFieldValue::Bool(true);
+    }
+    if value.eq_ignore_ascii_case("false") {
+        return NativeFieldValue::Bool(false);
+    }
+
+    NativeFieldValue::String(unquote_native_scalar(value))
+}
+
+fn unquote_native_scalar(value: &str) -> String {
+    if value.len() < 2 {
+        return value.to_string();
+    }
+
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    let Some(last) = value.chars().last() else {
+        return String::new();
+    };
+    if !matches!(first, '"' | '\'') || first != last {
+        return value.to_string();
+    }
+
+    let inner = &value[first.len_utf8()..value.len() - last.len_utf8()];
+    if first == '\'' {
+        return inner.replace("''", "'");
+    }
+
+    let mut output = String::new();
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            let Some(escaped) = chars.next() else {
+                output.push(ch);
+                break;
+            };
+            output.push(match escaped {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                other => other,
+            });
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+fn normalize_native_source_folder(source: &str) -> Result<String, String> {
+    let mut folder = source.trim().replace('\\', "/");
+    while let Some(stripped) = folder.strip_prefix("./") {
+        folder = stripped.to_string();
+    }
+    folder = folder.trim_matches('/').to_string();
+
+    if folder.is_empty() {
+        return Err("native folder source must not be empty".to_string());
+    }
+    if folder.contains('\0') {
+        return Err("native folder source contains a NUL byte".to_string());
+    }
+    for segment in folder.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(format!(
+                "native folder source {source:?} is not a clean \
+                 vault-relative folder"
+            ));
+        }
+    }
+
+    Ok(folder)
+}
+
+fn native_link_target(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let link = if let Some(rest) = trimmed.strip_prefix("[[") {
+        let end = rest.find("]]")?;
+        &rest[..end]
+    } else {
+        trimmed
+    };
+    let before_alias = link.split_once('|').map_or(link, |(target, _)| target);
+    let before_subpath = before_alias
+        .split_once('#')
+        .map_or(before_alias, |(target, _)| target);
+    let target = before_subpath.trim().replace('\\', "/");
+    (!target.is_empty()).then_some(target)
+}
+
+fn comparable_link_path(raw: &str) -> Option<String> {
+    native_link_target(raw).and_then(|target| normalize_note_path(&target).ok())
+}
+
+fn note_stem(path: &str) -> Option<String> {
+    Path::new(path)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+}
+
+fn is_native_identifier_start(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphabetic()
+}
+
+fn is_native_identifier_continue(ch: char) -> bool {
+    ch == '_' || ch == '-' || ch.is_ascii_alphanumeric()
+}
+
+fn native_identifier_token(identifier: String) -> NativeToken {
+    match identifier.to_ascii_lowercase().as_str() {
+        "and" => NativeToken::And,
+        "false" => NativeToken::Bool(false),
+        "from" => NativeToken::From,
+        "list" => NativeToken::List,
+        "or" => NativeToken::Or,
+        "true" => NativeToken::Bool(true),
+        "where" => NativeToken::Where,
+        _ => NativeToken::Identifier(identifier),
+    }
+}
+
+fn native_token_name(token: &NativeToken) -> &'static str {
+    match token {
+        NativeToken::And => "AND",
+        NativeToken::Bool(_) => "boolean",
+        NativeToken::Dot => "'.'",
+        NativeToken::Equal => "'='",
+        NativeToken::Eof => "end of query",
+        NativeToken::From => "FROM",
+        NativeToken::Identifier(_) => "field name",
+        NativeToken::Link(_) => "wikilink",
+        NativeToken::List => "LIST",
+        NativeToken::LParen => "'('",
+        NativeToken::Or => "OR",
+        NativeToken::RParen => "')'",
+        NativeToken::String(_) => "string",
+        NativeToken::Where => "WHERE",
+    }
 }
 
 fn parse_dynomark_stdout(stdout: &[u8], bob_dir: &Path) -> DynomarkOutput {
@@ -1221,6 +2123,13 @@ enum DataviewError {
     MissingProtocolSentinel {
         output: String,
     },
+    NativeQuery {
+        message: String,
+    },
+    NativeVaultRead {
+        path: PathBuf,
+        error: io::Error,
+    },
     ObsidianFailed {
         exit_code: i32,
         output: String,
@@ -1310,6 +2219,16 @@ impl DataviewError {
                 if !output.is_empty() {
                     eprintln!("obsidian stdout excerpt: {output}");
                 }
+            }
+            Self::NativeQuery { message } => {
+                eprintln!("{COMMAND_NAME}: native query failed");
+                eprintln!("{message}");
+            }
+            Self::NativeVaultRead { path, error } => {
+                eprintln!(
+                    "{COMMAND_NAME}: failed to read vault path {}: {error}",
+                    path.display()
+                );
             }
             Self::ObsidianFailed { exit_code, output } => {
                 eprintln!(
@@ -1437,7 +2356,8 @@ Obsidian vault.\n\n\
 Source expressions return matching page paths. DQL queries support path, JSON, \
 and markdown output modes. The default Obsidian engine is the exact Dataview \
 runtime. The explicit dynomark engine is a partial headless fallback for DQL \
-paths and JSON output.",
+paths and JSON output. The native engine is a headless local frontmatter \
+subset for LIST queries.",
         )
         .after_help(
             "Examples:\n  bob dataview --source '#project and -\"archive\"'\n  bob dataview --query 'LIST FROM #waiting'\n  bob dataview --format json --query-file ~/queries/projects.dql",
@@ -1473,8 +2393,8 @@ fn engine_arg() -> Arg {
         .long("engine")
         .value_name("ENGINE")
         .default_value("obsidian")
-        .value_parser(["dynomark", "obsidian"])
-        .help("Query engine: obsidian for exact Dataview, dynomark for partial headless DQL")
+        .value_parser(["dynomark", "native", "obsidian"])
+        .help("Query engine: obsidian for exact Dataview, dynomark for partial headless DQL, native for local frontmatter DQL")
 }
 
 fn format_arg() -> Arg {
@@ -1565,7 +2485,17 @@ impl Request {
             ));
         }
 
-        if engine == Engine::Dynomark && format == OutputFormat::Markdown {
+        if engine == Engine::Native && query.is_source() {
+            return Err(command.error(
+                ErrorKind::ArgumentConflict,
+                "--engine native supports DQL queries only; use --query or \
+                 --query-file",
+            ));
+        }
+
+        if matches!(engine, Engine::Dynomark | Engine::Native)
+            && format == OutputFormat::Markdown
+        {
             return Err(command.error(
                 ErrorKind::ArgumentConflict,
                 "--format markdown requires the Obsidian engine for \
@@ -1580,7 +2510,7 @@ impl Request {
             vault: VaultConfig::from_matches(
                 matches,
                 command,
-                engine == Engine::Dynomark,
+                matches!(engine, Engine::Dynomark | Engine::Native),
             )?,
             strict_paths,
         })
@@ -1684,6 +2614,7 @@ impl Engine {
             .as_str()
         {
             "dynomark" => Self::Dynomark,
+            "native" => Self::Native,
             "obsidian" => Self::Obsidian,
             value => unreachable!("unexpected engine value from clap: {value}"),
         }
@@ -1692,6 +2623,7 @@ impl Engine {
     fn as_str(self) -> &'static str {
         match self {
             Self::Dynomark => "dynomark",
+            Self::Native => "native",
             Self::Obsidian => "obsidian",
         }
     }
