@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     env,
     ffi::{OsStr, OsString},
     fs,
@@ -19,7 +19,14 @@ use clap::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use self::{
+    index::DataviewIndex,
+    value::{DataviewLink, DataviewValue},
+};
 use super::env as bob_env;
+
+mod index;
+mod value;
 
 const COMMAND_NAME: &str = "bob dataview";
 const ENV_DYNOMARK_COMMAND: &str = "BOB_DATAVIEW_DYNOMARK_COMMAND";
@@ -630,6 +637,7 @@ fn emit_native_output(
 ) -> Result<(), DataviewError> {
     match request.format {
         OutputFormat::Paths => {
+            emit_warnings(&output.warnings);
             if !output.paths.is_empty() {
                 println!("{}", output.paths.join("\n"));
             }
@@ -662,7 +670,7 @@ fn emit_native_output(
                 "format": request.format.as_str(),
                 "paths": output.paths,
                 "result": result,
-                "warnings": [],
+                "warnings": output.warnings,
             }))
         }
         OutputFormat::Markdown => unreachable!(
@@ -743,6 +751,7 @@ struct DynomarkOutput {
 struct NativeOutput {
     paths: Vec<String>,
     result: NativeResult,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -790,22 +799,7 @@ enum NativeValue {
 
 #[derive(Debug)]
 struct NativeVault {
-    pages: Vec<NativePage>,
-    by_path: HashMap<String, usize>,
-    by_stem: HashMap<String, Vec<usize>>,
-}
-
-#[derive(Debug)]
-struct NativePage {
-    path: String,
-    fields: HashMap<String, NativeFieldValue>,
-}
-
-#[derive(Debug)]
-enum NativeFieldValue {
-    Bool(bool),
-    Null,
-    String(String),
+    index: DataviewIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -841,63 +835,24 @@ impl NativeQuery {
 
 impl NativeVault {
     fn read(bob_dir: &Path) -> Result<Self, DataviewError> {
-        let mut paths = Vec::new();
-        collect_native_markdown_paths(bob_dir, &mut paths)?;
-        paths.sort();
-
-        let mut pages = Vec::new();
-        for path in paths {
-            let contents = fs::read_to_string(&path).map_err(|error| {
-                DataviewError::NativeVaultRead {
-                    path: path.clone(),
-                    error,
-                }
-            })?;
-            let relative_path = path
-                .strip_prefix(bob_dir)
-                .map_err(|error| DataviewError::NativeQuery {
-                    message: format!(
-                        "vault path {} is outside {}: {error}",
-                        path.display(),
-                        bob_dir.display()
-                    ),
-                })?
-                .to_string_lossy()
-                .replace('\\', "/");
-            pages.push(NativePage {
-                path: relative_path,
-                fields: parse_native_frontmatter(&contents),
-            });
-        }
-
-        let mut by_path = HashMap::new();
-        let mut by_stem: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, page) in pages.iter().enumerate() {
-            by_path.insert(page.path.clone(), index);
-            if let Some(stem) = note_stem(&page.path) {
-                by_stem.entry(stem).or_default().push(index);
-            }
-        }
-
         Ok(Self {
-            pages,
-            by_path,
-            by_stem,
+            index: DataviewIndex::read(bob_dir)?,
         })
     }
 
     fn evaluate(&self, query: &NativeQuery) -> NativeOutput {
         let page_indices = self
+            .index
             .pages
             .iter()
             .enumerate()
-            .filter(|(_, page)| query.matches_source(page))
+            .filter(|(_, page)| query.matches_source_path(&page.path))
             .filter(|(index, _)| query.matches_filter(self, *index))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         let paths = page_indices
             .iter()
-            .map(|index| self.pages[*index].path.clone())
+            .map(|index| self.index.pages[*index].path.clone())
             .collect::<Vec<_>>();
         let result = match &query.kind {
             NativeQueryKind::List => NativeResult::List,
@@ -913,7 +868,7 @@ impl NativeVault {
                             .iter()
                             .map(|column| {
                                 self.field_chain_value(*page_index, column)
-                                    .map(native_field_value_to_json)
+                                    .map(DataviewValue::to_plain_json)
                                     .unwrap_or(Value::Null)
                             })
                             .collect()
@@ -922,74 +877,87 @@ impl NativeVault {
             },
         };
 
-        NativeOutput { paths, result }
+        NativeOutput {
+            paths,
+            result,
+            warnings: self.index.warnings.clone(),
+        }
     }
 
     fn field_chain_value(
         &self,
         page_index: usize,
         chain: &[String],
-    ) -> Option<&NativeFieldValue> {
-        let mut page_index = page_index;
+    ) -> Option<&DataviewValue> {
+        let mut cursor = FieldCursor::Page(page_index);
         for (position, field) in chain.iter().enumerate() {
-            let value = self.pages.get(page_index)?.fields.get(field)?;
+            let value = match cursor {
+                FieldCursor::Page(page_index) => {
+                    self.index.pages.get(page_index)?.fields.get(field)?
+                }
+                FieldCursor::Object(object) => object.get(field)?,
+            };
             if position + 1 == chain.len() {
                 return Some(value);
             }
-            page_index = self.resolve_field_link(value)?;
+            cursor = match value {
+                DataviewValue::Object(object) => FieldCursor::Object(object),
+                DataviewValue::Link(link) => {
+                    FieldCursor::Page(self.resolve_link_path(&link.path)?)
+                }
+                DataviewValue::String(value) => {
+                    FieldCursor::Page(self.resolve_link(value)?)
+                }
+                DataviewValue::Null
+                | DataviewValue::Bool(_)
+                | DataviewValue::Number(_)
+                | DataviewValue::Date(_)
+                | DataviewValue::DateTime(_)
+                | DataviewValue::Duration(_)
+                | DataviewValue::Array(_) => return None,
+            };
         }
 
         None
     }
 
-    fn resolve_field_link(&self, value: &NativeFieldValue) -> Option<usize> {
-        match value {
-            NativeFieldValue::String(value) => self.resolve_link(value),
-            NativeFieldValue::Bool(_) | NativeFieldValue::Null => None,
-        }
+    fn resolve_link(&self, raw: &str) -> Option<usize> {
+        self.index
+            .resolve_link_path(raw)
+            .and_then(|path| self.resolve_link_path(&path))
     }
 
-    fn resolve_link(&self, raw: &str) -> Option<usize> {
-        let target = native_link_target(raw)?;
-        let path = normalize_note_path(&target).ok()?;
-        if let Some(index) = self.by_path.get(&path) {
-            return Some(*index);
-        }
-
-        if target.contains('/') || target.contains('\\') {
-            return None;
-        }
-
-        let stem = path.strip_suffix(".md").unwrap_or(&path);
-        match self.by_stem.get(stem).map(Vec::as_slice) {
-            Some([index]) => Some(*index),
-            _ => None,
-        }
+    fn resolve_link_path(&self, path: &str) -> Option<usize> {
+        let path = path.split_once('#').map_or(path, |(path, _)| path);
+        self.index.by_path.get(path).copied()
     }
 
     fn field_value_matches_link(
         &self,
-        value: &NativeFieldValue,
+        value: &DataviewValue,
         expected: &str,
     ) -> bool {
-        let NativeFieldValue::String(actual) = value else {
-            return false;
+        let actual = match value {
+            DataviewValue::Link(link) => Some(link.path.clone()),
+            DataviewValue::String(value) => comparable_link_path(value),
+            _ => None,
         };
+        let Some(actual) = actual else { return false };
 
-        match (self.resolve_link(actual), self.resolve_link(expected)) {
+        match (self.resolve_link_path(&actual), self.resolve_link(expected)) {
             (Some(actual), Some(expected)) => actual == expected,
-            _ => comparable_link_path(actual) == comparable_link_path(expected),
+            _ => Some(actual) == comparable_link_path(expected),
         }
     }
 }
 
 impl NativeQuery {
-    fn matches_source(&self, page: &NativePage) -> bool {
+    fn matches_source_path(&self, path: &str) -> bool {
         let Some(source) = &self.source else {
             return true;
         };
         let prefix = format!("{}/", source.folder);
-        page.path.starts_with(&prefix)
+        path.starts_with(&prefix)
     }
 
     fn matches_filter(&self, vault: &NativeVault, page_index: usize) -> bool {
@@ -1016,7 +984,7 @@ impl NativeExpr {
             }
             Self::Field(chain) => vault
                 .field_chain_value(page_index, chain)
-                .is_some_and(NativeFieldValue::is_truthy),
+                .is_some_and(DataviewValue::is_truthy),
             Self::Or(left, right) => {
                 left.evaluate(vault, page_index)
                     || right.evaluate(vault, page_index)
@@ -1025,8 +993,13 @@ impl NativeExpr {
     }
 }
 
+enum FieldCursor<'a> {
+    Page(usize),
+    Object(&'a std::collections::BTreeMap<String, DataviewValue>),
+}
+
 impl NativeValue {
-    fn matches(&self, vault: &NativeVault, actual: &NativeFieldValue) -> bool {
+    fn matches(&self, vault: &NativeVault, actual: &DataviewValue) -> bool {
         match self {
             Self::Bool(expected) => actual.as_bool() == Some(*expected),
             Self::Link(expected) => {
@@ -1039,55 +1012,8 @@ impl NativeValue {
     }
 }
 
-impl NativeFieldValue {
-    fn is_truthy(&self) -> bool {
-        match self {
-            Self::Bool(value) => *value,
-            Self::Null => false,
-            Self::String(value) => !value.is_empty(),
-        }
-    }
-
-    fn as_bool(&self) -> Option<bool> {
-        match self {
-            Self::Bool(value) => Some(*value),
-            Self::Null | Self::String(_) => None,
-        }
-    }
-
-    fn as_str(&self) -> Option<&str> {
-        match self {
-            Self::String(value) => Some(value),
-            Self::Bool(_) | Self::Null => None,
-        }
-    }
-}
-
-fn native_field_value_to_json(value: &NativeFieldValue) -> Value {
-    match value {
-        NativeFieldValue::Bool(value) => Value::Bool(*value),
-        NativeFieldValue::Null => Value::Null,
-        NativeFieldValue::String(value) => native_wikilink_json(value)
-            .unwrap_or_else(|| Value::String(value.clone())),
-    }
-}
-
-fn native_wikilink_json(raw: &str) -> Option<Value> {
-    if !raw.trim_start().starts_with("[[") {
-        return None;
-    }
-    let target = native_link_target(raw)?;
-    let path = normalize_note_path(&target).ok()?;
-    Some(native_link_json_for_path(&path))
-}
-
 fn native_link_json_for_path(path: &str) -> Value {
-    serde_json::json!({
-        "type": "link",
-        "path": path,
-        "display": null,
-        "embed": false,
-    })
+    DataviewValue::Link(DataviewLink::page(path)).to_plain_json()
 }
 
 struct NativeLexer<'a> {
@@ -1474,37 +1400,6 @@ fn has_markdown_extension(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
-fn parse_native_frontmatter(
-    contents: &str,
-) -> HashMap<String, NativeFieldValue> {
-    let Some(frontmatter) = native_frontmatter_block(contents) else {
-        return HashMap::new();
-    };
-
-    let mut fields = HashMap::new();
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty()
-            || trimmed.starts_with('#')
-            || trimmed.starts_with('-')
-        {
-            continue;
-        }
-        let Some((key, value)) = trimmed.split_once(':') else {
-            continue;
-        };
-        let key = key.trim();
-        if key.is_empty() {
-            continue;
-        }
-        fields.insert(
-            key.to_string(),
-            parse_native_frontmatter_scalar(value.trim()),
-        );
-    }
-    fields
-}
-
 fn native_frontmatter_block(contents: &str) -> Option<&str> {
     let marker_len = if contents.starts_with("---\r\n") {
         5
@@ -1525,21 +1420,6 @@ fn native_frontmatter_block(contents: &str) -> Option<&str> {
     }
 
     None
-}
-
-fn parse_native_frontmatter_scalar(raw: &str) -> NativeFieldValue {
-    let value = raw.trim();
-    if value.eq_ignore_ascii_case("null") || value == "~" {
-        return NativeFieldValue::Null;
-    }
-    if value.eq_ignore_ascii_case("true") {
-        return NativeFieldValue::Bool(true);
-    }
-    if value.eq_ignore_ascii_case("false") {
-        return NativeFieldValue::Bool(false);
-    }
-
-    NativeFieldValue::String(unquote_native_scalar(value))
 }
 
 fn unquote_native_scalar(value: &str) -> String {

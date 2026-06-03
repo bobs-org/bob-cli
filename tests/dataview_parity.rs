@@ -162,7 +162,7 @@ fn dataview_native_current_json_golden_uses_bob_wrapper_shape() {
                         {
                             "type": "link",
                             "path": "People/Ada Lovelace.md",
-                            "display": null,
+                            "display": "Ada",
                             "embed": false
                         },
                         true,
@@ -186,6 +186,168 @@ fn dataview_native_current_json_golden_uses_bob_wrapper_shape() {
             },
             "warnings": []
         }),
+    );
+}
+
+#[test]
+fn dataview_native_index_values_cover_yaml_inline_dates_and_links() {
+    let output = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"TABLE aliases, metrics.points, due, started, estimate, status-inline, budget, reviewer, related FROM "Projects""#,
+    ]);
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json = json_stdout(&output);
+    assert_eq!(
+        json["paths"],
+        json!(["Projects/Alpha.md", "Projects/Beta.md", "Projects/Gamma.md"])
+    );
+    let values = json["result"]["values"].as_array().expect("table values");
+
+    assert_eq!(values[0][0], json!(["Alpha", "Project Alpha"]));
+    assert_eq!(values[0][1], 8);
+    assert_eq!(values[0][2], "2026-06-15");
+    assert_eq!(values[0][3], "2026-06-01T09:30:00");
+    assert_eq!(values[0][4], "PT2H");
+    assert_eq!(values[0][5], "active");
+    assert_eq!(values[0][6], 42);
+    assert_eq!(values[0][7], dataview_link("People/Grace Hopper.md", None));
+    assert_eq!(
+        values[0][8],
+        json!([dataview_link("Projects/Beta.md", None)])
+    );
+
+    assert_eq!(values[1][0], json!(["Beta Project"]));
+    assert_eq!(values[1][2], "2026-07-01");
+    assert_eq!(values[1][4], "P3D");
+    assert!(values[2][2].is_null(), "blank YAML value should be null");
+}
+
+#[test]
+fn dataview_native_index_builds_file_metadata_and_link_graph() {
+    let output = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"TABLE file.name, file.folder, file.path, file.link, file.tags, file.etags, file.aliases, file.outlinks, file.inlinks, file.day, file.starred FROM "Projects""#,
+    ]);
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json = json_stdout(&output);
+    let values = json["result"]["values"].as_array().expect("table values");
+    let alpha = values[0].as_array().expect("alpha row");
+
+    assert_eq!(alpha[0], "Alpha");
+    assert_eq!(alpha[1], "Projects");
+    assert_eq!(alpha[2], "Projects/Alpha.md");
+    assert_eq!(alpha[3], dataview_link("Projects/Alpha.md", None));
+    assert_eq!(
+        alpha[4],
+        json!(["#project", "#project/active", "#task", "#task/project"])
+    );
+    assert_eq!(
+        alpha[5],
+        json!(["#project", "#project/active", "#task/project"])
+    );
+    assert_eq!(alpha[6], json!(["Alpha", "Project Alpha"]));
+    assert_array_contains(&alpha[7], dataview_link("Links/Hub.md", None));
+    assert_array_contains(&alpha[8], dataview_link("Origins/Origin.md", None));
+    assert!(alpha[9].is_null(), "project notes should not have file.day");
+    assert_eq!(alpha[10], false);
+
+    let daily = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"TABLE file.day, file.tags FROM "Daily""#,
+    ]);
+    assert_success(&daily);
+    let daily_json = json_stdout(&daily);
+    assert_eq!(daily_json["paths"], json!(["Daily/2026-06-03.md"]));
+    assert_eq!(daily_json["result"]["values"][0][0], "2026-06-03");
+}
+
+#[test]
+fn dataview_native_index_builds_task_and_list_objects() {
+    let output = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"TABLE file.tasks, file.lists FROM "Tasks""#,
+    ]);
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json = json_stdout(&output);
+    let row = json["result"]["values"][0].as_array().expect("task row");
+    let tasks = row[0].as_array().expect("file.tasks");
+    let lists = row[1].as_array().expect("file.lists");
+
+    assert_eq!(tasks.len(), 4, "task list should be flat");
+    assert_eq!(lists.len(), 4, "list index should include task list items");
+
+    let parent = tasks[0].as_object().expect("parent task");
+    assert_eq!(parent["text"], "Parent task #project");
+    assert_eq!(parent["due"], "2026-06-08");
+    assert_eq!(parent["status"], " ");
+    assert_eq!(parent["completed"], false);
+    assert_eq!(
+        parent["owner"],
+        dataview_link("People/Grace Hopper.md", None)
+    );
+    assert_eq!(parent["tags"], json!(["#project"]));
+    assert_eq!(
+        parent["children"]
+            .as_array()
+            .expect("parent children")
+            .len(),
+        2
+    );
+
+    let completed_child = tasks[1].as_object().expect("completed child");
+    assert_eq!(completed_child["text"], "Completed child");
+    assert_eq!(completed_child["completion"], "2026-06-01");
+    assert_eq!(completed_child["status"], "x");
+    assert_eq!(completed_child["completed"], true);
+
+    let sibling = tasks[3].as_object().expect("sibling task");
+    assert_eq!(sibling["blockId"], "sibling-task");
+    assert_eq!(
+        sibling["link"],
+        dataview_link("Tasks/Nested.md#^sibling-task", None)
+    );
+}
+
+#[test]
+fn dataview_native_index_skips_hidden_directories() {
+    let temp = TempDir::new("bob-cli-dataview-hidden-index");
+    let vault = temp.path().join("vault");
+    copy_dir_all(&fixture_vault_path(), &vault)
+        .unwrap_or_else(|error| panic!("copy fixture vault: {error}"));
+    fs::create_dir_all(vault.join(".hidden"))
+        .unwrap_or_else(|error| panic!("create hidden directory: {error}"));
+    fs::write(
+        vault.join(".hidden/Secret.md"),
+        "---\nready: true\n---\n# Secret\n",
+    )
+    .unwrap_or_else(|error| panic!("write hidden note: {error}"));
+
+    let output = run_bob_dataview(
+        &vault,
+        Some("native"),
+        None,
+        &["--query", "LIST WHERE ready"],
+    );
+
+    assert_success(&output);
+    assert!(
+        !stdout(&output).contains(".hidden/Secret.md"),
+        "hidden notes must not be indexed:\n{}",
+        format_output(&output)
     );
 }
 
@@ -890,15 +1052,35 @@ fn assert_success(output: &Output) {
 }
 
 fn assert_json_stdout_eq(output: &Output, expected: Value) {
-    let actual: Value = serde_json::from_str(stdout(output).trim())
-        .unwrap_or_else(|error| {
-            panic!("stdout should be JSON: {error}\n{}", format_output(output))
-        });
+    let actual = json_stdout(output);
     assert_eq!(
         actual,
         expected,
         "JSON stdout changed:\n{}",
         format_output(output)
+    );
+}
+
+fn json_stdout(output: &Output) -> Value {
+    serde_json::from_str(stdout(output).trim()).unwrap_or_else(|error| {
+        panic!("stdout should be JSON: {error}\n{}", format_output(output))
+    })
+}
+
+fn dataview_link(path: &str, display: Option<&str>) -> Value {
+    json!({
+        "type": "link",
+        "path": path,
+        "display": display,
+        "embed": false,
+    })
+}
+
+fn assert_array_contains(array: &Value, expected: Value) {
+    let values = array.as_array().expect("JSON array");
+    assert!(
+        values.contains(&expected),
+        "expected array to contain {expected}: {values:?}"
     );
 }
 
