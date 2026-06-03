@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-03 11:52:31
-status: wip
+status: done
 prompt: sdd/prompts/202606/maybe_bob_highlights_sync.md
 ---
 # Plan: Add `maybe_bob_highlights_sync`
