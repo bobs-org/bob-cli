@@ -40,13 +40,6 @@ impl DataviewValue {
         }
     }
 
-    pub(super) fn as_bool(&self) -> Option<bool> {
-        match self {
-            Self::Bool(value) => Some(*value),
-            _ => None,
-        }
-    }
-
     pub(super) fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(value) => Some(value),

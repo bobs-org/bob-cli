@@ -441,6 +441,138 @@ fn dataview_native_dql_from_accepts_source_expressions() {
 }
 
 #[test]
+fn dataview_native_expression_core_evaluates_table_and_list_values() {
+    let table = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"TABLE score + metrics.points AS total, [status, ready] AS pair, {name: file.name, missing: missing.child} AS obj, nullable = null AS is_null FROM "Projects/Alpha.md""#,
+    ]);
+
+    assert_success(&table);
+    assert!(stderr(&table).is_empty(), "{}", format_output(&table));
+    assert_json_stdout_eq(
+        &table,
+        json!({
+            "engine": "native",
+            "query_kind": "dql",
+            "format": "json",
+            "paths": ["Projects/Alpha.md"],
+            "result": {
+                "type": "table",
+                "headers": ["total", "pair", "obj", "is_null"],
+                "values": [[
+                    15,
+                    ["active", true],
+                    {"missing": null, "name": "Alpha"},
+                    true
+                ]]
+            },
+            "warnings": []
+        }),
+    );
+
+    let list = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"LIST status + ":" + file.name FROM "Projects/Alpha.md""#,
+    ]);
+
+    assert_success(&list);
+    assert!(stderr(&list).is_empty(), "{}", format_output(&list));
+    assert_json_stdout_eq(
+        &list,
+        json!({
+            "engine": "native",
+            "query_kind": "dql",
+            "format": "json",
+            "paths": ["Projects/Alpha.md"],
+            "result": {
+                "type": "list",
+                "values": ["active:Alpha"]
+            },
+            "warnings": []
+        }),
+    );
+}
+
+#[test]
+fn dataview_native_expression_core_supports_this_comparison_and_sorting() {
+    let origin = run_native_fixture(&[
+        "--origin",
+        "Origins/Origin.md",
+        "--query",
+        r#"LIST FROM "Projects" WHERE owner = this.owner"#,
+    ]);
+
+    assert_success(&origin);
+    assert_eq!(
+        stdout(&origin),
+        "Projects/Alpha.md\n",
+        "native this/origin comparison changed:\n{}",
+        format_output(&origin)
+    );
+    assert!(stderr(&origin).is_empty(), "{}", format_output(&origin));
+
+    let sorted = run_native_fixture(&[
+        "--query",
+        r#"LIST FROM "Projects" WHERE due >= "2026-07-01" SORT due DESC"#,
+    ]);
+
+    assert_success(&sorted);
+    assert_eq!(
+        stdout(&sorted),
+        "Projects/Beta.md\n",
+        "native ordering comparison or SORT changed:\n{}",
+        format_output(&sorted)
+    );
+    assert!(stderr(&sorted).is_empty(), "{}", format_output(&sorted));
+}
+
+#[test]
+fn dataview_native_expression_core_supports_swizzling_and_lambdas() {
+    let output = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"TABLE file.tasks.text AS texts, filter(file.tasks, (t) => !t.completed).text AS open, map(file.tasks, (t) => t.completed) AS done, any(file.tasks, (t) => !t.completed) AS has_open, all(file.tasks, (t) => t.completed) AS all_done, minby(file.tasks, (t) => t.line).text AS first_task FROM "Projects/Alpha.md""#,
+    ]);
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    assert_json_stdout_eq(
+        &output,
+        json!({
+            "engine": "native",
+            "query_kind": "dql",
+            "format": "json",
+            "paths": ["Projects/Alpha.md"],
+            "result": {
+                "type": "table",
+                "headers": ["texts", "open", "done", "has_open", "all_done", "first_task"],
+                "values": [[
+                    [
+                        "Kickoff #task/project",
+                        "Prepare brief",
+                        "Review with [[People/Ada Lovelace]]"
+                    ],
+                    [
+                        "Kickoff #task/project",
+                        "Review with [[People/Ada Lovelace]]"
+                    ],
+                    [false, true, false],
+                    true,
+                    false,
+                    "Kickoff #task/project"
+                ]]
+            },
+            "warnings": []
+        }),
+    );
+}
+
+#[test]
 fn dataview_native_expected_failures_record_future_parity_contract() {
     let cases = [
         NativeFailureCase {
@@ -517,19 +649,6 @@ fn dataview_native_expected_failures_record_future_parity_contract() {
                 r#"CALENDAR due FROM "Projects""#,
             ],
             markers: &["--format markdown requires the Obsidian engine"],
-        },
-        NativeFailureCase {
-            name: "origin and this",
-            args: &[
-                "--origin",
-                "Origins/Origin.md",
-                "--query",
-                r#"LIST FROM "Projects" WHERE owner = this.owner"#,
-            ],
-            markers: &[
-                "native query failed",
-                "native expression evaluation does not support WHERE expression `owner = this.owner` yet",
-            ],
         },
     ];
 

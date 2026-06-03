@@ -1,5 +1,6 @@
 use std::{
-    collections::HashSet,
+    cmp::Ordering,
+    collections::{BTreeMap, HashSet},
     env,
     ffi::{OsStr, OsString},
     fs,
@@ -17,7 +18,7 @@ use clap::{
     Arg, ArgAction, ArgGroup, ArgMatches, Command as ClapCommand,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Number, Value};
 
 use self::{
     index::DataviewIndex,
@@ -311,7 +312,10 @@ fn run_dynomark(request: &Request) -> Result<(), DataviewError> {
 }
 
 fn run_native(request: &Request) -> Result<(), DataviewError> {
-    let vault = NativeVault::read(&request.vault.bob_dir)?;
+    let vault = NativeVault::read(
+        &request.vault.bob_dir,
+        request.vault.origin.as_deref(),
+    )?;
     match &request.query {
         QueryInput::Source(source) => {
             let source = NativeSourceExpr::parse(source)?;
@@ -653,12 +657,7 @@ fn emit_native_output(
         }
         OutputFormat::Json => {
             let result = match output.result {
-                NativeResult::List => {
-                    let values = output
-                        .paths
-                        .iter()
-                        .map(|path| native_link_json_for_path(path))
-                        .collect::<Vec<_>>();
+                NativeResult::List { values } => {
                     serde_json::json!({
                         "type": "list",
                         "values": values,
@@ -768,7 +767,9 @@ struct NativeOutput {
 #[derive(Debug)]
 enum NativeResult {
     Source,
-    List,
+    List {
+        values: Vec<Value>,
+    },
     Table {
         headers: Vec<String>,
         values: Vec<Vec<Value>>,
@@ -809,8 +810,7 @@ struct NativeSelect {
 #[derive(Debug)]
 struct NativeExpression {
     raw: String,
-    field_chain: Option<Vec<String>>,
-    filter: Option<NativeExpr>,
+    expr: NativeExpr,
 }
 
 #[derive(Debug)]
@@ -819,7 +819,7 @@ enum NativeDataCommand {
     Where(NativeExpression),
     Sort {
         expression: NativeExpression,
-        _direction: Option<SortDirection>,
+        direction: Option<SortDirection>,
     },
     GroupBy {
         expression: NativeExpression,
@@ -852,24 +852,60 @@ enum NativeSourceExpr {
 
 #[derive(Debug)]
 enum NativeExpr {
-    And(Box<NativeExpr>, Box<NativeExpr>),
-    Bool(bool),
-    Eq(Vec<String>, NativeValue),
-    Field(Vec<String>),
-    Or(Box<NativeExpr>, Box<NativeExpr>),
+    Array(Vec<NativeExpr>),
+    Binary {
+        op: NativeBinaryOp,
+        left: Box<NativeExpr>,
+        right: Box<NativeExpr>,
+    },
+    Call {
+        function: String,
+        args: Vec<NativeExpr>,
+    },
+    GetAttr {
+        target: Box<NativeExpr>,
+        field: String,
+    },
+    Identifier(String),
+    Lambda {
+        parameter: String,
+        body: Box<NativeExpr>,
+    },
+    LinkLiteral(String),
+    Literal(DataviewValue),
+    Object(Vec<(String, NativeExpr)>),
+    Unary {
+        op: NativeUnaryOp,
+        expr: Box<NativeExpr>,
+    },
 }
 
-#[derive(Debug)]
-enum NativeValue {
-    Bool(bool),
-    Link(String),
-    Null,
-    String(String),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeBinaryOp {
+    Add,
+    And,
+    Divide,
+    Equal,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+    Multiply,
+    NotEqual,
+    Or,
+    Subtract,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeUnaryOp {
+    Not,
+    Negate,
 }
 
 #[derive(Debug)]
 struct NativeVault {
     index: DataviewIndex,
+    origin_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -885,6 +921,7 @@ enum NativeToken {
     Desc,
     Dot,
     Equal,
+    Arrow,
     Eof,
     Flatten,
     From,
@@ -948,10 +985,41 @@ impl NativeSourceExpr {
 }
 
 impl NativeVault {
-    fn read(bob_dir: &Path) -> Result<Self, DataviewError> {
+    fn read(
+        bob_dir: &Path,
+        origin: Option<&Path>,
+    ) -> Result<Self, DataviewError> {
+        let index = DataviewIndex::read(bob_dir)?;
+        let origin_index = Self::origin_index(&index, origin)?;
         Ok(Self {
-            index: DataviewIndex::read(bob_dir)?,
+            index,
+            origin_index,
         })
+    }
+
+    fn origin_index(
+        index: &DataviewIndex,
+        origin: Option<&Path>,
+    ) -> Result<Option<usize>, DataviewError> {
+        let Some(origin) = origin else {
+            return Ok(None);
+        };
+        let path = normalize_note_path(&origin.to_string_lossy()).map_err(
+            |message| DataviewError::NativeQuery {
+                message: format!(
+                    "invalid native --origin {}: {message}",
+                    origin.display()
+                ),
+            },
+        )?;
+        let Some(index) = index.by_path.get(&path).copied() else {
+            return Err(DataviewError::NativeQuery {
+                message: format!(
+                    "native --origin {path} does not name an indexed note"
+                ),
+            });
+        };
+        Ok(Some(index))
     }
 
     fn evaluate_source(&self, source: &NativeSourceExpr) -> NativeOutput {
@@ -987,25 +1055,31 @@ impl NativeVault {
                         .collect();
                 }
                 NativeDataCommand::Where(expression) => {
-                    let filter =
-                        expression.filter.as_ref().ok_or_else(|| {
-                            native_unsupported_execution(format!(
-                            "native expression evaluation does not support \
-                             WHERE expression `{}` yet",
-                            expression.raw
-                        ))
-                        })?;
-                    page_indices.retain(|index| filter.evaluate(self, *index));
+                    page_indices.retain(|index| {
+                        expression
+                            .evaluate(&self.eval_context(*index))
+                            .is_truthy()
+                    });
                 }
                 NativeDataCommand::Limit(limit) => {
                     page_indices.truncate(*limit);
                 }
-                NativeDataCommand::Sort { expression, .. } => {
-                    return Err(native_unsupported_execution(format!(
-                        "native DQL execution does not support SORT \
-                         expression `{}` yet",
-                        expression.raw
-                    )));
+                NativeDataCommand::Sort {
+                    expression,
+                    direction,
+                } => {
+                    page_indices.sort_by(|left, right| {
+                        let left_value =
+                            expression.evaluate(&self.eval_context(*left));
+                        let right_value =
+                            expression.evaluate(&self.eval_context(*right));
+                        let ordering =
+                            compare_values(self, &left_value, &right_value);
+                        match direction.unwrap_or(SortDirection::Ascending) {
+                            SortDirection::Ascending => ordering,
+                            SortDirection::Descending => ordering.reverse(),
+                        }
+                    });
                 }
                 NativeDataCommand::GroupBy { expression, .. } => {
                     return Err(native_unsupported_execution(format!(
@@ -1029,7 +1103,26 @@ impl NativeVault {
             .map(|index| self.index.pages[*index].path.clone())
             .collect::<Vec<_>>();
         let result = match &query.kind {
-            NativeQueryKind::List { .. } => NativeResult::List,
+            NativeQueryKind::List { expression, .. } => {
+                let values = page_indices
+                    .iter()
+                    .map(|page_index| {
+                        expression
+                            .as_ref()
+                            .map(|expression| {
+                                expression
+                                    .evaluate(&self.eval_context(*page_index))
+                            })
+                            .unwrap_or_else(|| {
+                                DataviewValue::Link(DataviewLink::page(
+                                    &self.index.pages[*page_index].path,
+                                ))
+                            })
+                            .to_plain_json()
+                    })
+                    .collect();
+                NativeResult::List { values }
+            }
             NativeQueryKind::Table { columns, .. } => NativeResult::Table {
                 headers: columns.iter().map(NativeSelect::header).collect(),
                 values: page_indices
@@ -1038,14 +1131,10 @@ impl NativeVault {
                         columns
                             .iter()
                             .map(|column| {
-                                let chain = column
+                                column
                                     .expression
-                                    .field_chain
-                                    .as_ref()
-                                    .expect("ensure_executable checks columns");
-                                self.field_chain_value(*page_index, chain)
-                                    .map(DataviewValue::to_plain_json)
-                                    .unwrap_or(Value::Null)
+                                    .evaluate(&self.eval_context(*page_index))
+                                    .to_plain_json()
                             })
                             .collect()
                     })
@@ -1196,41 +1285,86 @@ impl NativeVault {
         self.index.resolve_target_path(&target)
     }
 
-    fn field_chain_value(
+    fn eval_context(&self, page_index: usize) -> EvalContext<'_> {
+        EvalContext {
+            vault: self,
+            page_index,
+            variables: BTreeMap::new(),
+        }
+    }
+
+    fn page_value(&self, page_index: usize) -> DataviewValue {
+        let Some(page) = self.index.pages.get(page_index) else {
+            return DataviewValue::Null;
+        };
+        DataviewValue::Object(
+            page.fields
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        )
+    }
+
+    fn page_field_value(
         &self,
         page_index: usize,
-        chain: &[String],
-    ) -> Option<&DataviewValue> {
-        let mut cursor = FieldCursor::Page(page_index);
-        for (position, field) in chain.iter().enumerate() {
-            let value = match cursor {
-                FieldCursor::Page(page_index) => {
-                    self.index.pages.get(page_index)?.fields.get(field)?
-                }
-                FieldCursor::Object(object) => object.get(field)?,
-            };
-            if position + 1 == chain.len() {
-                return Some(value);
-            }
-            cursor = match value {
-                DataviewValue::Object(object) => FieldCursor::Object(object),
-                DataviewValue::Link(link) => {
-                    FieldCursor::Page(self.resolve_link_path(&link.path)?)
-                }
-                DataviewValue::String(value) => {
-                    FieldCursor::Page(self.resolve_link(value)?)
-                }
-                DataviewValue::Null
-                | DataviewValue::Bool(_)
-                | DataviewValue::Number(_)
-                | DataviewValue::Date(_)
-                | DataviewValue::DateTime(_)
-                | DataviewValue::Duration(_)
-                | DataviewValue::Array(_) => return None,
-            };
-        }
+        field: &str,
+    ) -> DataviewValue {
+        self.index
+            .pages
+            .get(page_index)
+            .and_then(|page| page.fields.get(field))
+            .cloned()
+            .unwrap_or(DataviewValue::Null)
+    }
 
-        None
+    fn attr_value(&self, value: &DataviewValue, field: &str) -> DataviewValue {
+        match value {
+            DataviewValue::Object(object) => {
+                object.get(field).cloned().unwrap_or(DataviewValue::Null)
+            }
+            DataviewValue::Array(values) => DataviewValue::Array(
+                values
+                    .iter()
+                    .map(|value| self.attr_value(value, field))
+                    .collect(),
+            ),
+            DataviewValue::Link(link) => self
+                .link_intrinsic_value(link, field)
+                .or_else(|| {
+                    self.resolve_link_path(&link.path)
+                        .map(|index| self.page_field_value(index, field))
+                })
+                .unwrap_or(DataviewValue::Null),
+            DataviewValue::String(value) => self
+                .resolve_link(value)
+                .map(|index| self.page_field_value(index, field))
+                .unwrap_or(DataviewValue::Null),
+            DataviewValue::Null
+            | DataviewValue::Bool(_)
+            | DataviewValue::Number(_)
+            | DataviewValue::Date(_)
+            | DataviewValue::DateTime(_)
+            | DataviewValue::Duration(_) => DataviewValue::Null,
+        }
+    }
+
+    fn link_intrinsic_value(
+        &self,
+        link: &DataviewLink,
+        field: &str,
+    ) -> Option<DataviewValue> {
+        match field {
+            "path" => Some(DataviewValue::String(link.path.clone())),
+            "display" => Some(
+                link.display
+                    .clone()
+                    .map(DataviewValue::String)
+                    .unwrap_or(DataviewValue::Null),
+            ),
+            "embed" => Some(DataviewValue::Bool(link.embed)),
+            _ => None,
+        }
     }
 
     fn resolve_link(&self, raw: &str) -> Option<usize> {
@@ -1266,27 +1400,7 @@ impl NativeVault {
 impl NativeQuery {
     fn ensure_executable(&self) -> Result<(), DataviewError> {
         match &self.kind {
-            NativeQueryKind::List {
-                expression: Some(expression),
-                ..
-            } => Err(native_unsupported_execution(format!(
-                "native DQL execution does not support LIST expression `{}` \
-                 yet",
-                expression.raw
-            ))),
-            NativeQueryKind::List {
-                expression: None, ..
-            } => Ok(()),
-            NativeQueryKind::Table { columns, .. } => {
-                for column in columns {
-                    if column.expression.field_chain.is_none() {
-                        return Err(native_unsupported_execution(format!(
-                            "native DQL execution does not support TABLE \
-                             expression `{}` yet",
-                            column.expression.raw
-                        )));
-                    }
-                }
+            NativeQueryKind::List { .. } | NativeQueryKind::Table { .. } => {
                 Ok(())
             }
             NativeQueryKind::Task { .. } => Err(native_unsupported_execution(
@@ -1317,71 +1431,499 @@ impl NativeExpression {
         if tokens.is_empty() {
             return Err("expected expression".to_string());
         }
-        let field_chain = field_chain_from_tokens(&tokens);
         let raw = expression_tokens_to_string(&tokens);
-        Ok(Self {
-            raw,
-            field_chain,
-            filter: None,
-        })
+        let expr = parse_native_expression(tokens)?;
+        Ok(Self { raw, expr })
     }
 
     fn where_clause(tokens: Vec<NativeToken>) -> Result<Self, String> {
-        let filter = supported_filter_from_tokens(&tokens)?;
-        let mut expression = Self::new(tokens)?;
-        expression.filter = filter;
-        Ok(expression)
+        Self::new(tokens)
+    }
+
+    fn evaluate(&self, context: &EvalContext<'_>) -> DataviewValue {
+        self.expr.evaluate(context)
     }
 }
 
 impl NativeExpr {
-    fn evaluate(&self, vault: &NativeVault, page_index: usize) -> bool {
+    fn evaluate(&self, context: &EvalContext<'_>) -> DataviewValue {
         match self {
-            Self::And(left, right) => {
-                left.evaluate(vault, page_index)
-                    && right.evaluate(vault, page_index)
+            Self::Array(values) => DataviewValue::Array(
+                values.iter().map(|value| value.evaluate(context)).collect(),
+            ),
+            Self::Binary { op, left, right } => match op {
+                NativeBinaryOp::And => {
+                    let left = left.evaluate(context);
+                    if !left.is_truthy() {
+                        DataviewValue::Bool(false)
+                    } else {
+                        DataviewValue::Bool(right.evaluate(context).is_truthy())
+                    }
+                }
+                NativeBinaryOp::Or => {
+                    let left = left.evaluate(context);
+                    if left.is_truthy() {
+                        DataviewValue::Bool(true)
+                    } else {
+                        DataviewValue::Bool(right.evaluate(context).is_truthy())
+                    }
+                }
+                NativeBinaryOp::Equal
+                | NativeBinaryOp::NotEqual
+                | NativeBinaryOp::Less
+                | NativeBinaryOp::LessEqual
+                | NativeBinaryOp::Greater
+                | NativeBinaryOp::GreaterEqual => {
+                    let left = left.evaluate(context);
+                    let right = right.evaluate(context);
+                    compare_operator_value(context.vault, *op, &left, &right)
+                }
+                NativeBinaryOp::Add
+                | NativeBinaryOp::Subtract
+                | NativeBinaryOp::Multiply
+                | NativeBinaryOp::Divide => {
+                    let left = left.evaluate(context);
+                    let right = right.evaluate(context);
+                    arithmetic_value(*op, left, right)
+                }
+            },
+            Self::Call { function, args } => {
+                evaluate_call(function, args, context)
             }
-            Self::Bool(value) => *value,
-            Self::Eq(chain, value) => {
-                let Some(actual) = vault.field_chain_value(page_index, chain)
-                else {
-                    return false;
-                };
-                value.matches(vault, actual)
+            Self::GetAttr { target, field } => {
+                let target = target.evaluate(context);
+                context.vault.attr_value(&target, field)
             }
-            Self::Field(chain) => vault
-                .field_chain_value(page_index, chain)
-                .is_some_and(DataviewValue::is_truthy),
-            Self::Or(left, right) => {
-                left.evaluate(vault, page_index)
-                    || right.evaluate(vault, page_index)
+            Self::Identifier(identifier) if identifier == "this" => {
+                context.vault.page_value(
+                    context.vault.origin_index.unwrap_or(context.page_index),
+                )
+            }
+            Self::Identifier(identifier) => {
+                context.variables.get(identifier).cloned().unwrap_or_else(
+                    || {
+                        context
+                            .vault
+                            .page_field_value(context.page_index, identifier)
+                    },
+                )
+            }
+            Self::Lambda { .. } => DataviewValue::Null,
+            Self::LinkLiteral(raw) => DataviewValue::Link(
+                native_expression_link(raw)
+                    .map(|mut link| {
+                        if let Some(path) = context
+                            .vault
+                            .index
+                            .resolve_target_path(&link.raw_target)
+                        {
+                            link.path = path;
+                        }
+                        link
+                    })
+                    .unwrap_or_else(|| DataviewLink::page(raw)),
+            ),
+            Self::Literal(value) => value.clone(),
+            Self::Object(fields) => DataviewValue::Object(
+                fields
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.evaluate(context)))
+                    .collect(),
+            ),
+            Self::Unary { op, expr } => {
+                let value = expr.evaluate(context);
+                match op {
+                    NativeUnaryOp::Not => {
+                        DataviewValue::Bool(!value.is_truthy())
+                    }
+                    NativeUnaryOp::Negate => negate_value(value),
+                }
             }
         }
     }
 }
 
-enum FieldCursor<'a> {
-    Page(usize),
-    Object(&'a std::collections::BTreeMap<String, DataviewValue>),
+#[derive(Clone)]
+struct EvalContext<'a> {
+    vault: &'a NativeVault,
+    page_index: usize,
+    variables: BTreeMap<String, DataviewValue>,
 }
 
-impl NativeValue {
-    fn matches(&self, vault: &NativeVault, actual: &DataviewValue) -> bool {
-        match self {
-            Self::Bool(expected) => actual.as_bool() == Some(*expected),
-            Self::Link(expected) => {
-                vault.field_value_matches_link(actual, expected)
-            }
-            Self::Null => matches!(actual, DataviewValue::Null),
-            Self::String(expected) => {
-                actual.as_str() == Some(expected.as_str())
-            }
+impl<'a> EvalContext<'a> {
+    fn with_variable(
+        &self,
+        name: &str,
+        value: DataviewValue,
+    ) -> EvalContext<'a> {
+        let mut variables = self.variables.clone();
+        variables.insert(name.to_string(), value);
+        EvalContext {
+            vault: self.vault,
+            page_index: self.page_index,
+            variables,
         }
     }
 }
 
-fn native_link_json_for_path(path: &str) -> Value {
-    DataviewValue::Link(DataviewLink::page(path)).to_plain_json()
+fn evaluate_call(
+    function: &str,
+    args: &[NativeExpr],
+    context: &EvalContext<'_>,
+) -> DataviewValue {
+    match function.to_ascii_lowercase().as_str() {
+        "filter" => evaluate_filter_call(args, context),
+        "map" => evaluate_map_call(args, context),
+        "any" => evaluate_quantifier_call(args, context, Quantifier::Any),
+        "all" => evaluate_quantifier_call(args, context, Quantifier::All),
+        "none" => evaluate_quantifier_call(args, context, Quantifier::None),
+        "minby" => evaluate_extreme_by_call(args, context, Ordering::Less),
+        "maxby" => evaluate_extreme_by_call(args, context, Ordering::Greater),
+        _ => DataviewValue::Null,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Quantifier {
+    All,
+    Any,
+    None,
+}
+
+fn evaluate_filter_call(
+    args: &[NativeExpr],
+    context: &EvalContext<'_>,
+) -> DataviewValue {
+    let Some((values, parameter, body)) = collection_lambda_args(args, context)
+    else {
+        return DataviewValue::Null;
+    };
+    DataviewValue::Array(
+        values
+            .into_iter()
+            .filter(|value| {
+                body.evaluate(&context.with_variable(parameter, value.clone()))
+                    .is_truthy()
+            })
+            .collect(),
+    )
+}
+
+fn evaluate_map_call(
+    args: &[NativeExpr],
+    context: &EvalContext<'_>,
+) -> DataviewValue {
+    let Some((values, parameter, body)) = collection_lambda_args(args, context)
+    else {
+        return DataviewValue::Null;
+    };
+    DataviewValue::Array(
+        values
+            .into_iter()
+            .map(|value| {
+                body.evaluate(&context.with_variable(parameter, value))
+            })
+            .collect(),
+    )
+}
+
+fn evaluate_quantifier_call(
+    args: &[NativeExpr],
+    context: &EvalContext<'_>,
+    quantifier: Quantifier,
+) -> DataviewValue {
+    let values = match args {
+        [collection] => collection_value(collection.evaluate(context)),
+        [collection, NativeExpr::Lambda { parameter, body }] => {
+            let values = collection_value(collection.evaluate(context));
+            let projected = values
+                .into_iter()
+                .map(|value| {
+                    body.evaluate(&context.with_variable(parameter, value))
+                })
+                .collect::<Vec<_>>();
+            return DataviewValue::Bool(match quantifier {
+                Quantifier::All => {
+                    projected.iter().all(DataviewValue::is_truthy)
+                }
+                Quantifier::Any => {
+                    projected.iter().any(DataviewValue::is_truthy)
+                }
+                Quantifier::None => {
+                    !projected.iter().any(DataviewValue::is_truthy)
+                }
+            });
+        }
+        _ => return DataviewValue::Null,
+    };
+
+    DataviewValue::Bool(match quantifier {
+        Quantifier::All => values.iter().all(DataviewValue::is_truthy),
+        Quantifier::Any => values.iter().any(DataviewValue::is_truthy),
+        Quantifier::None => !values.iter().any(DataviewValue::is_truthy),
+    })
+}
+
+fn evaluate_extreme_by_call(
+    args: &[NativeExpr],
+    context: &EvalContext<'_>,
+    target_ordering: Ordering,
+) -> DataviewValue {
+    let Some((values, parameter, body)) = collection_lambda_args(args, context)
+    else {
+        return DataviewValue::Null;
+    };
+    let mut best: Option<(DataviewValue, DataviewValue)> = None;
+    for value in values {
+        let key =
+            body.evaluate(&context.with_variable(parameter, value.clone()));
+        match &best {
+            None => best = Some((value, key)),
+            Some((_, best_key))
+                if compare_values(context.vault, &key, best_key)
+                    == target_ordering =>
+            {
+                best = Some((value, key));
+            }
+            _ => {}
+        }
+    }
+    best.map(|(value, _)| value).unwrap_or(DataviewValue::Null)
+}
+
+fn collection_lambda_args<'a>(
+    args: &'a [NativeExpr],
+    context: &EvalContext<'_>,
+) -> Option<(Vec<DataviewValue>, &'a str, &'a NativeExpr)> {
+    let [collection, NativeExpr::Lambda { parameter, body }] = args else {
+        return None;
+    };
+    Some((
+        collection_value(collection.evaluate(context)),
+        parameter.as_str(),
+        body,
+    ))
+}
+
+fn collection_value(value: DataviewValue) -> Vec<DataviewValue> {
+    match value {
+        DataviewValue::Array(values) => values,
+        DataviewValue::Null => Vec::new(),
+        value => vec![value],
+    }
+}
+
+fn compare_operator_value(
+    vault: &NativeVault,
+    op: NativeBinaryOp,
+    left: &DataviewValue,
+    right: &DataviewValue,
+) -> DataviewValue {
+    let equal = values_equal(vault, left, right);
+    let value = match op {
+        NativeBinaryOp::Equal => equal,
+        NativeBinaryOp::NotEqual => !equal,
+        NativeBinaryOp::Less if values_include_null(left, right) => false,
+        NativeBinaryOp::Less => {
+            compare_values(vault, left, right) == Ordering::Less
+        }
+        NativeBinaryOp::LessEqual if values_include_null(left, right) => false,
+        NativeBinaryOp::LessEqual => {
+            matches!(
+                compare_values(vault, left, right),
+                Ordering::Less | Ordering::Equal
+            )
+        }
+        NativeBinaryOp::Greater if values_include_null(left, right) => false,
+        NativeBinaryOp::Greater => {
+            compare_values(vault, left, right) == Ordering::Greater
+        }
+        NativeBinaryOp::GreaterEqual if values_include_null(left, right) => {
+            false
+        }
+        NativeBinaryOp::GreaterEqual => {
+            matches!(
+                compare_values(vault, left, right),
+                Ordering::Greater | Ordering::Equal
+            )
+        }
+        NativeBinaryOp::Add
+        | NativeBinaryOp::And
+        | NativeBinaryOp::Divide
+        | NativeBinaryOp::Multiply
+        | NativeBinaryOp::Or
+        | NativeBinaryOp::Subtract => unreachable!("not a comparison operator"),
+    };
+    DataviewValue::Bool(value)
+}
+
+fn values_include_null(left: &DataviewValue, right: &DataviewValue) -> bool {
+    matches!(left, DataviewValue::Null) || matches!(right, DataviewValue::Null)
+}
+
+fn values_equal(
+    vault: &NativeVault,
+    left: &DataviewValue,
+    right: &DataviewValue,
+) -> bool {
+    match (left, right) {
+        (DataviewValue::Number(left), DataviewValue::Number(right)) => {
+            left.as_f64() == right.as_f64()
+        }
+        (DataviewValue::Link(_), _) => {
+            vault.field_value_matches_link(left, &value_text(right))
+        }
+        (_, DataviewValue::Link(_)) => {
+            vault.field_value_matches_link(right, &value_text(left))
+        }
+        _ => left == right,
+    }
+}
+
+fn compare_values(
+    vault: &NativeVault,
+    left: &DataviewValue,
+    right: &DataviewValue,
+) -> Ordering {
+    if values_equal(vault, left, right) {
+        return Ordering::Equal;
+    }
+    match (left, right) {
+        (DataviewValue::Null, _) => Ordering::Greater,
+        (_, DataviewValue::Null) => Ordering::Less,
+        (DataviewValue::Number(left), DataviewValue::Number(right)) => left
+            .as_f64()
+            .partial_cmp(&right.as_f64())
+            .unwrap_or(Ordering::Equal),
+        (DataviewValue::Bool(left), DataviewValue::Bool(right)) => {
+            left.cmp(right)
+        }
+        (DataviewValue::Array(left), DataviewValue::Array(right)) => {
+            left.len().cmp(&right.len())
+        }
+        _ => value_text(left).cmp(&value_text(right)),
+    }
+}
+
+fn arithmetic_value(
+    op: NativeBinaryOp,
+    left: DataviewValue,
+    right: DataviewValue,
+) -> DataviewValue {
+    match op {
+        NativeBinaryOp::Add => add_value(left, right),
+        NativeBinaryOp::Subtract => {
+            numeric_value(left, right, |left, right| left - right)
+        }
+        NativeBinaryOp::Multiply => {
+            numeric_value(left, right, |left, right| left * right)
+        }
+        NativeBinaryOp::Divide => {
+            numeric_value(left, right, |left, right| left / right)
+        }
+        NativeBinaryOp::And
+        | NativeBinaryOp::Equal
+        | NativeBinaryOp::Greater
+        | NativeBinaryOp::GreaterEqual
+        | NativeBinaryOp::Less
+        | NativeBinaryOp::LessEqual
+        | NativeBinaryOp::NotEqual
+        | NativeBinaryOp::Or => unreachable!("not an arithmetic operator"),
+    }
+}
+
+fn add_value(left: DataviewValue, right: DataviewValue) -> DataviewValue {
+    match (left, right) {
+        (DataviewValue::Number(left), DataviewValue::Number(right)) => {
+            add_numbers(&left, &right)
+        }
+        (DataviewValue::Array(mut left), DataviewValue::Array(right)) => {
+            left.extend(right);
+            DataviewValue::Array(left)
+        }
+        (DataviewValue::Array(mut left), right) => {
+            left.push(right);
+            DataviewValue::Array(left)
+        }
+        (left, DataviewValue::Array(mut right)) => {
+            right.insert(0, left);
+            DataviewValue::Array(right)
+        }
+        (DataviewValue::Null, _) | (_, DataviewValue::Null) => {
+            DataviewValue::Null
+        }
+        (left, right) => DataviewValue::String(format!(
+            "{}{}",
+            value_text(&left),
+            value_text(&right)
+        )),
+    }
+}
+
+fn add_numbers(left: &Number, right: &Number) -> DataviewValue {
+    if let (Some(left), Some(right)) = (left.as_i64(), right.as_i64())
+        && let Some(value) = left.checked_add(right)
+    {
+        return DataviewValue::Number(Number::from(value));
+    }
+    number_from_f64(
+        left.as_f64().unwrap_or(0.0) + right.as_f64().unwrap_or(0.0),
+    )
+}
+
+fn numeric_value(
+    left: DataviewValue,
+    right: DataviewValue,
+    op: impl FnOnce(f64, f64) -> f64,
+) -> DataviewValue {
+    let (DataviewValue::Number(left), DataviewValue::Number(right)) =
+        (left, right)
+    else {
+        return DataviewValue::Null;
+    };
+    number_from_f64(op(
+        left.as_f64().unwrap_or(0.0),
+        right.as_f64().unwrap_or(0.0),
+    ))
+}
+
+fn negate_value(value: DataviewValue) -> DataviewValue {
+    let DataviewValue::Number(number) = value else {
+        return DataviewValue::Null;
+    };
+    if let Some(value) = number.as_i64()
+        && let Some(value) = value.checked_neg()
+    {
+        return DataviewValue::Number(Number::from(value));
+    }
+    number_from_f64(-number.as_f64().unwrap_or(0.0))
+}
+
+fn number_from_f64(value: f64) -> DataviewValue {
+    Number::from_f64(value)
+        .map(DataviewValue::Number)
+        .unwrap_or(DataviewValue::Null)
+}
+
+fn value_text(value: &DataviewValue) -> String {
+    match value {
+        DataviewValue::Null => String::new(),
+        DataviewValue::Bool(value) => value.to_string(),
+        DataviewValue::Number(value) => value.to_string(),
+        DataviewValue::String(value)
+        | DataviewValue::Date(value)
+        | DataviewValue::DateTime(value)
+        | DataviewValue::Duration(value) => value.clone(),
+        DataviewValue::Link(link) => {
+            link.display.clone().unwrap_or_else(|| link.path.clone())
+        }
+        DataviewValue::Array(values) => {
+            values.iter().map(value_text).collect::<Vec<_>>().join(", ")
+        }
+        DataviewValue::Object(_) => {
+            serde_json::to_string(&value.to_plain_json()).unwrap_or_default()
+        }
+    }
 }
 
 struct NativeLexer<'a> {
@@ -1422,6 +1964,10 @@ impl<'a> NativeLexer<'a> {
                     tokens.push(NativeToken::NotEqual);
                 }
                 '!' => tokens.push(NativeToken::Not),
+                '=' if self.chars.peek() == Some(&'>') => {
+                    self.chars.next();
+                    tokens.push(NativeToken::Arrow);
+                }
                 '=' => tokens.push(NativeToken::Equal),
                 '<' if self.chars.peek() == Some(&'=') => {
                     self.chars.next();
@@ -1599,7 +2145,7 @@ impl NativeParser {
                 };
                 Ok(NativeDataCommand::Sort {
                     expression: NativeExpression::new(tokens)?,
-                    _direction: direction,
+                    direction,
                 })
             }
             NativeToken::Group => {
@@ -1717,6 +2263,41 @@ impl NativeParser {
     }
 
     fn parse_expr(&mut self) -> Result<NativeExpr, String> {
+        self.parse_lambda()
+    }
+
+    fn parse_lambda(&mut self) -> Result<NativeExpr, String> {
+        let start = self.position;
+        if let NativeToken::Identifier(parameter) = self.peek().clone() {
+            self.position += 1;
+            if self.take_arrow() {
+                let body = self.parse_lambda()?;
+                return Ok(NativeExpr::Lambda {
+                    parameter,
+                    body: Box::new(body),
+                });
+            }
+        }
+        self.position = start;
+
+        if matches!(self.peek(), NativeToken::LParen) {
+            self.position += 1;
+            if let NativeToken::Identifier(parameter) = self.peek().clone() {
+                self.position += 1;
+                if matches!(self.peek(), NativeToken::RParen) {
+                    self.position += 1;
+                    if self.take_arrow() {
+                        let body = self.parse_lambda()?;
+                        return Ok(NativeExpr::Lambda {
+                            parameter,
+                            body: Box::new(body),
+                        });
+                    }
+                }
+            }
+        }
+        self.position = start;
+
         self.parse_or()
     }
 
@@ -1724,16 +2305,91 @@ impl NativeParser {
         let mut expr = self.parse_and()?;
         while self.take_or() {
             let right = self.parse_and()?;
-            expr = NativeExpr::Or(Box::new(expr), Box::new(right));
+            expr = NativeExpr::Binary {
+                op: NativeBinaryOp::Or,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
         }
         Ok(expr)
     }
 
     fn parse_and(&mut self) -> Result<NativeExpr, String> {
-        let mut expr = self.parse_primary()?;
+        let mut expr = self.parse_comparison()?;
         while self.take_and() {
-            let right = self.parse_primary()?;
-            expr = NativeExpr::And(Box::new(expr), Box::new(right));
+            let right = self.parse_comparison()?;
+            expr = NativeExpr::Binary {
+                op: NativeBinaryOp::And,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_comparison(&mut self) -> Result<NativeExpr, String> {
+        let mut expr = self.parse_term()?;
+        while let Some(op) = self.take_comparison_op() {
+            let right = self.parse_term()?;
+            expr = NativeExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_term(&mut self) -> Result<NativeExpr, String> {
+        let mut expr = self.parse_factor()?;
+        while let Some(op) = self.take_additive_op() {
+            let right = self.parse_factor()?;
+            expr = NativeExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_factor(&mut self) -> Result<NativeExpr, String> {
+        let mut expr = self.parse_unary()?;
+        while let Some(op) = self.take_multiplicative_op() {
+            let right = self.parse_unary()?;
+            expr = NativeExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_unary(&mut self) -> Result<NativeExpr, String> {
+        if self.take_not() {
+            return Ok(NativeExpr::Unary {
+                op: NativeUnaryOp::Not,
+                expr: Box::new(self.parse_unary()?),
+            });
+        }
+        if self.take_minus() {
+            return Ok(NativeExpr::Unary {
+                op: NativeUnaryOp::Negate,
+                expr: Box::new(self.parse_unary()?),
+            });
+        }
+        self.parse_postfix()
+    }
+
+    fn parse_postfix(&mut self) -> Result<NativeExpr, String> {
+        let mut expr = self.parse_primary()?;
+        while self.take_dot() {
+            let field = self.expect_identifier()?;
+            expr = NativeExpr::GetAttr {
+                target: Box::new(expr),
+                field,
+            };
         }
         Ok(expr)
     }
@@ -1743,14 +2399,37 @@ impl NativeParser {
             NativeToken::Bool(value) => {
                 let value = *value;
                 self.position += 1;
-                Ok(NativeExpr::Bool(value))
+                Ok(NativeExpr::Literal(DataviewValue::Bool(value)))
             }
-            NativeToken::Identifier(_) => {
-                let chain = self.parse_field_chain()?;
-                if self.take_equal() {
-                    Ok(NativeExpr::Eq(chain, self.parse_value()?))
+            NativeToken::Null => {
+                self.position += 1;
+                Ok(NativeExpr::Literal(DataviewValue::Null))
+            }
+            NativeToken::Number(value) => {
+                let value = parse_expression_number(value)?;
+                self.position += 1;
+                Ok(NativeExpr::Literal(DataviewValue::Number(value)))
+            }
+            NativeToken::String(value) => {
+                let value = value.clone();
+                self.position += 1;
+                Ok(NativeExpr::Literal(DataviewValue::String(value)))
+            }
+            NativeToken::Link(value) => {
+                let value = value.clone();
+                self.position += 1;
+                Ok(NativeExpr::LinkLiteral(value))
+            }
+            NativeToken::Identifier(identifier) => {
+                let identifier = identifier.clone();
+                self.position += 1;
+                if self.take_lparen() {
+                    Ok(NativeExpr::Call {
+                        function: identifier,
+                        args: self.parse_call_args()?,
+                    })
                 } else {
-                    Ok(NativeExpr::Field(chain))
+                    Ok(NativeExpr::Identifier(identifier))
                 }
             }
             NativeToken::LParen => {
@@ -1759,49 +2438,64 @@ impl NativeParser {
                 self.expect_rparen()?;
                 Ok(expr)
             }
+            NativeToken::LBracket => self.parse_array(),
+            NativeToken::LBrace => self.parse_object(),
             token => Err(format!(
-                "expected expression, found {}; native engine supports field \
-                 truthiness, field = [[link]], AND, OR, booleans, and \
-                 parentheses",
+                "expected expression, found {}; native expression parser \
+                 supports literals, field access, calls, arrays, objects, \
+                 lambdas, operators, and parentheses",
                 native_token_name(token)
             )),
         }
     }
 
-    fn parse_field_chain(&mut self) -> Result<Vec<String>, String> {
-        let mut chain = vec![self.expect_identifier()?];
-        while self.take_dot() {
-            chain.push(self.expect_identifier()?);
+    fn parse_call_args(&mut self) -> Result<Vec<NativeExpr>, String> {
+        let mut args = Vec::new();
+        if self.take_rparen() {
+            return Ok(args);
         }
-        Ok(chain)
+        loop {
+            args.push(self.parse_expr()?);
+            if self.take_comma() {
+                continue;
+            }
+            self.expect_rparen()?;
+            return Ok(args);
+        }
     }
 
-    fn parse_value(&mut self) -> Result<NativeValue, String> {
-        match self.peek() {
-            NativeToken::Bool(value) => {
-                let value = *value;
-                self.position += 1;
-                Ok(NativeValue::Bool(value))
+    fn parse_array(&mut self) -> Result<NativeExpr, String> {
+        self.position += 1;
+        let mut values = Vec::new();
+        if self.take_rbracket() {
+            return Ok(NativeExpr::Array(values));
+        }
+        loop {
+            values.push(self.parse_expr()?);
+            if self.take_comma() {
+                continue;
             }
-            NativeToken::Link(value) => {
-                let value = value.clone();
-                self.position += 1;
-                Ok(NativeValue::Link(value))
+            self.expect_rbracket()?;
+            return Ok(NativeExpr::Array(values));
+        }
+    }
+
+    fn parse_object(&mut self) -> Result<NativeExpr, String> {
+        self.position += 1;
+        let mut values = Vec::new();
+        if self.take_rbrace() {
+            return Ok(NativeExpr::Object(values));
+        }
+        loop {
+            let key = self.expect_object_key()?;
+            self.expect_colon()?;
+            let value = self.parse_expr()?;
+            values.push((key, value));
+            if self.take_comma() {
+                continue;
             }
-            NativeToken::Null => {
-                self.position += 1;
-                Ok(NativeValue::Null)
-            }
-            NativeToken::String(value) => {
-                let value = value.clone();
-                self.position += 1;
-                Ok(NativeValue::String(value))
-            }
-            token => Err(format!(
-                "expected comparison value, found {}; native engine supports \
-                 booleans, strings, and wikilinks as comparison values",
-                native_token_name(token)
-            )),
+            self.expect_rbrace()?;
+            return Ok(NativeExpr::Object(values));
         }
     }
 
@@ -1939,8 +2633,62 @@ impl NativeParser {
         self.take(|token| matches!(token, NativeToken::Minus))
     }
 
-    fn take_equal(&mut self) -> bool {
-        self.take(|token| matches!(token, NativeToken::Equal))
+    fn take_not(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::Not))
+    }
+
+    fn take_arrow(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::Arrow))
+    }
+
+    fn take_lparen(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::LParen))
+    }
+
+    fn take_rparen(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::RParen))
+    }
+
+    fn take_rbracket(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::RBracket))
+    }
+
+    fn take_rbrace(&mut self) -> bool {
+        self.take(|token| matches!(token, NativeToken::RBrace))
+    }
+
+    fn take_comparison_op(&mut self) -> Option<NativeBinaryOp> {
+        let op = match self.peek() {
+            NativeToken::Equal => NativeBinaryOp::Equal,
+            NativeToken::NotEqual => NativeBinaryOp::NotEqual,
+            NativeToken::Less => NativeBinaryOp::Less,
+            NativeToken::LessEqual => NativeBinaryOp::LessEqual,
+            NativeToken::Greater => NativeBinaryOp::Greater,
+            NativeToken::GreaterEqual => NativeBinaryOp::GreaterEqual,
+            _ => return None,
+        };
+        self.position += 1;
+        Some(op)
+    }
+
+    fn take_additive_op(&mut self) -> Option<NativeBinaryOp> {
+        let op = match self.peek() {
+            NativeToken::Plus => NativeBinaryOp::Add,
+            NativeToken::Minus => NativeBinaryOp::Subtract,
+            _ => return None,
+        };
+        self.position += 1;
+        Some(op)
+    }
+
+    fn take_multiplicative_op(&mut self) -> Option<NativeBinaryOp> {
+        let op = match self.peek() {
+            NativeToken::Star => NativeBinaryOp::Multiply,
+            NativeToken::Slash => NativeBinaryOp::Divide,
+            _ => return None,
+        };
+        self.position += 1;
+        Some(op)
     }
 
     fn take_as(&mut self) -> bool {
@@ -2060,6 +2808,53 @@ impl NativeParser {
         ))
     }
 
+    fn expect_rbracket(&mut self) -> Result<(), String> {
+        if matches!(self.peek(), NativeToken::RBracket) {
+            self.position += 1;
+            return Ok(());
+        }
+        Err(format!(
+            "expected ']', found {}",
+            native_token_name(self.peek())
+        ))
+    }
+
+    fn expect_rbrace(&mut self) -> Result<(), String> {
+        if matches!(self.peek(), NativeToken::RBrace) {
+            self.position += 1;
+            return Ok(());
+        }
+        Err(format!(
+            "expected '}}', found {}",
+            native_token_name(self.peek())
+        ))
+    }
+
+    fn expect_colon(&mut self) -> Result<(), String> {
+        if matches!(self.peek(), NativeToken::Colon) {
+            self.position += 1;
+            return Ok(());
+        }
+        Err(format!(
+            "expected ':', found {}",
+            native_token_name(self.peek())
+        ))
+    }
+
+    fn expect_object_key(&mut self) -> Result<String, String> {
+        match self.peek() {
+            NativeToken::Identifier(key) | NativeToken::String(key) => {
+                let key = key.clone();
+                self.position += 1;
+                Ok(key)
+            }
+            token => Err(format!(
+                "expected object key, found {}",
+                native_token_name(token)
+            )),
+        }
+    }
+
     fn expect_eof(&self) -> Result<(), String> {
         if matches!(self.peek(), NativeToken::Eof) {
             return Ok(());
@@ -2116,48 +2911,29 @@ fn native_unsupported_execution(message: String) -> DataviewError {
     DataviewError::NativeQuery { message }
 }
 
-fn supported_filter_from_tokens(
-    tokens: &[NativeToken],
-) -> Result<Option<NativeExpr>, String> {
-    if tokens.iter().any(is_unsupported_filter_token)
-        || has_field_to_field_comparison(tokens)
-    {
-        return Ok(None);
-    }
-
-    let mut filter_tokens = tokens.to_vec();
-    filter_tokens.push(NativeToken::Eof);
-    let mut parser = NativeParser::new(filter_tokens);
+fn parse_native_expression(
+    tokens: Vec<NativeToken>,
+) -> Result<NativeExpr, String> {
+    let mut tokens = tokens;
+    tokens.push(NativeToken::Eof);
+    let mut parser = NativeParser::new(tokens);
     let expr = parser.parse_expr()?;
     parser.expect_eof()?;
-    Ok(Some(expr))
+    Ok(expr)
 }
 
-fn is_unsupported_filter_token(token: &NativeToken) -> bool {
-    !matches!(
-        token,
-        NativeToken::And
-            | NativeToken::Bool(_)
-            | NativeToken::Dot
-            | NativeToken::Equal
-            | NativeToken::Identifier(_)
-            | NativeToken::Link(_)
-            | NativeToken::LParen
-            | NativeToken::Null
-            | NativeToken::Or
-            | NativeToken::RParen
-            | NativeToken::String(_)
-    )
-}
-
-fn has_field_to_field_comparison(tokens: &[NativeToken]) -> bool {
-    tokens.windows(2).any(|window| {
-        matches!(
-            window,
-            [NativeToken::Equal, NativeToken::Identifier(_)]
-                | [NativeToken::Equal, NativeToken::LParen]
-        )
-    })
+fn parse_expression_number(value: &str) -> Result<Number, String> {
+    if let Ok(value) = value.parse::<i64>() {
+        return Ok(Number::from(value));
+    }
+    if let Ok(value) = value.parse::<u64>() {
+        return Ok(Number::from(value));
+    }
+    value
+        .parse::<f64>()
+        .ok()
+        .and_then(Number::from_f64)
+        .ok_or_else(|| format!("invalid number literal: {value}"))
 }
 
 fn field_chain_from_tokens(tokens: &[NativeToken]) -> Option<Vec<String>> {
@@ -2219,6 +2995,7 @@ fn token_expression_piece(token: &NativeToken) -> String {
         NativeToken::Desc => "DESC".to_string(),
         NativeToken::Dot => ".".to_string(),
         NativeToken::Equal => "=".to_string(),
+        NativeToken::Arrow => "=>".to_string(),
         NativeToken::Eof => String::new(),
         NativeToken::Flatten => "FLATTEN".to_string(),
         NativeToken::From => "FROM".to_string(),
@@ -2524,6 +3301,38 @@ fn native_link_target(raw: &str) -> Option<String> {
     (!target.is_empty()).then_some(target)
 }
 
+fn native_expression_link(raw: &str) -> Option<DataviewLink> {
+    let (target, display) = raw
+        .split_once('|')
+        .map_or((raw, None), |(target, display)| {
+            (target, Some(display.trim().to_string()))
+        });
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+
+    Some(DataviewLink::new(
+        normalized_link_literal_path(target),
+        display.filter(|display| !display.is_empty()),
+        false,
+        target.to_string(),
+    ))
+}
+
+fn normalized_link_literal_path(target: &str) -> String {
+    let (base, subpath) = target
+        .split_once('#')
+        .map_or((target, None), |(base, subpath)| (base, Some(subpath)));
+    let mut path = normalize_note_path(base.trim())
+        .unwrap_or_else(|_| target.trim().replace('\\', "/"));
+    if let Some(subpath) = subpath.filter(|subpath| !subpath.is_empty()) {
+        path.push('#');
+        path.push_str(subpath);
+    }
+    path
+}
+
 fn comparable_link_path(raw: &str) -> Option<String> {
     native_link_target(raw).and_then(|target| normalize_note_path(&target).ok())
 }
@@ -2587,6 +3396,7 @@ fn native_token_name(token: &NativeToken) -> &'static str {
         NativeToken::Desc => "DESC",
         NativeToken::Dot => "'.'",
         NativeToken::Equal => "'='",
+        NativeToken::Arrow => "'=>'",
         NativeToken::Eof => "end of query",
         NativeToken::Flatten => "FLATTEN",
         NativeToken::From => "FROM",
