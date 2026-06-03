@@ -1,6 +1,6 @@
 # highlights-ref Fixtures
 
-Fixtures in this directory are intentionally small and synthetic. Phase 1 uses
-them to reserve a stable test harness location; later phases can add real PDF
-annotation and Highlights sidecar samples here.
-
+Fixtures in this directory are intentionally small and synthetic. Phase 2
+integration tests generate PDF annotation fixtures at runtime with `lopdf`;
+Phase 3 integration tests also generate sidecars at runtime, while
+`sample_sidecar.md` documents the configured Markdown shape used by the parser.

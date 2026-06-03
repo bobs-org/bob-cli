@@ -107,12 +107,24 @@ bob highlights-ref marker <pdf>
 ```
 
 Prepares the Highlights app PDF annotation to Bob reference note sync workflow.
-The Phase 1 command surface is intentionally no-write: each command resolves
-configuration and reports that no PDF or vault files were modified. Later phases
-will scan PDFs under the configured library directory, treat the first
-standalone PDF note as the marker note, sync selected marker/frontmatter fields
-both ways, and render Highlights sidecar annotations into
-`ref/<pdf-basename>.md`.
+`sync <pdf>` reads the first standalone PDF note annotation as the marker note,
+parses its `key: value` list, and creates or updates
+`ref/<pdf-basename>.md` frontmatter and the managed Highlights body region. It
+stores a canonical marker projection hash so later runs can sync marker-only
+edits into frontmatter and, when `--write-pdf` is supplied, frontmatter-only
+edits back into the PDF marker. Simultaneous marker/frontmatter edits fail with
+a conflict report unless `--prefer marker` or `--prefer frontmatter` is
+supplied. `--dry-run` reports the planned note/PDF actions without writing
+either side. `marker <pdf>` inspects and renders the marker contract without
+writing. `scan` and `doctor` still report configuration only until their later
+implementation phases.
+
+For `foo.pdf`, `sync` discovers `foo.md` first and can parse simple
+`foo.textbundle/text.md` or `text.markdown` sidecars. Highlights, highlight
+comments, and standalone non-marker notes render into the managed
+`<!-- highlights:begin -->` region using stable `^h-...` block IDs. Existing
+manual body content outside that region is preserved, and disappeared generated
+blocks are kept as tombstones under `### Removed highlights`.
 
 The full contract and MacBook setup guide live in
 [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md).

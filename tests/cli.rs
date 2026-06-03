@@ -155,22 +155,88 @@ fn highlights_ref_subcommand_help_works() {
 }
 
 #[test]
-fn highlights_ref_phase_one_commands_do_not_modify_vault_files() {
-    let temp = TempDir::new("bob-cli-highlights-ref-no-write");
+fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
+    let temp = TempDir::new("bob-cli-highlights-ref-create");
     let vault = temp.path().join("vault");
-    let lib = vault.join("lib");
-    let ref_dir = vault.join("ref");
-    let pdf = lib.join("example.pdf");
-    let note = ref_dir.join("example.md");
-    fs::create_dir_all(&lib).expect("create lib dir");
-    fs::create_dir_all(&ref_dir).expect("create ref dir");
-    write_file(&pdf, "%PDF-1.4\n%%EOF\n");
-    write_file(
-        &note,
-        "---\nparent: \"[[obsidian]]\"\n---\n\nManual note.\n",
+    let pdf = vault.join("lib/systems-performance.pdf");
+    let note = vault.join("ref/systems-performance.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: reading\n- title: Systems Performance\n- topics: [linux, performance]\n",
     );
 
-    let before = snapshot_files(&vault);
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob highlights-ref sync");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read generated ref note");
+    assert!(contents.contains("status: reading\n"), "{contents}");
+    assert!(
+        contents.contains("parent: \"[[obsidian]]\"\n"),
+        "{contents}"
+    );
+    assert!(
+        contents.contains("title: \"Systems Performance\"\n"),
+        "{contents}"
+    );
+    assert!(
+        contents.contains("topics: [linux, performance]\n"),
+        "{contents}"
+    );
+    assert!(
+        contents.contains("source_pdf: lib/systems-performance.pdf\n"),
+        "{contents}"
+    );
+    assert!(contents.contains("highlights_marker_hash: "), "{contents}");
+}
+
+#[test]
+fn highlights_ref_sync_rejects_missing_marker_status_without_note_write() {
+    let temp = TempDir::new("bob-cli-highlights-ref-missing-status");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/missing-status.pdf");
+    let note = vault.join("ref/missing-status.md");
+    write_highlights_pdf(&pdf, "- title: Missing Status\n");
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob highlights-ref sync");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "missing marker status should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("missing required marker key: status"),
+        "expected missing status error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !note.exists(),
+        "sync must not create a note on marker error"
+    );
+}
+
+#[test]
+fn highlights_ref_dry_run_and_inspection_do_not_modify_vault_files() {
+    let temp = TempDir::new("bob-cli-highlights-ref-dry-run");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: reading\n");
+    let pdf_before = fs::read(&pdf).expect("read PDF before");
+    let marker_before = pdf_marker_contents(&pdf);
     let cases = vec![
         vec![
             OsString::from("highlights-ref"),
@@ -205,11 +271,492 @@ fn highlights_ref_phase_one_commands_do_not_modify_vault_files() {
             format_output(&output)
         );
         assert_eq!(
-            snapshot_files(&vault),
-            before,
-            "highlights-ref Phase 1 command modified vault files"
+            fs::read(&pdf).expect("read PDF after"),
+            pdf_before,
+            "highlights-ref inspection command modified the PDF"
+        );
+        assert_eq!(pdf_marker_contents(&pdf), marker_before);
+        assert!(
+            !note.exists(),
+            "dry-run/inspection must not create ref note"
         );
     }
+}
+
+#[test]
+fn highlights_ref_marker_edit_updates_frontmatter() {
+    let temp = TempDir::new("bob-cli-highlights-ref-marker-edit");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: reading\n");
+    assert_success(
+        &bob_command()
+            .arg("highlights-ref")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial highlights-ref sync"),
+    );
+
+    set_pdf_marker_contents(&pdf, "- status: done\n");
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync marker edit");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read updated ref note");
+    assert!(contents.contains("status: done\n"), "{contents}");
+}
+
+#[test]
+fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
+    let temp = TempDir::new("bob-cli-highlights-ref-frontmatter-edit");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: reading\n");
+    assert_success(
+        &bob_command()
+            .arg("highlights-ref")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial highlights-ref sync"),
+    );
+    let edited = fs::read_to_string(&note)
+        .expect("read ref note")
+        .replace("status: reading", "status: complete");
+    write_file(&note, &edited);
+    let marker_before = pdf_marker_contents(&pdf);
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run frontmatter edit");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("pdf_marker_action: would-update"),
+        "expected dry-run PDF update preview:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(pdf_marker_contents(&pdf), marker_before);
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync frontmatter edit without PDF writes");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "frontmatter-to-marker sync should require --write-pdf:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(pdf_marker_contents(&pdf), marker_before);
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--write-pdf")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync frontmatter edit");
+
+    assert_success(&output);
+    let marker = pdf_marker_contents(&pdf);
+    assert!(marker.contains("- status: complete\n"), "{marker}");
+}
+
+#[test]
+fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
+    let temp = TempDir::new("bob-cli-highlights-ref-conflict");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: reading\n");
+    assert_success(
+        &bob_command()
+            .arg("highlights-ref")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial highlights-ref sync"),
+    );
+
+    set_pdf_marker_contents(&pdf, "- status: marker-side\n");
+    let frontmatter_side = fs::read_to_string(&note)
+        .expect("read ref note")
+        .replace("status: reading", "status: frontmatter-side");
+    write_file(&note, &frontmatter_side);
+    let note_before = fs::read_to_string(&note).expect("read note before");
+    let marker_before = pdf_marker_contents(&pdf);
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--write-pdf")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync conflicting edits");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "conflicting edits should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("marker/frontmatter conflict"),
+        "expected conflict report:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note after conflict"),
+        note_before
+    );
+    assert_eq!(pdf_marker_contents(&pdf), marker_before);
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--write-pdf")
+        .arg("--prefer")
+        .arg("frontmatter")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("resolve conflict with frontmatter");
+
+    assert_success(&output);
+    let marker = pdf_marker_contents(&pdf);
+    assert!(marker.contains("- status: frontmatter-side\n"), "{marker}");
+}
+
+#[test]
+fn highlights_ref_sync_renders_sidecar_highlights_and_notes() {
+    let temp = TempDir::new("bob-cli-highlights-ref-sidecar-create");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/systems-performance.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/systems-performance.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: reading\n- title: Systems Performance\n",
+    );
+    write_file(
+        &sidecar,
+        "\
+# Systems Performance
+
+## Page 12
+
+Note: marker note mirrored from the PDF
+
+---
+
+> Latency is not throughput.
+
+Comment: Compare this with SLO notes.
+
+---
+
+Note: Keep a standalone observation after the marker.
+",
+    );
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync sidecar highlights");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read generated note");
+    assert!(
+        contents.contains("highlights_sidecar: lib/systems-performance.md\n"),
+        "{contents}"
+    );
+    assert!(contents.contains("highlights_count: 2\n"), "{contents}");
+    assert!(contents.contains("highlights_synced_at: "), "{contents}");
+    assert!(contents.contains("# Systems Performance\n"), "{contents}");
+    assert!(
+        contents.contains("PDF: [[lib/systems-performance.pdf]]\n"),
+        "{contents}"
+    );
+    assert!(
+        contents.contains("## Summary\n\n## My Notes\n\n## Highlights\n"),
+        "{contents}"
+    );
+    assert!(contents.contains("### Page 12\n"), "{contents}");
+    assert!(
+        contents.contains("> Latency is not throughput.\n"),
+        "{contents}"
+    );
+    assert!(
+        contents.contains("> [comment] Compare this with SLO notes.\n"),
+        "{contents}"
+    );
+    assert!(
+        contents.contains(
+            "> [note] Keep a standalone observation after the marker.\n"
+        ),
+        "{contents}"
+    );
+    assert!(
+        !contents.contains("marker note mirrored"),
+        "first standalone sidecar note should be excluded:\n{contents}"
+    );
+    assert_eq!(highlight_block_ids(&contents).len(), 2, "{contents}");
+}
+
+#[test]
+fn highlights_ref_comment_edit_keeps_stable_block_id() {
+    let temp = TempDir::new("bob-cli-highlights-ref-comment-edit");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: reading\n");
+    write_file(
+        &sidecar,
+        "\
+## Page 4
+
+Note: marker note
+
+---
+
+> Stable quoted text.
+
+Comment: first comment
+",
+    );
+    assert_success(
+        &bob_command()
+            .arg("highlights-ref")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial sidecar sync"),
+    );
+    let initial = fs::read_to_string(&note).expect("read initial note");
+    let initial_ids = highlight_block_ids(&initial);
+    assert_eq!(initial_ids.len(), 1, "{initial}");
+
+    write_file(
+        &sidecar,
+        "\
+## Page 4
+
+Note: marker note
+
+---
+
+> Stable quoted text.
+
+Comment: revised comment
+",
+    );
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync comment edit");
+
+    assert_success(&output);
+    let updated = fs::read_to_string(&note).expect("read updated note");
+    assert_eq!(highlight_block_ids(&updated), initial_ids, "{updated}");
+    assert!(updated.contains("[comment] revised comment"), "{updated}");
+    assert!(!updated.contains("[comment] first comment"), "{updated}");
+}
+
+#[test]
+fn highlights_ref_deleted_highlight_is_tombstoned() {
+    let temp = TempDir::new("bob-cli-highlights-ref-tombstone");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: reading\n");
+    write_file(
+        &sidecar,
+        "\
+## Page 9
+
+Note: marker note
+
+---
+
+> First quote.
+
+---
+
+> Deleted quote.
+",
+    );
+    assert_success(
+        &bob_command()
+            .arg("highlights-ref")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial tombstone sync"),
+    );
+    let initial = fs::read_to_string(&note).expect("read initial note");
+    let initial_ids = highlight_block_ids(&initial);
+    assert_eq!(initial_ids.len(), 2, "{initial}");
+    let deleted_id = initial_ids[1].clone();
+
+    write_file(
+        &sidecar,
+        "\
+## Page 9
+
+Note: marker note
+
+---
+
+> First quote.
+",
+    );
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync deleted highlight");
+
+    assert_success(&output);
+    let updated = fs::read_to_string(&note).expect("read updated note");
+    assert!(updated.contains("highlights_count: 1\n"), "{updated}");
+    assert!(updated.contains("### Removed highlights\n"), "{updated}");
+    assert!(
+        updated.contains(&format!("^{deleted_id}\n")),
+        "deleted block id should remain as a tombstone:\n{updated}"
+    );
+    assert!(!updated.contains("> Deleted quote.\n"), "{updated}");
+}
+
+#[test]
+fn highlights_ref_sync_preserves_manual_sections_and_rejects_missing_markers() {
+    let temp = TempDir::new("bob-cli-highlights-ref-manual-body");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: reading\n");
+    write_file(
+        &sidecar,
+        "\
+## Page 2
+
+Note: marker note
+
+---
+
+> Initial quote.
+",
+    );
+    assert_success(
+        &bob_command()
+            .arg("highlights-ref")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial manual-body sync"),
+    );
+    let edited = fs::read_to_string(&note)
+        .expect("read note")
+        .replacen("---\n", "---\nowner: Bryan\n", 1)
+        .replace("## My Notes\n\n", "## My Notes\n\nManual synthesis.\n\n");
+    write_file(&note, &edited);
+    write_file(
+        &sidecar,
+        "\
+## Page 2
+
+Note: marker note
+
+---
+
+> Initial quote.
+
+Comment: added later
+",
+    );
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync with manual content");
+
+    assert_success(&output);
+    let updated = fs::read_to_string(&note).expect("read updated note");
+    assert!(updated.contains("owner: Bryan\n"), "{updated}");
+    assert!(updated.contains("Manual synthesis.\n"), "{updated}");
+    assert!(updated.contains("[comment] added later"), "{updated}");
+
+    let unsafe_pdf = vault.join("lib/unsafe.pdf");
+    let unsafe_note = vault.join("ref/unsafe.md");
+    write_highlights_pdf(&unsafe_pdf, "- status: reading\n");
+    write_file(
+        &unsafe_note,
+        "\
+---
+status: reading
+parent: \"[[obsidian]]\"
+---
+
+Manual note without generated markers.
+",
+    );
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&unsafe_pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync unsafe existing note");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "existing note without markers should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("missing the managed Highlights region"),
+        "expected managed-region error:\n{}",
+        format_output(&output)
+    );
 }
 
 #[test]
@@ -1608,48 +2155,6 @@ fn fixture(relative: &str) -> PathBuf {
         .join(relative)
 }
 
-fn snapshot_files(root: &Path) -> Vec<(PathBuf, String)> {
-    fn visit(
-        root: &Path,
-        directory: &Path,
-        files: &mut Vec<(PathBuf, String)>,
-    ) {
-        let mut entries: Vec<_> = fs::read_dir(directory)
-            .unwrap_or_else(|error| {
-                panic!("read directory {}: {error}", directory.display())
-            })
-            .map(|entry| entry.expect("read directory entry").path())
-            .collect();
-        entries.sort();
-
-        for path in entries {
-            if path.is_dir() {
-                visit(root, &path, files);
-            } else {
-                let relative = path
-                    .strip_prefix(root)
-                    .unwrap_or_else(|error| {
-                        panic!(
-                            "strip root {} from {}: {error}",
-                            root.display(),
-                            path.display()
-                        )
-                    })
-                    .to_path_buf();
-                let contents =
-                    fs::read_to_string(&path).unwrap_or_else(|error| {
-                        panic!("read file {}: {error}", path.display())
-                    });
-                files.push((relative, contents));
-            }
-        }
-    }
-
-    let mut files = Vec::new();
-    visit(root, root, &mut files);
-    files
-}
-
 fn single_script_cache_dir(cache_home: &Path) -> PathBuf {
     let scripts_root = cache_home.join("bob-cli/scripts");
     let mut entries: Vec<_> = fs::read_dir(&scripts_root)
@@ -1737,6 +2242,127 @@ fn path_with_prefix(prefix: &Path) -> String {
         .expect("join PATH")
         .into_string()
         .expect("PATH is UTF-8")
+}
+
+fn highlight_block_ids(contents: &str) -> Vec<String> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix('^')
+                .filter(|id| id.starts_with("h-"))
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+fn write_highlights_pdf(path: &Path, marker_contents: &str) {
+    use lopdf::{dictionary, Document, Object, Stream};
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap_or_else(|error| {
+            panic!("create parent {}: {error}", parent.display())
+        });
+    }
+
+    let mut doc = Document::with_version("1.4");
+    let pages_id = doc.new_object_id();
+    let content_id = doc.add_object(Stream::new(dictionary! {}, Vec::new()));
+    let marker_id = doc.add_object(dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Text",
+        "Rect" => vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(24),
+            Object::Integer(24),
+        ],
+        "Contents" => pdf_text_string(marker_contents),
+    });
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(612),
+            Object::Integer(792),
+        ],
+        "Contents" => content_id,
+        "Annots" => vec![Object::Reference(marker_id)],
+    });
+    doc.set_object(
+        pages_id,
+        dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        },
+    );
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", catalog_id);
+    doc.save(path).unwrap_or_else(|error| {
+        panic!("write PDF {}: {error}", path.display())
+    });
+}
+
+fn set_pdf_marker_contents(path: &Path, marker_contents: &str) {
+    let mut doc = lopdf::Document::load(path)
+        .unwrap_or_else(|error| panic!("load PDF {}: {error}", path.display()));
+    let marker_id = first_text_annotation_id(&doc);
+    doc.get_object_mut(marker_id)
+        .expect("get marker object")
+        .as_dict_mut()
+        .expect("marker is dictionary")
+        .set("Contents", pdf_text_string(marker_contents));
+    doc.save(path).unwrap_or_else(|error| {
+        panic!("write PDF {}: {error}", path.display())
+    });
+}
+
+fn pdf_marker_contents(path: &Path) -> String {
+    let doc = lopdf::Document::load(path)
+        .unwrap_or_else(|error| panic!("load PDF {}: {error}", path.display()));
+    let marker_id = first_text_annotation_id(&doc);
+    let marker = doc
+        .get_dictionary(marker_id)
+        .expect("get marker annotation dictionary");
+    lopdf::decode_text_string(marker.get(b"Contents").expect("marker contents"))
+        .expect("decode marker contents")
+}
+
+fn first_text_annotation_id(doc: &lopdf::Document) -> lopdf::ObjectId {
+    for (_, page_id) in doc.get_pages() {
+        let page = doc.get_dictionary(page_id).expect("get page dictionary");
+        let annots = page
+            .get(b"Annots")
+            .expect("page annotations")
+            .as_array()
+            .expect("annotation array");
+        for annot in annots {
+            let annot_id = annot.as_reference().expect("annotation reference");
+            let annot_dict =
+                doc.get_dictionary(annot_id).expect("annotation dictionary");
+            if annot_dict
+                .get(b"Subtype")
+                .and_then(lopdf::Object::as_name)
+                .is_ok_and(|name| name == b"Text")
+            {
+                return annot_id;
+            }
+        }
+    }
+    panic!("missing /Text annotation");
+}
+
+fn pdf_text_string(contents: &str) -> lopdf::Object {
+    lopdf::Object::String(
+        lopdf::encode_utf16_be(contents),
+        lopdf::StringFormat::Hexadecimal,
+    )
 }
 
 fn write_file(path: &Path, contents: &str) {
