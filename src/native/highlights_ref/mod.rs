@@ -2401,6 +2401,9 @@ fn parse_value(value: &str) -> MarkerValue {
     if let Some(value) = parse_quoted_string(trimmed) {
         return MarkerValue::String(value);
     }
+    if is_wikilink(trimmed) {
+        return MarkerValue::String(trimmed.to_string());
+    }
     if let Some(values) = parse_inline_list(trimmed) {
         return MarkerValue::List(values);
     }
@@ -2793,6 +2796,7 @@ mod tests {
 - Status: reading
 * aliases: [\"Systems Performance\", linux]
 - source-url: https://example.com/book
+- parent: [[obsidian]]
 - rating: 5
 - archived: false
 ",
@@ -2806,6 +2810,10 @@ mod tests {
         assert_eq!(
             projection.get("source_url"),
             Some(&MarkerValue::String("https://example.com/book".to_string()))
+        );
+        assert_eq!(
+            projection.get("parent"),
+            Some(&MarkerValue::String("[[obsidian]]".to_string()))
         );
         assert_eq!(
             projection.get("rating"),
