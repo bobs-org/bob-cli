@@ -6,18 +6,26 @@ reference notes in the Bob vault.
 Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 `~/projects/bob-cli`; do not install from ad hoc scripts outside that checkout.
 
-## Phase 3 Status
+## MVP Status
 
-Phase 3 implements the marker/frontmatter synchronization core plus Markdown
-sidecar parsing and generated note rendering. `sync <pdf>` loads the PDF with
-native Rust code, treats the first standalone `/Text` annotation as the marker
-note, parses the marker list, creates or updates `ref/<pdf-basename>.md`, and
-rewrites only the managed Highlights body region from the sidecar when one is
-present. `marker <pdf>` inspects the same marker without writing.
+The MVP implements marker/frontmatter synchronization, Markdown sidecar parsing,
+generated note rendering, recursive library scan, prerequisite checks, output
+collision detection, dirty-target refusal, and atomic note writes.
 
-`scan` and `doctor` still report configuration only. Recursive library scanning,
-full prerequisite checks, collision checks, and git/ob integration land in
-later phases.
+`sync <pdf>` loads one PDF with native Rust code, treats the first standalone
+`/Text` annotation as the marker note, parses the marker list, creates or
+updates `ref/<pdf-basename>.md`, and rewrites only the managed Highlights body
+region from the sidecar when one is present. `marker <pdf>` inspects the same
+marker without writing.
+
+`scan` recursively finds PDFs under the configured library directory, preflights
+all target note paths before writing anything, and then syncs each PDF in stable
+path order. It refuses duplicate output paths such as two PDFs with the same
+basename that would both write `ref/<basename>.md`.
+
+`doctor` checks vault paths, library/ref directories, sidecar presence, marker
+readability, default parent shape, Git worktree status, and optional `ob`
+availability. It never writes files.
 
 Available commands:
 
@@ -152,6 +160,25 @@ and renaming it over the target. Before first PDF writes, commit or otherwise
 back up the PDF library. Keep Highlights and Obsidian idle while testing PDF
 writes so the apps do not race the CLI.
 
+## Scan, Safety, and Git/ob Behavior
+
+`scan --dry-run` reports every PDF it would process, each target reference note,
+the sidecar path if present, the selected sync source, and the note/PDF marker
+action. It does not create directories, write notes, or write PDFs.
+
+Before a writing scan, the command builds the complete plan for every PDF,
+rejects duplicate output paths, and checks Git status for existing vault files
+it would modify. If a target ref note or PDF marker target is dirty, it fails
+before any write. There is no force mode in the MVP; commit, stash, or clean the
+dirty file before rerunning.
+
+Reference note writes are atomic temporary-file renames and are skipped when the
+rendered note is byte-identical to the existing file.
+
+`bob highlights-ref` does not run `ob sync` before or after writes. The existing
+`bob cronjob` sync gate owns `ob sync` orchestration, while this command only
+reports whether `ob` is available through `doctor`.
+
 ## Generated Body Contract
 
 Highlights, comments on highlights, and standalone non-marker notes sync one way
@@ -267,7 +294,7 @@ apps do not race the CLI.
 ## Automation Outline
 
 The MVP automation target is a scheduled `scan`, not a live recursive watcher.
-A later phase should provide a LaunchAgent or cron snippet equivalent to:
+Start with a dry-run schedule:
 
 ```bash
 bob highlights-ref scan --dry-run

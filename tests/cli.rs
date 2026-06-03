@@ -235,6 +235,12 @@ fn highlights_ref_dry_run_and_inspection_do_not_modify_vault_files() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: reading\n");
+    fs::create_dir_all(vault.join("ref")).expect("create ref dir");
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
     let pdf_before = fs::read(&pdf).expect("read PDF before");
     let marker_before = pdf_marker_contents(&pdf);
     let cases = vec![
@@ -281,6 +287,225 @@ fn highlights_ref_dry_run_and_inspection_do_not_modify_vault_files() {
             "dry-run/inspection must not create ref note"
         );
     }
+}
+
+#[test]
+fn highlights_ref_scan_recurses_dry_runs_and_writes_multiple_pdfs() {
+    let temp = TempDir::new("bob-cli-highlights-ref-scan");
+    let vault = temp.path().join("vault");
+    let first_pdf = vault.join("lib/books/systems-performance.pdf");
+    let second_pdf = vault.join("lib/papers/rust-book.PDF");
+    let first_note = vault.join("ref/systems-performance.md");
+    let second_note = vault.join("ref/rust-book.md");
+    write_highlights_pdf(
+        &first_pdf,
+        "- status: reading\n- title: Systems Performance\n",
+    );
+    write_highlights_pdf(&second_pdf, "- status: queued\n- title: Rust Book\n");
+    write_file(
+        &first_pdf.with_extension("md"),
+        "\
+## Page 1
+
+Note: marker note
+
+---
+
+> First quote.
+",
+    );
+    write_file(
+        &second_pdf.with_extension("md"),
+        "\
+## Page 2
+
+Note: marker note
+
+---
+
+> Second quote.
+",
+    );
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("scan")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run highlights-ref scan");
+
+    assert_success(&output);
+    let dry_run = stdout(&output);
+    assert!(dry_run.contains("pdf_count: 2"), "{dry_run}");
+    assert!(dry_run.contains("notes_create: 2"), "{dry_run}");
+    assert!(dry_run.contains("writes: none"), "{dry_run}");
+    assert!(!first_note.exists(), "dry-run must not create first note");
+    assert!(!second_note.exists(), "dry-run must not create second note");
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("write highlights-ref scan");
+
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(written.contains("notes_created: 2"), "{written}");
+    assert!(written.contains("writes: note"), "{written}");
+    assert!(fs::read_to_string(&first_note)
+        .expect("read first note")
+        .contains("> First quote.\n"));
+    assert!(fs::read_to_string(&second_note)
+        .expect("read second note")
+        .contains("> Second quote.\n"));
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat highlights-ref scan");
+
+    assert_success(&output);
+    let repeated = stdout(&output);
+    assert!(repeated.contains("notes_unchanged: 2"), "{repeated}");
+    assert!(repeated.contains("writes: none"), "{repeated}");
+}
+
+#[test]
+fn highlights_ref_scan_detects_duplicate_basenames_before_writing() {
+    let temp = TempDir::new("bob-cli-highlights-ref-scan-collision");
+    let vault = temp.path().join("vault");
+    let first_pdf = vault.join("lib/a/example.pdf");
+    let second_pdf = vault.join("lib/b/example.pdf");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&first_pdf, "- status: reading\n");
+    write_highlights_pdf(&second_pdf, "- status: queued\n");
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run collision scan");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "duplicate basenames should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("output path collision"),
+        "expected collision report:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !note.exists(),
+        "scan must not write any note when collisions exist"
+    );
+}
+
+#[test]
+fn highlights_ref_sync_refuses_dirty_target_note_before_writing() {
+    let temp = TempDir::new("bob-cli-highlights-ref-dirty-note");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: reading\n");
+    assert_success(
+        &bob_command()
+            .arg("highlights-ref")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial highlights-ref sync"),
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
+    let dirty_note = fs::read_to_string(&note)
+        .expect("read note")
+        .replace("## My Notes\n\n", "## My Notes\n\nLocal edit.\n\n");
+    write_file(&note, &dirty_note);
+    set_pdf_marker_contents(&pdf, "- status: done\n");
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync dirty target note");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "dirty target note should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("refusing to modify dirty vault files")
+            && stderr(&output).contains("ref/example.md"),
+        "expected dirty target report:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note after refusal"),
+        dirty_note
+    );
+}
+
+#[test]
+fn highlights_ref_doctor_checks_vault_git_and_ob_without_writes() {
+    let temp = TempDir::new("bob-cli-highlights-ref-doctor");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let sidecar = pdf.with_extension("md");
+    fs::create_dir_all(vault.join("ref")).expect("create ref dir");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    let ob_stub = stub_bin.join("ob");
+    write_executable(&ob_stub, "#!/bin/sh\nexit 0\n");
+    write_highlights_pdf(&pdf, "- status: reading\n");
+    write_file(
+        &sidecar,
+        "\
+## Page 1
+
+Note: marker note
+",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("doctor")
+        .env("BOB_DIR", &vault)
+        .env("OB_COMMAND", &ob_stub)
+        .output()
+        .expect("run highlights-ref doctor");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(report.contains("vault_path: ok"), "{report}");
+    assert!(report.contains("library_dir: ok"), "{report}");
+    assert!(report.contains("ref_dir: ok"), "{report}");
+    assert!(report.contains("sidecars_found: 1"), "{report}");
+    assert!(report.contains("pdf_markers_readable: 1"), "{report}");
+    assert!(report.contains("git: ok (clean worktree)"), "{report}");
+    assert!(report.contains("ob: available"), "{report}");
+    assert!(report.contains("writes: none"), "{report}");
+    assert!(report.contains("result: ok"), "{report}");
 }
 
 #[test]

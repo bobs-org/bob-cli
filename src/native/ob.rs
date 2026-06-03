@@ -119,7 +119,7 @@ fn ob_command_builder(ob_command: &OsStr, child_env: &ChildEnv) -> Command {
 
 /// Locate the `ob` binary: `OB_COMMAND` first (used by the test suite), then
 /// `PATH`, then an NVM fallback.
-fn load_ob_command() -> Option<OsString> {
+pub(crate) fn load_ob_command() -> Option<OsString> {
     if let Some(value) =
         env::var_os("OB_COMMAND").filter(|value| !value.is_empty())
     {

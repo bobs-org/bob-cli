@@ -5,7 +5,7 @@ use std::{
     ffi::{OsStr, OsString},
     fmt, fs, io, iter,
     path::{Path, PathBuf},
-    process,
+    process::{self, Output, Stdio},
 };
 
 use chrono::{SecondsFormat, Utc};
@@ -20,7 +20,7 @@ use lopdf::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::env as bob_env;
+use super::{env as bob_env, ob};
 
 const COMMAND_NAME: &str = "bob highlights-ref";
 const DEFAULT_LIB_DIR: &str = "lib";
@@ -194,6 +194,39 @@ struct RenderedHighlights {
     count: usize,
 }
 
+#[derive(Debug, Clone)]
+struct PdfSyncPlan {
+    pdf: PathBuf,
+    note_path: PathBuf,
+    sidecar_path: Option<PathBuf>,
+    marker: PdfMarker,
+    decision: SyncDecision,
+    rendered_highlights_count: Option<usize>,
+    synced_projection: Projection,
+    synced_hash: String,
+    rendered_marker: String,
+    marker_write_needed: bool,
+    note: ParsedNote,
+    sidecar: Option<SidecarInput>,
+    rendered_highlights: Option<RenderedHighlights>,
+    rendered_body: String,
+    stable_rendered_note: String,
+    stable_note_action: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SyncWriteReport {
+    note_action: &'static str,
+    marker_action: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GitStatus {
+    MissingCommand,
+    NotWorktree,
+    Worktree { entries: Vec<String> },
+}
+
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let matches = match build_cli().try_get_matches_from(
         iter::once(OsString::from(COMMAND_NAME)).chain(args),
@@ -221,11 +254,12 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
 fn run_scan(matches: &ArgMatches) -> i32 {
     let config = Config::from_matches(matches);
-    print_config_report("scan", &config);
-    println!("dry_run: {}", matches.get_flag("dry-run"));
-    println!("phase: scan pending");
-    println!("writes: none");
-    0
+    let options = SyncOptions {
+        dry_run: matches.get_flag("dry-run"),
+        write_pdf: false,
+        prefer: None,
+    };
+    report_result(scan_library(&config, options))
 }
 
 fn run_sync(matches: &ArgMatches) -> i32 {
@@ -242,10 +276,7 @@ fn run_sync(matches: &ArgMatches) -> i32 {
 
 fn run_doctor(matches: &ArgMatches) -> i32 {
     let config = Config::from_matches(matches);
-    print_config_report("doctor", &config);
-    println!("checks: pending in a later phase");
-    println!("writes: none");
-    0
+    report_result(doctor_vault(&config))
 }
 
 fn run_marker(matches: &ArgMatches) -> i32 {
@@ -265,10 +296,84 @@ fn report_result(result: Result<()>) -> i32 {
 }
 
 fn sync_pdf(config: &Config, pdf: &Path, options: SyncOptions) -> Result<()> {
+    let plan = plan_pdf_sync(config, pdf, options)?;
+    print_pdf_sync_report("sync", config, &plan, options);
+
+    if options.dry_run {
+        println!("note_action: {}", plan.stable_note_action);
+        println!(
+            "pdf_marker_action: {}",
+            if plan.marker_write_needed {
+                "would-update"
+            } else {
+                "none"
+            }
+        );
+        println!("writes: none");
+        return Ok(());
+    }
+
+    ensure_safe_to_write(config, iter::once(&plan))?;
+    let report = execute_pdf_sync(config, &plan)?;
+    print_sync_write_report(report);
+    Ok(())
+}
+
+fn scan_library(config: &Config, options: SyncOptions) -> Result<()> {
+    let pdfs = collect_pdf_paths(config)?;
+    validate_output_collisions(config, &pdfs)?;
+
+    let mut plans = Vec::new();
+    let mut errors = Vec::new();
+    for pdf in &pdfs {
+        match plan_pdf_sync(config, pdf, options) {
+            Ok(plan) => plans.push(plan),
+            Err(error) => {
+                errors.push(format!("{}: {error}", pdf.display()));
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(CommandError::new(format!(
+            "scan failed before writes:\n  {}",
+            errors.join("\n  ")
+        )));
+    }
+
+    print_config_report("scan", config);
+    println!("dry_run: {}", options.dry_run);
+    println!("ob_sync: not-run");
+    println!("pdf_count: {}", plans.len());
+    for plan in &plans {
+        print_scan_plan_entry(plan);
+    }
+
+    if options.dry_run {
+        print_scan_plan_summary(&plans);
+        println!("writes: none");
+        return Ok(());
+    }
+
+    ensure_safe_to_write(config, plans.iter())?;
+    let mut reports = Vec::new();
+    for plan in &plans {
+        reports.push(execute_pdf_sync(config, plan)?);
+    }
+    print_scan_write_summary(&reports);
+    Ok(())
+}
+
+fn plan_pdf_sync(
+    config: &Config,
+    pdf: &Path,
+    options: SyncOptions,
+) -> Result<PdfSyncPlan> {
     let marker = read_pdf_marker(pdf)?;
     let marker_projection =
         projection_with_default_parent(parse_marker(&marker.contents)?, config);
     let note_path = ref_note_path(config, pdf)?;
+    validate_note_target(&note_path)?;
     let note = read_note(&note_path)?;
     let frontmatter_projection = note.synced_projection(config);
     let marker_hash = projection_hash(&marker_projection)?;
@@ -306,6 +411,9 @@ fn sync_pdf(config: &Config, pdf: &Path, options: SyncOptions) -> Result<()> {
         .as_ref()
         .map(|sidecar| render_sidecar_highlights(config, pdf, &note, sidecar))
         .transpose()?;
+    let sidecar_path = sidecar.as_ref().map(|sidecar| sidecar.path.clone());
+    let rendered_highlights_count =
+        rendered_highlights.as_ref().map(|rendered| rendered.count);
     let stable_metadata = pipeline_metadata(
         config,
         pdf,
@@ -332,14 +440,91 @@ fn sync_pdf(config: &Config, pdf: &Path, options: SyncOptions) -> Result<()> {
         &stable_rendered_note,
     );
 
-    print_config_report("sync", config);
-    println!("pdf: {}", pdf.display());
-    println!("note: {}", note_path.display());
+    Ok(PdfSyncPlan {
+        pdf: pdf.to_path_buf(),
+        note_path,
+        sidecar_path,
+        marker,
+        decision,
+        rendered_highlights_count,
+        synced_projection,
+        synced_hash,
+        rendered_marker,
+        marker_write_needed,
+        note,
+        sidecar,
+        rendered_highlights,
+        rendered_body,
+        stable_rendered_note,
+        stable_note_action,
+    })
+}
+
+fn execute_pdf_sync(
+    config: &Config,
+    plan: &PdfSyncPlan,
+) -> Result<SyncWriteReport> {
+    if plan.marker_write_needed {
+        write_pdf_marker(
+            &plan.pdf,
+            plan.marker.annotation_id,
+            &plan.rendered_marker,
+        )?;
+    }
+
+    let rendered_note = if plan.stable_note_action != "none"
+        && plan.rendered_highlights.is_some()
+    {
+        let metadata = pipeline_metadata(
+            config,
+            &plan.pdf,
+            &plan.note,
+            plan.sidecar.as_ref(),
+            plan.rendered_highlights.as_ref(),
+            true,
+        )?;
+        plan.note.render_with_projection(
+            &plan.synced_projection,
+            &plan.synced_hash,
+            &metadata,
+            &plan.rendered_body,
+        )
+    } else {
+        plan.stable_rendered_note.clone()
+    };
+    let note_action = change_action(
+        plan.note.exists(),
+        plan.note.contents().as_deref(),
+        &rendered_note,
+    );
+    if plan.note.contents().as_deref() != Some(rendered_note.as_str()) {
+        atomic_write(&plan.note_path, &rendered_note)?;
+    }
+
+    Ok(SyncWriteReport {
+        note_action,
+        marker_action: if plan.marker_write_needed {
+            "updated"
+        } else {
+            "none"
+        },
+    })
+}
+
+fn print_pdf_sync_report(
+    operation: &str,
+    config: &Config,
+    plan: &PdfSyncPlan,
+    options: SyncOptions,
+) {
+    print_config_report(operation, config);
+    println!("pdf: {}", plan.pdf.display());
+    println!("note: {}", plan.note_path.display());
     println!(
         "sidecar: {}",
-        sidecar
+        plan.sidecar_path
             .as_ref()
-            .map(|sidecar| sidecar.path.display().to_string())
+            .map(|path| path.display().to_string())
             .unwrap_or_else(|| "none".to_string())
     );
     println!("dry_run: {}", options.dry_run);
@@ -347,79 +532,111 @@ fn sync_pdf(config: &Config, pdf: &Path, options: SyncOptions) -> Result<()> {
     if let Some(prefer) = options.prefer {
         println!("prefer: {}", prefer.as_str());
     }
-    println!("marker_page: {}", marker.page_number);
-    println!("marker_note: {}", marker.note_number);
-    println!("sync_source: {}", decision.source.as_str());
-    println!("sync_reason: {}", decision.reason);
-    if let Some(rendered_highlights) = &rendered_highlights {
-        println!("highlights_count: {}", rendered_highlights.count);
+    println!("marker_page: {}", plan.marker.page_number);
+    println!("marker_note: {}", plan.marker.note_number);
+    println!("sync_source: {}", plan.decision.source.as_str());
+    println!("sync_reason: {}", plan.decision.reason);
+    if let Some(count) = plan.rendered_highlights_count {
+        println!("highlights_count: {count}");
     }
+}
 
-    if options.dry_run {
-        println!("note_action: {stable_note_action}");
-        println!(
-            "pdf_marker_action: {}",
-            if marker_write_needed {
-                "would-update"
-            } else {
-                "none"
-            }
-        );
-        println!("writes: none");
-        return Ok(());
+fn print_sync_write_report(report: SyncWriteReport) {
+    println!("note_action: {}", report.note_action);
+    println!("pdf_marker_action: {}", report.marker_action);
+    println!("writes: {}", write_summary(report));
+}
+
+fn write_summary(report: SyncWriteReport) -> &'static str {
+    match (report.note_action, report.marker_action != "none") {
+        ("none", false) => "none",
+        ("none", true) => "pdf",
+        (_, false) => "note",
+        (_, true) => "note,pdf",
     }
+}
 
-    if marker_write_needed {
-        write_pdf_marker(pdf, marker.annotation_id, &rendered_marker)?;
-    }
-
-    let rendered_note =
-        if stable_note_action != "none" && rendered_highlights.is_some() {
-            let metadata = pipeline_metadata(
-                config,
-                pdf,
-                &note,
-                sidecar.as_ref(),
-                rendered_highlights.as_ref(),
-                true,
-            )?;
-            note.render_with_projection(
-                &synced_projection,
-                &synced_hash,
-                &metadata,
-                &rendered_body,
-            )
-        } else {
-            stable_rendered_note
-        };
-    let note_action = change_action(
-        note.exists(),
-        note.contents().as_deref(),
-        &rendered_note,
-    );
-    if note.contents().as_deref() != Some(rendered_note.as_str()) {
-        atomic_write(&note_path, &rendered_note)?;
-    }
-
-    println!("note_action: {note_action}");
+fn print_scan_plan_entry(plan: &PdfSyncPlan) {
+    println!("pdf: {}", plan.pdf.display());
+    println!("  note: {}", plan.note_path.display());
     println!(
-        "pdf_marker_action: {}",
-        if marker_write_needed {
-            "updated"
+        "  sidecar: {}",
+        plan.sidecar_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    println!("  sync_source: {}", plan.decision.source.as_str());
+    println!("  note_action: {}", plan.stable_note_action);
+    println!(
+        "  pdf_marker_action: {}",
+        if plan.marker_write_needed {
+            "would-update"
         } else {
             "none"
         }
     );
+    if let Some(count) = plan.rendered_highlights_count {
+        println!("  highlights_count: {count}");
+    }
+}
+
+fn print_scan_plan_summary(plans: &[PdfSyncPlan]) {
+    let creates = plans
+        .iter()
+        .filter(|plan| plan.stable_note_action == "create")
+        .count();
+    let updates = plans
+        .iter()
+        .filter(|plan| plan.stable_note_action == "update")
+        .count();
+    let unchanged = plans
+        .iter()
+        .filter(|plan| plan.stable_note_action == "none")
+        .count();
+    let marker_updates =
+        plans.iter().filter(|plan| plan.marker_write_needed).count();
+    println!("summary:");
+    println!("  notes_create: {creates}");
+    println!("  notes_update: {updates}");
+    println!("  notes_unchanged: {unchanged}");
+    println!("  pdf_markers_would_update: {marker_updates}");
+}
+
+fn print_scan_write_summary(reports: &[SyncWriteReport]) {
+    let creates = reports
+        .iter()
+        .filter(|report| report.note_action == "create")
+        .count();
+    let updates = reports
+        .iter()
+        .filter(|report| report.note_action == "update")
+        .count();
+    let unchanged = reports
+        .iter()
+        .filter(|report| report.note_action == "none")
+        .count();
+    let marker_updates = reports
+        .iter()
+        .filter(|report| report.marker_action != "none")
+        .count();
+    println!("summary:");
+    println!("  notes_created: {creates}");
+    println!("  notes_updated: {updates}");
+    println!("  notes_unchanged: {unchanged}");
+    println!("  pdf_markers_updated: {marker_updates}");
+    let note_writes = reports.iter().any(|report| report.note_action != "none");
+    let marker_writes =
+        reports.iter().any(|report| report.marker_action != "none");
     println!(
         "writes: {}",
-        match (note_action, marker_write_needed) {
-            ("none", false) => "none",
-            ("none", true) => "pdf",
-            (_, false) => "note",
-            (_, true) => "note,pdf",
+        match (note_writes, marker_writes) {
+            (false, false) => "none",
+            (true, false) => "note",
+            (false, true) => "pdf",
+            (true, true) => "note,pdf",
         }
     );
-    Ok(())
 }
 
 fn show_marker(config: &Config, pdf: &Path) -> Result<()> {
@@ -439,6 +656,360 @@ fn show_marker(config: &Config, pdf: &Path) -> Result<()> {
     print!("{}", render_marker(&projection));
     println!("writes: none");
     Ok(())
+}
+
+fn doctor_vault(config: &Config) -> Result<()> {
+    print_config_report("doctor", config);
+    let mut failures = Vec::new();
+    let mut warnings = Vec::new();
+
+    print_path_check("vault_path", &config.bob_dir, config.bob_dir.is_dir());
+    if !config.bob_dir.is_dir() {
+        failures.push(format!(
+            "vault path does not exist or is not a directory: {}",
+            config.bob_dir.display()
+        ));
+    }
+
+    print_path_check("library_dir", &config.lib_dir, config.lib_dir.is_dir());
+    if !config.lib_dir.is_dir() {
+        failures.push(format!(
+            "library directory does not exist or is not a directory: {}",
+            config.lib_dir.display()
+        ));
+    }
+
+    print_path_check("ref_dir", &config.ref_dir, config.ref_dir.is_dir());
+    if !config.ref_dir.is_dir() {
+        failures.push(format!(
+            "reference directory does not exist or is not a directory: {}",
+            config.ref_dir.display()
+        ));
+    }
+
+    if config.default_parent.trim().is_empty() {
+        println!("default_parent_check: fail (empty)");
+        failures.push("default parent is empty".to_string());
+    } else if is_wikilink(&config.default_parent) {
+        println!("default_parent_check: ok");
+    } else {
+        println!("default_parent_check: warn (not an Obsidian wikilink)");
+        warnings.push(format!(
+            "default parent is not an Obsidian wikilink: {}",
+            config.default_parent
+        ));
+    }
+
+    let pdfs = if config.lib_dir.is_dir() {
+        match collect_pdf_paths(config) {
+            Ok(pdfs) => pdfs,
+            Err(error) => {
+                failures.push(error.to_string());
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    println!("pdf_count: {}", pdfs.len());
+
+    let mut sidecar_count = 0usize;
+    let mut missing_sidecars = Vec::new();
+    for pdf in &pdfs {
+        match discover_sidecar_path(pdf) {
+            Ok(Some(_)) => sidecar_count += 1,
+            Ok(None) => missing_sidecars.push(pdf.clone()),
+            Err(error) => failures.push(error.to_string()),
+        }
+    }
+    println!("sidecars_found: {sidecar_count}");
+    println!("sidecars_missing: {}", missing_sidecars.len());
+    if !missing_sidecars.is_empty() {
+        warnings.push(format!(
+            "{} PDF(s) do not have a Highlights Markdown sidecar",
+            missing_sidecars.len()
+        ));
+    }
+
+    let mut readable_markers = 0usize;
+    for pdf in &pdfs {
+        match read_pdf_marker(pdf)
+            .and_then(|marker| parse_marker(&marker.contents).map(|_| marker))
+        {
+            Ok(_) => readable_markers += 1,
+            Err(error) => failures.push(format!("{}: {error}", pdf.display())),
+        }
+    }
+    println!("pdf_markers_readable: {readable_markers}");
+    println!(
+        "pdf_marker_errors: {}",
+        pdfs.len().saturating_sub(readable_markers)
+    );
+
+    match git_status(config, &[])? {
+        GitStatus::MissingCommand => {
+            println!("git: fail (command not found)");
+            failures.push("git command not found".to_string());
+        }
+        GitStatus::NotWorktree => {
+            println!("git: fail (vault is not a worktree)");
+            failures.push(format!(
+                "vault is not a Git worktree: {}",
+                config.bob_dir.display()
+            ));
+        }
+        GitStatus::Worktree { entries } if entries.is_empty() => {
+            println!("git: ok (clean worktree)");
+        }
+        GitStatus::Worktree { entries } => {
+            println!("git: fail (dirty worktree)");
+            println!("git_dirty_count: {}", entries.len());
+            for entry in entries.iter().take(20) {
+                println!("  {entry}");
+            }
+            failures
+                .push(format!("vault has {} dirty Git path(s)", entries.len()));
+        }
+    }
+
+    match ob::load_ob_command() {
+        Some(command) => {
+            println!("ob: available ({})", command.to_string_lossy());
+        }
+        None => {
+            println!("ob: warn (command not found)");
+            warnings.push("ob command not found; Obsidian Sync integration is unavailable".to_string());
+        }
+    }
+    println!("ob_sync: not-run");
+
+    if !warnings.is_empty() {
+        println!("warnings:");
+        for warning in &warnings {
+            println!("  {warning}");
+        }
+    }
+
+    println!("writes: none");
+    if failures.is_empty() {
+        println!("result: ok");
+        Ok(())
+    } else {
+        println!("result: failed");
+        Err(CommandError::new(format!(
+            "doctor found failing checks:\n  {}",
+            failures.join("\n  ")
+        )))
+    }
+}
+
+fn print_path_check(name: &str, path: &Path, ok: bool) {
+    println!(
+        "{name}: {} ({})",
+        if ok { "ok" } else { "fail" },
+        path.display()
+    );
+}
+
+fn collect_pdf_paths(config: &Config) -> Result<Vec<PathBuf>> {
+    if !config.lib_dir.is_dir() {
+        return Err(CommandError::new(format!(
+            "library directory does not exist or is not a directory: {}",
+            config.lib_dir.display()
+        )));
+    }
+
+    let mut paths = Vec::new();
+    collect_pdf_paths_from_dir(&config.lib_dir, &mut paths)?;
+    paths.sort();
+    Ok(paths)
+}
+
+fn collect_pdf_paths_from_dir(
+    directory: &Path,
+    paths: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let entries = fs::read_dir(directory).map_err(|error| {
+        CommandError::new(format!("scan {}: {error}", directory.display()))
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CommandError::new(format!("scan {}: {error}", directory.display()))
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            CommandError::new(format!("stat {}: {error}", path.display()))
+        })?;
+        if file_type.is_dir() {
+            if !should_skip_scan_dir(&path) {
+                collect_pdf_paths_from_dir(&path, paths)?;
+            }
+        } else if file_type.is_file() && is_pdf_path(&path) {
+            paths.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn should_skip_scan_dir(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name == OsStr::new(".git"))
+}
+
+fn is_pdf_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
+fn validate_output_collisions(config: &Config, pdfs: &[PathBuf]) -> Result<()> {
+    let mut by_note_path: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    for pdf in pdfs {
+        by_note_path
+            .entry(ref_note_path(config, pdf)?)
+            .or_default()
+            .push(pdf.clone());
+    }
+
+    let collisions = by_note_path
+        .into_iter()
+        .filter(|(_, pdfs)| pdfs.len() > 1)
+        .collect::<Vec<_>>();
+    if collisions.is_empty() {
+        return Ok(());
+    }
+
+    let mut message =
+        String::from("output path collision(s) detected before writes:");
+    for (note_path, pdfs) in collisions {
+        message.push('\n');
+        message.push_str("  ");
+        message.push_str(&note_path.display().to_string());
+        message.push_str(" <= ");
+        message.push_str(
+            &pdfs
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    Err(CommandError::new(message))
+}
+
+fn validate_note_target(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        return Err(CommandError::new(format!(
+            "reference note target is a directory: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_safe_to_write<'a, I>(config: &Config, plans: I) -> Result<()>
+where
+    I: IntoIterator<Item = &'a PdfSyncPlan>,
+{
+    let mut touched_paths = BTreeSet::new();
+    for plan in plans {
+        if plan.stable_note_action != "none" {
+            touched_paths.insert(plan.note_path.clone());
+        }
+        if plan.marker_write_needed {
+            touched_paths.insert(plan.pdf.clone());
+        }
+    }
+
+    let touched_paths = touched_paths
+        .into_iter()
+        .filter(|path| path.exists())
+        .filter(|path| path.strip_prefix(&config.bob_dir).is_ok())
+        .collect::<Vec<_>>();
+    if touched_paths.is_empty() {
+        return Ok(());
+    }
+
+    match git_status(config, &touched_paths)? {
+        GitStatus::Worktree { entries } if !entries.is_empty() => {
+            Err(CommandError::new(format!(
+                "refusing to modify dirty vault files:\n  {}\ncommit, stash, or clean these files before rerunning",
+                entries.join("\n  ")
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn git_status(config: &Config, paths: &[PathBuf]) -> Result<GitStatus> {
+    let child_env = ob::child_env();
+    let rev_parse = ob::git_command(&config.bob_dir, &child_env)
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let rev_parse = match rev_parse {
+        Ok(status) if status.success() => status,
+        Ok(_) => return Ok(GitStatus::NotWorktree),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(GitStatus::MissingCommand);
+        }
+        Err(error) => {
+            return Err(CommandError::new(format!(
+                "run git rev-parse in {}: {error}",
+                config.bob_dir.display()
+            )));
+        }
+    };
+    let _ = rev_parse;
+
+    let mut command = ob::git_command(&config.bob_dir, &child_env);
+    command
+        .arg("-c")
+        .arg("color.status=false")
+        .arg("status")
+        .arg("--short")
+        .arg("--untracked-files=all")
+        .arg("--");
+    for path in paths {
+        let pathspec = path.strip_prefix(&config.bob_dir).unwrap_or(path);
+        command.arg(pathspec);
+    }
+    let output = command.output().map_err(|error| {
+        CommandError::new(format!(
+            "run git status in {}: {error}",
+            config.bob_dir.display()
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(CommandError::new(format!(
+            "git status failed in {}:\n{}",
+            config.bob_dir.display(),
+            command_output(&output)
+        )));
+    }
+
+    Ok(GitStatus::Worktree {
+        entries: String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect(),
+    })
+}
+
+fn command_output(output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    format!("stdout:\n{stdout}\nstderr:\n{stderr}")
+}
+
+fn is_wikilink(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("[[") && trimmed.ends_with("]]")
 }
 
 fn read_sidecar_for_pdf(pdf: &Path) -> Result<Option<SidecarInput>> {
@@ -939,7 +1510,7 @@ fn build_cli() -> ClapCommand {
                     .about("Scan the configured Highlights library")
                     .arg(dry_run_arg()),
             )
-            .after_help("Recursive library scanning is implemented in a later phase."),
+            .after_help("Scans PDFs recursively, preflights collisions and dirty targets, then syncs each PDF."),
         )
         .subcommand(
             with_config_args(
@@ -974,7 +1545,7 @@ fn build_cli() -> ClapCommand {
                 ClapCommand::new("doctor")
                     .about("Check Highlights reference sync prerequisites"),
             )
-            .after_help("Full prerequisite checks are implemented in a later phase."),
+            .after_help("Checks vault paths, sidecars, PDF markers, Git state, default parent, and optional ob support."),
         )
         .subcommand(
             with_config_args(
