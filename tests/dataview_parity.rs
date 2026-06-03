@@ -155,9 +155,11 @@ fn dataview_native_current_json_golden_uses_bob_wrapper_shape() {
             ],
             "result": {
                 "type": "table",
+                "idMeaning": {"type": "path"},
                 "headers": ["status", "owner", "ready", "nullable", "missing"],
                 "values": [
                     [
+                        dataview_link("Projects/Alpha.md", None),
                         "active",
                         {
                             "type": "link",
@@ -170,6 +172,7 @@ fn dataview_native_current_json_golden_uses_bob_wrapper_shape() {
                         null
                     ],
                     [
+                        dataview_link("Projects/Beta.md", None),
                         "waiting",
                         {
                             "type": "link",
@@ -181,7 +184,14 @@ fn dataview_native_current_json_golden_uses_bob_wrapper_shape() {
                         null,
                         null
                     ],
-                    [null, null, true, null, null]
+                    [
+                        dataview_link("Projects/Gamma.md", None),
+                        null,
+                        null,
+                        true,
+                        null,
+                        null
+                    ]
                 ]
             },
             "warnings": []
@@ -207,23 +217,24 @@ fn dataview_native_index_values_cover_yaml_inline_dates_and_links() {
     );
     let values = json["result"]["values"].as_array().expect("table values");
 
-    assert_eq!(values[0][0], json!(["Alpha", "Project Alpha"]));
-    assert_eq!(values[0][1], 8);
-    assert_eq!(values[0][2], "2026-06-15");
-    assert_eq!(values[0][3], "2026-06-01T09:30:00");
-    assert_eq!(values[0][4], "PT2H");
-    assert_eq!(values[0][5], "active");
-    assert_eq!(values[0][6], 42);
-    assert_eq!(values[0][7], dataview_link("People/Grace Hopper.md", None));
+    assert_eq!(values[0][0], dataview_link("Projects/Alpha.md", None));
+    assert_eq!(values[0][1], json!(["Alpha", "Project Alpha"]));
+    assert_eq!(values[0][2], 8);
+    assert_eq!(values[0][3], "2026-06-15");
+    assert_eq!(values[0][4], "2026-06-01T09:30:00");
+    assert_eq!(values[0][5], "PT2H");
+    assert_eq!(values[0][6], "active");
+    assert_eq!(values[0][7], 42);
+    assert_eq!(values[0][8], dataview_link("People/Grace Hopper.md", None));
     assert_eq!(
-        values[0][8],
+        values[0][9],
         json!([dataview_link("Projects/Beta.md", None)])
     );
 
-    assert_eq!(values[1][0], json!(["Beta Project"]));
-    assert_eq!(values[1][2], "2026-07-01");
-    assert_eq!(values[1][4], "P3D");
-    assert!(values[2][2].is_null(), "blank YAML value should be null");
+    assert_eq!(values[1][1], json!(["Beta Project"]));
+    assert_eq!(values[1][3], "2026-07-01");
+    assert_eq!(values[1][5], "P3D");
+    assert!(values[2][3].is_null(), "blank YAML value should be null");
 }
 
 #[test]
@@ -241,23 +252,27 @@ fn dataview_native_index_builds_file_metadata_and_link_graph() {
     let values = json["result"]["values"].as_array().expect("table values");
     let alpha = values[0].as_array().expect("alpha row");
 
-    assert_eq!(alpha[0], "Alpha");
-    assert_eq!(alpha[1], "Projects");
-    assert_eq!(alpha[2], "Projects/Alpha.md");
-    assert_eq!(alpha[3], dataview_link("Projects/Alpha.md", None));
+    assert_eq!(alpha[0], dataview_link("Projects/Alpha.md", None));
+    assert_eq!(alpha[1], "Alpha");
+    assert_eq!(alpha[2], "Projects");
+    assert_eq!(alpha[3], "Projects/Alpha.md");
+    assert_eq!(alpha[4], dataview_link("Projects/Alpha.md", None));
     assert_eq!(
-        alpha[4],
+        alpha[5],
         json!(["#project", "#project/active", "#task", "#task/project"])
     );
     assert_eq!(
-        alpha[5],
+        alpha[6],
         json!(["#project", "#project/active", "#task/project"])
     );
-    assert_eq!(alpha[6], json!(["Alpha", "Project Alpha"]));
-    assert_array_contains(&alpha[7], dataview_link("Links/Hub.md", None));
-    assert_array_contains(&alpha[8], dataview_link("Origins/Origin.md", None));
-    assert!(alpha[9].is_null(), "project notes should not have file.day");
-    assert_eq!(alpha[10], false);
+    assert_eq!(alpha[7], json!(["Alpha", "Project Alpha"]));
+    assert_array_contains(&alpha[8], dataview_link("Links/Hub.md", None));
+    assert_array_contains(&alpha[9], dataview_link("Origins/Origin.md", None));
+    assert!(
+        alpha[10].is_null(),
+        "project notes should not have file.day"
+    );
+    assert_eq!(alpha[11], false);
 
     let daily = run_native_fixture(&[
         "--format",
@@ -268,7 +283,7 @@ fn dataview_native_index_builds_file_metadata_and_link_graph() {
     assert_success(&daily);
     let daily_json = json_stdout(&daily);
     assert_eq!(daily_json["paths"], json!(["Daily/2026-06-03.md"]));
-    assert_eq!(daily_json["result"]["values"][0][0], "2026-06-03");
+    assert_eq!(daily_json["result"]["values"][0][1], "2026-06-03");
 }
 
 #[test]
@@ -284,8 +299,8 @@ fn dataview_native_index_builds_task_and_list_objects() {
     assert!(stderr(&output).is_empty(), "{}", format_output(&output));
     let json = json_stdout(&output);
     let row = json["result"]["values"][0].as_array().expect("task row");
-    let tasks = row[0].as_array().expect("file.tasks");
-    let lists = row[1].as_array().expect("file.lists");
+    let tasks = row[1].as_array().expect("file.tasks");
+    let lists = row[2].as_array().expect("file.lists");
 
     assert_eq!(tasks.len(), 4, "task list should be flat");
     assert_eq!(lists.len(), 4, "list index should include task list items");
@@ -460,8 +475,10 @@ fn dataview_native_expression_core_evaluates_table_and_list_values() {
             "paths": ["Projects/Alpha.md"],
             "result": {
                 "type": "table",
+                "idMeaning": {"type": "path"},
                 "headers": ["total", "pair", "obj", "is_null"],
                 "values": [[
+                    dataview_link("Projects/Alpha.md", None),
                     15,
                     ["active", true],
                     {"missing": null, "name": "Alpha"},
@@ -490,7 +507,12 @@ fn dataview_native_expression_core_evaluates_table_and_list_values() {
             "paths": ["Projects/Alpha.md"],
             "result": {
                 "type": "list",
-                "values": ["active:Alpha"]
+                "primaryMeaning": {"type": "path"},
+                "values": [{
+                    "$widget": "dataview:list-pair",
+                    "key": dataview_link("Projects/Alpha.md", None),
+                    "value": "active:Alpha"
+                }]
             },
             "warnings": []
         }),
@@ -550,8 +572,10 @@ fn dataview_native_expression_core_supports_swizzling_and_lambdas() {
             "paths": ["Projects/Alpha.md"],
             "result": {
                 "type": "table",
+                "idMeaning": {"type": "path"},
                 "headers": ["texts", "open", "done", "has_open", "all_done", "first_task"],
                 "values": [[
+                    dataview_link("Projects/Alpha.md", None),
                     [
                         "Kickoff #task/project",
                         "Prepare brief",
@@ -588,6 +612,7 @@ fn dataview_native_function_library_supports_constructors_and_utilities() {
     assert_eq!(
         json["result"]["values"][0],
         json!([
+            dataview_link("Projects/Alpha.md", None),
             "Alpha",
             [1, 2, 3],
             true,
@@ -624,6 +649,7 @@ fn dataview_native_function_library_supports_numeric_and_container_functions() {
     assert_eq!(
         json["result"]["values"][0],
         json!([
+            dataview_link("Projects/Alpha.md", None),
             16.56,
             -93,
             -1,
@@ -671,6 +697,7 @@ fn dataview_native_function_library_supports_string_functions() {
     assert_eq!(
         json["result"]["values"][0],
         json!([
+            dataview_link("Projects/Alpha.md", None),
             true,
             true,
             "Suite -",
@@ -713,52 +740,170 @@ fn dataview_native_function_library_works_in_where_sort_and_list() {
     assert_success(&list);
     assert!(stderr(&list).is_empty(), "{}", format_output(&list));
     let json = json_stdout(&list);
-    assert_eq!(json["result"]["values"], json!(["Alpha|Project Alpha"]));
+    assert_eq!(
+        json["result"]["values"],
+        json!([{
+            "$widget": "dataview:list-pair",
+            "key": dataview_link("Projects/Alpha.md", None),
+            "value": "Alpha|Project Alpha"
+        }])
+    );
+}
+
+#[test]
+fn dataview_native_dql_execution_supports_phase6_result_shapes() {
+    let task = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"TASK FROM "Tasks""#,
+    ]);
+    assert_success(&task);
+    assert!(stderr(&task).is_empty(), "{}", format_output(&task));
+    let task_json = json_stdout(&task);
+    assert_eq!(task_json["paths"], json!(["Tasks/Nested.md"]));
+    assert_eq!(task_json["result"]["type"], "task");
+    let tasks = task_json["result"]["values"]
+        .as_array()
+        .expect("task values");
+    assert_eq!(tasks.len(), 2, "TASK should emit top-level tasks");
+    assert_eq!(tasks[0]["text"], "Parent task #project");
+    assert_eq!(
+        tasks[0]["children"]
+            .as_array()
+            .expect("task children")
+            .len(),
+        2
+    );
+    assert_eq!(tasks[1]["blockId"], "sibling-task");
+
+    let calendar = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"CALENDAR due FROM "Projects""#,
+    ]);
+    assert_success(&calendar);
+    assert!(stderr(&calendar).is_empty(), "{}", format_output(&calendar));
+    assert_json_stdout_eq(
+        &calendar,
+        json!({
+            "engine": "native",
+            "query_kind": "dql",
+            "format": "json",
+            "paths": ["Projects/Alpha.md", "Projects/Beta.md"],
+            "result": {
+                "type": "calendar",
+                "values": [
+                    {
+                        "date": "2026-06-15",
+                        "link": dataview_link("Projects/Alpha.md", None),
+                        "value": "Alpha"
+                    },
+                    {
+                        "date": "2026-07-01",
+                        "link": dataview_link("Projects/Beta.md", None),
+                        "value": "Beta"
+                    }
+                ]
+            },
+            "warnings": []
+        }),
+    );
+
+    let grouped = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"TABLE status FROM "Projects" GROUP BY status"#,
+    ]);
+    assert_success(&grouped);
+    let grouped_json = json_stdout(&grouped);
+    assert_eq!(grouped_json["paths"], json!([]));
+    assert_eq!(
+        grouped_json["result"],
+        json!({
+            "type": "table",
+            "idMeaning": {"type": "group"},
+            "headers": ["status"],
+            "values": [["active"], ["waiting"], [null]]
+        })
+    );
+    assert!(
+        stderr(&grouped).contains("DQL table row 1 uses grouped identity"),
+        "{}",
+        format_output(&grouped)
+    );
+
+    let grouped_strict = run_native_fixture(&[
+        "--strict-paths",
+        "--query",
+        r#"TABLE status FROM "Projects" GROUP BY status"#,
+    ]);
+    assert!(
+        !grouped_strict.status.success(),
+        "strict grouped paths should fail:\n{}",
+        format_output(&grouped_strict)
+    );
+    assert!(
+        stdout(&grouped_strict).is_empty(),
+        "{}",
+        format_output(&grouped_strict)
+    );
+    assert!(
+        stderr(&grouped_strict)
+            .contains("paths output could not derive clean note paths"),
+        "{}",
+        format_output(&grouped_strict)
+    );
+
+    let flattened = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"TABLE aliases FROM "Projects" FLATTEN aliases"#,
+    ]);
+    assert_success(&flattened);
+    assert!(
+        stderr(&flattened).is_empty(),
+        "{}",
+        format_output(&flattened)
+    );
+    let flattened_json = json_stdout(&flattened);
+    assert_eq!(
+        flattened_json["paths"],
+        json!(["Projects/Alpha.md", "Projects/Beta.md", "Projects/Gamma.md"])
+    );
+    assert_eq!(
+        flattened_json["result"]["values"],
+        json!([
+            [dataview_link("Projects/Alpha.md", None), "Alpha"],
+            [dataview_link("Projects/Alpha.md", None), "Project Alpha"],
+            [dataview_link("Projects/Beta.md", None), "Beta Project"],
+            [dataview_link("Projects/Gamma.md", None), null],
+        ])
+    );
+
+    let flattened_paths = run_native_fixture(&[
+        "--strict-paths",
+        "--query",
+        r#"TABLE aliases FROM "Projects" FLATTEN aliases"#,
+    ]);
+    assert_success(&flattened_paths);
+    assert_eq!(
+        stdout(&flattened_paths),
+        "Projects/Alpha.md\nProjects/Beta.md\nProjects/Gamma.md\n"
+    );
+    assert!(
+        stderr(&flattened_paths).is_empty(),
+        "{}",
+        format_output(&flattened_paths)
+    );
 }
 
 #[test]
 fn dataview_native_expected_failures_record_future_parity_contract() {
     let cases = [
-        NativeFailureCase {
-            name: "task JSON",
-            args: &["--format", "json", "--query", r#"TASK FROM "Tasks""#],
-            markers: &[
-                "native query failed",
-                "native DQL execution does not support TASK queries yet",
-            ],
-        },
-        NativeFailureCase {
-            name: "calendar JSON",
-            args: &[
-                "--format",
-                "json",
-                "--query",
-                r#"CALENDAR due FROM "Projects""#,
-            ],
-            markers: &[
-                "native query failed",
-                "native DQL execution does not support CALENDAR queries yet",
-            ],
-        },
-        NativeFailureCase {
-            name: "grouped paths",
-            args: &["--query", r#"LIST FROM "Projects" GROUP BY status"#],
-            markers: &[
-                "native query failed",
-                "native DQL execution does not support GROUP BY expression `status` yet",
-            ],
-        },
-        NativeFailureCase {
-            name: "flattened paths",
-            args: &[
-                "--query",
-                r#"TABLE aliases FROM "Projects" FLATTEN aliases"#,
-            ],
-            markers: &[
-                "native query failed",
-                "native DQL execution does not support FLATTEN expression `aliases` yet",
-            ],
-        },
         NativeFailureCase {
             name: "list markdown",
             args: &[

@@ -1402,6 +1402,10 @@ fn dataview_native_table_json_projects_frontmatter_rows() {
     );
     assert_eq!(json["result"]["type"], "table");
     assert_eq!(
+        json["result"]["idMeaning"],
+        serde_json::json!({"type": "path"})
+    );
+    assert_eq!(
         json["result"]["headers"],
         serde_json::json!(["status", "parent", "ready", "missing"])
     );
@@ -1409,9 +1413,18 @@ fn dataview_native_table_json_projects_frontmatter_rows() {
         .as_array()
         .expect("table values array");
     assert_eq!(values.len(), 2, "expected two table rows:\n{json}");
-    assert_eq!(values[0][0], "active");
     assert_eq!(
-        values[0][1],
+        values[0][0],
+        serde_json::json!({
+            "type": "link",
+            "path": "ref/alpha.md",
+            "display": null,
+            "embed": false
+        })
+    );
+    assert_eq!(values[0][1], "active");
+    assert_eq!(
+        values[0][2],
         serde_json::json!({
             "type": "link",
             "path": "memory_ref.md",
@@ -1419,11 +1432,20 @@ fn dataview_native_table_json_projects_frontmatter_rows() {
             "embed": false
         })
     );
-    assert_eq!(values[0][2], true);
-    assert!(values[0][3].is_null(), "missing field should be null");
-    assert!(values[1][0].is_null(), "missing field should be null");
-    assert!(values[1][1].is_null(), "frontmatter null should be null");
-    assert_eq!(values[1][2], false);
+    assert_eq!(values[0][3], true);
+    assert!(values[0][4].is_null(), "missing field should be null");
+    assert_eq!(
+        values[1][0],
+        serde_json::json!({
+            "type": "link",
+            "path": "ref/beta.md",
+            "display": null,
+            "embed": false
+        })
+    );
+    assert!(values[1][1].is_null(), "missing field should be null");
+    assert!(values[1][2].is_null(), "frontmatter null should be null");
+    assert_eq!(values[1][3], false);
 }
 
 #[test]

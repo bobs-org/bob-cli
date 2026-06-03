@@ -323,13 +323,7 @@ fn run_native(request: &Request) -> Result<(), DataviewError> {
         QueryInput::Source(source) => {
             let source = NativeSourceExpr::parse(source)?;
             let output = vault.evaluate_source(&source);
-            emit_engine_output(
-                request,
-                EngineOutput {
-                    response: EngineResponse::SourcePaths(output.paths),
-                    warnings: output.warnings,
-                },
-            )
+            emit_engine_output(request, output)
         }
         QueryInput::Dql(input) => {
             let query = NativeQuery::parse(&input.read_query()?)?;
@@ -650,40 +644,32 @@ fn emit_native_output(
     request: &Request,
     output: NativeOutput,
 ) -> Result<(), DataviewError> {
+    let NativeOutput {
+        result,
+        mut warnings,
+    } = output;
+
     match request.format {
         OutputFormat::Paths => {
-            emit_warnings(&output.warnings);
-            if !output.paths.is_empty() {
-                println!("{}", output.paths.join("\n"));
+            let extraction = extract_dql_paths(&result, request.strict_paths)?;
+            warnings.extend(extraction.warnings);
+            emit_warnings(&warnings);
+            if !extraction.paths.is_empty() {
+                println!("{}", extraction.paths.join("\n"));
             }
             Ok(())
         }
         OutputFormat::Json => {
-            let result = match output.result {
-                NativeResult::List { values } => {
-                    serde_json::json!({
-                        "type": "list",
-                        "values": values,
-                    })
-                }
-                NativeResult::Source => unreachable!(
-                    "native source output uses the shared source emitter"
-                ),
-                NativeResult::Table { headers, values } => {
-                    serde_json::json!({
-                        "type": "table",
-                        "headers": headers,
-                        "values": values,
-                    })
-                }
-            };
+            let extraction = extract_dql_paths(&result, false)?;
+            warnings.extend(extraction.warnings);
+            emit_warnings(&warnings);
             print_json(serde_json::json!({
                 "engine": request.engine.as_str(),
                 "query_kind": "dql",
                 "format": request.format.as_str(),
-                "paths": output.paths,
+                "paths": extraction.paths,
                 "result": result,
-                "warnings": output.warnings,
+                "warnings": warnings,
             }))
         }
         OutputFormat::Markdown => unreachable!(
@@ -762,21 +748,8 @@ struct DynomarkOutput {
 
 #[derive(Debug)]
 struct NativeOutput {
-    paths: Vec<String>,
-    result: NativeResult,
     warnings: Vec<String>,
-}
-
-#[derive(Debug)]
-enum NativeResult {
-    Source,
-    List {
-        values: Vec<Value>,
-    },
-    Table {
-        headers: Vec<String>,
-        values: Vec<Vec<Value>>,
-    },
+    result: Value,
 }
 
 #[derive(Debug)]
@@ -799,7 +772,7 @@ enum NativeQueryKind {
         _without_id: bool,
     },
     Calendar {
-        _expression: NativeExpression,
+        expression: NativeExpression,
         _without_id: bool,
     },
 }
@@ -826,11 +799,11 @@ enum NativeDataCommand {
     },
     GroupBy {
         expression: NativeExpression,
-        _alias: Option<String>,
+        alias: Option<String>,
     },
     Flatten {
         expression: NativeExpression,
-        _alias: Option<String>,
+        alias: Option<String>,
     },
     Limit(usize),
 }
@@ -909,6 +882,14 @@ enum NativeUnaryOp {
 struct NativeVault {
     index: DataviewIndex,
     origin_index: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct NativeRow {
+    page_index: usize,
+    source_page_index: Option<usize>,
+    value: DataviewValue,
+    variables: BTreeMap<String, DataviewValue>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1025,16 +1006,15 @@ impl NativeVault {
         Ok(Some(index))
     }
 
-    fn evaluate_source(&self, source: &NativeSourceExpr) -> NativeOutput {
+    fn evaluate_source(&self, source: &NativeSourceExpr) -> EngineOutput {
         let paths = self
             .evaluate_source_indices(source)
             .into_iter()
             .map(|index| self.index.pages[index].path.clone())
             .collect();
 
-        NativeOutput {
-            paths,
-            result: NativeResult::Source,
+        EngineOutput {
+            response: EngineResponse::SourcePaths(paths),
             warnings: self.index.warnings.clone(),
         }
     }
@@ -1043,39 +1023,29 @@ impl NativeVault {
         &self,
         query: &NativeQuery,
     ) -> Result<NativeOutput, DataviewError> {
-        query.ensure_executable()?;
-
-        let mut page_indices = self.index_order_indices();
+        let mut rows = self.initial_rows(query);
         for command in &query.commands {
             match command {
                 NativeDataCommand::From(source) => {
-                    let source_indices = self.evaluate_source_indices(source);
-                    let current =
-                        page_indices.iter().copied().collect::<HashSet<_>>();
-                    page_indices = source_indices
-                        .into_iter()
-                        .filter(|index| current.contains(index))
-                        .collect();
+                    rows = self.filter_rows_by_source(rows, source);
                 }
                 NativeDataCommand::Where(expression) => {
-                    page_indices.retain(|index| {
-                        expression
-                            .evaluate(&self.eval_context(*index))
-                            .is_truthy()
+                    rows.retain(|row| {
+                        expression.evaluate(&row.context(self)).is_truthy()
                     });
                 }
                 NativeDataCommand::Limit(limit) => {
-                    page_indices.truncate(*limit);
+                    rows.truncate(*limit);
                 }
                 NativeDataCommand::Sort {
                     expression,
                     direction,
                 } => {
-                    page_indices.sort_by(|left, right| {
+                    rows.sort_by(|left, right| {
                         let left_value =
-                            expression.evaluate(&self.eval_context(*left));
+                            expression.evaluate(&left.context(self));
                         let right_value =
-                            expression.evaluate(&self.eval_context(*right));
+                            expression.evaluate(&right.context(self));
                         let ordering =
                             compare_values(self, &left_value, &right_value);
                         match direction.unwrap_or(SortDirection::Ascending) {
@@ -1084,76 +1054,255 @@ impl NativeVault {
                         }
                     });
                 }
-                NativeDataCommand::GroupBy { expression, .. } => {
-                    return Err(native_unsupported_execution(format!(
-                        "native DQL execution does not support GROUP BY \
-                         expression `{}` yet",
-                        expression.raw
-                    )));
+                NativeDataCommand::GroupBy { expression, alias } => {
+                    rows = self.group_rows(rows, expression, alias.as_deref());
                 }
-                NativeDataCommand::Flatten { expression, .. } => {
-                    return Err(native_unsupported_execution(format!(
-                        "native DQL execution does not support FLATTEN \
-                         expression `{}` yet",
-                        expression.raw
-                    )));
+                NativeDataCommand::Flatten { expression, alias } => {
+                    rows =
+                        self.flatten_rows(rows, expression, alias.as_deref());
                 }
             }
         }
 
-        let paths = page_indices
-            .iter()
-            .map(|index| self.index.pages[*index].path.clone())
-            .collect::<Vec<_>>();
-        let result = match &query.kind {
-            NativeQueryKind::List { expression, .. } => {
-                let values = page_indices
-                    .iter()
-                    .map(|page_index| {
-                        expression
-                            .as_ref()
-                            .map(|expression| {
-                                expression
-                                    .evaluate(&self.eval_context(*page_index))
-                            })
-                            .unwrap_or_else(|| {
-                                DataviewValue::Link(DataviewLink::page(
-                                    &self.index.pages[*page_index].path,
-                                ))
-                            })
-                            .to_plain_json()
-                    })
-                    .collect();
-                NativeResult::List { values }
-            }
-            NativeQueryKind::Table { columns, .. } => NativeResult::Table {
-                headers: columns.iter().map(NativeSelect::header).collect(),
-                values: page_indices
-                    .iter()
-                    .map(|page_index| {
-                        columns
-                            .iter()
-                            .map(|column| {
-                                column
-                                    .expression
-                                    .evaluate(&self.eval_context(*page_index))
-                                    .to_plain_json()
-                            })
-                            .collect()
-                    })
-                    .collect(),
-            },
-            NativeQueryKind::Task { .. } | NativeQueryKind::Calendar { .. } => {
-                unreachable!(
-                    "ensure_executable rejects unsupported query kinds"
-                )
-            }
-        };
-
         Ok(NativeOutput {
-            paths,
-            result,
             warnings: self.index.warnings.clone(),
+            result: self.result_json(query, &rows),
+        })
+    }
+
+    fn initial_rows(&self, query: &NativeQuery) -> Vec<NativeRow> {
+        match &query.kind {
+            NativeQueryKind::Task { .. } => self.task_rows(),
+            NativeQueryKind::List { .. }
+            | NativeQueryKind::Table { .. }
+            | NativeQueryKind::Calendar { .. } => self.page_rows(),
+        }
+    }
+
+    fn page_rows(&self) -> Vec<NativeRow> {
+        self.index_order_indices()
+            .into_iter()
+            .map(|page_index| NativeRow::page(self, page_index))
+            .collect()
+    }
+
+    fn task_rows(&self) -> Vec<NativeRow> {
+        let mut rows = Vec::new();
+        for page_index in self.index_order_indices() {
+            for task in self.top_level_page_tasks(page_index) {
+                rows.push(NativeRow::task(page_index, task));
+            }
+        }
+        rows
+    }
+
+    fn top_level_page_tasks(&self, page_index: usize) -> Vec<DataviewValue> {
+        let tasks = self
+            .page_field_value(page_index, "file")
+            .as_object_field("tasks")
+            .and_then(|value| match value {
+                DataviewValue::Array(values) => Some(values.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        tasks
+            .into_iter()
+            .filter(|task| {
+                matches!(
+                    task.as_object_field("parent"),
+                    None | Some(DataviewValue::Null)
+                )
+            })
+            .collect()
+    }
+
+    fn filter_rows_by_source(
+        &self,
+        rows: Vec<NativeRow>,
+        source: &NativeSourceExpr,
+    ) -> Vec<NativeRow> {
+        let mut rows_by_page: BTreeMap<usize, Vec<NativeRow>> = BTreeMap::new();
+        for row in rows {
+            if let Some(page_index) = row.source_page_index {
+                rows_by_page.entry(page_index).or_default().push(row);
+            }
+        }
+
+        let mut filtered = Vec::new();
+        for page_index in self.evaluate_source_indices(source) {
+            if let Some(mut page_rows) = rows_by_page.remove(&page_index) {
+                filtered.append(&mut page_rows);
+            }
+        }
+        filtered
+    }
+
+    fn group_rows(
+        &self,
+        rows: Vec<NativeRow>,
+        expression: &NativeExpression,
+        alias: Option<&str>,
+    ) -> Vec<NativeRow> {
+        let mut groups: Vec<(String, DataviewValue, Vec<NativeRow>)> =
+            Vec::new();
+        for row in rows {
+            let key = expression.evaluate(&row.context(self));
+            let group_key = value_group_key(&key);
+            if let Some((_, _, rows)) = groups
+                .iter_mut()
+                .find(|(existing, _, _)| existing == &group_key)
+            {
+                rows.push(row);
+            } else {
+                groups.push((group_key, key, vec![row]));
+            }
+        }
+
+        groups
+            .into_iter()
+            .map(|(_, key, rows)| {
+                let page_index = rows.first().map_or(0, |row| row.page_index);
+                NativeRow::group(page_index, key, rows, expression, alias)
+            })
+            .collect()
+    }
+
+    fn flatten_rows(
+        &self,
+        rows: Vec<NativeRow>,
+        expression: &NativeExpression,
+        alias: Option<&str>,
+    ) -> Vec<NativeRow> {
+        let field = alias.unwrap_or(&expression.raw);
+        let mut flattened = Vec::new();
+        for row in rows {
+            let value = expression.evaluate(&row.context(self));
+            let values = match value {
+                DataviewValue::Array(values) => values,
+                DataviewValue::Null => vec![DataviewValue::Null],
+                value => vec![value],
+            };
+            for value in values {
+                flattened.push(row.clone().with_field(field, value));
+            }
+        }
+        flattened
+    }
+
+    fn result_json(&self, query: &NativeQuery, rows: &[NativeRow]) -> Value {
+        match &query.kind {
+            NativeQueryKind::List { expression, .. } => {
+                self.list_result_json(rows, expression.as_ref())
+            }
+            NativeQueryKind::Table { columns, .. } => {
+                self.table_result_json(rows, columns)
+            }
+            NativeQueryKind::Task { .. } => self.task_result_json(rows),
+            NativeQueryKind::Calendar { expression, .. } => {
+                self.calendar_result_json(rows, expression)
+            }
+        }
+    }
+
+    fn list_result_json(
+        &self,
+        rows: &[NativeRow],
+        expression: Option<&NativeExpression>,
+    ) -> Value {
+        let grouped = rows.iter().any(|row| row.source_page_index.is_none());
+        let values = rows
+            .iter()
+            .map(|row| match expression {
+                Some(expression) => list_pair_json(
+                    row.identity_value(self).to_plain_json(),
+                    expression.evaluate(&row.context(self)).to_plain_json(),
+                ),
+                None => {
+                    if row.source_page_index.is_some() {
+                        row.identity_value(self).to_plain_json()
+                    } else {
+                        row.group_key_value().to_plain_json()
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut result = serde_json::json!({
+            "type": "list",
+            "values": values,
+        });
+        if expression.is_some() || grouped {
+            result["primaryMeaning"] = identity_meaning_json(grouped);
+        }
+        result
+    }
+
+    fn table_result_json(
+        &self,
+        rows: &[NativeRow],
+        columns: &[NativeSelect],
+    ) -> Value {
+        let grouped = rows.iter().any(|row| row.source_page_index.is_none());
+        let include_identity = !grouped;
+        let values = rows
+            .iter()
+            .map(|row| {
+                let mut cells = Vec::new();
+                if include_identity {
+                    cells.push(row.identity_value(self).to_plain_json());
+                }
+                cells.extend(columns.iter().map(|column| {
+                    column
+                        .expression
+                        .evaluate(&row.context(self))
+                        .to_plain_json()
+                }));
+                Value::Array(cells)
+            })
+            .collect::<Vec<_>>();
+
+        serde_json::json!({
+            "type": "table",
+            "idMeaning": identity_meaning_json(grouped),
+            "headers": columns.iter().map(NativeSelect::header).collect::<Vec<_>>(),
+            "values": values,
+        })
+    }
+
+    fn task_result_json(&self, rows: &[NativeRow]) -> Value {
+        serde_json::json!({
+            "type": "task",
+            "values": rows
+                .iter()
+                .map(|row| row.value.to_plain_json())
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    fn calendar_result_json(
+        &self,
+        rows: &[NativeRow],
+        expression: &NativeExpression,
+    ) -> Value {
+        let values = rows
+            .iter()
+            .filter_map(|row| {
+                let date = calendar_date_text(
+                    &expression.evaluate(&row.context(self)),
+                )?;
+                let link = row.identity_value(self).to_plain_json();
+                Some(serde_json::json!({
+                    "date": date,
+                    "link": link,
+                    "value": row.display_value(self),
+                }))
+            })
+            .collect::<Vec<_>>();
+
+        serde_json::json!({
+            "type": "calendar",
+            "values": values,
         })
     }
 
@@ -1288,14 +1437,6 @@ impl NativeVault {
         self.index.resolve_target_path(&target)
     }
 
-    fn eval_context(&self, page_index: usize) -> EvalContext<'_> {
-        EvalContext {
-            vault: self,
-            page_index,
-            variables: BTreeMap::new(),
-        }
-    }
-
     fn page_value(&self, page_index: usize) -> DataviewValue {
         let Some(page) = self.index.pages.get(page_index) else {
             return DataviewValue::Null;
@@ -1400,24 +1541,142 @@ impl NativeVault {
     }
 }
 
-impl NativeQuery {
-    fn ensure_executable(&self) -> Result<(), DataviewError> {
-        match &self.kind {
-            NativeQueryKind::List { .. } | NativeQueryKind::Table { .. } => {
-                Ok(())
-            }
-            NativeQueryKind::Task { .. } => Err(native_unsupported_execution(
-                "native DQL execution does not support TASK queries yet"
-                    .to_string(),
-            )),
-            NativeQueryKind::Calendar { .. } => {
-                Err(native_unsupported_execution(
-                    "native DQL execution does not support CALENDAR queries \
-                     yet"
-                    .to_string(),
-                ))
-            }
+impl NativeRow {
+    fn page(vault: &NativeVault, page_index: usize) -> Self {
+        Self {
+            page_index,
+            source_page_index: Some(page_index),
+            value: vault.page_value(page_index),
+            variables: BTreeMap::new(),
         }
+    }
+
+    fn task(page_index: usize, value: DataviewValue) -> Self {
+        Self {
+            page_index,
+            source_page_index: Some(page_index),
+            value,
+            variables: BTreeMap::new(),
+        }
+    }
+
+    fn group(
+        page_index: usize,
+        key: DataviewValue,
+        rows: Vec<Self>,
+        expression: &NativeExpression,
+        alias: Option<&str>,
+    ) -> Self {
+        let rows_value = DataviewValue::Array(
+            rows.iter().map(|row| row.value.clone()).collect(),
+        );
+        let field = alias.unwrap_or(&expression.raw).to_string();
+        let mut object = BTreeMap::new();
+        object.insert("key".to_string(), key.clone());
+        object.insert("rows".to_string(), rows_value.clone());
+        object.insert(field.clone(), key.clone());
+
+        let mut variables = BTreeMap::new();
+        variables.insert("key".to_string(), key.clone());
+        variables.insert("rows".to_string(), rows_value);
+        variables.insert(field, key);
+
+        Self {
+            page_index,
+            source_page_index: None,
+            value: DataviewValue::Object(object),
+            variables,
+        }
+    }
+
+    fn context<'a>(&'a self, vault: &'a NativeVault) -> EvalContext<'a> {
+        EvalContext {
+            vault,
+            page_index: self.page_index,
+            row_value: &self.value,
+            variables: self.variables.clone(),
+        }
+    }
+
+    fn identity_value(&self, vault: &NativeVault) -> DataviewValue {
+        self.source_page_index.map_or_else(
+            || self.group_key_value(),
+            |page_index| {
+                DataviewValue::Link(DataviewLink::page(
+                    &vault.index.pages[page_index].path,
+                ))
+            },
+        )
+    }
+
+    fn group_key_value(&self) -> DataviewValue {
+        self.value
+            .as_object_field("key")
+            .cloned()
+            .unwrap_or(DataviewValue::Null)
+    }
+
+    fn display_value(&self, vault: &NativeVault) -> String {
+        let Some(page_index) = self.source_page_index else {
+            return display_text(&self.value);
+        };
+        let file = vault.page_field_value(page_index, "file");
+        let name = vault.attr_value(&file, "name");
+        let name = value_text(&name);
+        if name.is_empty() {
+            display_text(&self.identity_value(vault))
+        } else {
+            name
+        }
+    }
+
+    fn with_field(mut self, field: &str, value: DataviewValue) -> Self {
+        self.variables.insert(field.to_string(), value.clone());
+        if let DataviewValue::Object(object) = &mut self.value {
+            object.insert(field.to_string(), value);
+        }
+        self
+    }
+}
+
+impl DataviewValue {
+    fn as_object_field(&self, field: &str) -> Option<&DataviewValue> {
+        let Self::Object(object) = self else {
+            return None;
+        };
+        object.get(field)
+    }
+}
+
+fn list_pair_json(key: Value, value: Value) -> Value {
+    serde_json::json!({
+        "$widget": "dataview:list-pair",
+        "key": key,
+        "value": value,
+    })
+}
+
+fn identity_meaning_json(grouped: bool) -> Value {
+    if grouped {
+        serde_json::json!({ "type": "group" })
+    } else {
+        serde_json::json!({ "type": "path" })
+    }
+}
+
+fn value_group_key(value: &DataviewValue) -> String {
+    serde_json::to_string(&value.to_plain_json())
+        .unwrap_or_else(|_| value_text(value))
+}
+
+fn calendar_date_text(value: &DataviewValue) -> Option<String> {
+    match value {
+        DataviewValue::Date(value) => Some(value.clone()),
+        DataviewValue::DateTime(value) => Some(value.clone()),
+        DataviewValue::String(value) if date_from_text(value).is_some() => {
+            Some(value.clone())
+        }
+        _ => None,
     }
 }
 
@@ -1502,15 +1761,16 @@ impl NativeExpr {
                     context.vault.origin_index.unwrap_or(context.page_index),
                 )
             }
-            Self::Identifier(identifier) => {
-                context.variables.get(identifier).cloned().unwrap_or_else(
-                    || {
-                        context
-                            .vault
-                            .page_field_value(context.page_index, identifier)
-                    },
-                )
-            }
+            Self::Identifier(identifier) => context
+                .variables
+                .get(identifier)
+                .cloned()
+                .or_else(|| context.row_field_value(identifier))
+                .unwrap_or_else(|| {
+                    context
+                        .vault
+                        .page_field_value(context.page_index, identifier)
+                }),
             Self::Lambda { .. } => DataviewValue::Null,
             Self::LinkLiteral(raw) => DataviewValue::Link(
                 native_expression_link(raw)
@@ -1550,10 +1810,15 @@ impl NativeExpr {
 struct EvalContext<'a> {
     vault: &'a NativeVault,
     page_index: usize,
+    row_value: &'a DataviewValue,
     variables: BTreeMap<String, DataviewValue>,
 }
 
 impl<'a> EvalContext<'a> {
+    fn row_field_value(&self, field: &str) -> Option<DataviewValue> {
+        self.row_value.as_object_field(field).cloned()
+    }
+
     fn with_variable(
         &self,
         name: &str,
@@ -1564,6 +1829,7 @@ impl<'a> EvalContext<'a> {
         EvalContext {
             vault: self.vault,
             page_index: self.page_index,
+            row_value: self.row_value,
             variables,
         }
     }
@@ -3762,7 +4028,7 @@ impl NativeParser {
                 let expression = self.parse_aliased_command_expression()?;
                 Ok(NativeDataCommand::GroupBy {
                     expression: expression.0,
-                    _alias: expression.1,
+                    alias: expression.1,
                 })
             }
             NativeToken::Flatten => {
@@ -3770,7 +4036,7 @@ impl NativeParser {
                 let expression = self.parse_aliased_command_expression()?;
                 Ok(NativeDataCommand::Flatten {
                     expression: expression.0,
-                    _alias: expression.1,
+                    alias: expression.1,
                 })
             }
             NativeToken::Limit => {
@@ -4172,7 +4438,7 @@ impl NativeParser {
                     self.collect_expression(ExpressionStop::Data)?,
                 )?;
                 Ok(NativeQueryKind::Calendar {
-                    _expression: expression,
+                    expression,
                     _without_id: without_id,
                 })
             }
@@ -4545,10 +4811,6 @@ impl ExpressionStop {
 }
 
 fn native_query_error(message: String) -> DataviewError {
-    DataviewError::NativeQuery { message }
-}
-
-fn native_unsupported_execution(message: String) -> DataviewError {
     DataviewError::NativeQuery { message }
 }
 
