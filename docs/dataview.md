@@ -28,3 +28,24 @@ scriptable paths, JSON, or rendered Markdown only. `--bob-dir` defaults to
 
 `--origin` must be a vault-relative note path. It is required when a DQL query
 depends on relative links or Dataview's `this` context.
+
+## Headless dynomark
+
+For non-GUI shell or cron workflows, `bob dataview` also supports an explicit
+partial-compatibility engine:
+
+```bash
+bob dataview --engine dynomark --format paths --query 'LIST FROM "Projects"'
+bob dataview --engine dynomark --format json --query-file query.dql
+```
+
+Dynomark is a Dataview-like Markdown query engine, not the Obsidian Dataview
+plugin runtime. It is useful when desktop Obsidian is unavailable, but its query
+language and output are not guaranteed to match Dataview exactly. Validate
+queries against the default Obsidian engine before relying on dynomark for
+automation.
+
+The dynomark engine runs `dynomark --query <DQL> --metadata` from `--bob-dir`.
+Set `BOB_DATAVIEW_DYNOMARK_COMMAND` to use a specific executable. It supports
+`paths` and `json` output for DQL queries; `--source` and `--format markdown`
+remain Obsidian-only.
