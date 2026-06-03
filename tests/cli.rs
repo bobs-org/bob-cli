@@ -13,6 +13,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 const BOB_BIN: &str = env!("CARGO_BIN_EXE_bob");
+const BOB_SYNC_BIN: &str = env!("CARGO_BIN_EXE_bob_sync");
 
 #[test]
 fn cache_extraction_writes_expected_files_and_modes() {
@@ -55,25 +56,48 @@ fn cache_extraction_writes_expected_files_and_modes() {
 }
 
 #[test]
-fn collect_done_help_is_native_only() {
-    let temp = TempDir::new("bob-cli-collect-done-native-help");
+fn move_done_tasks_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-native-help");
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--help")
         .env("BOB_CLI_USE_SCRIPT", "1")
         .env("XDG_CACHE_HOME", temp.path())
         .output()
-        .expect("run native-only bob collect-done --help");
+        .expect("run native-only bob move-done-tasks --help");
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("usage: bob collect-done"),
-        "expected collect-done help text:\n{}",
+        stdout(&output).contains("usage: bob move-done-tasks"),
+        "expected move-done-tasks help text:\n{}",
         format_output(&output)
     );
     assert!(
         !temp.path().join("bob-cli/scripts").exists(),
-        "native-only collect-done should not extract script assets"
+        "native-only move-done-tasks should not extract script assets"
+    );
+}
+
+#[test]
+fn bulk_git_commit_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-bulk-git-commit-native-help");
+    let output = bob_command()
+        .arg("bulk-git-commit")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob bulk-git-commit --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("usage: bob bulk-git-commit"),
+        "expected bulk-git-commit help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only bulk-git-commit should not extract script assets"
     );
 }
 
@@ -189,8 +213,8 @@ fn highlights_ref_phase_one_commands_do_not_modify_vault_files() {
 }
 
 #[test]
-fn collect_done_commits_and_pushes_collection_changes_only() {
-    let temp = TempDir::new("bob-cli-collect-done-git");
+fn move_done_tasks_commits_and_pushes_collection_changes_only() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-git");
     let stub_bin = temp.path().join("bin");
     let (vault, remote) = init_git_vault_with_remote(&temp);
     let source = vault.join("obsidian.md");
@@ -212,20 +236,21 @@ fn collect_done_commits_and_pushes_collection_changes_only() {
     write_file(&unrelated, "- [ ] unrelated #task\nlocal edit\n");
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done in git repo");
+        .expect("run bob move-done-tasks in git repo");
 
     assert_success(&output);
     let output_text = stdout(&output);
     assert!(
         output_text.contains("git:")
-            && output_text.contains("committed: bob collect-done 2026-06-02")
+            && output_text
+                .contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected git section with commit and push:\n{}",
         format_output(&output)
@@ -253,8 +278,8 @@ done_tasks: \"[[done/obsidian_done]]\"
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.starts_with("bob collect-done 2026-06-02\n"),
-        "expected collect-done commit subject:\n{show}"
+        show.starts_with("bob move-done-tasks 2026-06-02\n"),
+        "expected move-done-tasks commit subject:\n{show}"
     );
     assert!(
         show.contains("\nobsidian.md\n"),
@@ -287,8 +312,8 @@ done_tasks: \"[[done/obsidian_done]]\"
 }
 
 #[test]
-fn collect_done_commits_link_repairs_with_collection_changes() {
-    let temp = TempDir::new("bob-cli-collect-done-link-repair-git");
+fn move_done_tasks_commits_link_repairs_with_collection_changes() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-link-repair-git");
     let stub_bin = temp.path().join("bin");
     let (vault, remote) = init_git_vault_with_remote(&temp);
     let source = vault.join("obsidian.md");
@@ -312,21 +337,22 @@ fn collect_done_commits_link_repairs_with_collection_changes() {
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done with link repair");
+        .expect("run bob move-done-tasks with link repair");
 
     assert_success(&output);
     let output_text = stdout(&output);
     assert!(
         output_text.contains("Obsidian links repaired: 2")
             && output_text.contains("link-repair files updated: 1")
-            && output_text.contains("committed: bob collect-done 2026-06-02")
+            && output_text
+                .contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected link repair commit and push:\n{}",
         format_output(&output)
@@ -359,8 +385,8 @@ fn collect_done_commits_link_repairs_with_collection_changes() {
 }
 
 #[test]
-fn collect_done_deduplicates_archive_block_ids_and_repairs_links() {
-    let temp = TempDir::new("bob-cli-collect-done-block-id-dedup-git");
+fn move_done_tasks_deduplicates_archive_block_ids_and_repairs_links() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-block-id-dedup-git");
     let stub_bin = temp.path().join("bin");
     let (vault, remote) = init_git_vault_with_remote(&temp);
     let source = vault.join("obsidian.md");
@@ -392,21 +418,22 @@ type: \"[[done]]\"
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done with block id collision");
+        .expect("run bob move-done-tasks with block id collision");
 
     assert_success(&output);
     let output_text = stdout(&output);
     assert!(
         output_text.contains("moved block id renames: 1")
             && output_text.contains("Obsidian links repaired: 1")
-            && output_text.contains("committed: bob collect-done 2026-06-02")
+            && output_text
+                .contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected block id rename, link repair, commit, and push:\n{}",
         format_output(&output)
@@ -437,7 +464,7 @@ done_tasks: \"[[done/obsidian_done]]\"
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.starts_with("bob collect-done 2026-06-02\n")
+        show.starts_with("bob move-done-tasks 2026-06-02\n")
             && show.contains("\nobsidian.md\n")
             && show.contains("\ndone/obsidian_done.md\n")
             && show.contains("\ndaily.md\n"),
@@ -450,8 +477,8 @@ done_tasks: \"[[done/obsidian_done]]\"
 }
 
 #[test]
-fn collect_done_commits_metadata_only_source_updates() {
-    let temp = TempDir::new("bob-cli-collect-done-git-metadata");
+fn move_done_tasks_commits_metadata_only_source_updates() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-git-metadata");
     let stub_bin = temp.path().join("bin");
     let (vault, remote) = init_git_vault_with_remote(&temp);
     let source = vault.join("obsidian.md");
@@ -475,20 +502,21 @@ type: \"[[done]]\"
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=10")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done metadata-only in git repo");
+        .expect("run bob move-done-tasks metadata-only in git repo");
 
     assert_success(&output);
     let output_text = stdout(&output);
     assert!(
         output_text.contains("source done_tasks updates: 1")
-            && output_text.contains("committed: bob collect-done 2026-06-02")
+            && output_text
+                .contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected metadata commit and push:\n{}",
         format_output(&output)
@@ -520,8 +548,8 @@ type: \"[[done]]\"
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.starts_with("bob collect-done 2026-06-02\n"),
-        "expected collect-done commit subject:\n{show}"
+        show.starts_with("bob move-done-tasks 2026-06-02\n"),
+        "expected move-done-tasks commit subject:\n{show}"
     );
     assert!(
         show.contains("\nobsidian.md\n"),
@@ -539,8 +567,8 @@ type: \"[[done]]\"
 }
 
 #[test]
-fn collect_done_commits_metadata_only_archive_repairs() {
-    let temp = TempDir::new("bob-cli-collect-done-git-archive-metadata");
+fn move_done_tasks_commits_metadata_only_archive_repairs() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-git-archive-metadata");
     let stub_bin = temp.path().join("bin");
     let (vault, remote) = init_git_vault_with_remote(&temp);
     let source = vault.join("obsidian.md");
@@ -572,20 +600,21 @@ parent: \"[[done]]\"
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=10")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done archive metadata-only in git repo");
+        .expect("run bob move-done-tasks archive metadata-only in git repo");
 
     assert_success(&output);
     let output_text = stdout(&output);
     assert!(
         output_text.contains("archive metadata repairs: 1")
-            && output_text.contains("committed: bob collect-done 2026-06-02")
+            && output_text
+                .contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected archive metadata commit and push:\n{}",
         format_output(&output)
@@ -617,8 +646,8 @@ type: \"[[done]]\"
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.starts_with("bob collect-done 2026-06-02\n"),
-        "expected collect-done commit subject:\n{show}"
+        show.starts_with("bob move-done-tasks 2026-06-02\n"),
+        "expected move-done-tasks commit subject:\n{show}"
     );
     assert!(
         !show.contains("\nobsidian.md\n"),
@@ -636,8 +665,8 @@ type: \"[[done]]\"
 }
 
 #[test]
-fn collect_done_warns_and_skips_git_for_non_repo_vault() {
-    let temp = TempDir::new("bob-cli-collect-done-non-repo");
+fn move_done_tasks_warns_and_skips_git_for_non_repo_vault() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-non-repo");
     let stub_bin = temp.path().join("bin");
     let vault = temp.path().join("vault");
     let source = vault.join("obsidian.md");
@@ -652,13 +681,13 @@ fn collect_done_warns_and_skips_git_for_non_repo_vault() {
     );
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done outside git repo");
+        .expect("run bob move-done-tasks outside git repo");
 
     assert_success(&output);
     assert!(
@@ -670,7 +699,7 @@ fn collect_done_warns_and_skips_git_for_non_repo_vault() {
     );
     assert!(
         !vault.join(".git").exists(),
-        "collect-done must not initialize git"
+        "move-done-tasks must not initialize git"
     );
     assert_eq!(
         fs::read_to_string(&source).expect("read source"),
@@ -685,8 +714,8 @@ done_tasks: \"[[done/obsidian_done]]\"
 }
 
 #[test]
-fn collect_done_refuses_dirty_link_repair_files_before_mutation() {
-    let temp = TempDir::new("bob-cli-collect-done-dirty-link-repair");
+fn move_done_tasks_refuses_dirty_link_repair_files_before_mutation() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-dirty-link-repair");
     let stub_bin = temp.path().join("bin");
     let vault = temp.path().join("vault");
     let source = vault.join("obsidian.md");
@@ -710,13 +739,13 @@ fn collect_done_refuses_dirty_link_repair_files_before_mutation() {
     write_file(&daily, dirty_daily);
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done with dirty link repair candidate");
+        .expect("run bob move-done-tasks with dirty link repair candidate");
 
     assert_eq!(
         output.status.code(),
@@ -747,8 +776,8 @@ fn collect_done_refuses_dirty_link_repair_files_before_mutation() {
 }
 
 #[test]
-fn collect_done_refuses_dirty_candidate_files_before_mutation() {
-    let temp = TempDir::new("bob-cli-collect-done-dirty-candidate");
+fn move_done_tasks_refuses_dirty_candidate_files_before_mutation() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-dirty-candidate");
     let stub_bin = temp.path().join("bin");
     let vault = temp.path().join("vault");
     let source = vault.join("obsidian.md");
@@ -776,13 +805,13 @@ local edit
     write_file(&source, dirty_source);
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done with dirty candidate");
+        .expect("run bob move-done-tasks with dirty candidate");
 
     assert_eq!(
         output.status.code(),
@@ -812,8 +841,8 @@ local edit
 }
 
 #[test]
-fn collect_done_refuses_dirty_metadata_only_source_before_mutation() {
-    let temp = TempDir::new("bob-cli-collect-done-dirty-metadata");
+fn move_done_tasks_refuses_dirty_metadata_only_source_before_mutation() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-dirty-metadata");
     let stub_bin = temp.path().join("bin");
     let vault = temp.path().join("vault");
     let source = vault.join("obsidian.md");
@@ -842,13 +871,13 @@ type: \"[[done]]\"
     write_file(&source, dirty_source);
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=10")
         .env("BOB_DIR", &vault)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done with dirty metadata candidate");
+        .expect("run bob move-done-tasks with dirty metadata candidate");
 
     assert_eq!(
         output.status.code(),
@@ -885,8 +914,8 @@ type: \"[[done]]\"
 }
 
 #[test]
-fn collect_done_refuses_dirty_metadata_only_archive_before_mutation() {
-    let temp = TempDir::new("bob-cli-collect-done-dirty-archive");
+fn move_done_tasks_refuses_dirty_metadata_only_archive_before_mutation() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-dirty-archive");
     let stub_bin = temp.path().join("bin");
     let vault = temp.path().join("vault");
     let source = vault.join("obsidian.md");
@@ -930,13 +959,15 @@ local edit
     write_file(&archive, dirty_archive);
 
     let output = bob_command()
-        .arg("collect-done")
+        .arg("move-done-tasks")
         .arg("--threshold=10")
         .env("BOB_DIR", &vault)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob collect-done with dirty archive metadata candidate");
+        .expect(
+            "run bob move-done-tasks with dirty archive metadata candidate",
+        );
 
     assert_eq!(
         output.status.code(),
@@ -1079,8 +1110,8 @@ fn pomodoro_missing_day_file_is_a_successful_noop() {
 }
 
 #[test]
-fn bob_sync_commits_and_pushes_without_running_ob() {
-    let temp = TempDir::new("bob-cli-sync");
+fn bulk_git_commit_commits_and_pushes_without_running_ob() {
+    let temp = TempDir::new("bob-cli-bulk-git-commit");
     let stub_bin = temp.path().join("bin");
     let vault = temp.path().join("vault");
     let home = temp.path().join("home");
@@ -1089,8 +1120,9 @@ fn bob_sync_commits_and_pushes_without_running_ob() {
     fs::create_dir_all(&vault).expect("create vault");
     fs::create_dir_all(&home).expect("create home");
 
-    // An `ob` stub that fails loudly if invoked: standalone `bob sync` must no
-    // longer touch Obsidian (that moved up to `bob cronjob`).
+    // An `ob` stub that fails loudly if invoked: standalone
+    // `bob bulk-git-commit` must not touch Obsidian (that moved up to
+    // `bob cronjob`).
     write_executable(
         &stub_bin.join("ob"),
         r#"#!/bin/sh
@@ -1125,22 +1157,25 @@ exit 64
     );
 
     let output = bob_command()
-        .arg("sync")
+        .arg("bulk-git-commit")
         .env("BOB_DIR", &vault)
-        .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
+        .env(
+            "BOB_BULK_GIT_COMMIT_LOCK_FILE",
+            temp.path().join("bob_bulk_git_commit.lock"),
+        )
         .env_remove("OB_COMMAND")
         .env("HOME", &home)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("STUB_LOG", &log)
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob sync");
+        .expect("run bob bulk-git-commit");
 
     assert_success(&output);
     let log_contents = fs::read_to_string(&log).expect("read stub command log");
     assert!(
         !log_contents.contains("ob "),
-        "standalone sync must not invoke ob:\n{log_contents}"
+        "standalone bulk-git-commit must not invoke ob:\n{log_contents}"
     );
     assert!(log_contents.contains(&format!(
         "git -C {} rev-parse --is-inside-work-tree",
@@ -1156,8 +1191,81 @@ exit 64
     assert!(log_contents.contains(&format!("git -C {} push", vault.display())));
     assert!(
         !log_contents.contains(" commit "),
-        "no-change sync should not commit"
+        "no-change bulk-git-commit should not commit"
     );
+}
+
+#[test]
+fn legacy_bob_sync_binary_runs_bulk_git_commit_native_path() {
+    let temp = TempDir::new("bob-cli-legacy-bob-sync");
+    let (vault, remote) = init_git_vault_with_remote(&temp);
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("create home");
+    write_file(&vault.join("initial.md"), "- [ ] initial #task\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
+    write_file(&vault.join("extra.md"), "- [ ] extra #task\n");
+
+    let output = bob_sync_command()
+        .env("BOB_DIR", &vault)
+        .env("BOB_BULK_GIT_COMMIT_MESSAGE", "legacy binary commit")
+        .env(
+            "BOB_BULK_GIT_COMMIT_LOCK_FILE",
+            temp.path().join("bob_bulk_git_commit.lock"),
+        )
+        .env_remove("BOB_CLI_USE_SCRIPT")
+        .env_remove("OB_COMMAND")
+        .env("HOME", &home)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run legacy bob_sync binary");
+
+    assert_success(&output);
+    assert_eq!(
+        stdout(&git_in(&vault, ["log", "-1", "--format=%s"])).trim(),
+        "legacy binary commit",
+        "legacy bob_sync should use the native bulk-git-commit implementation"
+    );
+    let remote_head =
+        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(remote_head, local_head, "push should update bare remote");
+}
+
+#[test]
+fn renamed_old_top_level_commands_are_unknown() {
+    for command in ["move-done-tasks", "bulk-git-commit"] {
+        let output = bob_command()
+            .arg(command)
+            .arg("--help")
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("run bob {command} --help: {error}")
+            });
+        assert_success(&output);
+    }
+
+    for command in ["collect-done", "sync"] {
+        let output = bob_command()
+            .arg(command)
+            .arg("--help")
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("run bob {command} --help: {error}")
+            });
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "old top-level command should be rejected:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains("unrecognized subcommand"),
+            "expected clap unknown-command error:\n{}",
+            format_output(&output)
+        );
+    }
 }
 
 #[test]
@@ -1168,12 +1276,12 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
     let help = stdout(&output);
 
     let order = [
-        "collect-done",
+        "bulk-git-commit",
         "cronjob",
         "highlights-ref",
+        "move-done-tasks",
         "notify",
         "pomodoro",
-        "sync",
         "tmux-pomodoro",
     ];
     let mut last = 0;
@@ -1191,7 +1299,8 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
 
     assert!(
         help.contains("Examples:")
-            && help.contains("bob collect-done --threshold 10")
+            && help.contains("bob bulk-git-commit")
+            && help.contains("bob move-done-tasks --threshold 10")
             && help.contains("bob pomodoro"),
         "expected an Examples section:\n{help}"
     );
@@ -1222,7 +1331,8 @@ fn cronjob_runs_shared_sync_once_then_wrapped_steps_in_order() {
     git_in(&vault, ["add", "."]);
     git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
-    // Untracked file the wrapped `sync` step should commit wholesale.
+    // Untracked file the wrapped `bulk-git-commit` step should commit
+    // wholesale.
     write_file(&extra, "- [ ] extra #task\n");
     write_executable(
         &stub_bin.join("ob"),
@@ -1246,8 +1356,14 @@ exit 64
         .arg("cronjob")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
-        .env("BOB_SYNC_COMMIT_MESSAGE", "bob sync 2026-06-02")
-        .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
+        .env(
+            "BOB_BULK_GIT_COMMIT_MESSAGE",
+            "bob bulk-git-commit 2026-06-02",
+        )
+        .env(
+            "BOB_BULK_GIT_COMMIT_LOCK_FILE",
+            temp.path().join("bob_bulk_git_commit.lock"),
+        )
         .env("HOME", &home)
         .env("OB_COMMAND", stub_bin.join("ob"))
         .env("ARCHIVE_FILE", &archive)
@@ -1275,28 +1391,29 @@ exit 64
         "wrapped steps must run after the shared sync:\n{log_contents}"
     );
 
-    // collect-done committed first, then sync (sync is the newest commit).
+    // move-done-tasks committed first, then bulk-git-commit
+    // (bulk-git-commit is the newest commit).
     let subjects = stdout(&git_in(&vault, ["log", "--format=%s"]));
     let lines: Vec<&str> = subjects.lines().collect();
     assert_eq!(
         lines.first().copied(),
-        Some("bob sync 2026-06-02"),
-        "sync should be the most recent commit:\n{subjects}"
+        Some("bob bulk-git-commit 2026-06-02"),
+        "bulk-git-commit should be the most recent commit:\n{subjects}"
     );
     assert_eq!(
         lines.get(1).copied(),
-        Some("bob collect-done 2026-06-02"),
-        "collect-done should be committed before sync:\n{subjects}"
+        Some("bob move-done-tasks 2026-06-02"),
+        "move-done-tasks should be committed before bulk-git-commit:\n{subjects}"
     );
 
-    // The wrapped sync step committed the untracked file wholesale.
-    let sync_show = stdout(&git_in(
+    // The wrapped bulk-git-commit step committed the untracked file wholesale.
+    let bulk_show = stdout(&git_in(
         &vault,
         ["show", "--name-only", "--format=", "HEAD"],
     ));
     assert!(
-        sync_show.contains("extra.md"),
-        "sync step should commit the untracked file:\n{sync_show}"
+        bulk_show.contains("extra.md"),
+        "bulk-git-commit step should commit the untracked file:\n{bulk_show}"
     );
 
     let remote_head =
@@ -1304,7 +1421,7 @@ exit 64
     let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
     assert_eq!(remote_head, local_head, "push should update bare remote");
 
-    // collect-done archived the done tasks and linked the source.
+    // move-done-tasks archived the done tasks and linked the source.
     let archive_contents = fs::read_to_string(&archive).expect("read archive");
     assert!(
         archive_contents.contains("parent: \"[[obsidian]]\"")
@@ -1323,7 +1440,7 @@ exit 64
     assert!(
         out.contains("bob cronjob")
             && out.contains("Obsidian sync (shared, runs once)")
-            && out.contains("collect-done")
+            && out.contains("move-done-tasks")
             && out.contains("All steps passed"),
         "expected a structured cronjob summary:\n{}",
         format_output(&output)
@@ -1382,7 +1499,7 @@ exit 64
         format_output(&output)
     );
     assert!(
-        !out.contains("Collect done tasks") && !out.contains("step 1/2"),
+        !out.contains("Move done tasks") && !out.contains("step 1/2"),
         "no wrapped step should run after a failed gate sync:\n{}",
         format_output(&output)
     );
@@ -1415,8 +1532,9 @@ fn cronjob_failed_step_still_runs_later_steps_and_exits_nonzero() {
     git_in(&vault, ["add", "."]);
     git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
-    // A pre-existing edit to a collect-done candidate makes collect-done refuse
-    // (exit 1); the later sync step must still run and commit it.
+    // A pre-existing edit to a move-done-tasks candidate makes
+    // move-done-tasks refuse (exit 1); the later bulk-git-commit step must
+    // still run and commit it.
     let dirty_source = format!("{}local edit\n", done_tasks_source(12));
     write_file(&source, &dirty_source);
     write_successful_ob_stub(&stub_bin);
@@ -1424,7 +1542,7 @@ fn cronjob_failed_step_still_runs_later_steps_and_exits_nonzero() {
     let output = bob_command()
         .arg("cronjob")
         .env("BOB_DIR", &vault)
-        .env("BOB_SYNC_COMMIT_MESSAGE", "bob sync 2026-06-02")
+        .env("BOB_SYNC_COMMIT_MESSAGE", "legacy fallback commit")
         .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
         .env("HOME", &home)
         .env("OB_COMMAND", stub_bin.join("ob"))
@@ -1440,8 +1558,8 @@ fn cronjob_failed_step_still_runs_later_steps_and_exits_nonzero() {
     );
     let out = stdout(&output);
     assert!(
-        out.contains("\u{2717} collect-done"),
-        "expected a failed collect-done marker:\n{}",
+        out.contains("\u{2717} move-done-tasks"),
+        "expected a failed move-done-tasks marker:\n{}",
         format_output(&output)
     );
     assert!(
@@ -1450,18 +1568,19 @@ fn cronjob_failed_step_still_runs_later_steps_and_exits_nonzero() {
         format_output(&output)
     );
 
-    // The sync step still ran: the dirty edit was committed and pushed.
+    // The bulk-git-commit step still ran: the dirty edit was committed and
+    // pushed.
     assert_eq!(
         stdout(&git_in(&vault, ["log", "-1", "--format=%s"])).trim(),
-        "bob sync 2026-06-02",
-        "the later sync step should commit despite the earlier failure"
+        "legacy fallback commit",
+        "the later bulk-git-commit step should commit despite the earlier failure"
     );
     let remote_head =
         stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
     let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
     assert_eq!(
         remote_head, local_head,
-        "sync step should push to the remote"
+        "bulk-git-commit step should push to the remote"
     );
 }
 
@@ -1476,6 +1595,10 @@ fn done_tasks_source(count: usize) -> String {
 
 fn bob_command() -> Command {
     Command::new(BOB_BIN)
+}
+
+fn bob_sync_command() -> Command {
+    Command::new(BOB_SYNC_BIN)
 }
 
 fn fixture(relative: &str) -> PathBuf {

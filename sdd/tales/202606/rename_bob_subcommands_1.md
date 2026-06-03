@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-03 03:04:35
-status: wip
+status: done
 prompt: sdd/prompts/202606/rename_bob_subcommands_1.md
 ---
 # Plan: Rename Bob task-moving and bulk commit subcommands

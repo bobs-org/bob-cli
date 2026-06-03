@@ -1,4 +1,9 @@
-use std::{env, ffi::OsString, path::Path, process::Stdio};
+use std::{
+    env,
+    ffi::{OsStr, OsString},
+    path::Path,
+    process::Stdio,
+};
 
 use chrono::{Datelike, Local};
 
@@ -7,7 +12,26 @@ use super::{
     ob::{self, ChildEnv},
 };
 
-pub(crate) fn run(_args: Vec<OsString>) -> i32 {
+const COMMAND_NAME: &str = "bob bulk-git-commit";
+
+pub(crate) fn run(args: Vec<OsString>) -> i32 {
+    if args.iter().any(|arg| {
+        let value = arg.as_os_str();
+        value == OsStr::new("--help") || value == OsStr::new("-h")
+    }) {
+        print_help();
+        return 0;
+    }
+
+    if let Some(arg) = args.first() {
+        eprintln!(
+            "{COMMAND_NAME}: unexpected argument: {}",
+            arg.to_string_lossy()
+        );
+        eprintln!("Try '{COMMAND_NAME} --help' for more information.");
+        return 2;
+    }
+
     let bob_dir = bob_env::bob_dir();
 
     let _lock = match ob::acquire_lock() {
@@ -28,8 +52,7 @@ pub(crate) fn commit_and_push_vault(
     bob_dir: &Path,
     child_env: &ChildEnv,
 ) -> i32 {
-    let commit_message = env::var("BOB_SYNC_COMMIT_MESSAGE")
-        .unwrap_or_else(|_| format!("bob sync {}", today()));
+    let commit_message = commit_message();
 
     if let Err(message) = verify_bob_worktree(bob_dir, child_env) {
         return die(&message);
@@ -145,6 +168,12 @@ fn today() -> String {
     format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day())
 }
 
+fn commit_message() -> String {
+    env::var("BOB_BULK_GIT_COMMIT_MESSAGE")
+        .or_else(|_| env::var("BOB_SYNC_COMMIT_MESSAGE"))
+        .unwrap_or_else(|_| format!("bob bulk-git-commit {}", today()))
+}
+
 fn log(args: std::fmt::Arguments<'_>) {
     println!("[{}] {args}", timestamp());
 }
@@ -156,4 +185,22 @@ fn die(message: &str) -> i32 {
 
 fn timestamp() -> String {
     Local::now().format("%Y-%m-%dT%H:%M:%S%z").to_string()
+}
+
+fn print_help() {
+    println!(
+        "\
+usage: {COMMAND_NAME}
+
+Stage all Bob vault changes, commit if anything changed, and push.
+
+environment:
+  BOB_BULK_GIT_COMMIT_MESSAGE    override the Git commit message
+  BOB_BULK_GIT_COMMIT_LOCK_FILE  override the shared lock path
+  BOB_SYNC_COMMIT_MESSAGE        deprecated compatibility alias
+  BOB_SYNC_LOCK_FILE             deprecated compatibility alias
+
+options:
+  -h, --help                     show this help message and exit"
+    );
 }

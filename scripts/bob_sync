@@ -21,11 +21,11 @@ function acquire_lock() {
     lock_dir="/tmp"
   fi
 
-  local lock_file="${BOB_SYNC_LOCK_FILE:-${lock_dir}/bob_sync.lock}"
+  local lock_file="${BOB_BULK_GIT_COMMIT_LOCK_FILE:-${BOB_SYNC_LOCK_FILE:-${lock_dir}/bob_sync.lock}}"
   exec 9>"${lock_file}"
 
   if ! flock -n 9; then
-    log "Another bob_sync run is already active; exiting."
+    log "Another Bob vault maintenance run is already active; exiting."
     exit 0
   fi
 }
@@ -97,7 +97,7 @@ function run_ob_sync() {
 
 function run() {
   local bob_dir="${BOB_DIR:-${HOME}/bob}"
-  local commit_message="${BOB_SYNC_COMMIT_MESSAGE:-bob sync $(date +%F)}"
+  local commit_message="${BOB_BULK_GIT_COMMIT_MESSAGE:-${BOB_SYNC_COMMIT_MESSAGE:-bob bulk-git-commit $(date +%F)}}"
 
   acquire_lock
   load_ob_command

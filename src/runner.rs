@@ -31,10 +31,10 @@ struct Subcommand {
 // the invariant.
 const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
-        name: "collect-done",
+        name: "bulk-git-commit",
         script_command: None,
-        about: "Archive done and canceled tasks and maintain done links",
-        native_command: NativeCommand::CollectDone,
+        about: "Commit and push Bob vault Git changes",
+        native_command: NativeCommand::BulkGitCommit,
     },
     Subcommand {
         name: "cronjob",
@@ -49,6 +49,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::HighlightsRef,
     },
     Subcommand {
+        name: "move-done-tasks",
+        script_command: None,
+        about: "Move done and canceled tasks and maintain done links",
+        native_command: NativeCommand::MoveDoneTasks,
+    },
+    Subcommand {
         name: "notify",
         script_command: Some("bob_notify"),
         about: "Notify when the current Pomodoro is complete",
@@ -59,12 +65,6 @@ const SUBCOMMANDS: &[Subcommand] = &[
         script_command: Some("bob_pomodoro"),
         about: "Show the current Pomodoro status",
         native_command: NativeCommand::Pomodoro,
-    },
-    Subcommand {
-        name: "sync",
-        script_command: Some("bob_sync"),
-        about: "Sync the Obsidian vault",
-        native_command: NativeCommand::Sync,
     },
     Subcommand {
         name: "tmux-pomodoro",
@@ -207,12 +207,13 @@ const HELP_TEMPLATE: &str = "\
 
 const AFTER_HELP: &str = "\
 Examples:
-  bob collect-done --threshold 10  Archive tasks and maintain done links
+  bob bulk-git-commit             Commit and push Bob vault Git changes
   bob cronjob                    Run the nightly sync and maintenance steps
   bob highlights-ref scan --dry-run
                                  Preview Highlights reference note sync
+  bob move-done-tasks --threshold 10
+                                 Move tasks and maintain done links
   bob pomodoro                   Show today's Pomodoro status
-  bob sync                       Sync the Obsidian vault
 
 Run 'bob <command> --help' for more information on a command.";
 

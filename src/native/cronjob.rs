@@ -1,10 +1,11 @@
 //! `bob cronjob` — the single nightly entry point.
 //!
 //! Performs the once-nightly Obsidian sync up front (the shared gate), then
-//! runs a sequence of wrapped steps (`collect-done`, then `sync`). The wrapped
-//! steps keep ownership of their own git commits/pushes but no longer run
-//! `ob sync` themselves. Output is laid out in clearly-labeled sections so the
-//! cron log always makes it obvious which step is talking.
+//! runs a sequence of wrapped steps (`move-done-tasks`, then
+//! `bulk-git-commit`). The wrapped steps keep ownership of their own git
+//! commits/pushes but no longer run `ob sync` themselves. Output is laid out in
+//! clearly-labeled sections so the cron log always makes it obvious which step
+//! is talking.
 
 use std::{ffi::OsString, io::IsTerminal, path::Path};
 
@@ -26,12 +27,12 @@ struct Step {
 
 const STEPS: &[Step] = &[
     Step {
-        name: "collect-done",
+        name: "move-done-tasks",
         blurb: "Archive done & canceled tasks",
         run: run_collect_done_step,
     },
     Step {
-        name: "sync",
+        name: "bulk-git-commit",
         blurb: "Commit and push the vault",
         run: run_sync_step,
     },
@@ -226,7 +227,7 @@ fn print_summary_row(styler: &Styler, name: &str, ok: bool, detail: &str) {
     } else {
         styler.red("\u{2717}")
     };
-    println!("  {marker} {name:<14} {detail}");
+    println!("  {marker} {name:<17} {detail}");
 }
 
 /// Build a `╭─ <label> ──…──` opening rule, padded to `RULE_WIDTH`.

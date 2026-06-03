@@ -1,5 +1,6 @@
 //! Shared Obsidian (`ob`) and Git plumbing used by the nightly `cronjob`
-//! orchestrator and the wrapped `sync` / `collect-done` commands.
+//! orchestrator and the wrapped `bulk-git-commit` / `move-done-tasks`
+//! commands.
 //!
 //! This module owns the single source of truth for three things that used to
 //! be duplicated (and divergent) across `sync.rs` and `collect_done.rs`:
@@ -10,8 +11,8 @@
 //! 3. The child environment (ssh-agent vars + non-interactive `GIT_SSH_COMMAND`)
 //!    and the `git -C <vault>` command builder used for commits and pushes.
 //!
-//! It also owns the exclusive run lock so the standalone `sync` command and the
-//! `cronjob` orchestrator share a single mutual-exclusion gate.
+//! It also owns the exclusive run lock so the standalone `bulk-git-commit`
+//! command and the `cronjob` orchestrator share a single mutual-exclusion gate.
 
 use std::{
     env,
@@ -241,16 +242,13 @@ env -0
         .collect()
 }
 
-/// Acquire the exclusive run lock shared by `sync` and `cronjob`.
+/// Acquire the exclusive run lock shared by `bulk-git-commit` and `cronjob`.
 ///
 /// Returns `Ok(Some(file))` on success (hold the guard for the duration of the
 /// run), `Err(0)` when another run already holds the lock, and `Err(1)` on an
 /// unexpected I/O error.
 pub(crate) fn acquire_lock() -> Result<Option<File>, i32> {
-    let lock_file = env::var_os("BOB_SYNC_LOCK_FILE")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(default_lock_file);
+    let lock_file = lock_file_from_env().unwrap_or_else(default_lock_file);
 
     let file = match OpenOptions::new()
         .create(true)
@@ -272,7 +270,10 @@ pub(crate) fn acquire_lock() -> Result<Option<File>, i32> {
     match file.try_lock_exclusive() {
         Ok(()) => Ok(Some(file)),
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-            eprintln!("bob: another sync run is already active; exiting.");
+            eprintln!(
+                "bob: another Bob vault maintenance run is already active; \
+                 exiting."
+            );
             Err(0)
         }
         Err(error) => {
@@ -283,6 +284,15 @@ pub(crate) fn acquire_lock() -> Result<Option<File>, i32> {
             Err(1)
         }
     }
+}
+
+fn lock_file_from_env() -> Option<PathBuf> {
+    env::var_os("BOB_BULK_GIT_COMMIT_LOCK_FILE")
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            env::var_os("BOB_SYNC_LOCK_FILE").filter(|value| !value.is_empty())
+        })
+        .map(PathBuf::from)
 }
 
 fn default_lock_file() -> PathBuf {

@@ -11,12 +11,12 @@ mod sync;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {
-    CollectDone,
+    BulkGitCommit,
     Cronjob,
     HighlightsRef,
+    MoveDoneTasks,
     Pomodoro,
     Notify,
-    Sync,
     TmuxPomodoro,
 }
 
@@ -26,7 +26,7 @@ pub(crate) fn command_for_script(
     match script_command {
         "bob_pomodoro" => Some(NativeCommand::Pomodoro),
         "bob_notify" => Some(NativeCommand::Notify),
-        "bob_sync" => Some(NativeCommand::Sync),
+        "bob_sync" => Some(NativeCommand::BulkGitCommit),
         "tmux_bob_pomodoro" => Some(NativeCommand::TmuxPomodoro),
         _ => None,
     }
@@ -34,12 +34,12 @@ pub(crate) fn command_for_script(
 
 pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
     match command {
-        NativeCommand::CollectDone => collect_done::run(args),
+        NativeCommand::BulkGitCommit => sync::run(args),
         NativeCommand::Cronjob => cronjob::run(args),
         NativeCommand::HighlightsRef => highlights_ref::run(args),
+        NativeCommand::MoveDoneTasks => collect_done::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),
         NativeCommand::Notify => notify::run(args),
-        NativeCommand::Sync => sync::run(args),
         NativeCommand::TmuxPomodoro => pomodoro::run_tmux(args),
     }
 }

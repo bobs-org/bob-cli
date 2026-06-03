@@ -28,7 +28,7 @@ To smoke-test an install without replacing an existing user install:
 ```bash
 root="$(mktemp -d)"
 cargo install --path . --locked --root "$root"
-"$root/bin/bob" collect-done --help
+"$root/bin/bob" move-done-tasks --help
 BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" pomodoro
 BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" tmux-pomodoro
 "$root/bin/bob_notify" --help
@@ -37,7 +37,27 @@ BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" tmux-pomodoro
 ## Commands
 
 ```bash
-bob collect-done [--threshold N]
+bob bulk-git-commit
+```
+
+Stages all Bob vault changes, commits them when anything changed, and pushes via
+Git. This command does not run `ob sync`; use `bob cronjob` for the nightly path
+that syncs Obsidian before maintenance steps. `bob bulk-git-commit` mutates the
+vault repository and should only be run when Git remotes and SSH credentials are
+ready.
+
+```bash
+bob cronjob
+```
+
+Runs the nightly maintenance sequence. It performs one shared
+`ob sync --path <vault>` gate first, then runs `bob move-done-tasks` and
+`bob bulk-git-commit` in order. A failed Obsidian sync aborts before the wrapped
+steps touch the vault; a failed wrapped step is reported but does not prevent
+later wrapped steps from running.
+
+```bash
+bob move-done-tasks [--threshold N]
 ```
 
 Scans the Bob vault for completed (`[x]`) and canceled (`[-]`) Markdown task
@@ -72,13 +92,12 @@ because the intended block is ambiguous. Only explicit `^block-id` targets can
 be rewritten; heading links and tasks without block ids do not have a stable
 target to repair.
 
-Before writing files, `bob collect-done` runs `ob sync --path <vault>` when the
-configured `ob` command is available. Missing `ob` is reported as a skipped sync.
-Other sync failures stop the command before vault files are changed. In a Git
-worktree, the command refuses to modify source, archive, or link-repair
-candidates that already have uncommitted changes, stages only the files it
-touches, commits with a `bob collect-done YYYY-MM-DD` message, and pushes.
-Non-Git vaults are left uncommitted.
+The command itself does not run `ob sync`; `bob cronjob` runs the shared
+Obsidian sync gate before invoking it. In a Git worktree, the command refuses to
+modify source, archive, or link-repair candidates that already have uncommitted
+changes, stages only the files it touches, commits with a
+`bob move-done-tasks YYYY-MM-DD` message, and pushes. Non-Git vaults are left
+uncommitted.
 
 ```bash
 bob highlights-ref scan [--dry-run]
@@ -118,14 +137,6 @@ Polls `bob_pomodoro` until the current Pomodoro is overdue, then sends a desktop
 notification when `notify-send` is available and rings the terminal bell.
 
 ```bash
-bob sync
-```
-
-Synchronizes the Bob Obsidian vault with `ob`, stages and commits vault changes,
-and pushes via Git. This command mutates the vault repository and should only be
-run when Git remotes and SSH credentials are ready.
-
-```bash
 bob tmux-pomodoro
 ```
 
@@ -150,12 +161,11 @@ useful for validating or forcing the embedded script fallback with
 
 The remaining runtime dependencies are:
 
-- `ob` from obsidian-headless for `bob sync` and pre-write
-  `bob collect-done` sync
-- `git` and `ssh` for `bob sync` and for `bob collect-done` commit/push
-  behavior when the vault is a Git worktree
+- `ob` from obsidian-headless for the shared `bob cronjob` Obsidian sync gate
+- `git` and `ssh` for `bob bulk-git-commit` and for `bob move-done-tasks`
+  commit/push behavior when the vault is a Git worktree
 - `notify-send` for desktop notifications from `bob notify`
-- `bash` only when `bob sync` needs to load `ob` through NVM or source
+- `bash` only when loading `ob` through the NVM fallback or sourcing
   `~/.ssh-agent-thing`
 
 No old chezmoi script files are required after installation. Cargo installs the
@@ -168,7 +178,7 @@ Rust binaries, and the binaries carry the script assets they need.
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`.
 
 `BOB_NOW` sets the current timestamp for Pomodoro status and default runtime note
-selection. It also controls the default `bob collect-done YYYY-MM-DD` commit
+selection. It also controls the default `bob move-done-tasks YYYY-MM-DD` commit
 message date. Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 `YYYY-MM-DD HH:MM:SS`.
 
@@ -188,22 +198,33 @@ new reference notes when the PDF marker note omits `parent`. It defaults to
 prefix such as `date --utc`, or a timestamp in the same formats accepted by
 `BOB_NOW`.
 
-`OB_COMMAND` overrides the `ob` executable used by `bob collect-done`. If that
-executable is unavailable, collection reports the skipped sync before scanning
-the vault.
+`OB_COMMAND` overrides the `ob` executable used by the shared `bob cronjob`
+Obsidian sync gate.
 
-`BOB_SYNC_LOCK_FILE` overrides the lock path used by `bob sync`.
+`BOB_BULK_GIT_COMMIT_LOCK_FILE` overrides the lock path used by
+`bob bulk-git-commit` and `bob cronjob`.
 
-`BOB_SYNC_COMMIT_MESSAGE` overrides the commit message used by `bob sync`.
+`BOB_BULK_GIT_COMMIT_MESSAGE` overrides the commit message used by
+`bob bulk-git-commit`.
+
+`BOB_SYNC_LOCK_FILE` is a deprecated compatibility alias for
+`BOB_BULK_GIT_COMMIT_LOCK_FILE`.
+
+`BOB_SYNC_COMMIT_MESSAGE` is a deprecated compatibility alias for
+`BOB_BULK_GIT_COMMIT_MESSAGE`.
 
 `BOB_CLI_USE_SCRIPT=1` forces the embedded shell fallback implementation.
 
 ## Migration Notes
 
-Use `bob pomodoro`, `bob notify`, `bob sync`, and `bob tmux-pomodoro` for new
-integrations, and run `bob collect-done` when done and canceled task blocks
-should be archived from the vault. The legacy command names are installed only
-as compatibility shims for existing callers.
+Use `bob pomodoro`, `bob notify`, `bob bulk-git-commit`, and
+`bob tmux-pomodoro` for new integrations, and run `bob move-done-tasks` when
+done and canceled task blocks should be archived from the vault.
+
+The old top-level commands were renamed: `bob collect-done` is now
+`bob move-done-tasks`, and `bob sync` is now `bob bulk-git-commit`. The old
+top-level names are no longer registered. Legacy installed binaries such as
+`bob_sync` remain compatibility shims for existing callers.
 
 The original script implementations remain embedded only as a rollback path.
 New integrations should rely on the native Rust command behavior.
@@ -225,7 +246,7 @@ Run a local install smoke test:
 ```bash
 root="$(mktemp -d)"
 cargo install --path . --locked --root "$root"
-"$root/bin/bob" collect-done --help
+"$root/bin/bob" move-done-tasks --help
 BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" pomodoro
 BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" tmux-pomodoro
 "$root/bin/bob_notify" --help
@@ -237,14 +258,14 @@ Run a tmux status smoke test after installing locally:
 tmux display-message -p '#(bob tmux-pomodoro)'
 ```
 
-Before running `bob sync` in a release smoke test, verify that `BOB_DIR` points
-at the intended vault and that its Git remote can be pushed without prompts.
-Before running `bob collect-done` against the real vault, verify that `~/bob` is
-the intended vault, inspect `git -C ~/bob status --short`, and expect the command
-to skip candidate files that are already dirty.
+Before running `bob bulk-git-commit` in a release smoke test, verify that
+`BOB_DIR` points at the intended vault and that its Git remote can be pushed
+without prompts. Before running `bob move-done-tasks` against the real vault,
+verify that `~/bob` is the intended vault, inspect `git -C ~/bob status --short`,
+and expect the command to skip candidate files that are already dirty.
 
 For an end-to-end collection smoke test, install the local binary, run
-`bob collect-done` against `~/bob`, then verify that archive notes under
+`bob move-done-tasks` against `~/bob`, then verify that archive notes under
 `~/bob/done` include `parent: "[[source]]"` for the original note and
 `type: "[[done]]"`, source notes include matching `done_tasks` links and no
 longer contain the collected blocks, Obsidian links to moved `^block-id` task

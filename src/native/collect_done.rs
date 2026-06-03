@@ -11,7 +11,7 @@ use super::{
     ob::{self, ChildEnv},
 };
 
-const COMMAND_NAME: &str = "bob collect-done";
+const COMMAND_NAME: &str = "bob move-done-tasks";
 pub(crate) const DEFAULT_THRESHOLD: usize = 10;
 const ARCHIVE_TYPE_LINE: &str = "type: \"[[done]]\"";
 const DONE_TASKS_KEY: &str = "done_tasks:";
@@ -272,7 +272,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 pub(crate) fn run_collection(threshold: usize, child_env: &ChildEnv) -> i32 {
     let vault = bob_env::bob_dir();
 
-    println!("Collect done tasks");
+    println!("Move done tasks");
     println!("vault: {}", vault.display());
     println!("threshold: {threshold}");
 
@@ -711,7 +711,7 @@ fn report_git_failure(action: &str, output: &Output) {
 
 fn collect_done_commit_message() -> String {
     format!(
-        "bob collect-done {}",
+        "bob move-done-tasks {}",
         bob_env::current_datetime().format("%Y-%m-%d")
     )
 }
@@ -2104,7 +2104,7 @@ fn print_help() {
         "\
 usage: {COMMAND_NAME} [--threshold N]
 
-Collect done and canceled Bob task blocks into archive notes, link sources,
+Move done and canceled Bob task blocks into archive notes, link sources,
 repair archive metadata, and repair Obsidian links to moved block ids.
 
 options:
