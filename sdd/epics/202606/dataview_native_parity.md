@@ -2,6 +2,8 @@
 create_time: 2026-06-03 16:28:01
 status: wip
 prompt: sdd/prompts/202606/dataview_native_parity.md
+bead_id: bob-cli-4
+tier: epic
 ---
 # Native Dataview Parity Plan
 
