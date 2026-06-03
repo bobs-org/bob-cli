@@ -14,14 +14,16 @@ collision detection, dirty-target refusal, and atomic note writes.
 
 `sync <pdf>` loads one PDF with native Rust code, treats the first standalone
 `/Text` annotation as the marker note, parses the marker list, creates or
-updates `ref/<pdf-basename>.md`, and rewrites only the managed Highlights body
-region from the sidecar when one is present. `marker <pdf>` inspects the same
-marker without writing.
+updates `ref/<ref_type>/<pdf-basename>.md` for PDFs under
+`lib/<ref_type>/`, and rewrites only the managed Highlights body region from the
+sidecar when one is present. Top-level library PDFs and explicit out-of-library
+syncs keep the legacy `ref/<pdf-basename>.md` target. `marker <pdf>` inspects
+the same marker without writing.
 
 `scan` recursively finds PDFs under the configured library directory, preflights
 all target note paths before writing anything, and then syncs each PDF in stable
-path order. It refuses duplicate output paths such as two PDFs with the same
-basename that would both write `ref/<basename>.md`.
+path order. It refuses duplicate output paths such as two PDFs that would both
+write the same `ref/<ref_type>/<basename>.md` target.
 
 `doctor` checks vault paths, library/ref directories, sidecar presence, marker
 readability, Git worktree status, and optional `ob` availability. It never
@@ -82,9 +84,32 @@ Relative `BOB_HIGHLIGHTS_LIB_DIR` and `BOB_HIGHLIGHTS_REF_DIR` values are
 resolved under `BOB_DIR`. Absolute paths and `~/...` paths are used directly
 after tilde expansion.
 
-For `~/bob/lib/systems-performance.pdf`, the default output note is:
+For `~/bob/lib/books/systems-performance.pdf`, the default output note is:
 
 ```text
+~/bob/ref/books/systems-performance.md
+```
+
+The first path component below the library directory is the reference type. For
+the example above, generated frontmatter includes:
+
+```yaml
+ref_type: books
+```
+
+Deeper paths preserve the full library-relative path in `ref/` while keeping the
+first component as `ref_type`:
+
+```text
+~/bob/lib/books/performance/systems-performance.pdf
+~/bob/ref/books/performance/systems-performance.md
+```
+
+Top-level library PDFs remain supported for existing files and do not derive a
+`ref_type`:
+
+```text
+~/bob/lib/systems-performance.pdf
 ~/bob/ref/systems-performance.md
 ```
 
@@ -126,10 +151,10 @@ Values should be parsed as a YAML-compatible subset when possible:
 
 Invalid values fall back to strings when that is unambiguous. Duplicate marker
 keys, invalid marker list items, pipeline-owned marker keys, command-managed
-marker keys such as `type`, and missing or empty `status` or `parent` produce
-clear errors.
+marker keys such as `type` or `ref_type`, and missing or empty `status` or
+`parent` produce clear errors.
 
-## Required Parent and Type
+## Required Parent, Type, and Ref Type
 
 New Markdown notes under `~/bob` require `parent` frontmatter. The PDF marker
 is authoritative for `parent`, so the marker must include it.
@@ -140,8 +165,16 @@ Generated reference notes also always include command-managed frontmatter:
 type: "[[ref]]"
 ```
 
-`type` is replaced on each successful sync, excluded from marker/frontmatter
-round-trip hashes, and rejected if it appears in the PDF marker note.
+Nested library PDFs also include path-derived frontmatter:
+
+```yaml
+ref_type: books
+```
+
+`type` and `ref_type` are replaced on each successful sync, excluded from
+marker/frontmatter round-trip hashes, and rejected if either appears in the PDF
+marker note. `ref_type` is omitted for top-level library PDFs and explicit
+out-of-library syncs because there is no library category to derive.
 
 ## Synced Properties
 
@@ -161,8 +194,9 @@ highlights_marker_fields
 pipeline_version
 ```
 
-The command-managed `type` field is also excluded from marker sync and always
-rendered as `[[ref]]` in the reference note.
+The command-managed `type` and `ref_type` fields are also excluded from marker
+sync. `type` is always rendered as `[[ref]]`; `ref_type` is rendered only when
+the PDF path is under `lib/<ref_type>/`.
 
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or
@@ -303,15 +337,16 @@ bob highlights-ref --help
 Create or confirm the vault layout:
 
 ```bash
-mkdir -p ~/bob/lib ~/bob/ref
+mkdir -p ~/bob/lib/books ~/bob/ref
 git -C ~/bob status --short
 ```
 
 In Highlights Pro on the MacBook:
 
-- Keep PDFs that should sync under `~/bob/lib`.
+- Keep PDFs that should sync under `~/bob/lib/<ref_type>/`, such as
+  `~/bob/lib/books`.
 - Enable autosaved Markdown sidecars next to each PDF, so
-  `~/bob/lib/example.pdf` gets `~/bob/lib/example.md`.
+  `~/bob/lib/books/example.pdf` gets `~/bob/lib/books/example.md`.
 - Prefer Markdown sidecars over TextBundle for the MVP.
 - Lock the Highlights Note Format to the sidecar contract above: page headings,
   `---` annotation separators, highlights as blockquote lines, highlight
@@ -333,8 +368,8 @@ Run the initial checks:
 ```bash
 bob highlights-ref doctor
 bob highlights-ref scan --dry-run
-bob highlights-ref sync ~/bob/lib/example.pdf --dry-run
-bob highlights-ref marker ~/bob/lib/example.pdf
+bob highlights-ref sync ~/bob/lib/books/example.pdf --dry-run
+bob highlights-ref marker ~/bob/lib/books/example.pdf
 ```
 
 MacBook validation checklist:
@@ -344,13 +379,14 @@ MacBook validation checklist:
 - `bob highlights-ref doctor` reports valid vault/library/ref paths, marker
   readability, Git status, and optional `ob` availability.
 - `bob highlights-ref scan --dry-run` lists the expected PDFs under
-  `~/bob/lib`, reports the intended `~/bob/ref/*.md` targets, and prints
-  `writes: none`.
-- `bob highlights-ref sync ~/bob/lib/example.pdf --dry-run` shows the expected
-  marker page/note, sync source, sidecar path, note action, and no writes.
-- The first real note write creates or updates `~/bob/ref/example.md` with
-  `parent`, `type: "[[ref]]"`, pipeline metadata, manual sections, and the
-  managed Highlights region.
+  `~/bob/lib`, reports the intended `~/bob/ref/<ref_type>/*.md` targets, and
+  prints `writes: none`.
+- `bob highlights-ref sync ~/bob/lib/books/example.pdf --dry-run` shows the
+  expected marker page/note, sync source, sidecar path, note action, and no
+  writes.
+- The first real note write creates or updates `~/bob/ref/books/example.md`
+  with `parent`, `type: "[[ref]]"`, `ref_type: books`, pipeline metadata,
+  manual sections, and the managed Highlights region.
 - A second run with unchanged inputs reports `writes: none`.
 - If frontmatter-only edits require PDF marker write-back, a targeted dry run
   reports `pdf_marker_action: would-update` before any `--write-pdf` run.
@@ -368,7 +404,7 @@ Enable note writes only after reviewing the dry-run output:
 
 ```bash
 git -C ~/bob status --short
-bob highlights-ref sync ~/bob/lib/example.pdf
+bob highlights-ref sync ~/bob/lib/books/example.pdf
 bob highlights-ref scan
 ```
 
@@ -377,8 +413,8 @@ bob highlights-ref scan
 backing up the PDF:
 
 ```bash
-bob highlights-ref sync ~/bob/lib/example.pdf --dry-run
-bob highlights-ref sync ~/bob/lib/example.pdf --write-pdf
+bob highlights-ref sync ~/bob/lib/books/example.pdf --dry-run
+bob highlights-ref sync ~/bob/lib/books/example.pdf --write-pdf
 ```
 
 Keep Highlights and Obsidian idle while testing PDF marker writes so the apps do
@@ -462,18 +498,19 @@ To disable one PDF, move that PDF and its sidecar out of `~/bob/lib`:
 
 ```bash
 mkdir -p ~/bob/lib-disabled
-mv ~/bob/lib/example.pdf ~/bob/lib-disabled/
-mv ~/bob/lib/example.md ~/bob/lib-disabled/ 2>/dev/null || true
-mv ~/bob/lib/example.textbundle ~/bob/lib-disabled/ 2>/dev/null || true
+mv ~/bob/lib/books/example.pdf ~/bob/lib-disabled/
+mv ~/bob/lib/books/example.md ~/bob/lib-disabled/ 2>/dev/null || true
+mv ~/bob/lib/books/example.textbundle ~/bob/lib-disabled/ 2>/dev/null || true
 git -C ~/bob status --short
 ```
 
-The existing `~/bob/ref/example.md` is no longer touched once the PDF is outside
-the scanned library. Leave it in place for archival use, or move it explicitly:
+The existing `~/bob/ref/books/example.md` is no longer touched once the PDF is
+outside the scanned library. Leave it in place for archival use, or move it
+explicitly:
 
 ```bash
 mkdir -p ~/bob/ref-disabled
-mv ~/bob/ref/example.md ~/bob/ref-disabled/
+mv ~/bob/ref/books/example.md ~/bob/ref-disabled/
 ```
 
 Do not remove the managed Highlights markers as a disable mechanism. If a PDF is
@@ -502,9 +539,9 @@ Before enabling `--write-pdf`, keep a PDF backup outside the write path:
 
 ```bash
 backup_dir=~/bob/backups/highlights-ref/$(date +%Y%m%d-%H%M%S)
-mkdir -p "$backup_dir/lib"
-cp -p ~/bob/lib/example.pdf "$backup_dir/lib/"
-cp -p ~/bob/lib/example.md "$backup_dir/lib/" 2>/dev/null || true
+mkdir -p "$backup_dir/lib/books"
+cp -p ~/bob/lib/books/example.pdf "$backup_dir/lib/books/"
+cp -p ~/bob/lib/books/example.md "$backup_dir/lib/books/" 2>/dev/null || true
 ```
 
 For a full library backup before broader testing:
@@ -518,20 +555,20 @@ rsync -a --include='*/' --include='*.pdf' --include='*.md' --include='*.textbund
 Inspect note writes:
 
 ```bash
-git -C ~/bob diff -- ref/example.md
+git -C ~/bob diff -- ref/books/example.md
 git -C ~/bob status --short
 ```
 
 Rollback a generated reference note:
 
 ```bash
-git -C ~/bob restore -- ref/example.md
+git -C ~/bob restore -- ref/books/example.md
 ```
 
 Rollback a PDF marker write from the backup:
 
 ```bash
-cp -p "$backup_dir/lib/example.pdf" ~/bob/lib/example.pdf
+cp -p "$backup_dir/lib/books/example.pdf" ~/bob/lib/books/example.pdf
 ```
 
 ## Conflict Resolution
@@ -540,29 +577,29 @@ When the marker and frontmatter both changed since the last synced projection,
 the command fails with a conflict and writes nothing. Inspect both sides:
 
 ```bash
-bob highlights-ref marker ~/bob/lib/example.pdf
-sed -n '1,120p' ~/bob/ref/example.md
-bob highlights-ref sync ~/bob/lib/example.pdf --dry-run
+bob highlights-ref marker ~/bob/lib/books/example.pdf
+sed -n '1,120p' ~/bob/ref/books/example.md
+bob highlights-ref sync ~/bob/lib/books/example.pdf --dry-run
 ```
 
 Choose the PDF marker as the source of truth:
 
 ```bash
-bob highlights-ref sync ~/bob/lib/example.pdf --prefer marker
+bob highlights-ref sync ~/bob/lib/books/example.pdf --prefer marker
 ```
 
 Choose the Obsidian frontmatter as the source of truth and write it back to the
 PDF marker:
 
 ```bash
-bob highlights-ref sync ~/bob/lib/example.pdf --prefer frontmatter --write-pdf
+bob highlights-ref sync ~/bob/lib/books/example.pdf --prefer frontmatter --write-pdf
 ```
 
 If the only change is frontmatter and the command says `--write-pdf` is missing,
 review the marker first, back up the PDF, then run:
 
 ```bash
-bob highlights-ref sync ~/bob/lib/example.pdf --write-pdf
+bob highlights-ref sync ~/bob/lib/books/example.pdf --write-pdf
 ```
 
 ## Expected Failures
@@ -576,9 +613,10 @@ Common failure snippets and fixes:
 | `missing required marker key: status` | The marker list lacks `status`. | Add `- status: wip` to the marker. |
 | `missing required marker key: parent` | The marker/frontmatter projection lacks `parent`. | Add `- parent: obsidian` to the marker or frontmatter source; `[[obsidian]]` is also accepted. |
 | `'type' is command-managed` | The marker tries to set the generated note `type`. | Remove `type` from the marker; generated notes get `type: "[[ref]]"` automatically. |
+| `'ref_type' is command-managed` | The marker tries to set the path-derived reference type. | Remove `ref_type` from the marker; nested library paths derive it automatically. |
 | `invalid marker item on line` | A marker line is not `- key: value` or `* key: value`. | Rewrite the marker as a flat list. |
 | `duplicate marker key on line` | The marker repeats a normalized key. | Keep only one value for that key. |
-| `output path collision(s) detected before writes` | Multiple PDFs would write the same `ref/<basename>.md`. | Rename or move one PDF before scanning. |
+| `output path collision(s) detected before writes` | Multiple PDFs would write the same reference note path, such as `ref/books/example.md`. | Rename or move one PDF before scanning. |
 | `refusing to modify dirty vault files` | Git reports dirty files the command would touch. | Commit, stash, or clean those paths. |
 | `frontmatter changed but --write-pdf was not supplied` | Frontmatter is the selected source, so the PDF marker needs an opt-in write. | Back up the PDF, then run targeted `sync --write-pdf`. |
 | `marker/frontmatter conflict` | Marker and frontmatter changed differently. | Inspect both sides, then rerun with `--prefer marker` or `--prefer frontmatter --write-pdf`. |

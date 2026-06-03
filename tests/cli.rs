@@ -439,6 +439,10 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
         contents.contains("source_pdf: lib/systems-performance.pdf\n"),
         "{contents}"
     );
+    assert!(
+        !contents.contains("ref_type:"),
+        "top-level library PDFs should not derive ref_type:\n{contents}"
+    );
     assert!(contents.contains("highlights_marker_hash: "), "{contents}");
 
     let output = bob_command()
@@ -567,6 +571,11 @@ fn highlights_ref_sync_rejects_malformed_and_duplicate_marker_lists() {
             "- status: wip\n- parent: [[obsidian]]\n- type: [[book]]\n",
             "'type' is command-managed",
         ),
+        (
+            "managed-ref-type-marker-key",
+            "- status: wip\n- parent: [[obsidian]]\n- ref_type: books\n",
+            "'ref_type' is command-managed",
+        ),
     ];
 
     for (name, marker, expected_error) in cases {
@@ -671,8 +680,8 @@ fn highlights_ref_scan_recurses_dry_runs_and_writes_multiple_pdfs() {
     let vault = temp.path().join("vault");
     let first_pdf = vault.join("lib/books/systems-performance.pdf");
     let second_pdf = vault.join("lib/papers/rust-book.PDF");
-    let first_note = vault.join("ref/systems-performance.md");
-    let second_note = vault.join("ref/rust-book.md");
+    let first_note = vault.join("ref/books/systems-performance.md");
+    let second_note = vault.join("ref/papers/rust-book.md");
     write_highlights_pdf(
         &first_pdf,
         "- status: wip\n- parent: [[obsidian]]\n- title: Systems Performance\n",
@@ -717,6 +726,11 @@ Note: marker note
     assert_success(&output);
     let dry_run = stdout(&output);
     assert!(dry_run.contains("pdf_count: 2"), "{dry_run}");
+    assert!(
+        dry_run.contains(path_str(&first_note))
+            && dry_run.contains(path_str(&second_note)),
+        "{dry_run}"
+    );
     assert!(dry_run.contains("notes_create: 2"), "{dry_run}");
     assert!(dry_run.contains("writes: none"), "{dry_run}");
     assert!(!first_note.exists(), "dry-run must not create first note");
@@ -733,12 +747,20 @@ Note: marker note
     let written = stdout(&output);
     assert!(written.contains("notes_created: 2"), "{written}");
     assert!(written.contains("writes: note"), "{written}");
-    assert!(fs::read_to_string(&first_note)
-        .expect("read first note")
-        .contains("> First quote.\n"));
-    assert!(fs::read_to_string(&second_note)
-        .expect("read second note")
-        .contains("> Second quote.\n"));
+    let first_contents =
+        fs::read_to_string(&first_note).expect("read first note");
+    let second_contents =
+        fs::read_to_string(&second_note).expect("read second note");
+    assert!(
+        first_contents.contains("ref_type: books\n")
+            && first_contents.contains("> First quote.\n"),
+        "{first_contents}"
+    );
+    assert!(
+        second_contents.contains("ref_type: papers\n")
+            && second_contents.contains("> Second quote.\n"),
+        "{second_contents}"
+    );
 
     let output = bob_command()
         .arg("highlights-ref")
@@ -754,12 +776,53 @@ Note: marker note
 }
 
 #[test]
-fn highlights_ref_scan_detects_duplicate_basenames_before_writing() {
+fn highlights_ref_scan_allows_duplicate_basenames_in_different_ref_types() {
+    let temp = TempDir::new("bob-cli-highlights-ref-scan-ref-types");
+    let vault = temp.path().join("vault");
+    let first_pdf = vault.join("lib/books/example.pdf");
+    let second_pdf = vault.join("lib/papers/example.pdf");
+    let first_note = vault.join("ref/books/example.md");
+    let second_note = vault.join("ref/papers/example.md");
+    let old_flat_note = vault.join("ref/example.md");
+    write_highlights_pdf(&first_pdf, "- status: wip\n- parent: [[obsidian]]\n");
+    write_highlights_pdf(
+        &second_pdf,
+        "- status: queued\n- parent: [[obsidian]]\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run duplicate basename scan");
+
+    assert_success(&output);
+    let first_contents =
+        fs::read_to_string(&first_note).expect("read books note");
+    let second_contents =
+        fs::read_to_string(&second_note).expect("read papers note");
+    assert!(
+        first_contents.contains("ref_type: books\n"),
+        "{first_contents}"
+    );
+    assert!(
+        second_contents.contains("ref_type: papers\n"),
+        "{second_contents}"
+    );
+    assert!(
+        !old_flat_note.exists(),
+        "nested references must not also write the old flat note"
+    );
+}
+
+#[test]
+fn highlights_ref_scan_detects_same_target_collision_before_writing() {
     let temp = TempDir::new("bob-cli-highlights-ref-scan-collision");
     let vault = temp.path().join("vault");
-    let first_pdf = vault.join("lib/a/example.pdf");
-    let second_pdf = vault.join("lib/b/example.pdf");
-    let note = vault.join("ref/example.md");
+    let first_pdf = vault.join("lib/books/example.pdf");
+    let second_pdf = vault.join("lib/books/example.PDF");
+    let note = vault.join("ref/books/example.md");
     write_highlights_pdf(&first_pdf, "- status: wip\n- parent: [[obsidian]]\n");
     write_highlights_pdf(
         &second_pdf,
@@ -776,7 +839,7 @@ fn highlights_ref_scan_detects_duplicate_basenames_before_writing() {
     assert_eq!(
         output.status.code(),
         Some(1),
-        "duplicate basenames should fail:\n{}",
+        "same target collision should fail:\n{}",
         format_output(&output)
     );
     assert!(
@@ -1150,9 +1213,10 @@ fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
 fn highlights_ref_sync_renders_sidecar_highlights_and_notes() {
     let temp = TempDir::new("bob-cli-highlights-ref-sidecar-create");
     let vault = temp.path().join("vault");
-    let pdf = vault.join("lib/systems-performance.pdf");
+    let pdf = vault.join("lib/books/systems-performance.pdf");
     let sidecar = pdf.with_extension("md");
-    let note = vault.join("ref/systems-performance.md");
+    let note = vault.join("ref/books/systems-performance.md");
+    let old_flat_note = vault.join("ref/systems-performance.md");
     write_highlights_pdf(
         &pdf,
         "- status: wip\n- parent: [[obsidian]]\n- title: Systems Performance\n",
@@ -1188,15 +1252,21 @@ Note: Keep a standalone observation after the marker.
 
     assert_success(&output);
     let contents = fs::read_to_string(&note).expect("read generated note");
+    assert!(contents.contains("ref_type: books\n"), "{contents}");
     assert!(
-        contents.contains("highlights_sidecar: lib/systems-performance.md\n"),
+        contents.contains("source_pdf: lib/books/systems-performance.pdf\n"),
+        "{contents}"
+    );
+    assert!(
+        contents
+            .contains("highlights_sidecar: lib/books/systems-performance.md\n"),
         "{contents}"
     );
     assert!(contents.contains("highlights_count: 2\n"), "{contents}");
     assert!(contents.contains("highlights_synced_at: "), "{contents}");
     assert!(contents.contains("# Systems Performance\n"), "{contents}");
     assert!(
-        contents.contains("PDF: [[lib/systems-performance.pdf]]\n"),
+        contents.contains("PDF: [[lib/books/systems-performance.pdf]]\n"),
         "{contents}"
     );
     assert!(
@@ -1223,6 +1293,26 @@ Note: Keep a standalone observation after the marker.
         "first standalone sidecar note should be excluded:\n{contents}"
     );
     assert_eq!(highlight_block_ids(&contents).len(), 2, "{contents}");
+    assert!(
+        !old_flat_note.exists(),
+        "nested sync must not create the old flat reference note"
+    );
+
+    let stale_ref_type =
+        contents.replace("ref_type: books\n", "ref_type: stale\n");
+    write_file(&note, &stale_ref_type);
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("resync stale ref_type");
+
+    assert_success(&output);
+    let refreshed = fs::read_to_string(&note).expect("read refreshed note");
+    assert!(refreshed.contains("ref_type: books\n"), "{refreshed}");
+    assert!(!refreshed.contains("ref_type: stale\n"), "{refreshed}");
 }
 
 #[test]

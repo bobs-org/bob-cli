@@ -117,23 +117,26 @@ bob highlights-ref sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontma
 Prepares the Highlights app PDF annotation to Bob reference note sync workflow.
 `sync <pdf>` reads the first standalone PDF note annotation as the marker note,
 parses its `key: value` list, and creates or updates
-`ref/<pdf-basename>.md` frontmatter and the managed Highlights body region. It
-stores a canonical marker projection hash so later runs can sync marker-only
-edits into frontmatter and, when `--write-pdf` is supplied, frontmatter-only
-edits back into the PDF marker. Simultaneous marker/frontmatter edits fail with
-a conflict report unless `--prefer marker` or `--prefer frontmatter` is
-supplied. `--dry-run` reports the planned note/PDF actions without writing
-either side. `marker <pdf>` inspects and renders the marker contract without
-writing. `scan` recursively processes PDFs under the configured library with
-collision and dirty-target preflights, while `doctor` checks vault paths,
-sidecars, marker readability, Git state, and optional `ob` availability without
-writing files. Marker notes must include `status` and `parent`; `parent` may be
-a bare note target such as `obsidian` or an existing wikilink. Generated
-reference notes always include `type: "[[ref]]"`.
+`ref/<ref_type>/<pdf-basename>.md` frontmatter and the managed Highlights body
+region for PDFs under `lib/<ref_type>/`. Top-level library PDFs and explicit
+out-of-library syncs keep the legacy `ref/<pdf-basename>.md` target. It stores a
+canonical marker projection hash so later runs can sync marker-only edits into
+frontmatter and, when `--write-pdf` is supplied, frontmatter-only edits back
+into the PDF marker. Simultaneous marker/frontmatter edits fail with a conflict
+report unless `--prefer marker` or `--prefer frontmatter` is supplied.
+`--dry-run` reports the planned note/PDF actions without writing either side.
+`marker <pdf>` inspects and renders the marker contract without writing. `scan`
+recursively processes PDFs under the configured library with collision and
+dirty-target preflights, while `doctor` checks vault paths, sidecars, marker
+readability, Git state, and optional `ob` availability without writing files.
+Marker notes must include `status` and `parent`; `parent` may be a bare note
+target such as `obsidian` or an existing wikilink. Generated reference notes
+always include `type: "[[ref]]"` and include command-managed `ref_type` when it
+can be derived from the first library path component.
 
-For `foo.pdf`, `sync` discovers `foo.md` first and can parse simple
-`foo.textbundle/text.md` or `text.markdown` sidecars. Highlights, highlight
-comments, and standalone non-marker notes render into the managed
+For `lib/books/foo.pdf`, `sync` discovers `lib/books/foo.md` first and can
+parse simple `foo.textbundle/text.md` or `text.markdown` sidecars. Highlights,
+highlight comments, and standalone non-marker notes render into the managed
 `<!-- highlights:begin -->` region using stable `^h-...` block IDs. Existing
 manual body content outside that region is preserved, and disappeared generated
 blocks are kept as tombstones under `### Removed highlights`.

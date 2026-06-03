@@ -4,7 +4,7 @@ use std::{
     error::Error as StdError,
     ffi::{OsStr, OsString},
     fmt, fs, io, iter,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{self, Output, Stdio},
 };
 
@@ -32,8 +32,10 @@ const ENV_REF_DIR: &str = "BOB_HIGHLIGHTS_REF_DIR";
 const FIELD_STATUS: &str = "status";
 const FIELD_PARENT: &str = "parent";
 const FIELD_NOTE_TYPE: &str = "type";
+const FIELD_REF_TYPE: &str = "ref_type";
 const NOTE_TYPE_VALUE: &str = "[[ref]]";
 const MARKER_REQUIRED_KEYS: &[&str] = &[FIELD_STATUS, FIELD_PARENT];
+const COMMAND_MANAGED_FIELDS: &[&str] = &[FIELD_NOTE_TYPE, FIELD_REF_TYPE];
 const MANAGED_BODY_BEGIN: &str = "<!-- highlights:begin -->";
 const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
 const PIPELINE_VERSION: &str = "highlights-ref-mvp-3";
@@ -150,9 +152,17 @@ struct ParsedNote {
 struct PipelineMetadata {
     source_pdf: String,
     source_pdf_sha256: String,
+    ref_type: Option<String>,
     highlights_sidecar: Option<MarkerValue>,
     highlights_count: Option<MarkerValue>,
     highlights_synced_at: Option<MarkerValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PdfPathMetadata {
+    relative_pdf_path: Option<PathBuf>,
+    note_relative_path: PathBuf,
+    ref_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1836,7 +1846,11 @@ impl ParsedNote {
         let mut removed_keys = BTreeSet::new();
         removed_keys
             .extend(PIPELINE_FIELDS.iter().map(|field| (*field).to_string()));
-        removed_keys.insert(FIELD_NOTE_TYPE.to_string());
+        removed_keys.extend(
+            COMMAND_MANAGED_FIELDS
+                .iter()
+                .map(|field| (*field).to_string()),
+        );
         removed_keys.extend(
             COMMON_USER_FIELDS
                 .iter()
@@ -1847,19 +1861,19 @@ impl ParsedNote {
         removed_keys.extend(projection.keys().cloned());
 
         let mut lines = Vec::new();
-        let mut rendered_note_type = false;
+        let mut rendered_command_managed_fields = false;
         for key in ordered_projection_keys(projection) {
             let Some(value) = projection.get(&key) else {
                 continue;
             };
             lines.push(format!("{key}: {}", value.as_frontmatter_value()));
             if key == FIELD_PARENT {
-                lines.push(note_type_frontmatter_line());
-                rendered_note_type = true;
+                push_command_managed_frontmatter_lines(&mut lines, metadata);
+                rendered_command_managed_fields = true;
             }
         }
-        if !rendered_note_type {
-            lines.push(note_type_frontmatter_line());
+        if !rendered_command_managed_fields {
+            push_command_managed_frontmatter_lines(&mut lines, metadata);
         }
 
         for entry in &self.frontmatter {
@@ -2002,10 +2016,12 @@ fn pipeline_metadata(
     } else {
         note.frontmatter_value(FIELD_HIGHLIGHTS_SYNCED_AT)
     };
+    let ref_type = pdf_path_metadata(config, pdf)?.ref_type;
 
     Ok(PipelineMetadata {
         source_pdf: source_pdf_value(config, pdf),
         source_pdf_sha256: sha256_file(pdf)?,
+        ref_type,
         highlights_sidecar,
         highlights_count,
         highlights_synced_at,
@@ -2049,6 +2065,19 @@ fn note_type_frontmatter_line() -> String {
         "{FIELD_NOTE_TYPE}: {}",
         MarkerValue::String(NOTE_TYPE_VALUE.to_string()).as_frontmatter_value()
     )
+}
+
+fn push_command_managed_frontmatter_lines(
+    lines: &mut Vec<String>,
+    metadata: &PipelineMetadata,
+) {
+    lines.push(note_type_frontmatter_line());
+    if let Some(ref_type) = &metadata.ref_type {
+        lines.push(format!(
+            "{FIELD_REF_TYPE}: {}",
+            MarkerValue::String(ref_type.clone()).as_frontmatter_value()
+        ));
+    }
 }
 
 fn note_title(pdf: &Path, projection: &Projection) -> String {
@@ -2650,7 +2679,7 @@ fn is_pipeline_field(key: &str) -> bool {
 }
 
 fn is_command_managed_field(key: &str) -> bool {
-    key == FIELD_NOTE_TYPE
+    COMMAND_MANAGED_FIELDS.contains(&key)
 }
 
 fn is_managed_frontmatter_field(key: &str) -> bool {
@@ -2677,13 +2706,63 @@ fn projection_hash(projection: &Projection) -> Result<String> {
 }
 
 fn ref_note_path(config: &Config, pdf: &Path) -> Result<PathBuf> {
+    Ok(config
+        .ref_dir
+        .join(pdf_path_metadata(config, pdf)?.note_relative_path))
+}
+
+fn pdf_path_metadata(config: &Config, pdf: &Path) -> Result<PdfPathMetadata> {
     let stem = pdf.file_stem().and_then(OsStr::to_str).ok_or_else(|| {
         CommandError::new(format!(
             "PDF path has no UTF-8 basename: {}",
             pdf.display()
         ))
     })?;
-    Ok(config.ref_dir.join(format!("{stem}.md")))
+
+    if let Ok(relative_pdf_path) = pdf.strip_prefix(&config.lib_dir) {
+        let mut note_relative_path = relative_pdf_path.to_path_buf();
+        note_relative_path.set_extension("md");
+        let ref_type = ref_type_from_relative_pdf_path(pdf, relative_pdf_path)?;
+        return Ok(PdfPathMetadata {
+            relative_pdf_path: Some(relative_pdf_path.to_path_buf()),
+            note_relative_path,
+            ref_type,
+        });
+    }
+
+    Ok(PdfPathMetadata {
+        relative_pdf_path: None,
+        note_relative_path: PathBuf::from(format!("{stem}.md")),
+        ref_type: None,
+    })
+}
+
+fn ref_type_from_relative_pdf_path(
+    pdf: &Path,
+    relative_pdf_path: &Path,
+) -> Result<Option<String>> {
+    let Some(parent) = relative_pdf_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(component) = parent.components().find_map(|component| {
+        if let Component::Normal(value) = component {
+            Some(value)
+        } else {
+            None
+        }
+    }) else {
+        return Ok(None);
+    };
+    let ref_type = component.to_str().ok_or_else(|| {
+        CommandError::new(format!(
+            "PDF path has non-UTF-8 ref_type component: {}",
+            pdf.display()
+        ))
+    })?;
+    Ok(Some(ref_type.to_string()))
 }
 
 fn source_pdf_value(config: &Config, pdf: &Path) -> String {
@@ -2805,8 +2884,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        parse_marker, parse_note, projection_hash, render_marker,
-        resolve_under_bob, MarkerValue, PipelineMetadata, Projection,
+        parse_marker, parse_note, pdf_path_metadata, projection_hash,
+        ref_note_path, render_marker, resolve_under_bob, Config, MarkerValue,
+        PipelineMetadata, Projection,
     };
 
     #[test]
@@ -2831,6 +2911,74 @@ mod tests {
         assert!(!super::PIPELINE_FIELDS.contains(&"parent"));
         assert!(!super::PIPELINE_FIELDS.contains(&"type"));
         assert!(super::is_command_managed_field("type"));
+        assert!(super::is_command_managed_field("ref_type"));
+    }
+
+    #[test]
+    fn pdf_path_metadata_derives_nested_reference_paths() {
+        let config = Config {
+            bob_dir: PathBuf::from("/tmp/bob"),
+            lib_dir: PathBuf::from("/tmp/bob/lib"),
+            ref_dir: PathBuf::from("/tmp/bob/ref"),
+        };
+
+        let top_level =
+            pdf_path_metadata(&config, Path::new("/tmp/bob/lib/example.pdf"))
+                .expect("top-level metadata");
+        assert_eq!(
+            top_level.relative_pdf_path,
+            Some(PathBuf::from("example.pdf"))
+        );
+        assert_eq!(top_level.note_relative_path, PathBuf::from("example.md"));
+        assert_eq!(top_level.ref_type, None);
+        assert_eq!(
+            ref_note_path(&config, Path::new("/tmp/bob/lib/example.pdf"))
+                .expect("top-level note path"),
+            PathBuf::from("/tmp/bob/ref/example.md")
+        );
+
+        let nested = pdf_path_metadata(
+            &config,
+            Path::new("/tmp/bob/lib/books/example.pdf"),
+        )
+        .expect("nested metadata");
+        assert_eq!(
+            nested.relative_pdf_path,
+            Some(PathBuf::from("books/example.pdf"))
+        );
+        assert_eq!(
+            nested.note_relative_path,
+            PathBuf::from("books/example.md")
+        );
+        assert_eq!(nested.ref_type.as_deref(), Some("books"));
+        assert_eq!(
+            ref_note_path(&config, Path::new("/tmp/bob/lib/books/example.pdf"))
+                .expect("nested note path"),
+            PathBuf::from("/tmp/bob/ref/books/example.md")
+        );
+
+        let deeper = pdf_path_metadata(
+            &config,
+            Path::new("/tmp/bob/lib/books/os/example.PDF"),
+        )
+        .expect("deeper metadata");
+        assert_eq!(
+            deeper.note_relative_path,
+            PathBuf::from("books/os/example.md")
+        );
+        assert_eq!(deeper.ref_type.as_deref(), Some("books"));
+
+        let outside =
+            pdf_path_metadata(&config, Path::new("/tmp/elsewhere/example.pdf"))
+                .expect("outside metadata");
+        assert_eq!(outside.relative_pdf_path, None);
+        assert_eq!(outside.note_relative_path, PathBuf::from("example.md"));
+        assert_eq!(outside.ref_type, None);
+        assert_eq!(
+            ref_note_path(&config, Path::new("/tmp/elsewhere/example.pdf"))
+                .expect("outside note path"),
+            PathBuf::from("/tmp/bob/ref/example.md")
+        );
     }
 
     #[test]
@@ -2982,6 +3130,12 @@ Body
         .expect_err("marker type should fail");
         assert!(marker_type.to_string().contains("command-managed"));
 
+        let marker_ref_type = parse_marker(
+            "- status: wip\n- parent: [[obsidian]]\n- ref_type: books\n",
+        )
+        .expect_err("marker ref_type should fail");
+        assert!(marker_ref_type.to_string().contains("command-managed"));
+
         let duplicate = parse_marker(
             "- status: wip\n- parent: [[obsidian]]\n- Status: done\n",
         )
@@ -3078,6 +3232,7 @@ Manual body.
             &PipelineMetadata {
                 source_pdf: "lib/example.pdf".to_string(),
                 source_pdf_sha256: "abc123".to_string(),
+                ref_type: None,
                 highlights_sidecar: None,
                 highlights_count: None,
                 highlights_synced_at: None,

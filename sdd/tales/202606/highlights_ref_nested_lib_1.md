@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-03 07:12:14
-status: wip
+status: done
 prompt: sdd/prompts/202606/highlights_ref_nested_lib_1.md
 ---
 # Plan: Support Nested `bob highlights-ref` Library Reference Types
