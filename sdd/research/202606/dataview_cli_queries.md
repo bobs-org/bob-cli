@@ -22,7 +22,11 @@ From `/home/bryan/bob/.obsidian/community-plugins.json` and `.obsidian/plugins/`
   `bob-ledger-tools`, `block-id-prompt`, `obsidian-relative-line-numbers`,
   `note-refactor-obsidian`.
 - The **Local REST API** plugin (`coddingtonbear/obsidian-local-rest-api`) is **NOT yet
-  installed**. It is the key dependency for the recommended approach below.
+  installed**. It is the key dependency for the REST API option below, but not for the
+  Obsidian CLI `eval` option.
+- Dataview's plugin manifest reports version `0.5.68`.
+- `ob`, `obsidian`, `node`, and `npm` are installed locally. `ob` is useful for Obsidian
+  Sync freshness, but it is not a Dataview runtime.
 
 So Bob's notes already carry Dataview metadata (frontmatter + `key:: value` inline fields),
 and the query language is already in daily use inside Obsidian.
@@ -41,16 +45,93 @@ gap, not an oversight we can quickly route around:
 - Dataview publishes TypeScript typings to npm (`obsidian-dataview`), but these are for
   **plugin development inside Obsidian**, not for standalone Node use.
 
-Consequently every viable option falls into one of two buckets:
+Consequently every viable option falls into one of three buckets:
 
-1. **Use the *real* Dataview engine** — which means driving a *running* Obsidian instance
-   from the outside (highest query fidelity).
-2. **Use a *reimplementation* of DQL** that reads markdown directly off disk — no Obsidian
+1. **Use the *real* Dataview engine via Obsidian CLI `eval`** — drive a running Obsidian
+   app directly, without installing another community plugin.
+2. **Use the *real* Dataview engine via an HTTP plugin** — drive a running Obsidian app
+   through Local REST API.
+3. **Use a *reimplementation* of DQL** that reads markdown directly off disk — no Obsidian
    needed, but only a subset of DQL is supported (lower fidelity, fully headless).
 
 ## Options
 
-### Option A — Local REST API plugin + `curl` (real Dataview engine) ⭐ recommended
+### Option A — Obsidian CLI `eval` + Dataview API (real Dataview engine)
+
+The current Obsidian CLI can run JavaScript inside the desktop Obsidian app:
+
+```bash
+obsidian eval code="app.vault.getFiles().length"
+```
+
+It can target a vault with `vault=<name-or-id>` or, when run from inside a vault folder,
+use that vault by default. Official docs say the app must be running; if it is not running,
+the CLI launches it.
+
+That gives Bob a direct route to Dataview's own plugin API:
+
+```javascript
+const api = app.plugins.plugins.dataview?.api ?? window.DataviewAPI;
+```
+
+Useful API surfaces:
+
+- `api.pagePaths(source)` for Dataview **source** expressions such as `#tag`, `"folder"`,
+  `[[note]]`, and boolean combinations of sources.
+- `api.tryQuery(query, originFile, { forceId: true })` for full DQL execution.
+- `api.tryQueryMarkdown(query, originFile)` for rendered markdown output.
+
+Important limitation: `pagePaths()` accepts a Dataview source expression, not a full DQL
+query. Full filtering such as:
+
+```dataview
+LIST
+FROM #project
+WHERE status = "active"
+SORT file.mtime DESC
+```
+
+must go through `tryQuery()` or `tryQueryMarkdown()`.
+
+Recommended `bob-cli` command shape:
+
+```bash
+bob dataview --format paths --query 'LIST FROM #project WHERE status = "active"'
+bob dataview --format markdown --query 'TABLE file.mtime FROM #project SORT file.mtime DESC'
+bob dataview --format json --query 'TASK FROM #project WHERE !completed'
+```
+
+Suggested options:
+
+- `--format markdown|json|paths`: output mode; default `paths` if the primary goal is note
+  matching.
+- `--origin <path>`: Dataview origin file for `this` and relative links.
+- `--query <DQL>`: query text.
+- `--query-file <path>`: read query text from a file to avoid shell quoting.
+- `--sync`: optionally run `ob sync --path <vault>` before querying.
+- `--vault <name-or-id>`: pass through to Obsidian CLI vault targeting.
+
+Implementation notes:
+
+- Build the JavaScript snippet in Rust and pass it as an `obsidian` argument; do not depend
+  on shell interpolation for query quoting.
+- Wait for `api.index.initialized`, or subscribe once to
+  `app.metadataCache.on("dataview:index-ready", ...)`, before querying on a cold start.
+- For `--format markdown`, call `tryQueryMarkdown()`.
+- For `--format json`, call `tryQuery()` and serialize the result.
+- For `--format paths`, normalize the result to note paths. This is straightforward for
+  ordinary `LIST`/`TABLE` rows, `TASK` rows via `task.path`, and `CALENDAR` links, but
+  grouped queries, `WITHOUT ID`, and intentionally transformed rows may not have a
+  one-note-per-row meaning.
+
+- **Pros:** exact Dataview semantics; no additional community plugin; works with the
+  existing enabled Dataview plugin; fits `bob-cli` as a thin native wrapper.
+- **Cons:** requires desktop Obsidian CLI/app availability; cold starts need index-ready
+  handling; path-only output needs documented limits for grouped/transformed DQL.
+- **Net:** best first implementation for `bob-cli` when exact DQL behavior matters and a
+  desktop Obsidian session is available.
+
+### Option B — Local REST API plugin + `curl` (real Dataview engine)
 
 `coddingtonbear/obsidian-local-rest-api` exposes a secure REST API over the running vault.
 Its `POST /search/` endpoint accepts a **Dataview DQL `TABLE` query** directly when you set
@@ -87,7 +168,7 @@ to pipe into `jq`, scripts, or an agent.
 - **Setup:** install + enable the Local REST API plugin, copy its API key, keep Dataview
   enabled. (Dataview is already enabled in Bob's vault; only Local REST API is missing.)
 
-### Option B — `dnvriend/obsidian-search-tool` (ergonomic CLI wrapper over Option A)
+### Option C — `dnvriend/obsidian-search-tool` (ergonomic CLI wrapper over Option B)
 
 A purpose-built **CLI** that talks to the same Local REST API and is explicitly designed to
 be "agent-friendly." It wraps the DQL-`TABLE` endpoint (and a JsonLogic mode) with nicer
@@ -104,11 +185,11 @@ obsidian-search-tool search 'TABLE file.name, author WHERE author SORT file.mtim
   (multi-field), `LIMIT`; functions `date()`, `dur()`, `contains()`; comparison/logical
   operators; the common implicit `file.*` fields.
 - **Does NOT support:** `GROUP BY`, `FLATTEN`, `LIST`, `TASK`, `CALENDAR`.
-- **Net:** same fidelity/availability trade-off as Option A (it *is* Option A under the
+- **Net:** same fidelity/availability trade-off as Option B (it *is* Option B under the
   hood) but saves us writing the curl/JSON plumbing — at the cost of a Python+uv dependency.
   Good if we want a ready-made, documented CLI rather than a shell wrapper we maintain.
 
-### Option C — `k-lar/dynomark` (standalone DQL reimplementation, no Obsidian) ⭐ recommended for headless
+### Option D — `k-lar/dynomark` (standalone DQL reimplementation, no Obsidian)
 
 A **standalone Go binary** that reimplements a Dataview-like query language and reads
 markdown **directly off disk** — *no Obsidian instance required*. This is the best fit
@@ -135,7 +216,7 @@ dynomark 'PARAGRAPH FROM examples/ WHERE [author] IS "Shakespeare"'
 - **Pros:** truly headless; fast; single binary; reads the vault as plain files.
 - **Cons:** not byte-for-byte Dataview-compatible — fidelity is the price of independence.
 
-### Option D — In-Obsidian export plugins (adjacent, not a true CLI)
+### Option E — In-Obsidian export plugins (adjacent, not a true CLI)
 
 Plugins like `udus122/dataview-publisher` (and similar "dataview serializer" tools) run a
 Dataview query **inside** Obsidian and write the rendered results back into a markdown file,
@@ -143,7 +224,7 @@ keeping it up to date. Useful if the real goal is "materialize query results int
 but they run inside the app on Obsidian's schedule — they are **not** a command-line
 interface. Mentioned for completeness; not recommended for CLI/scripting use.
 
-### Option E — `intellectronica/mdbasequery` (different query language)
+### Option F — `intellectronica/mdbasequery` (different query language)
 
 A standalone CLI/library that queries Markdown-frontmatter "bases" and is **Obsidian
 *Bases*-compatible** (the newer native query feature), running on Node 20+/Bun/Deno. It is
@@ -154,39 +235,39 @@ today. Listed as a forward-looking alternative, not a match.
 
 ## Recommendation
 
-Pick by whether Obsidian can be running at query time:
+Pick by whether Obsidian can be running at query time and whether we want an extra plugin:
 
-1. **Default / highest fidelity (Obsidian available): Option A — Local REST API + `curl`.**
-   Install and enable the Local REST API plugin (Dataview is already enabled), grab the API
-   key, and wrap the curl call in a small shell function/alias (e.g. `dvq '<TABLE query>'`).
-   This gives the *real* Dataview engine, exact semantics, and clean JSON output for
-   scripting — with no new language runtime. If we'd rather not maintain the curl/JSON glue,
-   **Option B (`obsidian-search-tool`)** is the same approach pre-packaged as a documented,
-   agent-friendly CLI (at the cost of a Python+uv dependency).
+1. **Best `bob-cli` default: Option A — Obsidian CLI `eval` + Dataview API.** It uses the
+   actual Dataview engine, does not require installing Local REST API, and can support
+   `LIST`, `TABLE`, `TASK`, `CALENDAR`, markdown output, JSON output, and path output from
+   one native `bob dataview` wrapper.
 
-2. **Headless / automation (Obsidian not running): Option C — `dynomark`.** A single Go
-   binary that reads the vault off disk. Accept that it's a *partial* DQL reimplementation
-   and validate each query we rely on against expected results; pin the queries we use to
-   the subset it supports.
+2. **HTTP/API workflow: Option B or C.** If we want a persistent HTTP endpoint with API-key
+   authentication, install Local REST API and either call it with `curl` or use
+   `obsidian-search-tool`. This is a good automation surface when Obsidian is already
+   running, but the documented Dataview endpoint is `TABLE`-oriented and requires another
+   community plugin.
 
-A reasonable end state is **both**: a `dvq` shell wrapper around the REST API for
-interactive/high-fidelity use, and `dynomark` for cron/CI paths where spinning up Obsidian
-isn't viable.
+3. **Headless / automation (Obsidian not running): Option D — `dynomark`, or a small
+   Rust-only query subset.** Accept that this is not exact Dataview. Validate each query
+   against expected output and pin usage to the subset the tool or Bob implementation
+   supports.
 
 **Not recommended:** waiting for native Dataview CLI support (no timeline), or relying on
-the npm `obsidian-dataview` typings to build our own headless indexer (it needs Obsidian's
-`CachedMetadata`; this is effectively reimplementing the index — `dynomark` already did it).
+the npm `obsidian-dataview` typings to build our own headless indexer. Dataview's real index
+depends on Obsidian's `App`, `Vault`, `MetadataCache`, IndexedDB/local storage, and plugin
+lifecycle, so a standalone Node CLI would effectively recreate a large part of Obsidian.
 
 ## Open Questions / Follow-ups
 
 - Which DQL query *types* does Bob actually need from the CLI? If it's purely "list the
-  notes matching X," `TABLE`/`LIST` cover it and both recommended paths work. If `TASK`,
-  `GROUP BY`, or `FLATTEN` are required, note that the REST endpoint is `TABLE`-only and
-  `dynomark`'s coverage must be checked per-feature.
+  notes matching X," `TABLE`/`LIST` cover it. If `TASK`, `GROUP BY`, or `FLATTEN` are
+  required, Option A has the best chance of preserving exact Dataview semantics; the REST
+  endpoint is `TABLE`-only and `dynomark`'s coverage must be checked per-feature.
 - Is the use case interactive (Obsidian usually open) or automated (headless)? That choice
-  is what selects Option A/B vs Option C.
+  is what selects Option A/B/C vs Option D.
 - Longer term: given the ecosystem shift toward **Bases/Datacore**, is it worth tracking
-  `mdbasequery` (Option E) as Bob's metadata strategy evolves?
+  `mdbasequery` (Option F) as Bob's metadata strategy evolves?
 
 ## Sources
 
@@ -199,5 +280,13 @@ the npm `obsidian-dataview` typings to build our own headless indexer (it needs 
 - [dnvriend/obsidian-search-tool (CLI over Local REST API)](https://github.com/dnvriend/obsidian-search-tool)
 - [udus122/dataview-publisher (in-Obsidian export)](https://github.com/udus122/dataview-publisher)
 - [intellectronica/mdbasequery (Obsidian Bases-compatible CLI)](https://github.com/intellectronica/mdbasequery)
+- [Obsidian CLI help](https://obsidian.md/help/cli)
+- [Obsidian Headless help](https://obsidian.md/help/headless)
+- [obsidianmd/obsidian-headless](https://github.com/obsidianmd/obsidian-headless)
+- [Dataview JavaScript API overview](https://blacksmithgu.github.io/obsidian-dataview/api/intro/)
+- [Dataview codeblock/API reference](https://blacksmithgu.github.io/obsidian-dataview/api/code-reference/)
 - [Dataview docs — Structure of a Query](https://blacksmithgu.github.io/obsidian-dataview/queries/structure/)
 - [Dataview docs — Data Commands](https://blacksmithgu.github.io/obsidian-dataview/queries/data-commands/)
+- [Dataview docs — Sources](https://blacksmithgu.github.io/obsidian-dataview/reference/sources/)
+- [Dataview `FullIndex` source](https://github.com/blacksmithgu/obsidian-dataview/blob/master/src/data-index/index.ts)
+- [Dataview plugin API source](https://github.com/blacksmithgu/obsidian-dataview/blob/master/src/api/plugin-api.ts)
