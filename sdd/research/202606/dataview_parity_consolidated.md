@@ -26,13 +26,15 @@ The gaps are elsewhere:
 - `markdown` output uses Dataview's Markdown export API, not Obsidian's live DOM
   renderer, and Dataview cannot export `CALENDAR` queries to Markdown;
 - interactive task behavior is not representable on stdout;
-- the headless engines are deliberately partial: `native` is a small Rust subset
-  for Bob-specific frontmatter queries, and `dynomark` is a broader external
-  Dataview-like engine, not Obsidian Dataview.
+- the headless engines are not the installed Obsidian plugin runtime: `native`
+  now covers Bob's supported source-expression and DQL shell surface broadly,
+  while `dynomark` remains a partial external Dataview-like fallback until the
+  final engine cutover removes it.
 
 So the precise conclusion is: **Bob has exact DQL evaluation when the Obsidian
-engine can reach a running desktop Obsidian app; Bob does not have exact
-headless Dataview parity or full Dataview UI/JS parity.**
+engine can reach a running desktop Obsidian app; Bob has practical native
+headless parity for its supported shell contract, but not full Dataview UI/JS or
+installed-plugin parity.**
 
 ## Verified Current State
 
@@ -47,6 +49,9 @@ Checked in this workspace on 2026-06-03:
 - `docs/dataview.md` says `bob dataview` does not run `ob sync` or
   `ob sync-status`; vault freshness is owned by the external background or cron
   sync path.
+- Native Phase 8 hardening added real-vault smoke coverage and cached native
+  indexing regexes after a simple `~/bob` source query timed out in debug due
+  to per-line regex compilation.
 
 The implementation is in `src/native/dataview.rs`. The default engine generates
 JavaScript and runs:
@@ -69,8 +74,8 @@ The command's output contracts are Bob-specific:
   `--strict-paths` is used;
 - `json`: a stable wrapper containing `engine`, `query_kind`, `format`,
   extracted `paths`, the Dataview or engine `result`, and `warnings`;
-- `markdown`: Dataview-rendered Markdown for DQL, available only through the
-  Obsidian engine.
+- `markdown`: Dataview-rendered Markdown for DQL through Obsidian, or native
+  Markdown export for native `LIST`, `TABLE`, and `TASK`.
 
 ## Obsidian Dataview Surface
 
@@ -100,55 +105,56 @@ Dataview. It does not expose inline DQL or DataviewJS as separate CLI modes.
 
 ## Gap Inventory
 
-| Area | Current behavior | What is lacking | Practical severity |
+| Area | Current behavior | Remaining boundary | Practical severity |
 | --- | --- | --- | --- |
-| DQL source expressions | `--source` calls Dataview `pagePaths()` through Obsidian | No headless native source expression support | Low for default; high headless |
-| DQL `LIST` / `TABLE` | Exact via Obsidian; narrow in `native`; partial in `dynomark` | Native lacks computed list values, aliases, `WITHOUT ID`, richer projections | Low for default; medium headless |
-| DQL `TASK` | Exact structured result via Obsidian; path extraction best effort | No native task parser; no CLI interactivity/checking | Medium |
-| DQL `CALENDAR` | Exact structured result via Obsidian | No Markdown export; no native calendar support | Medium |
-| Data commands | Exact via Obsidian | Native lacks `SORT`, `GROUP BY`, `FLATTEN`, `LIMIT` | High headless |
-| Sources | Exact via Obsidian | Native accepts only one quoted folder, no tags/files/links/source algebra | High headless |
-| Expressions/operators | Exact via Obsidian | Native has field truthiness, equality, `AND`, `OR`, parentheses only | High headless |
-| Functions | Exact via Obsidian | Native has none | High headless |
-| Dataview types | Exact via Obsidian | Native stores only string/bool/null, with wikilink strings resolved on demand | High headless |
-| Metadata index | Exact via Obsidian | Native reads top-level scalar YAML only; no inline fields, tasks/lists, tags, link graph, or implicit `file.*` object | High headless |
-| `this` / origin | Obsidian engine forwards `--origin` | Dynomark warns and ignores origin; native has no real `this` | Medium |
-| Inline DQL | Not exposed | No `--expression` or inline-result mode | Medium |
-| DataviewJS | Not exposed | No `--js` / `--js-file`; no safe stdout-oriented JS contract | High if needed |
+| DQL source expressions | Exact via Obsidian; native supports tags, folders/files, incoming/outgoing links, boolean algebra, and parentheses | Native quoted sources resolve an exact note before folder matching when both exist | Low |
+| DQL `LIST` / `TABLE` | Exact via Obsidian; native supports computed expressions, `WITHOUT ID`, identity-aware paths, JSON, and Markdown | Formatting can differ from installed Dataview/plugin settings | Low |
+| DQL `TASK` | Exact structured result via Obsidian; native indexes task/list objects and exports JSON/Markdown | CLI cannot expose interactive task checking | Medium |
+| DQL `CALENDAR` | Exact structured result via Obsidian; native emits JSON/path-capable calendar rows | Markdown export fails cleanly because Dataview cannot render calendar queries to Markdown | Low |
+| Data commands | Exact via Obsidian; native supports `FROM`, `WHERE`, `SORT`, `GROUP BY`, `FLATTEN`, and `LIMIT` | Some advanced Dataview coercions may still differ | Medium |
+| Expressions/functions | Exact via Obsidian; native supports the Bob parity matrix of typed literals, operators, swizzling, lambdas, and common functions | Not a guarantee of every Dataview plugin edge case | Medium |
+| Metadata index | Exact via Obsidian; native indexes YAML, inline fields, tags, links, tasks/lists, and implicit `file.*` metadata | File timestamps/bookmark state can differ from a live Obsidian cache | Low |
+| `this` / origin | Obsidian forwards `--origin`; native supports `this` against indexed origin notes | Dynomark still warns and ignores origin | Low until dynomark removal |
+| Inline DQL | Not exposed | No `--expression` or inline-result mode | Medium if requested |
+| DataviewJS | Not exposed | No `--js` / `--js-file`; no safe stdout-oriented JS contract | High if requested |
 | Live rendering | Not attempted | No DOM renderer, CSS fidelity, lifecycle, live reload, or interactive task state | Usually acceptable |
-| Path output | Bob extracts paths from source/list/table/task/calendar-ish shapes | Aggregates, grouped rows, `WITHOUT ID`, heavy `FLATTEN`, computed rows, and task-level identities can be ambiguous | Medium |
-| Exact headless Dataview | Not available | Requires reimplementing or embedding a plugin runtime plus Obsidian's metadata cache | XL / not recommended |
+| Path output | Bob extracts paths from source/list/table/task/calendar-shaped results | Grouped rows and rows without source identity warn or fail under `--strict-paths` | Medium |
+| Exact headless Dataview | Native is practical Bob-shell parity, not the installed plugin runtime | Full upstream parity would require ongoing reimplementation of Dataview and Obsidian metadata cache behavior | XL / not recommended |
 
 ## Native Engine Detail
 
-The native engine is useful, but it should not be described as a Dataview clone.
-It currently supports:
+The native engine should be described as a Bob-owned headless Dataview
+implementation for the CLI's supported shell contract, not as a full Obsidian
+Dataview clone.
 
-- query types: `LIST` and limited `TABLE field, parent.field`;
-- source: optional single quoted folder, e.g. `FROM "ref"`;
-- filters: field truthiness, `field = "string"`, `field = true|false`,
-  `field = [[wikilink]]`, `AND`, `OR`, and parentheses;
-- parent/wikilink chains: `parent.parent.status` resolves intermediate
-  frontmatter values as note links;
-- data model: top-of-file YAML-like scalar frontmatter only, represented as
-  `String`, `Bool`, or `Null`;
-- output: `paths` for matching pages and `json` for list/table-shaped results.
+It now supports:
 
-It lacks the hard parts of Dataview: a typed value system, a full DQL parser,
-source algebra, comparison and arithmetic operators, functions, inline fields,
-implicit file metadata, tags, tasks/lists, link graph indexing, computed
-columns, rendering, and DataviewJS.
+- source expressions for all pages, tags/subtags, quoted files/folders,
+  incoming links, outgoing links, boolean source algebra, and parentheses;
+- `LIST`, `TABLE`, `TASK`, and `CALENDAR` DQL;
+- ordered data commands: `FROM`, `WHERE`, `SORT`, `GROUP BY`, `FLATTEN`, and
+  `LIMIT`;
+- typed values for nulls, booleans, numbers, strings, dates/datetimes,
+  durations, links, arrays, and objects;
+- YAML frontmatter, page inline fields, tags, aliases, outlinks/inlinks,
+  tasks/lists, and implicit `file.*` metadata;
+- expression evaluation for field access, swizzling, arithmetic/comparison,
+  booleans, `this`, lambdas, and the practical Dataview function set used in
+  the parity matrix;
+- native `paths`/`json` output plus Markdown export for `LIST`, `TABLE`, and
+  `TASK`.
 
-This is acceptable if `native` remains a Bob-owned subset for local automation.
-It becomes expensive only if it is asked to chase general Dataview behavior.
+It intentionally does not expose DataviewJS, inline DQL modes, live DOM
+rendering, CSS/view semantics, or interactive task state. Its Markdown output
+targets stable shell output, not pixel-perfect live Dataview rendering.
 
 ## Dynomark Detail
 
-The dynomark engine provides more headless breadth than `native`. Upstream
-describes it as a Markdown query language engine similar to Dataview and
-"barebones for now." Its README lists support for features such as `LIST`,
-`TASK`, `TABLE`, sorting, grouping, limits, metadata conditionals, and default
-file metadata.
+The dynomark engine is now an obsolete partial fallback retained only until the
+final engine cutover. Upstream describes it as a Markdown query language engine
+similar to Dataview and "barebones for now." It is not the Obsidian Dataview
+plugin runtime and is no longer the preferred headless path now that the native
+engine covers the supported Bob shell surface.
 
 Bob's integration is correctly conservative:
 
@@ -158,26 +164,24 @@ Bob's integration is correctly conservative:
 - compatibility warning in JSON/stderr;
 - no Obsidian `--origin` semantics.
 
-Dynomark is a good fallback for cron/server workflows where "close enough" is
-acceptable. It should not be treated as parity.
+Dynomark should not be treated as parity. Phase 9 is expected to remove it after
+native parity hardening is accepted.
 
 ## Work to Fill the Gaps
 
 ### Small, high-value work
 
 1. **Keep the contract explicit in docs/help**: Obsidian engine is exact for
-   DQL evaluation; headless engines are partial; Bob output formats are
-   Bob-specific. The current docs already do much of this, but the parity
-   language should stay precise as features are added.
+   installed-plugin DQL evaluation; native is practical headless parity for
+   Bob's supported shell contract; Bob output formats are Bob-specific. The
+   parity language should stay precise as features are added.
    - Estimate: 0.5 day when docs drift.
 
-2. **Add a parity smoke suite**: a fixture vault plus a manual/live checklist
-   comparing `--engine obsidian` against native Dataview for source expressions,
-   `LIST`, `TABLE`, `TASK`, `CALENDAR` JSON, `SORT`, `GROUP BY`, `FLATTEN`,
-   inline fields, `this` via `--origin`, and a query where `paths` warns.
-   Automated tests can keep using fake `obsidian`; live tests should be gated
-   because they require a running desktop Obsidian app.
-   - Estimate: 1-2 days.
+2. **Maintain the parity smoke suite**: keep the deterministic fixture vault,
+   fake-Obsidian protocol goldens, generated native source smoke test, gated
+   live fixture harness, and documented `~/bob` native smoke checklist current
+   as the engine changes.
+   - Estimate: 0.5-1 day when behavior changes.
 
 3. **Polish path extraction only where source identity really exists**: add live
    examples for grouped/flattened/task/calendar results, keep `--strict-paths`
@@ -201,12 +205,11 @@ acceptable. It should not be treated as parity.
    mode.
    - Estimate: 3-6 days for a data-returning subset.
 
-6. **Grow the native engine surgically**: comparison operators, `not`, `LIMIT`,
-   `SORT`, and perhaps `GROUP BY` would deliver the most headless value without
-   building a full Dataview runtime. Lazy numeric/date comparison could support
-   sorting and range filters before a complete type system exists.
-   - Estimate: M-L, roughly several days to 1-2 weeks depending on how much type
-   behavior is included.
+6. **Tighten native edge cases only when real queries need them**: examples
+   include exact Dataview coercion edge cases, installed-plugin display
+   settings, or ambiguous file-vs-folder source behavior. Avoid broad upstream
+   parity work without a concrete Bob workflow.
+   - Estimate: varies by edge case.
 
 ### Large or not recommended
 
@@ -229,20 +232,20 @@ installed Dataview plugin.
 
 The pragmatic path is:
 
-1. Preserve precise docs: exact DQL through Obsidian, partial headless engines,
-   Bob-specific path/json/markdown output.
-2. Add a small live parity smoke suite so regressions in the Obsidian engine and
-   path extraction are visible.
-3. Add inline DQL expression support if a real shell workflow needs it.
-4. Invest in native only as a demand-driven Bob subset: comparisons, `not`,
-   `LIMIT`, `SORT`, and maybe `GROUP BY`.
+1. Preserve precise docs: exact DQL through Obsidian, practical native headless
+   parity for Bob's shell contract, Bob-specific path/json/markdown output.
+2. Keep the fixture/live parity smoke suite so regressions in the Obsidian
+   engine and path extraction are visible.
+3. Add inline DQL expression support only if a real shell workflow needs it.
+4. Keep native compatibility demand-driven rather than chasing every upstream
+   Dataview edge case.
 5. Consider data-only DataviewJS later, but avoid DOM/render capture unless it
    becomes a hard requirement.
 
-This keeps the valuable behavior and avoids turning `bob-cli` into a second
-Dataview implementation. The practical gap worth closing is incremental and
-moderate; the theoretical gap of exact headless Dataview parity is too large
-for the likely return.
+This keeps the valuable behavior and avoids turning `bob-cli` into a perpetual
+upstream Dataview reimplementation. The practical gaps worth closing are
+incremental and workflow-driven; the theoretical gap of exact headless
+installed-plugin parity is too large for the likely return.
 
 ## Sources
 

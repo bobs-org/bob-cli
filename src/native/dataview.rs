@@ -6560,8 +6560,8 @@ Obsidian vault.\n\n\
 Source expressions return matching page paths. DQL queries support path, JSON, \
 and markdown output modes. The default Obsidian engine is the exact Dataview \
 runtime. The explicit dynomark engine is a partial headless fallback for DQL \
-paths and JSON output. The native engine is a headless local source-expression \
-and frontmatter DQL subset.",
+paths and JSON output. The native engine is a headless local implementation of \
+the supported Bob source-expression and DQL surface.",
         )
         .after_help(
             "Examples:\n  bob dataview --source '#project and -\"archive\"'\n  bob dataview --query 'LIST FROM #waiting'\n  bob dataview --format json --query-file ~/queries/projects.dql",

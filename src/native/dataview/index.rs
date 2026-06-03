@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::Path,
+    sync::LazyLock,
     time::SystemTime,
 };
 
@@ -14,6 +15,41 @@ use super::{
     collect_native_markdown_paths, native_frontmatter_block,
     normalize_note_path, note_stem, unquote_native_scalar, DataviewError,
 };
+
+static LINE_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*([A-Za-z][A-Za-z0-9_-]*)::\s*(.*?)\s*$")
+        .expect("valid inline field regex")
+});
+static BRACKET_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[([A-Za-z][A-Za-z0-9_-]*)::\s*([^\]]+)\]")
+        .expect("valid bracket inline field regex")
+});
+static WIKILINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"!?\[\[([^\]\n]+)\]\]").expect("valid wikilink regex")
+});
+static MARKDOWN_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(^|[\s(\[{>])(#(?:[A-Za-z0-9][A-Za-z0-9_/-]*))")
+        .expect("valid tag regex")
+});
+static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*#{1,6}\s+(.+?)\s*$").expect("valid heading regex")
+});
+static LIST_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\s*)[-*+]\s+(?:\[([^\]])\]\s+)?(.*)$")
+        .expect("valid markdown list regex")
+});
+static BLOCK_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|\s)\^([A-Za-z0-9_-]+)(?:\s*$)")
+        .expect("valid block id regex")
+});
+static CLEAN_INLINE_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\s*\[[A-Za-z][A-Za-z0-9_-]*::\s*[^\]]+\]")
+        .expect("valid inline field cleanup regex")
+});
+static CLEAN_BLOCK_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\s+\^[A-Za-z0-9_-]+(?:\s*$)")
+        .expect("valid block id cleanup regex")
+});
 
 #[derive(Debug)]
 pub(super) struct DataviewIndex {
@@ -89,6 +125,7 @@ impl DataviewIndex {
         for draft in &mut drafts {
             draft.canonicalize_links(&lookup, &mut warnings);
         }
+        let warnings = dedup_strings(warnings);
 
         let inlinks = collect_inlinks(&drafts, &lookup);
         let pages = drafts
@@ -687,17 +724,11 @@ fn parse_page_inline_fields(
     body: &str,
     fields: &mut HashMap<String, DataviewValue>,
 ) {
-    let line_field = Regex::new(r"^\s*([A-Za-z][A-Za-z0-9_-]*)::\s*(.*?)\s*$")
-        .expect("valid inline field regex");
-    let bracket_field =
-        Regex::new(r"\[([A-Za-z][A-Za-z0-9_-]*)::\s*([^\]]+)\]")
-            .expect("valid bracket inline field regex");
-
     for line in body.lines() {
         if markdown_list_line(line).is_some() {
             continue;
         }
-        if let Some(captures) = line_field.captures(line) {
+        if let Some(captures) = LINE_FIELD_RE.captures(line) {
             insert_field(
                 fields,
                 &captures[1],
@@ -705,7 +736,7 @@ fn parse_page_inline_fields(
             );
             continue;
         }
-        for captures in bracket_field.captures_iter(line) {
+        for captures in BRACKET_FIELD_RE.captures_iter(line) {
             insert_field(
                 fields,
                 &captures[1],
@@ -759,9 +790,8 @@ fn markdown_body(contents: &str) -> (&str, usize) {
 }
 
 fn markdown_links(contents: &str) -> Vec<DataviewLink> {
-    let link =
-        Regex::new(r"!?\[\[([^\]\n]+)\]\]").expect("valid wikilink regex");
-    link.find_iter(contents)
+    WIKILINK_RE
+        .find_iter(contents)
         .filter_map(|match_| {
             let raw = match_.as_str();
             let embed = raw.starts_with('!');
@@ -773,9 +803,8 @@ fn markdown_links(contents: &str) -> Vec<DataviewLink> {
 }
 
 fn markdown_tags(contents: &str) -> Vec<String> {
-    let tag = Regex::new(r"(^|[\s(\[{>])(#(?:[A-Za-z0-9][A-Za-z0-9_/-]*))")
-        .expect("valid tag regex");
-    tag.captures_iter(contents)
+    MARKDOWN_TAG_RE
+        .captures_iter(contents)
         .map(|captures| normalize_tag(&captures[2]))
         .collect()
 }
@@ -797,11 +826,9 @@ fn markdown_lists(
     let mut drafts: Vec<ListDraft> = Vec::new();
     let mut stack: Vec<usize> = Vec::new();
     let mut current_section = None;
-    let heading =
-        Regex::new(r"^\s*#{1,6}\s+(.+?)\s*$").expect("valid heading regex");
 
     for (offset, line) in body.lines().enumerate() {
-        if let Some(captures) = heading.captures(line) {
+        if let Some(captures) = HEADING_RE.captures(line) {
             current_section = Some(section_link(page_path, captures[1].trim()));
         }
 
@@ -859,9 +886,7 @@ fn markdown_lists(
 }
 
 fn markdown_list_line(line: &str) -> Option<(usize, Option<char>, &str)> {
-    let marker = Regex::new(r"^(\s*)[-*+]\s+(?:\[([^\]])\]\s+)?(.*)$")
-        .expect("valid markdown list regex");
-    let captures = marker.captures(line)?;
+    let captures = LIST_MARKER_RE.captures(line)?;
     let indent = captures.get(1).map_or(0, |value| value.as_str().len());
     let task_status = captures
         .get(2)
@@ -871,10 +896,8 @@ fn markdown_list_line(line: &str) -> Option<(usize, Option<char>, &str)> {
 }
 
 fn inline_fields_in_text(text: &str) -> BTreeMap<String, DataviewValue> {
-    let field = Regex::new(r"\[([A-Za-z][A-Za-z0-9_-]*)::\s*([^\]]+)\]")
-        .expect("valid inline field regex");
     let mut fields = BTreeMap::new();
-    for captures in field.captures_iter(text) {
+    for captures in BRACKET_FIELD_RE.captures_iter(text) {
         fields.insert(
             captures[1].to_string(),
             parse_dataview_scalar(captures[2].trim()),
@@ -884,18 +907,14 @@ fn inline_fields_in_text(text: &str) -> BTreeMap<String, DataviewValue> {
 }
 
 fn block_id(text: &str) -> Option<String> {
-    let block = Regex::new(r"(?:^|\s)\^([A-Za-z0-9_-]+)(?:\s*$)")
-        .expect("valid block id regex");
-    block.captures(text).map(|captures| captures[1].to_string())
+    BLOCK_ID_RE
+        .captures(text)
+        .map(|captures| captures[1].to_string())
 }
 
 fn clean_list_text(text: &str) -> String {
-    let inline = Regex::new(r"\s*\[[A-Za-z][A-Za-z0-9_-]*::\s*[^\]]+\]")
-        .expect("valid inline field cleanup regex");
-    let block = Regex::new(r"\s+\^[A-Za-z0-9_-]+(?:\s*$)")
-        .expect("valid block id cleanup regex");
-    block
-        .replace_all(&inline.replace_all(text, ""), "")
+    CLEAN_BLOCK_ID_RE
+        .replace_all(&CLEAN_INLINE_FIELD_RE.replace_all(text, ""), "")
         .trim()
         .to_string()
 }

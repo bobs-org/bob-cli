@@ -432,6 +432,69 @@ fn dataview_native_source_expressions_match_fixture_goldens() {
 }
 
 #[test]
+fn dataview_native_source_smoke_handles_generated_vault_with_many_lists() {
+    let temp = TempDir::new("bob-cli-dataview-native-source-smoke");
+    let vault = temp.path().join("vault");
+    let ref_dir = vault.join("ref");
+    fs::create_dir_all(&ref_dir)
+        .unwrap_or_else(|error| panic!("create smoke ref dir: {error}"));
+
+    for page_index in 0..120 {
+        let mut contents = format!(
+            concat!(
+                "---\n",
+                "tags: [project, project/smoke]\n",
+                "source_pdf: true\n",
+                "parent: [[ai_ref]]\n",
+                "aliases: [Smoke {page_index}]\n",
+                "---\n\n",
+                "# Smoke {page_index}\n",
+                "status-inline:: active\n",
+                "Links to [[hub]] and #project/smoke.\n",
+            ),
+            page_index = page_index,
+        );
+        for task_index in 0..40 {
+            contents.push_str(&format!(
+                "- [ ] Task {page_index}-{task_index} #task [due:: 2026-06-03]\n"
+            ));
+        }
+        fs::write(ref_dir.join(format!("smoke-{page_index:03}.md")), contents)
+            .unwrap_or_else(|error| panic!("write smoke note: {error}"));
+    }
+
+    let folder = run_bob_dataview(
+        &vault,
+        Some("native"),
+        None,
+        &["--source", r#""ref""#],
+    );
+    assert_success(&folder);
+    assert_eq!(
+        stdout(&folder).lines().count(),
+        120,
+        "folder source smoke should return generated ref notes:\n{}",
+        format_output(&folder)
+    );
+    assert!(stderr(&folder).is_empty(), "{}", format_output(&folder));
+
+    let tag = run_bob_dataview(
+        &vault,
+        Some("native"),
+        None,
+        &["--source", "#project"],
+    );
+    assert_success(&tag);
+    assert_eq!(
+        stdout(&tag).lines().count(),
+        120,
+        "tag source smoke should return generated project notes:\n{}",
+        format_output(&tag)
+    );
+    assert!(stderr(&tag).is_empty(), "{}", format_output(&tag));
+}
+
+#[test]
 fn dataview_native_dql_from_accepts_source_expressions() {
     let output = run_native_fixture(&[
         "--strict-paths",

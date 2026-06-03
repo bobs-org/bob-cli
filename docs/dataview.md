@@ -53,8 +53,9 @@ The path is validated when it is supplied explicitly or when the `dynomark` or
 
 `--engine <obsidian|dynomark|native>` selects the query engine. The default is
 `obsidian`; `dynomark` is an explicit partial-compatibility headless fallback.
-`native` is a local frontmatter/query subset for automation that cannot depend
-on a running Obsidian app.
+`native` is the local headless implementation of Bob's supported source
+expression and DQL surface for automation that cannot depend on a running
+Obsidian app.
 
 `--format <paths|json|markdown>` selects the output format. `paths` is the
 default and prints matching source note paths for DQL `LIST` and `TABLE`
@@ -113,6 +114,47 @@ bob dataview --query-file /tmp/bob-dataview-smoke.dql
 If the smoke test needs recently synced state, let the external background or
 cron sync path finish first. `bob dataview` only reads the current vault state.
 
+The fixture parity harness compares supported native fixture queries against the
+live Obsidian engine. It is intentionally gated because it requires desktop
+Obsidian to be running with the fixture vault open:
+
+```bash
+BOB_DATAVIEW_PARITY_LIVE=1 \
+BOB_DATAVIEW_PARITY_VAULT=<opened-fixture-vault-name-or-id> \
+cargo test --test dataview_parity dataview_live_obsidian_parity_harness_compares_supported_native_cases -- --nocapture
+```
+
+For headless real-vault native smoke tests, use read-only queries against
+`~/bob`. These cover the Phase 8 surface without requiring Obsidian:
+
+```bash
+bob dataview --engine native --strict-paths --query '
+LIST
+FROM "ref"
+WHERE source_pdf
+  AND (
+    parent = [[ai_ref]]
+    OR parent.parent = [[ai_ref]]
+    OR parent.parent.parent = [[ai_ref]]
+    OR parent.parent.parent.parent = [[ai_ref]]
+    OR parent.parent.parent.parent.parent = [[ai_ref]]
+  )
+'
+bob dataview --engine native --source '#project'
+bob dataview --engine native --source '"prj"'
+bob dataview --engine native --strict-paths --query 'LIST FROM "prj" LIMIT 5'
+bob dataview --engine native --strict-paths --query 'TABLE file.mday, parent FROM "prj" LIMIT 5'
+bob dataview --engine native --strict-paths --query 'TASK LIMIT 3'
+bob dataview --engine native --strict-paths --query 'CALENDAR file.day WHERE file.day LIMIT 5'
+bob dataview --engine native --format markdown --query 'LIST FROM "prj" LIMIT 3'
+bob dataview --engine native --format markdown --query 'TABLE file.mday, parent FROM "prj" LIMIT 3'
+bob dataview --engine native --format markdown --query 'TASK LIMIT 3'
+```
+
+Native indexing may warn about ambiguous bare wikilinks when multiple notes
+share the same stem or alias. Those warnings are diagnostics about vault links;
+they do not make otherwise successful read-only smoke queries fail.
+
 ## Headless dynomark
 
 For non-GUI shell or cron workflows, `bob dataview` also supports an explicit
@@ -166,3 +208,9 @@ Native `paths` output prints matching source note paths where a DQL result
 retains source identity. Native `json` output emits the stable Bob wrapper.
 Native `markdown` output renders DQL `LIST`, `TABLE`, and `TASK` results and
 fails cleanly for `CALENDAR`, matching Dataview's Markdown export behavior.
+
+Native mode remains scoped to the shell contract exposed by `bob dataview`. It
+does not implement DataviewJS, inline DQL modes, Obsidian DOM rendering,
+interactive task checking, or every plugin setting. Quoted native sources
+resolve an exact note path first and otherwise act as folder sources; use a
+more specific folder path when a vault contains both `Name.md` and `Name/...`.
