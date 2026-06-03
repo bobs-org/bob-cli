@@ -1504,77 +1504,80 @@ fn build_cli() -> ClapCommand {
             with_config_args(
                 ClapCommand::new("marker")
                     .about("Inspect the marker note for one PDF")
-                    .arg(
-                        Arg::new("pdf")
-                            .value_name("PDF")
-                            .required(true)
-                            .value_parser(OsStringValueParser::new())
-                            .help("PDF whose marker note should be inspected"),
-                    ),
+                    .arg(pdf_arg("PDF whose marker note should be inspected")),
             )
             .after_help("The marker note is the first standalone PDF note annotation."),
         )
         .subcommand(
-            with_config_args(
+            with_scan_args(
                 ClapCommand::new("scan")
-                    .about("Scan the configured Highlights library")
-                    .arg(dry_run_arg()),
+                    .about("Scan the configured Highlights library"),
             )
             .after_help("Scans PDFs recursively, preflights collisions and dirty targets, then syncs each PDF."),
         )
-        .subcommand(
-            with_config_args(
-                ClapCommand::new("sync")
-                    .about("Sync one PDF marker note into its Bob reference note")
-                    .arg(
-                        Arg::new("pdf")
-                            .value_name("PDF")
-                            .required(true)
-                            .value_parser(OsStringValueParser::new())
-                            .help("PDF to sync"),
-                    )
-                    .arg(dry_run_arg())
-                    .arg(
-                        Arg::new("prefer")
-                            .long("prefer")
-                            .value_name("SIDE")
-                            .value_parser(["marker", "frontmatter"])
-                            .help("Resolve a marker/frontmatter conflict using this side"),
-                    )
-                    .arg(
-                        Arg::new("write-pdf")
-                            .long("write-pdf")
-                            .action(ArgAction::SetTrue)
-                            .help("Allow marker writes back to the PDF"),
-                    ),
-            )
-            .after_help("The first standalone /Text annotation in the PDF is treated as the marker note."),
-        )
+        .subcommand(with_sync_args(ClapCommand::new("sync")))
 }
 
 fn with_config_args(command: ClapCommand) -> ClapCommand {
     command
-        .arg(
-            Arg::new("bob-dir")
-                .long("bob-dir")
-                .value_name("PATH")
-                .value_parser(OsStringValueParser::new())
-                .help("Bob vault root; defaults to BOB_DIR or ~/bob"),
+        .arg(bob_dir_arg())
+        .arg(lib_dir_arg())
+        .arg(ref_dir_arg())
+}
+
+fn with_scan_args(command: ClapCommand) -> ClapCommand {
+    command
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(lib_dir_arg())
+        .arg(ref_dir_arg())
+}
+
+fn with_sync_args(command: ClapCommand) -> ClapCommand {
+    command
+        .about("Sync one PDF marker note into its Bob reference note")
+        .arg(pdf_arg("PDF to sync"))
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(lib_dir_arg())
+        .arg(prefer_arg())
+        .arg(ref_dir_arg())
+        .arg(write_pdf_arg())
+        .after_help("The first standalone /Text annotation in the PDF is treated as the marker note.")
+}
+
+fn bob_dir_arg() -> Arg {
+    Arg::new("bob-dir")
+        .long("bob-dir")
+        .value_name("PATH")
+        .value_parser(OsStringValueParser::new())
+        .help("Bob vault root; defaults to BOB_DIR or ~/bob")
+}
+
+fn lib_dir_arg() -> Arg {
+    Arg::new("lib-dir")
+        .long("lib-dir")
+        .value_name("PATH")
+        .value_parser(OsStringValueParser::new())
+        .help(
+            "Highlights PDF library; defaults to BOB_HIGHLIGHTS_LIB_DIR or lib",
         )
-        .arg(
-            Arg::new("lib-dir")
-                .long("lib-dir")
-                .value_name("PATH")
-                .value_parser(OsStringValueParser::new())
-                .help("Highlights PDF library; defaults to BOB_HIGHLIGHTS_LIB_DIR or lib"),
-        )
-        .arg(
-            Arg::new("ref-dir")
-                .long("ref-dir")
-                .value_name("PATH")
-                .value_parser(OsStringValueParser::new())
-                .help("Reference note output directory; defaults to BOB_HIGHLIGHTS_REF_DIR or ref"),
-        )
+}
+
+fn ref_dir_arg() -> Arg {
+    Arg::new("ref-dir")
+        .long("ref-dir")
+        .value_name("PATH")
+        .value_parser(OsStringValueParser::new())
+        .help("Reference note output directory; defaults to BOB_HIGHLIGHTS_REF_DIR or ref")
+}
+
+fn pdf_arg(help: &'static str) -> Arg {
+    Arg::new("pdf")
+        .value_name("PDF")
+        .required(true)
+        .value_parser(OsStringValueParser::new())
+        .help(help)
 }
 
 fn dry_run_arg() -> Arg {
@@ -1582,6 +1585,21 @@ fn dry_run_arg() -> Arg {
         .long("dry-run")
         .action(ArgAction::SetTrue)
         .help("Preview work without modifying the vault or PDF")
+}
+
+fn prefer_arg() -> Arg {
+    Arg::new("prefer")
+        .long("prefer")
+        .value_name("SIDE")
+        .value_parser(["marker", "frontmatter"])
+        .help("Resolve a marker/frontmatter conflict using this side")
+}
+
+fn write_pdf_arg() -> Arg {
+    Arg::new("write-pdf")
+        .long("write-pdf")
+        .action(ArgAction::SetTrue)
+        .help("Allow marker writes back to the PDF")
 }
 
 impl Config {

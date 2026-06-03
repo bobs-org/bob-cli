@@ -39,8 +39,15 @@ install-smoke:
     set -euo pipefail
     root="$(mktemp -d)"
     cargo install --path . --locked --root "${root}"
-    "${root}/bin/bob" move-done-tasks --help >/dev/null
+    "${root}/bin/bob" --help >/dev/null
+    "${root}/bin/bob" bulk-git-commit --help >/dev/null
+    "${root}/bin/bob" cronjob --help >/dev/null
     "${root}/bin/bob" highlights-ref --help >/dev/null
-    BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "${root}/bin/bob" pomodoro >/dev/null
-    BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "${root}/bin/bob" tmux-pomodoro >/dev/null
+    "${root}/bin/bob" move-done-tasks --help >/dev/null
+    "${root}/bin/bob" notify --help >/dev/null
+    "${root}/bin/bob" pomodoro --help >/dev/null
+    "${root}/bin/bob" tmux-pomodoro --help >/dev/null
     "${root}/bin/bob_notify" --help >/dev/null
+    "${root}/bin/bob_pomodoro" --help >/dev/null
+    "${root}/bin/bob_sync" --help >/dev/null
+    "${root}/bin/tmux_bob_pomodoro" --help >/dev/null

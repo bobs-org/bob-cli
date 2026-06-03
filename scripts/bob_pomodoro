@@ -46,6 +46,30 @@ function get_day_file() {
   printf "%s/bob/%s_day.md\n" "${HOME}" "$(current_date +%Y/%Y%m%d)"
 }
 
+function print_help() {
+  cat <<EOF
+usage: ${SCRIPTNAME} [-d|--debug] [-v|--verbose]
+       ${SCRIPTNAME} -h
+
+Show the current Pomodoro status from today's Bob daily note.
+
+The command prints the latest open Pomodoro ledger entry with the remaining
+time or recent overdue status. It exits successfully with no output when the
+daily note is missing, has no open Pomodoro, or the Pomodoro is more than nine
+minutes overdue.
+
+environment:
+  BOB_DAY_FILE  exact daily note path to read
+  BOB_NOW       override the current timestamp for status calculations
+  HOME          used for the default ~/bob daily note path
+
+options:
+  -d, --debug    enable debug tracing
+  -h, --help     show this help message and exit
+  -v, --verbose  enable verbose debug output
+EOF
+}
+
 function get_day_date() {
   local day_file="$1"
   local day_file_basename
@@ -133,18 +157,29 @@ function format_pomodoro() {
 }
 
 function run() {
-  if [[ "$1" == "-d" || "$1" == "--debug" ]]; then
+  local arg
+  for arg in "$@"; do
+    if [[ "${arg}" == "-h" || "${arg}" == "--help" ]]; then
+      print_help
+      return 0
+    fi
+  done
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+    -d | --debug)
+      PS4='$LINENO: '
+      set -x
+      ;;
+    -v | --verbose)
+      export VERBOSE=1
+      ;;
+    *)
+      die -x 2 "Unexpected argument: %s" "$1"
+      ;;
+    esac
     shift
-    PS4='$LINENO: '
-    set -x
-  fi
-  if [[ "$1" == "-v" || "$1" == "--verbose" ]]; then
-    shift
-    export VERBOSE=1
-  fi
-  if [[ "$#" -gt 0 ]]; then
-    die -x 2 "Unexpected argument: %s" "$1"
-  fi
+  done
 
   local day_file
   day_file="$(get_day_file)"

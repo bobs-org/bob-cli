@@ -11,6 +11,29 @@ function die() {
   exit 1
 }
 
+function print_help() {
+  cat <<'EOF'
+usage: bob_sync
+       bob_sync -h
+
+Legacy embedded shell fallback for Bob vault sync and Git push.
+
+This script acquires the shared lock, runs `ob sync --path <vault>`, checks
+`ob sync-status`, stages Bob vault changes, commits when anything changed, and
+pushes.
+
+environment:
+  BOB_BULK_GIT_COMMIT_LOCK_FILE  override the shared lock path
+  BOB_BULK_GIT_COMMIT_MESSAGE    override the Git commit message
+  BOB_DIR                        Bob vault root; defaults to ~/bob
+  BOB_SYNC_COMMIT_MESSAGE        deprecated compatibility alias
+  BOB_SYNC_LOCK_FILE             deprecated compatibility alias
+
+options:
+  -h, --help                     show this help message and exit
+EOF
+}
+
 function acquire_lock() {
   if ! command -v flock >/dev/null 2>&1; then
     return 0
@@ -96,6 +119,20 @@ function run_ob_sync() {
 }
 
 function run() {
+  if [[ "$#" -gt 0 ]]; then
+    case "$1" in
+    -h | --help)
+      print_help
+      return 0
+      ;;
+    *)
+      printf 'bob_sync: error: unexpected argument: %s\n' "$1" >&2
+      printf "Try 'bob_sync --help' for more information.\n" >&2
+      return 2
+      ;;
+    esac
+  fi
+
   local bob_dir="${BOB_DIR:-${HOME}/bob}"
   local commit_message="${BOB_BULK_GIT_COMMIT_MESSAGE:-${BOB_SYNC_COMMIT_MESSAGE:-bob bulk-git-commit $(date +%F)}}"
 

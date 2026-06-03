@@ -14,7 +14,16 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 const BOB_BIN: &str = env!("CARGO_BIN_EXE_bob");
+const BOB_NOTIFY_BIN: &str = env!("CARGO_BIN_EXE_bob_notify");
+const BOB_POMODORO_BIN: &str = env!("CARGO_BIN_EXE_bob_pomodoro");
 const BOB_SYNC_BIN: &str = env!("CARGO_BIN_EXE_bob_sync");
+const TMUX_BOB_POMODORO_BIN: &str = env!("CARGO_BIN_EXE_tmux_bob_pomodoro");
+
+struct LegacyHelpCase {
+    command: fn() -> Command,
+    name: &'static str,
+    marker: &'static str,
+}
 
 #[test]
 fn cache_extraction_writes_expected_files_and_modes() {
@@ -153,6 +162,242 @@ fn highlights_ref_subcommand_help_works() {
             "piped help output must not contain ANSI escape codes:\n{help}"
         );
     }
+}
+
+#[test]
+fn all_top_level_subcommand_help_is_safe_and_plain() {
+    let cases: &[(&[&str], &str)] = &[
+        (&["bulk-git-commit", "--help"], "usage: bob bulk-git-commit"),
+        (&["cronjob", "--help"], "usage: bob cronjob"),
+        (&["highlights-ref", "--help"], "Usage: bob highlights-ref"),
+        (&["move-done-tasks", "--help"], "usage: bob move-done-tasks"),
+        (&["notify", "--help"], "Notify me when"),
+        (&["pomodoro", "--help"], "usage: bob pomodoro"),
+        (&["tmux-pomodoro", "--help"], "usage: bob tmux-pomodoro"),
+    ];
+
+    for (args, marker) in cases {
+        let output = bob_command()
+            .args(*args)
+            .output()
+            .unwrap_or_else(|error| panic!("run bob {args:?}: {error}"));
+
+        assert_success(&output);
+        let help = stdout(&output);
+        assert!(
+            help.contains(marker),
+            "expected `{marker}` in help for {args:?}:\n{}",
+            format_output(&output)
+        );
+        assert_stdout_has_no_ansi(&output);
+    }
+}
+
+#[test]
+fn legacy_binary_help_is_safe_and_plain() {
+    let cases = [
+        LegacyHelpCase {
+            command: bob_pomodoro_command,
+            name: "bob_pomodoro",
+            marker: "Show the current Pomodoro status",
+        },
+        LegacyHelpCase {
+            command: bob_notify_command,
+            name: "bob_notify",
+            marker: "Notify me when",
+        },
+        LegacyHelpCase {
+            command: bob_sync_command,
+            name: "bob_sync",
+            marker: "Stage all Bob vault changes",
+        },
+        LegacyHelpCase {
+            command: tmux_bob_pomodoro_command,
+            name: "tmux_bob_pomodoro",
+            marker: "Print the current Pomodoro status",
+        },
+    ];
+
+    for case in cases {
+        let output =
+            (case.command)()
+                .arg("--help")
+                .output()
+                .unwrap_or_else(|error| {
+                    panic!("run {} --help: {error}", case.name)
+                });
+
+        assert_success(&output);
+        let help = stdout(&output);
+        assert!(
+            help.contains(case.marker),
+            "expected `{}` in {} help:\n{}",
+            case.marker,
+            case.name,
+            format_output(&output)
+        );
+        assert_stdout_has_no_ansi(&output);
+    }
+}
+
+#[test]
+fn script_fallback_help_is_safe_and_plain() {
+    let temp = TempDir::new("bob-cli-script-help");
+    let cases: &[(&[&str], &str)] = &[
+        (&["notify", "--help"], "Notify me when"),
+        (&["pomodoro", "--help"], "Show the current Pomodoro status"),
+        (
+            &["tmux-pomodoro", "--help"],
+            "Print the current Pomodoro status",
+        ),
+    ];
+
+    for (args, marker) in cases {
+        let output = bob_command()
+            .args(*args)
+            .env("BOB_CLI_USE_SCRIPT", "1")
+            .env("XDG_CACHE_HOME", temp.path().join("cache"))
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("run script fallback bob {args:?}: {error}")
+            });
+
+        assert_success(&output);
+        let help = stdout(&output);
+        assert!(
+            help.contains(marker),
+            "expected `{marker}` in script help for {args:?}:\n{}",
+            format_output(&output)
+        );
+        assert_stdout_has_no_ansi(&output);
+    }
+}
+
+#[test]
+fn script_fallback_bob_sync_help_exits_before_work() {
+    let temp = TempDir::new("bob-cli-script-bob-sync-help");
+    let stub_bin = temp.path().join("bin");
+    let log = temp.path().join("commands.log");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_executable(
+        &stub_bin.join("git"),
+        "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"$STUB_LOG\"\nexit 99\n",
+    );
+    write_executable(
+        &stub_bin.join("ob"),
+        "#!/bin/sh\nprintf 'ob %s\\n' \"$*\" >> \"$STUB_LOG\"\nexit 99\n",
+    );
+
+    let output = bob_sync_command()
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("STUB_LOG", &log)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run script fallback bob_sync --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("usage: bob_sync"),
+        "expected bob_sync script help:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !log.exists(),
+        "bob_sync --help must not run ob or git:\n{}",
+        fs::read_to_string(&log).unwrap_or_default()
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn cronjob_help_exits_before_operational_work() {
+    let temp = TempDir::new("bob-cli-cronjob-help");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    let log = temp.path().join("commands.log");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(
+        &stub_bin.join("git"),
+        "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"$STUB_LOG\"\nexit 99\n",
+    );
+    write_executable(
+        &stub_bin.join("ob"),
+        "#!/bin/sh\nprintf 'ob %s\\n' \"$*\" >> \"$STUB_LOG\"\nexit 99\n",
+    );
+
+    let output = bob_command()
+        .arg("cronjob")
+        .arg("--help")
+        .env("BOB_DIR", &vault)
+        .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
+        .env("OB_COMMAND", stub_bin.join("ob"))
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("STUB_LOG", &log)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob cronjob --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("usage: bob cronjob"),
+        "expected cronjob help:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !log.exists(),
+        "bob cronjob --help must not run ob or git:\n{}",
+        fs::read_to_string(&log).unwrap_or_default()
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn highlights_ref_help_lists_subcommands_alphabetically() {
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("--help")
+        .output()
+        .expect("run bob highlights-ref --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert_text_order(
+        &help,
+        &["\n  doctor ", "\n  marker ", "\n  scan ", "\n  sync "],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn highlights_ref_sync_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg("--help")
+        .output()
+        .expect("run bob highlights-ref sync --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Arguments:") && help.contains("<PDF>"),
+        "expected PDF positional argument in Arguments section:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "--bob-dir",
+            "--dry-run",
+            "--lib-dir",
+            "--prefer",
+            "--ref-dir",
+            "--write-pdf",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
 }
 
 #[test]
@@ -2560,8 +2805,20 @@ fn bob_command() -> Command {
     Command::new(BOB_BIN)
 }
 
+fn bob_notify_command() -> Command {
+    Command::new(BOB_NOTIFY_BIN)
+}
+
+fn bob_pomodoro_command() -> Command {
+    Command::new(BOB_POMODORO_BIN)
+}
+
 fn bob_sync_command() -> Command {
     Command::new(BOB_SYNC_BIN)
+}
+
+fn tmux_bob_pomodoro_command() -> Command {
+    Command::new(TMUX_BOB_POMODORO_BIN)
 }
 
 fn fixture(relative: &str) -> PathBuf {
@@ -2832,6 +3089,25 @@ fn assert_success(output: &Output) {
         "expected command success:\n{}",
         format_output(output)
     );
+}
+
+fn assert_stdout_has_no_ansi(output: &Output) {
+    assert!(
+        !output.stdout.contains(&0x1b),
+        "stdout must not contain ANSI escape codes:\n{}",
+        stdout(output)
+    );
+}
+
+fn assert_text_order(text: &str, needles: &[&str]) {
+    let mut last = 0;
+    for needle in needles {
+        let position = text
+            .find(needle)
+            .unwrap_or_else(|| panic!("expected `{needle}` in text:\n{text}"));
+        assert!(position >= last, "`{needle}` is out of order:\n{text}");
+        last = position;
+    }
 }
 
 fn stdout(output: &Output) -> String {

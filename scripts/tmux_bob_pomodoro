@@ -4,7 +4,40 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/bob_shell.sh
 source "${SCRIPT_DIR}/lib/bob_shell.sh"
 
+function print_help() {
+  cat <<EOF
+usage: ${SCRIPTNAME}
+       ${SCRIPTNAME} -h
+
+Print the current Pomodoro status in tmux status-line format.
+
+When an active or recently overdue Pomodoro exists, the output is the regular
+Pomodoro status followed by " | ". Missing or stale Pomodoros produce no
+output.
+
+environment:
+  BOB_DAY_FILE  exact daily note path to read
+  BOB_NOW       override the current timestamp for status calculations
+  HOME          used for the default ~/bob daily note path
+
+options:
+  -h, --help     show this help message and exit
+EOF
+}
+
 function run() {
+  if [[ "$#" -gt 0 ]]; then
+    case "$1" in
+    -h | --help)
+      print_help
+      return 0
+      ;;
+    *)
+      die -x 2 "Unexpected argument: %s" "$1"
+      ;;
+    esac
+  fi
+
   local bob_pomodoro_output
   if ! bob_pomodoro_output="$(bob_pomodoro)"; then
     return 0

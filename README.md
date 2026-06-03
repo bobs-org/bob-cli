@@ -28,11 +28,18 @@ To smoke-test an install without replacing an existing user install:
 ```bash
 root="$(mktemp -d)"
 cargo install --path . --locked --root "$root"
-"$root/bin/bob" move-done-tasks --help
+"$root/bin/bob" --help
+"$root/bin/bob" bulk-git-commit --help
+"$root/bin/bob" cronjob --help
 "$root/bin/bob" highlights-ref --help
-BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" pomodoro
-BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" tmux-pomodoro
+"$root/bin/bob" move-done-tasks --help
+"$root/bin/bob" notify --help
+"$root/bin/bob" pomodoro --help
+"$root/bin/bob" tmux-pomodoro --help
 "$root/bin/bob_notify" --help
+"$root/bin/bob_pomodoro" --help
+"$root/bin/bob_sync" --help
+"$root/bin/tmux_bob_pomodoro" --help
 ```
 
 ## Commands
@@ -258,11 +265,18 @@ Run a local install smoke test:
 ```bash
 root="$(mktemp -d)"
 cargo install --path . --locked --root "$root"
-"$root/bin/bob" move-done-tasks --help
+"$root/bin/bob" --help
+"$root/bin/bob" bulk-git-commit --help
+"$root/bin/bob" cronjob --help
 "$root/bin/bob" highlights-ref --help
-BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" pomodoro
-BOB_DAY_FILE=/tmp/bob-cli-missing-day.md "$root/bin/bob" tmux-pomodoro
+"$root/bin/bob" move-done-tasks --help
+"$root/bin/bob" notify --help
+"$root/bin/bob" pomodoro --help
+"$root/bin/bob" tmux-pomodoro --help
 "$root/bin/bob_notify" --help
+"$root/bin/bob_pomodoro" --help
+"$root/bin/bob_sync" --help
+"$root/bin/tmux_bob_pomodoro" --help
 ```
 
 Run a tmux status smoke test after installing locally:

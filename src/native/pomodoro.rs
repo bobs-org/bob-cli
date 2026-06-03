@@ -1,6 +1,6 @@
 use std::{
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs, io,
     path::{Path, PathBuf},
 };
@@ -39,8 +39,12 @@ struct LedgerPomodoro {
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let options = match parse_args(args) {
-        Ok(options) => options,
-        Err(error) => {
+        ParseResult::Run(options) => options,
+        ParseResult::Help => {
+            print_help();
+            return 0;
+        }
+        ParseResult::Error(error) => {
             print_error(&error);
             return error.code;
         }
@@ -60,8 +64,16 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 }
 
 pub(crate) fn run_tmux(args: Vec<OsString>) -> i32 {
-    if !args.is_empty() {
-        return 0;
+    match parse_tmux_args(args) {
+        ParseResult::Run(_) => {}
+        ParseResult::Help => {
+            print_tmux_help();
+            return 0;
+        }
+        ParseResult::Error(error) => {
+            print_tmux_error(&error);
+            return error.code;
+        }
     }
 
     if let Ok(Some(output)) = status_from_env()
@@ -141,17 +153,18 @@ fn status(verbose: bool) -> Result<Option<String>, Error> {
     Ok(Some(format!("[<{minutes_until_due}m] {output}")))
 }
 
-fn parse_args(args: Vec<OsString>) -> Result<Options, Error> {
+fn parse_args(args: Vec<OsString>) -> ParseResult {
     let mut options = Options::default();
 
     for arg in args {
         let arg = bob_env::os_to_string(&arg);
         match arg.as_str() {
+            "-h" | "--help" => return ParseResult::Help,
             "-d" | "--debug" | "-v" | "--verbose" => {
                 options.verbose = true;
             }
             _ => {
-                return Err(Error::new(
+                return ParseResult::Error(Error::new(
                     2,
                     format!("Unexpected argument: {arg}"),
                 ));
@@ -159,7 +172,31 @@ fn parse_args(args: Vec<OsString>) -> Result<Options, Error> {
         }
     }
 
-    Ok(options)
+    ParseResult::Run(options)
+}
+
+fn parse_tmux_args(args: Vec<OsString>) -> ParseResult {
+    if args.iter().any(|arg| {
+        let value = arg.as_os_str();
+        value == OsStr::new("--help") || value == OsStr::new("-h")
+    }) {
+        return ParseResult::Help;
+    }
+
+    if let Some(arg) = args.first() {
+        return ParseResult::Error(Error::new(
+            2,
+            format!("Unexpected argument: {}", arg.to_string_lossy()),
+        ));
+    }
+
+    ParseResult::Run(Options::default())
+}
+
+enum ParseResult {
+    Run(Options),
+    Help,
+    Error(Error),
 }
 
 fn day_file() -> PathBuf {
@@ -412,4 +449,56 @@ fn debug(enabled: bool, args: std::fmt::Arguments<'_>) {
 
 fn print_error(error: &Error) {
     eprintln!("bob_pomodoro: error: {}", error.message);
+}
+
+fn print_tmux_error(error: &Error) {
+    eprintln!("tmux_bob_pomodoro: error: {}", error.message);
+    eprintln!("Try 'bob tmux-pomodoro --help' for more information.");
+}
+
+fn print_help() {
+    println!(
+        "\
+usage: bob pomodoro [-d|--debug] [-v|--verbose]
+       bob pomodoro -h
+
+Show the current Pomodoro status from today's Bob daily note.
+
+The command prints the latest open Pomodoro ledger entry with the remaining
+time or recent overdue status. It exits successfully with no output when the
+daily note is missing, has no open Pomodoro, or the Pomodoro is more than nine
+minutes overdue.
+
+environment:
+  BOB_DAY_FILE  exact daily note path to read
+  BOB_DIR       Bob vault root used to find the default daily note
+  BOB_NOW       override the current timestamp for status calculations
+
+options:
+  -d, --debug    enable debug tracing
+  -h, --help     show this help message and exit
+  -v, --verbose  enable verbose debug output"
+    );
+}
+
+fn print_tmux_help() {
+    println!(
+        "\
+usage: bob tmux-pomodoro
+       bob tmux-pomodoro -h
+
+Print the current Pomodoro status in tmux status-line format.
+
+When an active or recently overdue Pomodoro exists, the output is the regular
+Pomodoro status followed by ` | `. Missing or stale Pomodoros produce no
+output.
+
+environment:
+  BOB_DAY_FILE  exact daily note path to read
+  BOB_DIR       Bob vault root used to find the default daily note
+  BOB_NOW       override the current timestamp for status calculations
+
+options:
+  -h, --help     show this help message and exit"
+    );
 }

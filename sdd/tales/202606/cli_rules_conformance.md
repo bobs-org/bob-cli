@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-03 05:18:31
-status: wip
+status: done
 prompt: sdd/prompts/202606/cli_rules_conformance.md
 ---
 # Plan: Bring Bob CLI Help And Ordering Into CLI Rules Conformance

@@ -7,7 +7,11 @@
 //! clearly-labeled sections so the cron log always makes it obvious which step
 //! is talking.
 
-use std::{ffi::OsString, io::IsTerminal, path::Path};
+use std::{
+    ffi::{OsStr, OsString},
+    io::IsTerminal,
+    path::Path,
+};
 
 use chrono::Local;
 
@@ -40,7 +44,20 @@ const STEPS: &[Step] = &[
 
 const RULE_WIDTH: usize = 68;
 
-pub(crate) fn run(_args: Vec<OsString>) -> i32 {
+pub(crate) fn run(args: Vec<OsString>) -> i32 {
+    match parse_args(args) {
+        ParseResult::Run => {}
+        ParseResult::Help => {
+            print_help();
+            return 0;
+        }
+        ParseResult::Error(message) => {
+            eprintln!("bob cronjob: {message}");
+            eprintln!("Try 'bob cronjob --help' for more information.");
+            return 2;
+        }
+    }
+
     let vault = bob_env::bob_dir();
     let styler = Styler::detect();
 
@@ -78,6 +95,62 @@ pub(crate) fn run(_args: Vec<OsString>) -> i32 {
         .map(|(_, code)| *code)
         .find(|code| *code != 0)
         .unwrap_or(0)
+}
+
+fn parse_args(args: Vec<OsString>) -> ParseResult {
+    if args.iter().any(|arg| {
+        let value = arg.as_os_str();
+        value == OsStr::new("--help") || value == OsStr::new("-h")
+    }) {
+        return ParseResult::Help;
+    }
+
+    if let Some(arg) = args.first() {
+        return ParseResult::Error(format!(
+            "unexpected argument: {}",
+            arg.to_string_lossy()
+        ));
+    }
+
+    ParseResult::Run
+}
+
+enum ParseResult {
+    Run,
+    Help,
+    Error(String),
+}
+
+fn print_help() {
+    println!(
+        "\
+usage: bob cronjob
+
+Run the nightly Bob maintenance path. The command acquires the shared lock,
+runs the shared `ob sync --path <vault>` gate once, then runs
+`move-done-tasks` and `bulk-git-commit` in order.
+
+workflow:
+  1. acquire the shared Bob maintenance lock
+  2. run the shared Obsidian sync gate
+  3. run move-done-tasks against the vault
+  4. run bulk-git-commit against the vault
+
+environment:
+  BOB_BULK_GIT_COMMIT_LOCK_FILE  override the shared lock path
+  BOB_BULK_GIT_COMMIT_MESSAGE    override the bulk-git-commit message
+  BOB_DIR                        Bob vault root; defaults to ~/bob
+  BOB_NOW                        override the date used by wrapped commands
+  BOB_SYNC_COMMIT_MESSAGE        deprecated compatibility alias
+  BOB_SYNC_LOCK_FILE             deprecated compatibility alias
+  NO_COLOR                       disable color even when stdout is a TTY
+  OB_COMMAND                     override the ob executable
+
+options:
+  -h, --help                     show this help message and exit
+
+No other options are accepted."
+    );
 }
 
 fn run_collect_done_step(child_env: &ChildEnv) -> i32 {
