@@ -1,0 +1,7 @@
+- status: reading
+- parent: [[obsidian]]
+- title: Systems Performance
+- aliases: ["Systems Performance", "Brendan Gregg systems performance"]
+- topics: [linux, performance]
+- source_url: https://example.com/book
+

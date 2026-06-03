@@ -1,5 +1,5 @@
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     fs, io,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -75,6 +75,117 @@ fn collect_done_help_is_native_only() {
         !temp.path().join("bob-cli/scripts").exists(),
         "native-only collect-done should not extract script assets"
     );
+}
+
+#[test]
+fn highlights_ref_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-highlights-ref-native-help");
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob highlights-ref --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob highlights-ref"),
+        "expected highlights-ref help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only highlights-ref should not extract script assets"
+    );
+}
+
+#[test]
+fn highlights_ref_subcommand_help_works() {
+    let cases: &[&[&str]] = &[
+        &["highlights-ref", "--help"],
+        &["highlights-ref", "scan", "--help"],
+        &["highlights-ref", "sync", "--help"],
+        &["highlights-ref", "doctor", "--help"],
+        &["highlights-ref", "marker", "--help"],
+    ];
+
+    for args in cases {
+        let output = bob_command()
+            .args(*args)
+            .output()
+            .unwrap_or_else(|error| panic!("run bob {args:?}: {error}"));
+
+        assert_success(&output);
+        let help = stdout(&output);
+        assert!(
+            help.contains("Usage: bob highlights-ref"),
+            "expected highlights-ref usage for {args:?}:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            !output.stdout.contains(&0x1b),
+            "piped help output must not contain ANSI escape codes:\n{help}"
+        );
+    }
+}
+
+#[test]
+fn highlights_ref_phase_one_commands_do_not_modify_vault_files() {
+    let temp = TempDir::new("bob-cli-highlights-ref-no-write");
+    let vault = temp.path().join("vault");
+    let lib = vault.join("lib");
+    let ref_dir = vault.join("ref");
+    let pdf = lib.join("example.pdf");
+    let note = ref_dir.join("example.md");
+    fs::create_dir_all(&lib).expect("create lib dir");
+    fs::create_dir_all(&ref_dir).expect("create ref dir");
+    write_file(&pdf, "%PDF-1.4\n%%EOF\n");
+    write_file(
+        &note,
+        "---\nparent: \"[[obsidian]]\"\n---\n\nManual note.\n",
+    );
+
+    let before = snapshot_files(&vault);
+    let cases = vec![
+        vec![
+            OsString::from("highlights-ref"),
+            OsString::from("scan"),
+            OsString::from("--dry-run"),
+        ],
+        vec![
+            OsString::from("highlights-ref"),
+            OsString::from("sync"),
+            OsString::from(path_str(&pdf)),
+            OsString::from("--dry-run"),
+        ],
+        vec![OsString::from("highlights-ref"), OsString::from("doctor")],
+        vec![
+            OsString::from("highlights-ref"),
+            OsString::from("marker"),
+            OsString::from(path_str(&pdf)),
+        ],
+    ];
+
+    for args in cases {
+        let output = bob_command()
+            .args(&args)
+            .env("BOB_DIR", &vault)
+            .output()
+            .unwrap_or_else(|error| panic!("run bob {args:?}: {error}"));
+
+        assert_success(&output);
+        assert!(
+            stdout(&output).contains("writes: none"),
+            "expected no-write report:\n{}",
+            format_output(&output)
+        );
+        assert_eq!(
+            snapshot_files(&vault),
+            before,
+            "highlights-ref Phase 1 command modified vault files"
+        );
+    }
 }
 
 #[test]
@@ -1059,6 +1170,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
     let order = [
         "collect-done",
         "cronjob",
+        "highlights-ref",
         "notify",
         "pomodoro",
         "sync",
@@ -1371,6 +1483,48 @@ fn fixture(relative: &str) -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join(relative)
+}
+
+fn snapshot_files(root: &Path) -> Vec<(PathBuf, String)> {
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        files: &mut Vec<(PathBuf, String)>,
+    ) {
+        let mut entries: Vec<_> = fs::read_dir(directory)
+            .unwrap_or_else(|error| {
+                panic!("read directory {}: {error}", directory.display())
+            })
+            .map(|entry| entry.expect("read directory entry").path())
+            .collect();
+        entries.sort();
+
+        for path in entries {
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "strip root {} from {}: {error}",
+                            root.display(),
+                            path.display()
+                        )
+                    })
+                    .to_path_buf();
+                let contents =
+                    fs::read_to_string(&path).unwrap_or_else(|error| {
+                        panic!("read file {}: {error}", path.display())
+                    });
+                files.push((relative, contents));
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    visit(root, root, &mut files);
+    files
 }
 
 fn single_script_cache_dir(cache_home: &Path) -> PathBuf {

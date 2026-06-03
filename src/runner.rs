@@ -43,6 +43,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Cronjob,
     },
     Subcommand {
+        name: "highlights-ref",
+        script_command: None,
+        about: "Sync Highlights PDF annotations into reference notes",
+        native_command: NativeCommand::HighlightsRef,
+    },
+    Subcommand {
         name: "notify",
         script_command: Some("bob_notify"),
         about: "Notify when the current Pomodoro is complete",
@@ -203,6 +209,8 @@ const AFTER_HELP: &str = "\
 Examples:
   bob collect-done --threshold 10  Archive tasks and maintain done links
   bob cronjob                    Run the nightly sync and maintenance steps
+  bob highlights-ref scan --dry-run
+                                 Preview Highlights reference note sync
   bob pomodoro                   Show today's Pomodoro status
   bob sync                       Sync the Obsidian vault
 

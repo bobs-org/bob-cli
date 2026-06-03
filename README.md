@@ -81,6 +81,24 @@ touches, commits with a `bob collect-done YYYY-MM-DD` message, and pushes.
 Non-Git vaults are left uncommitted.
 
 ```bash
+bob highlights-ref scan [--dry-run]
+bob highlights-ref sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter]
+bob highlights-ref doctor
+bob highlights-ref marker <pdf>
+```
+
+Prepares the Highlights app PDF annotation to Bob reference note sync workflow.
+The Phase 1 command surface is intentionally no-write: each command resolves
+configuration and reports that no PDF or vault files were modified. Later phases
+will scan PDFs under the configured library directory, treat the first
+standalone PDF note as the marker note, sync selected marker/frontmatter fields
+both ways, and render Highlights sidecar annotations into
+`ref/<pdf-basename>.md`.
+
+The full contract and MacBook setup guide live in
+[`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md).
+
+```bash
 bob pomodoro
 ```
 
@@ -153,6 +171,18 @@ Rust binaries, and the binaries carry the script assets they need.
 selection. It also controls the default `bob collect-done YYYY-MM-DD` commit
 message date. Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 `YYYY-MM-DD HH:MM:SS`.
+
+`BOB_HIGHLIGHTS_LIB_DIR` sets the Highlights PDF library directory used by
+`bob highlights-ref`. It defaults to `lib` under `BOB_DIR`. Relative values are
+resolved under the Bob vault; absolute paths and `~/...` paths are used as
+configured.
+
+`BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
+`bob highlights-ref`. It defaults to `ref` under `BOB_DIR`.
+
+`BOB_HIGHLIGHTS_DEFAULT_PARENT` sets the fallback `parent` frontmatter value for
+new reference notes when the PDF marker note omits `parent`. It defaults to
+`[[obsidian]]`.
 
 `DATE` preserves the legacy date override behavior. It can be a date command
 prefix such as `date --utc`, or a timestamp in the same formats accepted by

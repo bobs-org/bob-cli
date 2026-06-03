@@ -9,6 +9,7 @@ include = [
     "/Cargo.toml",
     "/Cargo.lock",
     "/README.md",
+    "/docs/**",
     "/justfile",
     "/src/**",
     "/scripts/**",

@@ -3,6 +3,7 @@ use std::ffi::OsString;
 mod collect_done;
 mod cronjob;
 mod env;
+mod highlights_ref;
 mod notify;
 mod ob;
 mod pomodoro;
@@ -12,6 +13,7 @@ mod sync;
 pub(crate) enum NativeCommand {
     CollectDone,
     Cronjob,
+    HighlightsRef,
     Pomodoro,
     Notify,
     Sync,
@@ -34,6 +36,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
     match command {
         NativeCommand::CollectDone => collect_done::run(args),
         NativeCommand::Cronjob => cronjob::run(args),
+        NativeCommand::HighlightsRef => highlights_ref::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),
         NativeCommand::Notify => notify::run(args),
         NativeCommand::Sync => sync::run(args),
