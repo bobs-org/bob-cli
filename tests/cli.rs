@@ -248,6 +248,97 @@ fn collect_done_commits_link_repairs_with_collection_changes() {
 }
 
 #[test]
+fn collect_done_deduplicates_archive_block_ids_and_repairs_links() {
+    let temp = TempDir::new("bob-cli-collect-done-block-id-dedup-git");
+    let stub_bin = temp.path().join("bin");
+    let (vault, remote) = init_git_vault_with_remote(&temp);
+    let source = vault.join("obsidian.md");
+    let daily = vault.join("daily.md");
+    let archive = vault.join("done/obsidian_done.md");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_successful_ob_stub(&stub_bin);
+    write_file(
+        &source,
+        "\
+- [x] done #task ^abc123
+- [ ] active #task
+",
+    );
+    write_file(&daily, "Links [[obsidian#^abc123]].\n");
+    write_file(
+        &archive,
+        "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [x] archived #task ^abc123
+",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
+
+    let output = bob_command()
+        .arg("collect-done")
+        .arg("--threshold=1")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-06-02")
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob collect-done with block id collision");
+
+    assert_success(&output);
+    let output_text = stdout(&output);
+    assert!(
+        output_text.contains("moved block id renames: 1")
+            && output_text.contains("Obsidian links repaired: 1")
+            && output_text.contains("committed: bob collect-done 2026-06-02")
+            && output_text.contains("pushed"),
+        "expected block id rename, link repair, commit, and push:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("read source"),
+        "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+- [ ] active #task
+"
+    );
+    assert_eq!(
+        fs::read_to_string(&daily).expect("read daily"),
+        "Links [[done/obsidian_done#^abc123-1]].\n"
+    );
+    let archive_contents = fs::read_to_string(&archive).expect("read archive");
+    assert!(
+        archive_contents.contains("- [x] archived #task ^abc123\n")
+            && archive_contents.contains("- [x] done #task ^abc123-1\n"),
+        "expected existing and renamed moved block ids:\n{archive_contents}"
+    );
+
+    let show = stdout(&git_in(
+        &vault,
+        ["show", "--name-only", "--format=%s", "HEAD"],
+    ));
+    assert!(
+        show.starts_with("bob collect-done 2026-06-02\n")
+            && show.contains("\nobsidian.md\n")
+            && show.contains("\ndone/obsidian_done.md\n")
+            && show.contains("\ndaily.md\n"),
+        "expected source, archive, and repaired link note in commit:\n{show}"
+    );
+    let remote_head =
+        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(remote_head, local_head, "push should update bare remote");
+}
+
+#[test]
 fn collect_done_commits_metadata_only_source_updates() {
     let temp = TempDir::new("bob-cli-collect-done-git-metadata");
     let stub_bin = temp.path().join("bin");

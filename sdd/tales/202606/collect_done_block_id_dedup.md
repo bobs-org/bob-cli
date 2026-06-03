@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-02 22:07:09
-status: wip
+status: done
 prompt: sdd/prompts/202606/collect_done_block_id_dedup.md
 ---
 # Plan: `bob collect-done` archive block ID de-duplication

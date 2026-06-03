@@ -62,9 +62,15 @@ When task blocks with explicit Obsidian block ids are moved, links to those
 blocks are repaired across vault Markdown notes. For example,
 `[[projects/foo#^abc123]]`, `![[projects/foo#^abc123]]`, and aliases such as
 `[[projects/foo#^abc123|follow-up]]` are rewritten to
-`[[done/projects/foo_done#^abc123]]`. Only explicit `^block-id` targets can be
-rewritten; heading links and tasks without block ids do not have a stable target
-to repair.
+`[[done/projects/foo_done#^abc123]]`. Moved block ids are de-duplicated within
+their destination archive note before link repair. If `^abc123` already exists
+in `done/projects/foo_done.md`, the moved id becomes the smallest available
+suffix such as `^abc123-1`, and repaired links point at that final id. If
+multiple moved blocks originally share the same id, their archived ids are still
+made unique, but existing links to the original duplicate id are left unchanged
+because the intended block is ambiguous. Only explicit `^block-id` targets can
+be rewritten; heading links and tasks without block ids do not have a stable
+target to repair.
 
 Before writing files, `bob collect-done` runs `ob sync --path <vault>` when the
 configured `ob` command is available. Missing `ob` is reported as a skipped sync.

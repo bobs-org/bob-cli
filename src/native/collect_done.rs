@@ -84,6 +84,13 @@ impl CollectionPlan {
             .sum()
     }
 
+    fn moved_block_id_rename_count(&self) -> usize {
+        self.files
+            .iter()
+            .map(|file| file.moved_block_id_rename_count)
+            .sum()
+    }
+
     fn link_repair_count(&self) -> usize {
         let file_repairs: usize = self
             .files
@@ -156,6 +163,8 @@ struct FilePlan {
     archive_metadata_updated: bool,
     moved_block_ids: BTreeSet<String>,
     ambiguous_moved_block_ids: BTreeSet<String>,
+    moved_block_id_final_ids: BTreeMap<String, String>,
+    moved_block_id_rename_count: usize,
     source_link_repair_count: usize,
     archive_link_repair_count: usize,
 }
@@ -216,6 +225,21 @@ struct Transform {
     archive_append: String,
     moved_block_ids: BTreeSet<String>,
     ambiguous_moved_block_ids: BTreeSet<String>,
+    moved_block_id_occurrences: Vec<BlockIdOccurrence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlockIdOccurrence {
+    id: String,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeduplicatedArchiveAppend {
+    archive_append: String,
+    final_block_ids: BTreeMap<String, String>,
+    rename_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,6 +303,10 @@ pub(crate) fn run_collection(threshold: usize, child_env: &ChildEnv) -> i32 {
     println!(
         "  ambiguous moved block ids: {}",
         plan.ambiguous_moved_block_id_count()
+    );
+    println!(
+        "  moved block id renames: {}",
+        plan.moved_block_id_rename_count()
     );
     println!("  Obsidian links repaired: {}", plan.link_repair_count());
     println!("  link-repair files: {}", plan.link_repair_file_count());
@@ -399,6 +427,10 @@ pub(crate) fn run_collection(threshold: usize, child_env: &ChildEnv) -> i32 {
         plan.archive_metadata_update_count()
     );
     println!("  moved block ids: {}", plan.moved_block_id_count());
+    println!(
+        "  moved block id renames: {}",
+        plan.moved_block_id_rename_count()
+    );
     println!("  Obsidian links repaired: {}", plan.link_repair_count());
     println!(
         "  link-repair files updated: {}",
@@ -692,6 +724,96 @@ fn read_optional_string(path: &Path) -> io::Result<Option<String>> {
     }
 }
 
+fn deduplicate_archive_append_block_ids(
+    existing_archive: Option<&str>,
+    archive_append: &str,
+    occurrences: &[BlockIdOccurrence],
+) -> DeduplicatedArchiveAppend {
+    if occurrences.is_empty() {
+        return DeduplicatedArchiveAppend {
+            archive_append: archive_append.to_string(),
+            final_block_ids: BTreeMap::new(),
+            rename_count: 0,
+        };
+    }
+
+    let mut used = BTreeSet::new();
+    if let Some(existing_archive) = existing_archive {
+        used.extend(block_ids_in_markdown(existing_archive));
+    }
+
+    let mut occurrence_counts = BTreeMap::new();
+    for occurrence in occurrences {
+        *occurrence_counts.entry(occurrence.id.clone()).or_insert(0) += 1;
+    }
+
+    let mut reserved_unchanged_ids = BTreeSet::new();
+    let mut seen_ids = BTreeSet::new();
+    for occurrence in occurrences {
+        if seen_ids.insert(occurrence.id.clone())
+            && !used.contains(&occurrence.id)
+        {
+            reserved_unchanged_ids.insert(occurrence.id.clone());
+        }
+    }
+
+    let mut final_ids = Vec::with_capacity(occurrences.len());
+    let mut final_block_ids = BTreeMap::new();
+    let mut rename_count = 0;
+    for occurrence in occurrences {
+        let final_id = if used.contains(&occurrence.id) {
+            next_available_block_id(
+                &occurrence.id,
+                &used,
+                &reserved_unchanged_ids,
+            )
+        } else {
+            occurrence.id.clone()
+        };
+
+        if final_id != occurrence.id {
+            rename_count += 1;
+        }
+        used.insert(final_id.clone());
+        if occurrence_counts.get(&occurrence.id) == Some(&1) {
+            final_block_ids.insert(occurrence.id.clone(), final_id.clone());
+        }
+        final_ids.push(final_id);
+    }
+
+    let mut deduplicated = archive_append.to_string();
+    for (occurrence, final_id) in occurrences.iter().zip(final_ids.iter()).rev()
+    {
+        if final_id != &occurrence.id {
+            deduplicated
+                .replace_range(occurrence.start..occurrence.end, final_id);
+        }
+    }
+
+    DeduplicatedArchiveAppend {
+        archive_append: deduplicated,
+        final_block_ids,
+        rename_count,
+    }
+}
+
+fn next_available_block_id(
+    original_id: &str,
+    used: &BTreeSet<String>,
+    reserved_unchanged_ids: &BTreeSet<String>,
+) -> String {
+    let mut suffix = 1usize;
+    loop {
+        let candidate = format!("{original_id}-{suffix}");
+        if !used.contains(&candidate)
+            && !reserved_unchanged_ids.contains(&candidate)
+        {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
 fn archive_contents(
     existing_archive: Option<&str>,
     archive_append: &str,
@@ -952,6 +1074,15 @@ fn build_collection_plan(
         let archive_path = vault.join(&relative_archive_path);
         let existing_archive = read_optional_string(&archive_path)?;
         let archive_exists = existing_archive.is_some();
+        let deduplicated_archive_append = if moves_tasks {
+            Some(deduplicate_archive_append_block_ids(
+                existing_archive.as_deref(),
+                &transform.archive_append,
+                &transform.moved_block_id_occurrences,
+            ))
+        } else {
+            None
+        };
 
         let source_base = if moves_tasks {
             transform.source_contents
@@ -979,10 +1110,20 @@ fn build_collection_plan(
         } else {
             BTreeSet::new()
         };
-        let archive_append = if moves_tasks {
-            transform.archive_append
+        let (
+            archive_append,
+            moved_block_id_final_ids,
+            moved_block_id_rename_count,
+        ) = if let Some(deduplicated_archive_append) =
+            deduplicated_archive_append
+        {
+            (
+                deduplicated_archive_append.archive_append,
+                deduplicated_archive_append.final_block_ids,
+                deduplicated_archive_append.rename_count,
+            )
         } else {
-            String::new()
+            (String::new(), BTreeMap::new(), 0)
         };
         let (archive_contents, archive_metadata_updated) =
             if moves_tasks || archive_exists {
@@ -1030,6 +1171,8 @@ fn build_collection_plan(
             archive_metadata_updated,
             moved_block_ids,
             ambiguous_moved_block_ids,
+            moved_block_id_final_ids,
+            moved_block_id_rename_count,
             source_link_repair_count: 0,
             archive_link_repair_count: 0,
         });
@@ -1044,7 +1187,13 @@ fn build_collection_plan(
     })
 }
 
-type MovedBlockTargets = BTreeMap<(PathBuf, String), String>;
+type MovedBlockTargets = BTreeMap<(PathBuf, String), MovedBlockTarget>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MovedBlockTarget {
+    archive_target: String,
+    block_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LinkRepairResult {
@@ -1240,9 +1389,17 @@ fn moved_block_targets(files: &[FilePlan]) -> io::Result<MovedBlockTargets> {
             if file.ambiguous_moved_block_ids.contains(block_id) {
                 continue;
             }
+            let final_block_id = file
+                .moved_block_id_final_ids
+                .get(block_id)
+                .cloned()
+                .unwrap_or_else(|| block_id.clone());
             targets.insert(
                 (file.relative_source_path.clone(), block_id.clone()),
-                archive_target.clone(),
+                MovedBlockTarget {
+                    archive_target: archive_target.clone(),
+                    block_id: final_block_id,
+                },
             );
         }
     }
@@ -1326,9 +1483,12 @@ fn repair_wiki_link_inner(
     let (target, fragment) = split_block_fragment(target_with_fragment)?;
     let resolved_path = note_index.resolve(current_path, target)?;
     let block_id = fragment.strip_prefix('^')?;
-    let new_target =
+    let moved_target =
         moved_targets.get(&(resolved_path, block_id.to_string()))?;
-    Some(format!("{new_target}#{fragment}{alias}"))
+    Some(format!(
+        "{}#^{}{}",
+        moved_target.archive_target, moved_target.block_id, alias
+    ))
 }
 
 fn repair_markdown_links(
@@ -1409,15 +1569,18 @@ fn repair_markdown_destination(
 
     let resolved_path = note_index.resolve(current_path, target)?;
     let block_id = fragment.strip_prefix('^')?;
-    let new_target =
+    let moved_target =
         moved_targets.get(&(resolved_path, block_id.to_string()))?;
     let new_destination_target =
         if target.is_empty() || has_markdown_extension(target) {
-            format!("{new_target}.md")
+            format!("{}.md", moved_target.archive_target)
         } else {
-            new_target.clone()
+            moved_target.archive_target.clone()
         };
-    Some(format!("{new_destination_target}#{fragment}"))
+    Some(format!(
+        "{new_destination_target}#^{}",
+        moved_target.block_id
+    ))
 }
 
 fn split_block_fragment(target: &str) -> Option<(&str, &str)> {
@@ -1646,6 +1809,7 @@ fn transform_markdown(contents: &str) -> Transform {
     let mut archive_append = String::new();
     let mut moved_block_ids = BTreeSet::new();
     let mut ambiguous_moved_block_ids = BTreeSet::new();
+    let mut moved_block_id_occurrences = Vec::new();
     let mut task_count = 0;
     let mut index = 0;
 
@@ -1659,9 +1823,16 @@ fn transform_markdown(contents: &str) -> Transform {
         let end = task_block_end(&lines, index, task_line.indent);
         task_count += 1;
         for line in &lines[index..end] {
+            let line_offset = archive_append.len();
             archive_append.push_str(line);
             let (content, _) = split_line_ending(line);
-            for block_id in block_ids_in_text(content) {
+            for occurrence in block_id_occurrences_in_text(content) {
+                moved_block_id_occurrences.push(BlockIdOccurrence {
+                    id: occurrence.id.clone(),
+                    start: line_offset + occurrence.start,
+                    end: line_offset + occurrence.end,
+                });
+                let block_id = occurrence.id;
                 if !moved_block_ids.insert(block_id.clone()) {
                     ambiguous_moved_block_ids.insert(block_id);
                 }
@@ -1676,12 +1847,29 @@ fn transform_markdown(contents: &str) -> Transform {
         archive_append,
         moved_block_ids,
         ambiguous_moved_block_ids,
+        moved_block_id_occurrences,
     }
 }
 
-fn block_ids_in_text(text: &str) -> Vec<String> {
-    let bytes = text.as_bytes();
+fn block_ids_in_markdown(contents: &str) -> Vec<String> {
     let mut block_ids = Vec::new();
+    for line in contents.split_inclusive('\n') {
+        let (content, _) = split_line_ending(line);
+        block_ids.extend(block_ids_in_text(content));
+    }
+    block_ids
+}
+
+fn block_ids_in_text(text: &str) -> Vec<String> {
+    block_id_occurrences_in_text(text)
+        .into_iter()
+        .map(|occurrence| occurrence.id)
+        .collect()
+}
+
+fn block_id_occurrences_in_text(text: &str) -> Vec<BlockIdOccurrence> {
+    let bytes = text.as_bytes();
+    let mut occurrences = Vec::new();
     let mut index = 0;
 
     while index < bytes.len() {
@@ -1707,14 +1895,18 @@ fn block_ids_in_text(text: &str) -> Vec<String> {
         }
 
         if end > index + 1 {
-            block_ids.push(text[index + 1..end].to_string());
+            occurrences.push(BlockIdOccurrence {
+                id: text[index + 1..end].to_string(),
+                start: index + 1,
+                end,
+            });
             index = end;
         } else {
             index += 1;
         }
     }
 
-    block_ids
+    occurrences
 }
 
 fn is_block_id_byte(byte: u8) -> bool {
@@ -1928,7 +2120,8 @@ mod tests {
         archive_contents, archive_relative_path, archive_wiki_link,
         build_collection_plan, ensure_source_done_tasks_frontmatter,
         parse_args, repair_links_in_note, source_wiki_link, transform_markdown,
-        Args, MovedBlockTargets, NoteIndex, ParseResult, DEFAULT_THRESHOLD,
+        Args, MovedBlockTarget, MovedBlockTargets, NoteIndex, ParseResult,
+        DEFAULT_THRESHOLD,
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -2098,6 +2291,190 @@ mod tests {
 
         assert_eq!(transform.moved_block_ids, string_set(["dup"]));
         assert_eq!(transform.ambiguous_moved_block_ids, string_set(["dup"]));
+    }
+
+    #[test]
+    fn duplicate_moved_block_ids_become_unique_archive_ids() {
+        let vault = TempDir::new("bob-cli-collect-done-duplicate-ids");
+        write_file(
+            &vault.path().join("obsidian.md"),
+            "\
+- [x] first #task ^dup
+- [x] second #task ^dup
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.moved_block_id_count(), 1);
+        assert_eq!(plan.ambiguous_moved_block_id_count(), 1);
+        assert_eq!(plan.moved_block_id_rename_count(), 1);
+        assert_eq!(
+            plan.files[0].archive_contents.as_deref(),
+            Some(
+                "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [x] first #task ^dup
+- [x] second #task ^dup-1
+"
+            )
+        );
+    }
+
+    #[test]
+    fn existing_archive_block_ids_reserve_original_ids() {
+        let vault = TempDir::new("bob-cli-collect-done-existing-id");
+        write_file(&vault.path().join("obsidian.md"), "- [x] new #task ^dup\n");
+        write_file(
+            &vault.path().join("done/obsidian_done.md"),
+            "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [x] old #task ^dup
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert_eq!(plan.moved_block_id_rename_count(), 1);
+        assert_eq!(
+            plan.files[0].archive_contents.as_deref(),
+            Some(
+                "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [x] old #task ^dup
+- [x] new #task ^dup-1
+"
+            )
+        );
+    }
+
+    #[test]
+    fn block_id_suffix_selection_skips_existing_candidates() {
+        let vault = TempDir::new("bob-cli-collect-done-existing-id-suffix");
+        write_file(&vault.path().join("obsidian.md"), "- [x] new #task ^dup\n");
+        write_file(
+            &vault.path().join("done/obsidian_done.md"),
+            "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [x] old #task ^dup
+- [x] old suffix #task ^dup-1
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert_eq!(plan.moved_block_id_rename_count(), 1);
+        assert!(plan.files[0]
+            .archive_contents
+            .as_deref()
+            .expect("archive contents")
+            .contains("- [x] new #task ^dup-2\n"));
+    }
+
+    #[test]
+    fn block_id_suffix_selection_preserves_distinct_moved_ids() {
+        let vault = TempDir::new("bob-cli-collect-done-preserve-distinct-id");
+        write_file(
+            &vault.path().join("obsidian.md"),
+            "\
+- [x] first #task ^dup
+- [x] second #task ^dup
+- [x] distinct #task ^dup-1
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert_eq!(plan.moved_block_id_rename_count(), 1);
+        assert_eq!(
+            plan.files[0].archive_contents.as_deref(),
+            Some(
+                "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [x] first #task ^dup
+- [x] second #task ^dup-2
+- [x] distinct #task ^dup-1
+"
+            )
+        );
+    }
+
+    #[test]
+    fn block_id_deduplication_preserves_crlf_line_endings() {
+        let vault = TempDir::new("bob-cli-collect-done-crlf-id-dedup");
+        write_file(
+            &vault.path().join("obsidian.md"),
+            "- [x] first #task ^dup\r\n- [x] second #task ^dup\r\n",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert_eq!(plan.moved_block_id_rename_count(), 1);
+        assert_eq!(
+            plan.files[0].archive_contents.as_deref(),
+            Some(
+                "---\r\nparent: \"[[obsidian]]\"\r\ntype: \"[[done]]\"\r\n---\r\n\r\n- [x] first #task ^dup\r\n- [x] second #task ^dup-1\r\n"
+            )
+        );
+    }
+
+    #[test]
+    fn link_repair_uses_renamed_unique_moved_block_id() {
+        let vault = TempDir::new("bob-cli-collect-done-renamed-link-plan");
+        write_file(
+            &vault.path().join("obsidian.md"),
+            "- [x] done #task ^abc123\n",
+        );
+        write_file(
+            &vault.path().join("daily.md"),
+            "Reference [[obsidian#^abc123]].\n",
+        );
+        write_file(
+            &vault.path().join("done/obsidian_done.md"),
+            "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [x] old #task ^abc123
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert_eq!(plan.moved_block_id_rename_count(), 1);
+        assert_eq!(plan.link_repair_count(), 1);
+        assert_eq!(
+            plan.link_repairs[0].contents,
+            "Reference [[done/obsidian_done#^abc123-1]].\n"
+        );
+        assert!(plan.files[0]
+            .archive_contents
+            .as_deref()
+            .expect("archive contents")
+            .contains("- [x] done #task ^abc123-1\n"));
     }
 
     #[test]
@@ -2972,8 +3349,14 @@ Old reference [[obsidian#^abc123]]
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.moved_block_id_count(), 1);
         assert_eq!(plan.ambiguous_moved_block_id_count(), 1);
+        assert_eq!(plan.moved_block_id_rename_count(), 1);
         assert_eq!(plan.link_repair_count(), 0);
         assert!(plan.link_repairs.is_empty());
+        assert!(plan.files[0]
+            .archive_contents
+            .as_deref()
+            .expect("archive contents")
+            .contains("- [x] first #task ^dup\n- [x] second #task ^dup-1\n"));
     }
 
     fn note_index<const N: usize>(paths: [&str; N]) -> NoteIndex {
@@ -2988,7 +3371,10 @@ Old reference [[obsidian#^abc123]]
             .map(|(source_path, block_id, target)| {
                 (
                     (PathBuf::from(source_path), block_id.to_string()),
-                    target.to_string(),
+                    MovedBlockTarget {
+                        archive_target: target.to_string(),
+                        block_id: block_id.to_string(),
+                    },
                 )
             })
             .collect::<BTreeMap<_, _>>()
