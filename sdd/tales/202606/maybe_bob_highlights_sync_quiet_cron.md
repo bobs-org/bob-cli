@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-03 17:11:26
-status: wip
+status: done
 prompt: sdd/prompts/202606/maybe_bob_highlights_sync_quiet_cron.md
 ---
 # Quiet `maybe_bob_highlights_sync` for Cron
