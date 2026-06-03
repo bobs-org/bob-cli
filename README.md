@@ -31,6 +31,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" --help
 "$root/bin/bob" bulk-git-commit --help
 "$root/bin/bob" cronjob --help
+"$root/bin/bob" dataview --help
 "$root/bin/bob" highlights-ref --help
 "$root/bin/bob" move-done-tasks --help
 "$root/bin/bob" notify --help
@@ -63,6 +64,24 @@ Runs the nightly maintenance sequence. It performs one shared
 `bob bulk-git-commit` in order. A failed Obsidian sync aborts before the wrapped
 steps touch the vault; a failed wrapped step is reported but does not prevent
 later wrapped steps from running.
+
+```bash
+bob dataview --source '#project'
+bob dataview --query 'LIST FROM #waiting'
+bob dataview --format json --query-file queries/projects.dql
+```
+
+Runs Dataview source expressions and DQL queries from the shell. The default
+engine evaluates queries inside a running desktop Obsidian app with the target
+vault open and the Dataview plugin enabled. `paths` output prints one
+vault-relative Markdown path per line, `json` output is stable for scripts, and
+`markdown` output prints Dataview-rendered Markdown. `--sync` can run `ob sync`
+before querying while keeping stdout reserved for query results. An explicit
+`--engine dynomark` mode is available for partial-compatibility headless DQL
+paths and JSON output.
+
+The full command contract and live smoke-test steps live in
+[`docs/dataview.md`](docs/dataview.md).
 
 ```bash
 bob move-done-tasks [--threshold N]
@@ -189,8 +208,12 @@ useful for validating or forcing the embedded script fallback with
 The remaining runtime dependencies are:
 
 - `ob` from obsidian-headless for the shared `bob cronjob` Obsidian sync gate
+  and for `bob dataview --sync`
+- `obsidian` CLI plus a running desktop Obsidian vault with the Dataview plugin
+  for the default `bob dataview` engine
 - `git` and `ssh` for `bob bulk-git-commit` and for `bob move-done-tasks`
   commit/push behavior when the vault is a Git worktree
+- `dynomark` only when using `bob dataview --engine dynomark`
 - `notify-send` for desktop notifications from `bob notify`
 - `bash` only when loading `ob` through the NVM fallback or sourcing
   `~/.ssh-agent-thing`
@@ -201,6 +224,15 @@ Rust binaries, and the binaries carry the script assets they need.
 ## Environment
 
 `BOB_DIR` sets the Bob vault directory. It defaults to `~/bob`.
+
+`BOB_DATAVIEW_DYNOMARK_COMMAND` overrides the executable used by
+`bob dataview --engine dynomark`.
+
+`BOB_DATAVIEW_OBSIDIAN_COMMAND` overrides the executable used by the default
+`bob dataview` Obsidian engine.
+
+`BOB_DATAVIEW_VAULT` sets the default Obsidian vault name or ID forwarded to
+`obsidian eval` by `bob dataview`.
 
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`.
 
@@ -272,6 +304,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" --help
 "$root/bin/bob" bulk-git-commit --help
 "$root/bin/bob" cronjob --help
+"$root/bin/bob" dataview --help
 "$root/bin/bob" highlights-ref --help
 "$root/bin/bob" move-done-tasks --help
 "$root/bin/bob" notify --help
@@ -294,6 +327,11 @@ Before running `bob bulk-git-commit` in a release smoke test, verify that
 without prompts. Before running `bob move-done-tasks` against the real vault,
 verify that `~/bob` is the intended vault, inspect `git -C ~/bob status --short`,
 and expect the command to skip candidate files that are already dirty.
+
+Before running live `bob dataview` smoke tests, start desktop Obsidian, open the
+target vault, enable Dataview, and use the examples in
+[`docs/dataview.md`](docs/dataview.md). The default engine requires that live
+Obsidian session; `--engine dynomark` is only a partial headless fallback.
 
 For an end-to-end collection smoke test, install the local binary, run
 `bob move-done-tasks` against `~/bob`, then verify that archive notes under
