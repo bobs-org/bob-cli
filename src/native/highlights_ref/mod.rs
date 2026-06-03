@@ -2456,7 +2456,7 @@ fn read_pdf_marker(path: &Path) -> Result<PdfMarker> {
         let contents = annotation
             .get(b"Contents")
             .ok()
-            .map(decode_text_string)
+            .map(decode_marker_contents)
             .transpose()
             .map_err(|error| {
                 CommandError::new(format!(
@@ -2478,6 +2478,57 @@ fn read_pdf_marker(path: &Path) -> Result<PdfMarker> {
         "no standalone /Text note annotations found on page 1 in {}",
         path.display()
     )))
+}
+
+fn decode_marker_contents(
+    contents: &Object,
+) -> std::result::Result<String, lopdf::Error> {
+    let Object::String(bytes, _) = contents else {
+        return decode_text_string(contents);
+    };
+    if has_text_string_bom(bytes) {
+        return decode_text_string(contents);
+    }
+
+    let mut decoded = String::new();
+    let mut segment_start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                decoded.push_str(&decode_marker_text_segment(
+                    &bytes[segment_start..index],
+                )?);
+                decoded.push('\n');
+                index += 1;
+                if bytes.get(index) == Some(&b'\n') {
+                    index += 1;
+                }
+                segment_start = index;
+            }
+            b'\n' => {
+                decoded.push_str(&decode_marker_text_segment(
+                    &bytes[segment_start..index],
+                )?);
+                decoded.push('\n');
+                index += 1;
+                segment_start = index;
+            }
+            _ => index += 1,
+        }
+    }
+    decoded.push_str(&decode_marker_text_segment(&bytes[segment_start..])?);
+    Ok(decoded)
+}
+
+fn has_text_string_bom(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\xFE\xFF") || bytes.starts_with(b"\xEF\xBB\xBF")
+}
+
+fn decode_marker_text_segment(
+    segment: &[u8],
+) -> std::result::Result<String, lopdf::Error> {
+    decode_text_string(&Object::String(segment.to_vec(), StringFormat::Literal))
 }
 
 fn annotation_ids_for_page(
@@ -3104,8 +3155,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        is_sidecar_marker_mirror, parse_marker, parse_note,
-        parse_sidecar_markdown, pdf_path_metadata, projection_hash,
+        decode_marker_contents, is_sidecar_marker_mirror, parse_marker,
+        parse_note, parse_sidecar_markdown, pdf_path_metadata, projection_hash,
         ref_note_path, render_marker, resolve_under_bob, sidecar_page_heading,
         Config, MarkerValue, PipelineMetadata, Projection,
         SidecarAnnotationKind,
@@ -3215,6 +3266,21 @@ mod tests {
         assert_eq!(sidecar_page_heading("## p. 12").as_deref(), Some("p. 12"));
         assert_eq!(sidecar_page_heading("# Systems Performance"), None);
         assert_eq!(sidecar_page_heading("##### 2026-06-03:"), None);
+    }
+
+    #[test]
+    fn marker_content_decoder_preserves_pdfdoc_line_separators() {
+        let contents = lopdf::Object::String(
+            b"- status: wip\n- parent: obsidian\r\n- title: Obsidian Docs\r"
+                .to_vec(),
+            lopdf::StringFormat::Literal,
+        );
+
+        assert_eq!(
+            decode_marker_contents(&contents)
+                .expect("decode literal marker contents"),
+            "- status: wip\n- parent: obsidian\n- title: Obsidian Docs\n"
+        );
     }
 
     #[test]

@@ -485,6 +485,39 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
 }
 
 #[test]
+fn highlights_ref_sync_dry_run_reads_literal_marker_newlines() {
+    let temp = TempDir::new("bob-cli-highlights-ref-literal-marker");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/obsidian-docs.pdf");
+    let note = vault.join("ref/obsidian-docs.md");
+    write_highlights_pdf(&pdf, "");
+    set_pdf_marker_literal_contents(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Obsidian Docs\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run sync literal marker");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("sync_source: marker")
+            && report.contains("note_action: create")
+            && report.contains("writes: none"),
+        "literal marker should parse as a complete marker list:\n{}",
+        format_output(&output)
+    );
+    assert!(!note.exists(), "dry-run must not create ref note");
+}
+
+#[test]
 fn highlights_ref_marker_uses_first_page_text_annotation() {
     let temp = TempDir::new("bob-cli-highlights-ref-first-page-marker");
     let vault = temp.path().join("vault");
@@ -3367,6 +3400,20 @@ fn set_pdf_marker_contents(path: &Path, marker_contents: &str) {
     });
 }
 
+fn set_pdf_marker_literal_contents(path: &Path, marker_contents: &str) {
+    let mut doc = lopdf::Document::load(path)
+        .unwrap_or_else(|error| panic!("load PDF {}: {error}", path.display()));
+    let marker_id = first_text_annotation_id(&doc);
+    doc.get_object_mut(marker_id)
+        .expect("get marker object")
+        .as_dict_mut()
+        .expect("marker is dictionary")
+        .set("Contents", pdf_literal_string(marker_contents));
+    doc.save(path).unwrap_or_else(|error| {
+        panic!("write PDF {}: {error}", path.display())
+    });
+}
+
 fn pdf_marker_contents(path: &Path) -> String {
     let doc = lopdf::Document::load(path)
         .unwrap_or_else(|error| panic!("load PDF {}: {error}", path.display()));
@@ -3412,6 +3459,13 @@ fn pdf_text_string(contents: &str) -> lopdf::Object {
     lopdf::Object::String(
         lopdf::encode_utf16_be(contents),
         lopdf::StringFormat::Hexadecimal,
+    )
+}
+
+fn pdf_literal_string(contents: &str) -> lopdf::Object {
+    lopdf::Object::String(
+        contents.as_bytes().to_vec(),
+        lopdf::StringFormat::Literal,
     )
 }
 
