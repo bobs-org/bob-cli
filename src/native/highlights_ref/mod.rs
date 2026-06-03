@@ -472,16 +472,17 @@ fn execute_pdf_sync(
         )?;
     }
 
-    let rendered_note = if plan.stable_note_action != "none"
-        && plan.rendered_highlights.is_some()
-    {
+    let refresh_synced_at =
+        plan.stable_note_action != "none" && plan.rendered_highlights.is_some();
+    let refresh_metadata = plan.marker_write_needed || refresh_synced_at;
+    let rendered_note = if refresh_metadata {
         let metadata = pipeline_metadata(
             config,
             &plan.pdf,
             &plan.note,
             plan.sidecar.as_ref(),
             plan.rendered_highlights.as_ref(),
-            true,
+            refresh_synced_at,
         )?;
         plan.note.render_with_projection(
             &plan.synced_projection,

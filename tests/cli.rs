@@ -7,6 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
@@ -627,6 +628,7 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
         format_output(&output)
     );
     assert_eq!(pdf_marker_contents(&pdf), marker_before);
+    let pdf_hash_before_write = sha256_file(&pdf);
 
     let output = bob_command()
         .arg("highlights-ref")
@@ -656,6 +658,44 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
     assert_success(&output);
     let marker = pdf_marker_contents(&pdf);
     assert!(marker.contains("- status: complete\n"), "{marker}");
+    let pdf_hash_after_write = sha256_file(&pdf);
+    assert_ne!(
+        pdf_hash_before_write, pdf_hash_after_write,
+        "PDF marker write should change the source PDF hash"
+    );
+
+    let note_after_write = fs::read_to_string(&note).expect("read note");
+    assert!(
+        note_after_write.contains(&format!(
+            "source_pdf_sha256: {pdf_hash_after_write}\n"
+        )),
+        "reference note should record the post-write PDF hash:\n{note_after_write}"
+    );
+    assert!(
+        !note_after_write.contains(&format!(
+            "source_pdf_sha256: {pdf_hash_before_write}\n"
+        )),
+        "reference note should not keep the pre-write PDF hash:\n{note_after_write}"
+    );
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync after PDF write-back");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("note_action: none")
+            && stdout(&output).contains("writes: none"),
+        "frontmatter PDF write-back should settle in one run:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read settled note"),
+        note_after_write
+    );
 }
 
 #[test]
@@ -2607,6 +2647,12 @@ fn pdf_marker_contents(path: &Path) -> String {
         .expect("get marker annotation dictionary");
     lopdf::decode_text_string(marker.get(b"Contents").expect("marker contents"))
         .expect("decode marker contents")
+}
+
+fn sha256_file(path: &Path) -> String {
+    let bytes = fs::read(path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn first_text_annotation_id(doc: &lopdf::Document) -> lopdf::ObjectId {
