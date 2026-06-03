@@ -1514,6 +1514,8 @@ fn run_obsidian_stub(args: &[&str], payload: &str) -> Output {
     write_obsidian_protocol_stub(&obsidian, payload);
     bob_command()
         .arg("dataview")
+        .arg("--engine")
+        .arg("obsidian")
         .args(args)
         .env("BOB_DATAVIEW_OBSIDIAN_COMMAND", &obsidian)
         .env_remove("BOB_DATAVIEW_VAULT")

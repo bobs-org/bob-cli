@@ -420,6 +420,16 @@ fn dataview_rejects_invalid_argument_combinations() {
         (
             &[
                 "dataview",
+                "--vault",
+                "Bob",
+                "--query",
+                "LIST FROM #project",
+            ],
+            "--vault can only be used with --engine obsidian",
+        ),
+        (
+            &[
+                "dataview",
                 "--query",
                 "LIST FROM #project",
                 "--format",
@@ -469,6 +479,8 @@ fn dataview_obsidian_source_uses_path_command_and_sentinel_protocol() {
 
     let output = bob_command()
         .arg("dataview")
+        .arg("--engine")
+        .arg("obsidian")
         .arg("--source")
         .arg("#project")
         .arg("--vault")
@@ -515,6 +527,8 @@ fn dataview_obsidian_dql_paths_extracts_and_deduplicates_note_paths() {
 
     let output = bob_command()
         .arg("dataview")
+        .arg("--engine")
+        .arg("obsidian")
         .arg("--query")
         .arg("TABLE status FROM #project")
         .env("BOB_DATAVIEW_OBSIDIAN_COMMAND", &obsidian)
@@ -549,6 +563,8 @@ fn dataview_obsidian_dql_paths_warn_or_fail_for_missing_identities() {
 
     let output = bob_command()
         .arg("dataview")
+        .arg("--engine")
+        .arg("obsidian")
         .arg("--query")
         .arg("TABLE status FROM #project")
         .env("BOB_DATAVIEW_OBSIDIAN_COMMAND", &obsidian)
@@ -572,6 +588,8 @@ fn dataview_obsidian_dql_paths_warn_or_fail_for_missing_identities() {
 
     let output = bob_command()
         .arg("dataview")
+        .arg("--engine")
+        .arg("obsidian")
         .arg("--query")
         .arg("TABLE status FROM #project")
         .arg("--strict-paths")
@@ -616,6 +634,8 @@ fn dataview_obsidian_dql_json_reads_query_file_and_forwards_env_vault() {
 
     let output = bob_command()
         .arg("dataview")
+        .arg("--engine")
+        .arg("obsidian")
         .arg("--format")
         .arg("json")
         .arg("--origin")
@@ -671,6 +691,8 @@ fn dataview_obsidian_markdown_prints_rendered_markdown() {
 
     let output = bob_command()
         .arg("dataview")
+        .arg("--engine")
+        .arg("obsidian")
         .arg("--format")
         .arg("markdown")
         .arg("--query")
@@ -721,6 +743,8 @@ fn dataview_obsidian_reports_protocol_errors() {
 
         let output = bob_command()
             .arg("dataview")
+            .arg("--engine")
+            .arg("obsidian")
             .arg("--format")
             .arg("json")
             .arg("--query")
@@ -777,6 +801,8 @@ fn dataview_obsidian_reports_missing_and_malformed_sentinel() {
 
         let output = bob_command()
             .arg("dataview")
+            .arg("--engine")
+            .arg("obsidian")
             .arg("--format")
             .arg("json")
             .arg("--query")
@@ -815,6 +841,8 @@ fn dataview_obsidian_reports_missing_command_without_query_blob() {
 
     let output = bob_command()
         .arg("dataview")
+        .arg("--engine")
+        .arg("obsidian")
         .arg("--format")
         .arg("json")
         .arg("--query")
@@ -853,6 +881,8 @@ fn dataview_obsidian_reports_not_running_without_javascript_blob() {
 
     let output = bob_command()
         .arg("dataview")
+        .arg("--engine")
+        .arg("obsidian")
         .arg("--format")
         .arg("json")
         .arg("--query")
@@ -906,6 +936,8 @@ exit 99
         .arg("dataview")
         .arg("--bob-dir")
         .arg(&vault)
+        .arg("--engine")
+        .arg("obsidian")
         .arg("--source")
         .arg("#project")
         .env("BOB_DATAVIEW_OBSIDIAN_COMMAND", &obsidian)
@@ -982,11 +1014,15 @@ fn dataview_rejects_removed_sync_option() {
 #[test]
 fn dataview_rejects_unsafe_origin_and_missing_bob_dir() {
     let temp = TempDir::new("bob-cli-dataview-path-validation");
+    let vault = temp.path().join("vault");
     let missing_vault = temp.path().join("missing-vault");
+    fs::create_dir_all(&vault).expect("create vault");
     let cases = [
         (
             vec![
                 OsString::from("dataview"),
+                OsString::from("--bob-dir"),
+                vault.clone().into_os_string(),
                 OsString::from("--origin"),
                 OsString::from("../Secret.md"),
                 OsString::from("--query"),
@@ -998,6 +1034,8 @@ fn dataview_rejects_unsafe_origin_and_missing_bob_dir() {
         (
             vec![
                 OsString::from("dataview"),
+                OsString::from("--bob-dir"),
+                vault.into_os_string(),
                 OsString::from("--origin"),
                 temp.path().join("absolute.md").into_os_string(),
                 OsString::from("--query"),
@@ -1042,202 +1080,6 @@ fn dataview_rejects_unsafe_origin_and_missing_bob_dir() {
 }
 
 #[test]
-fn dataview_dynomark_dql_paths_runs_headless_with_metadata() {
-    let temp = TempDir::new("bob-cli-dataview-dynomark-paths");
-    let vault = temp.path().join("vault");
-    let dynomark = temp.path().join("dynomark");
-    let log = temp.path().join("dynomark.log");
-    fs::create_dir_all(&vault).expect("create vault");
-    write_executable(
-        &dynomark,
-        r#"#!/bin/sh
-printf 'PWD:%s\n' "$(pwd)" > "$DYNOMARK_LOG"
-for arg in "$@"; do printf 'ARG:%s\n' "$arg" >> "$DYNOMARK_LOG"; done
-printf '{\n  "file.path": "Projects/alpha.md",\n  "file.name": "alpha.md"\n}\n'
-printf '{\n  "file.path": "Inbox/waiting",\n  "file.name": "waiting.md"\n}\n'
-printf -- '- alpha.md\n- waiting.md\n'
-"#,
-    );
-
-    let output = bob_command()
-        .arg("dataview")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .arg("--engine")
-        .arg("dynomark")
-        .arg("--query")
-        .arg("LIST FROM \"Projects\"")
-        .env("BOB_DATAVIEW_DYNOMARK_COMMAND", &dynomark)
-        .env("DYNOMARK_LOG", &log)
-        .output()
-        .expect("run bob dataview dynomark paths query");
-
-    assert_success(&output);
-    assert_eq!(
-        stdout(&output),
-        "Projects/alpha.md\nInbox/waiting.md\n",
-        "dynomark metadata paths should print cleanly:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        stderr(&output).contains("dynomark is a partial"),
-        "dynomark paths should carry a compatibility warning:\n{}",
-        format_output(&output)
-    );
-
-    let log_text = fs::read_to_string(&log).expect("read dynomark argv log");
-    assert!(
-        log_text.contains(&format!("PWD:{}", path_str(&vault))),
-        "dynomark should run from --bob-dir:\n{log_text}"
-    );
-    assert_text_order(
-        &log_text,
-        &[
-            "ARG:--query",
-            "ARG:LIST FROM \"Projects\"",
-            "ARG:--metadata",
-        ],
-    );
-}
-
-#[test]
-fn dataview_dynomark_json_includes_metadata_and_compat_warning() {
-    let temp = TempDir::new("bob-cli-dataview-dynomark-json");
-    let vault = temp.path().join("vault");
-    let dynomark = temp.path().join("dynomark");
-    fs::create_dir_all(&vault).expect("create vault");
-    write_executable(
-        &dynomark,
-        r#"#!/bin/sh
-printf 'dynomark stderr warning\n' >&2
-printf '{\n  "file.path": "%s/Projects/alpha.md",\n  "file.name": "alpha.md"\n}\n' "$PWD"
-printf -- '- alpha.md\n'
-"#,
-    );
-
-    let output = bob_command()
-        .arg("dataview")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .arg("--engine")
-        .arg("dynomark")
-        .arg("--format")
-        .arg("json")
-        .arg("--query")
-        .arg("LIST FROM \"Projects\"")
-        .env("BOB_DATAVIEW_DYNOMARK_COMMAND", &dynomark)
-        .output()
-        .expect("run bob dataview dynomark json query");
-
-    assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
-            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
-        });
-    assert_eq!(json["engine"], "dynomark");
-    assert_eq!(json["query_kind"], "dql");
-    assert_eq!(json["format"], "json");
-    assert_eq!(json["paths"][0], "Projects/alpha.md");
-    assert_eq!(json["result"]["metadata"][0]["file.name"], "alpha.md");
-    assert_eq!(json["result"]["markdown"], "- alpha.md\n");
-    assert!(
-        json["warnings"]
-            .as_array()
-            .expect("warnings array")
-            .iter()
-            .any(|warning| warning
-                .as_str()
-                .is_some_and(|text| text.contains("dynomark is a partial"))),
-        "expected compatibility warning in JSON output:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        stderr(&output).contains("dynomark stderr warning")
-            && stderr(&output).contains("dynomark is a partial"),
-        "dynomark stderr and compatibility warning should stay off stdout:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
-fn dataview_headless_engines_reject_unsupported_combinations() {
-    let cases: &[(&[&str], &str)] = &[
-        (
-            &["dataview", "--engine", "dynomark", "--source", "#project"],
-            "--engine dynomark supports DQL queries only",
-        ),
-        (
-            &[
-                "dataview",
-                "--engine",
-                "dynomark",
-                "--format",
-                "markdown",
-                "--query",
-                "LIST FROM #project",
-            ],
-            "--format markdown is not supported by the dynomark engine",
-        ),
-    ];
-
-    for (args, marker) in cases {
-        let output = bob_command()
-            .args(*args)
-            .output()
-            .unwrap_or_else(|error| panic!("run bob {args:?}: {error}"));
-
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "unsupported headless combination should be a usage error:\n{}",
-            format_output(&output)
-        );
-        assert!(
-            stdout(&output).is_empty() && stderr(&output).contains(marker),
-            "expected headless validation error `{marker}`:\n{}",
-            format_output(&output)
-        );
-    }
-}
-
-#[test]
-fn dataview_dynomark_reports_missing_command() {
-    let temp = TempDir::new("bob-cli-dataview-dynomark-missing");
-    let vault = temp.path().join("vault");
-    let missing = temp.path().join("missing-dynomark");
-    fs::create_dir_all(&vault).expect("create vault");
-
-    let output = bob_command()
-        .arg("dataview")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .arg("--engine")
-        .arg("dynomark")
-        .arg("--format")
-        .arg("json")
-        .arg("--query")
-        .arg("LIST FROM #project")
-        .env("BOB_DATAVIEW_DYNOMARK_COMMAND", &missing)
-        .output()
-        .expect("run bob dataview with missing dynomark");
-
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "missing dynomark command should fail:\n{}",
-        format_output(&output)
-    );
-    let err = stderr(&output);
-    assert!(
-        stdout(&output).is_empty()
-            && err.contains("dynomark command not found")
-            && err.contains("BOB_DATAVIEW_DYNOMARK_COMMAND"),
-        "missing dynomark error should be actionable:\n{}",
-        format_output(&output)
-    );
-}
-
-#[test]
 fn dataview_native_dql_paths_walks_parent_frontmatter_headlessly() {
     let temp = TempDir::new("bob-cli-dataview-native-parents");
     let vault = temp.path().join("vault");
@@ -1259,8 +1101,6 @@ WHERE source_pdf
         .arg("dataview")
         .arg("--bob-dir")
         .arg(&vault)
-        .arg("--engine")
-        .arg("native")
         .arg("--strict-paths")
         .arg("--query")
         .arg(query)

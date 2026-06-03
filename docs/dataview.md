@@ -1,9 +1,10 @@
 # bob dataview
 
 `bob dataview` runs Dataview source expressions and DQL queries from the shell.
-The default engine is `obsidian`, which evaluates the query inside a running
-desktop Obsidian app. The target vault must already be open, and the Dataview
-community plugin must be enabled.
+The default engine is `native`, which evaluates queries against the local
+Markdown vault without a running desktop Obsidian app. Use `--engine obsidian`
+when you need exact behavior from the live Dataview plugin in an open Obsidian
+vault.
 
 Stdout is reserved for query results only. Paths, JSON, and rendered Markdown
 can be piped into scripts without sync logs, engine warnings, or diagnostics
@@ -32,7 +33,7 @@ bob dataview --format json --query 'TABLE status, due FROM #project'
 bob dataview --format json --query-file ~/queries/projects.dql | jq '.paths'
 ```
 
-Render a visible Dataview table through Obsidian. Markdown output requires DQL:
+Render a visible Dataview table. Markdown output requires DQL:
 
 ```bash
 bob dataview --format markdown --origin Home.md --query 'TABLE file.link FROM #project'
@@ -48,19 +49,18 @@ printf 'LIST FROM #waiting\n' | bob dataview --query-file -
 ## Options
 
 `--bob-dir <PATH>` sets the Bob vault root. It defaults to `BOB_DIR` or `~/bob`.
-The path is validated when it is supplied explicitly or when the `dynomark` or
-`native` engine is used.
+The path is validated when it is supplied explicitly or when the native engine
+is used.
 
-`--engine <obsidian|dynomark|native>` selects the query engine. The default is
-`obsidian`; `dynomark` is an explicit partial-compatibility headless fallback.
-`native` is the local headless implementation of Bob's supported source
-expression and DQL surface for automation that cannot depend on a running
-Obsidian app.
+`--engine <native|obsidian>` selects the query engine. The default is `native`,
+the local headless implementation of Bob's supported source expression and DQL
+surface. `obsidian` evaluates through the live Dataview plugin and is useful as
+an oracle or fallback when installed-plugin behavior matters.
 
 `--format <paths|json|markdown>` selects the output format. `paths` is the
 default and prints matching source note paths for DQL `LIST` and `TABLE`
 queries. Use `json` for structured rows and `markdown` for rendered DQL `LIST`,
-`TABLE`, and `TASK` output through the Obsidian or native engine.
+`TABLE`, and `TASK` output.
 
 `--origin <VAULT_RELATIVE_PATH>` sets the origin note for Dataview `this` and
 relative links. It must be vault-relative; absolute paths and `..` traversal are
@@ -78,7 +78,8 @@ cleanly from every DQL row. Without it, best-effort path extraction warnings go
 to stderr and the command prints the paths it can derive.
 
 `--vault <NAME_OR_ID>` forwards an Obsidian vault name or ID to the Obsidian CLI.
-If omitted, `BOB_DATAVIEW_VAULT` is used when set.
+It can only be used with `--engine obsidian`. If omitted in Obsidian mode,
+`BOB_DATAVIEW_VAULT` is used when set.
 
 Exactly one of `--source`, `--query`, and `--query-file` is required.
 
@@ -89,7 +90,7 @@ owned by the external background or cron sync path.
 
 JSON output is a stable object for scripts. It includes:
 
-- `engine`: `obsidian`, `dynomark`, or `native`
+- `engine`: `native` or `obsidian`
 - `query_kind`: `source` or `dql`
 - `format`: `json`
 - `paths`: extracted vault-relative note paths
@@ -98,9 +99,7 @@ JSON output is a stable object for scripts. It includes:
 
 ## Manual Smoke Test
 
-For live smoke tests, start desktop Obsidian, open the target vault, and confirm
-the Dataview plugin is enabled. Adjust tags or folders to values that exist in
-the vault.
+For local smoke tests, adjust tags or folders to values that exist in the vault.
 
 ```bash
 bob dataview --source '#project'
@@ -124,11 +123,11 @@ BOB_DATAVIEW_PARITY_VAULT=<opened-fixture-vault-name-or-id> \
 cargo test --test dataview_parity dataview_live_obsidian_parity_harness_compares_supported_native_cases -- --nocapture
 ```
 
-For headless real-vault native smoke tests, use read-only queries against
-`~/bob`. These cover the Phase 8 surface without requiring Obsidian:
+For real-vault native smoke tests, use read-only queries against `~/bob`. These
+cover the supported local surface without requiring Obsidian:
 
 ```bash
-bob dataview --engine native --strict-paths --query '
+bob dataview --strict-paths --query '
 LIST
 FROM "ref"
 WHERE source_pdf
@@ -140,53 +139,28 @@ WHERE source_pdf
     OR parent.parent.parent.parent.parent = [[ai_ref]]
   )
 '
-bob dataview --engine native --source '#project'
-bob dataview --engine native --source '"prj"'
-bob dataview --engine native --strict-paths --query 'LIST FROM "prj" LIMIT 5'
-bob dataview --engine native --strict-paths --query 'TABLE file.mday, parent FROM "prj" LIMIT 5'
-bob dataview --engine native --strict-paths --query 'TASK LIMIT 3'
-bob dataview --engine native --strict-paths --query 'CALENDAR file.day WHERE file.day LIMIT 5'
-bob dataview --engine native --format markdown --query 'LIST FROM "prj" LIMIT 3'
-bob dataview --engine native --format markdown --query 'TABLE file.mday, parent FROM "prj" LIMIT 3'
-bob dataview --engine native --format markdown --query 'TASK LIMIT 3'
+bob dataview --source '#project'
+bob dataview --source '"prj"'
+bob dataview --strict-paths --query 'LIST FROM "prj" LIMIT 5'
+bob dataview --strict-paths --query 'TABLE file.mday, parent FROM "prj" LIMIT 5'
+bob dataview --strict-paths --query 'TASK LIMIT 3'
+bob dataview --strict-paths --query 'CALENDAR file.day WHERE file.day LIMIT 5'
+bob dataview --format markdown --query 'LIST FROM "prj" LIMIT 3'
+bob dataview --format markdown --query 'TABLE file.mday, parent FROM "prj" LIMIT 3'
+bob dataview --format markdown --query 'TASK LIMIT 3'
 ```
 
 Native indexing may warn about ambiguous bare wikilinks when multiple notes
 share the same stem or alias. Those warnings are diagnostics about vault links;
 they do not make otherwise successful read-only smoke queries fail.
 
-## Headless dynomark
+## Native Dataview queries
 
-For non-GUI shell or cron workflows, `bob dataview` also supports an explicit
-partial-compatibility engine:
-
-```bash
-bob dataview --engine dynomark --format paths --query 'LIST FROM "Projects"'
-bob dataview --engine dynomark --format json --query-file query.dql
-```
-
-Dynomark is a Dataview-like Markdown query engine, not the Obsidian Dataview
-plugin runtime. It is useful when desktop Obsidian is unavailable, but its query
-language and output are not guaranteed to match Dataview exactly. Validate
-queries against the default Obsidian engine before relying on dynomark for
-automation. Dynomark does not support Obsidian `--origin` context.
-
-The dynomark engine runs `dynomark --query <DQL> --metadata` from `--bob-dir`.
-Set `BOB_DATAVIEW_DYNOMARK_COMMAND` to use a specific executable. It supports
-`paths` and `json` output for DQL queries; `--source` and `--format markdown`
-remain Obsidian-only.
-
-Set `BOB_DATAVIEW_OBSIDIAN_COMMAND` to use a specific Obsidian CLI executable
-for the default engine. Set `BOB_DATAVIEW_VAULT` to choose the default vault
-name or ID forwarded to `obsidian eval`.
-
-## Headless native Dataview queries
-
-Use `--engine native` when the query can run against the local Markdown index.
-It does not call Obsidian, Dataview, or dynomark.
+Native mode runs against the local Markdown index. It does not call Obsidian or
+the live Dataview plugin.
 
 ```bash
-bob dataview --engine native --strict-paths --query '
+bob dataview --strict-paths --query '
 LIST
 FROM "ref"
 WHERE source_pdf
@@ -214,3 +188,18 @@ does not implement DataviewJS, inline DQL modes, Obsidian DOM rendering,
 interactive task checking, or every plugin setting. Quoted native sources
 resolve an exact note path first and otherwise act as folder sources; use a
 more specific folder path when a vault contains both `Name.md` and `Name/...`.
+
+## Live Obsidian engine
+
+Use `--engine obsidian` when a query needs the exact installed Dataview plugin.
+The target vault must already be open in desktop Obsidian, and the Dataview
+community plugin must be enabled.
+
+```bash
+bob dataview --engine obsidian --source '#project'
+bob dataview --engine obsidian --format markdown --origin Home.md --query 'TABLE file.link FROM #project'
+```
+
+Set `BOB_DATAVIEW_OBSIDIAN_COMMAND` to use a specific Obsidian CLI executable.
+Set `BOB_DATAVIEW_VAULT` or pass `--vault` to choose the vault name or ID
+forwarded to `obsidian eval`.

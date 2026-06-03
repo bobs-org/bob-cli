@@ -33,13 +33,9 @@ mod index;
 mod value;
 
 const COMMAND_NAME: &str = "bob dataview";
-const ENV_DYNOMARK_COMMAND: &str = "BOB_DATAVIEW_DYNOMARK_COMMAND";
 const ENV_OBSIDIAN_COMMAND: &str = "BOB_DATAVIEW_OBSIDIAN_COMMAND";
 const ENV_VAULT: &str = "BOB_DATAVIEW_VAULT";
 const RESULT_PREFIX: &str = "BOB_DATAVIEW_RESULT\t";
-const DYNOMARK_COMPAT_WARNING: &str = "dynomark is a partial \
-Dataview-compatible headless engine; validate results before relying on them \
-for automation";
 const OBSIDIAN_EVAL_SCRIPT: &str = r#"
 (async () => {
   function plain(value, seen = new WeakSet()) {
@@ -234,7 +230,6 @@ enum OutputFormat {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Engine {
-    Dynomark,
     Native,
     Obsidian,
 }
@@ -283,7 +278,6 @@ fn run_request(request: &Request) -> Result<(), DataviewError> {
     match request.engine {
         Engine::Obsidian => run_obsidian(request),
         Engine::Native => run_native(request),
-        Engine::Dynomark => run_dynomark(request),
     }
 }
 
@@ -294,24 +288,6 @@ fn run_obsidian(request: &Request) -> Result<(), DataviewError> {
     let output = run_obsidian_eval(&request.vault, &javascript)?;
     let engine_output = parse_protocol_stdout(&output.stdout)?;
     emit_engine_output(request, engine_output)
-}
-
-fn run_dynomark(request: &Request) -> Result<(), DataviewError> {
-    let query = match &request.query {
-        QueryInput::Dql(input) => input.read_query()?,
-        QueryInput::Source(_) => unreachable!(
-            "dynomark source expressions are rejected during argument parsing"
-        ),
-    };
-
-    let output = run_dynomark_query(&request.vault.bob_dir, &query)?;
-    if !output.stderr.is_empty() {
-        eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    let dynomark_output =
-        parse_dynomark_stdout(&output.stdout, &request.vault.bob_dir);
-    emit_dynomark_output(request, dynomark_output)
 }
 
 fn run_native(request: &Request) -> Result<(), DataviewError> {
@@ -363,53 +339,6 @@ fn run_obsidian_eval(
         Ok(output)
     } else {
         Err(obsidian_failure(output))
-    }
-}
-
-fn run_dynomark_query(
-    bob_dir: &Path,
-    query: &str,
-) -> Result<Output, DataviewError> {
-    let command = dynomark_command();
-    let output = Command::new(&command)
-        .arg("--query")
-        .arg(query)
-        .arg("--metadata")
-        .current_dir(bob_dir)
-        .output()
-        .map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                DataviewError::MissingDynomarkCommand {
-                    command: command.clone(),
-                }
-            } else {
-                DataviewError::RunDynomark {
-                    command: command.clone(),
-                    error,
-                }
-            }
-        })?;
-
-    if output.status.success() {
-        Ok(output)
-    } else {
-        Err(dynomark_failure(output))
-    }
-}
-
-fn dynomark_command() -> OsString {
-    env::var_os(ENV_DYNOMARK_COMMAND)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| OsString::from("dynomark"))
-}
-
-fn dynomark_failure(output: Output) -> DataviewError {
-    let exit_code = bob_env::exit_code(output.status);
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    DataviewError::DynomarkFailed {
-        exit_code,
-        output: child_output_excerpt(&stdout, &stderr),
     }
 }
 
@@ -603,50 +532,6 @@ fn emit_engine_output(
     }
 }
 
-fn emit_dynomark_output(
-    request: &Request,
-    output: DynomarkOutput,
-) -> Result<(), DataviewError> {
-    let mut warnings = dynomark_warnings(request);
-    let mut path_warnings = output.warnings;
-    let extraction =
-        extract_dynomark_paths(&output.metadata, &request.vault.bob_dir)?;
-    path_warnings.extend(extraction.warnings);
-    if request.strict_paths && !path_warnings.is_empty() {
-        return Err(DataviewError::StrictPaths {
-            warnings: path_warnings,
-        });
-    }
-    warnings.extend(path_warnings);
-
-    match request.format {
-        OutputFormat::Paths => {
-            emit_warnings(&warnings);
-            if !extraction.paths.is_empty() {
-                println!("{}", extraction.paths.join("\n"));
-            }
-            Ok(())
-        }
-        OutputFormat::Json => {
-            emit_warnings(&warnings);
-            print_json(serde_json::json!({
-                "engine": request.engine.as_str(),
-                "query_kind": "dql",
-                "format": request.format.as_str(),
-                "paths": extraction.paths,
-                "result": {
-                    "metadata": output.metadata,
-                    "markdown": output.rendered,
-                },
-                "warnings": warnings,
-            }))
-        }
-        OutputFormat::Markdown => unreachable!(
-            "dynomark markdown output is rejected during argument parsing"
-        ),
-    }
-}
-
 fn emit_native_output(
     request: &Request,
     output: NativeOutput,
@@ -683,18 +568,6 @@ fn emit_native_output(
             "native markdown output is handled before native JSON emission"
         ),
     }
-}
-
-fn dynomark_warnings(request: &Request) -> Vec<String> {
-    let mut warnings = vec![DYNOMARK_COMPAT_WARNING.to_string()];
-    if request.vault.origin.is_some() {
-        warnings.push(
-            "dynomark does not support Obsidian origin context; ignoring \
-             --origin"
-                .to_string(),
-        );
-    }
-    warnings
 }
 
 fn emit_warnings(warnings: &[String]) {
@@ -744,13 +617,6 @@ fn extract_dql_paths(
         None => collect_unknown_result_paths(result, &mut collector),
     }
     collector.finish(strict)
-}
-
-#[derive(Debug)]
-struct DynomarkOutput {
-    metadata: Vec<Value>,
-    rendered: String,
-    warnings: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -5782,111 +5648,6 @@ fn native_token_name(token: &NativeToken) -> &'static str {
     }
 }
 
-fn parse_dynomark_stdout(stdout: &[u8], bob_dir: &Path) -> DynomarkOutput {
-    let stdout = String::from_utf8_lossy(stdout);
-    let (metadata, rendered) = split_dynomark_metadata(&stdout);
-    let mut warnings = Vec::new();
-    if metadata.is_empty() {
-        warnings.push(
-            "dynomark did not emit file metadata; paths output may be empty"
-                .to_string(),
-        );
-    }
-    if !bob_dir.is_absolute() {
-        warnings.push(format!(
-            "dynomark was run from non-absolute vault path {}; absolute \
-             metadata may not be relativized",
-            bob_dir.display()
-        ));
-    }
-
-    DynomarkOutput {
-        metadata,
-        rendered,
-        warnings,
-    }
-}
-
-fn split_dynomark_metadata(stdout: &str) -> (Vec<Value>, String) {
-    let mut stream = serde_json::Deserializer::from_str(stdout).into_iter();
-    let mut metadata = Vec::new();
-    let mut offset = 0;
-
-    loop {
-        let next: Option<Result<Value, _>> = stream.next();
-        let Some(value) = next else {
-            offset = stream.byte_offset();
-            break;
-        };
-
-        match value {
-            Ok(value) if dynomark_metadata_has_path(&value) => {
-                metadata.push(value);
-                offset = stream.byte_offset();
-            }
-            Ok(_) | Err(_) => break,
-        }
-    }
-
-    let rendered = stdout[offset..].trim_start().to_string();
-    (metadata, rendered)
-}
-
-fn dynomark_metadata_has_path(value: &Value) -> bool {
-    value
-        .as_object()
-        .and_then(|object| object.get("file.path"))
-        .and_then(Value::as_str)
-        .is_some()
-}
-
-fn extract_dynomark_paths(
-    metadata: &[Value],
-    bob_dir: &Path,
-) -> Result<PathExtraction, DataviewError> {
-    let mut collector = PathCollector::default();
-    for (index, item) in metadata.iter().enumerate() {
-        let context = format!("dynomark metadata row {}", index + 1);
-        let Some(raw_path) = item.get("file.path").and_then(Value::as_str)
-        else {
-            collector.warn(format!("{context} has no file.path"));
-            continue;
-        };
-
-        match dynomark_vault_relative_path(raw_path, bob_dir) {
-            Ok(path) => {
-                collector.add_raw_path(&path, &context);
-            }
-            Err(reason) => collector.warn(format!("{context}: {reason}")),
-        }
-    }
-
-    collector.finish(false)
-}
-
-fn dynomark_vault_relative_path(
-    raw_path: &str,
-    bob_dir: &Path,
-) -> Result<String, String> {
-    let path = Path::new(raw_path);
-    if !path.is_absolute() {
-        return Ok(raw_path.to_string());
-    }
-
-    let relative = path.strip_prefix(bob_dir).map_err(|_| {
-        format!(
-            "absolute path {raw_path:?} is outside Bob vault {}",
-            bob_dir.display()
-        )
-    })?;
-
-    if relative.as_os_str().is_empty() {
-        return Err(format!("absolute path {raw_path:?} names the vault root"));
-    }
-
-    Ok(relative.to_string_lossy().into_owned())
-}
-
 fn collect_list_paths(result: &Value, collector: &mut PathCollector) {
     let Some(values) = result_array(result) else {
         collector.warn("DQL list result missing values array".to_string());
@@ -6311,15 +6072,8 @@ enum DataviewError {
     DataviewQuery {
         message: String,
     },
-    DynomarkFailed {
-        exit_code: i32,
-        output: String,
-    },
     MalformedProtocolResponse {
         reason: String,
-    },
-    MissingDynomarkCommand {
-        command: OsString,
     },
     MissingObsidianCommand {
         command: OsString,
@@ -6354,10 +6108,6 @@ enum DataviewError {
         command: OsString,
         error: io::Error,
     },
-    RunDynomark {
-        command: OsString,
-        error: io::Error,
-    },
     SerializeOutput(serde_json::Error),
     SerializeRequest(serde_json::Error),
     StrictPaths {
@@ -6379,30 +6129,11 @@ impl DataviewError {
                 eprintln!("{COMMAND_NAME}: Dataview query failed");
                 eprintln!("Dataview reported: {message}");
             }
-            Self::DynomarkFailed { exit_code, output } => {
-                eprintln!(
-                    "{COMMAND_NAME}: dynomark query failed with exit code \
-                     {exit_code}"
-                );
-                if !output.is_empty() {
-                    eprintln!("dynomark output excerpt: {output}");
-                }
-            }
             Self::MalformedProtocolResponse { reason } => {
                 eprintln!(
                     "{COMMAND_NAME}: malformed Obsidian protocol response"
                 );
                 eprintln!("{reason}");
-            }
-            Self::MissingDynomarkCommand { command } => {
-                eprintln!(
-                    "{COMMAND_NAME}: dynomark command not found: {}",
-                    bob_env::os_to_string(command)
-                );
-                eprintln!(
-                    "Install dynomark or set {ENV_DYNOMARK_COMMAND} to an \
-                     executable path."
-                );
             }
             Self::MissingObsidianCommand { command } => {
                 eprintln!(
@@ -6476,13 +6207,6 @@ impl DataviewError {
                     bob_env::os_to_string(command)
                 );
             }
-            Self::RunDynomark { command, error } => {
-                eprintln!(
-                    "{COMMAND_NAME}: failed to run dynomark command {}: \
-                     {error}",
-                    bob_env::os_to_string(command)
-                );
-            }
             Self::SerializeOutput(error) => {
                 eprintln!(
                     "{COMMAND_NAME}: failed to serialize output JSON: {error}"
@@ -6512,8 +6236,7 @@ impl DataviewError {
 
     fn exit_code(&self) -> i32 {
         match self {
-            Self::DynomarkFailed { exit_code, .. }
-            | Self::ObsidianFailed { exit_code, .. }
+            Self::ObsidianFailed { exit_code, .. }
             | Self::ObsidianNotRunning { exit_code, .. } => *exit_code,
             _ => 1,
         }
@@ -6553,15 +6276,15 @@ fn redact_generated_code(output: &str) -> String {
 
 fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Run Dataview queries against the Bob Obsidian vault")
+        .about("Run Dataview queries against the Bob vault")
         .long_about(
             "Run Dataview source expressions or DQL queries against the Bob \
-Obsidian vault.\n\n\
+vault.\n\n\
 Source expressions return matching page paths. DQL queries support path, JSON, \
-and markdown output modes. The default Obsidian engine is the exact Dataview \
-runtime. The explicit dynomark engine is a partial headless fallback for DQL \
-paths and JSON output. The native engine is a headless local implementation of \
-the supported Bob source-expression and DQL surface.",
+and markdown output modes. The default native engine is a headless local \
+implementation of the supported Bob source-expression and DQL surface. The \
+explicit Obsidian engine runs against the live Dataview plugin when exact \
+installed-plugin behavior is needed.",
         )
         .after_help(
             "Examples:\n  bob dataview --source '#project and -\"archive\"'\n  bob dataview --query 'LIST FROM #waiting'\n  bob dataview --format json --query-file ~/queries/projects.dql",
@@ -6596,9 +6319,9 @@ fn engine_arg() -> Arg {
     Arg::new("engine")
         .long("engine")
         .value_name("ENGINE")
-        .default_value("obsidian")
-        .value_parser(["dynomark", "native", "obsidian"])
-        .help("Query engine: obsidian for exact Dataview, dynomark for partial headless DQL, native for local headless Dataview")
+        .default_value("native")
+        .value_parser(["native", "obsidian"])
+        .help("Query engine: native for local headless Dataview, obsidian for exact live Dataview")
 }
 
 fn format_arg() -> Arg {
@@ -6654,7 +6377,9 @@ fn vault_arg() -> Arg {
         .long("vault")
         .value_name("NAME_OR_ID")
         .value_parser(NonEmptyStringValueParser::new())
-        .help("Obsidian vault name or ID; defaults to BOB_DATAVIEW_VAULT")
+        .help(
+            "Obsidian engine vault name or ID; defaults to BOB_DATAVIEW_VAULT",
+        )
 }
 
 impl Request {
@@ -6681,19 +6406,12 @@ impl Request {
             ));
         }
 
-        if engine == Engine::Dynomark && query.is_source() {
+        if engine == Engine::Native
+            && matches.get_one::<String>("vault").is_some()
+        {
             return Err(command.error(
                 ErrorKind::ArgumentConflict,
-                "--engine dynomark supports DQL queries only; use --query or \
-                 --query-file",
-            ));
-        }
-
-        if engine == Engine::Dynomark && format == OutputFormat::Markdown {
-            return Err(command.error(
-                ErrorKind::ArgumentConflict,
-                "--format markdown is not supported by the dynomark engine; \
-                 use --engine obsidian or --engine native",
+                "--vault can only be used with --engine obsidian",
             ));
         }
 
@@ -6704,7 +6422,8 @@ impl Request {
             vault: VaultConfig::from_matches(
                 matches,
                 command,
-                matches!(engine, Engine::Dynomark | Engine::Native),
+                engine == Engine::Native,
+                engine == Engine::Obsidian,
             )?,
             strict_paths,
         })
@@ -6807,7 +6526,6 @@ impl Engine {
             .expect("clap provides a default engine")
             .as_str()
         {
-            "dynomark" => Self::Dynomark,
             "native" => Self::Native,
             "obsidian" => Self::Obsidian,
             value => unreachable!("unexpected engine value from clap: {value}"),
@@ -6816,7 +6534,6 @@ impl Engine {
 
     fn as_str(self) -> &'static str {
         match self {
-            Self::Dynomark => "dynomark",
             Self::Native => "native",
             Self::Obsidian => "obsidian",
         }
@@ -6828,6 +6545,7 @@ impl VaultConfig {
         matches: &ArgMatches,
         command: &mut ClapCommand,
         validate_default_bob_dir: bool,
+        use_obsidian_vault: bool,
     ) -> Result<Self, clap::Error> {
         let bob_dir_arg = matches.get_one::<OsString>("bob-dir");
         let bob_dir = bob_dir_arg
@@ -6846,10 +6564,14 @@ impl VaultConfig {
                 Ok::<PathBuf, clap::Error>(path)
             })
             .transpose()?;
-        let obsidian_vault = matches
-            .get_one::<String>("vault")
-            .cloned()
-            .or_else(default_vault_from_env);
+        let obsidian_vault = use_obsidian_vault
+            .then(|| {
+                matches
+                    .get_one::<String>("vault")
+                    .cloned()
+                    .or_else(default_vault_from_env)
+            })
+            .flatten();
 
         Ok(Self {
             bob_dir,
