@@ -58,8 +58,8 @@ on a running Obsidian app.
 
 `--format <paths|json|markdown>` selects the output format. `paths` is the
 default and prints matching source note paths for DQL `LIST` and `TABLE`
-queries. Use `json` for structured rows and `markdown` with the Obsidian engine
-for rendered Dataview tables.
+queries. Use `json` for structured rows and `markdown` for rendered DQL `LIST`,
+`TABLE`, and `TASK` output through the Obsidian or native engine.
 
 `--origin <VAULT_RELATIVE_PATH>` sets the origin note for Dataview `this` and
 relative links. It must be vault-relative; absolute paths and `..` traversal are
@@ -138,10 +138,10 @@ Set `BOB_DATAVIEW_OBSIDIAN_COMMAND` to use a specific Obsidian CLI executable
 for the default engine. Set `BOB_DATAVIEW_VAULT` to choose the default vault
 name or ID forwarded to `obsidian eval`.
 
-## Headless native frontmatter queries
+## Headless native Dataview queries
 
-Use `--engine native` when the query only needs local Markdown frontmatter and
-wikilink parent traversal. It does not call Obsidian, Dataview, or dynomark.
+Use `--engine native` when the query can run against the local Markdown index.
+It does not call Obsidian, Dataview, or dynomark.
 
 ```bash
 bob dataview --engine native --strict-paths --query '
@@ -158,15 +158,11 @@ WHERE source_pdf
 '
 ```
 
-The native engine supports `LIST` queries and limited `TABLE field,
-parent.field` projections with an optional quoted folder source such as
-`FROM "ref"`, plus `WHERE` expressions made from field truthiness,
-`field = [[wikilink]]`, string/boolean comparisons, `AND`, `OR`, and
-parentheses. Chained fields such as `parent.parent` resolve each intermediate
-frontmatter value as an Obsidian wikilink or bare note target.
+The native engine supports source expressions, `LIST`, `TABLE`, `TASK`, and
+`CALENDAR` JSON results, common Dataview expressions/functions, and ordered data
+commands such as `FROM`, `WHERE`, `SORT`, `GROUP BY`, `FLATTEN`, and `LIMIT`.
 
-Native `paths` output prints matching source note paths for both `LIST` and
-`TABLE`. Native `json` output keeps `LIST` results list-shaped and emits
-`TABLE` results with `type`, `headers`, and row `values`; missing fields become
-`null`. Rendered Markdown remains Obsidian-only, so use `--engine obsidian
---format markdown` when you want Dataview's Markdown table rendering.
+Native `paths` output prints matching source note paths where a DQL result
+retains source identity. Native `json` output emits the stable Bob wrapper.
+Native `markdown` output renders DQL `LIST`, `TABLE`, and `TASK` results and
+fails cleanly for `CALENDAR`, matching Dataview's Markdown export behavior.

@@ -21,12 +21,6 @@ struct TempDir {
     path: PathBuf,
 }
 
-struct NativeFailureCase {
-    name: &'static str,
-    args: &'static [&'static str],
-    markers: &'static [&'static str],
-}
-
 struct LiveCase {
     name: &'static str,
     args: &'static [&'static str],
@@ -902,69 +896,95 @@ fn dataview_native_dql_execution_supports_phase6_result_shapes() {
 }
 
 #[test]
-fn dataview_native_expected_failures_record_future_parity_contract() {
-    let cases = [
-        NativeFailureCase {
-            name: "list markdown",
-            args: &[
-                "--format",
-                "markdown",
-                "--query",
-                r#"LIST FROM "Projects""#,
-            ],
-            markers: &["--format markdown requires the Obsidian engine"],
-        },
-        NativeFailureCase {
-            name: "table markdown",
-            args: &[
-                "--format",
-                "markdown",
-                "--query",
-                r#"TABLE status FROM "Projects""#,
-            ],
-            markers: &["--format markdown requires the Obsidian engine"],
-        },
-        NativeFailureCase {
-            name: "task markdown",
-            args: &["--format", "markdown", "--query", r#"TASK FROM "Tasks""#],
-            markers: &["--format markdown requires the Obsidian engine"],
-        },
-        NativeFailureCase {
-            name: "calendar markdown",
-            args: &[
-                "--format",
-                "markdown",
-                "--query",
-                r#"CALENDAR due FROM "Projects""#,
-            ],
-            markers: &["--format markdown requires the Obsidian engine"],
-        },
-    ];
+fn dataview_native_markdown_goldens_cover_supported_exports() {
+    let list = run_native_fixture(&[
+        "--format",
+        "markdown",
+        "--query",
+        r#"LIST FROM "Projects""#,
+    ]);
+    assert_success(&list);
+    assert_eq!(
+        stdout(&list),
+        concat!(
+            "- [[Projects/Alpha.md|Alpha]]\n",
+            "- [[Projects/Beta.md|Beta]]\n",
+            "- [[Projects/Gamma.md|Gamma]]\n",
+        ),
+        "native list markdown changed:\n{}",
+        format_output(&list)
+    );
+    assert!(stderr(&list).is_empty(), "{}", format_output(&list));
 
-    for case in cases {
-        let output = run_native_fixture(case.args);
-        assert!(
-            !output.status.success(),
-            "future native parity case unexpectedly passed: {}\n{}",
-            case.name,
-            format_output(&output)
-        );
-        let err = stderr(&output);
-        for marker in case.markers {
-            assert!(
-                err.contains(marker),
-                "expected marker `{marker}` for future native parity case `{}`:\n{}",
-                case.name,
-                format_output(&output)
-            );
-        }
-        assert!(
-            stdout(&output).is_empty(),
-            "future native parity failures must keep stdout clean for `{}`:\n{}",
-            case.name,
-            format_output(&output)
-        );
-    }
+    let table = run_native_fixture(&[
+        "--format",
+        "markdown",
+        "--query",
+        r#"TABLE status, owner FROM "Projects""#,
+    ]);
+    assert_success(&table);
+    assert_eq!(
+        stdout(&table),
+        concat!(
+            "| File                         | status  | owner                                    |\n",
+            "| ---------------------------- | ------- | ---------------------------------------- |\n",
+            "| [[Projects/Alpha.md\\|Alpha]] | active  | [[People/Ada Lovelace.md\\|Ada]]          |\n",
+            "| [[Projects/Beta.md\\|Beta]]   | waiting | [[People/Grace Hopper.md\\|Grace Hopper]] |\n",
+            "| [[Projects/Gamma.md\\|Gamma]] | -       | -                                        |\n",
+        ),
+        "native table markdown changed:\n{}",
+        format_output(&table)
+    );
+    assert!(stderr(&table).is_empty(), "{}", format_output(&table));
+
+    let task = run_native_fixture(&[
+        "--format",
+        "markdown",
+        "--query",
+        r#"TASK FROM "Tasks""#,
+    ]);
+    assert_success(&task);
+    assert_eq!(
+        stdout(&task),
+        concat!(
+            "- [ ] Parent task #project\n",
+            "  - [x] Completed child\n",
+            "  - [-] Canceled child\n",
+            "- [ ] Sibling task with block id\n",
+        ),
+        "native task markdown changed:\n{}",
+        format_output(&task)
+    );
+    assert!(stderr(&task).is_empty(), "{}", format_output(&task));
+}
+
+#[test]
+fn dataview_native_calendar_markdown_fails_cleanly() {
+    let output = run_native_fixture(&[
+        "--format",
+        "markdown",
+        "--query",
+        r#"CALENDAR due FROM "Projects""#,
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "calendar markdown should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stdout(&output).is_empty(),
+        "calendar markdown failure must keep stdout clean:\n{}",
+        format_output(&output)
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains("Dataview query failed")
+            && err.contains("Cannot render calendar queries to markdown"),
+        "calendar markdown failure should explain the Dataview error:\n{}",
+        format_output(&output)
+    );
 }
 
 #[test]

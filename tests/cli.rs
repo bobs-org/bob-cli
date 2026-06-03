@@ -1176,19 +1176,7 @@ fn dataview_headless_engines_reject_unsupported_combinations() {
                 "--query",
                 "LIST FROM #project",
             ],
-            "--format markdown requires the Obsidian engine",
-        ),
-        (
-            &[
-                "dataview",
-                "--engine",
-                "native",
-                "--format",
-                "markdown",
-                "--query",
-                "LIST FROM #project",
-            ],
-            "--format markdown requires the Obsidian engine",
+            "--format markdown is not supported by the dynomark engine",
         ),
     ];
 

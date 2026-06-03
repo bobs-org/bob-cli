@@ -327,8 +327,15 @@ fn run_native(request: &Request) -> Result<(), DataviewError> {
         }
         QueryInput::Dql(input) => {
             let query = NativeQuery::parse(&input.read_query()?)?;
-            let output = vault.evaluate(&query)?;
-            emit_native_output(request, output)
+            if request.format == OutputFormat::Markdown {
+                let settings =
+                    NativeMarkdownSettings::read(&request.vault.bob_dir);
+                let output = vault.evaluate_markdown(&query, &settings)?;
+                emit_engine_output(request, output)
+            } else {
+                let output = vault.evaluate(&query);
+                emit_native_output(request, output)
+            }
         }
     }
 }
@@ -673,7 +680,7 @@ fn emit_native_output(
             }))
         }
         OutputFormat::Markdown => unreachable!(
-            "native markdown output is rejected during argument parsing"
+            "native markdown output is handled before native JSON emission"
         ),
     }
 }
@@ -752,6 +759,13 @@ struct NativeOutput {
     result: Value,
 }
 
+#[derive(Debug, Clone)]
+struct NativeMarkdownSettings {
+    render_null_as: String,
+    table_id_column_name: String,
+    table_group_column_name: String,
+}
+
 #[derive(Debug)]
 struct NativeQuery {
     kind: NativeQueryKind,
@@ -762,11 +776,11 @@ struct NativeQuery {
 enum NativeQueryKind {
     List {
         expression: Option<NativeExpression>,
-        _without_id: bool,
+        without_id: bool,
     },
     Table {
         columns: Vec<NativeSelect>,
-        _without_id: bool,
+        without_id: bool,
     },
     Task {
         _without_id: bool,
@@ -1019,10 +1033,29 @@ impl NativeVault {
         }
     }
 
-    fn evaluate(
+    fn evaluate(&self, query: &NativeQuery) -> NativeOutput {
+        let rows = self.evaluate_rows(query);
+        NativeOutput {
+            warnings: self.index.warnings.clone(),
+            result: self.result_json(query, &rows),
+        }
+    }
+
+    fn evaluate_markdown(
         &self,
         query: &NativeQuery,
-    ) -> Result<NativeOutput, DataviewError> {
+        settings: &NativeMarkdownSettings,
+    ) -> Result<EngineOutput, DataviewError> {
+        let rows = self.evaluate_rows(query);
+        Ok(EngineOutput {
+            response: EngineResponse::Markdown(
+                self.result_markdown(query, &rows, settings)?,
+            ),
+            warnings: self.index.warnings.clone(),
+        })
+    }
+
+    fn evaluate_rows(&self, query: &NativeQuery) -> Vec<NativeRow> {
         let mut rows = self.initial_rows(query);
         for command in &query.commands {
             match command {
@@ -1063,11 +1096,7 @@ impl NativeVault {
                 }
             }
         }
-
-        Ok(NativeOutput {
-            warnings: self.index.warnings.clone(),
-            result: self.result_json(query, &rows),
-        })
+        rows
     }
 
     fn initial_rows(&self, query: &NativeQuery) -> Vec<NativeRow> {
@@ -1304,6 +1333,122 @@ impl NativeVault {
             "type": "calendar",
             "values": values,
         })
+    }
+
+    fn result_markdown(
+        &self,
+        query: &NativeQuery,
+        rows: &[NativeRow],
+        settings: &NativeMarkdownSettings,
+    ) -> Result<String, DataviewError> {
+        match &query.kind {
+            NativeQueryKind::List {
+                expression,
+                without_id,
+            } => Ok(self.list_result_markdown(
+                rows,
+                expression.as_ref(),
+                *without_id,
+                settings,
+            )),
+            NativeQueryKind::Table {
+                columns,
+                without_id,
+            } => Ok(self.table_result_markdown(
+                rows,
+                columns,
+                *without_id,
+                settings,
+            )),
+            NativeQueryKind::Task { .. } => {
+                Ok(self.task_result_markdown(rows, settings))
+            }
+            NativeQueryKind::Calendar { .. } => {
+                Err(DataviewError::DataviewQuery {
+                    message: "Cannot render calendar queries to markdown."
+                        .to_string(),
+                })
+            }
+        }
+    }
+
+    fn list_result_markdown(
+        &self,
+        rows: &[NativeRow],
+        expression: Option<&NativeExpression>,
+        without_id: bool,
+        settings: &NativeMarkdownSettings,
+    ) -> String {
+        let mut markdown = String::new();
+        for row in rows {
+            markdown.push_str("- ");
+            match expression {
+                Some(expression) if !without_id => {
+                    let key = row.identity_value(self);
+                    let value = expression.evaluate(&row.context(self));
+                    markdown.push_str(&markdown_literal(&key, settings));
+                    markdown.push_str(": ");
+                    markdown.push_str(&markdown_literal(&value, settings));
+                }
+                Some(expression) => {
+                    let value = expression.evaluate(&row.context(self));
+                    markdown.push_str(&markdown_literal(&value, settings));
+                }
+                None => {
+                    markdown.push_str(&markdown_literal(
+                        &row.identity_value(self),
+                        settings,
+                    ));
+                }
+            }
+            markdown.push('\n');
+        }
+        markdown
+    }
+
+    fn table_result_markdown(
+        &self,
+        rows: &[NativeRow],
+        columns: &[NativeSelect],
+        without_id: bool,
+        settings: &NativeMarkdownSettings,
+    ) -> String {
+        let grouped = rows.iter().any(|row| row.source_page_index.is_none());
+        let mut headers = Vec::new();
+        if !without_id {
+            headers.push(if grouped {
+                settings.table_group_column_name.clone()
+            } else {
+                settings.table_id_column_name.clone()
+            });
+        }
+        headers.extend(columns.iter().map(NativeSelect::header));
+
+        let values = rows
+            .iter()
+            .map(|row| {
+                let mut cells = Vec::new();
+                if !without_id {
+                    cells.push(row.identity_value(self));
+                }
+                cells.extend(columns.iter().map(|column| {
+                    column.expression.evaluate(&row.context(self))
+                }));
+                cells
+            })
+            .collect::<Vec<_>>();
+
+        markdown_table(&headers, &values, settings)
+    }
+
+    fn task_result_markdown(
+        &self,
+        rows: &[NativeRow],
+        settings: &NativeMarkdownSettings,
+    ) -> String {
+        let values =
+            rows.iter().map(|row| row.value.clone()).collect::<Vec<_>>();
+        markdown_task_values(&values, settings, 0)
     }
 
     fn index_order_indices(&self) -> Vec<usize> {
@@ -1685,6 +1830,305 @@ impl NativeSelect {
         self.alias
             .clone()
             .unwrap_or_else(|| self.expression.raw.clone())
+    }
+}
+
+impl Default for NativeMarkdownSettings {
+    fn default() -> Self {
+        Self {
+            render_null_as: "\\-".to_string(),
+            table_id_column_name: "File".to_string(),
+            table_group_column_name: "Group".to_string(),
+        }
+    }
+}
+
+impl NativeMarkdownSettings {
+    fn read(bob_dir: &Path) -> Self {
+        let mut settings = Self::default();
+        let path = bob_dir.join(".obsidian/plugins/dataview/data.json");
+        let Ok(contents) = fs::read_to_string(path) else {
+            return settings;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&contents) else {
+            return settings;
+        };
+
+        settings.apply(&value);
+        settings
+    }
+
+    fn apply(&mut self, value: &Value) {
+        if let Some(render_null_as) =
+            value.get("renderNullAs").and_then(Value::as_str)
+        {
+            self.render_null_as = render_null_as.to_string();
+        }
+        if let Some(column_name) =
+            value.get("tableIdColumnName").and_then(Value::as_str)
+        {
+            self.table_id_column_name = column_name.to_string();
+        }
+        if let Some(column_name) =
+            value.get("tableGroupColumnName").and_then(Value::as_str)
+        {
+            self.table_group_column_name = column_name.to_string();
+        }
+    }
+}
+
+fn markdown_table(
+    headers: &[String],
+    values: &[Vec<DataviewValue>],
+    settings: &NativeMarkdownSettings,
+) -> String {
+    let mut rendered_rows = Vec::new();
+    let mut max_lengths = headers
+        .iter()
+        .map(|header| escape_table(header).len())
+        .collect::<Vec<_>>();
+
+    for row in values {
+        let rendered = (0..headers.len())
+            .map(|index| {
+                row.get(index)
+                    .map(|value| {
+                        escape_table(&markdown_table_literal(value, settings))
+                    })
+                    .unwrap_or_else(|| escape_table(&settings.render_null_as))
+            })
+            .collect::<Vec<_>>();
+        for (index, cell) in rendered.iter().enumerate() {
+            max_lengths[index] = max_lengths[index].max(cell.len());
+        }
+        rendered_rows.push(rendered);
+    }
+
+    let mut table = String::new();
+    table.push_str("| ");
+    table.push_str(
+        &headers
+            .iter()
+            .enumerate()
+            .map(|(index, header)| {
+                padright(&escape_table(header), max_lengths[index])
+            })
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
+    table.push_str(" |\n| ");
+    table.push_str(
+        &max_lengths
+            .iter()
+            .map(|length| "-".repeat(*length))
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
+    table.push_str(" |\n");
+
+    for row in rendered_rows {
+        table.push_str("| ");
+        table.push_str(
+            &row.iter()
+                .enumerate()
+                .map(|(index, cell)| padright(cell, max_lengths[index]))
+                .collect::<Vec<_>>()
+                .join(" | "),
+        );
+        table.push_str(" |\n");
+    }
+
+    table
+}
+
+fn markdown_table_literal(
+    value: &DataviewValue,
+    settings: &NativeMarkdownSettings,
+) -> String {
+    match value {
+        DataviewValue::Array(values) => values
+            .iter()
+            .map(|value| markdown_literal(value, settings))
+            .collect::<Vec<_>>()
+            .join(", "),
+        DataviewValue::Object(values) => values
+            .iter()
+            .map(|(key, value)| {
+                format!("{key}: {}", markdown_literal(value, settings))
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        value => markdown_literal(value, settings),
+    }
+}
+
+fn markdown_task_values(
+    values: &[DataviewValue],
+    settings: &NativeMarkdownSettings,
+    depth: usize,
+) -> String {
+    if !values.is_empty()
+        && values.iter().all(|value| task_group_value(value).is_some())
+    {
+        let mut markdown = String::new();
+        for value in values {
+            let Some((key, rows)) = task_group_value(value) else {
+                continue;
+            };
+            markdown.push_str(&"#".repeat(depth + 1));
+            markdown.push(' ');
+            markdown.push_str(&markdown_literal(key, settings));
+            markdown.push_str("\n\n");
+            markdown.push_str(&markdown_task_values(rows, settings, depth + 1));
+        }
+        return markdown;
+    }
+
+    let mut markdown = String::new();
+    for value in values {
+        markdown.push_str(&markdown_task_value(value, settings, depth));
+    }
+    markdown
+}
+
+fn task_group_value(
+    value: &DataviewValue,
+) -> Option<(&DataviewValue, &[DataviewValue])> {
+    let key = value.as_object_field("key")?;
+    let rows = match value.as_object_field("rows")? {
+        DataviewValue::Array(rows) => rows.as_slice(),
+        _ => return None,
+    };
+    Some((key, rows))
+}
+
+fn markdown_task_value(
+    value: &DataviewValue,
+    settings: &NativeMarkdownSettings,
+    depth: usize,
+) -> String {
+    let indent = "  ".repeat(depth);
+    let task = value
+        .as_object_field("task")
+        .and_then(|value| match value {
+            DataviewValue::Bool(value) => Some(*value),
+            _ => None,
+        })
+        .unwrap_or(false);
+    let status = value
+        .as_object_field("status")
+        .and_then(DataviewValue::as_str)
+        .and_then(|value| value.chars().next())
+        .unwrap_or(' ');
+    let text = value
+        .as_object_field("visual")
+        .or_else(|| value.as_object_field("text"))
+        .and_then(DataviewValue::as_str)
+        .map(|value| value.split('\n').collect::<Vec<_>>().join(" "))
+        .unwrap_or_else(|| markdown_literal(value, settings));
+
+    let mut markdown = String::new();
+    markdown.push_str(&indent);
+    markdown.push_str("- ");
+    if task {
+        markdown.push('[');
+        markdown.push(status);
+        markdown.push_str("] ");
+    }
+    markdown.push_str(&text);
+    markdown.push('\n');
+
+    if let Some(DataviewValue::Array(children)) =
+        value.as_object_field("children")
+    {
+        markdown.push_str(&markdown_task_values(children, settings, depth + 1));
+    }
+
+    markdown
+}
+
+fn markdown_literal(
+    value: &DataviewValue,
+    settings: &NativeMarkdownSettings,
+) -> String {
+    match value {
+        DataviewValue::Null => settings.render_null_as.clone(),
+        DataviewValue::Bool(value) => value.to_string(),
+        DataviewValue::Number(value) => value.to_string(),
+        DataviewValue::String(value)
+        | DataviewValue::Date(value)
+        | DataviewValue::DateTime(value)
+        | DataviewValue::Duration(value) => value.clone(),
+        DataviewValue::Link(link) => markdown_link(link),
+        DataviewValue::Array(values) => values
+            .iter()
+            .map(|value| markdown_literal(value, settings))
+            .collect::<Vec<_>>()
+            .join(", "),
+        DataviewValue::Object(values) => {
+            let fields = values
+                .iter()
+                .map(|(key, value)| {
+                    format!("{key}: {}", markdown_literal(value, settings))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {fields} }}")
+        }
+    }
+}
+
+fn markdown_link(link: &DataviewLink) -> String {
+    let mut markdown = String::new();
+    if link.embed {
+        markdown.push('!');
+    }
+    markdown.push_str("[[");
+    markdown.push_str(&link.path.replace('|', "\\|"));
+    markdown.push('|');
+    let display = link
+        .display
+        .clone()
+        .unwrap_or_else(|| default_link_display(&link.path));
+    markdown.push_str(&display);
+    markdown.push_str("]]");
+    markdown
+}
+
+fn default_link_display(path: &str) -> String {
+    let (base, subpath) = path
+        .split_once('#')
+        .map_or((path, None), |(base, subpath)| {
+            (base, Some(subpath.trim_start_matches('^')))
+        });
+    let mut display = note_stem(base).unwrap_or_else(|| base.to_string());
+    if let Some(subpath) = subpath
+        && !subpath.is_empty()
+    {
+        display.push_str(" > ");
+        display.push_str(subpath);
+    }
+    display
+}
+
+fn escape_table(text: &str) -> String {
+    let mut output = String::new();
+    let mut previous = None;
+    for ch in text.chars() {
+        if ch == '|' && previous != Some('\\') {
+            output.push('\\');
+        }
+        output.push(ch);
+        previous = Some(ch);
+    }
+    output
+}
+
+fn padright(text: &str, length: usize) -> String {
+    if text.len() >= length {
+        text.to_string()
+    } else {
+        format!("{text}{}", " ".repeat(length - text.len()))
     }
 }
 
@@ -4409,7 +4853,7 @@ impl NativeParser {
                 };
                 Ok(NativeQueryKind::List {
                     expression,
-                    _without_id: without_id,
+                    without_id,
                 })
             }
             NativeToken::Table => {
@@ -4421,7 +4865,7 @@ impl NativeParser {
                 }
                 Ok(NativeQueryKind::Table {
                     columns,
-                    _without_id: without_id,
+                    without_id,
                 })
             }
             NativeToken::Task => {
@@ -6245,13 +6689,11 @@ impl Request {
             ));
         }
 
-        if matches!(engine, Engine::Dynomark | Engine::Native)
-            && format == OutputFormat::Markdown
-        {
+        if engine == Engine::Dynomark && format == OutputFormat::Markdown {
             return Err(command.error(
                 ErrorKind::ArgumentConflict,
-                "--format markdown requires the Obsidian engine for \
-                 Dataview-rendered Markdown",
+                "--format markdown is not supported by the dynomark engine; \
+                 use --engine obsidian or --engine native",
             ));
         }
 
@@ -6517,9 +6959,9 @@ LIMIT 5
         match query.kind {
             NativeQueryKind::Table {
                 columns,
-                _without_id,
+                without_id,
             } => {
-                assert!(_without_id);
+                assert!(without_id);
                 assert_eq!(columns.len(), 2);
                 assert_eq!(columns[0].header(), "Owner");
                 assert_eq!(columns[1].header(), "Readiness");
