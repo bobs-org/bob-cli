@@ -234,8 +234,8 @@ Implemented conflict policy:
 - If only the marker changed, update frontmatter.
 - If only frontmatter changed, update the PDF marker note when PDF writes are
   enabled.
-- If the generated PDF task line is checked, treat that as a note-side
-  `status: read` signal.
+- If the generated PDF task line uses `[x]` or `[X]`, treat that as a
+  note-side `status: read` signal.
 - If marker and frontmatter changed different fields from the stored base,
   auto-merge them. PDF marker writes are still opt-in with targeted
   `sync --write-pdf` or bulk `scan --write-pdfs`.
@@ -393,13 +393,16 @@ The generated task line is a completion affordance:
 ```
 
 Checking it with `[x]` or `[X]` means `status: read`. Unchecking it does not
-infer a replacement status. When the final synced status is `read`, `sync`
-checks the generated task line if it is present; existing notes without that
-exact generated line are not bulk-migrated. If the checked task would update
-the PDF marker, `sync --dry-run` previews `pdf_marker_action: would-update`,
-plain `sync` refuses before writes, and targeted `sync --write-pdf` writes the
-marker. `scan --dry-run` previews this work. A writing scan keeps the default
-note-only refusal unless `--write-pdfs` is supplied.
+infer a replacement status. Existing Obsidian Tasks cancelled lines using
+`[-]` are tolerated and may keep metadata such as `[cancelled:: 2026-06-04]`,
+but they behave like unchecked lines and do not infer a replacement status.
+When the final synced status is `read`, `sync` checks the generated task line
+if it is present; existing notes without that exact generated line are not
+bulk-migrated. If the checked task would update the PDF marker,
+`sync --dry-run` previews `pdf_marker_action: would-update`, plain `sync`
+refuses before writes, and targeted `sync --write-pdf` writes the marker.
+`scan --dry-run` previews this work. A writing scan keeps the default note-only
+refusal unless `--write-pdfs` is supplied.
 
 Generated blocks use Obsidian block IDs beginning with `^h-`. The MVP ID is a
 deterministic content hash over source PDF path, page label, annotation kind,
@@ -728,9 +731,9 @@ PDF marker:
 bob highlights sync ~/bob/lib/books/example.pdf --prefer frontmatter --write-pdf
 ```
 
-If the only change is frontmatter, the generated task line is checked, or a
-dry-run auto-merge reports `pdf_marker_action: would-update`, review the marker
-first, back up the PDF, then run the targeted write:
+If the only change is frontmatter, the generated task line uses `[x]` or `[X]`,
+or a dry-run auto-merge reports `pdf_marker_action: would-update`, review the
+marker first, back up the PDF, then run the targeted write:
 
 ```bash
 bob highlights sync ~/bob/lib/books/example.pdf --write-pdf

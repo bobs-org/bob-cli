@@ -2283,7 +2283,7 @@ fn parse_pdf_task_line(body: &str) -> Result<PdfTaskLineState> {
 
 fn malformed_pdf_task_line_error(line_index: usize) -> CommandError {
     CommandError::new(format!(
-        "generated PDF task line on line {} is malformed; expected '- [ ] #task [[...pdf]] [p::2] ^task' or '- [x] #task [[...pdf]] [p::2] ^task'",
+        "generated PDF task line on line {} is malformed; expected a generated task such as '- [ ] #task [[...pdf]] [p::2] ^task', '- [x] #task [[...pdf]] [p::2] ^task', or '- [-] #task [[...pdf]] [p::2] ^task'; legacy generated lines without [p::2] are still accepted",
         line_index + 1
     ))
 }
@@ -2321,6 +2321,7 @@ fn parse_markdown_task_checkbox(line: &str) -> Option<(usize, bool, char)> {
     match mark {
         ' ' => Some((mark_index, false, mark)),
         'x' | 'X' => Some((mark_index, true, mark)),
+        '-' => Some((mark_index, false, mark)),
         _ => None,
     }
 }
@@ -4761,6 +4762,18 @@ Body
             super::PdfTaskLineState::Missing => panic!("expected task line"),
         }
 
+        let cancelled = super::parse_pdf_task_line(
+            "- [-] #task [[lib/chat/bulk_obsidian_task_properties.pdf]] [p::2] [cancelled:: 2026-06-04] ^task\n",
+        )
+        .expect("parse cancelled task");
+        match cancelled {
+            super::PdfTaskLineState::Present(task) => {
+                assert_eq!(task.mark, '-');
+                assert!(!task.checked);
+            }
+            super::PdfTaskLineState::Missing => panic!("expected task line"),
+        }
+
         let legacy_without_priority = super::parse_pdf_task_line(
             "- [ ] #task [[lib/books/example.pdf]] ^task\n",
         )
@@ -4781,12 +4794,22 @@ Body
             missing_tag.to_string().contains("malformed"),
             "{missing_tag}"
         );
+        assert!(missing_tag.to_string().contains("[-]"), "{missing_tag}");
 
         let non_pdf = super::parse_pdf_task_line(
             "- [ ] #task [[ref/example.md]] ^task\n",
         )
         .expect_err("task without PDF link should fail");
         assert!(non_pdf.to_string().contains("malformed"), "{non_pdf}");
+
+        let custom_marker = super::parse_pdf_task_line(
+            "- [>] #task [[lib/books/example.pdf]] [p::2] ^task\n",
+        )
+        .expect_err("custom task marker should fail");
+        assert!(
+            custom_marker.to_string().contains("malformed"),
+            "{custom_marker}"
+        );
 
         let duplicate = super::parse_pdf_task_line(
             "- [ ] #task [[lib/one.pdf]] ^task\n- [x] #task [[lib/two.pdf]] ^task\n",
@@ -4839,6 +4862,30 @@ Body
                 .expect("rewrite prioritized task checkbox");
         assert!(prioritized_rewritten
             .contains("- [x] #task [[lib/example.pdf]] [p::2] ^task\n"));
+
+        let cancelled_body = "\
+# Example
+
+- [-] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^task
+
+## Highlights
+
+<!-- highlights:begin -->
+
+<!-- highlights:end -->
+";
+        let cancelled_checked =
+            super::rewrite_pdf_task_checkbox(cancelled_body, true)
+                .expect("rewrite cancelled task checkbox to checked");
+        assert!(cancelled_checked.contains(
+            "- [x] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^task\n"
+        ));
+        let cancelled_unchecked =
+            super::rewrite_pdf_task_checkbox(cancelled_body, false)
+                .expect("rewrite cancelled task checkbox to unchecked");
+        assert!(cancelled_unchecked.contains(
+            "- [ ] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^task\n"
+        ));
 
         let unrelated_body = checked_body.replace("## Highlights", "Manual");
         assert!(!super::bodies_differ_only_by_pdf_task_checkbox(

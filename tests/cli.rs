@@ -2976,6 +2976,58 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
 }
 
 #[test]
+fn highlights_ref_scan_tolerates_cancelled_generated_pdf_task() {
+    let temp = TempDir::new("bob-cli-highlights-ref-task-cancelled");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    assert_success(
+        &bob_command()
+            .arg("highlights")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial highlights sync"),
+    );
+
+    let generated_note = fs::read_to_string(&note).expect("read ref note");
+    let cancelled_note = generated_note.replace(
+        "- [ ] #task [[lib/example.pdf]] [p::2] ^task",
+        "- [-] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] ^task",
+    );
+    write_file(&note, &cancelled_note);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run scan cancelled task");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("pdf_task: unchecked")
+            && report.contains("notes_update: 1")
+            && report.contains("writes: none"),
+        "expected cancelled task scan to plan successfully:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !report.contains("malformed") && !stderr(&output).contains("malformed"),
+        "cancelled generated task should not be reported malformed:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note after dry run"),
+        cancelled_note
+    );
+}
+
+#[test]
 fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     let temp = TempDir::new("bob-cli-highlights-ref-task-read");
     let vault = temp.path().join("vault");

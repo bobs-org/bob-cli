@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-04 16:08:22
-status: wip
+status: done
 prompt: sdd/prompts/202606/highlights_ref_cancelled_task.md
 ---
 # Plan: Accept Cancelled Generated Highlights Tasks
