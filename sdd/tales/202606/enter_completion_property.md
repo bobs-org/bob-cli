@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-04 18:33:09
-status: wip
+status: done
 prompt: sdd/prompts/202606/enter_completion_property.md
 ---
 # Plan: Obsidian Enter Task Completion Property
