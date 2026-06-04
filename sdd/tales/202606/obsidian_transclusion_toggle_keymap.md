@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-03 22:02:17
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_transclusion_toggle_keymap.md
 ---
 # Obsidian Line Transclusion Toggle Keymap Plan
