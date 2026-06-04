@@ -33,11 +33,14 @@ writes files.
 Available commands:
 
 ```bash
-bob highlights doctor
-bob highlights marker <pdf>
-bob highlights scan [--dry-run] [--write-pdfs]
-bob highlights sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter]
+bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
+bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
+bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-w|--write-pdfs]
+bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf]
 ```
+
+Path configuration options are `-b, --bob-dir <PATH>`, `-l, --lib-dir <PATH>`,
+and `-r, --ref-dir <PATH>`. `scan` also accepts `-j, --jobs <N>`.
 
 `sync <pdf> --dry-run` prints the resolved configuration and planned note/PDF
 actions without modifying either side. Without `--dry-run`, the command writes

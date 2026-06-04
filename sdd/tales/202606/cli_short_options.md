@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-04 13:51:08
-status: wip
+status: done
 prompt: sdd/prompts/202606/cli_short_options.md
 ---
 # Plan: Require Short Options for All Long CLI Options

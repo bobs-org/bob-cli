@@ -84,13 +84,13 @@ The full command contract and live smoke-test steps live in
 [`docs/dataview.md`](docs/dataview.md).
 
 ```bash
-bob move-done-tasks [--threshold N]
+bob move-done-tasks [-t|--threshold N]
 ```
 
 Scans the Bob vault for completed (`[x]`) and canceled (`[-]`) Markdown task
 blocks containing `#task`, then moves blocks from notes that meet the threshold
 into matching archive notes under `done/`. The default threshold is `10`; use a
-smaller value for a targeted collection pass, such as `--threshold 1` in a
+smaller value for a targeted collection pass, such as `-t 1` in a
 fixture vault.
 
 Archive paths mirror the source note path and add `_done` to the file stem. For
@@ -129,8 +129,8 @@ uncommitted.
 ```bash
 bob highlights doctor
 bob highlights marker <pdf>
-bob highlights scan [--dry-run] [--write-pdfs]
-bob highlights sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter]
+bob highlights scan [-d|--dry-run] [-j|--jobs N] [-w|--write-pdfs]
+bob highlights sync <pdf> [-d|--dry-run] [-w|--write-pdf] [-p|--prefer marker|frontmatter]
 ```
 
 Prepares the Highlights app PDF annotation to Bob reference note sync workflow.

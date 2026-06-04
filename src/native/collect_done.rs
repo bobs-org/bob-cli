@@ -2037,11 +2037,12 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
         let text = bob_env::os_to_string(&arg);
         match text.as_str() {
             "-h" | "--help" => return ParseResult::Help,
-            "--threshold" => {
+            "-t" | "--threshold" => {
+                let option = text.as_str();
                 let Some(value) = args.next() else {
-                    return ParseResult::Error(
-                        "option --threshold requires a value".to_string(),
-                    );
+                    return ParseResult::Error(format!(
+                        "option {option} requires a value"
+                    ));
                 };
                 parsed.threshold = match parse_threshold(&value) {
                     Ok(threshold) => threshold,
@@ -2057,6 +2058,19 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
                 }
             }
             _ if let Some(value) = text.strip_prefix("--threshold=") => {
+                parsed.threshold = match parse_threshold_text(value) {
+                    Ok(threshold) => threshold,
+                    Err(message) => return ParseResult::Error(message),
+                };
+            }
+            _ if let Some(value) = text.strip_prefix("-t=") => {
+                parsed.threshold = match parse_threshold_text(value) {
+                    Ok(threshold) => threshold,
+                    Err(message) => return ParseResult::Error(message),
+                };
+            }
+            _ if text.starts_with("-t") => {
+                let value = &text[2..];
                 parsed.threshold = match parse_threshold_text(value) {
                     Ok(threshold) => threshold,
                     Err(message) => return ParseResult::Error(message),
@@ -2102,14 +2116,15 @@ fn parse_threshold_text(value: &str) -> Result<usize, String> {
 fn print_help() {
     println!(
         "\
-usage: {COMMAND_NAME} [--threshold N]
+usage: {COMMAND_NAME} [-t|--threshold N]
 
 Move done and canceled Bob task blocks into archive notes, link sources,
 repair archive metadata, and repair Obsidian links to moved block ids.
 
 options:
   -h, --help       show this help message and exit
-  --threshold N    minimum completed/canceled task count per source note \
+  -t, --threshold N
+                   minimum completed/canceled task count per source note \
 (default: {DEFAULT_THRESHOLD})"
     );
 }
@@ -2153,8 +2168,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_short_threshold_option() {
+        match parse_args(os_args(["-t", "15"])) {
+            ParseResult::Run(args) => assert_eq!(args, Args { threshold: 15 }),
+            _ => panic!("expected runnable args"),
+        }
+    }
+
+    #[test]
     fn parses_threshold_equals_option() {
         match parse_args(os_args(["--threshold=3"])) {
+            ParseResult::Run(args) => assert_eq!(args, Args { threshold: 3 }),
+            _ => panic!("expected runnable args"),
+        }
+    }
+
+    #[test]
+    fn parses_short_threshold_equals_option() {
+        match parse_args(os_args(["-t=3"])) {
+            ParseResult::Run(args) => assert_eq!(args, Args { threshold: 3 }),
+            _ => panic!("expected runnable args"),
+        }
+    }
+
+    #[test]
+    fn parses_attached_short_threshold_option() {
+        match parse_args(os_args(["-t3"])) {
             ParseResult::Run(args) => assert_eq!(args, Args { threshold: 3 }),
             _ => panic!("expected runnable args"),
         }

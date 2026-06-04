@@ -2761,6 +2761,7 @@ fn with_sync_args(command: ClapCommand) -> ClapCommand {
 fn bob_dir_arg() -> Arg {
     Arg::new("bob-dir")
         .long("bob-dir")
+        .short('b')
         .value_name("PATH")
         .value_parser(OsStringValueParser::new())
         .help("Bob vault root; defaults to BOB_DIR or ~/bob")
@@ -2769,6 +2770,7 @@ fn bob_dir_arg() -> Arg {
 fn lib_dir_arg() -> Arg {
     Arg::new("lib-dir")
         .long("lib-dir")
+        .short('l')
         .value_name("PATH")
         .value_parser(OsStringValueParser::new())
         .help(
@@ -2779,6 +2781,7 @@ fn lib_dir_arg() -> Arg {
 fn ref_dir_arg() -> Arg {
     Arg::new("ref-dir")
         .long("ref-dir")
+        .short('r')
         .value_name("PATH")
         .value_parser(OsStringValueParser::new())
         .help("Reference note output directory; defaults to BOB_HIGHLIGHTS_REF_DIR or ref")
@@ -2795,6 +2798,7 @@ fn pdf_arg(help: &'static str) -> Arg {
 fn dry_run_arg() -> Arg {
     Arg::new("dry-run")
         .long("dry-run")
+        .short('d')
         .action(ArgAction::SetTrue)
         .help("Preview work without modifying the vault or PDF")
 }
@@ -2813,6 +2817,7 @@ fn jobs_arg() -> Arg {
 fn prefer_arg() -> Arg {
     Arg::new("prefer")
         .long("prefer")
+        .short('p')
         .value_name("SIDE")
         .value_parser(["marker", "frontmatter"])
         .help("Resolve a marker/frontmatter conflict using this side")
@@ -2821,6 +2826,7 @@ fn prefer_arg() -> Arg {
 fn write_pdf_arg() -> Arg {
     Arg::new("write-pdf")
         .long("write-pdf")
+        .short('w')
         .action(ArgAction::SetTrue)
         .help("Allow marker writes back to the PDF")
 }

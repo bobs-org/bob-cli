@@ -6321,6 +6321,7 @@ installed-plugin behavior is needed.",
 fn bob_dir_arg() -> Arg {
     Arg::new("bob-dir")
         .long("bob-dir")
+        .short('b')
         .value_name("PATH")
         .value_parser(OsStringValueParser::new())
         .help("Bob vault root; defaults to BOB_DIR or ~/bob")
@@ -6329,6 +6330,7 @@ fn bob_dir_arg() -> Arg {
 fn engine_arg() -> Arg {
     Arg::new("engine")
         .long("engine")
+        .short('e')
         .value_name("ENGINE")
         .default_value("native")
         .value_parser(["native", "obsidian"])
@@ -6338,6 +6340,7 @@ fn engine_arg() -> Arg {
 fn format_arg() -> Arg {
     Arg::new("format")
         .long("format")
+        .short('f')
         .value_name("FORMAT")
         .default_value("paths")
         .value_parser(["json", "markdown", "paths"])
@@ -6347,6 +6350,7 @@ fn format_arg() -> Arg {
 fn origin_arg() -> Arg {
     Arg::new("origin")
         .long("origin")
+        .short('o')
         .value_name("VAULT_RELATIVE_PATH")
         .value_parser(OsStringValueParser::new())
         .help("Origin note for relative links and this")
@@ -6355,6 +6359,7 @@ fn origin_arg() -> Arg {
 fn query_arg() -> Arg {
     Arg::new("query")
         .long("query")
+        .short('q')
         .value_name("DQL")
         .value_parser(NonEmptyStringValueParser::new())
         .help("Full Dataview DQL query")
@@ -6363,6 +6368,7 @@ fn query_arg() -> Arg {
 fn query_file_arg() -> Arg {
     Arg::new("query-file")
         .long("query-file")
+        .short('Q')
         .value_name("PATH")
         .value_parser(OsStringValueParser::new())
         .help("Read a Dataview DQL query from a file; use - for stdin")
@@ -6371,6 +6377,7 @@ fn query_file_arg() -> Arg {
 fn source_arg() -> Arg {
     Arg::new("source")
         .long("source")
+        .short('s')
         .value_name("SOURCE")
         .value_parser(NonEmptyStringValueParser::new())
         .help("Dataview source expression for page path lookup")
@@ -6379,6 +6386,7 @@ fn source_arg() -> Arg {
 fn strict_paths_arg() -> Arg {
     Arg::new("strict-paths")
         .long("strict-paths")
+        .short('S')
         .action(ArgAction::SetTrue)
         .help("Fail when paths output cannot derive clean note paths")
 }
@@ -6386,6 +6394,7 @@ fn strict_paths_arg() -> Arg {
 fn vault_arg() -> Arg {
     Arg::new("vault")
         .long("vault")
+        .short('v')
         .value_name("NAME_OR_ID")
         .value_parser(NonEmptyStringValueParser::new())
         .help(

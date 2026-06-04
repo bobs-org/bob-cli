@@ -219,6 +219,70 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
 }
 
 #[test]
+fn public_help_surfaces_do_not_list_long_only_options() {
+    let bob_cases: &[(&[&str], &str)] = &[
+        (&["--help"], "bob --help"),
+        (&["bulk-git-commit", "--help"], "bob bulk-git-commit --help"),
+        (&["cronjob", "--help"], "bob cronjob --help"),
+        (&["dataview", "--help"], "bob dataview --help"),
+        (&["highlights", "--help"], "bob highlights --help"),
+        (
+            &["highlights", "doctor", "--help"],
+            "bob highlights doctor --help",
+        ),
+        (
+            &["highlights", "marker", "--help"],
+            "bob highlights marker --help",
+        ),
+        (
+            &["highlights", "scan", "--help"],
+            "bob highlights scan --help",
+        ),
+        (
+            &["highlights", "sync", "--help"],
+            "bob highlights sync --help",
+        ),
+        (&["move-done-tasks", "--help"], "bob move-done-tasks --help"),
+        (&["notify", "--help"], "bob notify --help"),
+        (&["pomodoro", "--help"], "bob pomodoro --help"),
+        (&["tmux-pomodoro", "--help"], "bob tmux-pomodoro --help"),
+    ];
+
+    for (args, label) in bob_cases {
+        let output = bob_command()
+            .args(*args)
+            .output()
+            .unwrap_or_else(|error| panic!("run {label}: {error}"));
+
+        assert_success(&output);
+        assert_no_long_only_option_lines(label, &stdout(&output));
+    }
+
+    let legacy_cases = [
+        (bob_pomodoro_command as fn() -> Command, "bob_pomodoro"),
+        (bob_notify_command as fn() -> Command, "bob_notify"),
+        (bob_sync_command as fn() -> Command, "bob_sync"),
+        (
+            tmux_bob_pomodoro_command as fn() -> Command,
+            "tmux_bob_pomodoro",
+        ),
+    ];
+
+    for (command, name) in legacy_cases {
+        let output = command()
+            .arg("--help")
+            .output()
+            .unwrap_or_else(|error| panic!("run {name} --help: {error}"));
+
+        assert_success(&output);
+        assert_no_long_only_option_lines(
+            &format!("{name} --help"),
+            &stdout(&output),
+        );
+    }
+}
+
+#[test]
 fn legacy_binary_help_is_safe_and_plain() {
     let cases = [
         LegacyHelpCase {
@@ -392,18 +456,88 @@ fn dataview_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &[
-            "\n      --bob-dir ",
-            "\n      --engine ",
-            "\n      --format ",
-            "\n      --origin ",
-            "\n      --query ",
-            "\n      --query-file ",
-            "\n      --source ",
-            "\n      --strict-paths",
-            "\n      --vault ",
+            "-b, --bob-dir ",
+            "-e, --engine ",
+            "-f, --format ",
+            "-o, --origin ",
+            "-q, --query ",
+            "-Q, --query-file ",
+            "-s, --source ",
+            "-S, --strict-paths",
+            "-v, --vault ",
         ],
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn dataview_short_options_are_accepted() {
+    let temp = TempDir::new("bob-cli-dataview-short-options");
+    let vault = temp.path().join("vault");
+    let query_file = temp.path().join("projects.dql");
+    let obsidian = temp.path().join("obsidian");
+    let log = temp.path().join("commands.log");
+
+    write_file(&vault.join("Home.md"), "---\n---\n");
+    write_file(&vault.join("Projects/Alpha.md"), "# Alpha\n#project\n");
+    write_file(&query_file, "LIST FROM #project");
+
+    let output = bob_command()
+        .arg("dataview")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("-o")
+        .arg("Home.md")
+        .arg("-Q")
+        .arg(&query_file)
+        .output()
+        .expect("run bob dataview with short query-file options");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["format"], "json");
+    assert_eq!(json["paths"][0], "Projects/Alpha.md");
+
+    let output = bob_command()
+        .arg("dataview")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-S")
+        .arg("-q")
+        .arg("LIST FROM #project")
+        .output()
+        .expect("run bob dataview with short strict-paths/query options");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "Projects/Alpha.md\n");
+
+    write_obsidian_success_stub(
+        &obsidian,
+        r##"{"status":"ok","kind":"source_paths","paths":["Projects/Alpha.md"],"warnings":[]}"##,
+    );
+    let output = bob_command()
+        .arg("dataview")
+        .arg("-e")
+        .arg("obsidian")
+        .arg("-s")
+        .arg("#project")
+        .arg("-v")
+        .arg("Bob")
+        .env("BOB_DATAVIEW_OBSIDIAN_COMMAND", &obsidian)
+        .env_remove("BOB_DATAVIEW_VAULT")
+        .env("STUB_LOG", &log)
+        .output()
+        .expect("run bob dataview with short obsidian options");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "Projects/Alpha.md\n");
+    let log_text = fs::read_to_string(&log).expect("read obsidian argv log");
+    assert!(log_text.contains("ARG:vault=Bob"), "{log_text}");
 }
 
 #[test]
@@ -1339,12 +1473,12 @@ fn highlights_ref_sync_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &[
-            "--bob-dir",
-            "--dry-run",
-            "--lib-dir",
-            "--prefer",
-            "--ref-dir",
-            "--write-pdf",
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-l, --lib-dir",
+            "-p, --prefer",
+            "-r, --ref-dir",
+            "-w, --write-pdf",
         ],
     );
     assert_stdout_has_no_ansi(&output);
@@ -1368,15 +1502,64 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &[
-            "--bob-dir",
-            "--dry-run",
-            "--jobs",
-            "--lib-dir",
-            "--ref-dir",
-            "--write-pdfs",
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-j, --jobs",
+            "-l, --lib-dir",
+            "-r, --ref-dir",
+            "-w, --write-pdfs",
         ],
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn highlights_ref_short_options_are_accepted() {
+    let temp = TempDir::new("bob-cli-highlights-ref-short-options");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/books/example.pdf");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-j")
+        .arg("1")
+        .arg("-l")
+        .arg("lib")
+        .arg("-r")
+        .arg("ref")
+        .arg("-w")
+        .output()
+        .expect("run bob highlights scan with short options");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(report.contains("pdf_count: 1"), "{report}");
+    assert!(report.contains("writes: none"), "{report}");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-l")
+        .arg("lib")
+        .arg("-p")
+        .arg("marker")
+        .arg("-r")
+        .arg("ref")
+        .arg("-w")
+        .output()
+        .expect("run bob highlights sync with short options");
+
+    assert_success(&output);
+    assert!(stdout(&output).contains("writes: none"));
 }
 
 #[test]
@@ -4278,7 +4461,7 @@ fn move_done_tasks_warns_and_skips_git_for_non_repo_vault() {
 
     let output = bob_command()
         .arg("move-done-tasks")
-        .arg("--threshold=1")
+        .arg("-t1")
         .env("BOB_DIR", &vault)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
@@ -5594,6 +5777,21 @@ fn assert_text_order(text: &str, needles: &[&str]) {
             .unwrap_or_else(|| panic!("expected `{needle}` in text:\n{text}"));
         assert!(position >= last, "`{needle}` is out of order:\n{text}");
         last = position;
+    }
+}
+
+fn assert_no_long_only_option_lines(label: &str, help: &str) {
+    for line in help.lines() {
+        let trimmed = line.trim_start();
+        let starts_with_long_option = trimmed
+            .strip_prefix("--")
+            .and_then(|tail| tail.chars().next())
+            .is_some_and(|first| first.is_ascii_alphabetic());
+        if starts_with_long_option {
+            panic!(
+                "{label} exposes a long-only option line:\n{line}\n\n{help}"
+            );
+        }
     }
 }
 

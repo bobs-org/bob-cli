@@ -48,40 +48,40 @@ printf 'LIST FROM #waiting\n' | bob dataview --query-file -
 
 ## Options
 
-`--bob-dir <PATH>` sets the Bob vault root. It defaults to `BOB_DIR` or `~/bob`.
+`-b, --bob-dir <PATH>` sets the Bob vault root. It defaults to `BOB_DIR` or `~/bob`.
 The path is validated when it is supplied explicitly or when the native engine
 is used.
 
-`--engine <native|obsidian>` selects the query engine. The default is `native`,
+`-e, --engine <native|obsidian>` selects the query engine. The default is `native`,
 the local headless implementation of Bob's supported source expression and DQL
 surface. `obsidian` evaluates through the live Dataview plugin and is useful as
 an oracle or fallback when installed-plugin behavior matters.
 
-`--format <paths|json|markdown>` selects the output format. `paths` is the
+`-f, --format <paths|json|markdown>` selects the output format. `paths` is the
 default and prints matching source note paths for DQL `LIST` and `TABLE`
 queries. Use `json` for structured rows and `markdown` for rendered DQL `LIST`,
 `TABLE`, and `TASK` output.
 
-`--origin <VAULT_RELATIVE_PATH>` sets the origin note for Dataview `this` and
+`-o, --origin <VAULT_RELATIVE_PATH>` sets the origin note for Dataview `this` and
 relative links. It must be vault-relative; absolute paths and `..` traversal are
 rejected.
 
-`--query <DQL>` runs an inline Dataview DQL query.
+`-q, --query <DQL>` runs an inline Dataview DQL query.
 
-`--query-file <PATH>` reads Dataview DQL from a file. Use `-` to read the query
-from stdin.
+`-Q, --query-file <PATH>` reads Dataview DQL from a file. Use `-` to read the
+query from stdin.
 
-`--source <SOURCE>` runs a Dataview source expression with `pagePaths()`.
+`-s, --source <SOURCE>` runs a Dataview source expression with `pagePaths()`.
 
-`--strict-paths` makes `paths` output fail if note paths cannot be derived
+`-S, --strict-paths` makes `paths` output fail if note paths cannot be derived
 cleanly from every DQL row. Without it, best-effort path extraction warnings go
 to stderr and the command prints the paths it can derive.
 
-`--vault <NAME_OR_ID>` forwards an Obsidian vault name or ID to the Obsidian CLI.
-It can only be used with `--engine obsidian`. If omitted in Obsidian mode,
+`-v, --vault <NAME_OR_ID>` forwards an Obsidian vault name or ID to the
+Obsidian CLI. It can only be used with `--engine obsidian`. If omitted in Obsidian mode,
 `BOB_DATAVIEW_VAULT` is used when set.
 
-Exactly one of `--source`, `--query`, and `--query-file` is required.
+Exactly one of `-s|--source`, `-q|--query`, and `-Q|--query-file` is required.
 
 `bob dataview` does not run `ob sync` or `ob sync-status`. Vault freshness is
 owned by the external background or cron sync path.
