@@ -142,6 +142,14 @@ target such as `obsidian` or `Systems Performance`; existing wikilinks such as
 `[[obsidian]]` are also accepted. Generated reference notes render `parent` as
 an Obsidian wikilink.
 
+`status` must be a scalar string and must exactly match one of:
+
+- `unread`
+- `wip`
+- `done`
+- `abandoned`
+- `legacy`
+
 Values should be parsed as a YAML-compatible subset when possible:
 
 - strings
@@ -153,7 +161,7 @@ Values should be parsed as a YAML-compatible subset when possible:
 Invalid values fall back to strings when that is unambiguous. Duplicate marker
 keys, invalid marker list items, pipeline-owned marker keys, command-managed
 marker keys such as `type` or `ref_type`, and missing or empty `status` or
-`parent` produce clear errors.
+`parent` produce clear errors. Unsupported `status` values are also rejected.
 
 ## Required Parent, Type, and Ref Type
 
@@ -203,6 +211,11 @@ the PDF path is under `lib/<ref_type>/`.
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or
 explicitly listed in `highlights_marker_fields`.
+
+`legacy_status` is ordinary frontmatter used to preserve a migrated note's old
+status value. It is preserved when rendering notes, but it is not a standard
+marker-synced field and will not be written back to the PDF marker unless a
+marker explicitly opts into it as an unknown synced field.
 
 Implemented conflict policy:
 
@@ -678,6 +691,7 @@ Common failure snippets and fixes:
 | `library directory does not exist or is not a directory` | `~/bob/lib` is missing or `--lib-dir` points at the wrong path. | Create `~/bob/lib` or pass the intended `--lib-dir`. |
 | `no standalone /Text note annotations found on page 1` | The PDF has no page-1 standalone marker note. | Add the first standalone PDF note on page 1 in Highlights. |
 | `missing required marker key: status` | The marker list lacks `status`. | Add `- status: wip` to the marker. |
+| `unsupported status` | `status` is not one of `unread`, `wip`, `done`, `abandoned`, or `legacy`. | Change the marker or frontmatter status to a supported value. |
 | `missing required marker key: parent` | The marker/frontmatter projection lacks `parent`. | Add `- parent: obsidian` to the marker or frontmatter source; `[[obsidian]]` is also accepted. |
 | `'type' is command-managed` | The marker tries to set the generated note `type`. | Remove `type` from the marker; generated notes get `type: "[[ref]]"` automatically. |
 | `'ref_type' is command-managed` | The marker tries to set the path-derived reference type. | Remove `ref_type` from the marker; nested library paths derive it automatically. |

@@ -36,6 +36,8 @@ const FIELD_PARENT: &str = "parent";
 const FIELD_NOTE_TYPE: &str = "type";
 const FIELD_REF_TYPE: &str = "ref_type";
 const NOTE_TYPE_VALUE: &str = "[[ref]]";
+const ALLOWED_STATUS_VALUES: &[&str] =
+    &["unread", "wip", "done", "abandoned", "legacy"];
 const MARKER_REQUIRED_KEYS: &[&str] = &[FIELD_STATUS, FIELD_PARENT];
 const COMMAND_MANAGED_FIELDS: &[&str] = &[FIELD_NOTE_TYPE, FIELD_REF_TYPE];
 const MANAGED_BODY_BEGIN: &str = "<!-- highlights:begin -->";
@@ -3118,7 +3120,28 @@ fn validate_required_marker_keys(
             )));
         }
     }
+    validate_status_value(projection, source)?;
     Ok(())
+}
+
+fn validate_status_value(projection: &Projection, source: &str) -> Result<()> {
+    let Some(value) = projection.get(FIELD_STATUS) else {
+        return Ok(());
+    };
+    let Some(status) = value.as_string() else {
+        return Err(CommandError::new(format!(
+            "{source} status must be a scalar string; supported statuses: {}",
+            ALLOWED_STATUS_VALUES.join(", ")
+        )));
+    };
+    if ALLOWED_STATUS_VALUES.contains(&status) {
+        return Ok(());
+    }
+    Err(CommandError::new(format!(
+        "{source} has unsupported status {}: supported statuses: {}",
+        quote_string(status),
+        ALLOWED_STATUS_VALUES.join(", ")
+    )))
 }
 
 fn render_marker(projection: &Projection) -> String {
@@ -3875,7 +3898,7 @@ mod tests {
                 ("title", string_value("Old")),
             ]),
             &test_projection(vec![
-                ("status", string_value("paused")),
+                ("status", string_value("abandoned")),
                 ("parent", string_value("[[obsidian]]")),
                 ("title", string_value("Old")),
             ]),
@@ -4296,6 +4319,29 @@ Body
     }
 
     #[test]
+    fn status_validation_rejects_unsupported_and_non_scalar_values() {
+        let unsupported =
+            parse_marker("- status: queued\n- parent: [[obsidian]]\n")
+                .expect_err("unsupported status should fail");
+        assert!(
+            unsupported
+                .to_string()
+                .contains("marker has unsupported status \"queued\""),
+            "{unsupported}"
+        );
+
+        let non_scalar =
+            parse_marker("- status: [wip]\n- parent: [[obsidian]]\n")
+                .expect_err("list status should fail");
+        assert!(
+            non_scalar
+                .to_string()
+                .contains("marker status must be a scalar string"),
+            "{non_scalar}"
+        );
+    }
+
+    #[test]
     fn marker_renderer_uses_stable_key_order() {
         let mut projection = Projection::new();
         projection.insert(
@@ -4360,7 +4406,7 @@ Body
         let note = parse_note(
             "\
 ---
-status: old
+status: legacy
 type: \"[[old-type]]\"
 owner: Bryan
 ---

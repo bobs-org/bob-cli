@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-03 22:39:02
-status: wip
+status: done
 prompt: sdd/prompts/202606/ref_status_standardization.md
 ---
 # Plan: Reference Note Status Standardization

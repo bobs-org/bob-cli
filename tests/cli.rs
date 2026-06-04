@@ -1582,6 +1582,39 @@ fn highlights_ref_sync_rejects_missing_marker_status_without_note_write() {
 }
 
 #[test]
+fn highlights_ref_sync_rejects_unsupported_marker_status_without_note_write() {
+    let temp = TempDir::new("bob-cli-highlights-ref-unsupported-status");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/unsupported-status.pdf");
+    let note = vault.join("ref/unsupported-status.md");
+    write_highlights_pdf(&pdf, "- status: queued\n- parent: [[obsidian]]\n");
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob highlights-ref sync");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "unsupported marker status should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("marker has unsupported status \"queued\""),
+        "expected unsupported status error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !note.exists(),
+        "sync must not create a note on marker status error"
+    );
+}
+
+#[test]
 fn highlights_ref_sync_rejects_missing_marker_parent_without_note_write() {
     let temp = TempDir::new("bob-cli-highlights-ref-missing-parent");
     let vault = temp.path().join("vault");
@@ -1749,7 +1782,7 @@ fn highlights_ref_scan_recurses_dry_runs_and_writes_multiple_pdfs() {
     );
     write_highlights_pdf(
         &second_pdf,
-        "- status: queued\n- parent: [[obsidian]]\n- title: Rust Book\n",
+        "- status: unread\n- parent: [[obsidian]]\n- title: Rust Book\n",
     );
     write_file(
         &first_pdf.with_extension("md"),
@@ -1866,9 +1899,9 @@ fn highlights_ref_scan_jobs_flag_matches_sequential_output() {
     // parallel planning is unlikely to match the sorted reporting order.
     let specs = [
         ("lib/books/alpha.pdf", "wip", "Alpha", "Alpha quote."),
-        ("lib/books/beta.pdf", "queued", "Beta", "Beta quote."),
+        ("lib/books/beta.pdf", "unread", "Beta", "Beta quote."),
         ("lib/papers/gamma.pdf", "wip", "Gamma", "Gamma quote."),
-        ("lib/papers/delta.pdf", "queued", "Delta", "Delta quote."),
+        ("lib/papers/delta.pdf", "unread", "Delta", "Delta quote."),
         ("lib/notes/epsilon.pdf", "wip", "Epsilon", "Epsilon quote."),
     ];
     for (rel, status, title, quote) in specs {
@@ -1931,7 +1964,7 @@ fn highlights_ref_scan_allows_duplicate_basenames_in_different_ref_types() {
     write_highlights_pdf(&first_pdf, "- status: wip\n- parent: [[obsidian]]\n");
     write_highlights_pdf(
         &second_pdf,
-        "- status: queued\n- parent: [[obsidian]]\n",
+        "- status: unread\n- parent: [[obsidian]]\n",
     );
 
     let output = bob_command()
@@ -1970,7 +2003,7 @@ fn highlights_ref_scan_detects_same_target_collision_before_writing() {
     write_highlights_pdf(&first_pdf, "- status: wip\n- parent: [[obsidian]]\n");
     write_highlights_pdf(
         &second_pdf,
-        "- status: queued\n- parent: [[obsidian]]\n",
+        "- status: unread\n- parent: [[obsidian]]\n",
     );
 
     let output = bob_command()
@@ -2073,7 +2106,7 @@ fn highlights_ref_sync_allows_dirty_tracked_frontmatter_writeback() {
     git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
     let edited = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("status: wip", "status: complete");
+        .replace("status: wip", "status: done");
     write_file(&note, &edited);
 
     let output = bob_command()
@@ -2087,9 +2120,9 @@ fn highlights_ref_sync_allows_dirty_tracked_frontmatter_writeback() {
 
     assert_success(&output);
     let marker = pdf_marker_contents(&pdf);
-    assert!(marker.contains("- status: complete\n"), "{marker}");
+    assert!(marker.contains("- status: done\n"), "{marker}");
     let contents = fs::read_to_string(&note).expect("read updated note");
-    assert!(contents.contains("status: complete\n"), "{contents}");
+    assert!(contents.contains("status: done\n"), "{contents}");
 }
 
 #[test]
@@ -2188,7 +2221,7 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
     );
     let edited = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("status: wip", "status: complete");
+        .replace("status: wip", "status: done");
     write_file(&note, &edited);
     let marker_before = pdf_marker_contents(&pdf);
 
@@ -2237,7 +2270,7 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
 
     assert_success(&output);
     let marker = pdf_marker_contents(&pdf);
-    assert!(marker.contains("- status: complete\n"), "{marker}");
+    assert!(marker.contains("- status: done\n"), "{marker}");
     assert!(!marker.contains("- type:"), "{marker}");
     let pdf_hash_after_write = sha256_file(&pdf);
     assert_ne!(
@@ -2417,6 +2450,52 @@ fn highlights_ref_frontmatter_missing_parent_fails_before_pdf_writeback() {
 }
 
 #[test]
+fn highlights_ref_frontmatter_unsupported_status_fails_before_pdf_writeback() {
+    let temp = TempDir::new("bob-cli-highlights-ref-frontmatter-bad-status");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: [[obsidian]]\n");
+    assert_success(
+        &bob_command()
+            .arg("highlights-ref")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial highlights-ref sync"),
+    );
+    let edited = fs::read_to_string(&note)
+        .expect("read ref note")
+        .replace("status: wip", "status: complete");
+    write_file(&note, &edited);
+    let marker_before = pdf_marker_contents(&pdf);
+
+    let output = bob_command()
+        .arg("highlights-ref")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--write-pdf")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync frontmatter unsupported status");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "unsupported frontmatter status should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output)
+            .contains("frontmatter has unsupported status \"complete\""),
+        "expected unsupported frontmatter status error:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(pdf_marker_contents(&pdf), marker_before);
+}
+
+#[test]
 fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
     let temp = TempDir::new("bob-cli-highlights-ref-conflict");
     let vault = temp.path().join("vault");
@@ -2433,13 +2512,10 @@ fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
             .expect("initial highlights-ref sync"),
     );
 
-    set_pdf_marker_contents(
-        &pdf,
-        "- status: marker-side\n- parent: [[obsidian]]\n",
-    );
+    set_pdf_marker_contents(&pdf, "- status: done\n- parent: [[obsidian]]\n");
     let frontmatter_side = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("status: wip", "status: frontmatter-side");
+        .replace("status: wip", "status: abandoned");
     write_file(&note, &frontmatter_side);
     let note_before = fs::read_to_string(&note).expect("read note before");
     let marker_before = pdf_marker_contents(&pdf);
@@ -2465,8 +2541,8 @@ fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
         format_output(&output)
     );
     assert!(
-        stderr(&output).contains("status: marker=\"marker-side\"")
-            && stderr(&output).contains("frontmatter=\"frontmatter-side\"")
+        stderr(&output).contains("status: marker=\"done\"")
+            && stderr(&output).contains("frontmatter=\"abandoned\"")
             && stderr(&output).contains("base=\"wip\""),
         "expected field-level conflict report:\n{}",
         format_output(&output)
@@ -2490,7 +2566,7 @@ fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
 
     assert_success(&output);
     let marker = pdf_marker_contents(&pdf);
-    assert!(marker.contains("- status: frontmatter-side\n"), "{marker}");
+    assert!(marker.contains("- status: abandoned\n"), "{marker}");
 }
 
 #[test]
