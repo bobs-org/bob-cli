@@ -1,6 +1,6 @@
 # Highlights Reference Note Sync
 
-`bob highlights-ref` turns Highlights app PDF annotations into Obsidian
+`bob highlights` turns Highlights app PDF annotations into Obsidian
 reference notes in the Bob vault.
 
 Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
@@ -33,10 +33,10 @@ writes files.
 Available commands:
 
 ```bash
-bob highlights-ref doctor
-bob highlights-ref marker <pdf>
-bob highlights-ref scan [--dry-run]
-bob highlights-ref sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter]
+bob highlights doctor
+bob highlights marker <pdf>
+bob highlights scan [--dry-run]
+bob highlights sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter]
 ```
 
 `sync <pdf> --dry-run` prints the resolved configuration and planned note/PDF
@@ -47,7 +47,7 @@ the selected projection needs marker write-back and `--write-pdf` is supplied.
 ## Release Handoff Summary
 
 The MVP is ready for Linux-side release checks and MacBook dry-run validation.
-It includes the native `bob highlights-ref` command, synthetic PDF marker
+It includes the native `bob highlights` command, synthetic PDF marker
 fixtures, frontmatter/marker conflict detection, generated highlight rendering,
 recursive scan preflights, dirty target refusal, MacBook setup guidance, and
 scheduled dry-run automation examples.
@@ -270,7 +270,7 @@ count makes the command exit non-zero even when other PDFs were processed.
 Reference note writes are atomic temporary-file renames and are skipped when the
 rendered note is byte-identical to the existing file.
 
-`bob highlights-ref` does not run `ob sync` before or after writes. The existing
+`bob highlights` does not run `ob sync` before or after writes. The existing
 `bob cronjob` sync gate owns `ob sync` orchestration, while this command only
 reports whether `ob` is available through `doctor`.
 
@@ -426,7 +426,7 @@ else
   git clone git@github.com:bbugyi200/bob-cli.git ~/projects/bob-cli
 fi
 cargo install --path ~/projects/bob-cli --locked --force
-bob highlights-ref --help
+bob highlights --help
 ```
 
 Create or confirm the vault layout:
@@ -462,23 +462,23 @@ Use this marker as a starting point:
 Run the initial checks:
 
 ```bash
-bob highlights-ref doctor
-bob highlights-ref scan --dry-run
-bob highlights-ref sync ~/bob/lib/books/example.pdf --dry-run
-bob highlights-ref marker ~/bob/lib/books/example.pdf
+bob highlights doctor
+bob highlights scan --dry-run
+bob highlights sync ~/bob/lib/books/example.pdf --dry-run
+bob highlights marker ~/bob/lib/books/example.pdf
 ```
 
 MacBook validation checklist:
 
 - `cargo install --path ~/projects/bob-cli --locked --force` installs the local
   checkout.
-- `bob highlights-ref doctor` reports valid vault/library/ref paths, marker
+- `bob highlights doctor` reports valid vault/library/ref paths, marker
   readability, Git status, and optional `ob` availability.
-- `bob highlights-ref scan --dry-run` lists the expected PDFs under
+- `bob highlights scan --dry-run` lists the expected PDFs under
   `~/bob/lib`, reports the intended `~/bob/ref/<ref_type>/*.md` targets, and
   prints `writes: none`. If `scan_failures` is non-zero, inspect the per-PDF
   `plan_error` lines while noting that valid PDFs were still reported.
-- `bob highlights-ref sync ~/bob/lib/books/example.pdf --dry-run` shows the
+- `bob highlights sync ~/bob/lib/books/example.pdf --dry-run` shows the
   expected marker page/note, sync source, sidecar path, note action, and no
   writes.
 - The first real note write creates or updates `~/bob/ref/books/example.md`
@@ -502,8 +502,8 @@ Enable note writes only after reviewing the dry-run output:
 
 ```bash
 git -C ~/bob status --short
-bob highlights-ref sync ~/bob/lib/books/example.pdf
-bob highlights-ref scan
+bob highlights sync ~/bob/lib/books/example.pdf
+bob highlights scan
 ```
 
 `scan` does not enable PDF marker write-back. If a dry run reports
@@ -511,16 +511,16 @@ bob highlights-ref scan
 backing up the PDF:
 
 ```bash
-bob highlights-ref sync ~/bob/lib/books/example.pdf --dry-run
-bob highlights-ref sync ~/bob/lib/books/example.pdf --write-pdf
+bob highlights sync ~/bob/lib/books/example.pdf --dry-run
+bob highlights sync ~/bob/lib/books/example.pdf --write-pdf
 ```
 
 The intended frontmatter edit workflow is:
 
 ```bash
 $EDITOR ~/bob/ref/books/example.md
-bob highlights-ref sync ~/bob/lib/books/example.pdf --dry-run
-bob highlights-ref sync ~/bob/lib/books/example.pdf --write-pdf
+bob highlights sync ~/bob/lib/books/example.pdf --dry-run
+bob highlights sync ~/bob/lib/books/example.pdf --write-pdf
 ```
 
 If the ref note is tracked in Git, the write-back command may update that dirty
@@ -539,19 +539,19 @@ Start with a dry-run schedule. On the MacBook account, create this LaunchAgent:
 
 ```bash
 mkdir -p ~/Library/LaunchAgents ~/Library/Logs/bob
-cat > ~/Library/LaunchAgents/com.bryan.bob-highlights-ref-scan.plist <<'PLIST'
+cat > ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.bryan.bob-highlights-ref-scan</string>
+  <string>com.bryan.bob-highlights-scan</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>/Users/bryan/.cargo/bin/bob highlights-ref scan --dry-run</string>
+    <string>/Users/bryan/.cargo/bin/bob highlights scan --dry-run</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -565,18 +565,18 @@ cat > ~/Library/LaunchAgents/com.bryan.bob-highlights-ref-scan.plist <<'PLIST'
   <key>StartInterval</key>
   <integer>3600</integer>
   <key>StandardOutPath</key>
-  <string>/Users/bryan/Library/Logs/bob/highlights-ref-scan.out</string>
+  <string>/Users/bryan/Library/Logs/bob/highlights-scan.out</string>
   <key>StandardErrorPath</key>
-  <string>/Users/bryan/Library/Logs/bob/highlights-ref-scan.err</string>
+  <string>/Users/bryan/Library/Logs/bob/highlights-scan.err</string>
 </dict>
 </plist>
 PLIST
-plutil -lint ~/Library/LaunchAgents/com.bryan.bob-highlights-ref-scan.plist
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-ref-scan.plist 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-ref-scan.plist
-launchctl kickstart -k gui/$(id -u)/com.bryan.bob-highlights-ref-scan
-tail -n 80 ~/Library/Logs/bob/highlights-ref-scan.out
-tail -n 80 ~/Library/Logs/bob/highlights-ref-scan.err
+plutil -lint ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist
+launchctl kickstart -k gui/$(id -u)/com.bryan.bob-highlights-scan
+tail -n 80 ~/Library/Logs/bob/highlights-scan.out
+tail -n 80 ~/Library/Logs/bob/highlights-scan.err
 ```
 
 After several clean dry-run cycles, remove `--dry-run` from the
@@ -592,13 +592,13 @@ PATH=/Users/bryan/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/bin:/usr/bin
 BOB_DIR=/Users/bryan/bob
 BOB_HIGHLIGHTS_LIB_DIR=lib
 BOB_HIGHLIGHTS_REF_DIR=ref
-0 * * * * /Users/bryan/.cargo/bin/bob highlights-ref scan --dry-run >> /Users/bryan/Library/Logs/bob/highlights-ref-scan.log 2>&1
+0 * * * * /Users/bryan/.cargo/bin/bob highlights scan --dry-run >> /Users/bryan/Library/Logs/bob/highlights-scan.log 2>&1
 ```
 
 Disable the LaunchAgent with:
 
 ```bash
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-ref-scan.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist
 ```
 
 ## Disable One PDF
@@ -635,7 +635,7 @@ Before first writes, make the vault clean or intentionally checkpointed:
 
 ```bash
 git -C ~/bob status --short
-git -C ~/bob stash push -u -m "pre-highlights-ref"
+git -C ~/bob stash push -u -m "pre-highlights"
 git -C ~/bob status --short
 ```
 
@@ -644,13 +644,13 @@ of stashing:
 
 ```bash
 git -C ~/bob add ref lib
-git -C ~/bob commit -m "Checkpoint before highlights-ref sync"
+git -C ~/bob commit -m "Checkpoint before highlights sync"
 ```
 
 Before enabling `--write-pdf`, keep a PDF backup outside the write path:
 
 ```bash
-backup_dir=~/bob/backups/highlights-ref/$(date +%Y%m%d-%H%M%S)
+backup_dir=~/bob/backups/highlights/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$backup_dir/lib/books"
 cp -p ~/bob/lib/books/example.pdf "$backup_dir/lib/books/"
 cp -p ~/bob/lib/books/example.md "$backup_dir/lib/books/" 2>/dev/null || true
@@ -659,7 +659,7 @@ cp -p ~/bob/lib/books/example.md "$backup_dir/lib/books/" 2>/dev/null || true
 For a full library backup before broader testing:
 
 ```bash
-backup_dir=~/bob/backups/highlights-ref/$(date +%Y%m%d-%H%M%S)
+backup_dir=~/bob/backups/highlights/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$backup_dir"
 rsync -a --include='*/' --include='*.pdf' --include='*.md' --include='*.textbundle/***' --exclude='*' ~/bob/lib/ "$backup_dir/lib/"
 ```
@@ -691,22 +691,22 @@ field edits auto-merge and dry runs report `sync_source: auto-merge`. Same-field
 conflicts still fail and write nothing. Inspect both sides:
 
 ```bash
-bob highlights-ref marker ~/bob/lib/books/example.pdf
+bob highlights marker ~/bob/lib/books/example.pdf
 sed -n '1,120p' ~/bob/ref/books/example.md
-bob highlights-ref sync ~/bob/lib/books/example.pdf --dry-run
+bob highlights sync ~/bob/lib/books/example.pdf --dry-run
 ```
 
 Choose the PDF marker as the source of truth:
 
 ```bash
-bob highlights-ref sync ~/bob/lib/books/example.pdf --prefer marker
+bob highlights sync ~/bob/lib/books/example.pdf --prefer marker
 ```
 
 Choose the Obsidian frontmatter as the source of truth and write it back to the
 PDF marker:
 
 ```bash
-bob highlights-ref sync ~/bob/lib/books/example.pdf --prefer frontmatter --write-pdf
+bob highlights sync ~/bob/lib/books/example.pdf --prefer frontmatter --write-pdf
 ```
 
 If the only change is frontmatter, the generated task line is checked, or a
@@ -714,7 +714,7 @@ dry-run auto-merge reports `pdf_marker_action: would-update`, review the marker
 first, back up the PDF, then run:
 
 ```bash
-bob highlights-ref sync ~/bob/lib/books/example.pdf --write-pdf
+bob highlights sync ~/bob/lib/books/example.pdf --write-pdf
 ```
 
 ## Expected Failures

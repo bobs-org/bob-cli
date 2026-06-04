@@ -32,7 +32,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" bulk-git-commit --help
 "$root/bin/bob" cronjob --help
 "$root/bin/bob" dataview --help
-"$root/bin/bob" highlights-ref --help
+"$root/bin/bob" highlights --help
 "$root/bin/bob" move-done-tasks --help
 "$root/bin/bob" notify --help
 "$root/bin/bob" pomodoro --help
@@ -127,10 +127,10 @@ changes, stages only the files it touches, commits with a
 uncommitted.
 
 ```bash
-bob highlights-ref doctor
-bob highlights-ref marker <pdf>
-bob highlights-ref scan [--dry-run]
-bob highlights-ref sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter]
+bob highlights doctor
+bob highlights marker <pdf>
+bob highlights scan [--dry-run]
+bob highlights sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter]
 ```
 
 Prepares the Highlights app PDF annotation to Bob reference note sync workflow.
@@ -242,12 +242,12 @@ message date. Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 `YYYY-MM-DD HH:MM:SS`.
 
 `BOB_HIGHLIGHTS_LIB_DIR` sets the Highlights PDF library directory used by
-`bob highlights-ref`. It defaults to `lib` under `BOB_DIR`. Relative values are
+`bob highlights`. It defaults to `lib` under `BOB_DIR`. Relative values are
 resolved under the Bob vault; absolute paths and `~/...` paths are used as
 configured.
 
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
-`bob highlights-ref`. It defaults to `ref` under `BOB_DIR`.
+`bob highlights`. It defaults to `ref` under `BOB_DIR`.
 
 `DATE` preserves the legacy date override behavior. It can be a date command
 prefix such as `date --utc`, or a timestamp in the same formats accepted by
@@ -277,9 +277,10 @@ Use `bob pomodoro`, `bob notify`, `bob bulk-git-commit`, and
 done and canceled task blocks should be archived from the vault.
 
 The old top-level commands were renamed: `bob collect-done` is now
-`bob move-done-tasks`, and `bob sync` is now `bob bulk-git-commit`. The old
-top-level names are no longer registered. Legacy installed binaries such as
-`bob_sync` remain compatibility shims for existing callers.
+`bob move-done-tasks`, `bob highlights-ref` is now `bob highlights`, and
+`bob sync` is now `bob bulk-git-commit`. The old top-level names are no longer
+registered. Legacy installed binaries such as `bob_sync` remain compatibility
+shims for existing callers.
 
 The original script implementations remain embedded only as a rollback path.
 New integrations should rely on the native Rust command behavior.
@@ -305,7 +306,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" bulk-git-commit --help
 "$root/bin/bob" cronjob --help
 "$root/bin/bob" dataview --help
-"$root/bin/bob" highlights-ref --help
+"$root/bin/bob" highlights --help
 "$root/bin/bob" move-done-tasks --help
 "$root/bin/bob" notify --help
 "$root/bin/bob" pomodoro --help

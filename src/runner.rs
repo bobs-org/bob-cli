@@ -49,10 +49,10 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Dataview,
     },
     Subcommand {
-        name: "highlights-ref",
+        name: "highlights",
         script_command: None,
         about: "Sync Highlights PDF annotations into reference notes",
-        native_command: NativeCommand::HighlightsRef,
+        native_command: NativeCommand::Highlights,
     },
     Subcommand {
         name: "move-done-tasks",
@@ -217,7 +217,7 @@ Examples:
   bob cronjob                    Run the nightly sync and maintenance steps
   bob dataview --source '#project'
                                  Print matching note paths
-  bob highlights-ref scan --dry-run
+  bob highlights scan --dry-run
                                  Preview Highlights reference note sync
   bob move-done-tasks --threshold 10
                                  Move tasks and maintain done links

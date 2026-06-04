@@ -43,7 +43,7 @@ install-smoke:
     "${root}/bin/bob" bulk-git-commit --help >/dev/null
     "${root}/bin/bob" cronjob --help >/dev/null
     "${root}/bin/bob" dataview --help >/dev/null
-    "${root}/bin/bob" highlights-ref --help >/dev/null
+    "${root}/bin/bob" highlights --help >/dev/null
     "${root}/bin/bob" move-done-tasks --help >/dev/null
     "${root}/bin/bob" notify --help >/dev/null
     "${root}/bin/bob" pomodoro --help >/dev/null

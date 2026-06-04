@@ -139,33 +139,33 @@ fn dataview_help_is_native_only() {
 fn highlights_ref_help_is_native_only() {
     let temp = TempDir::new("bob-cli-highlights-ref-native-help");
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("--help")
         .env("BOB_CLI_USE_SCRIPT", "1")
         .env("XDG_CACHE_HOME", temp.path())
         .output()
-        .expect("run native-only bob highlights-ref --help");
+        .expect("run native-only bob highlights --help");
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("bob highlights-ref"),
-        "expected highlights-ref help text:\n{}",
+        stdout(&output).contains("bob highlights"),
+        "expected highlights help text:\n{}",
         format_output(&output)
     );
     assert!(
         !temp.path().join("bob-cli/scripts").exists(),
-        "native-only highlights-ref should not extract script assets"
+        "native-only highlights should not extract script assets"
     );
 }
 
 #[test]
 fn highlights_ref_subcommand_help_works() {
     let cases: &[&[&str]] = &[
-        &["highlights-ref", "--help"],
-        &["highlights-ref", "scan", "--help"],
-        &["highlights-ref", "sync", "--help"],
-        &["highlights-ref", "doctor", "--help"],
-        &["highlights-ref", "marker", "--help"],
+        &["highlights", "--help"],
+        &["highlights", "scan", "--help"],
+        &["highlights", "sync", "--help"],
+        &["highlights", "doctor", "--help"],
+        &["highlights", "marker", "--help"],
     ];
 
     for args in cases {
@@ -177,8 +177,8 @@ fn highlights_ref_subcommand_help_works() {
         assert_success(&output);
         let help = stdout(&output);
         assert!(
-            help.contains("Usage: bob highlights-ref"),
-            "expected highlights-ref usage for {args:?}:\n{}",
+            help.contains("Usage: bob highlights"),
+            "expected highlights usage for {args:?}:\n{}",
             format_output(&output)
         );
         assert!(
@@ -194,7 +194,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["bulk-git-commit", "--help"], "usage: bob bulk-git-commit"),
         (&["cronjob", "--help"], "usage: bob cronjob"),
         (&["dataview", "--help"], "bob dataview"),
-        (&["highlights-ref", "--help"], "Usage: bob highlights-ref"),
+        (&["highlights", "--help"], "Usage: bob highlights"),
         (&["move-done-tasks", "--help"], "usage: bob move-done-tasks"),
         (&["notify", "--help"], "Notify me when"),
         (&["pomodoro", "--help"], "usage: bob pomodoro"),
@@ -1307,10 +1307,10 @@ fn dataview_native_where_false_returns_no_rows() {
 #[test]
 fn highlights_ref_help_lists_subcommands_alphabetically() {
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("--help")
         .output()
-        .expect("run bob highlights-ref --help");
+        .expect("run bob highlights --help");
 
     assert_success(&output);
     let help = stdout(&output);
@@ -1324,11 +1324,11 @@ fn highlights_ref_help_lists_subcommands_alphabetically() {
 #[test]
 fn highlights_ref_sync_help_lists_options_alphabetically() {
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg("--help")
         .output()
-        .expect("run bob highlights-ref sync --help");
+        .expect("run bob highlights sync --help");
 
     assert_success(&output);
     let help = stdout(&output);
@@ -1362,12 +1362,12 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
         .output()
-        .expect("run bob highlights-ref sync");
+        .expect("run bob highlights sync");
 
     assert_success(&output);
     let contents = fs::read_to_string(&note).expect("read generated ref note");
@@ -1402,12 +1402,12 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     assert!(contents.contains("highlights_marker_base: "), "{contents}");
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
         .output()
-        .expect("repeat bob highlights-ref sync");
+        .expect("repeat bob highlights sync");
 
     assert_success(&output);
     assert!(
@@ -1424,7 +1424,7 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     let marker_before = pdf_marker_contents(&pdf);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -1453,7 +1453,7 @@ fn highlights_ref_sync_dry_run_reads_literal_marker_newlines() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--dry-run")
@@ -1487,7 +1487,7 @@ fn highlights_ref_marker_uses_first_page_text_annotation() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("marker")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -1520,12 +1520,12 @@ fn highlights_ref_scan_treats_later_page_note_as_missing_marker() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
-        .expect("dry-run highlights-ref scan");
+        .expect("dry-run highlights scan");
 
     assert_eq!(
         output.status.code(),
@@ -1560,12 +1560,12 @@ fn highlights_ref_sync_rejects_missing_marker_status_without_note_write() {
     write_highlights_pdf(&pdf, "- parent: obsidian\n- title: Missing Status\n");
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
         .output()
-        .expect("run bob highlights-ref sync");
+        .expect("run bob highlights sync");
 
     assert_eq!(
         output.status.code(),
@@ -1593,12 +1593,12 @@ fn highlights_ref_sync_rejects_unsupported_marker_status_without_note_write() {
     write_highlights_pdf(&pdf, "- status: queued\n- parent: obsidian\n");
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
         .output()
-        .expect("run bob highlights-ref sync");
+        .expect("run bob highlights sync");
 
     assert_eq!(
         output.status.code(),
@@ -1626,12 +1626,12 @@ fn highlights_ref_sync_rejects_missing_marker_parent_without_note_write() {
     write_highlights_pdf(&pdf, "- status: wip\n- title: Missing Parent\n");
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
         .output()
-        .expect("run bob highlights-ref sync");
+        .expect("run bob highlights sync");
 
     assert_eq!(
         output.status.code(),
@@ -1662,12 +1662,12 @@ fn highlights_ref_rejects_wikilink_marker_parent_before_writes() {
     );
 
     let sync = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
         .output()
-        .expect("run bob highlights-ref sync");
+        .expect("run bob highlights sync");
     assert_eq!(
         sync.status.code(),
         Some(1),
@@ -1682,12 +1682,12 @@ fn highlights_ref_rejects_wikilink_marker_parent_before_writes() {
     assert!(!note.exists(), "sync must not write a note on marker error");
 
     let marker = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("marker")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
         .output()
-        .expect("run bob highlights-ref marker");
+        .expect("run bob highlights marker");
     assert_eq!(
         marker.status.code(),
         Some(1),
@@ -1701,12 +1701,12 @@ fn highlights_ref_rejects_wikilink_marker_parent_before_writes() {
     );
 
     let scan = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
-        .expect("run bob highlights-ref scan");
+        .expect("run bob highlights scan");
     assert_eq!(
         scan.status.code(),
         Some(1),
@@ -1761,13 +1761,13 @@ fn highlights_ref_sync_rejects_malformed_and_duplicate_marker_lists() {
         write_highlights_pdf(&pdf, marker);
 
         let output = bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
             .unwrap_or_else(|error| {
-                panic!("run bob highlights-ref sync for {name}: {error}")
+                panic!("run bob highlights sync for {name}: {error}")
             });
 
         assert_eq!(
@@ -1805,19 +1805,19 @@ fn highlights_ref_dry_run_and_inspection_do_not_modify_vault_files() {
     let marker_before = pdf_marker_contents(&pdf);
     let cases = vec![
         vec![
-            OsString::from("highlights-ref"),
+            OsString::from("highlights"),
             OsString::from("scan"),
             OsString::from("--dry-run"),
         ],
         vec![
-            OsString::from("highlights-ref"),
+            OsString::from("highlights"),
             OsString::from("sync"),
             OsString::from(path_str(&pdf)),
             OsString::from("--dry-run"),
         ],
-        vec![OsString::from("highlights-ref"), OsString::from("doctor")],
+        vec![OsString::from("highlights"), OsString::from("doctor")],
         vec![
-            OsString::from("highlights-ref"),
+            OsString::from("highlights"),
             OsString::from("marker"),
             OsString::from(path_str(&pdf)),
         ],
@@ -1839,7 +1839,7 @@ fn highlights_ref_dry_run_and_inspection_do_not_modify_vault_files() {
         assert_eq!(
             fs::read(&pdf).expect("read PDF after"),
             pdf_before,
-            "highlights-ref inspection command modified the PDF"
+            "highlights inspection command modified the PDF"
         );
         assert_eq!(pdf_marker_contents(&pdf), marker_before);
         assert!(
@@ -1891,12 +1891,12 @@ Note: marker note
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
-        .expect("dry-run highlights-ref scan");
+        .expect("dry-run highlights scan");
 
     assert_success(&output);
     let dry_run = stdout(&output);
@@ -1912,11 +1912,11 @@ Note: marker note
     assert!(!second_note.exists(), "dry-run must not create second note");
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .env("BOB_DIR", &vault)
         .output()
-        .expect("write highlights-ref scan");
+        .expect("write highlights scan");
 
     assert_success(&output);
     let written = stdout(&output);
@@ -1959,11 +1959,11 @@ Note: marker note
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .env("BOB_DIR", &vault)
         .output()
-        .expect("repeat highlights-ref scan");
+        .expect("repeat highlights scan");
 
     assert_success(&output);
     let repeated = stdout(&output);
@@ -1989,12 +1989,12 @@ fn highlights_ref_scan_dry_run_reports_valid_and_invalid_pdfs() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
-        .expect("mixed dry-run highlights-ref scan");
+        .expect("mixed dry-run highlights scan");
 
     assert_eq!(
         output.status.code(),
@@ -2049,11 +2049,11 @@ fn highlights_ref_scan_writes_valid_pdfs_despite_invalid_pdf() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .env("BOB_DIR", &vault)
         .output()
-        .expect("mixed write highlights-ref scan");
+        .expect("mixed write highlights scan");
 
     assert_eq!(
         output.status.code(),
@@ -2119,14 +2119,14 @@ fn highlights_ref_scan_continues_after_write_failure() {
             "set -eu\n\
              mkdir -p \"$FAIL_PARENT\"\n\
              mkdir \"$FAIL_PARENT/.$FAIL_NAME.$$.tmp\"\n\
-             exec \"$BOB_BIN\" highlights-ref scan\n",
+             exec \"$BOB_BIN\" highlights scan\n",
         )
         .env("BOB_BIN", BOB_BIN)
         .env("BOB_DIR", &vault)
         .env("FAIL_PARENT", fail_parent)
         .env("FAIL_NAME", fail_name)
         .output()
-        .expect("write-failure highlights-ref scan");
+        .expect("write-failure highlights scan");
 
     assert_eq!(
         output.status.code(),
@@ -2193,14 +2193,14 @@ fn highlights_ref_scan_jobs_flag_matches_sequential_output() {
 
     let run_scan = |jobs: &str| {
         let output = bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("scan")
             .arg("--dry-run")
             .arg("--jobs")
             .arg(jobs)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("dry-run highlights-ref scan with --jobs");
+            .expect("dry-run highlights scan with --jobs");
         assert_success(&output);
         stdout(&output)
     };
@@ -2215,7 +2215,7 @@ fn highlights_ref_scan_jobs_flag_matches_sequential_output() {
 
     // Rejecting --jobs 0 keeps the flag meaningful (1 = sequential floor).
     let zero = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .arg("--jobs")
         .arg("0")
@@ -2238,7 +2238,7 @@ fn highlights_ref_scan_allows_duplicate_basenames_in_different_ref_types() {
     write_highlights_pdf(&second_pdf, "- status: unread\n- parent: obsidian\n");
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .env("BOB_DIR", &vault)
         .output()
@@ -2274,7 +2274,7 @@ fn highlights_ref_scan_detects_same_target_collision_before_writing() {
     write_highlights_pdf(&second_pdf, "- status: unread\n- parent: obsidian\n");
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .env("BOB_DIR", &vault)
         .output()
@@ -2306,12 +2306,12 @@ fn highlights_ref_sync_refuses_dirty_target_note_before_writing() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
     git_in(&vault, ["init", "-q"]);
     git_in(&vault, ["config", "user.name", "Test User"]);
@@ -2325,7 +2325,7 @@ fn highlights_ref_sync_refuses_dirty_target_note_before_writing() {
     set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -2359,12 +2359,12 @@ fn highlights_ref_sync_allows_dirty_tracked_frontmatter_writeback() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
     git_in(&vault, ["init", "-q"]);
     git_in(&vault, ["config", "user.name", "Test User"]);
@@ -2377,7 +2377,7 @@ fn highlights_ref_sync_allows_dirty_tracked_frontmatter_writeback() {
     write_file(&note, &edited);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -2419,12 +2419,12 @@ Note: marker note
     git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("doctor")
         .env("BOB_DIR", &vault)
         .env("OB_COMMAND", &ob_stub)
         .output()
-        .expect("run highlights-ref doctor");
+        .expect("run highlights doctor");
 
     assert_success(&output);
     let report = stdout(&output);
@@ -2448,17 +2448,17 @@ fn highlights_ref_marker_edit_updates_frontmatter() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
 
     set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -2486,12 +2486,12 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
     );
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
     let edited = fs::read_to_string(&note)
         .expect("read ref note")
@@ -2500,7 +2500,7 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
     let marker_before = pdf_marker_contents(&pdf);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--dry-run")
@@ -2518,7 +2518,7 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
     let pdf_hash_before_write = sha256_file(&pdf);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -2534,7 +2534,7 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
     assert_eq!(pdf_marker_contents(&pdf), marker_before);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -2571,7 +2571,7 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
         "reference note should not keep the pre-write PDF hash:\n{note_after_write}"
     );
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -2600,12 +2600,12 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
 
     set_pdf_marker_contents(&pdf, "- status: done\n- parent: obsidian\n");
@@ -2622,7 +2622,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     let pdf_hash_before_write = sha256_file(&pdf);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--dry-run")
@@ -2648,7 +2648,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -2673,7 +2673,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
@@ -2692,7 +2692,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     assert_eq!(pdf_marker_contents(&pdf), marker_before);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .env("BOB_DIR", &vault)
         .output()
@@ -2718,7 +2718,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -2745,7 +2745,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -2770,12 +2770,12 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
     let checked_note = fs::read_to_string(&note)
         .expect("read ref note")
@@ -2785,7 +2785,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     let pdf_hash_before_write = sha256_file(&pdf);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--dry-run")
@@ -2808,7 +2808,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     assert_eq!(fs::read_to_string(&note).expect("read note"), checked_note);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
@@ -2827,7 +2827,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -2849,7 +2849,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     assert_eq!(fs::read_to_string(&note).expect("read note"), checked_note);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("scan")
         .env("BOB_DIR", &vault)
         .output()
@@ -2879,7 +2879,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     assert_eq!(fs::read_to_string(&note).expect("read note"), checked_note);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -2916,7 +2916,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -2941,12 +2941,12 @@ fn highlights_ref_task_checked_dirty_tracked_note_is_allowed() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
     git_in(&vault, ["init", "-q"]);
     git_in(&vault, ["config", "user.name", "Test User"]);
@@ -2959,7 +2959,7 @@ fn highlights_ref_task_checked_dirty_tracked_note_is_allowed() {
     write_file(&note, &checked_note);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -2990,12 +2990,12 @@ fn highlights_ref_task_checked_competing_status_edits_fail() {
         write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
         assert_success(
             &bob_command()
-                .arg("highlights-ref")
+                .arg("highlights")
                 .arg("sync")
                 .arg(&pdf)
                 .env("BOB_DIR", &vault)
                 .output()
-                .expect("initial highlights-ref sync"),
+                .expect("initial highlights sync"),
         );
 
         let mut edited = fs::read_to_string(&note)
@@ -3014,7 +3014,7 @@ fn highlights_ref_task_checked_competing_status_edits_fail() {
         let marker_before = pdf_marker_contents(&pdf);
 
         let output = bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .arg("--write-pdf")
@@ -3054,12 +3054,12 @@ fn highlights_ref_non_overlapping_edits_auto_merge_and_settle() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
 
     set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
@@ -3072,7 +3072,7 @@ fn highlights_ref_non_overlapping_edits_auto_merge_and_settle() {
     let marker_before = pdf_marker_contents(&pdf);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--dry-run")
@@ -3092,7 +3092,7 @@ fn highlights_ref_non_overlapping_edits_auto_merge_and_settle() {
     assert_eq!(pdf_marker_contents(&pdf), marker_before);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -3118,7 +3118,7 @@ fn highlights_ref_non_overlapping_edits_auto_merge_and_settle() {
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -3144,12 +3144,12 @@ fn highlights_ref_frontmatter_missing_parent_fails_before_pdf_writeback() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
     let edited = fs::read_to_string(&note)
         .expect("read ref note")
@@ -3158,7 +3158,7 @@ fn highlights_ref_frontmatter_missing_parent_fails_before_pdf_writeback() {
     let marker_before = pdf_marker_contents(&pdf);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -3189,12 +3189,12 @@ fn highlights_ref_frontmatter_unsupported_status_fails_before_pdf_writeback() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
     let edited = fs::read_to_string(&note)
         .expect("read ref note")
@@ -3203,7 +3203,7 @@ fn highlights_ref_frontmatter_unsupported_status_fails_before_pdf_writeback() {
     let marker_before = pdf_marker_contents(&pdf);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -3235,12 +3235,12 @@ fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .expect("initial highlights-ref sync"),
+            .expect("initial highlights sync"),
     );
 
     set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
@@ -3252,7 +3252,7 @@ fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
     let marker_before = pdf_marker_contents(&pdf);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -3285,7 +3285,7 @@ fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
     assert_eq!(pdf_marker_contents(&pdf), marker_before);
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .arg("--write-pdf")
@@ -3334,7 +3334,7 @@ Note: Keep a standalone observation after the marker.
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -3397,7 +3397,7 @@ Note: Keep a standalone observation after the marker.
         contents.replace("ref_type: books\n", "ref_type: stale\n");
     write_file(&note, &stale_ref_type);
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -3461,7 +3461,7 @@ Some note...
     );
 
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -3535,7 +3535,7 @@ Comment: first comment
     );
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
@@ -3561,7 +3561,7 @@ Comment: revised comment
 ",
     );
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -3601,7 +3601,7 @@ Note: marker note
     );
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
@@ -3626,7 +3626,7 @@ Note: marker note
 ",
     );
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -3666,7 +3666,7 @@ Note: marker note
     );
     assert_success(
         &bob_command()
-            .arg("highlights-ref")
+            .arg("highlights")
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
@@ -3696,7 +3696,7 @@ Comment: added later
 ",
     );
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&pdf)
         .env("BOB_DIR", &vault)
@@ -3724,7 +3724,7 @@ Manual note without generated markers.
 ",
     );
     let output = bob_command()
-        .arg("highlights-ref")
+        .arg("highlights")
         .arg("sync")
         .arg(&unsafe_pdf)
         .env("BOB_DIR", &vault)
@@ -4778,7 +4778,7 @@ fn renamed_old_top_level_commands_are_unknown() {
         assert_success(&output);
     }
 
-    for command in ["collect-done", "sync"] {
+    for command in ["collect-done", "highlights-ref", "sync"] {
         let output = bob_command()
             .arg(command)
             .arg("--help")
@@ -4811,7 +4811,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "bulk-git-commit",
         "cronjob",
         "dataview",
-        "highlights-ref",
+        "highlights",
         "move-done-tasks",
         "notify",
         "pomodoro",
@@ -4834,9 +4834,14 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         help.contains("Examples:")
             && help.contains("bob bulk-git-commit")
             && help.contains("bob dataview --source '#project'")
+            && help.contains("bob highlights scan --dry-run")
             && help.contains("bob move-done-tasks --threshold 10")
             && help.contains("bob pomodoro"),
         "expected an Examples section:\n{help}"
+    );
+    assert!(
+        !help.contains("highlights-ref"),
+        "top-level help should not list the old highlights-ref spelling:\n{help}"
     );
     assert!(
         help.contains("Run 'bob <command> --help' for more information"),

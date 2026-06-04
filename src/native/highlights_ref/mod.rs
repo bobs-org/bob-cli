@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 
 use super::{env as bob_env, ob};
 
-const COMMAND_NAME: &str = "bob highlights-ref";
+const COMMAND_NAME: &str = "bob highlights";
 const DEFAULT_LIB_DIR: &str = "lib";
 const DEFAULT_REF_DIR: &str = "ref";
 
