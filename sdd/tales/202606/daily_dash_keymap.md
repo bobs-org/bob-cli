@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-03 23:04:51
-status: wip
+status: done
 prompt: sdd/prompts/202606/daily_dash_keymap.md
 ---
 # Daily Dash Keymap Plan
