@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-04 14:26:50
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_vim_o_list_continuation.md
 ---
 # Obsidian Vim `o` List Continuation Plan
