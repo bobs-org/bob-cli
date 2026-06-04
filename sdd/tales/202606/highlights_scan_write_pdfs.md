@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-04 13:41:25
-status: wip
+status: done
 prompt: sdd/prompts/202606/highlights_scan_write_pdfs.md
 ---
 # Plan: Add `bob highlights scan --write-pdfs`

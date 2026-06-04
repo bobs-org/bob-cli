@@ -1351,6 +1351,35 @@ fn highlights_ref_sync_help_lists_options_alphabetically() {
 }
 
 #[test]
+fn highlights_ref_scan_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--help")
+        .output()
+        .expect("run bob highlights scan --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("-w, --write-pdfs"),
+        "expected short and long write-pdfs flag in scan help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "--bob-dir",
+            "--dry-run",
+            "--jobs",
+            "--lib-dir",
+            "--ref-dir",
+            "--write-pdfs",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     let temp = TempDir::new("bob-cli-highlights-ref-create");
     let vault = temp.path().join("vault");
@@ -2819,12 +2848,39 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     let scan = stdout(&output);
     assert!(
         scan.contains("pdf_task_contribution: status=read")
+            && scan.contains("write_pdfs: false")
             && scan.contains("pdf_marker_action: would-update")
             && scan.contains("notes_update: 1")
             && scan.contains("writes: none"),
         "expected scan dry-run to preview marker work:\n{}",
         format_output(&output)
     );
+    assert_eq!(pdf_marker_contents(&pdf), marker_before);
+    assert_eq!(fs::read_to_string(&note).expect("read note"), checked_note);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--dry-run")
+        .arg("--write-pdfs")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run checked task scan with PDF writes enabled");
+
+    assert_success(&output);
+    let scan_write_dry_run = stdout(&output);
+    assert!(
+        scan_write_dry_run.contains("write_pdfs: true")
+            && scan_write_dry_run
+                .contains("pdf_task_contribution: status=read")
+            && scan_write_dry_run.contains("pdf_marker_action: would-update")
+            && scan_write_dry_run.contains("notes_update: 1")
+            && scan_write_dry_run.contains("writes: none"),
+        "expected scan --dry-run --write-pdfs to stay read-only:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(pdf_marker_contents(&pdf), marker_before);
+    assert_eq!(fs::read_to_string(&note).expect("read note"), checked_note);
 
     let output = bob_command()
         .arg("highlights")
@@ -2863,7 +2919,8 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     );
     let report = stdout(&output);
     assert!(
-        report.contains("plan_error:")
+        report.contains("write_pdfs: false")
+            && report.contains("plan_error:")
             && report.contains("--write-pdf")
             && report.contains("plan_failures: 1")
             && report.contains("writes: none"),
@@ -2880,14 +2937,21 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
 
     let output = bob_command()
         .arg("highlights")
-        .arg("sync")
-        .arg(&pdf)
-        .arg("--write-pdf")
+        .arg("scan")
+        .arg("--write-pdfs")
         .env("BOB_DIR", &vault)
         .output()
-        .expect("checked task write-pdf sync");
+        .expect("checked task write-pdfs scan");
 
     assert_success(&output);
+    let scan_write = stdout(&output);
+    assert!(
+        scan_write.contains("write_pdfs: true")
+            && scan_write.contains("pdf_markers_updated: 1")
+            && scan_write.contains("writes: note,pdf"),
+        "expected scan --write-pdfs to write note and PDF marker:\n{}",
+        format_output(&output)
+    );
     let marker = pdf_marker_contents(&pdf);
     assert!(marker.contains("- status: read\n"), "{marker}");
     let pdf_hash_after_write = sha256_file(&pdf);

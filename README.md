@@ -129,7 +129,7 @@ uncommitted.
 ```bash
 bob highlights doctor
 bob highlights marker <pdf>
-bob highlights scan [--dry-run]
+bob highlights scan [--dry-run] [--write-pdfs]
 bob highlights sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter]
 ```
 
@@ -146,8 +146,11 @@ report unless `--prefer marker` or `--prefer frontmatter` is supplied.
 `--dry-run` reports the planned note/PDF actions without writing either side.
 `marker <pdf>` inspects and renders the marker contract without writing. `scan`
 recursively processes PDFs under the configured library with collision and
-dirty-target preflights, while `doctor` checks vault paths, sidecars, marker
-readability, Git state, and optional `ob` availability without writing files.
+dirty-target preflights. By default scan does not write PDF markers; use
+`scan --dry-run --write-pdfs`, review the planned marker updates, back up PDFs,
+then run `scan --write-pdfs` to opt in to bulk marker write-back. `doctor`
+checks vault paths, sidecars, marker readability, Git state, and optional `ob`
+availability without writing files.
 Marker notes must include `status` and `parent`; marker `parent` must be a bare
 note target such as `obsidian`, while generated reference-note frontmatter
 renders it as an Obsidian wikilink. `status` must be one of `unread`, `wip`,

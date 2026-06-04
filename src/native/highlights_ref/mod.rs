@@ -386,7 +386,7 @@ fn run_scan(matches: &ArgMatches) -> i32 {
     let config = Config::from_matches(matches);
     let options = SyncOptions {
         dry_run: matches.get_flag("dry-run"),
-        write_pdf: false,
+        write_pdf: matches.get_flag("write-pdfs"),
         prefer: None,
     };
     report_result(scan_library(&config, options, jobs_from_matches(matches)))
@@ -506,6 +506,7 @@ fn scan_library(
 
     print_config_report("scan", config);
     println!("dry_run: {}", options.dry_run);
+    println!("write_pdfs: {}", options.write_pdf);
     println!("ob_sync: not-run");
     println!("pdf_count: {}", pdfs.len());
     for outcome in &plan_outcomes {
@@ -2741,6 +2742,7 @@ fn with_scan_args(command: ClapCommand) -> ClapCommand {
         .arg(jobs_arg())
         .arg(lib_dir_arg())
         .arg(ref_dir_arg())
+        .arg(write_pdfs_arg())
 }
 
 fn with_sync_args(command: ClapCommand) -> ClapCommand {
@@ -2821,6 +2823,14 @@ fn write_pdf_arg() -> Arg {
         .long("write-pdf")
         .action(ArgAction::SetTrue)
         .help("Allow marker writes back to the PDF")
+}
+
+fn write_pdfs_arg() -> Arg {
+    Arg::new("write-pdfs")
+        .long("write-pdfs")
+        .short('w')
+        .action(ArgAction::SetTrue)
+        .help("Allow marker writes back to all PDFs during scan")
 }
 
 impl Config {

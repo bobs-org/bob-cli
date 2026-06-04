@@ -35,7 +35,7 @@ Available commands:
 ```bash
 bob highlights doctor
 bob highlights marker <pdf>
-bob highlights scan [--dry-run]
+bob highlights scan [--dry-run] [--write-pdfs]
 bob highlights sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter]
 ```
 
@@ -43,6 +43,9 @@ bob highlights sync <pdf> [--dry-run] [--write-pdf] [--prefer marker|frontmatter
 actions without modifying either side. Without `--dry-run`, the command writes
 the reference note when frontmatter changes. It only writes the PDF marker when
 the selected projection needs marker write-back and `--write-pdf` is supplied.
+For recursive scans, `--write-pdfs` is the bulk opt-in for marker write-back;
+`scan --dry-run --write-pdfs` remains read-only and previews the same marker
+updates.
 
 ## Release Handoff Summary
 
@@ -59,9 +62,10 @@ Known risks to validate on the MacBook:
   testing.
 - PDF marker write-back is implemented with native PDF annotation writes, but
   real Highlights-authored files may expose annotation shapes not covered by
-  Linux fixtures. Use `--write-pdf` only after backing up the target PDF.
-- Scheduled `scan` should stay note-only. Keep PDF marker write-back as a
-  targeted manual action until real-file behavior is trusted.
+  Linux fixtures. Use `--write-pdf` or `--write-pdfs` only after backing up the
+  target PDFs.
+- Scheduled `scan` should stay dry-run or note-only unless bulk PDF marker
+  writes are intentionally wanted and backed up.
 - `~/bob/lib` and `~/bob/ref` are the MVP defaults even though this Linux host
   has an observed `~/bob/lit` path.
 
@@ -230,7 +234,8 @@ Implemented conflict policy:
 - If the generated PDF task line is checked, treat that as a note-side
   `status: read` signal.
 - If marker and frontmatter changed different fields from the stored base,
-  auto-merge them. PDF marker writes are still opt-in with `--write-pdf`.
+  auto-merge them. PDF marker writes are still opt-in with targeted
+  `sync --write-pdf` or bulk `scan --write-pdfs`.
 - If both changed the same field differently, fail without modifying either side unless
   `--prefer marker` or `--prefer frontmatter` is supplied.
 
@@ -238,8 +243,8 @@ The last synced user-property projection is stored as `highlights_marker_hash`
 and as compact JSON in `highlights_marker_base`. The hash keeps old-note
 compatibility; the base snapshot lets the command prove safe field-level
 merges. `--prefer frontmatter`, checked-task completion, and any auto-merge
-that includes frontmatter changes require `--write-pdf` whenever the PDF marker
-must be updated.
+that includes frontmatter changes require `--write-pdf` for targeted `sync`, or
+`--write-pdfs` for recursive `scan`, whenever the PDF marker must be updated.
 
 PDF marker writes are performed by saving a temporary PDF next to the original
 and renaming it over the target. Before first PDF writes, commit or otherwise
@@ -250,8 +255,10 @@ writes so the apps do not race the CLI.
 
 `scan --dry-run` reports every discovered PDF. Valid PDFs show their target
 reference note, sidecar path if present, selected sync source, and note/PDF
-marker action. Invalid PDFs show a `plan_error`. Dry runs do not create
-directories, write notes, or write PDFs.
+marker action. Invalid PDFs show a `plan_error`. Scan output also reports
+`write_pdfs: true|false` so bulk marker-write runs are auditable. Dry runs do
+not create directories, write notes, or write PDFs, even when combined with
+`--write-pdfs`.
 
 Before a writing scan, the command rejects duplicate output paths, builds
 per-PDF plans, and checks Git status for existing vault files that successfully
@@ -355,7 +362,7 @@ Linked sidecar fragment:
 ##### 2026-06-03:
 
 > It only writes the PDF marker when marker write-back is needed
-and --write-pdf is supplied.
+and the matching write opt-in is supplied.
 
 - Support sase tool call replay?
 ```
@@ -388,8 +395,8 @@ checks the generated task line if it is present; existing notes without that
 exact generated line are not bulk-migrated. If the checked task would update
 the PDF marker, `sync --dry-run` previews `pdf_marker_action: would-update`,
 plain `sync` refuses before writes, and targeted `sync --write-pdf` writes the
-marker. `scan --dry-run` previews this work, while writing `scan` still refuses
-instead of writing PDFs.
+marker. `scan --dry-run` previews this work. A writing scan keeps the default
+note-only refusal unless `--write-pdfs` is supplied.
 
 Generated blocks use Obsidian block IDs beginning with `^h-`. The MVP ID is a
 deterministic content hash over source PDF path, page label, annotation kind,
@@ -486,8 +493,8 @@ MacBook validation checklist:
   manual sections, and the managed Highlights region.
 - A second run with unchanged inputs reports `writes: none`.
 - If frontmatter edits or a checked generated task require PDF marker
-  write-back, a targeted dry run reports `pdf_marker_action: would-update`
-  before any `--write-pdf` run.
+  write-back, a dry run reports `pdf_marker_action: would-update` before any
+  targeted `--write-pdf` or bulk `--write-pdfs` run.
 - `git -C ~/bob status --short` is reviewed before and after each write pass.
 
 The sync model is deliberately asymmetric:
@@ -506,9 +513,16 @@ bob highlights sync ~/bob/lib/books/example.pdf
 bob highlights scan
 ```
 
-`scan` does not enable PDF marker write-back. If a dry run reports
-`pdf_marker_action: would-update`, handle that PDF with a targeted command after
-backing up the PDF:
+`scan` does not enable PDF marker write-back by default. If a dry run reports
+`pdf_markers_would_update`, review those PDFs and back up the library before
+bulk write-back:
+
+```bash
+bob highlights scan --dry-run --write-pdfs
+bob highlights scan --write-pdfs
+```
+
+For a single PDF, keep using the targeted singular flag:
 
 ```bash
 bob highlights sync ~/bob/lib/books/example.pdf --dry-run
@@ -582,7 +596,8 @@ tail -n 80 ~/Library/Logs/bob/highlights-scan.err
 After several clean dry-run cycles, remove `--dry-run` from the
 `ProgramArguments` command and reload the LaunchAgent with the same
 `launchctl bootout`, `bootstrap`, and `kickstart` commands. Keep PDF marker
-write-back manual; do not schedule `sync --write-pdf`.
+write-back manual; do not schedule `sync --write-pdf` or `scan --write-pdfs`
+unless bulk PDF writes are deliberately desired and backed up.
 
 A cron fallback is also acceptable:
 
@@ -647,7 +662,8 @@ git -C ~/bob add ref lib
 git -C ~/bob commit -m "Checkpoint before highlights sync"
 ```
 
-Before enabling `--write-pdf`, keep a PDF backup outside the write path:
+Before enabling `--write-pdf` or `--write-pdfs`, keep a PDF backup outside the
+write path:
 
 ```bash
 backup_dir=~/bob/backups/highlights/$(date +%Y%m%d-%H%M%S)
@@ -711,10 +727,17 @@ bob highlights sync ~/bob/lib/books/example.pdf --prefer frontmatter --write-pdf
 
 If the only change is frontmatter, the generated task line is checked, or a
 dry-run auto-merge reports `pdf_marker_action: would-update`, review the marker
-first, back up the PDF, then run:
+first, back up the PDF, then run the targeted write:
 
 ```bash
 bob highlights sync ~/bob/lib/books/example.pdf --write-pdf
+```
+
+For reviewed bulk scan write-back, preview the library and then opt in:
+
+```bash
+bob highlights scan --dry-run --write-pdfs
+bob highlights scan --write-pdfs
 ```
 
 ## Expected Failures
@@ -742,7 +765,7 @@ preflight failures remain hard global failures before writes.
 | `duplicate marker key on line` | The marker repeats a normalized key. | Keep only one value for that key. |
 | `output path collision(s) detected before writes` | Multiple PDFs would write the same reference note path, such as `ref/books/example.md`. | Rename or move one PDF before scanning. |
 | `refusing to modify dirty vault files` | Git reports dirty touched paths outside the allowed frontmatter and generated-task checkbox write-back case. | Commit, stash, or clean those paths. |
-| `reference note changed but --write-pdf was not supplied` | Frontmatter or the generated checked task contributes to the selected projection, so the PDF marker needs an opt-in write. | Back up the PDF, then run targeted `sync --write-pdf`. |
+| `reference note changed but --write-pdf was not supplied` | Frontmatter or the generated checked task contributes to the selected projection, so the PDF marker needs an opt-in write. | Back up the PDF, then run targeted `sync --write-pdf` or reviewed bulk `scan --write-pdfs`. |
 | `checked PDF task conflicts` | The generated task says `status: read`, but marker or frontmatter changed `status` to another value from the stored base. | Uncheck the task or set the marker/frontmatter status to `read`. |
 | `marker/frontmatter conflict` | Marker and frontmatter changed the same field differently, or the note has no stored base snapshot for a safe merge. | Inspect both sides, then rerun with `--prefer marker` or `--prefer frontmatter --write-pdf`. |
 | `changed during sync; rerun` | The note or PDF changed after planning and before writing. | Rerun after closing or pausing apps that may touch the file. |
