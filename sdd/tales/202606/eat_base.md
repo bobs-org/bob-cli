@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-05 10:39:22
-status: wip
+status: done
 prompt: sdd/prompts/202606/eat_base.md
 ---
 # Eat Base Design Plan
