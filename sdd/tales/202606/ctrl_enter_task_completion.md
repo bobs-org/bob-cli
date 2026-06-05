@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-05 15:28:37
-status: wip
+status: done
 prompt: sdd/prompts/202606/ctrl_enter_task_completion.md
 ---
 # Plan: Move Obsidian Task Completion From Enter to Ctrl+Enter
