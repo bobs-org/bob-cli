@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-05 15:07:07
-status: wip
+status: done
 source: sdd/research/202606/obsidian_improvements_consolidated.md
 prompt: sdd/prompts/202606/tune_obsidian_tasks_dashboard.md
 ---
