@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-05 16:25:32
-status: wip
+status: done
 prompt: sdd/prompts/202606/enter_current_line.md
 ---
 # Enter Current-Line Target Plan
