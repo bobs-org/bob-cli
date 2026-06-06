@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-06 07:36:38
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_enter_repeat_explicit_fix.md
 ---
 # Obsidian Vim Enter — `repeatIsExplicit` Root-Cause Fix
