@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-06 14:58:37
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_yank_path_picker.md
 ---
 # Obsidian Yank Path Picker Plan
