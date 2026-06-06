@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-06 11:10:39
-status: wip
+status: done
 prompt: sdd/prompts/202606/transcluded_ctrl_enter_tasks.md
 ---
 # Plan: Ctrl+Enter Completion for Transcluded Obsidian Tasks
