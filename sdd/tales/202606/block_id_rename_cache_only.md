@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-06 10:04:09
-status: wip
+status: done
 prompt: sdd/prompts/202606/block_id_rename_cache_only.md
 ---
 # Plan: Make `^`-trigger block-ID rename fast (cache-only candidate discovery)
