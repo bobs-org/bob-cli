@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-06 14:36:04
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_yank_path_keymap_fix.md
 ---
 # Obsidian Yank Path Keymap Fix Plan
