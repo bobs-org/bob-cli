@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-07 06:46:08
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_daily_jump_scroll.md
 ---
 # Plan: Fix Daily Pomodoro Jump After Tab Activation
