@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-07 08:24:22
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_cmd_n_new_note_template.md
 ---
 # Plan: Make Cmd+N New Notes Use `new_note.md`
