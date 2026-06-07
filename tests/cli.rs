@@ -4844,6 +4844,65 @@ done_tasks: \"[[done/obsidian_done]]\"
 }
 
 #[test]
+fn move_done_tasks_moves_canceled_tasks_in_non_repo_vault() {
+    let temp = TempDir::new("bob-cli-move-done-tasks-canceled-non-repo");
+    let vault = temp.path().join("vault");
+    let source = vault.join("obsidian.md");
+    let archive = vault.join("done/obsidian_done.md");
+    write_file(
+        &source,
+        "\
+- [-] canceled one #task
+- [-] canceled two #task
+- [ ] active #task
+",
+    );
+
+    let output = bob_command()
+        .arg("move-done-tasks")
+        .arg("--threshold=2")
+        .env("BOB_DIR", &vault)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob move-done-tasks with canceled tasks");
+
+    assert_success(&output);
+    let output_text = stdout(&output);
+    assert!(
+        output_text.contains("files meeting threshold: 1")
+            && output_text.contains("task blocks: 2")
+            && output_text.contains("moved task blocks: 2")
+            && output_text.contains(
+                "warning: vault is not a git worktree; skipping commit and push"
+            ),
+        "expected canceled task movement in non-repo vault:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("read source"),
+        "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+- [ ] active #task
+"
+    );
+    assert_eq!(
+        fs::read_to_string(&archive).expect("read archive"),
+        "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [-] canceled one #task
+- [-] canceled two #task
+"
+    );
+}
+
+#[test]
 fn move_done_tasks_rewrites_dirty_link_repair_files() {
     let temp = TempDir::new("bob-cli-move-done-tasks-dirty-link-repair");
     let stub_bin = temp.path().join("bin");

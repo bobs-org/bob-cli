@@ -3013,6 +3013,65 @@ type: \"[[done]]\"
     }
 
     #[test]
+    fn canceled_only_tasks_move_when_threshold_is_met() {
+        let vault = TempDir::new("bob-cli-collect-done-canceled-only");
+        write_file(
+            &vault.path().join("obsidian.md"),
+            "\
+- [-] canceled one #task
+  detail
+- [-] canceled two #task
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 2).expect("build plan");
+
+        assert_eq!(plan.files.len(), 1);
+        let file = &plan.files[0];
+        assert_eq!(file.task_count, 2);
+        assert_eq!(
+            file.source_contents,
+            "\
+---
+done_tasks: \"[[done/obsidian_done]]\"
+---
+
+"
+        );
+        assert_eq!(
+            file.archive_contents.as_deref(),
+            Some(
+                "\
+---
+parent: \"[[obsidian]]\"
+type: \"[[done]]\"
+---
+
+- [-] canceled one #task
+  detail
+- [-] canceled two #task
+"
+            )
+        );
+    }
+
+    #[test]
+    fn canceled_only_tasks_below_threshold_remain_in_source() {
+        let contents = "- [-] canceled #task\n";
+        let transform = transform_markdown(contents);
+        assert_eq!(transform.task_count, 1);
+
+        let vault = TempDir::new("bob-cli-collect-done-canceled-below");
+        let source = vault.path().join("obsidian.md");
+        write_file(&source, contents);
+
+        let plan = build_collection_plan(vault.path(), 2).expect("build plan");
+
+        assert!(plan.files.is_empty());
+        assert_eq!(fs::read_to_string(&source).expect("read source"), contents);
+    }
+
+    #[test]
     fn task_moving_plan_writes_archive_with_nested_source_parent() {
         let vault = TempDir::new("bob-cli-collect-done-nested-parent");
         write_file(
