@@ -4157,15 +4157,63 @@ Note:
 
     assert_success(&output);
     let mut contents = fs::read_to_string(&note).expect("read generated note");
-    let expected_task_block = format!(
-        "\
-- [ ] #task [[lib/books/task-notes.pdf]] [p::2] ^task
-- [ ] #task Reconcile with chapter 3. [created::{created}]
-- [ ] #task Ask about the standalone note. [created::{created}]
-- [ ] #task Capture the second standalone task. [created::{created}]
-"
+
+    // The generated PDF reading-status task line is unchanged.
+    assert!(
+        contents.contains(
+            "- [ ] #task [[lib/books/task-notes.pdf]] [p::2] ^task\n"
+        ),
+        "{contents}"
     );
-    assert!(contents.contains(&expected_task_block), "{contents}");
+
+    let find_created_task = |contents: &str, prose: &str| -> String {
+        contents
+            .lines()
+            .find(|line| line.starts_with("- [ ]") && line.contains(prose))
+            .unwrap_or_else(|| {
+                panic!("missing created task for {prose}:\n{contents}")
+            })
+            .to_string()
+    };
+    let source_link_id = |line: &str| -> String {
+        let marker = "[[#^";
+        let start =
+            line.find(marker).expect("source link present") + marker.len();
+        let rest = &line[start..];
+        let end = rest.find(['|', ']']).expect("source link terminator");
+        rest[..end].to_string()
+    };
+
+    let reconcile_line =
+        find_created_task(&contents, "#task Reconcile with chapter 3.");
+    let ask_line =
+        find_created_task(&contents, "#task Ask about the standalone note.");
+    let capture_line = find_created_task(
+        &contents,
+        "#task Capture the second standalone task.",
+    );
+
+    // Each created task carries a same-file block backlink and a created date.
+    for line in [&reconcile_line, &ask_line, &capture_line] {
+        assert!(line.contains("[[#^h-"), "missing source link: {line}");
+        assert!(
+            line.contains(&format!("[created::{created}]")),
+            "missing created date: {line}"
+        );
+    }
+
+    // The link resolves: every id is a real block in the managed Highlights
+    // region. Both standalone bullets share the note's block; the comment task
+    // points at a distinct (highlight) block.
+    let block_ids = highlight_block_ids(&contents);
+    let reconcile_id = source_link_id(&reconcile_line);
+    let ask_id = source_link_id(&ask_line);
+    let capture_id = source_link_id(&capture_line);
+    assert!(block_ids.contains(&reconcile_id), "{contents}");
+    assert!(block_ids.contains(&ask_id), "{contents}");
+    assert_eq!(ask_id, capture_id, "standalone bullets share a block id");
+    assert_ne!(reconcile_id, ask_id, "comment and note blocks differ");
+
     assert!(
         contents.contains(
             "> [comment] #task Reconcile with chapter 3.\n> Keep this bullet as a comment.\n"
@@ -4197,24 +4245,23 @@ Note:
         "{contents}"
     );
 
-    let completed_line =
-        format!("- [ ] #task Reconcile with chapter 3. [created::{created}]");
-    let cancelled_line = format!(
-        "- [ ] #task Ask about the standalone note. [created::{created}]"
+    // Complete the comment task and cancel a standalone task, keeping their
+    // links; a later sync preserves them verbatim and never duplicates them.
+    let reconcile_line =
+        find_created_task(&contents, "#task Reconcile with chapter 3.");
+    let ask_line =
+        find_created_task(&contents, "#task Ask about the standalone note.");
+    let reconcile_completed = format!(
+        "{} [completion::2026-06-08]",
+        reconcile_line.replacen("- [ ]", "- [x]", 1)
+    );
+    let ask_cancelled = format!(
+        "{} [cancelled::2026-06-08]",
+        ask_line.replacen("- [ ]", "- [-]", 1)
     );
     let edited = contents
-        .replace(
-            &completed_line,
-            &format!(
-                "- [x] #task Reconcile with chapter 3. [created::{created}] [completion::2026-06-08]"
-            ),
-        )
-        .replace(
-            &cancelled_line,
-            &format!(
-                "- [-] #task Ask about the standalone note. [created::{created}] [cancelled::2026-06-08]"
-            ),
-        );
+        .replace(&reconcile_line, &reconcile_completed)
+        .replace(&ask_line, &ask_cancelled);
     write_file(&note, &edited);
 
     let output = bob_command()
@@ -4226,18 +4273,8 @@ Note:
         .expect("resync completed sidecar task bullets");
     assert_success(&output);
     let updated = fs::read_to_string(&note).expect("read updated note");
-    assert!(
-        updated.contains(&format!(
-            "- [x] #task Reconcile with chapter 3. [created::{created}] [completion::2026-06-08]"
-        )),
-        "{updated}"
-    );
-    assert!(
-        updated.contains(&format!(
-            "- [-] #task Ask about the standalone note. [created::{created}] [cancelled::2026-06-08]"
-        )),
-        "{updated}"
-    );
+    assert!(updated.contains(&reconcile_completed), "{updated}");
+    assert!(updated.contains(&ask_cancelled), "{updated}");
     assert_eq!(
         updated
             .lines()

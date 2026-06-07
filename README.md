@@ -173,7 +173,10 @@ manual body content outside that region is preserved, and disappeared generated
 blocks are kept as tombstones under `### Removed highlights`. Markdown bullet
 lines tagged with `#task` inside highlight comments or standalone non-marker
 notes also create top-level Obsidian tasks immediately under the generated PDF
-`^task` line, with a `[created::YYYY-MM-DD]` property.
+`^task` line, with a `[created::YYYY-MM-DD]` property and a same-file `🔖` block
+backlink (`[[#^h-...|🔖]]`) to the source highlight/note. The link is ignored
+for duplicate detection, so re-syncing never recreates or mutates an existing
+task.
 
 The full contract and MacBook setup guide live in
 [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md).

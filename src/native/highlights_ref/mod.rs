@@ -58,6 +58,7 @@ const PDF_TASK_PRIORITY: &str = "[p::2]";
 const PDF_TASK_TAG: &str = "#task";
 const PIPELINE_VERSION: &str = "highlights-ref-mvp-3";
 const REMOVED_HIGHLIGHTS_HEADING: &str = "### Removed highlights";
+const SOURCE_LINK_ALIAS: &str = "🔖";
 const TEXTBUNDLE_TEXT_FILES: &[&str] = &["text.md", "text.markdown"];
 
 const FIELD_SOURCE_PDF: &str = "source_pdf";
@@ -352,6 +353,7 @@ struct RenderedHighlights {
 struct AnnotationTaskCandidate {
     identity: String,
     task_text: String,
+    source_block_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -780,7 +782,8 @@ fn plan_pdf_sync(
         &stable_metadata.source_pdf,
         rendered_highlights.as_ref(),
     )?;
-    let annotation_tasks = annotation_task_candidates(sidecar.as_ref());
+    let annotation_tasks =
+        annotation_task_candidates(config, pdf, sidecar.as_ref());
     let rendered_body = insert_missing_annotation_tasks(
         &rendered_body,
         &annotation_tasks,
@@ -2323,6 +2326,8 @@ fn normalized_identity_text(text: &str) -> String {
 }
 
 fn annotation_task_candidates(
+    config: &Config,
+    pdf: &Path,
     sidecar: Option<&SidecarInput>,
 ) -> Vec<AnnotationTaskCandidate> {
     let Some(sidecar) = sidecar else {
@@ -2342,11 +2347,16 @@ fn annotation_task_candidates(
                 let Some(source) = annotation.task_source.as_deref() else {
                     continue;
                 };
-                candidates.extend(annotation_task_candidates_from_text(source));
+                let block_id = annotation_block_id(config, pdf, annotation);
+                candidates.extend(annotation_task_candidates_from_text(
+                    source, &block_id,
+                ));
             }
             SidecarAnnotationKind::StandaloneNote => {
+                let block_id = annotation_block_id(config, pdf, annotation);
                 candidates.extend(annotation_task_candidates_from_text(
                     &annotation.text,
+                    &block_id,
                 ));
             }
         }
@@ -2356,14 +2366,18 @@ fn annotation_task_candidates(
 
 fn annotation_task_candidates_from_text(
     text: &str,
+    source_block_id: &str,
 ) -> Vec<AnnotationTaskCandidate> {
     text.lines()
-        .filter_map(annotation_task_candidate_from_source_line)
+        .filter_map(|line| {
+            annotation_task_candidate_from_source_line(line, source_block_id)
+        })
         .collect()
 }
 
 fn annotation_task_candidate_from_source_line(
     line: &str,
+    source_block_id: &str,
 ) -> Option<AnnotationTaskCandidate> {
     let item = strip_unordered_list_marker(line)?;
     let task_body = strip_optional_markdown_task_checkbox(item);
@@ -2377,6 +2391,7 @@ fn annotation_task_candidate_from_source_line(
     Some(AnnotationTaskCandidate {
         identity: annotation_task_identity(&task_text)?,
         task_text,
+        source_block_id: source_block_id.to_string(),
     })
 }
 
@@ -2397,9 +2412,40 @@ fn strip_markdown_task_checkbox(item: &str) -> Option<&str> {
 }
 
 fn annotation_task_identity(task_text: &str) -> Option<String> {
-    let without_properties = strip_obsidian_task_properties(task_text);
+    let without_link = strip_source_block_link(task_text);
+    let without_properties = strip_obsidian_task_properties(&without_link);
     let identity = normalized_identity_text(&without_properties);
     contains_markdown_token(&identity, PDF_TASK_TAG).then_some(identity)
+}
+
+/// Removes any `[[ ... ]]` wikilink whose target contains a block reference
+/// (`#^`), covering `[[#^h-...]]`, `[[#^h-...|🔖]]`, and the full
+/// `[[note#^h-...|...]]` form. PDF wikilinks (`[[lib/example.pdf]]`) have no
+/// `#^` and are left untouched, so identity stays stable across the link being
+/// injected into created task lines.
+fn strip_source_block_link(text: &str) -> String {
+    let mut stripped = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    while let Some(start) = remaining.find("[[") {
+        let after_start = &remaining[start + 2..];
+        let Some(end) = after_start.find("]]") else {
+            break;
+        };
+        let inside = &after_start[..end];
+        if inside.contains("#^") {
+            stripped.push_str(&remaining[..start]);
+            remaining = &after_start[end + 2..];
+            continue;
+        }
+
+        let keep_to = start + 2;
+        stripped.push_str(&remaining[..keep_to]);
+        remaining = &remaining[keep_to..];
+    }
+
+    stripped.push_str(remaining);
+    stripped
 }
 
 fn existing_annotation_task_identities(body: &str) -> BTreeSet<String> {
@@ -3671,9 +3717,17 @@ fn insert_missing_annotation_tasks(
     let mut missing = Vec::new();
     for candidate in candidates {
         if existing.insert(candidate.identity.clone()) {
+            let source_link = if candidate.source_block_id.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "[[#^{}|{}]] ",
+                    candidate.source_block_id, SOURCE_LINK_ALIAS
+                )
+            };
             missing.push(format!(
-                "- [ ] {} [created::{}]",
-                candidate.task_text, created_date
+                "- [ ] {} {}[created::{}]",
+                candidate.task_text, source_link, created_date
             ));
         }
     }
@@ -5172,8 +5226,15 @@ Note:
             path: PathBuf::from("example.md"),
             annotations,
         };
+        let config = Config {
+            bob_dir: PathBuf::from("/tmp/bob"),
+            lib_dir: PathBuf::from("/tmp/bob/lib"),
+            ref_dir: PathBuf::from("/tmp/bob/ref"),
+        };
+        let pdf = Path::new("/tmp/bob/lib/example.pdf");
 
-        let candidates = super::annotation_task_candidates(Some(&sidecar));
+        let candidates =
+            super::annotation_task_candidates(&config, pdf, Some(&sidecar));
 
         assert_eq!(
             candidates
@@ -5190,6 +5251,17 @@ Note:
             sidecar.annotations[1].comment.as_deref(),
             Some("#task Review the contradiction.\nOrdinary comment bullet.")
         );
+
+        // The comment task points at the highlight's block; both standalone
+        // bullets share the standalone note's block; the two ids differ.
+        let highlight_block_id =
+            super::annotation_block_id(&config, pdf, &sidecar.annotations[1]);
+        let note_block_id =
+            super::annotation_block_id(&config, pdf, &sidecar.annotations[2]);
+        assert_eq!(candidates[0].source_block_id, highlight_block_id);
+        assert_eq!(candidates[1].source_block_id, note_block_id);
+        assert_eq!(candidates[2].source_block_id, note_block_id);
+        assert_ne!(highlight_block_id, note_block_id);
     }
 
     #[test]
@@ -5211,12 +5283,15 @@ Keep me here.
 
 <!-- highlights:end -->
 ";
+        let block_id = "h-abc123def456";
+        let alias = super::SOURCE_LINK_ALIAS;
         let candidates = super::annotation_task_candidates_from_text(
             "\
 - #task Existing done
 - #task Existing cancelled
 - #task New follow-up [due::2026-06-08]
 ",
+            block_id,
         );
 
         let updated = super::insert_missing_annotation_tasks(
@@ -5226,9 +5301,18 @@ Keep me here.
         )
         .expect("insert annotation tasks");
 
-        assert!(updated.contains(
-            "- [ ] #task [[lib/example.pdf]] [p::2] ^task\n- [ ] #task New follow-up [due::2026-06-08] [created::2026-06-07]\n"
-        ));
+        // The created task carries a same-file block backlink between the
+        // prose and the [created::] field.
+        let new_line = format!(
+            "- [ ] #task New follow-up [due::2026-06-08] [[#^{block_id}|{alias}]] [created::2026-06-07]"
+        );
+        assert!(
+            updated.contains(&format!(
+                "- [ ] #task [[lib/example.pdf]] [p::2] ^task\n{new_line}\n"
+            )),
+            "{updated}"
+        );
+        // The pre-existing link-less tasks are preserved, not recreated.
         assert_eq!(updated.matches("#task Existing done").count(), 1);
         assert_eq!(updated.matches("#task Existing cancelled").count(), 1);
         assert!(updated.contains("## Manual Notes\n\nKeep me here."));
@@ -5241,6 +5325,23 @@ Keep me here.
         )
         .expect("rerun annotation task insertion");
         assert_eq!(rerun, updated);
+
+        // A completed linked task keeps its link and is not recreated: identity
+        // strips the injected block link on the existing-line side.
+        let completed_linked = updated.replace(
+            &new_line,
+            &format!(
+                "{} [completion::2026-06-09]",
+                new_line.replacen("- [ ]", "- [x]", 1)
+            ),
+        );
+        let rerun_completed = super::insert_missing_annotation_tasks(
+            &completed_linked,
+            &candidates,
+            "2026-06-07",
+        )
+        .expect("rerun completed linked annotation task insertion");
+        assert_eq!(rerun_completed, completed_linked);
     }
 
     #[test]

@@ -417,16 +417,28 @@ immediately under the generated PDF `^task` line:
 becomes:
 
 ```md
-- [ ] #task Compare this claim with the appendix. [created::2026-06-07]
-- [ ] #task Email the citation to Alex. [created::2026-06-07]
+- [ ] #task Compare this claim with the appendix. [[#^h-2b91f0a4c7de|🔖]] [created::2026-06-07]
+- [ ] #task Email the citation to Alex. [[#^h-2b91f0a4c7de|🔖]] [created::2026-06-07]
 ```
+
+Each created task carries a same-file block backlink to the highlight comment
+or standalone note that spawned it, rendered as an aliased `🔖` link between the
+task prose and the `[created::]` field. The target is the `^h-...` block ID of
+that annotation in the managed Highlights region, so clicking 🔖 in Obsidian
+jumps straight to the source passage in the same note. The bare same-file form
+(`[[#^h-...]]`, no note basename) is rename-safe, and multiple `#task` bullets
+in one comment all link to that comment's single block. The link is ignored for
+duplicate detection — identity is computed from the normalized task text with
+the block link and task properties stripped — so adding it never recreates or
+mutates an already-created task.
 
 These annotation-created tasks are sibling top-level tasks, not subtasks of the
 PDF reading-status task. They are created once by normalized task text; later
 syncs preserve existing checkbox state and task properties such as
 `[completion::]`, `[cancelled::]`, `[due::]`, or edited priority fields.
 Completing or cancelling these annotation-created tasks does not update the PDF
-marker or reference-note reading status.
+marker or reference-note reading status. Tasks created before block backlinks
+were added stay link-less and are left as-is; only new bullets get linked tasks.
 
 Generated blocks use Obsidian block IDs beginning with `^h-`. The MVP ID is a
 deterministic content hash over source PDF path, page label, annotation kind,
@@ -434,6 +446,9 @@ sidecar order on the page, and quote/note text. Highlight comments are not part
 of the hash, so editing only a comment updates the block without changing its
 ID. If a previously generated block disappears from the sidecar, the command
 keeps the old block ID under `### Removed highlights` with a tombstone message.
+Editing the highlight text itself mints a new block ID; a task created earlier
+keeps its original link, which then targets the tombstoned block under
+`### Removed highlights` — still a valid, resolvable jump.
 
 ## MacBook Setup Guide
 
