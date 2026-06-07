@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-07 09:01:56
-status: wip
+status: done
 prompt: sdd/prompts/202606/new_note_current_parent_fallback.md
 ---
 # Plan: Try Current Note Parent For Cmd+N New Notes
