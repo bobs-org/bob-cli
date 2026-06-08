@@ -878,6 +878,19 @@ fn finalize_annotation_task_plans(
     config: &Config,
     plans: &mut [&mut PdfSyncPlan],
 ) -> Result<()> {
+    // Building the processed-task index walks the entire vault. Skip it
+    // entirely when no plan carries annotation-task candidates: with nothing to
+    // accept/reject there are no routed groups to form and no reference-note
+    // bodies to mutate, so the index would never be consulted. This keeps the
+    // common `sync`/`scan` path (non-`wip` PDFs, or `wip` PDFs with no `#task`
+    // bullets) free of the vault-wide scan.
+    if plans
+        .iter()
+        .all(|plan| plan.annotation_task_candidates.is_empty())
+    {
+        return Ok(());
+    }
+
     let mut processed = processed_task_index(config)?;
     let created_date = current_local_date();
     let mut routed_groups: BTreeMap<PathBuf, RoutedTaskGroup> = BTreeMap::new();
@@ -889,7 +902,7 @@ fn finalize_annotation_task_plans(
         plan.routed_task_note_writes.clear();
 
         let mut reference_task_lines = Vec::new();
-        for candidate in plan.annotation_task_candidates.clone() {
+        for candidate in std::mem::take(&mut plan.annotation_task_candidates) {
             if !processed.accept(&candidate) {
                 plan.annotation_tasks_skipped += 1;
                 continue;

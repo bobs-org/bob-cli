@@ -4461,6 +4461,59 @@ Note: marker note mirrored from the PDF
 }
 
 #[test]
+fn highlights_ref_sync_skips_vault_scan_when_no_annotation_candidates() {
+    // Pins the "skip the vault-wide processed-task scan when no plan carries
+    // annotation-task candidates" optimization. The sidecar has no `#task`
+    // bullets, so there are zero candidates and the processed-task index is
+    // never needed. We drop an unreadable (invalid UTF-8) `.md` file into the
+    // vault: if a future refactor reintroduced the unconditional scan, the walk
+    // would read this file and abort the command, failing this test.
+    let temp = TempDir::new("bob-cli-highlights-ref-no-candidate-scan");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/books/task-notes.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/books/task-notes.md");
+    let unreadable = vault.join("unreadable.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Task Notes\n",
+    );
+    write_file(
+        &sidecar,
+        "\
+# Task Notes
+
+## Page 4
+
+Note: marker note mirrored from the PDF
+
+---
+
+> A claim with no task bullet.
+",
+    );
+    // Invalid UTF-8 bytes make `fs::read_to_string` fail if this file is ever
+    // walked by the processed-task index builder.
+    fs::write(&unreadable, [0xff, 0xfe, 0x00, 0x9f])
+        .expect("write invalid utf-8 sibling note");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync wip pdf without annotation tasks");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read ref note");
+    assert!(
+        !contents.lines().any(|line| line.contains("#task A claim")),
+        "no annotation task should be created:\n{contents}"
+    );
+}
+
+#[test]
 fn highlights_ref_scan_groups_routed_tasks_with_parallel_jobs() {
     let temp = TempDir::new("bob-cli-highlights-ref-routed-scan");
     let vault = temp.path().join("vault");

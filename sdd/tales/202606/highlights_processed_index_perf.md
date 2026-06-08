@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-08 07:30:23
-status: wip
+status: done
 prompt: sdd/prompts/202606/highlights_processed_index_perf.md
 ---
 # Plan: Keep `bob highlights` Fast After Annotation-Task Routing
