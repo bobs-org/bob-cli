@@ -56,7 +56,8 @@ const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
 const PDF_TASK_BLOCK_ID: &str = "^task";
 const PDF_TASK_PRIORITY: &str = "[p::2]";
 const PDF_TASK_TAG: &str = "#task";
-const HIGHLIGHT_TASK_FIELD: &str = "highlight_task";
+const HIGHLIGHT_TASK_FIELD: &str = "h";
+const LEGACY_HIGHLIGHT_TASK_FIELD: &str = "highlight_task";
 const HIGHLIGHT_TASK_ID_VERSION: &str = "v1";
 const SOURCE_TASK_BLOCK_ID_PREFIX: &str = "ht-";
 const PIPELINE_VERSION: &str = "highlights-ref-mvp-3";
@@ -357,10 +358,9 @@ struct AnnotationTaskCandidate {
     identity: String,
     task_text: String,
     source_block_id: String,
-    source_task_block_id: String,
     target: AnnotationTaskTarget,
     source_ref_note_path: PathBuf,
-    legacy_highlight_task_id: String,
+    processed_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,8 +378,8 @@ struct AnnotationTaskSource {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ProcessedTaskIndex {
-    source_task_anchors: BTreeSet<String>,
-    legacy_highlight_task_ids: BTreeSet<String>,
+    legacy_source_task_anchors: BTreeSet<String>,
+    processed_ids: BTreeSet<String>,
     legacy_identities: BTreeSet<String>,
 }
 
@@ -982,21 +982,20 @@ struct RoutedTaskGroup {
 
 impl ProcessedTaskIndex {
     fn accept(&mut self, candidate: &AnnotationTaskCandidate) -> bool {
+        let legacy_source_task_anchor =
+            annotation_task_legacy_source_task_block_id(candidate);
         if self
-            .source_task_anchors
-            .contains(&candidate.source_task_block_id)
-            || self
-                .legacy_highlight_task_ids
-                .contains(&candidate.legacy_highlight_task_id)
+            .legacy_source_task_anchors
+            .contains(&legacy_source_task_anchor)
+            || self.processed_ids.contains(&candidate.processed_id)
             || self.legacy_identities.contains(&candidate.identity)
         {
             return false;
         }
 
-        self.source_task_anchors
-            .insert(candidate.source_task_block_id.clone());
-        self.legacy_highlight_task_ids
-            .insert(candidate.legacy_highlight_task_id.clone());
+        self.legacy_source_task_anchors
+            .insert(legacy_source_task_anchor);
+        self.processed_ids.insert(candidate.processed_id.clone());
         self.legacy_identities.insert(candidate.identity.clone());
         true
     }
@@ -2350,41 +2349,22 @@ fn annotation_block_id(
 }
 
 fn render_annotation_block(
-    config: &Config,
-    ref_note_path: &Path,
+    _config: &Config,
+    _ref_note_path: &Path,
     annotation: &SidecarAnnotation,
     block_id: &str,
 ) -> String {
     let mut rendered = String::new();
-    let source_task_anchors = annotation_source_task_anchors(
-        config,
-        ref_note_path,
-        annotation,
-        block_id,
-    );
-    let mut rendered_source_task_anchors = BTreeSet::new();
     match annotation.kind {
         SidecarAnnotationKind::Highlight => {
             push_blockquote(&mut rendered, None, &annotation.text);
             if let Some(comment) = &annotation.comment {
                 rendered.push_str(">\n");
-                push_blockquote_with_source_task_anchors(
-                    &mut rendered,
-                    Some("[comment] "),
-                    comment,
-                    &source_task_anchors,
-                    &mut rendered_source_task_anchors,
-                );
+                push_blockquote(&mut rendered, Some("[comment] "), comment);
             }
         }
         SidecarAnnotationKind::StandaloneNote => {
-            push_blockquote_with_source_task_anchors(
-                &mut rendered,
-                Some("[note] "),
-                &annotation.text,
-                &source_task_anchors,
-                &mut rendered_source_task_anchors,
-            );
+            push_blockquote(&mut rendered, Some("[note] "), &annotation.text);
         }
     }
     rendered.push('\n');
@@ -2394,65 +2374,12 @@ fn render_annotation_block(
     rendered
 }
 
-fn annotation_source_task_anchors(
-    config: &Config,
-    ref_note_path: &Path,
-    annotation: &SidecarAnnotation,
-    source_block_id: &str,
-) -> BTreeMap<String, String> {
-    let source = match annotation.kind {
-        SidecarAnnotationKind::Highlight => {
-            annotation.task_source.as_deref().unwrap_or_default()
-        }
-        SidecarAnnotationKind::StandaloneNote => &annotation.text,
-    };
-    let mut anchors = BTreeMap::new();
-    for line in source.lines() {
-        let Some(source) = annotation_task_source_from_source_line(line) else {
-            continue;
-        };
-        let source_task_block_id = annotation_task_source_task_block_id(
-            config,
-            ref_note_path,
-            source_block_id,
-            &source.identity,
-        );
-        anchors
-            .entry(source.identity)
-            .or_insert(source_task_block_id);
-    }
-    anchors
-}
-
 fn push_blockquote(
     rendered: &mut String,
     first_prefix: Option<&str>,
     text: &str,
 ) {
-    let source_task_anchors = BTreeMap::new();
-    let mut rendered_source_task_anchors = BTreeSet::new();
-    push_blockquote_with_source_task_anchors(
-        rendered,
-        first_prefix,
-        text,
-        &source_task_anchors,
-        &mut rendered_source_task_anchors,
-    );
-}
-
-fn push_blockquote_with_source_task_anchors(
-    rendered: &mut String,
-    first_prefix: Option<&str>,
-    text: &str,
-    source_task_anchors: &BTreeMap<String, String>,
-    rendered_source_task_anchors: &mut BTreeSet<String>,
-) {
     for (index, line) in text.lines().enumerate() {
-        let source_task_anchor = source_task_anchor_for_rendered_line(
-            line,
-            source_task_anchors,
-            rendered_source_task_anchors,
-        );
         rendered.push_str("> ");
         if index == 0
             && let Some(prefix) = first_prefix
@@ -2460,25 +2387,8 @@ fn push_blockquote_with_source_task_anchors(
             rendered.push_str(prefix);
         }
         rendered.push_str(line);
-        if let Some(anchor) = source_task_anchor {
-            rendered.push(' ');
-            rendered.push('^');
-            rendered.push_str(&anchor);
-        }
         rendered.push('\n');
     }
-}
-
-fn source_task_anchor_for_rendered_line(
-    line: &str,
-    source_task_anchors: &BTreeMap<String, String>,
-    rendered_source_task_anchors: &mut BTreeSet<String>,
-) -> Option<String> {
-    let source = annotation_task_source_from_rendered_line(line)?;
-    let anchor = source_task_anchors.get(&source.identity)?;
-    rendered_source_task_anchors
-        .insert(anchor.clone())
-        .then(|| anchor.clone())
 }
 
 impl SidecarAnnotationKind {
@@ -2801,13 +2711,7 @@ fn annotation_task_candidate_from_source_line(
         ),
         None => AnnotationTaskTarget::ReferenceNote,
     };
-    let source_task_block_id = annotation_task_source_task_block_id(
-        config,
-        ref_note_path,
-        source_block_id,
-        &source.identity,
-    );
-    let legacy_highlight_task_id = legacy_annotation_task_property_id(
+    let processed_id = annotation_task_processed_id(
         config,
         ref_note_path,
         source_block_id,
@@ -2818,10 +2722,9 @@ fn annotation_task_candidate_from_source_line(
         identity: source.identity,
         task_text: source.task_text,
         source_block_id: source_block_id.to_string(),
-        source_task_block_id,
         target,
         source_ref_note_path: ref_note_path.to_path_buf(),
-        legacy_highlight_task_id,
+        processed_id,
     }))
 }
 
@@ -2830,17 +2733,6 @@ fn annotation_task_source_from_source_line(
 ) -> Option<AnnotationTaskSource> {
     let item = strip_unordered_list_marker(line)?;
     annotation_task_source_from_item(item)
-}
-
-fn annotation_task_source_from_rendered_line(
-    line: &str,
-) -> Option<AnnotationTaskSource> {
-    let trimmed = line.trim_start();
-    if let Some(item) = strip_unordered_list_marker(trimmed) {
-        annotation_task_source_from_item(item)
-    } else {
-        annotation_task_source_from_item(trimmed)
-    }
 }
 
 fn annotation_task_source_from_item(
@@ -2917,22 +2809,17 @@ fn route_name_to_note_path(
     Ok(path)
 }
 
-fn annotation_task_source_task_block_id(
-    config: &Config,
-    ref_note_path: &Path,
-    source_block_id: &str,
-    identity: &str,
+fn annotation_task_legacy_source_task_block_id(
+    candidate: &AnnotationTaskCandidate,
 ) -> String {
-    let digest = annotation_task_source_digest(
-        config,
-        ref_note_path,
-        source_block_id,
-        identity,
-    );
-    format!("{}{}", SOURCE_TASK_BLOCK_ID_PREFIX, &digest[..12])
+    format!(
+        "{}{}",
+        SOURCE_TASK_BLOCK_ID_PREFIX,
+        &candidate.processed_id[..12]
+    )
 }
 
-fn legacy_annotation_task_property_id(
+fn annotation_task_processed_id(
     config: &Config,
     ref_note_path: &Path,
     source_block_id: &str,
@@ -2970,8 +2857,12 @@ fn render_annotation_task_line(
 ) -> String {
     let source_link = annotation_task_source_link(config, candidate);
     format!(
-        "- [ ] {} {}[created::{}]",
-        candidate.task_text, source_link, created_date
+        "- [ ] {} {}[{}:: {}] [created::{}]",
+        candidate.task_text,
+        source_link,
+        HIGHLIGHT_TASK_FIELD,
+        candidate.processed_id,
+        created_date
     )
 }
 
@@ -2979,16 +2870,22 @@ fn annotation_task_source_link(
     config: &Config,
     candidate: &AnnotationTaskCandidate,
 ) -> String {
-    if candidate.source_task_block_id.is_empty() {
+    if candidate.source_block_id.is_empty() {
         return String::new();
     }
 
-    format!(
-        "[[{}#^{}|{}]] ",
-        vault_relative_note_link(config, &candidate.source_ref_note_path),
-        candidate.source_task_block_id,
-        SOURCE_LINK_ALIAS
-    )
+    let target = match candidate.target {
+        AnnotationTaskTarget::ReferenceNote => {
+            format!("#^{}", candidate.source_block_id)
+        }
+        AnnotationTaskTarget::RoutedNote(_) => format!(
+            "{}#^{}",
+            vault_relative_note_link(config, &candidate.source_ref_note_path),
+            candidate.source_block_id
+        ),
+    };
+
+    format!("[[{target}|{SOURCE_LINK_ALIAS}]] ")
 }
 
 fn vault_relative_note_link(config: &Config, note_path: &Path) -> String {
@@ -3127,14 +3024,17 @@ fn collect_processed_task_index_from_file(
             continue;
         };
         for source_task_anchor in source_task_block_ids(task_body) {
-            index.source_task_anchors.insert(source_task_anchor);
+            index.legacy_source_task_anchors.insert(source_task_anchor);
         }
-        for legacy_highlight_task_id in
+        for processed_id in
             obsidian_task_property_values(task_body, HIGHLIGHT_TASK_FIELD)
+                .into_iter()
+                .chain(obsidian_task_property_values(
+                    task_body,
+                    LEGACY_HIGHLIGHT_TASK_FIELD,
+                ))
         {
-            index
-                .legacy_highlight_task_ids
-                .insert(legacy_highlight_task_id);
+            index.processed_ids.insert(processed_id);
         }
         if let Some(identity) = annotation_task_identity(task_body) {
             index.legacy_identities.insert(identity);
@@ -6112,7 +6012,7 @@ Note:
     }
 
     #[test]
-    fn rendered_annotation_blocks_include_source_task_anchors() {
+    fn rendered_annotation_blocks_do_not_include_source_task_anchors() {
         let annotations = parse_sidecar_markdown(
             "\
 ## Page 2
@@ -6147,10 +6047,10 @@ Note:
         let rendered = super::render_sidecar_highlights(
             &config, pdf, ref_note, &note, &sidecar,
         )
-        .expect("render source task anchors");
+        .expect("render annotation blocks");
 
         assert_eq!(super::generated_block_ids(&rendered.content).len(), 2);
-        assert_eq!(rendered.content.matches(" ^ht-").count(), 3);
+        assert!(!rendered.content.contains(" ^ht-"), "{}", rendered.content);
         let review_lines = rendered
             .content
             .lines()
@@ -6162,13 +6062,13 @@ Note:
                 .iter()
                 .filter(|line| line.contains(" ^ht-"))
                 .count(),
-            1,
+            0,
             "{}",
             rendered.content
         );
         assert!(
             rendered.content.contains(
-                "> [note] - #task Follow up on the standalone note. ^ht-"
+                "> [note] - #task Follow up on the standalone note.\n"
             ),
             "{}",
             rendered.content
@@ -6219,7 +6119,7 @@ Note:
     }
 
     #[test]
-    fn annotation_task_candidate_records_route_and_source_task_ids() {
+    fn annotation_task_candidate_records_route_and_processed_id() {
         let bob_dir = temp_bob_dir("candidate-route");
         write_test_file(
             &bob_dir.join("alice.md"),
@@ -6246,17 +6146,8 @@ Note:
             super::AnnotationTaskTarget::RoutedNote(bob_dir.join("alice.md"))
         );
         assert_eq!(
-            candidates[0].source_task_block_id,
-            super::annotation_task_source_task_block_id(
-                &config,
-                &ref_note,
-                "h-abc123",
-                "#task Follow up with Alice",
-            )
-        );
-        assert_eq!(
-            candidates[0].legacy_highlight_task_id,
-            super::legacy_annotation_task_property_id(
+            candidates[0].processed_id,
+            super::annotation_task_processed_id(
                 &config,
                 &ref_note,
                 "h-abc123",
@@ -6269,8 +6160,12 @@ Note:
             "2026-06-07",
         );
         assert!(
-            rendered.contains("[[ref/books/task-notes#^ht-"),
+            rendered.contains("[[ref/books/task-notes#^h-abc123|"),
             "{rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("[h:: {}]", candidates[0].processed_id)),
+            "new tasks must render short processed marker: {rendered}"
         );
         assert!(
             !rendered.contains("[highlight_task:: "),
@@ -6289,6 +6184,15 @@ Note:
             candidates[1].task_text,
             "#task Keep unsafe token @alice.md"
         );
+        let same_note_rendered = super::render_annotation_task_line(
+            &config,
+            &candidates[1],
+            "2026-06-07",
+        );
+        assert!(
+            same_note_rendered.contains("[[#^h-abc123|"),
+            "{same_note_rendered}"
+        );
     }
 
     #[test]
@@ -6298,13 +6202,13 @@ Note:
             &bob_dir.join("root.md"),
             "\
 - [ ] #task Active [[ref/books/task#^ht-active|x]] [highlight_task:: active-id]
-  - [x] #task Nested child [[ref/books/task#^ht-nested|x]] [highlight_task:: nested-id]
+  - [x] #task Nested child [[ref/books/task#^ht-nested|x]] [h:: nested-id]
 - [-] #task Canceled [[ref/books/task#^ht-cancel|x]] @alice [cancelled::2026-06-08]
 ",
         );
         write_test_file(
             &bob_dir.join("done/alice_done.md"),
-            "- [x] #task Archived [[ref/books/task#^ht-done|x]] [highlight_task:: done-id] [created::2026-06-07]\n",
+            "- [x] #task Archived [[ref/books/task#^h-done|x]] [h:: done-id] [created::2026-06-07]\n",
         );
         write_test_file(
             &bob_dir.join(".git/ignored.md"),
@@ -6315,15 +6219,15 @@ Note:
         let index = super::processed_task_index(&config)
             .expect("build processed index");
 
-        assert!(index.source_task_anchors.contains("ht-active"));
-        assert!(index.source_task_anchors.contains("ht-nested"));
-        assert!(index.source_task_anchors.contains("ht-cancel"));
-        assert!(index.source_task_anchors.contains("ht-done"));
-        assert!(!index.source_task_anchors.contains("ht-ignored"));
-        assert!(index.legacy_highlight_task_ids.contains("active-id"));
-        assert!(index.legacy_highlight_task_ids.contains("nested-id"));
-        assert!(index.legacy_highlight_task_ids.contains("done-id"));
-        assert!(!index.legacy_highlight_task_ids.contains("ignored-id"));
+        assert!(index.legacy_source_task_anchors.contains("ht-active"));
+        assert!(index.legacy_source_task_anchors.contains("ht-nested"));
+        assert!(index.legacy_source_task_anchors.contains("ht-cancel"));
+        assert!(!index.legacy_source_task_anchors.contains("h-done"));
+        assert!(!index.legacy_source_task_anchors.contains("ht-ignored"));
+        assert!(index.processed_ids.contains("active-id"));
+        assert!(index.processed_ids.contains("nested-id"));
+        assert!(index.processed_ids.contains("done-id"));
+        assert!(!index.processed_ids.contains("ignored-id"));
         assert!(index.legacy_identities.contains("#task Active"));
         assert!(index.legacy_identities.contains("#task Nested child"));
         assert!(index.legacy_identities.contains("#task Archived"));
@@ -6351,6 +6255,38 @@ Note:
         .pop()
         .expect("candidate");
 
+        assert!(!index.accept(&candidate));
+    }
+
+    #[test]
+    fn processed_task_index_legacy_ht_backlink_blocks_edited_recreation() {
+        let bob_dir = temp_bob_dir("legacy-ht-index");
+        let config = test_config_for_bob_dir(bob_dir.clone());
+        let ref_note = bob_dir.join("ref/books/task.md");
+        let candidate = super::annotation_task_candidates_from_text(
+            &config,
+            &ref_note,
+            "- #task Original follow-up\n",
+            "h-source123456",
+        )
+        .expect("extract candidate")
+        .pop()
+        .expect("candidate");
+        let legacy_anchor =
+            super::annotation_task_legacy_source_task_block_id(&candidate);
+        write_test_file(
+            &bob_dir.join("done/old.md"),
+            &format!(
+                "- [x] #task Edited archived follow-up [[ref/books/task#^{legacy_anchor}|x]] [created::2026-06-01]\n"
+            ),
+        );
+
+        let mut index = super::processed_task_index(&config)
+            .expect("build processed index");
+
+        assert!(index.legacy_source_task_anchors.contains(&legacy_anchor));
+        assert!(!index.processed_ids.contains(&candidate.processed_id));
+        assert!(!index.legacy_identities.contains(&candidate.identity));
         assert!(!index.accept(&candidate));
     }
 
@@ -6397,11 +6333,11 @@ Keep me here.
         )
         .expect("insert annotation tasks");
 
-        // The created task carries a vault-relative source-task backlink
-        // between the prose and the [created::] field.
+        // The created task carries a same-file source backlink followed by the
+        // durable processed marker and created date.
         let new_line = format!(
-            "- [ ] #task New follow-up [due::2026-06-08] [[ref/example#^{}|{alias}]] [created::2026-06-07]",
-            candidates[2].source_task_block_id
+            "- [ ] #task New follow-up [due::2026-06-08] [[#^{block_id}|{alias}]] [h:: {}] [created::2026-06-07]",
+            candidates[2].processed_id
         );
         assert!(
             updated.contains(&format!(
@@ -6412,6 +6348,10 @@ Keep me here.
         assert!(
             !updated.contains("[highlight_task:: "),
             "new tasks must not render legacy processed markers:\n{updated}"
+        );
+        assert!(
+            updated.contains(&format!("[h:: {}]", candidates[2].processed_id)),
+            "new tasks must render short processed markers:\n{updated}"
         );
         // The pre-existing link-less tasks are preserved, not recreated.
         assert_eq!(updated.matches("#task Existing done").count(), 1);

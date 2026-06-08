@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-08 08:45:16
-status: wip
+status: done
 prompt: sdd/prompts/202606/highlight_task_h_property.md
 ---
 # Plan: Restore property-based highlight task tracking with `h`

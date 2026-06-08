@@ -423,8 +423,8 @@ By default, created tasks are top-level siblings immediately under the
 generated PDF `^task` line:
 
 ```md
-- [ ] #task Compare this claim with the appendix. [[ref/books/example#^ht-5c7a1d8e2b44|🔖]] [created::2026-06-07]
-- [ ] #task Email the citation to Alex. [[ref/books/example#^ht-a28f93c0d117|🔖]] [created::2026-06-07]
+- [ ] #task Compare this claim with the appendix. [[#^h-2b91f0a4c7de|🔖]] [h:: 4c0a13d2...] [created::2026-06-07]
+- [ ] #task Email the citation to Alex. [[#^h-2b91f0a4c7de|🔖]] [h:: 910f6ce7...] [created::2026-06-07]
 ```
 
 If the final whitespace-delimited token is a strict `@name` route suffix, the
@@ -437,37 +437,37 @@ explicit frontmatter that this command cannot infer. For example, `@alice`
 creates this line in `~/bob/alice.md`:
 
 ```md
-- [ ] #task Send the quote to Alice [[ref/books/example#^ht-9b31c4a056ef|🔖]] [created::2026-06-07]
+- [ ] #task Send the quote to Alice [[ref/books/example#^h-2b91f0a4c7de|🔖]] [h:: 9b31c4a0...] [created::2026-06-07]
 ```
 
-Each created task carries a block backlink to a task-specific generated source
-anchor, rendered as an aliased `🔖` link between the task prose and
-`[created::]`. Same-note and routed tasks both use a full vault-relative note
-target (`[[ref/books/example#^ht-...]]`) so the source note remains recoverable
-after the task moves to another note or `done/`. The managed Highlights region
-keeps the annotation-level `^h-...` block and also attaches the corresponding
-task-specific `^ht-...` block ID to the source task line:
+Each created task carries a block backlink to the annotation-level generated
+source block, rendered as an aliased `🔖` link between the task prose and
+processed/created properties. Same-note tasks use compact same-file targets
+(`[[#^h-...]]`). Routed tasks use full vault-relative note targets
+(`[[ref/books/example#^h-...]]`) so the source note remains recoverable after
+the task moves to another note or `done/`. The managed Highlights region keeps
+the annotation-level `^h-...` block and does not attach task-specific `^ht-...`
+block IDs to source task lines:
 
 ```md
-> [comment] #task Compare this claim with the appendix. ^ht-5c7a1d8e2b44
-> [comment] #task Email the citation to Alex. ^ht-a28f93c0d117
+> [comment] #task Compare this claim with the appendix.
+> [comment] #task Email the citation to Alex.
 
 ^h-2b91f0a4c7de
 ```
 
-The `ht-...` ID is computed from the source reference note path, source
-annotation block, and normalized task identity. Duplicate identical `#task`
-bullets in the same annotation still create only one task; the first matching
-source line gets the shared `^ht-...` anchor.
-
-New created tasks no longer carry `[highlight_task:: ...]`. The source
-backlink is the durable processed marker that moves with the task when it is
-completed, cancelled, edited, or archived by `bob move-done-tasks`, so later
-syncs do not recreate it and do not write any processed state back into the PDF
-or sidecar. Older tasks that already have `[highlight_task:: ...]` are still
-recognized for compatibility, but the field is no longer written. If the source
-backlink is removed from a moved or heavily edited task, the legacy normalized
-text fallback only covers unchanged text.
+The `[h:: ...]` processed ID is computed from the source reference note path,
+source annotation block, and normalized task identity. Duplicate identical
+`#task` bullets in the same annotation still create only one task. The property
+is the durable processed marker that moves with the task when it is completed,
+cancelled, edited, or archived by `bob move-done-tasks`, so later syncs do not
+recreate it and do not write any processed state back into the PDF or sidecar.
+Older tasks that already have `[highlight_task:: ...]` are still recognized for
+compatibility, and tasks created by the old `^ht` implementation are recognized
+by their `#^ht-...` backlinks. New tasks do not write `[highlight_task:: ...]`
+or `^ht` source anchors. If both processed properties and old source backlinks
+are removed from a moved or heavily edited task, the legacy normalized text
+fallback only covers unchanged text.
 
 Annotation-created tasks are independent tasks, not subtasks of the PDF
 reading-status task. Later syncs preserve existing checkbox state and task

@@ -3487,13 +3487,15 @@ Note: marker note mirrored from the PDF
         "#task Final same-note intake.",
     );
     assert!(
-        same_note_task.contains("[[ref/books/closing-order#^ht-"),
-        "same-note task should link to its managed source block: {same_note_task}"
+        same_note_task.contains("[[#^h-")
+            && same_note_task.contains("[h:: ")
+            && same_note_task.contains("[created::"),
+        "same-note task should link to its annotation block and carry properties: {same_note_task}"
     );
     let same_note_source_id = annotation_task_source_link_id(&same_note_task);
     assert!(
-        managed_source_anchor_exists(&contents, &same_note_source_id),
-        "same-note source-task anchor should exist:\n{contents}"
+        highlight_block_ids(&contents).contains(&same_note_source_id),
+        "same-note annotation block should exist:\n{contents}"
     );
     let route_contents =
         fs::read_to_string(&route_note).expect("read routed task note");
@@ -3503,13 +3505,15 @@ Note: marker note mirrored from the PDF
     );
     assert!(!routed_task.contains("@alice"), "{routed_task}");
     assert!(
-        routed_task.contains("[[ref/books/closing-order#^ht-"),
-        "routed task should link to its managed source block: {routed_task}"
+        routed_task.contains("[[ref/books/closing-order#^h-")
+            && routed_task.contains("[h:: ")
+            && routed_task.contains("[created::"),
+        "routed task should link to its annotation block and carry properties: {routed_task}"
     );
     let routed_source_id = annotation_task_source_link_id(&routed_task);
     assert!(
-        managed_source_anchor_exists(&contents, &routed_source_id),
-        "routed source-task anchor should exist in the ref note:\n{contents}"
+        highlight_block_ids(&contents).contains(&routed_source_id),
+        "routed annotation block should exist in the ref note:\n{contents}"
     );
 
     let output = bob_command()
@@ -3650,8 +3654,10 @@ Note: marker note mirrored from the PDF
     );
     let source_id = annotation_task_source_link_id(&created_task);
     assert!(
-        managed_source_anchor_exists(&contents, &source_id),
-        "scan-created source-task anchor should exist:\n{contents}"
+        created_task.contains("[[#^h-")
+            && created_task.contains("[h:: ")
+            && highlight_block_ids(&contents).contains(&source_id),
+        "scan-created task should link to an annotation block and carry h property:\n{contents}"
     );
 }
 
@@ -4434,11 +4440,6 @@ Note:
             .1
             .to_string()
     };
-    let managed_source_anchor_exists = |contents: &str, id: &str| -> bool {
-        contents.lines().any(|line| {
-            line.starts_with("> ") && line.contains(&format!("^{id}"))
-        })
-    };
 
     let reconcile_line =
         find_created_task(&contents, "#task Reconcile with chapter 3.");
@@ -4449,16 +4450,20 @@ Note:
         "#task Capture the second standalone task.",
     );
 
-    // Each created task carries a vault-relative source-task backlink and a
-    // created date, without the legacy highlight_task property.
+    // Each created task carries a same-note annotation backlink, the short
+    // durable processed marker, and a created date.
     for line in [&reconcile_line, &ask_line, &capture_line] {
         assert!(
-            line.contains("[[ref/books/task-notes#^ht-"),
-            "missing source-task link: {line}"
+            line.contains("[[#^h-"),
+            "missing annotation source link: {line}"
         );
         assert!(
             !line.contains("[highlight_task:: "),
             "legacy processed marker should not be rendered: {line}"
+        );
+        assert!(
+            line.contains("[h:: "),
+            "short processed marker should be rendered: {line}"
         );
         assert!(
             line.contains(&format!("[created::{created}]")),
@@ -4466,34 +4471,25 @@ Note:
         );
     }
 
-    // The link resolves: every id is a real source-task block in the managed
-    // Highlights region. The source-task ids are task-specific, while the
-    // annotation-level h-... blocks are still rendered separately.
+    // The link resolves to annotation-level h-... blocks. The two standalone
+    // note tasks share the note block; the comment task points at the highlight
+    // block.
     let block_ids = highlight_block_ids(&contents);
     let reconcile_id = source_link_id(&reconcile_line);
     let ask_id = source_link_id(&ask_line);
     let capture_id = source_link_id(&capture_line);
     assert_eq!(block_ids.len(), 2, "{contents}");
-    assert!(
-        managed_source_anchor_exists(&contents, &reconcile_id),
-        "{contents}"
+    assert!(block_ids.contains(&reconcile_id), "{contents}");
+    assert!(block_ids.contains(&ask_id), "{contents}");
+    assert!(block_ids.contains(&capture_id), "{contents}");
+    assert_eq!(
+        ask_id, capture_id,
+        "standalone tasks share annotation block"
     );
-    assert!(
-        managed_source_anchor_exists(&contents, &ask_id),
-        "{contents}"
-    );
-    assert!(
-        managed_source_anchor_exists(&contents, &capture_id),
-        "{contents}"
-    );
-    assert_ne!(ask_id, capture_id, "source-task ids are task-specific");
     assert_ne!(reconcile_id, ask_id, "comment and note tasks differ");
 
     assert!(
-        contents.lines().any(|line| {
-            line.starts_with("> [comment] #task Reconcile with chapter 3.")
-                && line.contains(" ^ht-")
-        }),
+        contents.contains("> [comment] #task Reconcile with chapter 3.\n"),
         "{contents}"
     );
     assert!(
@@ -4501,18 +4497,16 @@ Note:
         "{contents}"
     );
     assert!(
-        contents.lines().any(|line| {
-            line.starts_with("> [note] - #task Ask about the standalone note.")
-                && line.contains(" ^ht-")
-        }),
+        contents.contains("> [note] - #task Ask about the standalone note.\n"),
         "{contents}"
     );
     assert!(
-        contents.lines().any(|line| {
-            line.starts_with("> * #task Capture the second standalone task.")
-                && line.contains(" ^ht-")
-        }),
+        contents.contains("> * #task Capture the second standalone task.\n"),
         "{contents}"
+    );
+    assert!(
+        !contents.contains(" ^ht-"),
+        "managed highlight blocks should not render task-specific anchors:\n{contents}"
     );
     assert!(
         contents.contains("> - Untagged standalone bullet.\n"),
@@ -4723,11 +4717,10 @@ Note: marker note mirrored from the PDF
         "routed task should not be inserted into the reference note:\n{ref_contents}"
     );
     assert!(
-        ref_contents.lines().any(|line| {
-            line.starts_with("> [comment] #task Follow up with Alice @alice")
-                && line.contains(" ^ht-")
-        }),
-        "source task anchor should render in the reference note:\n{ref_contents}"
+        ref_contents
+            .contains("> [comment] #task Follow up with Alice @alice\n")
+            && !ref_contents.contains(" ^ht-"),
+        "managed source should render without task-specific anchors:\n{ref_contents}"
     );
     let mut route_contents =
         fs::read_to_string(&route_note).expect("read routed note");
@@ -4738,14 +4731,15 @@ Note: marker note mirrored from the PDF
         .to_string();
     assert!(!routed_line.contains("@alice"), "{routed_line}");
     assert!(
-        routed_line.contains("[[ref/books/task-notes#^ht-")
+        routed_line.contains("[[ref/books/task-notes#^h-")
             && routed_line.contains("|🔖]]"),
-        "routed task should link back to the source-task ref note block:\n{routed_line}"
+        "routed task should link back to the annotation ref note block:\n{routed_line}"
     );
     assert!(
         !routed_line.contains("[highlight_task:: ")
+            && routed_line.contains("[h:: ")
             && routed_line.contains(&format!("[created::{created}]")),
-        "routed task should omit legacy processed marker and carry created date:\n{routed_line}"
+        "routed task should carry h marker and created date:\n{routed_line}"
     );
 
     let completed_line = format!(
@@ -6970,12 +6964,6 @@ fn annotation_task_source_link_id(line: &str) -> String {
         .unwrap_or_else(|| panic!("source link has no block id: {line}"))
         .1
         .to_string()
-}
-
-fn managed_source_anchor_exists(contents: &str, id: &str) -> bool {
-    contents
-        .lines()
-        .any(|line| line.starts_with("> ") && line.contains(&format!("^{id}")))
 }
 
 fn legacy_highlight_task_id(

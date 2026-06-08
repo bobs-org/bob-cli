@@ -181,14 +181,13 @@ task intake. By default, tasks are inserted immediately under the generated PDF
 route suffix (`A-Z`, `a-z`, `0-9`, `_`, and `-`, starting with an
 alphanumeric), the suffix is stripped and the task is appended to existing
 `~/bob/name.md` instead; routed target notes are never auto-created. Created
-tasks carry `[created::YYYY-MM-DD]` and a `🔖` backlink to a task-specific
-generated source anchor such as `[[ref/books/foo#^ht-...|🔖]]`. The backlink is
-the durable processed marker that moves with completed, cancelled, edited, or
-`bob move-done-tasks` archived tasks, so re-syncing does not recreate them
-without PDF or sidecar edits. Older `[highlight_task:: ...]` fields are still
-recognized for compatibility, but new tasks no longer write that property.
-Removing the source backlink removes the only durable no-property marker for a
-moved or heavily edited annotation task.
+tasks carry `[created::YYYY-MM-DD]`, `[h:: ...]`, and a `🔖` backlink to the
+annotation-level generated source block such as `[[#^h-...|🔖]]` or
+`[[ref/books/foo#^h-...|🔖]]`. The `[h:: ...]` property is the durable processed
+marker that moves with completed, cancelled, edited, or `bob move-done-tasks`
+archived tasks, so re-syncing does not recreate them without PDF or sidecar
+edits. Older `[highlight_task:: ...]` fields and old `#^ht-...` source links
+are still recognized for compatibility, but new tasks no longer write them.
 
 The full contract and MacBook setup guide live in
 [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md).
