@@ -172,8 +172,11 @@ highlight comments, and standalone non-marker notes render into the managed
 manual body content outside that region is preserved, and disappeared generated
 blocks are kept as tombstones under `### Removed highlights`. Markdown bullet
 lines tagged with `#task` inside highlight comments or standalone non-marker
-notes also create Obsidian tasks, but only when the resolved PDF status is
-`wip`. By default, tasks are inserted immediately under the generated PDF
+notes also create Obsidian tasks when the marker/frontmatter-selected PDF status
+is `wip`, before the generated PDF `^task` checkbox contributes a closing
+`read` or `abandoned` status. That final closing run still imports newly added
+annotation tasks; later runs whose selected status is already non-`wip` skip
+task intake. By default, tasks are inserted immediately under the generated PDF
 `^task` line. If the final whitespace-delimited task token is a strict `@name`
 route suffix (`A-Z`, `a-z`, `0-9`, `_`, and `-`, starting with an
 alphanumeric), the suffix is stripped and the task is appended to existing

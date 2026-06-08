@@ -405,9 +405,13 @@ work. A writing scan keeps the default note-only refusal unless `--write-pdfs`
 is supplied.
 
 Highlight comments and standalone non-marker notes can also create actionable
-Obsidian tasks, but only when the resolved PDF status is `wip`. Any unordered
-Markdown bullet line whose item text contains `#task` as a
-whitespace-delimited token is copied to an unchecked task:
+Obsidian tasks when the marker/frontmatter-selected PDF status is `wip`, before
+the generated PDF `^task` checkbox contributes a closing `read` or `abandoned`
+status. The final run that closes a `wip` PDF still imports newly added
+annotation tasks in that same run; subsequent runs whose selected status is
+already non-`wip` skip task intake. Any unordered Markdown bullet line whose
+item text contains `#task` as a whitespace-delimited token is copied to an
+unchecked task:
 
 ```md
 - #task Compare this claim with the appendix.

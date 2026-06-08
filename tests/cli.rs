@@ -3410,6 +3410,252 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
 }
 
 #[test]
+fn highlights_ref_task_checked_sync_creates_annotation_tasks_before_closing() {
+    let temp = TempDir::new("bob-cli-highlights-ref-task-closing-sync");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/books/closing-order.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/books/closing-order.md");
+    let route_note = vault.join("alice.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Closing Order\n",
+    );
+    assert_success(
+        &bob_command()
+            .arg("highlights")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial sync creates reference note"),
+    );
+    write_file(&route_note, "---\nparent: \"[[people]]\"\n---\n\n# Alice\n");
+    write_file(
+        &sidecar,
+        "\
+## Page 7
+
+Note: marker note mirrored from the PDF
+
+---
+
+> Closing highlight.
+
+- #task Final same-note intake.
+- #task Ask Alice about closing order @alice
+",
+    );
+    let checked_note =
+        fs::read_to_string(&note).expect("read ref note").replace(
+            "- [ ] #task [[lib/books/closing-order.pdf]]",
+            "- [x] #task [[lib/books/closing-order.pdf]]",
+        );
+    write_file(&note, &checked_note);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--write-pdf")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync checked task with new annotation tasks");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("pdf_task_contribution: status=read")
+            && report.contains("annotation_tasks_create: 2")
+            && report.contains("annotation_tasks_created: 2")
+            && report.contains("routed_task_note_writes: 1"),
+        "expected checked-task close to import pending annotation tasks:\n{}",
+        format_output(&output)
+    );
+    let marker = pdf_marker_contents(&pdf);
+    assert!(marker.contains("- status: read\n"), "{marker}");
+    let contents = fs::read_to_string(&note).expect("read closed ref note");
+    assert!(contents.contains("status: read\n"), "{contents}");
+    assert!(
+        contents.contains(
+            "- [x] #task [[lib/books/closing-order.pdf]] [p::2] ^task\n"
+        ),
+        "{contents}"
+    );
+    let same_note_task = find_created_annotation_task(
+        &contents,
+        "#task Final same-note intake.",
+    );
+    assert!(
+        same_note_task.contains("[[ref/books/closing-order#^ht-"),
+        "same-note task should link to its managed source block: {same_note_task}"
+    );
+    let same_note_source_id = annotation_task_source_link_id(&same_note_task);
+    assert!(
+        managed_source_anchor_exists(&contents, &same_note_source_id),
+        "same-note source-task anchor should exist:\n{contents}"
+    );
+    let route_contents =
+        fs::read_to_string(&route_note).expect("read routed task note");
+    let routed_task = find_created_annotation_task(
+        &route_contents,
+        "#task Ask Alice about closing order",
+    );
+    assert!(!routed_task.contains("@alice"), "{routed_task}");
+    assert!(
+        routed_task.contains("[[ref/books/closing-order#^ht-"),
+        "routed task should link to its managed source block: {routed_task}"
+    );
+    let routed_source_id = annotation_task_source_link_id(&routed_task);
+    assert!(
+        managed_source_anchor_exists(&contents, &routed_source_id),
+        "routed source-task anchor should exist in the ref note:\n{contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat sync after closing status");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("annotation_tasks_created: 0")
+            && stdout(&output).contains("writes: none"),
+        "repeat read sync should not create additional annotation tasks:\n{}",
+        format_output(&output)
+    );
+    let repeat_contents =
+        fs::read_to_string(&note).expect("read repeat-synced ref note");
+    let repeat_route_contents =
+        fs::read_to_string(&route_note).expect("read repeat-routed note");
+    assert_eq!(
+        created_annotation_task_count(
+            &repeat_contents,
+            "#task Final same-note intake."
+        ),
+        1,
+        "{repeat_contents}"
+    );
+    assert_eq!(
+        created_annotation_task_count(
+            &repeat_route_contents,
+            "#task Ask Alice about closing order"
+        ),
+        1,
+        "{repeat_route_contents}"
+    );
+}
+
+#[test]
+fn highlights_ref_task_checked_scan_creates_annotation_tasks_before_closing() {
+    let temp = TempDir::new("bob-cli-highlights-ref-task-closing-scan");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/books/scan-closing.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/books/scan-closing.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Scan Closing\n",
+    );
+    assert_success(
+        &bob_command()
+            .arg("highlights")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial sync creates scan reference note"),
+    );
+    write_file(
+        &sidecar,
+        "\
+## Page 3
+
+Note: marker note mirrored from the PDF
+
+---
+
+> Scan closing highlight.
+
+- #task Import during scan close.
+",
+    );
+    let checked_note = fs::read_to_string(&note)
+        .expect("read scan ref note")
+        .replace(
+            "- [ ] #task [[lib/books/scan-closing.pdf]]",
+            "- [x] #task [[lib/books/scan-closing.pdf]]",
+        );
+    write_file(&note, &checked_note);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--dry-run")
+        .arg("--write-pdfs")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run scan checked task with pending annotation task");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("write_pdfs: true")
+            && report.contains("pdf_task_contribution: status=read")
+            && report.contains("annotation_tasks_create: 1")
+            && report.contains("pdf_markers_would_update: 1")
+            && report.contains("writes: none"),
+        "scan dry-run should report the final intake pass:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        pdf_marker_contents(&pdf).contains("- status: wip\n"),
+        "dry-run should leave the PDF marker wip"
+    );
+    assert_eq!(fs::read_to_string(&note).expect("read note"), checked_note);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--write-pdfs")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("write scan checked task with pending annotation task");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("annotation_tasks_created: 1")
+            && report.contains("pdf_markers_updated: 1")
+            && report.contains("writes: note,pdf"),
+        "scan --write-pdfs should write annotation tasks and close marker:\n{}",
+        format_output(&output)
+    );
+    let marker = pdf_marker_contents(&pdf);
+    assert!(marker.contains("- status: read\n"), "{marker}");
+    let contents = fs::read_to_string(&note).expect("read scan-closed note");
+    assert!(contents.contains("status: read\n"), "{contents}");
+    assert!(
+        contents.contains(
+            "- [x] #task [[lib/books/scan-closing.pdf]] [p::2] ^task\n"
+        ),
+        "{contents}"
+    );
+    let created_task = find_created_annotation_task(
+        &contents,
+        "#task Import during scan close.",
+    );
+    let source_id = annotation_task_source_link_id(&created_task);
+    assert!(
+        managed_source_anchor_exists(&contents, &source_id),
+        "scan-created source-task anchor should exist:\n{contents}"
+    );
+}
+
+#[test]
 fn highlights_ref_task_checked_dirty_tracked_note_is_allowed() {
     let temp = TempDir::new("bob-cli-highlights-ref-task-dirty");
     let vault = temp.path().join("vault");
@@ -6694,6 +6940,42 @@ fn highlight_block_ids(contents: &str) -> Vec<String> {
                 .map(str::to_string)
         })
         .collect()
+}
+
+fn find_created_annotation_task(contents: &str, prose: &str) -> String {
+    contents
+        .lines()
+        .find(|line| line.starts_with("- [ ]") && line.contains(prose))
+        .unwrap_or_else(|| {
+            panic!("missing created annotation task for {prose}:\n{contents}")
+        })
+        .to_string()
+}
+
+fn created_annotation_task_count(contents: &str, prose: &str) -> usize {
+    contents
+        .lines()
+        .filter(|line| line.starts_with("- [") && line.contains(prose))
+        .count()
+}
+
+fn annotation_task_source_link_id(line: &str) -> String {
+    let start = line.find("[[").expect("source link present") + 2;
+    let rest = &line[start..];
+    let end = rest.find("]]").expect("source link terminator");
+    let inside = &rest[..end];
+    let target = inside.split_once('|').map_or(inside, |(target, _)| target);
+    target
+        .rsplit_once("#^")
+        .unwrap_or_else(|| panic!("source link has no block id: {line}"))
+        .1
+        .to_string()
+}
+
+fn managed_source_anchor_exists(contents: &str, id: &str) -> bool {
+    contents
+        .lines()
+        .any(|line| line.starts_with("> ") && line.contains(&format!("^{id}")))
 }
 
 fn legacy_highlight_task_id(

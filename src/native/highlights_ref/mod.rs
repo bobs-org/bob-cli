@@ -785,6 +785,8 @@ fn plan_pdf_sync(
         note_exists: note.exists(),
         prefer: options.prefer,
     })?;
+    let annotation_task_intake_allowed =
+        projection_status_is(&resolution.projection, STATUS_WIP);
     let pdf_task_signal = apply_pdf_task_status_signal(
         &mut resolution,
         &pdf_task_line,
@@ -836,17 +838,11 @@ fn plan_pdf_sync(
         &stable_metadata.source_pdf,
         rendered_highlights.as_ref(),
     )?;
-    let annotation_task_candidates =
-        if projection_status_is(&synced_projection, STATUS_WIP) {
-            annotation_task_candidates(
-                config,
-                &note_path,
-                pdf,
-                sidecar.as_ref(),
-            )?
-        } else {
-            Vec::new()
-        };
+    let annotation_task_candidates = if annotation_task_intake_allowed {
+        annotation_task_candidates(config, &note_path, pdf, sidecar.as_ref())?
+    } else {
+        Vec::new()
+    };
     let stable_rendered_note = note.render_with_projection(
         &synced_projection,
         &synced_hash,

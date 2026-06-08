@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-08 08:22:25
-status: wip
+status: done
 prompt: sdd/prompts/202606/highlight_task_completion_order.md
 ---
 # Plan: Process Highlight Tasks Before Closing PDF Status
