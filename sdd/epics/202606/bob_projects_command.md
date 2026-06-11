@@ -1,6 +1,8 @@
 ---
 create_time: 2026-06-11 18:16:00
 status: wip
+bead_id: bob-cli-7
+tier: epic
 prompt: sdd/prompts/202606/bob_projects_command.md
 ---
 # Plan: `bob projects` — Project ^prj Task Sync Command & Vault Migration
