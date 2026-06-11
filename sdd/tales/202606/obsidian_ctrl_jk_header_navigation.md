@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-11 11:11:45
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_ctrl_jk_header_navigation.md
 ---
 # Plan: Obsidian Ctrl+J / Ctrl+K Section-Header Navigation
