@@ -73,6 +73,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Pomodoro,
     },
     Subcommand {
+        name: "projects",
+        script_command: None,
+        about: "Manage project notes via their ^prj tasks",
+        native_command: NativeCommand::Projects,
+    },
+    Subcommand {
         name: "tmux-pomodoro",
         script_command: Some("tmux_bob_pomodoro"),
         about: "Print Pomodoro status for tmux",
@@ -222,6 +228,7 @@ Examples:
                                  Move tasks and maintain done links
   bob nightly                    Run the nightly sync and maintenance steps
   bob pomodoro                   Show today's Pomodoro status
+  bob projects list              List project notes and ^prj task states
 
 Run 'bob <command> --help' for more information on a command.";
 

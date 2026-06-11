@@ -8,6 +8,7 @@ mod nightly;
 mod notify;
 mod ob;
 mod pomodoro;
+mod projects;
 mod sync;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +20,7 @@ pub(crate) enum NativeCommand {
     Nightly,
     Notify,
     Pomodoro,
+    Projects,
     TmuxPomodoro,
 }
 
@@ -43,6 +45,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Nightly => nightly::run(args),
         NativeCommand::Notify => notify::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),
+        NativeCommand::Projects => projects::run(args),
         NativeCommand::TmuxPomodoro => pomodoro::run_tmux(args),
     }
 }

@@ -36,6 +36,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" nightly --help
 "$root/bin/bob" notify --help
 "$root/bin/bob" pomodoro --help
+"$root/bin/bob" projects --help
 "$root/bin/bob" tmux-pomodoro --help
 "$root/bin/bob_notify" --help
 "$root/bin/bob_pomodoro" --help
@@ -125,6 +126,15 @@ only the files it touches, commits with a `bob move-done-tasks YYYY-MM-DD`
 message, and pushes. Existing uncommitted changes in touched source, archive,
 or link-repair files are included in that scoped commit after the command
 rewrites those files. Non-Git vaults are left uncommitted.
+
+```bash
+bob projects list [-b|--bob-dir DIR]
+```
+
+Scans the Bob vault for notes whose frontmatter declares
+`type: "[[project]]"` and prints a read-only overview of each project note. The
+table includes frontmatter status, open `#task` count, open P0 task count, and
+the state of the project completion task anchored with `^prj`.
 
 ```bash
 bob highlights doctor
@@ -334,6 +344,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" nightly --help
 "$root/bin/bob" notify --help
 "$root/bin/bob" pomodoro --help
+"$root/bin/bob" projects --help
 "$root/bin/bob" tmux-pomodoro --help
 "$root/bin/bob_notify" --help
 "$root/bin/bob_pomodoro" --help

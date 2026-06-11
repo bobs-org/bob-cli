@@ -137,6 +137,30 @@ fn dataview_help_is_native_only() {
 }
 
 #[test]
+fn projects_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-projects-native-help");
+    let output = bob_command()
+        .arg("projects")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob projects --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob projects"),
+        "expected projects help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only projects should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn highlights_ref_help_is_native_only() {
     let temp = TempDir::new("bob-cli-highlights-ref-native-help");
     let output = bob_command()
@@ -199,6 +223,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["nightly", "--help"], "usage: bob nightly"),
         (&["notify", "--help"], "Notify me when"),
         (&["pomodoro", "--help"], "usage: bob pomodoro"),
+        (&["projects", "--help"], "bob projects"),
         (&["tmux-pomodoro", "--help"], "usage: bob tmux-pomodoro"),
     ];
 
@@ -246,6 +271,8 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["nightly", "--help"], "bob nightly --help"),
         (&["notify", "--help"], "bob notify --help"),
         (&["pomodoro", "--help"], "bob pomodoro --help"),
+        (&["projects", "--help"], "bob projects --help"),
+        (&["projects", "list", "--help"], "bob projects list --help"),
         (&["tmux-pomodoro", "--help"], "bob tmux-pomodoro --help"),
     ];
 
@@ -1437,6 +1464,221 @@ fn dataview_native_where_false_returns_no_rows() {
         "WHERE false should not return fallback rows:\n{}",
         format_output(&output)
     );
+}
+
+#[test]
+fn projects_help_lists_subcommands_and_options() {
+    let output = bob_command()
+        .arg("projects")
+        .arg("--help")
+        .output()
+        .expect("run bob projects --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Manage Bob project notes") && help.contains("\n  list "),
+        "expected projects help to list the list subcommand:\n{help}"
+    );
+    assert_stdout_has_no_ansi(&output);
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("list")
+        .arg("--help")
+        .output()
+        .expect("run bob projects list --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("-b, --bob-dir"),
+        "expected bob-dir short and long option in list help:\n{help}"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn projects_list_scans_project_notes_and_renders_counts() {
+    let temp = TempDir::new("bob-cli-projects-list");
+    let vault = temp.path().join("vault");
+
+    write_file(
+        &vault.join("Alpha.md"),
+        r#"---
+type: "[[project]]"
+status: wip
+---
+- [ ] #task Finish Alpha [p::2] ^prj
+- [ ] #task implicit p0
+- [/] #task active non-p0 [p:: 1]
+- [B] #task blocked implicit p0
+- [x] #task done task
+- [-] #task canceled task
+"#,
+    );
+    write_file(
+        &vault.join("Beta.md"),
+        r#"---
+type: [[project]]
+status: waiting
+---
+- [ ] #task Finish Beta [p::2] [scheduled::2026-06-11] ^prj
+- [ ] #task planned [p:: 2]
+"#,
+    );
+    write_file(
+        &vault.join("Done.md"),
+        r#"---
+type: [[project]]
+status: done
+---
+- [X] #task Finish Done [p::2] ^prj
+"#,
+    );
+    write_file(
+        &vault.join("Canceled.md"),
+        r#"---
+type: [[project]]
+status: canceled
+---
+- [-] #task Cancel Canceled [p::2] ^prj
+"#,
+    );
+    write_file(
+        &vault.join("Missing.md"),
+        r#"---
+type: [[project]]
+status: wip
+---
+- [ ] #task Needs prj
+"#,
+    );
+    write_file(
+        &vault.join("Placeholder.md"),
+        r#"---
+type: [[project]]
+status: wip
+---
+- [ ] #task <short_project_completion_criteria_goes_here> [p::2] ^prj
+"#,
+    );
+    write_file(
+        &vault.join("_templates/Template.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task hidden [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join(".obsidian/Hidden.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task hidden [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("done/Archived.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task hidden [p::2] ^prj\n",
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("list")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .output()
+        .expect("run bob projects list");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected stderr:\n{}",
+        stderr(&output)
+    );
+    assert_stdout_has_no_ansi(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("Projects - 3 active - 1 waiting - 1 done - 1 canceled"),
+        "unexpected summary:\n{out}"
+    );
+    assert!(
+        out.contains("PROJECT")
+            && out.contains("STATUS")
+            && out.contains("^PRJ"),
+        "missing table header:\n{out}"
+    );
+    assert!(out.contains("Alpha") && out.contains("wip"));
+    assert!(
+        out.contains("   4   2  open"),
+        "unexpected Alpha counts:\n{out}"
+    );
+    assert!(
+        out.contains("Beta") && out.contains("scheduled 2026-06-11"),
+        "missing scheduled Beta row:\n{out}"
+    );
+    assert!(out.contains("Done") && out.contains("done"));
+    assert!(out.contains("Canceled") && out.contains("canceled"));
+    assert!(out.contains("Missing") && out.contains("missing"));
+    assert!(out.contains("Placeholder") && out.contains("placeholder"));
+    assert!(
+        !out.contains("Template")
+            && !out.contains("Hidden")
+            && !out.contains("Archived"),
+        "excluded directories should not be listed:\n{out}"
+    );
+    assert_text_order(
+        &out,
+        &[
+            "Alpha",
+            "Missing",
+            "Placeholder",
+            "Beta",
+            "Done",
+            "Canceled",
+        ],
+    );
+}
+
+#[test]
+fn projects_list_reports_prj_errors_without_aborting_scan() {
+    let temp = TempDir::new("bob-cli-projects-errors");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("Good.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task Good project [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("Malformed.md"),
+        "---\ntype: [[project]]\n---\nComplete malformed project ^prj\n",
+    );
+    write_file(
+        &vault.join("Multiple.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task One [p::2] ^prj\n- [ ] #task Two [p::2] ^prj\n",
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("list")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob projects list with errors");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "project scan errors should exit 1:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains("Good")
+            && out.contains("Malformed")
+            && out.contains("Multiple"),
+        "list should still render every project row:\n{out}"
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains("Malformed.md:4: malformed ^prj task")
+            && err.contains("Multiple.md:5: multiple ^prj tasks"),
+        "expected per-file project errors:\n{err}"
+    );
+    assert_stdout_has_no_ansi(&output);
 }
 
 #[test]
