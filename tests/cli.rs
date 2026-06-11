@@ -273,6 +273,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["pomodoro", "--help"], "bob pomodoro --help"),
         (&["projects", "--help"], "bob projects --help"),
         (&["projects", "list", "--help"], "bob projects list --help"),
+        (&["projects", "sync", "--help"], "bob projects sync --help"),
         (&["tmux-pomodoro", "--help"], "bob tmux-pomodoro --help"),
     ];
 
@@ -1477,9 +1478,12 @@ fn projects_help_lists_subcommands_and_options() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("Manage Bob project notes") && help.contains("\n  list "),
-        "expected projects help to list the list subcommand:\n{help}"
+        help.contains("Manage Bob project notes")
+            && help.contains("\n  list ")
+            && help.contains("\n  sync "),
+        "expected projects help to list subcommands:\n{help}"
     );
+    assert_text_order(&help, &["\n  list ", "\n  sync "]);
     assert_stdout_has_no_ansi(&output);
 
     let output = bob_command()
@@ -1495,6 +1499,22 @@ fn projects_help_lists_subcommands_and_options() {
         help.contains("-b, --bob-dir"),
         "expected bob-dir short and long option in list help:\n{help}"
     );
+    assert_stdout_has_no_ansi(&output);
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--help")
+        .output()
+        .expect("run bob projects sync --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("-b, --bob-dir") && help.contains("-d, --dry-run"),
+        "expected sync short and long options:\n{help}"
+    );
+    assert_text_order(&help, &["-b, --bob-dir", "-d, --dry-run"]);
     assert_stdout_has_no_ansi(&output);
 }
 
@@ -1679,6 +1699,216 @@ fn projects_list_reports_prj_errors_without_aborting_scan() {
         "expected per-file project errors:\n{err}"
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
+    let temp = TempDir::new("bob-cli-projects-sync");
+    let vault = temp.path().join("vault");
+
+    write_file(
+        &vault.join("DoneFlip.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship done [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("CancelFlip.md"),
+        "---\ntype: [[project]]\nstatus: waiting\n---\n- [-] #task Stop work [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("MissingStatus.md"),
+        "---\ntype: [[project]]\n---\n- [X] #task Ship missing status [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("Stalled.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled [p::2] ^prj\n- [/] #task Secondary work [p::1]\n",
+    );
+    write_file(
+        &vault.join("ZeroOpen.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open [p::2] ^prj\n- [x] #task Already done\n",
+    );
+    write_file(
+        &vault.join("HasP0.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has p0 [p::2] ^prj\n- [ ] #task Implicit P0\n",
+    );
+    write_file(
+        &vault.join("ExistingScheduled.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled [p::2] [scheduled::2026-06-01] ^prj\n",
+    );
+    write_file(
+        &vault.join("TerminalOpen.md"),
+        "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task Finish drift [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("MissingPrj.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Needs completion task\n",
+    );
+    write_file(
+        &vault.join("Placeholder.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task <short_project_completion_criteria_goes_here> [p::2] [scheduled::2026-06-01] ^prj\n",
+    );
+
+    let dry_run_snapshot =
+        fs::read_to_string(vault.join("Stalled.md")).expect("read stalled");
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("-d")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-06-11")
+        .output()
+        .expect("run bob projects sync dry-run");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected dry-run stderr:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains("[dry-run] ok")
+            && out.contains("would set status: waiting -> canceled")
+            && out.contains("would schedule ^prj for 2026-06-11")
+            && out.contains("active project has no ^prj task")
+            && out.contains("template placeholder")
+            && out.contains(
+                "10 projects - 3 status updated - 2 scheduled - 3 warnings"
+            ),
+        "unexpected dry-run output:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Stalled.md")).expect("read stalled"),
+        dry_run_snapshot,
+        "dry-run must not edit files"
+    );
+    assert_stdout_has_no_ansi(&output);
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-06-11")
+        .output()
+        .expect("run bob projects sync");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected sync stderr:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains("status: wip -> done")
+            && out.contains("scheduled ^prj for 2026-06-11")
+            && out.contains(
+                "10 projects - 3 status updated - 2 scheduled - 3 warnings"
+            ),
+        "unexpected sync output:\n{out}"
+    );
+
+    assert_eq!(
+        fs::read_to_string(vault.join("DoneFlip.md")).expect("read done"),
+        "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship done [p::2] ^prj\n"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("CancelFlip.md")).expect("read cancel"),
+        "---\ntype: [[project]]\nstatus: canceled\n---\n- [-] #task Stop work [p::2] ^prj\n"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("MissingStatus.md"))
+            .expect("read missing status"),
+        "---\ntype: [[project]]\nstatus: done\n---\n- [X] #task Ship missing status [p::2] ^prj\n"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Stalled.md")).expect("read stalled"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled [p::2] [scheduled::2026-06-11] ^prj\n- [/] #task Secondary work [p::1]\n"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("ZeroOpen.md")).expect("read zero"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open [p::2] [scheduled::2026-06-11] ^prj\n- [x] #task Already done\n"
+    );
+    assert!(
+        !fs::read_to_string(vault.join("HasP0.md"))
+            .expect("read has p0")
+            .contains("[scheduled::2026-06-11]"),
+        "open implicit P0 task should suppress scheduling"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("ExistingScheduled.md"))
+            .expect("read scheduled"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled [p::2] [scheduled::2026-06-01] ^prj\n"
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-06-11")
+        .output()
+        .expect("rerun bob projects sync");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains(
+            "10 projects - 0 status updated - 0 scheduled - 3 warnings"
+        ),
+        "second run should have zero actions:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn projects_sync_reports_prj_errors_without_aborting_scan() {
+    let temp = TempDir::new("bob-cli-projects-sync-errors");
+    let vault = temp.path().join("vault");
+
+    write_file(
+        &vault.join("Good.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Good project [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("Malformed.md"),
+        "---\ntype: [[project]]\n---\nComplete malformed project ^prj\n",
+    );
+    write_file(
+        &vault.join("Multiple.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task One [p::2] ^prj\n- [ ] #task Two [p::2] ^prj\n",
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob projects sync with errors");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "project sync errors should exit 1:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stdout(&output)
+            .contains("3 projects - 1 status updated - 0 scheduled - 0 warnings - 2 errors"),
+        "unexpected sync summary:\n{}",
+        format_output(&output)
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains("Malformed.md:4: malformed ^prj task")
+            && err.contains("Multiple.md:5: multiple ^prj tasks"),
+        "expected per-file project errors:\n{err}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Good.md")).expect("read good"),
+        "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Good project [p::2] ^prj\n"
+    );
 }
 
 #[test]
@@ -3191,8 +3421,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     let migrated_note = fs::read_to_string(&note).expect("read migrated note");
     assert!(migrated_note.contains("status: read\n"), "{migrated_note}");
     assert!(
-        migrated_note
-            .contains("- [x] #task [[lib/example.pdf]] [p::2] ^ref\n"),
+        migrated_note.contains("- [x] #task [[lib/example.pdf]] [p::2] ^ref\n"),
         "{migrated_note}"
     );
     assert!(
@@ -4702,9 +4931,8 @@ Note:
 
     // The generated PDF reading-status task line is unchanged.
     assert!(
-        contents.contains(
-            "- [ ] #task [[lib/books/task-notes.pdf]] [p::2] ^ref\n"
-        ),
+        contents
+            .contains("- [ ] #task [[lib/books/task-notes.pdf]] [p::2] ^ref\n"),
         "{contents}"
     );
 

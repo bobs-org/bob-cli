@@ -6146,10 +6146,9 @@ Body
         );
         assert!(missing_tag.to_string().contains("[-]"), "{missing_tag}");
 
-        let non_pdf = super::parse_pdf_task_line(
-            "- [ ] #task [[ref/example.md]] ^ref\n",
-        )
-        .expect_err("task without PDF link should fail");
+        let non_pdf =
+            super::parse_pdf_task_line("- [ ] #task [[ref/example.md]] ^ref\n")
+                .expect_err("task without PDF link should fail");
         assert!(non_pdf.to_string().contains("malformed"), "{non_pdf}");
 
         let custom_marker = super::parse_pdf_task_line(

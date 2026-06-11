@@ -37,6 +37,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" notify --help
 "$root/bin/bob" pomodoro --help
 "$root/bin/bob" projects --help
+"$root/bin/bob" projects sync --help
 "$root/bin/bob" tmux-pomodoro --help
 "$root/bin/bob_notify" --help
 "$root/bin/bob_pomodoro" --help
@@ -129,12 +130,19 @@ rewrites those files. Non-Git vaults are left uncommitted.
 
 ```bash
 bob projects list [-b|--bob-dir DIR]
+bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
 ```
 
 Scans the Bob vault for notes whose frontmatter declares
 `type: "[[project]]"` and prints a read-only overview of each project note. The
 table includes frontmatter status, open `#task` count, open P0 task count, and
-the state of the project completion task anchored with `^prj`.
+the state of the project completion task anchored with `^prj`. `sync` makes
+that `^prj` task the lifecycle control: checking it sets `status: done`,
+canceling it sets `status: canceled`, and active projects with no open P0 tasks
+get `[scheduled::YYYY-mm-dd]` appended to the open `^prj` task. Use
+`--dry-run` to preview the exact actions without writing.
+
+The full project task contract lives in [`docs/projects.md`](docs/projects.md).
 
 ```bash
 bob highlights doctor
@@ -345,6 +353,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" notify --help
 "$root/bin/bob" pomodoro --help
 "$root/bin/bob" projects --help
+"$root/bin/bob" projects sync --help
 "$root/bin/bob" tmux-pomodoro --help
 "$root/bin/bob_notify" --help
 "$root/bin/bob_pomodoro" --help

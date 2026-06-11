@@ -8,7 +8,8 @@ use std::{
 };
 
 use clap::{
-    builder::OsStringValueParser, Arg, ArgMatches, Command as ClapCommand,
+    builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
+    Command as ClapCommand,
 };
 
 use super::env as bob_env;
@@ -30,6 +31,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
     match matches.subcommand() {
         Some(("list", sub_matches)) => run_list(sub_matches),
+        Some(("sync", sub_matches)) => run_sync(sub_matches),
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");
             2
@@ -55,14 +57,17 @@ fn build_cli() -> ClapCommand {
             "Manage Bob project notes through the completion-criteria task \
 anchored with ^prj.\n\n\
 The list subcommand is read-only: it scans project notes, counts open #task \
-items, counts open P0 tasks, and shows the current ^prj state.",
+items, counts open P0 tasks, and shows the current ^prj state. The sync \
+subcommand updates project status and schedules stalled project completion \
+tasks from that same ^prj line.",
         )
         .after_help(
-            "Examples:\n  bob projects list\n  bob projects list --bob-dir ~/bob\n  bob projects list -b tests/fixtures/projects",
+            "Examples:\n  bob projects list\n  bob projects sync --dry-run\n  bob projects sync -b ~/bob",
         )
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(list_command())
+        .subcommand(sync_command())
 }
 
 fn list_command() -> ClapCommand {
@@ -74,6 +79,23 @@ fn list_command() -> ClapCommand {
         .arg(bob_dir_arg())
 }
 
+fn sync_command() -> ClapCommand {
+    ClapCommand::new("sync")
+        .about("Sync project status and scheduling from ^prj tasks")
+        .long_about(
+            "Sync Bob project notes from the completion-criteria task anchored \
+with ^prj.\n\n\
+A checked ^prj task sets frontmatter status to done. A canceled ^prj task sets \
+status to canceled. Active projects with no open P0 tasks have today's \
+[scheduled::YYYY-mm-dd] field inserted on their open ^prj task.",
+        )
+        .after_help(
+            "Examples:\n  bob projects sync --dry-run\n  bob projects sync -d -b ~/bob\n  bob projects sync --bob-dir /tmp/bob-vault",
+        )
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+}
+
 fn bob_dir_arg() -> Arg {
     Arg::new("bob-dir")
         .long("bob-dir")
@@ -83,12 +105,16 @@ fn bob_dir_arg() -> Arg {
         .help("Bob vault root; defaults to BOB_DIR or ~/bob")
 }
 
+fn dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('d')
+        .action(ArgAction::SetTrue)
+        .help("Preview changes without writing files")
+}
+
 fn run_list(matches: &ArgMatches) -> i32 {
-    let bob_dir = matches
-        .get_one::<OsString>("bob-dir")
-        .map(PathBuf::from)
-        .map(|path| bob_env::expand_tilde(&path))
-        .unwrap_or_else(bob_env::bob_dir);
+    let bob_dir = bob_dir_from_matches(matches);
 
     let report = scan_projects(&bob_dir);
     let styler = Styler::detect();
@@ -103,6 +129,37 @@ fn run_list(matches: &ArgMatches) -> i32 {
     } else {
         1
     }
+}
+
+fn run_sync(matches: &ArgMatches) -> i32 {
+    let bob_dir = bob_dir_from_matches(matches);
+    let dry_run = matches.get_flag("dry-run");
+    let today = bob_env::current_datetime()
+        .date()
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let report = sync_projects(&bob_dir, &today, dry_run);
+    let styler = Styler::detect();
+    print_sync_report(&report, dry_run, &styler);
+
+    for issue in &report.issues {
+        eprintln!("{COMMAND_NAME}: {}", issue.display());
+    }
+
+    if report.issues.is_empty() {
+        0
+    } else {
+        1
+    }
+}
+
+fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
+    matches
+        .get_one::<OsString>("bob-dir")
+        .map(PathBuf::from)
+        .map(|path| bob_env::expand_tilde(&path))
+        .unwrap_or_else(bob_env::bob_dir)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,6 +274,47 @@ impl ProjectStatus {
     fn is_canceled(&self) -> bool {
         matches!(self, Self::Canceled)
     }
+
+    fn is_terminal(&self) -> bool {
+        self.is_done() || self.is_canceled()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetProjectStatus {
+    Done,
+    Canceled,
+}
+
+impl TargetProjectStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Canceled => "canceled",
+        }
+    }
+
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Done => "^prj task checked",
+            Self::Canceled => "^prj task canceled",
+        }
+    }
+
+    fn as_project_status(self) -> ProjectStatus {
+        match self {
+            Self::Done => ProjectStatus::Done,
+            Self::Canceled => ProjectStatus::Canceled,
+        }
+    }
+
+    fn matches(self, status: &ProjectStatus) -> bool {
+        matches!(
+            (self, status),
+            (Self::Done, ProjectStatus::Done)
+                | (Self::Canceled, ProjectStatus::Canceled)
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,6 +344,17 @@ impl PrjTask {
             description: String::new(),
             priority: None,
             placeholder: false,
+        }
+    }
+
+    fn target_status(&self) -> Option<TargetProjectStatus> {
+        match self.state {
+            PrjTaskState::Done => Some(TargetProjectStatus::Done),
+            PrjTaskState::Canceled => Some(TargetProjectStatus::Canceled),
+            PrjTaskState::Missing
+            | PrjTaskState::Open
+            | PrjTaskState::Malformed
+            | PrjTaskState::Multiple => None,
         }
     }
 }
@@ -386,6 +495,461 @@ fn scan_markdown_file(
         return;
     };
     projects.push(project);
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct SyncReport {
+    project_count: usize,
+    events: Vec<SyncEvent>,
+    issues: Vec<ScanIssue>,
+}
+
+impl SyncReport {
+    fn status_update_count(&self) -> usize {
+        self.events
+            .iter()
+            .filter(|event| matches!(event, SyncEvent::Status { .. }))
+            .count()
+    }
+
+    fn schedule_count(&self) -> usize {
+        self.events
+            .iter()
+            .filter(|event| matches!(event, SyncEvent::Schedule { .. }))
+            .count()
+    }
+
+    fn warning_count(&self) -> usize {
+        self.events
+            .iter()
+            .filter(|event| matches!(event, SyncEvent::Warning { .. }))
+            .count()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SyncEvent {
+    Status {
+        project_name: String,
+        from: String,
+        to: String,
+        reason: String,
+    },
+    Schedule {
+        project_name: String,
+        date: String,
+        reason: String,
+    },
+    Warning {
+        project_name: String,
+        message: String,
+        detail: String,
+    },
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ProjectPlan {
+    changes: Vec<ProjectChange>,
+    warnings: Vec<SyncEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProjectChange {
+    Status {
+        from: String,
+        to: TargetProjectStatus,
+    },
+    Schedule {
+        date: String,
+    },
+}
+
+impl ProjectChange {
+    fn event(&self, project_name: &str) -> SyncEvent {
+        match self {
+            Self::Status { from, to } => SyncEvent::Status {
+                project_name: project_name.to_string(),
+                from: from.clone(),
+                to: to.label().to_string(),
+                reason: to.reason().to_string(),
+            },
+            Self::Schedule { date } => SyncEvent::Schedule {
+                project_name: project_name.to_string(),
+                date: date.clone(),
+                reason: "no open P0 tasks".to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TextEdit {
+    start: usize,
+    end: usize,
+    replacement: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LineSpan {
+    line_number: usize,
+    start: usize,
+    end: usize,
+    next_start: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FrontmatterLayout {
+    body_start_line: usize,
+    type_line: Option<LineSpan>,
+    status_line: Option<LineSpan>,
+}
+
+fn sync_projects(bob_dir: &Path, today: &str, dry_run: bool) -> SyncReport {
+    let mut report = SyncReport::default();
+    sync_directory(bob_dir, bob_dir, today, dry_run, &mut report);
+    report
+}
+
+fn sync_directory(
+    root: &Path,
+    directory: &Path,
+    today: &str,
+    dry_run: bool,
+    report: &mut SyncReport,
+) {
+    let entries = match read_sorted_directory(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            report.issues.push(ScanIssue::path(
+                relative_or_original(root, directory),
+                format!("failed to read directory: {error}"),
+            ));
+            return;
+        }
+    };
+
+    for entry in entries {
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                report.issues.push(ScanIssue::path(
+                    relative_or_original(root, &path),
+                    format!("failed to inspect path: {error}"),
+                ));
+                continue;
+            }
+        };
+
+        if file_type.is_dir() {
+            if is_excluded_directory(&path) {
+                continue;
+            }
+            sync_directory(root, &path, today, dry_run, report);
+            continue;
+        }
+
+        if file_type.is_file() && is_markdown_file(&path) {
+            sync_markdown_file(root, &path, today, dry_run, report);
+        }
+    }
+}
+
+fn sync_markdown_file(
+    root: &Path,
+    path: &Path,
+    today: &str,
+    dry_run: bool,
+    report: &mut SyncReport,
+) {
+    let relative_path = relative_or_original(root, path);
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            report.issues.push(ScanIssue::path(
+                relative_path,
+                format!("failed to read file: {error}"),
+            ));
+            return;
+        }
+    };
+
+    let issue_count = report.issues.len();
+    let Some(project) =
+        parse_project(&relative_path, &contents, &mut report.issues)
+    else {
+        return;
+    };
+    report.project_count += 1;
+
+    if report.issues.len() != issue_count {
+        return;
+    }
+
+    let plan = plan_project_sync(&project, today);
+    report.events.extend(plan.warnings);
+
+    if plan.changes.is_empty() {
+        return;
+    }
+
+    if !dry_run {
+        let new_contents = match apply_project_changes(&contents, &plan.changes)
+        {
+            Ok(new_contents) => new_contents,
+            Err(message) => {
+                report.issues.push(ScanIssue::path(relative_path, message));
+                return;
+            }
+        };
+
+        if let Err(error) = fs::write(path, new_contents) {
+            report.issues.push(ScanIssue::path(
+                relative_path,
+                format!("failed to write file: {error}"),
+            ));
+            return;
+        }
+    }
+
+    for change in &plan.changes {
+        report.events.push(change.event(&project.name));
+    }
+}
+
+fn plan_project_sync(project: &Project, today: &str) -> ProjectPlan {
+    let mut plan = ProjectPlan::default();
+
+    if project.prj_task.state == PrjTaskState::Missing
+        && !project.status.is_terminal()
+    {
+        plan.warnings.push(SyncEvent::Warning {
+            project_name: project.name.clone(),
+            message: "active project has no ^prj task".to_string(),
+            detail: format!("add `{PROJECT_TASK_SHAPE}`"),
+        });
+    }
+
+    if project.prj_task.state == PrjTaskState::Open
+        && project.status.is_terminal()
+    {
+        plan.warnings.push(SyncEvent::Warning {
+            project_name: project.name.clone(),
+            message: "^prj task is still open".to_string(),
+            detail: format!("frontmatter status is {}", project.status.label()),
+        });
+    }
+
+    if project.prj_task.placeholder {
+        plan.warnings.push(SyncEvent::Warning {
+            project_name: project.name.clone(),
+            message: "^prj task still uses the template placeholder"
+                .to_string(),
+            detail: "replace it with concrete completion criteria".to_string(),
+        });
+    }
+
+    let mut effective_status = project.status.clone();
+    if let Some(target) = project.prj_task.target_status()
+        && !target.matches(&project.status)
+    {
+        plan.changes.push(ProjectChange::Status {
+            from: project.status.label().to_string(),
+            to: target,
+        });
+        effective_status = target.as_project_status();
+    }
+
+    if !effective_status.is_terminal()
+        && project.prj_task.state == PrjTaskState::Open
+        && project.prj_task.scheduled.is_none()
+        && project.open_p0_count == 0
+    {
+        plan.changes.push(ProjectChange::Schedule {
+            date: today.to_string(),
+        });
+    }
+
+    plan
+}
+
+fn apply_project_changes(
+    contents: &str,
+    changes: &[ProjectChange],
+) -> Result<String, String> {
+    let mut edits = Vec::new();
+    for change in changes {
+        match change {
+            ProjectChange::Status { to, .. } => {
+                edits.push(status_edit(contents, to.label())?);
+            }
+            ProjectChange::Schedule { date } => {
+                edits.push(schedule_edit(contents, date)?);
+            }
+        }
+    }
+
+    edits.sort_by(|left, right| {
+        right
+            .start
+            .cmp(&left.start)
+            .then_with(|| right.end.cmp(&left.end))
+    });
+
+    let mut output = contents.to_string();
+    for edit in edits {
+        output.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+    Ok(output)
+}
+
+fn status_edit(contents: &str, status: &str) -> Result<TextEdit, String> {
+    let layout = frontmatter_layout(contents)
+        .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
+
+    if let Some(status_line) = layout.status_line {
+        return status_value_edit(contents, status_line, status)
+            .ok_or_else(|| "failed to locate status value".to_string());
+    }
+
+    let type_line = layout
+        .type_line
+        .ok_or_else(|| "failed to locate project type line".to_string())?;
+    Ok(TextEdit {
+        start: type_line.next_start,
+        end: type_line.next_start,
+        replacement: format!(
+            "status: {status}{}",
+            line_ending(contents, type_line)
+        ),
+    })
+}
+
+fn status_value_edit(
+    contents: &str,
+    line: LineSpan,
+    status: &str,
+) -> Option<TextEdit> {
+    let line_text = trim_cr(&contents[line.start..line.end]);
+    let trimmed = line_text.trim_start();
+    let leading_width = line_text.len() - trimmed.len();
+    let rest = trimmed.strip_prefix("status")?.strip_prefix(':')?;
+    let value_offset = leading_width + "status:".len();
+    let leading_value_width = rest.len() - rest.trim_start().len();
+    let value_start = value_offset + leading_value_width;
+    let value_end = value_offset + rest.trim_end().len();
+    let replacement = if leading_value_width == 0 {
+        format!(" {status}")
+    } else {
+        status.to_string()
+    };
+
+    Some(TextEdit {
+        start: line.start + value_start,
+        end: line.start + value_end,
+        replacement,
+    })
+}
+
+fn schedule_edit(contents: &str, date: &str) -> Result<TextEdit, String> {
+    let frontmatter = parse_frontmatter(contents)
+        .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
+    for line in line_spans(contents) {
+        if line.line_number <= frontmatter.body_start_line {
+            continue;
+        }
+        let line_text = &contents[line.start..line.end];
+        if !has_trailing_prj_anchor(line_text) {
+            continue;
+        }
+        let anchor_start = line_text
+            .rfind("^prj")
+            .ok_or_else(|| "failed to locate ^prj anchor".to_string())?;
+        return Ok(TextEdit {
+            start: line.start + anchor_start,
+            end: line.start + anchor_start,
+            replacement: format!("[scheduled::{date}] "),
+        });
+    }
+
+    Err("failed to locate ^prj task".to_string())
+}
+
+fn frontmatter_layout(contents: &str) -> Option<FrontmatterLayout> {
+    let lines = line_spans(contents);
+    let first = lines.first()?;
+    if trim_cr(&contents[first.start..first.end]) != "---" {
+        return None;
+    }
+
+    let mut type_line = None;
+    let mut status_line = None;
+    for line in lines.iter().skip(1) {
+        let line_text = trim_cr(&contents[line.start..line.end]);
+        if line_text == "---" {
+            return Some(FrontmatterLayout {
+                body_start_line: line.line_number,
+                type_line,
+                status_line,
+            });
+        }
+        if frontmatter_line_has_key(line_text, "type") {
+            type_line = Some(*line);
+        }
+        if frontmatter_line_has_key(line_text, "status") {
+            status_line = Some(*line);
+        }
+    }
+
+    None
+}
+
+fn frontmatter_line_has_key(line: &str, key: &str) -> bool {
+    line.trim_start()
+        .strip_prefix(key)
+        .is_some_and(|rest| rest.starts_with(':'))
+}
+
+fn line_spans(contents: &str) -> Vec<LineSpan> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut line_number = 1;
+
+    for (index, byte) in contents.bytes().enumerate() {
+        if byte != b'\n' {
+            continue;
+        }
+        lines.push(LineSpan {
+            line_number,
+            start,
+            end: index,
+            next_start: index + 1,
+        });
+        start = index + 1;
+        line_number += 1;
+    }
+
+    if start < contents.len() {
+        lines.push(LineSpan {
+            line_number,
+            start,
+            end: contents.len(),
+            next_start: contents.len(),
+        });
+    }
+
+    lines
+}
+
+fn line_ending(contents: &str, line: LineSpan) -> &'static str {
+    if line.next_start == line.end {
+        return "\n";
+    }
+    if line.end > line.start && contents.as_bytes()[line.end - 1] == b'\r' {
+        "\r\n"
+    } else {
+        "\n"
+    }
 }
 
 fn parse_project(
@@ -737,6 +1301,84 @@ fn print_project_list(projects: &[Project], styler: &Styler) {
     }
 }
 
+fn print_sync_report(report: &SyncReport, dry_run: bool, styler: &Styler) {
+    let project_width = report
+        .events
+        .iter()
+        .map(SyncEvent::project_name)
+        .map(display_width)
+        .max()
+        .unwrap_or(0);
+
+    for event in &report.events {
+        println!("{}", event.render(project_width, dry_run, styler));
+    }
+
+    let separator = styler.separator();
+    let mut summary = format!(
+        "{} projects {separator} {} status updated {separator} {} scheduled {separator} {} warnings",
+        report.project_count,
+        report.status_update_count(),
+        report.schedule_count(),
+        report.warning_count()
+    );
+    if !report.issues.is_empty() {
+        summary
+            .push_str(&format!(" {separator} {} errors", report.issues.len()));
+    }
+    println!("{summary}");
+}
+
+impl SyncEvent {
+    fn project_name(&self) -> &str {
+        match self {
+            Self::Status { project_name, .. }
+            | Self::Schedule { project_name, .. }
+            | Self::Warning { project_name, .. } => project_name,
+        }
+    }
+
+    fn render(
+        &self,
+        project_width: usize,
+        dry_run: bool,
+        styler: &Styler,
+    ) -> String {
+        let project_name =
+            styler.cyan(&pad_right(self.project_name(), project_width));
+        match self {
+            Self::Status {
+                from, to, reason, ..
+            } => {
+                let prefix = styler.success_prefix(dry_run);
+                let verb = if dry_run {
+                    "would set status"
+                } else {
+                    "status"
+                };
+                format!(
+                    "  {prefix} {project_name}  {verb}: {from} -> {to}  {reason}"
+                )
+            }
+            Self::Schedule { date, reason, .. } => {
+                let prefix = styler.schedule_prefix(dry_run);
+                let verb = if dry_run {
+                    "would schedule ^prj for"
+                } else {
+                    "scheduled ^prj for"
+                };
+                format!("  {prefix} {project_name}  {verb} {date}  {reason}")
+            }
+            Self::Warning {
+                message, detail, ..
+            } => {
+                let prefix = styler.warning_prefix();
+                format!("  {prefix} {project_name}  {message}  {detail}")
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Summary {
     active: usize,
@@ -907,6 +1549,36 @@ impl Styler {
             label.to_string()
         }
     }
+
+    fn success_prefix(&self, dry_run: bool) -> String {
+        let label = if dry_run { "[dry-run] ok" } else { "ok" };
+        if self.color {
+            self.green(label)
+        } else {
+            label.to_string()
+        }
+    }
+
+    fn schedule_prefix(&self, dry_run: bool) -> String {
+        let label = if dry_run {
+            "[dry-run] scheduled"
+        } else {
+            "scheduled"
+        };
+        if self.color {
+            self.blue(label)
+        } else {
+            label.to_string()
+        }
+    }
+
+    fn warning_prefix(&self) -> String {
+        if self.color {
+            self.yellow("warning")
+        } else {
+            "warning".to_string()
+        }
+    }
 }
 
 fn project_name(relative_path: &Path) -> String {
@@ -1071,5 +1743,102 @@ status: wip
         );
         assert!(note.is_none());
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn project_sync_plan_flips_status_and_schedules_after_effective_status() {
+        let contents = "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship [p::2] ^prj\n";
+        let mut issues = Vec::new();
+        let project =
+            parse_project(Path::new("Alpha.md"), contents, &mut issues)
+                .expect("project");
+        let plan = plan_project_sync(&project, "2026-06-11");
+
+        assert!(issues.is_empty());
+        assert_eq!(
+            plan.changes,
+            vec![ProjectChange::Status {
+                from: "wip".to_string(),
+                to: TargetProjectStatus::Done,
+            }]
+        );
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn project_sync_plan_warns_without_auto_fixing_drift_and_placeholder() {
+        let contents = format!(
+            "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task {PLACEHOLDER_CRITERIA} [p::2] ^prj\n"
+        );
+        let mut issues = Vec::new();
+        let project =
+            parse_project(Path::new("Alpha.md"), &contents, &mut issues)
+                .expect("project");
+        let plan = plan_project_sync(&project, "2026-06-11");
+
+        assert!(issues.is_empty());
+        assert!(plan.changes.is_empty());
+        assert_eq!(plan.warnings.len(), 2);
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|event| matches!(event, SyncEvent::Warning { message, .. } if message.contains("still open")))
+        );
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|event| matches!(event, SyncEvent::Warning { message, .. } if message.contains("placeholder")))
+        );
+    }
+
+    #[test]
+    fn project_changes_replace_status_append_missing_status_and_schedule() {
+        let contents = "---\ntype: [[project]]\nstatus: waiting\n---\n- [ ] #task Ship [p::2] ^prj\n";
+        let output = apply_project_changes(
+            contents,
+            &[
+                ProjectChange::Status {
+                    from: "waiting".to_string(),
+                    to: TargetProjectStatus::Canceled,
+                },
+                ProjectChange::Schedule {
+                    date: "2026-06-11".to_string(),
+                },
+            ],
+        )
+        .expect("apply edits");
+        assert_eq!(
+            output,
+            "---\ntype: [[project]]\nstatus: canceled\n---\n- [ ] #task Ship [p::2] [scheduled::2026-06-11] ^prj\n"
+        );
+
+        let output = apply_project_changes(
+            "---\ntype: [[project]]\n---\n- [x] #task Ship [p::2] ^prj\n",
+            &[ProjectChange::Status {
+                from: "wip".to_string(),
+                to: TargetProjectStatus::Done,
+            }],
+        )
+        .expect("append status");
+        assert_eq!(
+            output,
+            "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship [p::2] ^prj\n"
+        );
+    }
+
+    #[test]
+    fn project_changes_preserve_crlf_when_appending_status() {
+        let output = apply_project_changes(
+            "---\r\ntype: [[project]]\r\n---\r\n- [x] #task Ship [p::2] ^prj\r\n",
+            &[ProjectChange::Status {
+                from: "wip".to_string(),
+                to: TargetProjectStatus::Done,
+            }],
+        )
+        .expect("append status");
+        assert_eq!(
+            output,
+            "---\r\ntype: [[project]]\r\nstatus: done\r\n---\r\n- [x] #task Ship [p::2] ^prj\r\n"
+        );
     }
 }
