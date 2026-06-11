@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-11 18:30:41
-status: wip
+status: done
 prompt: sdd/prompts/202606/ref_task_block_id_migration.md
 ---
 # Plan: Migrate `[[ref]]` Note `^task` Block IDs to `^ref`

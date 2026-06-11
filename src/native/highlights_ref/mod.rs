@@ -53,7 +53,7 @@ const MARKER_REQUIRED_KEYS: &[&str] = &[FIELD_STATUS, FIELD_PARENT];
 const COMMAND_MANAGED_FIELDS: &[&str] = &[FIELD_NOTE_TYPE, FIELD_REF_TYPE];
 const MANAGED_BODY_BEGIN: &str = "<!-- highlights:begin -->";
 const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
-const PDF_TASK_BLOCK_ID: &str = "^task";
+const PDF_TASK_BLOCK_ID: &str = "^ref";
 const PDF_TASK_PRIORITY: &str = "[p::2]";
 const PDF_TASK_TAG: &str = "#task";
 const HIGHLIGHT_TASK_FIELD: &str = "h";
@@ -3407,7 +3407,7 @@ fn parse_pdf_task_line(body: &str) -> Result<PdfTaskLineState> {
         task_block_line_count += 1;
         if task_block_line_count > 1 {
             return Err(CommandError::new(
-                "reference note has multiple generated PDF task lines with ^task block ID",
+                "reference note has multiple generated PDF task lines with ^ref block ID",
             ));
         }
 
@@ -3437,7 +3437,7 @@ fn parse_pdf_task_line(body: &str) -> Result<PdfTaskLineState> {
 
 fn malformed_pdf_task_line_error(line_index: usize) -> CommandError {
     CommandError::new(format!(
-        "generated PDF task line on line {} is malformed; expected a generated task such as '- [ ] #task [[...pdf]] [p::2] ^task', '- [x] #task [[...pdf]] [p::2] ^task', or '- [-] #task [[...pdf]] [p::2] ^task'; legacy generated lines without [p::2] are still accepted",
+        "generated PDF task line on line {} is malformed; expected a generated task such as '- [ ] #task [[...pdf]] [p::2] ^ref', '- [x] #task [[...pdf]] [p::2] ^ref', or '- [-] #task [[...pdf]] [p::2] ^ref'; legacy generated lines without [p::2] are still accepted",
         line_index + 1
     ))
 }
@@ -4589,7 +4589,7 @@ fn insert_missing_annotation_tasks(
         PdfTaskLineState::Present(task_line) => task_line,
         PdfTaskLineState::Missing => {
             return Err(CommandError::new(
-                "reference note is missing the generated PDF task line with ^task; cannot create annotation tasks",
+                "reference note is missing the generated PDF task line with ^ref; cannot create annotation tasks",
             ));
         }
     };
@@ -4624,7 +4624,7 @@ fn insert_annotation_task_lines_after_pdf_task(
         PdfTaskLineState::Present(task_line) => task_line,
         PdfTaskLineState::Missing => {
             return Err(CommandError::new(
-                "reference note is missing the generated PDF task line with ^task; cannot create annotation tasks",
+                "reference note is missing the generated PDF task line with ^ref; cannot create annotation tasks",
             ));
         }
     };
@@ -6087,7 +6087,7 @@ Body
         );
 
         let unchecked = super::parse_pdf_task_line(
-            "# Example\n\n- [ ] #task [[lib/books/example.pdf]] [p::2] ^task\n",
+            "# Example\n\n- [ ] #task [[lib/books/example.pdf]] [p::2] ^ref\n",
         )
         .expect("parse unchecked task");
         match unchecked {
@@ -6100,7 +6100,7 @@ Body
         }
 
         let checked = super::parse_pdf_task_line(
-            "- [X] #task [[lib/books/example.PDF|Example]] [p::2] ^task\n",
+            "- [X] #task [[lib/books/example.PDF|Example]] [p::2] ^ref\n",
         )
         .expect("parse checked task");
         match checked {
@@ -6112,7 +6112,7 @@ Body
         }
 
         let cancelled = super::parse_pdf_task_line(
-            "- [-] #task [[lib/chat/bulk_obsidian_task_properties.pdf]] [p::2] [cancelled:: 2026-06-04] ^task\n",
+            "- [-] #task [[lib/chat/bulk_obsidian_task_properties.pdf]] [p::2] [cancelled:: 2026-06-04] ^ref\n",
         )
         .expect("parse cancelled task");
         match cancelled {
@@ -6125,7 +6125,7 @@ Body
         }
 
         let legacy_without_priority = super::parse_pdf_task_line(
-            "- [ ] #task [[lib/books/example.pdf]] ^task\n",
+            "- [ ] #task [[lib/books/example.pdf]] ^ref\n",
         )
         .expect("parse legacy task without priority");
         match legacy_without_priority {
@@ -6137,7 +6137,7 @@ Body
     #[test]
     fn highlights_ref_task_line_parser_rejects_malformed_and_duplicate_tasks() {
         let missing_tag = super::parse_pdf_task_line(
-            "- [ ] [[lib/books/example.pdf]] ^task\n",
+            "- [ ] [[lib/books/example.pdf]] ^ref\n",
         )
         .expect_err("task without tag should fail");
         assert!(
@@ -6147,13 +6147,13 @@ Body
         assert!(missing_tag.to_string().contains("[-]"), "{missing_tag}");
 
         let non_pdf = super::parse_pdf_task_line(
-            "- [ ] #task [[ref/example.md]] ^task\n",
+            "- [ ] #task [[ref/example.md]] ^ref\n",
         )
         .expect_err("task without PDF link should fail");
         assert!(non_pdf.to_string().contains("malformed"), "{non_pdf}");
 
         let custom_marker = super::parse_pdf_task_line(
-            "- [>] #task [[lib/books/example.pdf]] [p::2] ^task\n",
+            "- [>] #task [[lib/books/example.pdf]] [p::2] ^ref\n",
         )
         .expect_err("custom task marker should fail");
         assert!(
@@ -6162,7 +6162,7 @@ Body
         );
 
         let duplicate = super::parse_pdf_task_line(
-            "- [ ] #task [[lib/one.pdf]] ^task\n- [x] #task [[lib/two.pdf]] ^task\n",
+            "- [ ] #task [[lib/one.pdf]] ^ref\n- [x] #task [[lib/two.pdf]] ^ref\n",
         )
         .expect_err("duplicate task block id should fail");
         assert!(
@@ -6654,7 +6654,7 @@ Comment: Compare this with SLO notes.
         let body = "\
 # Example
 
-- [ ] #task [[lib/example.pdf]] [p::2] ^task
+- [ ] #task [[lib/example.pdf]] [p::2] ^ref
 - [x] #task Existing done [created::2026-06-01] [completion::2026-06-02]
 - [-] #task Existing cancelled [created::2026-06-01] [cancelled::2026-06-02] [due::2026-06-03]
 
@@ -6700,7 +6700,7 @@ Keep me here.
         );
         assert!(
             updated.contains(&format!(
-                "- [ ] #task [[lib/example.pdf]] [p::2] ^task\n{new_line}\n"
+                "- [ ] #task [[lib/example.pdf]] [p::2] ^ref\n{new_line}\n"
             )),
             "{updated}"
         );
@@ -6762,7 +6762,7 @@ Keep me here.
             projection: base.clone(),
         };
         let task = super::parse_pdf_task_line(
-            "- [-] #task [[lib/books/example.pdf]] [p::2] ^task\n",
+            "- [-] #task [[lib/books/example.pdf]] [p::2] ^ref\n",
         )
         .expect("parse cancelled task");
 
@@ -6808,7 +6808,7 @@ Keep me here.
         let base_body = "\
 # Example
 
-- [ ] #task [[lib/example.pdf]] ^task
+- [ ] #task [[lib/example.pdf]] ^ref
 
 ## Highlights
 
@@ -6840,12 +6840,12 @@ Keep me here.
             &read_projection,
         )
         .expect("rewrite task checkbox");
-        assert!(rewritten.contains("- [x] #task [[lib/example.pdf]] ^task\n"));
+        assert!(rewritten.contains("- [x] #task [[lib/example.pdf]] ^ref\n"));
 
         let prioritized_body = "\
 # Example
 
-- [ ] #task [[lib/example.pdf]] [p::2] ^task
+- [ ] #task [[lib/example.pdf]] [p::2] ^ref
 
 ## Highlights
 
@@ -6860,12 +6860,12 @@ Keep me here.
             )
             .expect("rewrite prioritized task checkbox");
         assert!(prioritized_rewritten
-            .contains("- [x] #task [[lib/example.pdf]] [p::2] ^task\n"));
+            .contains("- [x] #task [[lib/example.pdf]] [p::2] ^ref\n"));
 
         let cancelled_body = "\
 # Example
 
-- [-] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^task
+- [-] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^ref
 
 ## Highlights
 
@@ -6880,7 +6880,7 @@ Keep me here.
             )
             .expect("rewrite cancelled task checkbox to checked");
         assert!(cancelled_checked.contains(
-            "- [x] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^task\n"
+            "- [x] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^ref\n"
         ));
         let cancelled_unchecked =
             super::rewrite_pdf_task_checkbox_for_projection(
@@ -6889,7 +6889,7 @@ Keep me here.
             )
             .expect("rewrite cancelled task checkbox to unchecked");
         assert!(cancelled_unchecked.contains(
-            "- [ ] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^task\n"
+            "- [ ] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^ref\n"
         ));
         let unchecked_cancelled =
             super::rewrite_pdf_task_checkbox_for_projection(
@@ -6898,7 +6898,7 @@ Keep me here.
             )
             .expect("rewrite unchecked task checkbox to cancelled");
         assert!(unchecked_cancelled
-            .contains("- [-] #task [[lib/example.pdf]] [p::2] ^task\n"));
+            .contains("- [-] #task [[lib/example.pdf]] [p::2] ^ref\n"));
 
         let unrelated_body = checked_body.replace("## Highlights", "Manual");
         assert!(!super::bodies_differ_only_by_pdf_task_checkbox(

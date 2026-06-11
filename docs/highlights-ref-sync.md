@@ -267,7 +267,7 @@ Before a writing scan, the command rejects duplicate output paths, builds
 per-PDF plans, and checks Git status for existing vault files that successfully
 planned PDFs would modify. If a target ref note or PDF marker target is dirty,
 it fails before any write, except for a tracked target ref note whose only body
-change is the exact generated `^task` checkbox toggle, optionally combined with
+change is the exact generated `^ref` checkbox toggle, optionally combined with
 frontmatter edits. There is no force mode in the MVP; commit, stash, or clean
 unrelated dirty files before rerunning.
 
@@ -382,7 +382,7 @@ Manual content outside those markers must be preserved. User edits inside the
 generated region may be overwritten.
 
 New generated notes include a title, a PDF wikilink Obsidian task line with
-`[p::2]` priority and the stable `^task` block ID, and `## Highlights`.
+`[p::2]` priority and the stable `^ref` block ID, and `## Highlights`.
 Existing notes must already contain the managed begin/end markers; otherwise
 `sync` fails instead of guessing where generated content belongs.
 
@@ -430,7 +430,7 @@ regenerated with the callout format.
 The generated task line is a completion affordance:
 
 ```md
-- [ ] #task [[lib/books/example.pdf]] [p::2] ^task
+- [ ] #task [[lib/books/example.pdf]] [p::2] ^ref
 ```
 
 Checking it with `[x]` or `[X]` means `status: read`. Cancelling it with `[-]`
@@ -447,7 +447,7 @@ is supplied.
 
 Highlight comments and standalone non-marker notes can also create actionable
 Obsidian tasks when the marker/frontmatter-selected PDF status is `wip`, before
-the generated PDF `^task` checkbox contributes a closing `read` or `abandoned`
+the generated PDF `^ref` checkbox contributes a closing `read` or `abandoned`
 status. The final run that closes a `wip` PDF still imports newly added
 annotation tasks in that same run; subsequent runs whose selected status is
 already non-`wip` skip task intake. Any unordered Markdown bullet line whose
@@ -461,7 +461,7 @@ unchecked task:
 ```
 
 By default, created tasks are top-level siblings immediately under the
-generated PDF `^task` line:
+generated PDF `^ref` line:
 
 ```md
 - [ ] #task Compare this claim with the appendix. [[#^h-2b91f0a4c7de|🔖]] [h:: 4c0a13d2...] [created::2026-06-07]
@@ -665,7 +665,7 @@ bob highlights sync ~/bob/lib/books/example.pdf --write-pdf
 
 If the ref note is tracked in Git, the write-back command may update that dirty
 note only when the dirty changes are unstaged frontmatter edits and/or the exact
-generated `^task` checkbox toggle, and the file still matches what the command
+generated `^ref` checkbox toggle, and the file still matches what the command
 planned from. Other body edits, managed-region edits, staged changes, untracked
 notes, and dirty PDFs are still refused.
 
