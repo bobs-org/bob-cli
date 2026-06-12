@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-12 18:46:30
-status: wip
+status: done
 prompt: sdd/prompts/202606/project_task_links_to_prj.md
 ---
 # Plan: Migrate Promoted Task Block Links to Project `^prj`
