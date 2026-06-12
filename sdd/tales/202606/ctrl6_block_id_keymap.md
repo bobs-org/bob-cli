@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-12 15:21:40
-status: wip
+status: done
 prompt: sdd/prompts/202606/ctrl6_block_id_keymap.md
 ---
 # Plan: Add `<Ctrl+6>` Selected Block ID Rename/Add Keymap
