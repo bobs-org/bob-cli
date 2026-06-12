@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-12 15:10:47
-status: wip
+status: done
 prompt: sdd/prompts/202606/block_id_popup_preview.md
 ---
 # Plan: Show Block Contents in the Block ID Rename Popup
