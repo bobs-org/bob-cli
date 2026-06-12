@@ -70,12 +70,15 @@ Task statuses follow the Tasks plugin convention:
   `dash.md`'s Tasks section.
 - Active projects with unprioritized open tasks or open sub-projects get
   `[p::2]` added back to their open `^prj` task immediately before `^prj`.
-- Active projects with open `^prj` tasks get one plain child wikilink bullet
-  nested directly under `^prj` for each open sub-project, such as
-  `- [[child_project]]`.
-- A pure wikilink bullet under `^prj` whose target is no longer an open
-  sub-project is removed. Bullets with extra text are never removed, so
-  `- [[child_project]] kickoff notes` is the escape hatch for manual prose.
+- Active projects with open `^prj` tasks get one generated Sub-projects line
+  nested directly under `^prj`, such as
+  `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`.
+- The marker-prefixed Sub-projects line is fully machine-owned and rewritten
+  into canonical form. Duplicate marker lines are removed, and the line is
+  deleted when there are no open sub-projects.
+- Every other sub-bullet under `^prj` is user-owned, including bare wikilinks
+  like `- [[scratch_note]]`; `sync` never removes or uses them to suppress the
+  generated line.
 - Existing `[scheduled::...]` fields are removed from open `^prj` tasks on
   active projects. `scheduled` is no longer used for project surfacing.
 - Terminal projects, `status: done` or `status: canceled`, never get `^prj`
@@ -91,10 +94,9 @@ this note's file stem and whose own `^prj` task is open. Checked, canceled,
 missing, malformed, or multiple `^prj` child tasks do not keep the parent
 hidden.
 
-Generated sub-project bullets use the child note's file stem with its original
-casing and no path or alias. `sync` checks every wikilink in the direct `^prj`
-sub-block before adding a bullet, so a manual bullet with extra text suppresses
-a duplicate generated link.
+Generated sub-project links use the child note's file stem with its original
+casing and no path or alias. Links are sorted case-insensitively and separated
+with `•` on the single marker-prefixed line.
 
 In `bob projects list`, the `UNPRI` column is the open unprioritized task count.
 An open `^prj` task with a `p` field renders as `open`; an open `^prj` task
@@ -139,7 +141,8 @@ Typical action output:
   ok athena     added [p::2] to ^prj  project has open sub-projects
   ok athena     added [[sase_blog]] to ^prj  open sub-project
   ok athena     removed [[old_child]] from ^prj  no longer an open sub-project
+  ok athena     updated sub-projects on ^prj  canonical format
   warning outlive  active project has no ^prj task  add `- [ ] #task <completion criteria> [p::2] ^prj`
 
-11 projects - 1 status updated - 4 ^prj edited - 1 warnings
+11 projects - 1 status updated - 5 ^prj edited - 1 warnings
 ```

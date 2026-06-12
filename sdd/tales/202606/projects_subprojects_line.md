@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-12 14:21:48
-status: wip
+status: done
 prompt: sdd/prompts/202606/projects_subprojects_line.md
 ---
 # Plan: `bob projects sync` — one beautiful machine-owned Sub-projects line under `^prj`
