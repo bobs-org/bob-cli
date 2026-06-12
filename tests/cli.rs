@@ -1530,9 +1530,9 @@ type: "[[project]]"
 status: wip
 ---
 - [ ] #task Finish Alpha [p::2] ^prj
-- [ ] #task implicit p0
-- [/] #task active non-p0 [p:: 1]
-- [B] #task blocked implicit p0
+- [ ] #task unprioritized
+- [/] #task active prioritized [p:: 1]
+- [B] #task blocked unprioritized
 - [x] #task done task
 - [-] #task canceled task
 "#,
@@ -1543,7 +1543,7 @@ status: wip
 type: [[project]]
 status: waiting
 ---
-- [ ] #task Finish Beta [p::2] [scheduled::2026-06-11] ^prj
+- [ ] #task Finish Beta [scheduled::2026-06-11] ^prj
 - [ ] #task planned [p:: 2]
 "#,
     );
@@ -1619,17 +1619,22 @@ status: wip
     assert!(
         out.contains("PROJECT")
             && out.contains("STATUS")
+            && out.contains("UNPRI")
             && out.contains("^PRJ"),
         "missing table header:\n{out}"
     );
     assert!(out.contains("Alpha") && out.contains("wip"));
     assert!(
-        out.contains("   4   2  open"),
+        out.contains("   4      2  open"),
         "unexpected Alpha counts:\n{out}"
     );
     assert!(
-        out.contains("Beta") && out.contains("scheduled 2026-06-11"),
-        "missing scheduled Beta row:\n{out}"
+        out.contains("Beta") && out.contains("on dash"),
+        "missing on-dash Beta row:\n{out}"
+    );
+    assert!(
+        !out.contains("scheduled 2026-06-11"),
+        "scheduled field should not render in ^PRJ column:\n{out}"
     );
     assert!(out.contains("Done") && out.contains("done"));
     assert!(out.contains("Canceled") && out.contains("canceled"));
@@ -1702,7 +1707,7 @@ fn projects_list_reports_prj_errors_without_aborting_scan() {
 }
 
 #[test]
-fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
+fn projects_sync_updates_status_prj_priority_warns_and_is_idempotent() {
     let temp = TempDir::new("bob-cli-projects-sync");
     let vault = temp.path().join("vault");
 
@@ -1727,8 +1732,12 @@ fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open [p::2] ^prj\n- [x] #task Already done\n",
     );
     write_file(
-        &vault.join("HasP0.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has p0 [p::2] ^prj\n- [ ] #task Implicit P0\n",
+        &vault.join("HasUnprioritized.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has unprioritized [p::2] ^prj\n- [ ] #task Needs priority\n",
+    );
+    write_file(
+        &vault.join("MissingPriority.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish missing priority ^prj\n- [ ] #task Needs priority\n",
     );
     write_file(
         &vault.join("ExistingScheduled.md"),
@@ -1744,7 +1753,7 @@ fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
     );
     write_file(
         &vault.join("Placeholder.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task <short_project_completion_criteria_goes_here> [p::2] [scheduled::2026-06-01] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task <short_project_completion_criteria_goes_here> [p::2] ^prj\n- [ ] #task Needs priority\n",
     );
 
     let dry_run_snapshot =
@@ -1755,7 +1764,6 @@ fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
         .arg("-d")
         .arg("-b")
         .arg(&vault)
-        .env("BOB_NOW", "2026-06-11")
         .output()
         .expect("run bob projects sync dry-run");
 
@@ -1769,11 +1777,13 @@ fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
     assert!(
         out.contains("[dry-run] ok")
             && out.contains("would set status: waiting -> canceled")
-            && out.contains("would schedule ^prj for 2026-06-11")
+            && out.contains("would remove [p::2] from ^prj")
+            && out.contains("would add [p::2] to ^prj")
+            && out.contains("would remove [scheduled::2026-06-01] from ^prj")
             && out.contains("active project has no ^prj task")
             && out.contains("template placeholder")
             && out.contains(
-                "10 projects - 3 status updated - 2 scheduled - 3 warnings"
+                "11 projects - 3 status updated - 5 ^prj edited - 3 warnings"
             ),
         "unexpected dry-run output:\n{out}"
     );
@@ -1789,7 +1799,6 @@ fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
         .arg("sync")
         .arg("--bob-dir")
         .arg(&vault)
-        .env("BOB_NOW", "2026-06-11")
         .output()
         .expect("run bob projects sync");
 
@@ -1802,9 +1811,11 @@ fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
     let out = stdout(&output);
     assert!(
         out.contains("status: wip -> done")
-            && out.contains("scheduled ^prj for 2026-06-11")
+            && out.contains("removed [p::2] from ^prj")
+            && out.contains("added [p::2] to ^prj")
+            && out.contains("removed [scheduled::2026-06-01] from ^prj")
             && out.contains(
-                "10 projects - 3 status updated - 2 scheduled - 3 warnings"
+                "11 projects - 3 status updated - 5 ^prj edited - 3 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -1824,22 +1835,26 @@ fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("Stalled.md")).expect("read stalled"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled [p::2] [scheduled::2026-06-11] ^prj\n- [/] #task Secondary work [p::1]\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled ^prj\n- [/] #task Secondary work [p::1]\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("ZeroOpen.md")).expect("read zero"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open [p::2] [scheduled::2026-06-11] ^prj\n- [x] #task Already done\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open ^prj\n- [x] #task Already done\n"
     );
-    assert!(
-        !fs::read_to_string(vault.join("HasP0.md"))
-            .expect("read has p0")
-            .contains("[scheduled::2026-06-11]"),
-        "open implicit P0 task should suppress scheduling"
+    assert_eq!(
+        fs::read_to_string(vault.join("HasUnprioritized.md"))
+            .expect("read has unprioritized"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has unprioritized [p::2] ^prj\n- [ ] #task Needs priority\n"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("MissingPriority.md"))
+            .expect("read missing priority"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish missing priority [p::2] ^prj\n- [ ] #task Needs priority\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("ExistingScheduled.md"))
             .expect("read scheduled"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled [p::2] [scheduled::2026-06-01] ^prj\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled ^prj\n"
     );
 
     let output = bob_command()
@@ -1847,14 +1862,13 @@ fn projects_sync_updates_status_schedules_warns_and_is_idempotent() {
         .arg("sync")
         .arg("-b")
         .arg(&vault)
-        .env("BOB_NOW", "2026-06-11")
         .output()
         .expect("rerun bob projects sync");
 
     assert_success(&output);
     assert!(
         stdout(&output).contains(
-            "10 projects - 0 status updated - 0 scheduled - 3 warnings"
+            "11 projects - 0 status updated - 0 ^prj edited - 3 warnings"
         ),
         "second run should have zero actions:\n{}",
         format_output(&output)
@@ -1895,7 +1909,7 @@ fn projects_sync_reports_prj_errors_without_aborting_scan() {
     );
     assert!(
         stdout(&output)
-            .contains("3 projects - 1 status updated - 0 scheduled - 0 warnings - 2 errors"),
+            .contains("3 projects - 1 status updated - 0 ^prj edited - 0 warnings - 2 errors"),
         "unexpected sync summary:\n{}",
         format_output(&output)
     );

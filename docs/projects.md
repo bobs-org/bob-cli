@@ -15,7 +15,7 @@ bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
 ```
 
 `list` is read-only. It scans project notes, prints frontmatter status, open
-`#task` count, open P0 task count, and the current `^prj` state.
+`#task` count, open unprioritized task count, and the current `^prj` state.
 
 `sync` mutates only the exact lines it needs to change. It prints one line for
 each action or warning, then a summary. Per-file errors are reported without
@@ -62,13 +62,23 @@ Task statuses follow the Tasks plugin convention:
 - `[x]` or `[X]` on the `^prj` task sets frontmatter `status: done`.
 - `[-]` on the `^prj` task sets frontmatter `status: canceled`.
 - Open `^prj` tasks do not change frontmatter status.
-- Active projects with zero open P0 tasks get `[scheduled::YYYY-mm-dd]`
-  inserted immediately before `^prj`.
-- Existing `[scheduled::...]` fields are never overwritten or removed.
-- Terminal projects, `status: done` or `status: canceled`, are never scheduled.
+- Active projects with zero unprioritized open tasks have `[p::2]` removed from
+  their open `^prj` task so it surfaces in `dash.md`'s Tasks section.
+- Active projects with unprioritized open tasks get `[p::2]` added back to
+  their open `^prj` task immediately before `^prj`.
+- Existing `[scheduled::...]` fields are removed from open `^prj` tasks on
+  active projects. `scheduled` is no longer used for project surfacing.
+- Terminal projects, `status: done` or `status: canceled`, never get `^prj`
+  line edits.
 
-A task without `[p::N]` is implicitly P0. The `^prj` task itself does not count
-as an open P0 task, even though it normally carries `[p::2]`.
+The dash Tasks query hides tasks with any `[p::N]` field. An unprioritized task
+is an open `#task` line with no `[p::...]` inline field at all; `[p::0]` is
+therefore prioritized for sync purposes. The `^prj` task itself never counts
+toward the unprioritized task count.
+
+In `bob projects list`, the `UNPRI` column is the open unprioritized task count.
+An open `^prj` task with a `p` field renders as `open`; an open `^prj` task
+without a `p` field renders as `on dash`.
 
 When a project has no `status:` line and the `^prj` task is checked or canceled,
 `sync` inserts `status: done` or `status: canceled` immediately after the
@@ -105,8 +115,8 @@ Typical action output:
 
 ```text
   ok sase_blog  status: wip -> done  ^prj task checked
-  scheduled bob  scheduled ^prj for 2026-06-11  no open P0 tasks
+  ok bob        removed [p::2] from ^prj  no unprioritized open tasks
   warning outlive  active project has no ^prj task  add `- [ ] #task <completion criteria> [p::2] ^prj`
 
-11 projects - 1 status updated - 1 scheduled - 1 warnings
+11 projects - 1 status updated - 1 ^prj edited - 1 warnings
 ```

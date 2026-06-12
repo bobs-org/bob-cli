@@ -57,9 +57,9 @@ fn build_cli() -> ClapCommand {
             "Manage Bob project notes through the completion-criteria task \
 anchored with ^prj.\n\n\
 The list subcommand is read-only: it scans project notes, counts open #task \
-items, counts open P0 tasks, and shows the current ^prj state. The sync \
-subcommand updates project status and schedules stalled project completion \
-tasks from that same ^prj line.",
+items, counts open unprioritized tasks, and shows the current ^prj state. The \
+sync subcommand updates project status and manages the ^prj task's [p::2] \
+field from that same ^prj line.",
         )
         .after_help(
             "Examples:\n  bob projects list\n  bob projects sync --dry-run\n  bob projects sync -b ~/bob",
@@ -81,13 +81,14 @@ fn list_command() -> ClapCommand {
 
 fn sync_command() -> ClapCommand {
     ClapCommand::new("sync")
-        .about("Sync project status and scheduling from ^prj tasks")
+        .about("Sync project status and ^prj priority from ^prj tasks")
         .long_about(
             "Sync Bob project notes from the completion-criteria task anchored \
 with ^prj.\n\n\
 A checked ^prj task sets frontmatter status to done. A canceled ^prj task sets \
-status to canceled. Active projects with no open P0 tasks have today's \
-[scheduled::YYYY-mm-dd] field inserted on their open ^prj task.",
+status to canceled. Active projects with no unprioritized open tasks have the \
+[p::2] field removed from their open ^prj task so it surfaces in dash.md's \
+Tasks section; projects with unprioritized open tasks get [p::2] added back.",
         )
         .after_help(
             "Examples:\n  bob projects sync --dry-run\n  bob projects sync -d -b ~/bob\n  bob projects sync --bob-dir /tmp/bob-vault",
@@ -134,12 +135,8 @@ fn run_list(matches: &ArgMatches) -> i32 {
 fn run_sync(matches: &ArgMatches) -> i32 {
     let bob_dir = bob_dir_from_matches(matches);
     let dry_run = matches.get_flag("dry-run");
-    let today = bob_env::current_datetime()
-        .date()
-        .format("%Y-%m-%d")
-        .to_string();
 
-    let report = sync_projects(&bob_dir, &today, dry_run);
+    let report = sync_projects(&bob_dir, dry_run);
     let styler = Styler::detect();
     print_sync_report(&report, dry_run, &styler);
 
@@ -216,7 +213,7 @@ struct Project {
     name: String,
     status: ProjectStatus,
     open_task_count: usize,
-    open_p0_count: usize,
+    open_unprioritized_count: usize,
     prj_task: PrjTask,
 }
 
@@ -322,7 +319,7 @@ struct PrjTask {
     state: PrjTaskState,
     scheduled: Option<String>,
     description: String,
-    priority: Option<usize>,
+    priority: Option<String>,
     placeholder: bool,
 }
 
@@ -512,10 +509,10 @@ impl SyncReport {
             .count()
     }
 
-    fn schedule_count(&self) -> usize {
+    fn prj_edit_count(&self) -> usize {
         self.events
             .iter()
-            .filter(|event| matches!(event, SyncEvent::Schedule { .. }))
+            .filter(|event| matches!(event, SyncEvent::PrjEdit { .. }))
             .count()
     }
 
@@ -535,9 +532,10 @@ enum SyncEvent {
         to: String,
         reason: String,
     },
-    Schedule {
+    PrjEdit {
         project_name: String,
-        date: String,
+        action: PrjEditAction,
+        field: String,
         reason: String,
     },
     Warning {
@@ -545,6 +543,12 @@ enum SyncEvent {
         message: String,
         detail: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrjEditAction {
+    Add,
+    Remove,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -559,8 +563,12 @@ enum ProjectChange {
         from: String,
         to: TargetProjectStatus,
     },
-    Schedule {
-        date: String,
+    RemovePriority {
+        priority: String,
+    },
+    AddPriority,
+    RemoveScheduled {
+        scheduled: String,
     },
 }
 
@@ -573,13 +581,34 @@ impl ProjectChange {
                 to: to.label().to_string(),
                 reason: to.reason().to_string(),
             },
-            Self::Schedule { date } => SyncEvent::Schedule {
+            Self::RemovePriority { priority } => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
-                date: date.clone(),
-                reason: "no open P0 tasks".to_string(),
+                action: PrjEditAction::Remove,
+                field: format!("[p::{priority}]"),
+                reason: "no unprioritized open tasks".to_string(),
+            },
+            Self::AddPriority => SyncEvent::PrjEdit {
+                project_name: project_name.to_string(),
+                action: PrjEditAction::Add,
+                field: "[p::2]".to_string(),
+                reason: "unprioritized open tasks exist".to_string(),
+            },
+            Self::RemoveScheduled { scheduled } => SyncEvent::PrjEdit {
+                project_name: project_name.to_string(),
+                action: PrjEditAction::Remove,
+                field: format!("[scheduled::{scheduled}]"),
+                reason: "scheduled is no longer used".to_string(),
             },
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InlineFieldSpan {
+    start: usize,
+    end: usize,
+    value_start: usize,
+    value_end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -604,16 +633,15 @@ struct FrontmatterLayout {
     status_line: Option<LineSpan>,
 }
 
-fn sync_projects(bob_dir: &Path, today: &str, dry_run: bool) -> SyncReport {
+fn sync_projects(bob_dir: &Path, dry_run: bool) -> SyncReport {
     let mut report = SyncReport::default();
-    sync_directory(bob_dir, bob_dir, today, dry_run, &mut report);
+    sync_directory(bob_dir, bob_dir, dry_run, &mut report);
     report
 }
 
 fn sync_directory(
     root: &Path,
     directory: &Path,
-    today: &str,
     dry_run: bool,
     report: &mut SyncReport,
 ) {
@@ -645,12 +673,12 @@ fn sync_directory(
             if is_excluded_directory(&path) {
                 continue;
             }
-            sync_directory(root, &path, today, dry_run, report);
+            sync_directory(root, &path, dry_run, report);
             continue;
         }
 
         if file_type.is_file() && is_markdown_file(&path) {
-            sync_markdown_file(root, &path, today, dry_run, report);
+            sync_markdown_file(root, &path, dry_run, report);
         }
     }
 }
@@ -658,7 +686,6 @@ fn sync_directory(
 fn sync_markdown_file(
     root: &Path,
     path: &Path,
-    today: &str,
     dry_run: bool,
     report: &mut SyncReport,
 ) {
@@ -686,7 +713,7 @@ fn sync_markdown_file(
         return;
     }
 
-    let plan = plan_project_sync(&project, today);
+    let plan = plan_project_sync(&project);
     report.events.extend(plan.warnings);
 
     if plan.changes.is_empty() {
@@ -717,7 +744,7 @@ fn sync_markdown_file(
     }
 }
 
-fn plan_project_sync(project: &Project, today: &str) -> ProjectPlan {
+fn plan_project_sync(project: &Project) -> ProjectPlan {
     let mut plan = ProjectPlan::default();
 
     if project.prj_task.state == PrjTaskState::Missing
@@ -762,12 +789,22 @@ fn plan_project_sync(project: &Project, today: &str) -> ProjectPlan {
 
     if !effective_status.is_terminal()
         && project.prj_task.state == PrjTaskState::Open
-        && project.prj_task.scheduled.is_none()
-        && project.open_p0_count == 0
     {
-        plan.changes.push(ProjectChange::Schedule {
-            date: today.to_string(),
-        });
+        if project.open_unprioritized_count == 0 {
+            if let Some(priority) = &project.prj_task.priority {
+                plan.changes.push(ProjectChange::RemovePriority {
+                    priority: priority.clone(),
+                });
+            }
+        } else if project.prj_task.priority.is_none() {
+            plan.changes.push(ProjectChange::AddPriority);
+        }
+
+        if let Some(scheduled) = &project.prj_task.scheduled {
+            plan.changes.push(ProjectChange::RemoveScheduled {
+                scheduled: scheduled.clone(),
+            });
+        }
     }
 
     plan
@@ -783,8 +820,15 @@ fn apply_project_changes(
             ProjectChange::Status { to, .. } => {
                 edits.push(status_edit(contents, to.label())?);
             }
-            ProjectChange::Schedule { date } => {
-                edits.push(schedule_edit(contents, date)?);
+            ProjectChange::RemovePriority { .. } => {
+                edits.push(remove_prj_inline_field_edit(contents, "p")?);
+            }
+            ProjectChange::AddPriority => {
+                edits.push(add_priority_edit(contents)?);
+            }
+            ProjectChange::RemoveScheduled { .. } => {
+                edits
+                    .push(remove_prj_inline_field_edit(contents, "scheduled")?);
             }
         }
     }
@@ -851,7 +895,7 @@ fn status_value_edit(
     })
 }
 
-fn schedule_edit(contents: &str, date: &str) -> Result<TextEdit, String> {
+fn add_priority_edit(contents: &str) -> Result<TextEdit, String> {
     let frontmatter = parse_frontmatter(contents)
         .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
     for line in line_spans(contents) {
@@ -868,11 +912,62 @@ fn schedule_edit(contents: &str, date: &str) -> Result<TextEdit, String> {
         return Ok(TextEdit {
             start: line.start + anchor_start,
             end: line.start + anchor_start,
-            replacement: format!("[scheduled::{date}] "),
+            replacement: "[p::2] ".to_string(),
         });
     }
 
     Err("failed to locate ^prj task".to_string())
+}
+
+fn remove_prj_inline_field_edit(
+    contents: &str,
+    key: &str,
+) -> Result<TextEdit, String> {
+    let frontmatter = parse_frontmatter(contents)
+        .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
+    for line in line_spans(contents) {
+        if line.line_number <= frontmatter.body_start_line {
+            continue;
+        }
+        let line_text = &contents[line.start..line.end];
+        if !has_trailing_prj_anchor(line_text) {
+            continue;
+        }
+        let Some(field) = inline_field_span(line_text, key) else {
+            continue;
+        };
+        let (start, end) =
+            inline_field_removal_range(line_text, field.start, field.end);
+        return Ok(TextEdit {
+            start: line.start + start,
+            end: line.start + end,
+            replacement: String::new(),
+        });
+    }
+
+    Err(format!("failed to locate [{key}::...] field on ^prj task"))
+}
+
+fn inline_field_removal_range(
+    line_text: &str,
+    field_start: usize,
+    field_end: usize,
+) -> (usize, usize) {
+    let bytes = line_text.as_bytes();
+
+    let mut after = field_end;
+    while after < bytes.len() && is_inline_field_space(bytes[after]) {
+        after += 1;
+    }
+    if after > field_end {
+        return (field_start, after);
+    }
+
+    let mut before = field_start;
+    while before > 0 && is_inline_field_space(bytes[before - 1]) {
+        before -= 1;
+    }
+    (before, field_end)
 }
 
 fn frontmatter_layout(contents: &str) -> Option<FrontmatterLayout> {
@@ -965,7 +1060,7 @@ fn parse_project(
     let status =
         ProjectStatus::parse(frontmatter_value(&frontmatter, "status"));
     let mut open_task_count = 0;
-    let mut open_p0_count = 0;
+    let mut open_unprioritized_count = 0;
     let mut prj_candidates = Vec::new();
 
     for (index, line) in contents
@@ -987,8 +1082,8 @@ fn parse_project(
         }
 
         open_task_count += 1;
-        if !has_prj_anchor && task_priority(task.text).unwrap_or(0) == 0 {
-            open_p0_count += 1;
+        if !has_prj_anchor && inline_field_value(task.text, "p").is_none() {
+            open_unprioritized_count += 1;
         }
     }
 
@@ -999,7 +1094,7 @@ fn parse_project(
         name: project_name(relative_path),
         status,
         open_task_count,
-        open_p0_count,
+        open_unprioritized_count,
         prj_task,
     })
 }
@@ -1101,7 +1196,7 @@ fn classify_prj_task(
             TaskStatus::Canceled => PrjTaskState::Canceled,
         },
         scheduled: inline_field_value(task.text, "scheduled"),
-        priority: task_priority(task.text),
+        priority: inline_field_value(task.text, "p"),
         description,
         placeholder,
     }
@@ -1187,11 +1282,13 @@ fn has_trailing_prj_anchor(line: &str) -> bool {
             .is_some_and(char::is_whitespace)
 }
 
-fn task_priority(text: &str) -> Option<usize> {
-    inline_field_value(text, "p").and_then(|value| value.parse().ok())
+fn inline_field_value(text: &str, key: &str) -> Option<String> {
+    inline_field_span(text, key).map(|field| {
+        text[field.value_start..field.value_end].trim().to_string()
+    })
 }
 
-fn inline_field_value(text: &str, key: &str) -> Option<String> {
+fn inline_field_span(text: &str, key: &str) -> Option<InlineFieldSpan> {
     let mut offset = 0;
     while let Some(open_relative) = text[offset..].find('[') {
         let open = offset + open_relative;
@@ -1203,7 +1300,13 @@ fn inline_field_value(text: &str, key: &str) -> Option<String> {
         if let Some((field_key, value)) = inner.split_once("::")
             && field_key.trim() == key
         {
-            return Some(value.trim().to_string());
+            let value_start = open + 1 + field_key.len() + "::".len();
+            return Some(InlineFieldSpan {
+                start: open,
+                end: close + 1,
+                value_start,
+                value_end: value_start + value.len(),
+            });
         }
         offset = close + 1;
     }
@@ -1281,8 +1384,8 @@ fn print_project_list(projects: &[Project], styler: &Styler) {
         .max("PROJECT".len());
 
     println!(
-        "  {:project_width$}  {:<8}  {:>4}  {:>2}  {}",
-        "PROJECT", "STATUS", "OPEN", "P0", "^PRJ"
+        "  {:project_width$}  {:<8}  {:>4}  {:>5}  {}",
+        "PROJECT", "STATUS", "OPEN", "UNPRI", "^PRJ"
     );
 
     for project in projects {
@@ -1291,11 +1394,11 @@ fn print_project_list(projects: &[Project], styler: &Styler) {
         let status = styler
             .status(&pad_right(project.status.label(), 8), &project.status);
         println!(
-            "  {}  {}  {:>4}  {:>2}  {}",
+            "  {}  {}  {:>4}  {:>5}  {}",
             project_name,
             status,
             project.open_task_count,
-            project.open_p0_count,
+            project.open_unprioritized_count,
             project.prj_task.column(styler)
         );
     }
@@ -1316,10 +1419,10 @@ fn print_sync_report(report: &SyncReport, dry_run: bool, styler: &Styler) {
 
     let separator = styler.separator();
     let mut summary = format!(
-        "{} projects {separator} {} status updated {separator} {} scheduled {separator} {} warnings",
+        "{} projects {separator} {} status updated {separator} {} ^prj edited {separator} {} warnings",
         report.project_count,
         report.status_update_count(),
-        report.schedule_count(),
+        report.prj_edit_count(),
         report.warning_count()
     );
     if !report.issues.is_empty() {
@@ -1333,7 +1436,7 @@ impl SyncEvent {
     fn project_name(&self) -> &str {
         match self {
             Self::Status { project_name, .. }
-            | Self::Schedule { project_name, .. }
+            | Self::PrjEdit { project_name, .. }
             | Self::Warning { project_name, .. } => project_name,
         }
     }
@@ -1360,14 +1463,22 @@ impl SyncEvent {
                     "  {prefix} {project_name}  {verb}: {from} -> {to}  {reason}"
                 )
             }
-            Self::Schedule { date, reason, .. } => {
-                let prefix = styler.schedule_prefix(dry_run);
-                let verb = if dry_run {
-                    "would schedule ^prj for"
-                } else {
-                    "scheduled ^prj for"
+            Self::PrjEdit {
+                action,
+                field,
+                reason,
+                ..
+            } => {
+                let prefix = styler.success_prefix(dry_run);
+                let (verb, preposition) = match (dry_run, action) {
+                    (true, PrjEditAction::Add) => ("would add", "to"),
+                    (true, PrjEditAction::Remove) => ("would remove", "from"),
+                    (false, PrjEditAction::Add) => ("added", "to"),
+                    (false, PrjEditAction::Remove) => ("removed", "from"),
                 };
-                format!("  {prefix} {project_name}  {verb} {date}  {reason}")
+                format!(
+                    "  {prefix} {project_name}  {verb} {field} {preposition} ^prj  {reason}"
+                )
             }
             Self::Warning {
                 message, detail, ..
@@ -1423,10 +1534,10 @@ impl PrjTask {
                 styler.warning_label("placeholder")
             }
             PrjTaskState::Open => {
-                if let Some(scheduled) = &self.scheduled {
-                    styler.scheduled_label(scheduled)
-                } else {
+                if self.priority.is_some() {
                     styler.open_label()
+                } else {
+                    styler.on_dash_label()
                 }
             }
         }
@@ -1510,14 +1621,6 @@ impl Styler {
         }
     }
 
-    fn scheduled_label(&self, date: &str) -> String {
-        if self.color {
-            self.blue(&format!("\u{1f4c5} {date}"))
-        } else {
-            format!("scheduled {date}")
-        }
-    }
-
     fn success_label(&self, label: &str) -> String {
         if self.color {
             self.green(&format!("\u{2713} {label}"))
@@ -1559,16 +1662,11 @@ impl Styler {
         }
     }
 
-    fn schedule_prefix(&self, dry_run: bool) -> String {
-        let label = if dry_run {
-            "[dry-run] scheduled"
-        } else {
-            "scheduled"
-        };
+    fn on_dash_label(&self) -> String {
         if self.color {
-            self.blue(label)
+            self.blue("on dash")
         } else {
-            label.to_string()
+            "on dash".to_string()
         }
     }
 
@@ -1617,6 +1715,10 @@ fn trim_cr(value: &str) -> &str {
     value.strip_suffix('\r').unwrap_or(value)
 }
 
+fn is_inline_field_space(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t')
+}
+
 fn pad_right(text: &str, width: usize) -> String {
     let padding = width.saturating_sub(display_width(text));
     format!("{text}{}", " ".repeat(padding))
@@ -1650,9 +1752,11 @@ type: "[[project]]"
 status: wip
 ---
 - [ ] #task Finish the project [p::2] ^prj
-- [ ] #task open implicit p0
+- [ ] #task open unprioritized
 - [/] #task in progress [p:: 1]
 - [B] #task blocked with no p
+- [ ] #task explicit p0 [p::0]
+- [ ] #task invalid p [p::high]
 - [x] #task finished
 - [-] #task canceled
 - [ ] #taskish not a task
@@ -1664,10 +1768,10 @@ status: wip
 
         assert!(issues.is_empty());
         assert_eq!(project.status, ProjectStatus::Wip);
-        assert_eq!(project.open_task_count, 4);
-        assert_eq!(project.open_p0_count, 2);
+        assert_eq!(project.open_task_count, 6);
+        assert_eq!(project.open_unprioritized_count, 2);
         assert_eq!(project.prj_task.state, PrjTaskState::Open);
-        assert_eq!(project.prj_task.priority, Some(2));
+        assert_eq!(project.prj_task.priority.as_deref(), Some("2"));
         assert_eq!(project.prj_task.description, "Finish the project");
     }
 
@@ -1706,8 +1810,24 @@ status: wip
         assert!(issues.is_empty());
         assert_eq!(project.prj_task.state, PrjTaskState::Open);
         assert_eq!(project.prj_task.scheduled.as_deref(), Some("2026-06-11"));
+        assert_eq!(project.prj_task.priority.as_deref(), Some("2"));
         assert!(project.prj_task.placeholder);
         assert_eq!(project.prj_task.column(&Styler::plain()), "placeholder");
+    }
+
+    #[test]
+    fn project_parser_marks_unprioritized_prj_as_on_dash() {
+        let mut issues = Vec::new();
+        let project = parse_project(
+            Path::new("OnDash.md"),
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n",
+            &mut issues,
+        )
+        .expect("project note");
+
+        assert!(issues.is_empty());
+        assert_eq!(project.prj_task.priority, None);
+        assert_eq!(project.prj_task.column(&Styler::plain()), "on dash");
     }
 
     #[test]
@@ -1746,13 +1866,14 @@ status: wip
     }
 
     #[test]
-    fn project_sync_plan_flips_status_and_schedules_after_effective_status() {
+    fn project_sync_plan_flips_status_without_prj_edits_after_effective_status()
+    {
         let contents = "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship [p::2] ^prj\n";
         let mut issues = Vec::new();
         let project =
             parse_project(Path::new("Alpha.md"), contents, &mut issues)
                 .expect("project");
-        let plan = plan_project_sync(&project, "2026-06-11");
+        let plan = plan_project_sync(&project);
 
         assert!(issues.is_empty());
         assert_eq!(
@@ -1766,6 +1887,98 @@ status: wip
     }
 
     #[test]
+    fn project_sync_plan_manages_prj_priority_from_unprioritized_count() {
+        let mut issues = Vec::new();
+        let stalled = parse_project(
+            Path::new("Stalled.md"),
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n- [ ] #task Planned [p::1]\n",
+            &mut issues,
+        )
+        .expect("project");
+        assert_eq!(
+            plan_project_sync(&stalled).changes,
+            vec![ProjectChange::RemovePriority {
+                priority: "2".to_string(),
+            }]
+        );
+
+        issues.clear();
+        let has_unprioritized = parse_project(
+            Path::new("HasUnprioritized.md"),
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n- [ ] #task Needs priority\n",
+            &mut issues,
+        )
+        .expect("project");
+        assert_eq!(
+            plan_project_sync(&has_unprioritized).changes,
+            vec![ProjectChange::AddPriority]
+        );
+
+        issues.clear();
+        let explicit_p0_is_hidden = parse_project(
+            Path::new("ExplicitP0.md"),
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n- [ ] #task Explicit zero [p::0]\n",
+            &mut issues,
+        )
+        .expect("project");
+        assert_eq!(explicit_p0_is_hidden.open_unprioritized_count, 0);
+        assert_eq!(
+            plan_project_sync(&explicit_p0_is_hidden).changes,
+            vec![ProjectChange::RemovePriority {
+                priority: "2".to_string(),
+            }]
+        );
+
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn project_sync_plan_is_idempotent_when_prj_priority_matches_dash_state() {
+        let mut issues = Vec::new();
+        let already_on_dash = parse_project(
+            Path::new("AlreadyOnDash.md"),
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n- [ ] #task Planned [p::1]\n",
+            &mut issues,
+        )
+        .expect("project");
+        assert!(plan_project_sync(&already_on_dash).changes.is_empty());
+
+        issues.clear();
+        let already_hidden = parse_project(
+            Path::new("AlreadyHidden.md"),
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n- [ ] #task Needs priority\n",
+            &mut issues,
+        )
+        .expect("project");
+        assert!(plan_project_sync(&already_hidden).changes.is_empty());
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn project_sync_plan_removes_stale_scheduled_field() {
+        let mut issues = Vec::new();
+        let project = parse_project(
+            Path::new("Scheduled.md"),
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] [scheduled::2026-06-01] ^prj\n",
+            &mut issues,
+        )
+        .expect("project");
+
+        assert!(issues.is_empty());
+        assert_eq!(
+            plan_project_sync(&project).changes,
+            vec![
+                ProjectChange::RemovePriority {
+                    priority: "2".to_string(),
+                },
+                ProjectChange::RemoveScheduled {
+                    scheduled: "2026-06-01".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn project_sync_plan_warns_without_auto_fixing_drift_and_placeholder() {
         let contents = format!(
             "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task {PLACEHOLDER_CRITERIA} [p::2] ^prj\n"
@@ -1774,7 +1987,7 @@ status: wip
         let project =
             parse_project(Path::new("Alpha.md"), &contents, &mut issues)
                 .expect("project");
-        let plan = plan_project_sync(&project, "2026-06-11");
+        let plan = plan_project_sync(&project);
 
         assert!(issues.is_empty());
         assert!(plan.changes.is_empty());
@@ -1792,8 +2005,8 @@ status: wip
     }
 
     #[test]
-    fn project_changes_replace_status_append_missing_status_and_schedule() {
-        let contents = "---\ntype: [[project]]\nstatus: waiting\n---\n- [ ] #task Ship [p::2] ^prj\n";
+    fn project_changes_replace_status_append_missing_status_and_add_priority() {
+        let contents = "---\ntype: [[project]]\nstatus: waiting\n---\n- [ ] #task Ship ^prj\n";
         let output = apply_project_changes(
             contents,
             &[
@@ -1801,15 +2014,13 @@ status: wip
                     from: "waiting".to_string(),
                     to: TargetProjectStatus::Canceled,
                 },
-                ProjectChange::Schedule {
-                    date: "2026-06-11".to_string(),
-                },
+                ProjectChange::AddPriority,
             ],
         )
         .expect("apply edits");
         assert_eq!(
             output,
-            "---\ntype: [[project]]\nstatus: canceled\n---\n- [ ] #task Ship [p::2] [scheduled::2026-06-11] ^prj\n"
+            "---\ntype: [[project]]\nstatus: canceled\n---\n- [ ] #task Ship [p::2] ^prj\n"
         );
 
         let output = apply_project_changes(
@@ -1823,6 +2034,41 @@ status: wip
         assert_eq!(
             output,
             "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship [p::2] ^prj\n"
+        );
+    }
+
+    #[test]
+    fn project_changes_remove_prj_fields_with_adjacent_whitespace() {
+        let output = apply_project_changes(
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p:: 2] [scheduled::2026-06-01] ^prj\n",
+            &[
+                ProjectChange::RemovePriority {
+                    priority: "2".to_string(),
+                },
+                ProjectChange::RemoveScheduled {
+                    scheduled: "2026-06-01".to_string(),
+                },
+            ],
+        )
+        .expect("remove fields");
+        assert_eq!(
+            output,
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n"
+        );
+    }
+
+    #[test]
+    fn project_changes_remove_prj_priority_with_crlf() {
+        let output = apply_project_changes(
+            "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship [p:: 2] ^prj\r\n",
+            &[ProjectChange::RemovePriority {
+                priority: "2".to_string(),
+            }],
+        )
+        .expect("remove priority");
+        assert_eq!(
+            output,
+            "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship ^prj\r\n"
         );
     }
 
