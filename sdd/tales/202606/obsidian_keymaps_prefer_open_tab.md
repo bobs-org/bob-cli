@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-12 13:05:37
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_keymaps_prefer_open_tab.md
 ---
 # Plan: Prefer Already-Open Tabs For All Obsidian File-Jump Keymaps
