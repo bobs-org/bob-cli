@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-12 13:46:05
-status: wip
+status: done
 prompt: sdd/prompts/202606/projects_sync_subprojects_1.md
 ---
 # Plan: `bob projects sync` — consider sub-projects for the `^prj` `[p::2]` field

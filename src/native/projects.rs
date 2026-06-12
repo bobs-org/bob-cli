@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     ffi::OsString,
     fs, io,
@@ -86,9 +87,10 @@ fn sync_command() -> ClapCommand {
             "Sync Bob project notes from the completion-criteria task anchored \
 with ^prj.\n\n\
 A checked ^prj task sets frontmatter status to done. A canceled ^prj task sets \
-status to canceled. Active projects with no unprioritized open tasks have the \
-[p::2] field removed from their open ^prj task so it surfaces in dash.md's \
-Tasks section; projects with unprioritized open tasks get [p::2] added back.",
+status to canceled. Active projects with no unprioritized open tasks and no \
+open sub-projects have the [p::2] field removed from their open ^prj task so \
+it surfaces in dash.md's Tasks section; projects with unprioritized open tasks \
+or open sub-projects get [p::2] added back.",
         )
         .after_help(
             "Examples:\n  bob projects sync --dry-run\n  bob projects sync -d -b ~/bob\n  bob projects sync --bob-dir /tmp/bob-vault",
@@ -211,6 +213,8 @@ impl ScanIssue {
 struct Project {
     relative_path: PathBuf,
     name: String,
+    link_name: String,
+    parent_target: Option<String>,
     status: ProjectStatus,
     open_task_count: usize,
     open_unprioritized_count: usize,
@@ -524,6 +528,20 @@ impl SyncReport {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SyncFile {
+    path: PathBuf,
+    contents: String,
+    project: Project,
+    can_plan: bool,
+}
+
+impl SyncFile {
+    fn clean_project(&self) -> Option<&Project> {
+        self.can_plan.then_some(&self.project)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SyncEvent {
     Status {
@@ -566,10 +584,27 @@ enum ProjectChange {
     RemovePriority {
         priority: String,
     },
-    AddPriority,
+    AddPriority {
+        reason: AddPriorityReason,
+    },
     RemoveScheduled {
         scheduled: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddPriorityReason {
+    UnprioritizedOpenTasks,
+    OpenSubprojects,
+}
+
+impl AddPriorityReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::UnprioritizedOpenTasks => "unprioritized open tasks exist",
+            Self::OpenSubprojects => "project has open sub-projects",
+        }
+    }
 }
 
 impl ProjectChange {
@@ -585,13 +620,14 @@ impl ProjectChange {
                 project_name: project_name.to_string(),
                 action: PrjEditAction::Remove,
                 field: format!("[p::{priority}]"),
-                reason: "no unprioritized open tasks".to_string(),
+                reason: "no unprioritized open tasks or open sub-projects"
+                    .to_string(),
             },
-            Self::AddPriority => SyncEvent::PrjEdit {
+            Self::AddPriority { reason } => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
                 action: PrjEditAction::Add,
                 field: "[p::2]".to_string(),
-                reason: "unprioritized open tasks exist".to_string(),
+                reason: reason.label().to_string(),
             },
             Self::RemoveScheduled { scheduled } => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
@@ -635,15 +671,20 @@ struct FrontmatterLayout {
 
 fn sync_projects(bob_dir: &Path, dry_run: bool) -> SyncReport {
     let mut report = SyncReport::default();
-    sync_directory(bob_dir, bob_dir, dry_run, &mut report);
+    let mut files = Vec::new();
+    collect_sync_directory(bob_dir, bob_dir, &mut report, &mut files);
+    let open_subproject_parents = open_subproject_parent_link_names(
+        files.iter().filter_map(SyncFile::clean_project),
+    );
+    apply_sync_plans(&files, &open_subproject_parents, dry_run, &mut report);
     report
 }
 
-fn sync_directory(
+fn collect_sync_directory(
     root: &Path,
     directory: &Path,
-    dry_run: bool,
     report: &mut SyncReport,
+    files: &mut Vec<SyncFile>,
 ) {
     let entries = match read_sorted_directory(directory) {
         Ok(entries) => entries,
@@ -673,21 +714,21 @@ fn sync_directory(
             if is_excluded_directory(&path) {
                 continue;
             }
-            sync_directory(root, &path, dry_run, report);
+            collect_sync_directory(root, &path, report, files);
             continue;
         }
 
         if file_type.is_file() && is_markdown_file(&path) {
-            sync_markdown_file(root, &path, dry_run, report);
+            collect_sync_markdown_file(root, &path, report, files);
         }
     }
 }
 
-fn sync_markdown_file(
+fn collect_sync_markdown_file(
     root: &Path,
     path: &Path,
-    dry_run: bool,
     report: &mut SyncReport,
+    files: &mut Vec<SyncFile>,
 ) {
     let relative_path = relative_or_original(root, path);
     let contents = match fs::read_to_string(path) {
@@ -708,43 +749,80 @@ fn sync_markdown_file(
         return;
     };
     report.project_count += 1;
+    let can_plan = report.issues.len() == issue_count;
+    files.push(SyncFile {
+        path: path.to_path_buf(),
+        contents,
+        project,
+        can_plan,
+    });
+}
 
-    if report.issues.len() != issue_count {
-        return;
-    }
-
-    let plan = plan_project_sync(&project);
-    report.events.extend(plan.warnings);
-
-    if plan.changes.is_empty() {
-        return;
-    }
-
-    if !dry_run {
-        let new_contents = match apply_project_changes(&contents, &plan.changes)
-        {
-            Ok(new_contents) => new_contents,
-            Err(message) => {
-                report.issues.push(ScanIssue::path(relative_path, message));
-                return;
-            }
-        };
-
-        if let Err(error) = fs::write(path, new_contents) {
-            report.issues.push(ScanIssue::path(
-                relative_path,
-                format!("failed to write file: {error}"),
-            ));
-            return;
+fn apply_sync_plans(
+    files: &[SyncFile],
+    open_subproject_parents: &HashSet<String>,
+    dry_run: bool,
+    report: &mut SyncReport,
+) {
+    for file in files {
+        if !file.can_plan {
+            continue;
         }
-    }
 
-    for change in &plan.changes {
-        report.events.push(change.event(&project.name));
+        let has_open_subprojects =
+            open_subproject_parents.contains(&file.project.link_name);
+        let plan = plan_project_sync(&file.project, has_open_subprojects);
+        report.events.extend(plan.warnings);
+
+        if plan.changes.is_empty() {
+            continue;
+        }
+
+        if !dry_run {
+            let new_contents =
+                match apply_project_changes(&file.contents, &plan.changes) {
+                    Ok(new_contents) => new_contents,
+                    Err(message) => {
+                        report.issues.push(ScanIssue::path(
+                            file.project.relative_path.clone(),
+                            message,
+                        ));
+                        continue;
+                    }
+                };
+
+            if let Err(error) = fs::write(&file.path, new_contents) {
+                report.issues.push(ScanIssue::path(
+                    file.project.relative_path.clone(),
+                    format!("failed to write file: {error}"),
+                ));
+                continue;
+            }
+        }
+
+        for change in &plan.changes {
+            report.events.push(change.event(&file.project.name));
+        }
     }
 }
 
-fn plan_project_sync(project: &Project) -> ProjectPlan {
+fn open_subproject_parent_link_names<'a>(
+    projects: impl IntoIterator<Item = &'a Project>,
+) -> HashSet<String> {
+    projects
+        .into_iter()
+        .filter(|project| project.prj_task.state == PrjTaskState::Open)
+        .filter_map(|project| {
+            let parent = project.parent_target.as_ref()?;
+            (parent != &project.link_name).then(|| parent.clone())
+        })
+        .collect()
+}
+
+fn plan_project_sync(
+    project: &Project,
+    has_open_subprojects: bool,
+) -> ProjectPlan {
     let mut plan = ProjectPlan::default();
 
     if project.prj_task.state == PrjTaskState::Missing
@@ -790,14 +868,21 @@ fn plan_project_sync(project: &Project) -> ProjectPlan {
     if !effective_status.is_terminal()
         && project.prj_task.state == PrjTaskState::Open
     {
-        if project.open_unprioritized_count == 0 {
+        let should_surface =
+            project.open_unprioritized_count == 0 && !has_open_subprojects;
+        if should_surface {
             if let Some(priority) = &project.prj_task.priority {
                 plan.changes.push(ProjectChange::RemovePriority {
                     priority: priority.clone(),
                 });
             }
         } else if project.prj_task.priority.is_none() {
-            plan.changes.push(ProjectChange::AddPriority);
+            let reason = if project.open_unprioritized_count > 0 {
+                AddPriorityReason::UnprioritizedOpenTasks
+            } else {
+                AddPriorityReason::OpenSubprojects
+            };
+            plan.changes.push(ProjectChange::AddPriority { reason });
         }
 
         if let Some(scheduled) = &project.prj_task.scheduled {
@@ -823,7 +908,7 @@ fn apply_project_changes(
             ProjectChange::RemovePriority { .. } => {
                 edits.push(remove_prj_inline_field_edit(contents, "p")?);
             }
-            ProjectChange::AddPriority => {
+            ProjectChange::AddPriority { .. } => {
                 edits.push(add_priority_edit(contents)?);
             }
             ProjectChange::RemoveScheduled { .. } => {
@@ -1059,6 +1144,8 @@ fn parse_project(
 
     let status =
         ProjectStatus::parse(frontmatter_value(&frontmatter, "status"));
+    let parent_target =
+        frontmatter_value(&frontmatter, "parent").and_then(wikilink_target);
     let mut open_task_count = 0;
     let mut open_unprioritized_count = 0;
     let mut prj_candidates = Vec::new();
@@ -1092,6 +1179,8 @@ fn parse_project(
     Some(Project {
         relative_path: relative_path.to_path_buf(),
         name: project_name(relative_path),
+        link_name: project_link_name(relative_path),
+        parent_target,
         status,
         open_task_count,
         open_unprioritized_count,
@@ -1107,9 +1196,7 @@ fn parse_frontmatter(contents: &str) -> Option<Frontmatter<'_>> {
     }
 
     let mut frontmatter_lines = Vec::new();
-    let mut line_count = 1;
-    for line in lines {
-        line_count += 1;
+    for (line_count, line) in (2..).zip(lines) {
         let line = trim_cr(line);
         if line == "---" {
             return Some(Frontmatter {
@@ -1157,6 +1244,21 @@ fn trim_yaml_scalar(value: &str) -> &str {
         }
     }
     value
+}
+
+fn wikilink_target(value: &str) -> Option<String> {
+    let value = trim_yaml_scalar(value);
+    let inner = value.strip_prefix("[[")?.strip_suffix("]]")?.trim();
+    let before_alias =
+        inner.split_once('|').map_or(inner, |(target, _)| target);
+    let before_heading = before_alias
+        .split_once('#')
+        .map_or(before_alias, |(target, _)| target);
+    let name = before_heading.rsplit('/').next()?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_ascii_lowercase())
 }
 
 fn classify_prj_task(
@@ -1384,8 +1486,8 @@ fn print_project_list(projects: &[Project], styler: &Styler) {
         .max("PROJECT".len());
 
     println!(
-        "  {:project_width$}  {:<8}  {:>4}  {:>5}  {}",
-        "PROJECT", "STATUS", "OPEN", "UNPRI", "^PRJ"
+        "  {:project_width$}  {:<8}  {:>4}  {:>5}  ^PRJ",
+        "PROJECT", "STATUS", "OPEN", "UNPRI"
     );
 
     for project in projects {
@@ -1685,6 +1787,13 @@ fn project_name(relative_path: &Path) -> String {
     display_path(&path)
 }
 
+fn project_link_name(relative_path: &Path) -> String {
+    relative_path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
 fn relative_or_original(root: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).to_path_buf()
 }
@@ -1732,6 +1841,14 @@ fn display_width(text: &str) -> usize {
 mod tests {
     use super::*;
 
+    fn parse_clean_project(path: &str, contents: &str) -> Project {
+        let mut issues = Vec::new();
+        let project = parse_project(Path::new(path), contents, &mut issues)
+            .expect("project note");
+        assert!(issues.is_empty(), "unexpected issues: {issues:?}");
+        project
+    }
+
     #[test]
     fn task_tag_matches_tasks_plugin_boundaries() {
         assert!(contains_task_tag("#task"));
@@ -1743,6 +1860,33 @@ mod tests {
         assert!(!contains_task_tag("prefix#task"));
         assert!(!contains_task_tag("#taskish"));
         assert!(!contains_task_tag("task #task/sub"));
+    }
+
+    #[test]
+    fn wikilink_target_extracts_normalized_note_names() {
+        assert_eq!(wikilink_target("[[Bob]]").as_deref(), Some("bob"));
+        assert_eq!(wikilink_target("\"[[Bob]]\"").as_deref(), Some("bob"));
+        assert_eq!(wikilink_target("'[[Bob]]'").as_deref(), Some("bob"));
+        assert_eq!(
+            wikilink_target("[[projects/Bob|Alias]]").as_deref(),
+            Some("bob")
+        );
+        assert_eq!(
+            wikilink_target("[[projects/Bob#Heading]]").as_deref(),
+            Some("bob")
+        );
+        assert_eq!(
+            wikilink_target("[[projects/Bob#^block]]").as_deref(),
+            Some("bob")
+        );
+        assert_eq!(
+            wikilink_target("[[Projects/Bob#Heading|Alias]]").as_deref(),
+            Some("bob")
+        );
+
+        assert_eq!(wikilink_target("Bob"), None);
+        assert_eq!(wikilink_target("[[]]"), None);
+        assert_eq!(wikilink_target("[[folder/]]"), None);
     }
 
     #[test]
@@ -1773,6 +1917,19 @@ status: wip
         assert_eq!(project.prj_task.state, PrjTaskState::Open);
         assert_eq!(project.prj_task.priority.as_deref(), Some("2"));
         assert_eq!(project.prj_task.description, "Finish the project");
+        assert_eq!(project.link_name, "alpha");
+    }
+
+    #[test]
+    fn project_parser_reads_parent_wikilink_target() {
+        let project = parse_clean_project(
+            "Projects/Child.md",
+            "---\ntype: [[project]]\nparent: \"[[Areas/Parent#Now|Parent alias]]\"\n---\n- [ ] #task Ship [p::2] ^prj\n",
+        );
+
+        assert_eq!(project.name, "Projects/Child");
+        assert_eq!(project.link_name, "child");
+        assert_eq!(project.parent_target.as_deref(), Some("parent"));
     }
 
     #[test]
@@ -1873,7 +2030,7 @@ status: wip
         let project =
             parse_project(Path::new("Alpha.md"), contents, &mut issues)
                 .expect("project");
-        let plan = plan_project_sync(&project);
+        let plan = plan_project_sync(&project, false);
 
         assert!(issues.is_empty());
         assert_eq!(
@@ -1896,7 +2053,7 @@ status: wip
         )
         .expect("project");
         assert_eq!(
-            plan_project_sync(&stalled).changes,
+            plan_project_sync(&stalled, false).changes,
             vec![ProjectChange::RemovePriority {
                 priority: "2".to_string(),
             }]
@@ -1910,8 +2067,10 @@ status: wip
         )
         .expect("project");
         assert_eq!(
-            plan_project_sync(&has_unprioritized).changes,
-            vec![ProjectChange::AddPriority]
+            plan_project_sync(&has_unprioritized, false).changes,
+            vec![ProjectChange::AddPriority {
+                reason: AddPriorityReason::UnprioritizedOpenTasks,
+            }]
         );
 
         issues.clear();
@@ -1923,13 +2082,122 @@ status: wip
         .expect("project");
         assert_eq!(explicit_p0_is_hidden.open_unprioritized_count, 0);
         assert_eq!(
-            plan_project_sync(&explicit_p0_is_hidden).changes,
+            plan_project_sync(&explicit_p0_is_hidden, false).changes,
             vec![ProjectChange::RemovePriority {
                 priority: "2".to_string(),
             }]
         );
 
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn project_sync_plan_manages_prj_priority_from_open_subprojects() {
+        let hidden_parent = parse_clean_project(
+            "HiddenParent.md",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n",
+        );
+        assert!(
+            plan_project_sync(&hidden_parent, true).changes.is_empty(),
+            "existing priority should be kept while open sub-projects exist"
+        );
+
+        let missing_priority = parse_clean_project(
+            "MissingPriorityParent.md",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent ^prj\n",
+        );
+        assert_eq!(
+            plan_project_sync(&missing_priority, true).changes,
+            vec![ProjectChange::AddPriority {
+                reason: AddPriorityReason::OpenSubprojects,
+            }]
+        );
+
+        let surfacing_parent = parse_clean_project(
+            "SurfacingParent.md",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n",
+        );
+        assert_eq!(
+            plan_project_sync(&surfacing_parent, false).changes,
+            vec![ProjectChange::RemovePriority {
+                priority: "2".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn open_subproject_parent_links_only_count_open_prj_children() {
+        let parent = parse_clean_project(
+            "Projects/Parent.md",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n",
+        );
+        let open_child = parse_clean_project(
+            "Projects/OpenChild.md",
+            "---\ntype: [[project]]\nparent: [[Projects/Parent]]\n---\n- [ ] #task Ship child [p::2] ^prj\n",
+        );
+        let path_case_child = parse_clean_project(
+            "Projects/PathCaseChild.md",
+            "---\ntype: [[project]]\nparent: [[areas/PARENT#Now|Parent]]\n---\n- [ ] #task Ship child [p::2] ^prj\n",
+        );
+        let terminal_status_open_child = parse_clean_project(
+            "Projects/TerminalStatusOpenChild.md",
+            "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [ ] #task Ship child [p::2] ^prj\n",
+        );
+        let checked_child = parse_clean_project(
+            "Projects/CheckedChild.md",
+            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [x] #task Ship child [p::2] ^prj\n",
+        );
+        let canceled_child = parse_clean_project(
+            "Projects/CanceledChild.md",
+            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [-] #task Ship child [p::2] ^prj\n",
+        );
+        let missing_prj_child = parse_clean_project(
+            "Projects/MissingPrjChild.md",
+            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [ ] #task Needs completion task\n",
+        );
+        let self_link = parse_clean_project(
+            "Projects/Self.md",
+            "---\ntype: [[project]]\nparent: [[Self]]\n---\n- [ ] #task Ship self [p::2] ^prj\n",
+        );
+        let area_child = parse_clean_project(
+            "Projects/AreaChild.md",
+            "---\ntype: [[project]]\nparent: [[Area]]\n---\n- [ ] #task Ship child [p::2] ^prj\n",
+        );
+
+        let mut issues = Vec::new();
+        let malformed_child = parse_project(
+            Path::new("Projects/MalformedChild.md"),
+            "---\ntype: [[project]]\nparent: [[Parent]]\n---\nShip malformed child ^prj\n",
+            &mut issues,
+        )
+        .expect("malformed project");
+        let multiple_child = parse_project(
+            Path::new("Projects/MultipleChild.md"),
+            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [ ] #task One [p::2] ^prj\n- [ ] #task Two [p::2] ^prj\n",
+            &mut issues,
+        )
+        .expect("multiple project");
+        assert_eq!(issues.len(), 2);
+
+        let parent_links = open_subproject_parent_link_names([
+            &open_child,
+            &path_case_child,
+            &terminal_status_open_child,
+            &checked_child,
+            &canceled_child,
+            &missing_prj_child,
+            &malformed_child,
+            &multiple_child,
+            &self_link,
+            &area_child,
+        ]);
+
+        assert!(parent_links.contains(&parent.link_name));
+        assert!(parent_links.contains("area"));
+        assert!(!parent_links.contains(&self_link.link_name));
+
+        let non_parent_links = open_subproject_parent_link_names([&area_child]);
+        assert!(!non_parent_links.contains(&parent.link_name));
     }
 
     #[test]
@@ -1941,7 +2209,9 @@ status: wip
             &mut issues,
         )
         .expect("project");
-        assert!(plan_project_sync(&already_on_dash).changes.is_empty());
+        assert!(plan_project_sync(&already_on_dash, false)
+            .changes
+            .is_empty());
 
         issues.clear();
         let already_hidden = parse_project(
@@ -1950,7 +2220,7 @@ status: wip
             &mut issues,
         )
         .expect("project");
-        assert!(plan_project_sync(&already_hidden).changes.is_empty());
+        assert!(plan_project_sync(&already_hidden, false).changes.is_empty());
         assert!(issues.is_empty());
     }
 
@@ -1966,7 +2236,7 @@ status: wip
 
         assert!(issues.is_empty());
         assert_eq!(
-            plan_project_sync(&project).changes,
+            plan_project_sync(&project, false).changes,
             vec![
                 ProjectChange::RemovePriority {
                     priority: "2".to_string(),
@@ -1987,7 +2257,7 @@ status: wip
         let project =
             parse_project(Path::new("Alpha.md"), &contents, &mut issues)
                 .expect("project");
-        let plan = plan_project_sync(&project);
+        let plan = plan_project_sync(&project, false);
 
         assert!(issues.is_empty());
         assert!(plan.changes.is_empty());
@@ -2014,7 +2284,9 @@ status: wip
                     from: "waiting".to_string(),
                     to: TargetProjectStatus::Canceled,
                 },
-                ProjectChange::AddPriority,
+                ProjectChange::AddPriority {
+                    reason: AddPriorityReason::UnprioritizedOpenTasks,
+                },
             ],
         )
         .expect("apply edits");
