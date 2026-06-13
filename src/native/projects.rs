@@ -22,6 +22,8 @@ const PROJECT_TASK_SHAPE: &str =
     "- [ ] #task <completion criteria> [p::2] ^prj";
 const SUBPROJECTS_MARKER_PREFIX: &str = "🧩 **Sub-projects:**";
 const SUBPROJECTS_SEPARATOR: &str = "•";
+const SUBPROJECT_DONE_MARKER: &str = "✅";
+const SUBPROJECT_CANCELED_MARKER: &str = "❌";
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
@@ -408,6 +410,80 @@ struct WikilinkRef {
     stem: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WikilinkSpan {
+    link: WikilinkRef,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubprojectState {
+    Open,
+    Done,
+    Canceled,
+}
+
+impl SubprojectState {
+    fn from_project(project: &Project) -> Option<Self> {
+        if let Some(target) = project.prj_task.target_status() {
+            return Some(Self::from_target_status(target));
+        }
+        match project.status {
+            ProjectStatus::Done => Some(Self::Done),
+            ProjectStatus::Canceled => Some(Self::Canceled),
+            ProjectStatus::Wip
+            | ProjectStatus::Waiting
+            | ProjectStatus::Other(_) => match project.prj_task.state {
+                PrjTaskState::Open => Some(Self::Open),
+                PrjTaskState::Missing
+                | PrjTaskState::Done
+                | PrjTaskState::Canceled
+                | PrjTaskState::Malformed
+                | PrjTaskState::Multiple => None,
+            },
+        }
+    }
+
+    fn from_target_status(status: TargetProjectStatus) -> Self {
+        match status {
+            TargetProjectStatus::Done => Self::Done,
+            TargetProjectStatus::Canceled => Self::Canceled,
+        }
+    }
+
+    fn is_open(self) -> bool {
+        matches!(self, Self::Open)
+    }
+
+    fn is_terminal(self) -> bool {
+        !self.is_open()
+    }
+
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Open => "open sub-project",
+            Self::Done => "sub-project completed",
+            Self::Canceled => "sub-project canceled",
+        }
+    }
+
+    fn closed_marker(self) -> Option<&'static str> {
+        match self {
+            Self::Open => None,
+            Self::Done => Some(SUBPROJECT_DONE_MARKER),
+            Self::Canceled => Some(SUBPROJECT_CANCELED_MARKER),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubprojectEntry {
+    link_name: String,
+    stem: String,
+    state: SubprojectState,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskStatus {
     Open,
@@ -613,6 +689,7 @@ enum PrjEditAction {
 struct ProjectPlan {
     changes: Vec<ProjectChange>,
     warnings: Vec<SyncEvent>,
+    desired_subprojects: Option<Vec<SubprojectEntry>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -632,9 +709,14 @@ enum ProjectChange {
     },
     AddSubprojectLink {
         stem: String,
+        state: SubprojectState,
     },
     RemoveSubprojectLink {
         stem: String,
+    },
+    MarkSubproject {
+        stem: String,
+        state: SubprojectState,
     },
     NormalizeSubprojects,
 }
@@ -682,17 +764,23 @@ impl ProjectChange {
                 field: format!("[scheduled::{scheduled}]"),
                 reason: "scheduled is no longer used".to_string(),
             },
-            Self::AddSubprojectLink { stem } => SyncEvent::PrjEdit {
+            Self::AddSubprojectLink { stem, state } => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
                 action: PrjEditAction::Add,
                 field: format!("[[{stem}]]"),
-                reason: "open sub-project".to_string(),
+                reason: state.reason().to_string(),
             },
             Self::RemoveSubprojectLink { stem, .. } => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
                 action: PrjEditAction::Remove,
                 field: format!("[[{stem}]]"),
-                reason: "no longer an open sub-project".to_string(),
+                reason: "no longer a sub-project".to_string(),
+            },
+            Self::MarkSubproject { stem, state } => SyncEvent::PrjEdit {
+                project_name: project_name.to_string(),
+                action: PrjEditAction::Update,
+                field: format!("[[{stem}]]"),
+                reason: state.reason().to_string(),
             },
             Self::NormalizeSubprojects => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
@@ -738,10 +826,10 @@ fn sync_projects(bob_dir: &Path, dry_run: bool) -> SyncReport {
     let mut report = SyncReport::default();
     let mut files = Vec::new();
     collect_sync_directory(bob_dir, bob_dir, &mut report, &mut files);
-    let open_subproject_children = open_subproject_children_by_parent_link_name(
+    let subproject_children = subproject_children_by_parent_link_name(
         files.iter().filter_map(SyncFile::clean_project),
     );
-    apply_sync_plans(&files, &open_subproject_children, dry_run, &mut report);
+    apply_sync_plans(&files, &subproject_children, dry_run, &mut report);
     report
 }
 
@@ -825,7 +913,7 @@ fn collect_sync_markdown_file(
 
 fn apply_sync_plans(
     files: &[SyncFile],
-    open_subproject_children: &HashMap<String, Vec<String>>,
+    subproject_children: &HashMap<String, Vec<SubprojectEntry>>,
     dry_run: bool,
     report: &mut SyncReport,
 ) {
@@ -834,11 +922,11 @@ fn apply_sync_plans(
             continue;
         }
 
-        let open_children = open_subproject_children
+        let children = subproject_children
             .get(&file.project.link_name)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let plan = plan_project_sync(&file.project, open_children);
+        let plan = plan_project_sync(&file.project, children);
         report.events.extend(plan.warnings);
 
         if plan.changes.is_empty() {
@@ -846,17 +934,20 @@ fn apply_sync_plans(
         }
 
         if !dry_run {
-            let new_contents =
-                match apply_project_changes(&file.contents, &plan.changes) {
-                    Ok(new_contents) => new_contents,
-                    Err(message) => {
-                        report.issues.push(ScanIssue::path(
-                            file.project.relative_path.clone(),
-                            message,
-                        ));
-                        continue;
-                    }
-                };
+            let new_contents = match apply_project_changes(
+                &file.contents,
+                &plan.changes,
+                plan.desired_subprojects.as_deref(),
+            ) {
+                Ok(new_contents) => new_contents,
+                Err(message) => {
+                    report.issues.push(ScanIssue::path(
+                        file.project.relative_path.clone(),
+                        message,
+                    ));
+                    continue;
+                }
+            };
 
             if let Err(error) = fs::write(&file.path, new_contents) {
                 report.issues.push(ScanIssue::path(
@@ -873,16 +964,18 @@ fn apply_sync_plans(
     }
 }
 
-fn open_subproject_children_by_parent_link_name<'a>(
+fn subproject_children_by_parent_link_name<'a>(
     projects: impl IntoIterator<Item = &'a Project>,
-) -> HashMap<String, Vec<String>> {
-    let mut children_by_parent: HashMap<String, BTreeMap<String, String>> =
-        HashMap::new();
+) -> HashMap<String, Vec<SubprojectEntry>> {
+    let mut children_by_parent: HashMap<
+        String,
+        BTreeMap<String, SubprojectEntry>,
+    > = HashMap::new();
 
     for project in projects {
-        if project.prj_task.state != PrjTaskState::Open {
+        let Some(state) = SubprojectState::from_project(project) else {
             continue;
-        }
+        };
         let Some(parent) = &project.parent_target else {
             continue;
         };
@@ -893,7 +986,11 @@ fn open_subproject_children_by_parent_link_name<'a>(
             .entry(parent.clone())
             .or_default()
             .entry(project.link_name.clone())
-            .or_insert_with(|| project.link_stem.clone());
+            .or_insert_with(|| SubprojectEntry {
+                link_name: project.link_name.clone(),
+                stem: project.link_stem.clone(),
+                state,
+            });
     }
 
     children_by_parent
@@ -906,7 +1003,7 @@ fn open_subproject_children_by_parent_link_name<'a>(
 
 fn plan_project_sync(
     project: &Project,
-    open_subproject_stems: &[String],
+    subproject_children: &[SubprojectEntry],
 ) -> ProjectPlan {
     let mut plan = ProjectPlan::default();
 
@@ -953,7 +1050,9 @@ fn plan_project_sync(
     if !effective_status.is_terminal()
         && project.prj_task.state == PrjTaskState::Open
     {
-        let has_open_subprojects = !open_subproject_stems.is_empty();
+        let has_open_subprojects = subproject_children
+            .iter()
+            .any(|child| child.state.is_open());
         let should_surface =
             project.open_unprioritized_count == 0 && !has_open_subprojects;
         if should_surface {
@@ -971,10 +1070,6 @@ fn plan_project_sync(
             plan.changes.push(ProjectChange::AddPriority { reason });
         }
 
-        let desired_targets = open_subproject_stems
-            .iter()
-            .map(|stem| stem.to_ascii_lowercase())
-            .collect::<HashSet<_>>();
         let marker_line = project.prj_task.sub_block.first_marker_line();
         let mut marker_targets = HashSet::new();
         let marker_links = marker_line
@@ -988,12 +1083,24 @@ fn plan_project_sync(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let marker_display_states = marker_line
+            .map(|line| {
+                subproject_display_states_in_marker_line(&line.trimmed_text)
+            })
+            .unwrap_or_default();
+        let desired_subprojects =
+            desired_subproject_entries(subproject_children, &marker_targets);
+        let desired_targets = desired_subprojects
+            .iter()
+            .map(|entry| entry.link_name.clone())
+            .collect::<HashSet<_>>();
         let subproject_change_start = plan.changes.len();
 
-        for stem in open_subproject_stems {
-            if !marker_targets.contains(&stem.to_ascii_lowercase()) {
+        for entry in &desired_subprojects {
+            if !marker_targets.contains(&entry.link_name) {
                 plan.changes.push(ProjectChange::AddSubprojectLink {
-                    stem: stem.clone(),
+                    stem: entry.stem.clone(),
+                    state: entry.state,
                 });
             }
         }
@@ -1006,13 +1113,32 @@ fn plan_project_sync(
             }
         }
 
+        for entry in &desired_subprojects {
+            if !marker_targets.contains(&entry.link_name) {
+                continue;
+            }
+            let display_state = marker_display_states
+                .get(&entry.link_name)
+                .copied()
+                .unwrap_or(SubprojectState::Open);
+            if display_state != entry.state {
+                plan.changes.push(ProjectChange::MarkSubproject {
+                    stem: entry.stem.clone(),
+                    state: entry.state,
+                });
+            }
+        }
+
         if plan.changes.len() == subproject_change_start
             && subprojects_need_normalization(
                 &project.prj_task.sub_block,
-                open_subproject_stems,
+                &desired_subprojects,
             )
         {
             plan.changes.push(ProjectChange::NormalizeSubprojects);
+        }
+        if plan.changes.len() > subproject_change_start {
+            plan.desired_subprojects = Some(desired_subprojects);
         }
 
         if let Some(scheduled) = &project.prj_task.scheduled {
@@ -1025,12 +1151,72 @@ fn plan_project_sync(
     plan
 }
 
+fn desired_subproject_entries(
+    children: &[SubprojectEntry],
+    marker_targets: &HashSet<String>,
+) -> Vec<SubprojectEntry> {
+    let mut open_entries = children
+        .iter()
+        .filter(|child| child.state.is_open())
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut closed_entries = children
+        .iter()
+        .filter(|child| {
+            child.state.is_terminal()
+                && marker_targets.contains(&child.link_name)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    open_entries.sort_by(|left, right| left.link_name.cmp(&right.link_name));
+    closed_entries.sort_by(|left, right| left.link_name.cmp(&right.link_name));
+    open_entries.extend(closed_entries);
+    open_entries
+}
+
+fn subproject_display_states_in_marker_line(
+    line: &str,
+) -> HashMap<String, SubprojectState> {
+    let mut states = HashMap::new();
+    for span in wikilink_spans_in_line(line) {
+        states.entry(span.link.link_name).or_insert_with(|| {
+            display_state_for_wikilink(line, span.start, span.end)
+        });
+    }
+    states
+}
+
+fn display_state_for_wikilink(
+    line: &str,
+    link_start: usize,
+    link_end: usize,
+) -> SubprojectState {
+    let before_link = line[..link_start].trim_end();
+    let after_link = line[link_end..].trim_start();
+    if !before_link.ends_with("~~") {
+        return SubprojectState::Open;
+    }
+
+    let Some(after_strike) = after_link.strip_prefix("~~") else {
+        return SubprojectState::Open;
+    };
+    let marker = after_strike.trim_start();
+    if marker.starts_with(SUBPROJECT_DONE_MARKER) {
+        SubprojectState::Done
+    } else if marker.starts_with(SUBPROJECT_CANCELED_MARKER) {
+        SubprojectState::Canceled
+    } else {
+        SubprojectState::Open
+    }
+}
+
 fn subprojects_need_normalization(
     sub_block: &PrjSubBlock,
-    desired_stems: &[String],
+    desired_entries: &[SubprojectEntry],
 ) -> bool {
     let marker_count = sub_block.marker_line_count();
-    if desired_stems.is_empty() {
+    if desired_entries.is_empty() {
         return marker_count > 0;
     }
 
@@ -1038,7 +1224,7 @@ fn subprojects_need_normalization(
         return false;
     };
     let expected_indent = format!("{}\t", sub_block.prj_indent);
-    let expected_text = render_subprojects_line_text(desired_stems);
+    let expected_text = render_subprojects_line_text(desired_entries);
     marker_count > 1
         || marker_line.indentation != expected_indent
         || marker_line.trimmed_text != expected_text
@@ -1047,11 +1233,10 @@ fn subprojects_need_normalization(
 fn apply_project_changes(
     contents: &str,
     changes: &[ProjectChange],
+    desired_subprojects: Option<&[SubprojectEntry]>,
 ) -> Result<String, String> {
     let mut edits = Vec::new();
-    let mut subproject_link_additions = Vec::new();
-    let mut subproject_link_removals = Vec::new();
-    let mut normalize_subprojects = false;
+    let mut sync_subprojects = false;
     for change in changes {
         match change {
             ProjectChange::Status { to, .. } => {
@@ -1067,25 +1252,21 @@ fn apply_project_changes(
                 edits
                     .push(remove_prj_inline_field_edit(contents, "scheduled")?);
             }
-            ProjectChange::AddSubprojectLink { stem } => {
-                subproject_link_additions.push(stem.clone());
-            }
-            ProjectChange::RemoveSubprojectLink { stem } => {
-                subproject_link_removals.push(stem.clone());
-            }
-            ProjectChange::NormalizeSubprojects => {
-                normalize_subprojects = true;
+            ProjectChange::AddSubprojectLink { .. }
+            | ProjectChange::RemoveSubprojectLink { .. }
+            | ProjectChange::MarkSubproject { .. }
+            | ProjectChange::NormalizeSubprojects => {
+                sync_subprojects = true;
             }
         }
     }
-    if normalize_subprojects
-        || !subproject_link_additions.is_empty()
-        || !subproject_link_removals.is_empty()
-    {
+    if sync_subprojects {
+        let desired_subprojects = desired_subprojects.ok_or_else(|| {
+            "failed to resolve sub-project line state".to_string()
+        })?;
         edits.extend(sync_subprojects_line_edits(
             contents,
-            &subproject_link_additions,
-            &subproject_link_removals,
+            desired_subprojects,
         )?);
     }
 
@@ -1206,26 +1387,10 @@ fn remove_prj_inline_field_edit(
 
 fn sync_subprojects_line_edits(
     contents: &str,
-    added: &[String],
-    removed: &[String],
+    desired_entries: &[SubprojectEntry],
 ) -> Result<Vec<TextEdit>, String> {
     let layout = prj_sub_block_layout(contents)?;
     let first_marker = layout.sub_block.first_marker_line();
-    let mut final_links = BTreeMap::new();
-
-    if let Some(marker_line) = first_marker {
-        for link in &marker_line.links {
-            final_links
-                .entry(link.link_name.clone())
-                .or_insert_with(|| link.stem.clone());
-        }
-    }
-    for stem in removed {
-        final_links.remove(&stem.to_ascii_lowercase());
-    }
-    for stem in added {
-        final_links.insert(stem.to_ascii_lowercase(), stem.clone());
-    }
 
     let marker_line_numbers = layout
         .sub_block
@@ -1236,7 +1401,7 @@ fn sync_subprojects_line_edits(
         .collect::<Vec<_>>();
     let mut edits = Vec::new();
 
-    if final_links.is_empty() {
+    if desired_entries.is_empty() {
         for line_number in marker_line_numbers {
             let line = line_by_number(&layout.lines, line_number)?;
             edits.push(TextEdit {
@@ -1248,8 +1413,7 @@ fn sync_subprojects_line_edits(
         return Ok(edits);
     }
 
-    let stems = final_links.into_values().collect::<Vec<_>>();
-    let rendered = render_subprojects_line(&layout.prj_indent, &stems);
+    let rendered = render_subprojects_line(&layout.prj_indent, desired_entries);
 
     if let Some(marker_line) = first_marker {
         let line = line_by_number(&layout.lines, marker_line.line_number)?;
@@ -1306,19 +1470,44 @@ fn line_content_end(contents: &str, line: LineSpan) -> usize {
     }
 }
 
-fn render_subprojects_line(indent: &str, stems: &[String]) -> String {
-    format!("{}\t{}", indent, render_subprojects_line_text(stems))
+fn render_subprojects_line(
+    indent: &str,
+    entries: &[SubprojectEntry],
+) -> String {
+    format!("{}\t{}", indent, render_subprojects_line_text(entries))
 }
 
-fn render_subprojects_line_text(stems: &[String]) -> String {
-    let mut sorted_stems = stems.iter().collect::<Vec<_>>();
-    sorted_stems.sort_by_key(|stem| stem.to_ascii_lowercase());
-    let links = sorted_stems
+fn render_subprojects_line_text(entries: &[SubprojectEntry]) -> String {
+    let links = sorted_subproject_entries(entries)
         .into_iter()
-        .map(|stem| format!("[[{stem}]]"))
+        .map(render_subproject_entry)
         .collect::<Vec<_>>()
         .join(&format!(" {SUBPROJECTS_SEPARATOR} "));
     format!("- {SUBPROJECTS_MARKER_PREFIX} {links}")
+}
+
+fn sorted_subproject_entries(
+    entries: &[SubprojectEntry],
+) -> Vec<&SubprojectEntry> {
+    let mut open_entries = entries
+        .iter()
+        .filter(|entry| entry.state.is_open())
+        .collect::<Vec<_>>();
+    let mut closed_entries = entries
+        .iter()
+        .filter(|entry| entry.state.is_terminal())
+        .collect::<Vec<_>>();
+    open_entries.sort_by(|left, right| left.link_name.cmp(&right.link_name));
+    closed_entries.sort_by(|left, right| left.link_name.cmp(&right.link_name));
+    open_entries.extend(closed_entries);
+    open_entries
+}
+
+fn render_subproject_entry(entry: &SubprojectEntry) -> String {
+    match entry.state.closed_marker() {
+        Some(marker) => format!("~~[[{}]]~~ {marker}", entry.stem),
+        None => format!("[[{}]]", entry.stem),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1603,7 +1792,14 @@ fn wikilink_ref_from_inner(inner: &str) -> Option<WikilinkRef> {
 }
 
 fn wikilink_refs_in_line(line: &str) -> Vec<WikilinkRef> {
-    let mut links = Vec::new();
+    wikilink_spans_in_line(line)
+        .into_iter()
+        .map(|span| span.link)
+        .collect()
+}
+
+fn wikilink_spans_in_line(line: &str) -> Vec<WikilinkSpan> {
+    let mut spans = Vec::new();
     let mut offset = 0;
     while let Some(open_relative) = line[offset..].find("[[") {
         let open = offset + open_relative;
@@ -1612,11 +1808,15 @@ fn wikilink_refs_in_line(line: &str) -> Vec<WikilinkRef> {
         };
         let close = open + 2 + close_relative;
         if let Some(target) = wikilink_ref_from_inner(&line[open + 2..close]) {
-            links.push(target);
+            spans.push(WikilinkSpan {
+                link: target,
+                start: open,
+                end: close + 2,
+            });
         }
         offset = close + 2;
     }
-    links
+    spans
 }
 
 fn parse_prj_sub_block(
@@ -2278,6 +2478,39 @@ mod tests {
         project
     }
 
+    fn subproject(stem: &str, state: SubprojectState) -> SubprojectEntry {
+        SubprojectEntry {
+            link_name: stem.to_ascii_lowercase(),
+            stem: stem.to_string(),
+            state,
+        }
+    }
+
+    fn open_subproject(stem: &str) -> SubprojectEntry {
+        subproject(stem, SubprojectState::Open)
+    }
+
+    fn done_subproject(stem: &str) -> SubprojectEntry {
+        subproject(stem, SubprojectState::Done)
+    }
+
+    fn canceled_subproject(stem: &str) -> SubprojectEntry {
+        subproject(stem, SubprojectState::Canceled)
+    }
+
+    fn apply_changes(contents: &str, changes: &[ProjectChange]) -> String {
+        apply_project_changes(contents, changes, None).expect("apply edits")
+    }
+
+    fn apply_subproject_changes(
+        contents: &str,
+        changes: &[ProjectChange],
+        desired_subprojects: &[SubprojectEntry],
+    ) -> String {
+        apply_project_changes(contents, changes, Some(desired_subprojects))
+            .expect("apply edits")
+    }
+
     #[test]
     fn task_tag_matches_tasks_plugin_boundaries() {
         assert!(contains_task_tag("#task"));
@@ -2576,13 +2809,13 @@ status: wip
 
     #[test]
     fn project_sync_plan_manages_prj_priority_from_open_subprojects() {
-        let child_stems = [String::from("Child")];
+        let children = [open_subproject("Child")];
         let hidden_parent = parse_clean_project(
             "HiddenParent.md",
             "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
         );
         assert!(
-            plan_project_sync(&hidden_parent, &child_stems)
+            plan_project_sync(&hidden_parent, &children)
                 .changes
                 .is_empty(),
             "existing priority should be kept while open sub-projects exist"
@@ -2593,7 +2826,7 @@ status: wip
             "---\ntype: [[project]]\n---\n- [ ] #task Ship parent ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
         );
         assert_eq!(
-            plan_project_sync(&missing_priority, &child_stems).changes,
+            plan_project_sync(&missing_priority, &children).changes,
             vec![ProjectChange::AddPriority {
                 reason: AddPriorityReason::OpenSubprojects,
             }]
@@ -2618,9 +2851,9 @@ status: wip
             "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[ExistingChild]] • [[stale_child]]\n\t- [[MentionedChild]] kickoff notes\n\t- prose with [[ManualOnly]] link\n",
         );
         let children = [
-            String::from("AnotherChild"),
-            String::from("ExistingChild"),
-            String::from("MentionedChild"),
+            open_subproject("AnotherChild"),
+            open_subproject("ExistingChild"),
+            open_subproject("MentionedChild"),
         ];
 
         assert_eq!(
@@ -2628,9 +2861,11 @@ status: wip
             vec![
                 ProjectChange::AddSubprojectLink {
                     stem: "AnotherChild".to_string(),
+                    state: SubprojectState::Open,
                 },
                 ProjectChange::AddSubprojectLink {
                     stem: "MentionedChild".to_string(),
+                    state: SubprojectState::Open,
                 },
                 ProjectChange::RemoveSubprojectLink {
                     stem: "stale_child".to_string(),
@@ -2645,7 +2880,7 @@ status: wip
             "Parent.md",
             "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
         );
-        let children = [String::from("child")];
+        let children = [open_subproject("child")];
 
         let changes = plan_project_sync(&project, &children).changes;
         assert!(!changes.iter().any(|change| matches!(
@@ -2658,7 +2893,7 @@ status: wip
 
     #[test]
     fn project_sync_plan_normalizes_subprojects_marker_drift() {
-        let children = [String::from("Alpha"), String::from("Beta")];
+        let children = [open_subproject("Alpha"), open_subproject("Beta")];
         for contents in [
             "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n  - 🧩 **Sub-projects:** [[Beta]], [[Alpha]]\n",
             "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n",
@@ -2672,6 +2907,66 @@ status: wip
     }
 
     #[test]
+    fn project_sync_plan_marks_tracked_closed_subprojects() {
+        let project = parse_clean_project(
+            "Parent.md",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[DoneChild]] • ~~[[CanceledChild]]~~ ❌ • [[OpenChild]]\n",
+        );
+        let children = [
+            done_subproject("DoneChild"),
+            canceled_subproject("CanceledChild"),
+            open_subproject("OpenChild"),
+            done_subproject("PrunedDoneChild"),
+        ];
+
+        let plan = plan_project_sync(&project, &children);
+        assert_eq!(
+            plan.changes,
+            vec![ProjectChange::MarkSubproject {
+                stem: "DoneChild".to_string(),
+                state: SubprojectState::Done,
+            }]
+        );
+        assert_eq!(
+            plan.desired_subprojects,
+            Some(vec![
+                open_subproject("OpenChild"),
+                canceled_subproject("CanceledChild"),
+                done_subproject("DoneChild"),
+            ])
+        );
+    }
+
+    #[test]
+    fn project_sync_plan_keeps_canonical_closed_subprojects_idempotent() {
+        let project = parse_clean_project(
+            "Parent.md",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent ^prj\n\t- 🧩 **Sub-projects:** ~~[[CanceledChild]]~~ ❌ • ~~[[DoneChild]]~~ ✅\n",
+        );
+        let children = [
+            done_subproject("DoneChild"),
+            canceled_subproject("CanceledChild"),
+        ];
+
+        assert!(plan_project_sync(&project, &children).changes.is_empty());
+    }
+
+    #[test]
+    fn render_subprojects_line_formats_closed_children_after_open_children() {
+        let entries = [
+            done_subproject("Gamma"),
+            open_subproject("Beta"),
+            canceled_subproject("Delta"),
+            open_subproject("Alpha"),
+        ];
+
+        assert_eq!(
+            render_subprojects_line_text(&entries),
+            "- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]] • ~~[[Delta]]~~ ❌ • ~~[[Gamma]]~~ ✅"
+        );
+    }
+
+    #[test]
     fn project_sync_plan_treats_user_sub_bullets_as_user_owned() {
         let project = parse_clean_project(
             "Parent.md",
@@ -2679,9 +2974,10 @@ status: wip
         );
 
         assert_eq!(
-            plan_project_sync(&project, &[String::from("Child")]).changes,
+            plan_project_sync(&project, &[open_subproject("Child")]).changes,
             vec![ProjectChange::AddSubprojectLink {
                 stem: "Child".to_string(),
+                state: SubprojectState::Open,
             }]
         );
     }
@@ -2700,7 +2996,7 @@ status: wip
             "Terminal.md",
             "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task Ship terminal [p::2] ^prj\n\t- [[OldChild]]\n",
         );
-        let children = [String::from("Child")];
+        let children = [open_subproject("Child")];
 
         for project in [&missing, &checked, &terminal] {
             assert!(!plan_project_sync(project, &children).changes.iter().any(
@@ -2708,6 +3004,7 @@ status: wip
                     change,
                     ProjectChange::AddSubprojectLink { .. }
                         | ProjectChange::RemoveSubprojectLink { .. }
+                        | ProjectChange::MarkSubproject { .. }
                         | ProjectChange::NormalizeSubprojects
                 )
             ));
@@ -2715,7 +3012,7 @@ status: wip
     }
 
     #[test]
-    fn open_subproject_parent_links_only_count_open_prj_children() {
+    fn subproject_parent_links_classify_open_and_terminal_prj_children() {
         let parent = parse_clean_project(
             "Projects/Parent.md",
             "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n",
@@ -2768,36 +3065,37 @@ status: wip
         .expect("multiple project");
         assert_eq!(issues.len(), 2);
 
-        let children_by_parent =
-            open_subproject_children_by_parent_link_name([
-                &open_child,
-                &path_case_child,
-                &terminal_status_open_child,
-                &checked_child,
-                &canceled_child,
-                &missing_prj_child,
-                &malformed_child,
-                &multiple_child,
-                &self_link,
-                &area_child,
-            ]);
+        let children_by_parent = subproject_children_by_parent_link_name([
+            &open_child,
+            &path_case_child,
+            &terminal_status_open_child,
+            &checked_child,
+            &canceled_child,
+            &missing_prj_child,
+            &malformed_child,
+            &multiple_child,
+            &self_link,
+            &area_child,
+        ]);
 
         assert_eq!(
             children_by_parent.get(&parent.link_name),
             Some(&vec![
-                "OpenChild".to_string(),
-                "PathCaseChild".to_string(),
-                "TerminalStatusOpenChild".to_string(),
+                canceled_subproject("CanceledChild"),
+                done_subproject("CheckedChild"),
+                open_subproject("OpenChild"),
+                open_subproject("PathCaseChild"),
+                done_subproject("TerminalStatusOpenChild"),
             ])
         );
         assert_eq!(
             children_by_parent.get("area"),
-            Some(&vec!["AreaChild".to_string()])
+            Some(&vec![open_subproject("AreaChild")])
         );
         assert!(!children_by_parent.contains_key(&self_link.link_name));
 
         let non_parent_links =
-            open_subproject_children_by_parent_link_name([&area_child]);
+            subproject_children_by_parent_link_name([&area_child]);
         assert!(!non_parent_links.contains_key(&parent.link_name));
     }
 
@@ -2876,7 +3174,7 @@ status: wip
     #[test]
     fn project_changes_replace_status_append_missing_status_and_add_priority() {
         let contents = "---\ntype: [[project]]\nstatus: waiting\n---\n- [ ] #task Ship ^prj\n";
-        let output = apply_project_changes(
+        let output = apply_changes(
             contents,
             &[
                 ProjectChange::Status {
@@ -2887,21 +3185,19 @@ status: wip
                     reason: AddPriorityReason::UnprioritizedOpenTasks,
                 },
             ],
-        )
-        .expect("apply edits");
+        );
         assert_eq!(
             output,
             "---\ntype: [[project]]\nstatus: canceled\n---\n- [ ] #task Ship [p::2] ^prj\n"
         );
 
-        let output = apply_project_changes(
+        let output = apply_changes(
             "---\ntype: [[project]]\n---\n- [x] #task Ship [p::2] ^prj\n",
             &[ProjectChange::Status {
                 from: "wip".to_string(),
                 to: TargetProjectStatus::Done,
             }],
-        )
-        .expect("append status");
+        );
         assert_eq!(
             output,
             "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship [p::2] ^prj\n"
@@ -2910,7 +3206,7 @@ status: wip
 
     #[test]
     fn project_changes_remove_prj_fields_with_adjacent_whitespace() {
-        let output = apply_project_changes(
+        let output = apply_changes(
             "---\ntype: [[project]]\n---\n- [ ] #task Ship [p:: 2] [scheduled::2026-06-01] ^prj\n",
             &[
                 ProjectChange::RemovePriority {
@@ -2920,8 +3216,7 @@ status: wip
                     scheduled: "2026-06-01".to_string(),
                 },
             ],
-        )
-        .expect("remove fields");
+        );
         assert_eq!(
             output,
             "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n"
@@ -2930,13 +3225,12 @@ status: wip
 
     #[test]
     fn project_changes_remove_prj_priority_with_crlf() {
-        let output = apply_project_changes(
+        let output = apply_changes(
             "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship [p:: 2] ^prj\r\n",
             &[ProjectChange::RemovePriority {
                 priority: "2".to_string(),
             }],
-        )
-        .expect("remove priority");
+        );
         assert_eq!(
             output,
             "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship ^prj\r\n"
@@ -2945,14 +3239,13 @@ status: wip
 
     #[test]
     fn project_changes_preserve_crlf_when_appending_status() {
-        let output = apply_project_changes(
+        let output = apply_changes(
             "---\r\ntype: [[project]]\r\n---\r\n- [x] #task Ship [p::2] ^prj\r\n",
             &[ProjectChange::Status {
                 from: "wip".to_string(),
                 to: TargetProjectStatus::Done,
             }],
-        )
-        .expect("append status");
+        );
         assert_eq!(
             output,
             "---\r\ntype: [[project]]\r\nstatus: done\r\n---\r\n- [x] #task Ship [p::2] ^prj\r\n"
@@ -2961,13 +3254,15 @@ status: wip
 
     #[test]
     fn project_changes_insert_subproject_links_after_prj_with_tab_indent() {
-        let output = apply_project_changes(
+        let desired = [open_subproject("Child")];
+        let output = apply_subproject_changes(
             "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n## Tasks\n",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Child".to_string(),
+                state: SubprojectState::Open,
             }],
-        )
-        .expect("add sub-project link");
+            &desired,
+        );
 
         assert_eq!(
             output,
@@ -2977,13 +3272,15 @@ status: wip
 
     #[test]
     fn project_changes_insert_subproject_line_above_user_bullets() {
-        let output = apply_project_changes(
+        let desired = [open_subproject("Beta")];
+        let output = apply_subproject_changes(
             "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n  - [[Alpha]]\n  - prose notes\n",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Beta".to_string(),
+                state: SubprojectState::Open,
             }],
-        )
-        .expect("add sub-project link");
+            &desired,
+        );
 
         assert_eq!(
             output,
@@ -2993,13 +3290,15 @@ status: wip
 
     #[test]
     fn project_changes_rewrite_subproject_line_in_place() {
-        let output = apply_project_changes(
+        let desired = [open_subproject("Alpha"), open_subproject("Beta")];
+        let output = apply_subproject_changes(
             "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- user notes\n  - 🧩 **Sub-projects:** [[Alpha]]\n",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Beta".to_string(),
+                state: SubprojectState::Open,
             }],
-        )
-        .expect("rewrite sub-project line");
+            &desired,
+        );
 
         assert_eq!(
             output,
@@ -3008,14 +3307,32 @@ status: wip
     }
 
     #[test]
-    fn project_changes_delete_subproject_line_when_last_child_closes() {
-        let output = apply_project_changes(
+    fn project_changes_mark_last_child_closed_and_keep_subproject_line() {
+        let desired = [done_subproject("OldChild")];
+        let output = apply_subproject_changes(
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n\t- user notes\n",
+            &[ProjectChange::MarkSubproject {
+                stem: "OldChild".to_string(),
+                state: SubprojectState::Done,
+            }],
+            &desired,
+        );
+
+        assert_eq!(
+            output,
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** ~~[[OldChild]]~~ ✅\n\t- user notes\n"
+        );
+    }
+
+    #[test]
+    fn project_changes_delete_subproject_line_for_stale_child() {
+        let output = apply_subproject_changes(
             "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n\t- user notes\n",
             &[ProjectChange::RemoveSubprojectLink {
                 stem: "OldChild".to_string(),
             }],
-        )
-        .expect("delete sub-project line");
+            &[],
+        );
 
         assert_eq!(
             output,
@@ -3025,11 +3342,12 @@ status: wip
 
     #[test]
     fn project_changes_clean_duplicate_subproject_marker_lines() {
-        let output = apply_project_changes(
+        let desired = [open_subproject("Alpha"), open_subproject("Beta")];
+        let output = apply_subproject_changes(
             "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Beta]] • [[Alpha]] extra\n\t- keep me\n\t- 🧩 **Sub-projects:** [[Alpha]]\n",
             &[ProjectChange::NormalizeSubprojects],
-        )
-        .expect("normalize sub-project line");
+            &desired,
+        );
 
         assert_eq!(
             output,
@@ -3039,13 +3357,15 @@ status: wip
 
     #[test]
     fn project_changes_preserve_crlf_for_subproject_link_insertions() {
-        let output = apply_project_changes(
+        let desired = [open_subproject("Child")];
+        let output = apply_subproject_changes(
             "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship [p::2] ^prj\r\n## Tasks\r\n",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Child".to_string(),
+                state: SubprojectState::Open,
             }],
-        )
-        .expect("add sub-project link");
+            &desired,
+        );
 
         assert_eq!(
             output,
@@ -3055,13 +3375,15 @@ status: wip
 
     #[test]
     fn project_changes_insert_subproject_links_after_final_prj_line() {
-        let output = apply_project_changes(
+        let desired = [open_subproject("Child")];
+        let output = apply_subproject_changes(
             "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Child".to_string(),
+                state: SubprojectState::Open,
             }],
-        )
-        .expect("add sub-project link");
+            &desired,
+        );
 
         assert_eq!(
             output,

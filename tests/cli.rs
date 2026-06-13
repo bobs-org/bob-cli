@@ -2009,7 +2009,7 @@ fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
                 "removed [p::2] from ^prj  no unprioritized open tasks or open sub-projects"
             )
             && out.contains(
-                "removed [[Child]] from ^prj  no longer an open sub-project"
+                "updated [[Child]] on ^prj  sub-project completed"
             )
             && out.contains(
                 "2 projects - 1 status updated - 2 ^prj edited - 0 warnings"
@@ -2018,7 +2018,7 @@ fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n\t- 🧩 **Sub-projects:** ~~[[Child]]~~ ✅\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("Child.md")).expect("read child"),
@@ -2040,6 +2040,173 @@ fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
         ),
         "second run should have zero actions:\n{}",
         format_output(&output)
+    );
+}
+
+#[test]
+fn projects_sync_marks_canceled_subproject_same_run() {
+    let temp = TempDir::new("bob-cli-projects-sync-canceled-subproject");
+    let vault = temp.path().join("vault");
+
+    write_file(
+        &vault.join("Parent.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
+    );
+    write_file(
+        &vault.join("Child.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [-] #task Stop child [p::2] ^prj\n",
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .output()
+        .expect("run bob projects sync");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("status: wip -> canceled")
+            && out.contains(
+                "removed [p::2] from ^prj  no unprioritized open tasks or open sub-projects"
+            )
+            && out
+                .contains("updated [[Child]] on ^prj  sub-project canceled")
+            && out.contains(
+                "2 projects - 1 status updated - 2 ^prj edited - 0 warnings"
+            ),
+        "unexpected sync output:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n\t- 🧩 **Sub-projects:** ~~[[Child]]~~ ❌\n"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Child.md")).expect("read child"),
+        "---\ntype: [[project]]\nstatus: canceled\nparent: [[Parent]]\n---\n- [-] #task Stop child [p::2] ^prj\n"
+    );
+}
+
+#[test]
+fn projects_sync_orders_open_then_closed_subprojects_in_one_run() {
+    let temp = TempDir::new("bob-cli-projects-sync-mixed-subprojects");
+    let vault = temp.path().join("vault");
+
+    write_file(
+        &vault.join("Parent.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[DoneChild]] • [[CanceledChild]] • [[ExistingOpen]]\n",
+    );
+    write_file(
+        &vault.join("ExistingOpen.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish existing [p::2] ^prj\n- [ ] #task Needs priority\n",
+    );
+    write_file(
+        &vault.join("AddedOpen.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish added [p::2] ^prj\n- [ ] #task Needs priority\n",
+    );
+    write_file(
+        &vault.join("DoneChild.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [x] #task Finish done [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("CanceledChild.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [-] #task Stop canceled [p::2] ^prj\n",
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .output()
+        .expect("run bob projects sync");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("added [[AddedOpen]] to ^prj  open sub-project")
+            && out.contains(
+                "updated [[DoneChild]] on ^prj  sub-project completed"
+            )
+            && out.contains(
+                "updated [[CanceledChild]] on ^prj  sub-project canceled"
+            )
+            && out.contains(
+                "5 projects - 2 status updated - 3 ^prj edited - 0 warnings"
+            ),
+        "unexpected sync output:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[AddedOpen]] • [[ExistingOpen]] • ~~[[CanceledChild]]~~ ❌ • ~~[[DoneChild]]~~ ✅\n"
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .output()
+        .expect("rerun bob projects sync");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains(
+            "5 projects - 0 status updated - 0 ^prj edited - 0 warnings"
+        ),
+        "second run should have zero actions:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn projects_sync_keeps_pruned_closed_entries_gone() {
+    let temp = TempDir::new("bob-cli-projects-sync-curated-subprojects");
+    let vault = temp.path().join("vault");
+
+    write_file(
+        &vault.join("Parent.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n\t- 🧩 **Sub-projects:** [[DeletedChild]] • [[ReparentedChild]] • ~~[[KeptDone]]~~ ✅\n",
+    );
+    write_file(
+        &vault.join("KeptDone.md"),
+        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish kept [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("PrunedDone.md"),
+        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish pruned [p::2] ^prj\n",
+    );
+    write_file(
+        &vault.join("ReparentedChild.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[OtherParent]]\n---\n- [ ] #task Finish reparented [p::2] ^prj\n- [ ] #task Needs priority\n",
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .output()
+        .expect("run bob projects sync");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "removed [[DeletedChild]] from ^prj  no longer a sub-project"
+        ) && out.contains(
+            "removed [[ReparentedChild]] from ^prj  no longer a sub-project"
+        ) && !out.contains("PrunedDone]]")
+            && out.contains(
+                "4 projects - 0 status updated - 2 ^prj edited - 0 warnings"
+            ),
+        "unexpected sync output:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n\t- 🧩 **Sub-projects:** ~~[[KeptDone]]~~ ✅\n"
     );
 }
 
@@ -2229,9 +2396,11 @@ fn projects_sync_subproject_line_dry_run_reports_without_writing() {
     assert!(
         out.contains("would add [[ChildAdd]] to ^prj  open sub-project")
             && out.contains(
-                "would remove [[OldChild]] from ^prj  no longer an open sub-project"
+                "would remove [[OldChild]] from ^prj  no longer a sub-project"
             )
-            && out.contains("would update sub-projects on ^prj  canonical format")
+            && out.contains(
+                "would update sub-projects on ^prj  canonical format"
+            )
             && out.contains(
                 "5 projects - 0 status updated - 3 ^prj edited - 0 warnings"
             ),

@@ -74,8 +74,12 @@ Task statuses follow the Tasks plugin convention:
   nested directly under `^prj`, such as
   `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`.
 - The marker-prefixed Sub-projects line is fully machine-owned and rewritten
-  into canonical form. Duplicate marker lines are removed, and the line is
-  deleted when there are no open sub-projects.
+  into canonical form. Duplicate marker lines are removed. The line is deleted
+  only when there are no open sub-projects and no tracked closed sub-projects
+  left to show.
+- Closed sub-projects already present on the generated line are retained as a
+  ledger: done children render as `~~[[child]]~~ ✅`, and canceled children
+  render as `~~[[child]]~~ ❌`.
 - Every other sub-bullet under `^prj` is user-owned, including bare wikilinks
   like `- [[scratch_note]]`; `sync` never removes or uses them to suppress the
   generated line.
@@ -90,13 +94,21 @@ therefore prioritized for sync purposes. The `^prj` task itself never counts
 toward the unprioritized task count.
 
 An open sub-project is another project note whose `parent` wikilink resolves to
-this note's file stem and whose own `^prj` task is open. Checked, canceled,
-missing, malformed, or multiple `^prj` child tasks do not keep the parent
-hidden.
+this note's file stem and whose own `^prj` task is open. Checked, canceled, or
+terminal-frontmatter child projects do not keep the parent hidden; missing,
+malformed, or multiple non-terminal `^prj` child tasks are excluded from the
+generated line.
 
 Generated sub-project links use the child note's file stem with its original
-casing and no path or alias. Links are sorted case-insensitively and separated
-with `•` on the single marker-prefixed line.
+casing and no path or alias. Open children are always shown first, sorted
+case-insensitively. Closed children that were already listed are shown after
+open children, also sorted case-insensitively. Links are separated with `•` on
+the single marker-prefixed line.
+
+Closed children are preserve-and-mark only: `sync` marks a terminal child if it
+is already on the generated line, but it does not resurrect older closed
+children that are not listed. Deleting a closed entry by hand prunes it
+permanently unless that child is reopened.
 
 In `bob projects list`, the `UNPRI` column is the open unprioritized task count.
 An open `^prj` task with a `p` field renders as `open`; an open `^prj` task
@@ -140,9 +152,11 @@ Typical action output:
   ok bob        removed [p::2] from ^prj  no unprioritized open tasks or open sub-projects
   ok athena     added [p::2] to ^prj  project has open sub-projects
   ok athena     added [[sase_blog]] to ^prj  open sub-project
-  ok athena     removed [[old_child]] from ^prj  no longer an open sub-project
+  ok athena     updated [[sase_blog]] on ^prj  sub-project completed
+  ok athena     updated [[old_plan]] on ^prj  sub-project canceled
+  ok athena     removed [[old_child]] from ^prj  no longer a sub-project
   ok athena     updated sub-projects on ^prj  canonical format
   warning outlive  active project has no ^prj task  add `- [ ] #task <completion criteria> [p::2] ^prj`
 
-11 projects - 1 status updated - 5 ^prj edited - 1 warnings
+11 projects - 1 status updated - 7 ^prj edited - 1 warnings
 ```

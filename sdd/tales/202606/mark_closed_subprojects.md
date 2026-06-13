@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-13 13:11:36
-status: wip
+status: done
 prompt: sdd/prompts/202606/mark_closed_subprojects.md
 ---
 # Plan: Mark closed sub-projects instead of removing them
