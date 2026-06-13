@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-13 06:58:54
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_alt_t_duplicate_tab.md
 ---
 # Obsidian Alt+T Duplicate-Tab Keymap
