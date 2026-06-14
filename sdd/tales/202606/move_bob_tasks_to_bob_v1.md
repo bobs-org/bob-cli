@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-14 08:33:06
-status: wip
+status: done
 prompt: sdd/prompts/202606/move_bob_tasks_to_bob_v1.md
 ---
 # Plan: Move bob.md Tasks into bob_v1.md
