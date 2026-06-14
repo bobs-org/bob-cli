@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-14 11:28:49
-status: wip
+status: done
 prompt: sdd/prompts/202606/task_dependency_block_ids.md
 ---
 # Use Block IDs for Generated Task Dependency IDs
