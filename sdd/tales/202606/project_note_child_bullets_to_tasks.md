@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-14 07:14:07
-status: wip
+status: done
 prompt: sdd/prompts/202606/project_note_child_bullets_to_tasks.md
 ---
 # Plan: Convert Promoted Task Child Bullets Into Project Tasks
