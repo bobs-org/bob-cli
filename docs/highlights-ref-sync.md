@@ -8,9 +8,10 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 
 ## MVP Status
 
-The MVP implements marker/frontmatter synchronization, Markdown sidecar parsing,
-generated note rendering, recursive library scan, prerequisite checks, output
-collision detection, dirty-target refusal, and atomic note writes.
+The MVP implements marker/frontmatter synchronization, Markdown/TextBundle
+sidecar parsing, generated note rendering, TextBundle image selection asset
+copying, recursive library scan, prerequisite checks, output collision
+detection, dirty-target refusal, and atomic note writes.
 
 `sync <pdf>` loads one PDF with native Rust code, treats the first standalone
 `/Text` annotation on page 1 as the marker note, parses the marker list,
@@ -271,14 +272,20 @@ change is the exact generated `^ref` checkbox toggle, optionally combined with
 frontmatter edits. There is no force mode in the MVP; commit, stash, or clean
 unrelated dirty files before rerunning.
 
+Image assets copied from TextBundle sidecars are treated as note-side writes.
+They are planned during dry runs, checked by the same dirty-target preflight
+when the destination already exists, and written only during non-dry-run syncs.
+Scan output includes image totals when a planned PDF contains image selections.
+
 Planning failures for one PDF do not stop valid plans from writing. Write-time
 failures such as a changed note/PDF or temporary save failure are reported as
 `write_failure` entries, and later valid PDFs continue. The scan summary reports
 `plan_failures`, `write_failures`, and `scan_failures`; any non-zero failure
 count makes the command exit non-zero even when other PDFs were processed.
 
-Reference note writes are atomic temporary-file renames and are skipped when the
-rendered note is byte-identical to the existing file.
+Reference note writes and image asset copies are atomic temporary-file renames
+and are skipped when the rendered note or content-addressed asset is
+byte-identical to the existing file.
 
 `bob highlights` does not run `ob sync` before or after writes. The existing
 `bob nightly` sync gate owns `ob sync` orchestration, while this command only
@@ -286,15 +293,21 @@ reports whether `ob` is available through `doctor`.
 
 ## Generated Body Contract
 
-Highlights, comments on highlights, and standalone non-marker notes sync one way
-from the PDF/sidecar into the reference note.
+Highlights, image selections, comments on annotations, and standalone
+non-marker notes sync one way from the PDF/sidecar into the reference note.
 
 For `foo.pdf`, sidecar discovery looks for `foo.md` first. If there is no
 Markdown sidecar, it recognizes `foo.textbundle` only when the bundle contains
 `text.md` or `text.markdown`; other TextBundle contents fail with an explicit
-unsupported-sidecar error. If no sidecar exists, `sync` still performs
-marker/frontmatter sync. For a new note it creates an empty managed region; for
-an existing note it preserves the existing managed region.
+unsupported-sidecar error. Image selections require the referenced asset file to
+exist relative to the sidecar text file's directory. This makes
+`foo.textbundle/text.md` resolve `![](assets/figure.png)` to
+`foo.textbundle/assets/figure.png`. Plain Markdown sidecars can still reference
+local image files, but Highlights' plain Markdown export does not include image
+assets; re-export as TextBundle when area selections should sync. If no sidecar
+exists, `sync` still performs marker/frontmatter sync. For a new note it creates
+an empty managed region; for an existing note it preserves the existing managed
+region.
 
 Two Markdown sidecar shapes are supported. The simple shape is:
 
@@ -305,6 +318,11 @@ Two Markdown sidecar shapes are supported. The simple shape is:
   leading `Comment:` or `Note:` label is stripped.
 - A standalone note is non-heading text outside a blockquote. A leading `Note:`
   label is stripped.
+- A Markdown image line such as `![alt](assets/figure.png)` outside a blockquote
+  is an image selection when the target has a supported image extension. Text
+  after the image is treated as its comment. Multiple images in one chunk render
+  as separate image annotations. Non-image targets such as PDFs remain ordinary
+  standalone note text.
 - The first standalone note in sidecar order is treated as the PDF marker mirror
   and is excluded from generated content.
 
@@ -324,6 +342,16 @@ Comment: Compare this with SLO notes.
 ---
 
 Note: Keep this standalone observation.
+```
+
+Image selection sidecar fragment:
+
+```md
+## Page 12
+
+![Latency figure](assets/figure.png)
+
+Comment: Compare this figure with the latency table on p.14.
 ```
 
 The linked-page Highlights export shape is also supported:
@@ -387,10 +415,11 @@ Existing notes must already contain the managed begin/end markers; otherwise
 `sync` fails instead of guessing where generated content belongs.
 
 Generated annotations render as Obsidian callouts. Highlight text uses a
-`[!quote]` callout; a highlight comment is nested inside that quote as a
-`[!note] Comment` callout so the annotation's trailing `^h-...` block ID still
-covers the quote and the comment together. Standalone non-marker notes render as
-`[!note]` callouts. Removed annotation tombstones render under
+`[!quote]` callout; a highlight or image comment is nested inside that quote as
+a `[!note] Comment` callout so the annotation's trailing `^h-...` block ID still
+covers the quote/image and the comment together. Image selections use
+`[!quote] Image` with a vault-relative Obsidian embed. Standalone non-marker
+notes render as `[!note]` callouts. Removed annotation tombstones render under
 `### Removed highlights` as `[!warning] Removed highlight` callouts.
 
 Example generated body:
@@ -408,6 +437,30 @@ Example generated body:
 
 ^h-8f42a61a90cc
 ```
+
+Image selections copy their asset into a per-note assets directory beside the
+reference note. For `ref/books/example.md`, the destination is
+`ref/books/example.assets/h-<id>.<ext>`, and the generated block embeds it with a
+vault-relative wikilink:
+
+```md
+### Page 12
+
+> [!quote] Image ![[ref/books/example.assets/h-2b91f0a4c7de.png]]
+>
+> > [!note] Comment Compare this figure with the latency table on p.14.
+
+^h-2b91f0a4c7de
+```
+
+Asset filenames and image block IDs are content-addressed from the source PDF
+path and image bytes, so re-exported or renamed TextBundle assets keep the same
+`^h-...` block and stored filename when the image bytes are unchanged. Existing
+matching assets are skipped; an existing destination with different bytes is a
+write failure instead of an overwrite. When an image selection is removed from
+the sidecar, the generated block is tombstoned like other removed annotations,
+but the copied asset file is left in place. Asset garbage collection is future
+work.
 
 Annotation text is beautified only while rendering the generated region:
 
@@ -518,15 +571,17 @@ properties such as `[completion::]`, `[cancelled::]`, `[due::]`, or edited
 priority fields. Completing or cancelling these annotation-created tasks does
 not update the PDF marker or reference-note reading status.
 
-Generated blocks use Obsidian block IDs beginning with `^h-`. The MVP ID is a
-deterministic content hash over source PDF path, page label, annotation kind,
-sidecar order on the page, and quote/note text. Highlight comments are not part
-of the hash, so editing only a comment updates the block without changing its
-ID. If a previously generated block disappears from the sidecar, the command
-keeps the old block ID under `### Removed highlights` with a tombstone message.
-Editing the highlight text itself mints a new block ID; a task created earlier
-keeps its original link, which then targets the tombstoned block under
-`### Removed highlights` — still a valid, resolvable jump.
+Generated blocks use Obsidian block IDs beginning with `^h-`. Text highlight
+and standalone-note IDs are deterministic content hashes over source PDF path,
+page label, annotation kind, sidecar order on the page, and quote/note text.
+Highlight comments are not part of the hash, so editing only a comment updates
+the block without changing its ID. Image IDs use the source PDF path plus image
+bytes instead, so asset renames and nearby annotation order changes do not churn
+the image block. If a previously generated block disappears from the sidecar,
+the command keeps the old block ID under `### Removed highlights` with a
+tombstone message. Editing text highlight content itself mints a new block ID; a
+task created earlier keeps its original link, which then targets the tombstoned
+block under `### Removed highlights` — still a valid, resolvable jump.
 
 ## MacBook Setup Guide
 
@@ -570,12 +625,15 @@ In Highlights Pro on the MacBook:
 
 - Keep PDFs that should sync under `~/bob/lib/<ref_type>/`, such as
   `~/bob/lib/books`.
-- Enable autosaved Markdown sidecars next to each PDF, so
-  `~/bob/lib/books/example.pdf` gets `~/bob/lib/books/example.md`.
-- Prefer Markdown sidecars over TextBundle for the MVP.
+- Enable autosaved sidecars next to each PDF. Plain Markdown creates
+  `~/bob/lib/books/example.md`; TextBundle creates
+  `~/bob/lib/books/example.textbundle/text.md`.
+- Use TextBundle export for PDFs where Highlights area/rectangle selections
+  should sync, because plain Markdown export does not include image assets.
 - Lock the Highlights Note Format to the sidecar contract above: page headings,
   `---` annotation separators, highlights as blockquote lines, highlight
-  comments as plain paragraphs, and standalone notes as plain paragraphs.
+  comments as plain paragraphs, standalone notes as plain paragraphs, and image
+  selections as Markdown image links.
 - Add exactly one marker note as the first standalone `/Text` PDF note
   annotation on page 1.
 - Put at least `status` and `parent` in that page-1 standalone note.
@@ -614,6 +672,9 @@ MacBook validation checklist:
 - The first real note write creates or updates `~/bob/ref/books/example.md`
   with `parent`, `type: "[[ref]]"`, `ref_type: books`, pipeline metadata,
   manual sections, and the managed Highlights region.
+- For a TextBundle image selection, the first real write also creates
+  `~/bob/ref/books/example.assets/h-<id>.<ext>` and embeds it from the generated
+  callout with a vault-relative wikilink.
 - A second run with unchanged inputs reports `writes: none`.
 - If frontmatter edits or a checked generated task require PDF marker
   write-back, a dry run reports `pdf_marker_action: would-update` before any
@@ -889,7 +950,9 @@ preflight failures remain hard global failures before writes.
 | `'ref_type' is command-managed` | The marker tries to set the path-derived reference type. | Remove `ref_type` from the marker; nested library paths derive it automatically. |
 | `invalid marker item on line` | A marker line is not `- key: value` or `* key: value`. | Rewrite the marker as a flat list. |
 | `duplicate marker key on line` | The marker repeats a normalized key. | Keep only one value for that key. |
-| `output path collision(s) detected before writes` | Multiple PDFs would write the same reference note path, such as `ref/books/example.md`. | Rename or move one PDF before scanning. |
+| `output path collision(s) detected before writes` | Multiple PDFs would write the same reference note path, such as `ref/books/example.md`, or the same planned image asset destination. | Rename or move one PDF before scanning. |
+| `image asset not found` | The sidecar references an image file that is not present relative to the sidecar text file. This usually means the PDF was exported as plain Markdown instead of TextBundle. | Re-export the sidecar as TextBundle so `assets/...` files are included. |
+| `image asset destination exists with different bytes` | A content-addressed `ref/.../*.assets/h-<id>.<ext>` destination already exists but its bytes do not match the source asset. | Inspect the existing asset, then remove or restore it before rerunning. |
 | `refusing to modify dirty vault files` | Git reports dirty touched paths outside the allowed frontmatter and generated-task checkbox write-back case. | Commit, stash, or clean those paths. |
 | `reference note changed but --write-pdf was not supplied` | Frontmatter or the generated task contributes `status: read` or `status: abandoned` to the selected projection, so the PDF marker needs an opt-in write. | Back up the PDF, then run targeted `sync --write-pdf` or reviewed bulk `scan --write-pdfs`. |
 | `checked PDF task conflicts` | The generated task says `status: read`, but marker or frontmatter changed `status` to another value from the stored base. | Uncheck the task or set the marker/frontmatter status to `read`. |
@@ -898,4 +961,4 @@ preflight failures remain hard global failures before writes.
 | `changed during sync; rerun` | The note or PDF changed after planning and before writing. | Rerun after closing or pausing apps that may touch the file. |
 | `scan completed with ... per-PDF failure(s)` | A recursive scan finished reporting or writing valid PDFs, but at least one PDF had a `plan_error` or `write_failure`. | Fix the named PDFs and rerun; review successful writes before assuming the scan wrote nothing. |
 | `existing reference note is missing the managed Highlights region` | An existing ref note lacks `<!-- highlights:begin -->` and `<!-- highlights:end -->`. | Add both markers around the generated section or move the note aside and regenerate. |
-| `unsupported textbundle sidecar` | The `.textbundle` has no `text.md` or `text.markdown`. | Switch Highlights to Markdown sidecars or add one of those files. |
+| `unsupported textbundle sidecar` | The `.textbundle` has no `text.md` or `text.markdown`. | Re-export a valid TextBundle or add one of those files. |

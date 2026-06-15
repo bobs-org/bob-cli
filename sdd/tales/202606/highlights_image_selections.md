@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-15 09:04:32
-status: wip
+status: done
 prompt: sdd/prompts/202606/highlights_image_selections.md
 ---
 # Highlights Image Selection Support Plan

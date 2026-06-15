@@ -334,8 +334,15 @@ struct SidecarAnnotation {
     text: String,
     comment: Option<String>,
     task_source: Option<String>,
+    image: Option<SidecarImage>,
     order: usize,
     ordinal_on_page: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SidecarImage {
+    target: String,
+    alt_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -347,6 +354,7 @@ struct SidecarPageHeading {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidecarAnnotationKind {
     Highlight,
+    Image,
     StandaloneNote,
 }
 
@@ -354,6 +362,26 @@ enum SidecarAnnotationKind {
 struct RenderedHighlights {
     content: String,
     count: usize,
+    image_count: usize,
+    image_assets: Vec<ImageAssetWrite>,
+    block_ids_by_annotation_order: BTreeMap<usize, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImageAssetWrite {
+    annotation_order: usize,
+    source_path: PathBuf,
+    dest_path: PathBuf,
+    vault_relative_dest_path: PathBuf,
+    source_sha256: String,
+    block_id: String,
+    action: ImageAssetAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageAssetAction {
+    Copy,
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -413,6 +441,7 @@ struct PdfSyncPlan {
     rendered_body: String,
     stable_rendered_note: String,
     stable_note_action: &'static str,
+    image_assets: Vec<ImageAssetWrite>,
     annotation_task_candidates: Vec<AnnotationTaskCandidate>,
     annotation_tasks_created: usize,
     annotation_tasks_skipped: usize,
@@ -425,6 +454,9 @@ struct PdfSyncPlan {
 struct SyncWriteReport {
     note_action: &'static str,
     marker_action: &'static str,
+    image_count: usize,
+    image_assets_written: usize,
+    image_assets_skipped: usize,
     routed_note_actions: usize,
     annotation_tasks_created: usize,
     annotation_tasks_skipped: usize,
@@ -630,6 +662,7 @@ fn scan_library(
             ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
+    validate_planned_asset_collisions(&plans)?;
     let plan_failures = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -852,6 +885,10 @@ fn plan_pdf_sync(
     let sidecar_path = sidecar.as_ref().map(|sidecar| sidecar.path.clone());
     let rendered_highlights_count =
         rendered_highlights.as_ref().map(|rendered| rendered.count);
+    let image_assets = rendered_highlights
+        .as_ref()
+        .map(|rendered| rendered.image_assets.clone())
+        .unwrap_or_default();
     let stable_metadata = pipeline_metadata(
         config,
         pdf,
@@ -868,7 +905,13 @@ fn plan_pdf_sync(
         rendered_highlights.as_ref(),
     )?;
     let annotation_task_candidates = if annotation_task_intake_allowed {
-        annotation_task_candidates(config, &note_path, pdf, sidecar.as_ref())?
+        annotation_task_candidates(
+            config,
+            &note_path,
+            pdf,
+            sidecar.as_ref(),
+            rendered_highlights.as_ref(),
+        )?
     } else {
         Vec::new()
     };
@@ -902,6 +945,7 @@ fn plan_pdf_sync(
         rendered_body,
         stable_rendered_note,
         stable_note_action,
+        image_assets,
         annotation_task_candidates,
         annotation_tasks_created: 0,
         annotation_tasks_skipped: 0,
@@ -1065,6 +1109,16 @@ fn execute_pdf_sync(
         )?;
     }
 
+    let mut image_assets_written = 0usize;
+    let mut image_assets_skipped = 0usize;
+    for write in &plan.image_assets {
+        if execute_image_asset_write(write)? {
+            image_assets_written += 1;
+        } else {
+            image_assets_skipped += 1;
+        }
+    }
+
     let refresh_synced_at =
         plan.stable_note_action != "none" && plan.rendered_highlights.is_some();
     let refresh_metadata = plan.marker_write_needed || refresh_synced_at;
@@ -1122,10 +1176,42 @@ fn execute_pdf_sync(
         } else {
             "none"
         },
+        image_count: plan
+            .rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.image_count)
+            .unwrap_or(0),
+        image_assets_written,
+        image_assets_skipped,
         routed_note_actions,
         annotation_tasks_created: plan.annotation_tasks_created,
         annotation_tasks_skipped: plan.annotation_tasks_skipped,
     })
+}
+
+fn execute_image_asset_write(write: &ImageAssetWrite) -> Result<bool> {
+    match fs::read(&write.dest_path) {
+        Ok(bytes) => {
+            let dest_sha256 = hex::encode(Sha256::digest(bytes));
+            if dest_sha256 == write.source_sha256 {
+                return Ok(false);
+            }
+            return Err(CommandError::new(format!(
+                "image asset destination exists with different bytes: {}",
+                write.dest_path.display()
+            )));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(CommandError::new(format!(
+                "read image asset destination {}: {error}",
+                write.dest_path.display()
+            )));
+        }
+    }
+
+    atomic_copy(&write.source_path, &write.dest_path)?;
+    Ok(true)
 }
 
 fn ensure_note_unchanged_for_write(plan: &PdfSyncPlan) -> Result<()> {
@@ -1232,6 +1318,12 @@ fn print_pdf_sync_report(
     if let Some(count) = plan.rendered_highlights_count {
         println!("highlights_count: {count}");
     }
+    if let Some(rendered) = &plan.rendered_highlights
+        && (rendered.image_count > 0 || !plan.image_assets.is_empty())
+    {
+        println!("images: {}", rendered.image_count);
+        println!("image_assets: {}", planned_image_asset_write_count(plan));
+    }
     println!("annotation_tasks_create: {}", plan.annotation_tasks_created);
     println!("annotation_tasks_skip: {}", plan.annotation_tasks_skipped);
     println!(
@@ -1243,6 +1335,11 @@ fn print_pdf_sync_report(
 fn print_sync_write_report(report: SyncWriteReport) {
     println!("note_action: {}", report.note_action);
     println!("pdf_marker_action: {}", report.marker_action);
+    if report.image_count > 0 || report.image_assets_written > 0 {
+        println!("images: {}", report.image_count);
+        println!("image_assets_written: {}", report.image_assets_written);
+        println!("image_assets_skipped: {}", report.image_assets_skipped);
+    }
     println!(
         "annotation_tasks_created: {}",
         report.annotation_tasks_created
@@ -1256,8 +1353,9 @@ fn print_sync_write_report(report: SyncWriteReport) {
 }
 
 fn write_summary(report: SyncWriteReport) -> &'static str {
-    let note_writes =
-        report.note_action != "none" || report.routed_note_actions > 0;
+    let note_writes = report.note_action != "none"
+        || report.routed_note_actions > 0
+        || report.image_assets_written > 0;
     match (note_writes, report.marker_action != "none") {
         (false, false) => "none",
         (false, true) => "pdf",
@@ -1270,6 +1368,13 @@ fn planned_routed_note_write_count(plan: &PdfSyncPlan) -> usize {
     plan.routed_task_note_writes
         .iter()
         .filter(|write| write.action != "none")
+        .count()
+}
+
+fn planned_image_asset_write_count(plan: &PdfSyncPlan) -> usize {
+    plan.image_assets
+        .iter()
+        .filter(|write| write.action == ImageAssetAction::Copy)
         .count()
 }
 
@@ -1465,6 +1570,7 @@ impl ScanLine {
             action: scan_change_action(
                 plan.stable_note_action,
                 plan.marker_write_needed,
+                planned_image_asset_write_count(plan),
                 planned_routed_note_write_count(plan),
                 true,
             ),
@@ -1481,6 +1587,7 @@ impl ScanLine {
             action: scan_change_action(
                 report.note_action,
                 report.marker_action != "none",
+                report.image_assets_written,
                 report.routed_note_actions,
                 false,
             ),
@@ -1557,6 +1664,7 @@ fn success_prefix_label(dry_run: bool) -> &'static str {
 fn scan_plan_changed(plan: &PdfSyncPlan) -> bool {
     plan.stable_note_action != "none"
         || plan.marker_write_needed
+        || planned_image_asset_write_count(plan) > 0
         || plan.annotation_tasks_created > 0
         || planned_routed_note_write_count(plan) > 0
 }
@@ -1564,6 +1672,7 @@ fn scan_plan_changed(plan: &PdfSyncPlan) -> bool {
 fn scan_report_changed(report: &SyncWriteReport) -> bool {
     report.note_action != "none"
         || report.marker_action != "none"
+        || report.image_assets_written > 0
         || report.annotation_tasks_created > 0
         || report.routed_note_actions > 0
 }
@@ -1571,12 +1680,20 @@ fn scan_report_changed(report: &SyncWriteReport) -> bool {
 fn scan_change_action(
     note_action: &str,
     marker_changed: bool,
+    image_asset_count: usize,
     routed_note_count: usize,
     dry_run: bool,
 ) -> String {
     let mut targets = Vec::new();
     if note_action != "none" {
         targets.push("note".to_string());
+    }
+    if image_asset_count > 0 {
+        targets.push(count_phrase(
+            image_asset_count,
+            "image asset",
+            "image assets",
+        ));
     }
     if routed_note_count > 0 {
         targets.push(
@@ -1609,6 +1726,11 @@ fn scan_details(
     if let Some(count) = plan.rendered_highlights_count {
         details.push(count_phrase(count, "highlight", "highlights"));
     }
+    if let Some(rendered) = &plan.rendered_highlights
+        && rendered.image_count > 0
+    {
+        details.push(count_phrase(rendered.image_count, "image", "images"));
+    }
     if annotation_tasks_created > 0 {
         details.push(format!(
             "+{}",
@@ -1633,6 +1755,8 @@ struct ScanCounts {
     updates: usize,
     unchanged: usize,
     marker_updates: usize,
+    images: usize,
+    image_assets: usize,
     annotation_tasks_created: usize,
     annotation_tasks_skipped: usize,
     routed_task_note_writes: usize,
@@ -1660,6 +1784,15 @@ impl ScanCounts {
                 .iter()
                 .filter(|plan| plan.marker_write_needed)
                 .count(),
+            images: plans
+                .iter()
+                .filter_map(|plan| plan.rendered_highlights.as_ref())
+                .map(|rendered| rendered.image_count)
+                .sum(),
+            image_assets: plans
+                .iter()
+                .map(|plan| planned_image_asset_write_count(plan))
+                .sum(),
             annotation_tasks_created: plans
                 .iter()
                 .map(|plan| plan.annotation_tasks_created)
@@ -1696,6 +1829,11 @@ impl ScanCounts {
                 .iter()
                 .filter(|report| report.marker_action != "none")
                 .count(),
+            images: reports.iter().map(|report| report.image_count).sum(),
+            image_assets: reports
+                .iter()
+                .map(|report| report.image_assets_written)
+                .sum(),
             annotation_tasks_created: reports
                 .iter()
                 .map(|report| report.annotation_tasks_created)
@@ -1732,6 +1870,18 @@ fn scan_summary_line(
         marker_noun = plural(counts.marker_updates, "marker", "markers"),
         task_noun = plural(counts.annotation_tasks_created, "task", "tasks"),
     );
+    if counts.images > 0 {
+        summary.push_str(&format!(
+            " {separator} {}",
+            count_phrase(counts.images, "image", "images")
+        ));
+    }
+    if counts.image_assets > 0 {
+        summary.push_str(&format!(
+            " {separator} {}",
+            count_phrase(counts.image_assets, "image asset", "image assets")
+        ));
+    }
     if failure_count > 0 {
         summary.push_str(&format!(
             " {separator} {}",
@@ -1744,7 +1894,9 @@ fn scan_summary_line(
 
 fn write_summary_from_reports(reports: &[SyncWriteReport]) -> &'static str {
     let note_writes = reports.iter().any(|report| {
-        report.note_action != "none" || report.routed_note_actions > 0
+        report.note_action != "none"
+            || report.routed_note_actions > 0
+            || report.image_assets_written > 0
     });
     let marker_writes =
         reports.iter().any(|report| report.marker_action != "none");
@@ -1805,6 +1957,12 @@ fn print_scan_plan_entry(plan: &PdfSyncPlan) {
     if let Some(count) = plan.rendered_highlights_count {
         println!("  highlights_count: {count}");
     }
+    if let Some(rendered) = &plan.rendered_highlights
+        && (rendered.image_count > 0 || !plan.image_assets.is_empty())
+    {
+        println!("  images: {}", rendered.image_count);
+        println!("  image_assets: {}", planned_image_asset_write_count(plan));
+    }
     println!(
         "  annotation_tasks_create: {}",
         plan.annotation_tasks_created
@@ -1832,6 +1990,10 @@ fn print_scan_plan_summary(plans: &[&PdfSyncPlan], plan_failure_count: usize) {
     println!("  notes_create: {}", counts.creates);
     println!("  notes_update: {}", counts.updates);
     println!("  notes_unchanged: {}", counts.unchanged);
+    if counts.images > 0 || counts.image_assets > 0 {
+        println!("  images: {}", counts.images);
+        println!("  image_assets: {}", counts.image_assets);
+    }
     println!(
         "  annotation_tasks_create: {}",
         counts.annotation_tasks_created
@@ -1863,6 +2025,10 @@ fn print_scan_write_summary(
     println!("  notes_created: {}", counts.creates);
     println!("  notes_updated: {}", counts.updates);
     println!("  notes_unchanged: {}", counts.unchanged);
+    if counts.images > 0 || counts.image_assets > 0 {
+        println!("  images: {}", counts.images);
+        println!("  image_assets_written: {}", counts.image_assets);
+    }
     println!(
         "  annotation_tasks_created: {}",
         counts.annotation_tasks_created
@@ -1995,7 +2161,7 @@ fn doctor_vault(config: &Config) -> Result<()> {
     println!("sidecars_missing: {}", missing_sidecars.len());
     if !missing_sidecars.is_empty() {
         warnings.push(format!(
-            "{} PDF(s) do not have a Highlights Markdown sidecar",
+            "{} PDF(s) do not have a Highlights sidecar",
             missing_sidecars.len()
         ));
     }
@@ -2168,6 +2334,43 @@ fn validate_output_collisions(config: &Config, pdfs: &[PathBuf]) -> Result<()> {
     Err(CommandError::new(message))
 }
 
+fn validate_planned_asset_collisions(plans: &[&PdfSyncPlan]) -> Result<()> {
+    let mut by_asset_path: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    for plan in plans {
+        for asset in &plan.image_assets {
+            by_asset_path
+                .entry(asset.dest_path.clone())
+                .or_default()
+                .push(plan.pdf.clone());
+        }
+    }
+
+    let collisions = by_asset_path
+        .into_iter()
+        .filter(|(_, pdfs)| pdfs.len() > 1)
+        .collect::<Vec<_>>();
+    if collisions.is_empty() {
+        return Ok(());
+    }
+
+    let mut message =
+        String::from("output path collision(s) detected before writes:");
+    for (asset_path, pdfs) in collisions {
+        message.push('\n');
+        message.push_str("  ");
+        message.push_str(&asset_path.display().to_string());
+        message.push_str(" <= ");
+        message.push_str(
+            &pdfs
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    Err(CommandError::new(message))
+}
+
 fn validate_note_target(path: &Path) -> Result<()> {
     if path.is_dir() {
         return Err(CommandError::new(format!(
@@ -2192,6 +2395,9 @@ where
             if write.action != "none" {
                 touched_paths.insert(write.path.clone());
             }
+        }
+        for write in &plan.image_assets {
+            touched_paths.insert(write.dest_path.clone());
         }
         if plan.marker_write_needed {
             touched_paths.insert(plan.pdf.clone());
@@ -2615,7 +2821,7 @@ fn flush_sidecar_chunk(
     order: &mut usize,
     page_ordinals: &mut BTreeMap<String, usize>,
 ) {
-    if let Some(mut annotation) =
+    for mut annotation in
         parse_sidecar_chunk(chunk, page_label, linked_page_style)
     {
         *order += 1;
@@ -2633,10 +2839,10 @@ fn parse_sidecar_chunk(
     chunk: &[String],
     page_label: Option<&str>,
     linked_page_style: bool,
-) -> Option<SidecarAnnotation> {
+) -> Vec<SidecarAnnotation> {
     let lines = trim_blank_lines(chunk);
     if lines.is_empty() || lines.iter().all(|line| is_markdown_heading(line)) {
-        return None;
+        return Vec::new();
     }
 
     if let Some(blockquote_index) = lines
@@ -2676,7 +2882,7 @@ fn parse_sidecar_chunk(
 
         let text = normalize_annotation_text(&quote_lines);
         if text.is_empty() {
-            return None;
+            return Vec::new();
         }
         let comment_lines = lines[index..]
             .iter()
@@ -2686,7 +2892,7 @@ fn parse_sidecar_chunk(
         let comment_source = normalize_annotation_text(&comment_lines);
         let comment = strip_comment_label(&comment_source);
 
-        return Some(SidecarAnnotation {
+        return vec![SidecarAnnotation {
             kind: SidecarAnnotationKind::Highlight,
             page_label: page_label.map(str::to_string),
             linked_page_style,
@@ -2694,27 +2900,365 @@ fn parse_sidecar_chunk(
             comment: (!comment.is_empty()).then_some(comment),
             task_source: (!comment_source.is_empty())
                 .then(|| strip_comment_label_only(&comment_source)),
+            image: None,
             order: 0,
             ordinal_on_page: 0,
-        });
+        }];
     }
 
-    let note_lines = lines
+    let non_heading_lines = lines
         .iter()
         .filter(|line| !is_markdown_heading(line))
+        .cloned()
+        .collect::<Vec<_>>();
+    let image_annotations = parse_image_sidecar_annotations(
+        &non_heading_lines,
+        page_label,
+        linked_page_style,
+    );
+    if !image_annotations.is_empty() {
+        return image_annotations;
+    }
+
+    let note_lines = non_heading_lines
+        .iter()
         .map(|line| strip_standalone_note_marker(line))
         .collect::<Vec<_>>();
     let text = normalize_annotation_text(&note_lines);
-    (!text.is_empty()).then(|| SidecarAnnotation {
-        kind: SidecarAnnotationKind::StandaloneNote,
-        page_label: page_label.map(str::to_string),
-        linked_page_style,
-        text,
-        comment: None,
-        task_source: None,
-        order: 0,
-        ordinal_on_page: 0,
-    })
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![SidecarAnnotation {
+            kind: SidecarAnnotationKind::StandaloneNote,
+            page_label: page_label.map(str::to_string),
+            linked_page_style,
+            text,
+            comment: None,
+            task_source: None,
+            image: None,
+            order: 0,
+            ordinal_on_page: 0,
+        }]
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MarkdownImage {
+    target: String,
+    alt_text: Option<String>,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingImageAnnotation {
+    image: SidecarImage,
+    comment_lines: Vec<String>,
+}
+
+fn parse_image_sidecar_annotations(
+    lines: &[String],
+    page_label: Option<&str>,
+    linked_page_style: bool,
+) -> Vec<SidecarAnnotation> {
+    let mut images = Vec::<PendingImageAnnotation>::new();
+    let mut prefix_comment_lines = Vec::<String>::new();
+
+    for line in lines {
+        let markdown_images = markdown_images_in_line(line);
+        if markdown_images.is_empty() {
+            push_image_comment_line(
+                &mut images,
+                &mut prefix_comment_lines,
+                strip_standalone_note_marker(line),
+            );
+            continue;
+        }
+
+        let mut cursor = 0usize;
+        for markdown_image in markdown_images {
+            let before = line[cursor..markdown_image.start].trim();
+            if !before.is_empty() {
+                push_image_comment_line(
+                    &mut images,
+                    &mut prefix_comment_lines,
+                    strip_standalone_note_marker(before),
+                );
+            }
+
+            let mut pending = PendingImageAnnotation {
+                image: SidecarImage {
+                    target: markdown_image.target,
+                    alt_text: markdown_image.alt_text,
+                },
+                comment_lines: Vec::new(),
+            };
+            if images.is_empty() && !prefix_comment_lines.is_empty() {
+                pending.comment_lines.append(&mut prefix_comment_lines);
+            }
+            images.push(pending);
+            cursor = markdown_image.end;
+        }
+
+        let after = line[cursor..].trim();
+        if !after.is_empty() {
+            push_image_comment_line(
+                &mut images,
+                &mut prefix_comment_lines,
+                strip_standalone_note_marker(after),
+            );
+        }
+    }
+
+    images
+        .into_iter()
+        .filter_map(|pending| {
+            let comment_source =
+                normalize_annotation_text(&pending.comment_lines);
+            let comment = strip_comment_label(&comment_source);
+            let text = pending
+                .image
+                .alt_text
+                .clone()
+                .unwrap_or_else(|| pending.image.target.clone());
+            (!pending.image.target.is_empty()).then(|| SidecarAnnotation {
+                kind: SidecarAnnotationKind::Image,
+                page_label: page_label.map(str::to_string),
+                linked_page_style,
+                text,
+                comment: (!comment.is_empty()).then_some(comment),
+                task_source: (!comment_source.is_empty())
+                    .then(|| strip_comment_label_only(&comment_source)),
+                image: Some(pending.image),
+                order: 0,
+                ordinal_on_page: 0,
+            })
+        })
+        .collect()
+}
+
+fn push_image_comment_line(
+    images: &mut [PendingImageAnnotation],
+    prefix_comment_lines: &mut Vec<String>,
+    line: String,
+) {
+    if let Some(image) = images.last_mut() {
+        image.comment_lines.push(line);
+    } else {
+        prefix_comment_lines.push(line);
+    }
+}
+
+fn markdown_images_in_line(line: &str) -> Vec<MarkdownImage> {
+    let mut images = Vec::new();
+    let mut search_start = 0usize;
+    while let Some(relative_start) = line[search_start..].find("![") {
+        let start = search_start + relative_start;
+        let alt_start = start + 2;
+        let Some(label_end_relative) = line[alt_start..].find("](") else {
+            break;
+        };
+        let label_end = alt_start + label_end_relative;
+        let target_start = label_end + 2;
+        let Some(target_end_relative) = line[target_start..].find(')') else {
+            break;
+        };
+        let target_end = target_start + target_end_relative;
+        let end = target_end + 1;
+        if let Some(target) =
+            markdown_image_target(&line[target_start..target_end])
+        {
+            let alt = line[alt_start..label_end].trim();
+            images.push(MarkdownImage {
+                target,
+                alt_text: (!alt.is_empty()).then(|| alt.to_string()),
+                start,
+                end,
+            });
+        }
+        search_start = end;
+    }
+    images
+}
+
+fn markdown_image_target(destination: &str) -> Option<String> {
+    let trimmed = destination.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let target = if let Some(rest) = trimmed.strip_prefix('<') {
+        let end = rest.find('>')?;
+        &rest[..end]
+    } else if image_target_has_supported_extension(trimmed) {
+        trimmed
+    } else {
+        trimmed.split_whitespace().next()?
+    };
+
+    image_target_has_supported_extension(target)
+        .then(|| target.trim().to_string())
+}
+
+fn image_target_has_supported_extension(target: &str) -> bool {
+    let clean_target = target.split(['?', '#']).next().unwrap_or(target).trim();
+    let extension = Path::new(clean_target)
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase);
+    matches!(
+        extension.as_deref(),
+        Some(
+            "png"
+                | "jpg"
+                | "jpeg"
+                | "gif"
+                | "webp"
+                | "bmp"
+                | "svg"
+                | "avif"
+                | "heic"
+        )
+    )
+}
+
+fn resolve_sidecar_image_assets(
+    config: &Config,
+    pdf: &Path,
+    ref_note_path: &Path,
+    sidecar: &SidecarInput,
+) -> Result<BTreeMap<usize, ImageAssetWrite>> {
+    let mut assets = BTreeMap::new();
+    for annotation in &sidecar.annotations {
+        if annotation.kind != SidecarAnnotationKind::Image {
+            continue;
+        }
+        let image = annotation.image.as_ref().ok_or_else(|| {
+            CommandError::new("image annotation is missing image metadata")
+        })?;
+        let source_path =
+            sidecar_image_source_path(&sidecar.path, &image.target)?;
+        let source_bytes = fs::read(&source_path).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                CommandError::new(format!(
+                    "image asset not found: {} - export the sidecar as a TextBundle so images are included",
+                    image.target
+                ))
+            } else {
+                CommandError::new(format!(
+                    "read image asset {}: {error}",
+                    source_path.display()
+                ))
+            }
+        })?;
+        let source_sha256 = hex::encode(Sha256::digest(&source_bytes));
+        let block_id = image_annotation_block_id(config, pdf, &source_sha256);
+        let extension =
+            image_target_extension(&image.target).ok_or_else(|| {
+                CommandError::new(format!(
+                    "image asset target has no supported extension: {}",
+                    image.target
+                ))
+            })?;
+        let dest_path =
+            image_asset_dest_path(ref_note_path, &block_id, &extension)?;
+        let action = image_asset_action(&dest_path, &source_sha256)?;
+        assets.insert(
+            annotation.order,
+            ImageAssetWrite {
+                annotation_order: annotation.order,
+                source_path,
+                dest_path: dest_path.clone(),
+                vault_relative_dest_path: PathBuf::from(
+                    vault_relative_path_value(config, &dest_path),
+                ),
+                source_sha256,
+                block_id,
+                action,
+            },
+        );
+    }
+    Ok(assets)
+}
+
+fn sidecar_image_source_path(
+    sidecar_path: &Path,
+    target: &str,
+) -> Result<PathBuf> {
+    let filesystem_target =
+        target.split(['?', '#']).next().unwrap_or(target).trim();
+    let target_path = Path::new(filesystem_target);
+    if target_path.is_absolute()
+        || target_path.components().any(|component| {
+            matches!(component, Component::Prefix(_) | Component::ParentDir)
+        })
+    {
+        return Err(CommandError::new(format!(
+            "image asset target must be relative to the sidecar: {target}"
+        )));
+    }
+    let sidecar_dir = sidecar_path.parent().ok_or_else(|| {
+        CommandError::new(format!(
+            "sidecar has no parent directory: {}",
+            sidecar_path.display()
+        ))
+    })?;
+    Ok(sidecar_dir.join(target_path))
+}
+
+fn image_target_extension(target: &str) -> Option<String> {
+    let clean_target = target.split(['?', '#']).next().unwrap_or(target).trim();
+    Path::new(clean_target)
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .filter(|extension| {
+            image_target_has_supported_extension(&format!("x.{extension}"))
+        })
+}
+
+fn image_asset_dest_path(
+    ref_note_path: &Path,
+    block_id: &str,
+    extension: &str,
+) -> Result<PathBuf> {
+    let assets_dir = ref_note_assets_dir(ref_note_path)?;
+    Ok(assets_dir.join(format!("{block_id}.{extension}")))
+}
+
+fn ref_note_assets_dir(ref_note_path: &Path) -> Result<PathBuf> {
+    let stem = ref_note_path.file_stem().ok_or_else(|| {
+        CommandError::new(format!(
+            "reference note path has no file stem: {}",
+            ref_note_path.display()
+        ))
+    })?;
+    let mut dir_name = OsString::from(stem);
+    dir_name.push(".assets");
+    Ok(ref_note_path.with_file_name(dir_name))
+}
+
+fn image_asset_action(
+    dest_path: &Path,
+    source_sha256: &str,
+) -> Result<ImageAssetAction> {
+    match fs::read(dest_path) {
+        Ok(bytes) => {
+            let dest_sha256 = hex::encode(Sha256::digest(bytes));
+            if dest_sha256 == source_sha256 {
+                Ok(ImageAssetAction::None)
+            } else {
+                Ok(ImageAssetAction::Copy)
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(ImageAssetAction::Copy)
+        }
+        Err(error) => Err(CommandError::new(format!(
+            "read image asset destination {}: {error}",
+            dest_path.display()
+        ))),
+    }
 }
 
 fn render_sidecar_highlights(
@@ -2725,10 +3269,22 @@ fn render_sidecar_highlights(
     sidecar: &SidecarInput,
 ) -> Result<RenderedHighlights> {
     let existing_ids = note.generated_block_ids()?;
+    let image_assets_by_order =
+        resolve_sidecar_image_assets(config, pdf, ref_note_path, sidecar)?;
+    let mut image_asset_writes_by_dest =
+        BTreeMap::<PathBuf, ImageAssetWrite>::new();
     let mut current_ids = BTreeSet::new();
+    let mut block_ids_by_annotation_order = BTreeMap::new();
     let mut rendered = String::new();
     let mut current_page = None;
     let mut skipped_marker_note = false;
+    let mut image_count = 0usize;
+
+    for image_asset in image_assets_by_order.values() {
+        image_asset_writes_by_dest
+            .entry(image_asset.dest_path.clone())
+            .or_insert_with(|| image_asset.clone());
+    }
 
     for annotation in &sidecar.annotations {
         if !skipped_marker_note && is_sidecar_marker_mirror(annotation) {
@@ -2736,8 +3292,26 @@ fn render_sidecar_highlights(
             continue;
         }
 
-        let block_id = annotation_block_id(config, pdf, annotation);
-        current_ids.insert(block_id.clone());
+        let image_asset = image_assets_by_order.get(&annotation.order);
+        let block_id = match annotation.kind {
+            SidecarAnnotationKind::Image => {
+                image_asset.map(|asset| asset.block_id.clone()).ok_or_else(
+                    || CommandError::new("image annotation was not resolved"),
+                )?
+            }
+            SidecarAnnotationKind::Highlight
+            | SidecarAnnotationKind::StandaloneNote => {
+                annotation_block_id(config, pdf, annotation)
+            }
+        };
+        block_ids_by_annotation_order
+            .insert(annotation.order, block_id.clone());
+        if !current_ids.insert(block_id.clone()) {
+            continue;
+        }
+        if annotation.kind == SidecarAnnotationKind::Image {
+            image_count += 1;
+        }
 
         if annotation.page_label != current_page {
             if let Some(page_label) = &annotation.page_label {
@@ -2756,6 +3330,7 @@ fn render_sidecar_highlights(
             ref_note_path,
             annotation,
             &block_id,
+            image_asset,
         ));
     }
 
@@ -2786,6 +3361,9 @@ fn render_sidecar_highlights(
     Ok(RenderedHighlights {
         content: rendered,
         count: current_ids.len(),
+        image_count,
+        image_assets: image_asset_writes_by_dest.into_values().collect(),
+        block_ids_by_annotation_order,
     })
 }
 
@@ -2794,6 +3372,7 @@ fn annotation_block_id(
     pdf: &Path,
     annotation: &SidecarAnnotation,
 ) -> String {
+    debug_assert_ne!(annotation.kind, SidecarAnnotationKind::Image);
     let mut hasher = Sha256::new();
     hasher.update(source_pdf_value(config, pdf));
     hasher.update([0]);
@@ -2808,31 +3387,44 @@ fn annotation_block_id(
     format!("h-{}", &digest[..12])
 }
 
+fn image_annotation_block_id(
+    config: &Config,
+    pdf: &Path,
+    image_sha256: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source_pdf_value(config, pdf));
+    hasher.update([0]);
+    hasher.update(SidecarAnnotationKind::Image.as_str());
+    hasher.update([0]);
+    hasher.update(image_sha256);
+    let digest = hex::encode(hasher.finalize());
+    format!("h-{}", &digest[..12])
+}
+
 fn render_annotation_block(
-    _config: &Config,
-    _ref_note_path: &Path,
+    config: &Config,
+    ref_note_path: &Path,
     annotation: &SidecarAnnotation,
     block_id: &str,
+    image_asset: Option<&ImageAssetWrite>,
 ) -> String {
     let mut rendered = String::new();
     match annotation.kind {
         SidecarAnnotationKind::Highlight => {
             let text = beautify_annotation_text(&annotation.text);
             push_callout_block(&mut rendered, 1, "[!quote]", &text);
-            if let Some(comment) = &annotation.comment {
-                let comment_source =
-                    annotation.task_source.as_deref().unwrap_or(comment);
-                let comment = strip_comment_label(&beautify_annotation_text(
-                    comment_source,
-                ));
-                rendered.push_str(">\n");
-                push_callout_block(
-                    &mut rendered,
-                    2,
-                    "[!note] Comment",
-                    &comment,
-                );
-            }
+            push_annotation_comment_callout(&mut rendered, annotation);
+        }
+        SidecarAnnotationKind::Image => {
+            let embed_path = image_asset
+                .map(|asset| display_path(&asset.vault_relative_dest_path))
+                .unwrap_or_else(|| {
+                    vault_relative_note_link(config, ref_note_path)
+                });
+            let embed = format!("![[{embed_path}]]");
+            push_callout_block(&mut rendered, 1, "[!quote] Image", &embed);
+            push_annotation_comment_callout(&mut rendered, annotation);
         }
         SidecarAnnotationKind::StandaloneNote => {
             let text = beautify_annotation_text(&annotation.text);
@@ -2844,6 +3436,20 @@ fn render_annotation_block(
     rendered.push_str(block_id);
     rendered.push_str("\n\n");
     rendered
+}
+
+fn push_annotation_comment_callout(
+    rendered: &mut String,
+    annotation: &SidecarAnnotation,
+) {
+    if let Some(comment) = &annotation.comment {
+        let comment_source =
+            annotation.task_source.as_deref().unwrap_or(comment);
+        let comment =
+            strip_comment_label(&beautify_annotation_text(comment_source));
+        rendered.push_str(">\n");
+        push_callout_block(rendered, 2, "[!note] Comment", &comment);
+    }
 }
 
 fn push_callout_block(
@@ -2901,6 +3507,7 @@ impl SidecarAnnotationKind {
     fn as_str(self) -> &'static str {
         match self {
             SidecarAnnotationKind::Highlight => "highlight",
+            SidecarAnnotationKind::Image => "image",
             SidecarAnnotationKind::StandaloneNote => "note",
         }
     }
@@ -3319,6 +3926,7 @@ fn annotation_task_candidates(
     ref_note_path: &Path,
     pdf: &Path,
     sidecar: Option<&SidecarInput>,
+    rendered_highlights: Option<&RenderedHighlights>,
 ) -> Result<Vec<AnnotationTaskCandidate>> {
     let Some(sidecar) = sidecar else {
         return Ok(Vec::new());
@@ -3343,6 +3951,28 @@ fn annotation_task_candidates(
                     ref_note_path,
                     source,
                     &block_id,
+                )?);
+            }
+            SidecarAnnotationKind::Image => {
+                let Some(source) = annotation.task_source.as_deref() else {
+                    continue;
+                };
+                let block_id = rendered_highlights
+                    .and_then(|rendered| {
+                        rendered
+                            .block_ids_by_annotation_order
+                            .get(&annotation.order)
+                    })
+                    .ok_or_else(|| {
+                        CommandError::new(
+                            "image annotation task source was not rendered",
+                        )
+                    })?;
+                candidates.extend(annotation_task_candidates_from_text(
+                    config,
+                    ref_note_path,
+                    source,
+                    block_id,
                 )?);
             }
             SidecarAnnotationKind::StandaloneNote => {
@@ -6145,6 +6775,37 @@ fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     })
 }
 
+fn atomic_copy(source: &Path, dest: &Path) -> Result<()> {
+    if let Some(parent) = dest.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            CommandError::new(format!(
+                "create parent directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    let temp_path = temporary_write_path(dest)?;
+    let _ = fs::remove_file(&temp_path);
+    fs::copy(source, &temp_path).map_err(|error| {
+        CommandError::new(format!(
+            "copy image asset {} to temporary file {}: {error}",
+            source.display(),
+            temp_path.display()
+        ))
+    })?;
+    fs::rename(&temp_path, dest).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
+        CommandError::new(format!(
+            "install image asset {}: {error}",
+            dest.display()
+        ))
+    })?;
+    Ok(())
+}
+
 fn temporary_write_path(path: &Path) -> Result<PathBuf> {
     let file_name = path.file_name().ok_or_else(|| {
         CommandError::new(format!("path has no file name: {}", path.display()))
@@ -6671,6 +7332,7 @@ Note:
             ref_note,
             pdf,
             Some(&sidecar),
+            None,
         )
         .expect("extract annotation task candidates");
 
@@ -6700,6 +7362,226 @@ Note:
         assert_eq!(candidates[1].source_block_id, note_block_id);
         assert_eq!(candidates[2].source_block_id, note_block_id);
         assert_ne!(highlight_block_id, note_block_id);
+    }
+
+    #[test]
+    fn sidecar_parser_extracts_image_annotations_and_leaves_non_images_as_notes(
+    ) {
+        let annotations = parse_sidecar_markdown(
+            "\
+## Page 7
+
+![Figure 1](assets/figure.png)
+
+Comment: Compare this figure with the appendix.
+- #task Follow up on the figure.
+
+---
+
+![Diagram](assets/one.svg)
+![Table](assets/two.webp)
+
+---
+
+![Not an image](assets/paper.pdf)
+",
+        );
+
+        assert_eq!(annotations.len(), 4);
+        assert_eq!(annotations[0].kind, SidecarAnnotationKind::Image);
+        assert_eq!(
+            annotations[0]
+                .image
+                .as_ref()
+                .map(|image| image.target.as_str()),
+            Some("assets/figure.png")
+        );
+        assert_eq!(
+            annotations[0]
+                .image
+                .as_ref()
+                .and_then(|image| image.alt_text.as_deref()),
+            Some("Figure 1")
+        );
+        assert_eq!(
+            annotations[0].comment.as_deref(),
+            Some(
+                "Compare this figure with the appendix.\n- #task Follow up on the figure."
+            )
+        );
+        assert_eq!(annotations[1].kind, SidecarAnnotationKind::Image);
+        assert_eq!(annotations[2].kind, SidecarAnnotationKind::Image);
+        assert_eq!(annotations[3].kind, SidecarAnnotationKind::StandaloneNote);
+        assert_eq!(annotations[3].text, "![Not an image](assets/paper.pdf)");
+    }
+
+    #[test]
+    fn render_sidecar_highlights_renders_image_assets_and_tasks() {
+        let bob_dir = temp_bob_dir("image-render");
+        let sidecar_path = bob_dir.join("lib/books/figures.textbundle/text.md");
+        let asset_path =
+            bob_dir.join("lib/books/figures.textbundle/assets/figure.png");
+        write_test_file(&asset_path, "synthetic image bytes");
+        let annotations = parse_sidecar_markdown(
+            "\
+## Page 4
+
+Note: marker note mirrored from the PDF
+
+---
+
+![Figure](assets/figure.png)
+
+Comment: Compare this figure.
+- #task Revisit this figure.
+",
+        );
+        let sidecar = super::SidecarInput {
+            path: sidecar_path,
+            annotations,
+        };
+        let config = test_config_for_bob_dir(bob_dir.clone());
+        let pdf = bob_dir.join("lib/books/figures.pdf");
+        let ref_note = bob_dir.join("ref/books/figures.md");
+        let note = super::ParsedNote::empty();
+
+        let rendered = super::render_sidecar_highlights(
+            &config, &pdf, &ref_note, &note, &sidecar,
+        )
+        .expect("render image selection");
+
+        assert_eq!(rendered.count, 1);
+        assert_eq!(rendered.image_count, 1);
+        assert_eq!(rendered.image_assets.len(), 1);
+        let image_asset = &rendered.image_assets[0];
+        assert_eq!(image_asset.action, super::ImageAssetAction::Copy);
+        assert_eq!(image_asset.source_path, asset_path);
+        assert_eq!(
+            image_asset.vault_relative_dest_path.parent(),
+            Some(Path::new("ref/books/figures.assets"))
+        );
+        assert!(
+            rendered.content.contains(&format!(
+                "> [!quote] Image ![[{}]]\n",
+                super::display_path(&image_asset.vault_relative_dest_path)
+            )),
+            "{}",
+            rendered.content
+        );
+        assert!(
+            rendered
+                .content
+                .contains("> > [!note] Comment Compare this figure."),
+            "{}",
+            rendered.content
+        );
+        assert!(
+            rendered
+                .content
+                .contains(&format!("^{}\n", image_asset.block_id)),
+            "{}",
+            rendered.content
+        );
+
+        let candidates = super::annotation_task_candidates(
+            &config,
+            &ref_note,
+            &pdf,
+            Some(&sidecar),
+            Some(&rendered),
+        )
+        .expect("extract image comment task");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].task_text, "#task Revisit this figure.");
+        assert_eq!(candidates[0].source_block_id, image_asset.block_id);
+    }
+
+    #[test]
+    fn image_block_id_is_stable_across_asset_renames() {
+        let bob_dir = temp_bob_dir("image-id");
+        let config = test_config_for_bob_dir(bob_dir.clone());
+        let pdf = bob_dir.join("lib/books/figures.pdf");
+        let ref_note = bob_dir.join("ref/books/figures.md");
+        let note = super::ParsedNote::empty();
+
+        let first_sidecar_path =
+            bob_dir.join("lib/books/first.textbundle/text.md");
+        write_test_file(
+            &bob_dir.join("lib/books/first.textbundle/assets/a.png"),
+            "same image bytes",
+        );
+        let first_sidecar = super::SidecarInput {
+            path: first_sidecar_path,
+            annotations: parse_sidecar_markdown(
+                "## Page 1\n\n![A](assets/a.png)\n",
+            ),
+        };
+        let second_sidecar_path =
+            bob_dir.join("lib/books/second.textbundle/text.md");
+        write_test_file(
+            &bob_dir.join("lib/books/second.textbundle/assets/renamed.png"),
+            "same image bytes",
+        );
+        let second_sidecar = super::SidecarInput {
+            path: second_sidecar_path,
+            annotations: parse_sidecar_markdown(
+                "## Page 1\n\n![A](assets/renamed.png)\n",
+            ),
+        };
+
+        let first = super::render_sidecar_highlights(
+            &config,
+            &pdf,
+            &ref_note,
+            &note,
+            &first_sidecar,
+        )
+        .expect("render first image sidecar");
+        let second = super::render_sidecar_highlights(
+            &config,
+            &pdf,
+            &ref_note,
+            &note,
+            &second_sidecar,
+        )
+        .expect("render renamed image sidecar");
+
+        assert_eq!(
+            first.image_assets[0].block_id,
+            second.image_assets[0].block_id
+        );
+        assert_eq!(
+            first.image_assets[0].vault_relative_dest_path,
+            second.image_assets[0].vault_relative_dest_path
+        );
+    }
+
+    #[test]
+    fn missing_image_asset_error_points_at_textbundle_export() {
+        let bob_dir = temp_bob_dir("image-missing");
+        let config = test_config_for_bob_dir(bob_dir.clone());
+        let pdf = bob_dir.join("lib/books/missing.pdf");
+        let ref_note = bob_dir.join("ref/books/missing.md");
+        let sidecar = super::SidecarInput {
+            path: bob_dir.join("lib/books/missing.textbundle/text.md"),
+            annotations: parse_sidecar_markdown(
+                "## Page 1\n\n![Missing](assets/missing.png)\n",
+            ),
+        };
+
+        let error = super::render_sidecar_highlights(
+            &config,
+            &pdf,
+            &ref_note,
+            &super::ParsedNote::empty(),
+            &sidecar,
+        )
+        .expect_err("missing image asset should fail planning");
+        assert!(
+            error.to_string().contains("image asset not found")
+                && error.to_string().contains("TextBundle"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -6884,6 +7766,7 @@ Comment: Compare this with SLO notes.
                 .to_string(),
             comment: None,
             task_source: None,
+            image: None,
             order: 0,
             ordinal_on_page: 0,
         };

@@ -5512,6 +5512,144 @@ Note: Keep a standalone observation after the marker.
 }
 
 #[test]
+fn highlights_ref_sync_renders_textbundle_image_selections() {
+    let temp = TempDir::new("bob-cli-highlights-ref-image-textbundle");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/books/figures.pdf");
+    let textbundle = pdf.with_extension("textbundle");
+    let sidecar = textbundle.join("text.md");
+    let source_asset = textbundle.join("assets/figure.png");
+    let note = vault.join("ref/books/figures.md");
+    let note_assets_dir = vault.join("ref/books/figures.assets");
+    let image_bytes = b"synthetic png bytes";
+
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Figures\n",
+    );
+    write_file(
+        &sidecar,
+        "\
+# Figures
+
+## Page 12
+
+Note: marker note mirrored from the PDF
+
+---
+
+![Latency figure](assets/figure.png)
+
+Comment: Compare this figure with p.14.
+",
+    );
+    fs::create_dir_all(source_asset.parent().expect("asset parent"))
+        .expect("create source asset parent");
+    fs::write(&source_asset, image_bytes).expect("write source image asset");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run image textbundle sync");
+
+    assert_success(&output);
+    let dry_run = stdout(&output);
+    assert!(
+        dry_run.contains("images: 1")
+            && dry_run.contains("image_assets: 1")
+            && dry_run.contains("writes: none"),
+        "expected dry-run image report:\n{}",
+        format_output(&output)
+    );
+    assert!(!note.exists(), "dry-run must not create note");
+    assert!(
+        !note_assets_dir.exists(),
+        "dry-run must not create note assets dir"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync image textbundle");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("images: 1")
+            && report.contains("image_assets_written: 1")
+            && report.contains("writes: note"),
+        "expected write image report:\n{}",
+        format_output(&output)
+    );
+    let contents = fs::read_to_string(&note).expect("read image note");
+    assert!(
+        contents.contains(
+            "highlights_sidecar: lib/books/figures.textbundle/text.md\n"
+        ),
+        "{contents}"
+    );
+    assert!(contents.contains("highlights_count: 1\n"), "{contents}");
+    assert!(
+        contents.contains("> [!quote] Image ![[ref/books/figures.assets/h-"),
+        "{contents}"
+    );
+    assert!(
+        contents
+            .contains("> > [!note] Comment Compare this figure with p.14.\n"),
+        "{contents}"
+    );
+
+    let assets = fs::read_dir(&note_assets_dir)
+        .expect("read note assets dir")
+        .map(|entry| entry.expect("asset entry").path())
+        .collect::<Vec<_>>();
+    assert_eq!(assets.len(), 1, "expected one copied image asset");
+    let copied_asset = &assets[0];
+    let file_name = copied_asset
+        .file_name()
+        .and_then(OsStr::to_str)
+        .expect("asset file name");
+    assert!(
+        file_name.starts_with("h-") && file_name.ends_with(".png"),
+        "unexpected asset filename: {file_name}"
+    );
+    assert_eq!(
+        fs::read(copied_asset).expect("read copied image asset"),
+        image_bytes
+    );
+    assert!(
+        contents
+            .contains(&format!("![[ref/books/figures.assets/{file_name}]]")),
+        "{contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat image textbundle sync");
+
+    assert_success(&output);
+    let repeated = stdout(&output);
+    assert!(
+        repeated.contains("image_assets_written: 0")
+            && repeated.contains("image_assets_skipped: 1")
+            && repeated.contains("writes: none"),
+        "expected idempotent image report:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
 fn highlights_ref_sync_supports_linked_sidecar_style() {
     let temp = TempDir::new("bob-cli-highlights-ref-linked-sidecar");
     let vault = temp.path().join("vault");
