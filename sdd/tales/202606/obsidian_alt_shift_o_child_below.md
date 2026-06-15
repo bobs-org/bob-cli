@@ -1,7 +1,7 @@
 ---
 title: Repurpose Alt+Shift+o to Open Child Bullet Below
 create_time: 2026-06-15 08:07:13
-status: proposed
+status: done
 prompt: sdd/prompts/202606/obsidian_alt_shift_o_child_below.md
 ---
 
