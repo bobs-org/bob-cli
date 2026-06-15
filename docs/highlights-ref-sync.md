@@ -276,9 +276,6 @@ Image assets copied from TextBundle sidecars are treated as note-side writes.
 They are planned during dry runs, checked by the same dirty-target preflight
 when the destination already exists, and written only during non-dry-run syncs.
 Scan output includes image totals when a planned PDF contains image selections.
-If an image link cannot be resolved, the PDF still plans and writes; the
-generated note gets an image placeholder, and scan/sync output reports
-`images_unresolved` plus an `image_warning` line.
 
 Planning failures for one PDF do not stop valid plans from writing. Write-time
 failures such as a changed note/PDF or temporary save failure are reported as
@@ -302,17 +299,15 @@ non-marker notes sync one way from the PDF/sidecar into the reference note.
 For `foo.pdf`, sidecar discovery looks for `foo.md` first. If there is no
 Markdown sidecar, it recognizes `foo.textbundle` only when the bundle contains
 `text.md` or `text.markdown`; other TextBundle contents fail with an explicit
-unsupported-sidecar error. Image selections resolve the referenced asset file
-relative to the sidecar text file's directory. This makes
+unsupported-sidecar error. Image selections require the referenced asset file to
+exist relative to the sidecar text file's directory. This makes
 `foo.textbundle/text.md` resolve `![](assets/figure.png)` to
-`foo.textbundle/assets/figure.png`. If the asset is missing, unreadable, or not
-a relative sidecar target, the image degrades to a visible placeholder instead
-of failing the PDF. Plain Markdown sidecars can still reference local image
-files, but Highlights' plain Markdown export does not include image assets; the
-placeholder tells the user to re-export as TextBundle when area selections
-should sync. If no sidecar exists, `sync` still performs marker/frontmatter
-sync. For a new note it creates an empty managed region; for an existing note it
-preserves the existing managed region.
+`foo.textbundle/assets/figure.png`. Plain Markdown sidecars can still reference
+local image files, but Highlights' plain Markdown export does not include image
+assets; re-export as TextBundle when area selections should sync. If no sidecar
+exists, `sync` still performs marker/frontmatter sync. For a new note it creates
+an empty managed region; for an existing note it preserves the existing managed
+region.
 
 Two Markdown sidecar shapes are supported. The simple shape is:
 
@@ -423,12 +418,9 @@ Generated annotations render as Obsidian callouts. Highlight text uses a
 `[!quote]` callout; a highlight or image comment is nested inside that quote as
 a `[!note] Comment` callout so the annotation's trailing `^h-...` block ID still
 covers the quote/image and the comment together. Image selections use
-`[!quote] Image` with a vault-relative Obsidian embed when the asset is
-available. Unresolved image selections use `[!warning] Image not synced` with a
-TextBundle re-export hint, while preserving the same nested comment callout
-shape. Standalone non-marker notes render as `[!note]` callouts. Removed
-annotation tombstones render under `### Removed highlights` as
-`[!warning] Removed highlight` callouts.
+`[!quote] Image` with a vault-relative Obsidian embed. Standalone non-marker
+notes render as `[!note]` callouts. Removed annotation tombstones render under
+`### Removed highlights` as `[!warning] Removed highlight` callouts.
 
 Example generated body:
 
@@ -461,20 +453,6 @@ vault-relative wikilink:
 ^h-2b91f0a4c7de
 ```
 
-An unresolved image selection stays visible and keeps its comment/task
-affordances:
-
-```md
-### Page 12
-
-> [!warning] Image not synced Re-export this PDF as a TextBundle so the area selection is included.
-> Reason: image asset not found: assets/figure.png.
->
-> > [!note] Comment Compare this figure with the latency table on p.14.
-
-^h-7a42c3b0d19e
-```
-
 Asset filenames and image block IDs are content-addressed from the source PDF
 path and image bytes, so re-exported or renamed TextBundle assets keep the same
 `^h-...` block and stored filename when the image bytes are unchanged. Existing
@@ -482,10 +460,7 @@ matching assets are skipped; an existing destination with different bytes is a
 write failure instead of an overwrite. When an image selection is removed from
 the sidecar, the generated block is tombstoned like other removed annotations,
 but the copied asset file is left in place. Asset garbage collection is future
-work. Unresolved images use a deterministic fallback block ID based on the
-source PDF path, image target, page label, and page ordinal. When a later
-TextBundle export provides the bytes, the image switches to its content-addressed
-ID and the old placeholder ID is tombstoned under `### Removed highlights`.
+work.
 
 Annotation text is beautified only while rendering the generated region:
 
@@ -602,13 +577,11 @@ page label, annotation kind, sidecar order on the page, and quote/note text.
 Highlight comments are not part of the hash, so editing only a comment updates
 the block without changing its ID. Image IDs use the source PDF path plus image
 bytes instead, so asset renames and nearby annotation order changes do not churn
-the image block. Unresolved image placeholders use the fallback identity
-described above until the asset bytes become available. If a previously
-generated block disappears from the sidecar, the command keeps the old block ID
-under `### Removed highlights` with a tombstone message. Editing text highlight
-content itself mints a new block ID; a task created earlier keeps its original
-link, which then targets the tombstoned block under `### Removed highlights` —
-still a valid, resolvable jump.
+the image block. If a previously generated block disappears from the sidecar,
+the command keeps the old block ID under `### Removed highlights` with a
+tombstone message. Editing text highlight content itself mints a new block ID; a
+task created earlier keeps its original link, which then targets the tombstoned
+block under `### Removed highlights` — still a valid, resolvable jump.
 
 ## MacBook Setup Guide
 
@@ -657,8 +630,6 @@ In Highlights Pro on the MacBook:
   `~/bob/lib/books/example.textbundle/text.md`.
 - Use TextBundle export for PDFs where Highlights area/rectangle selections
   should sync, because plain Markdown export does not include image assets.
-  Plain Markdown image links remain visible as placeholders and report
-  `images_unresolved` until a TextBundle export supplies the asset bytes.
 - Lock the Highlights Note Format to the sidecar contract above: page headings,
   `---` annotation separators, highlights as blockquote lines, highlight
   comments as plain paragraphs, standalone notes as plain paragraphs, and image
@@ -695,8 +666,6 @@ MacBook validation checklist:
   `~/bob/lib`, reports the intended `~/bob/ref/<ref_type>/*.md` targets, and
   prints `writes: none`. If `scan_failures` is non-zero, inspect the per-PDF
   `plan_error` lines while noting that valid PDFs were still reported.
-  `images_unresolved` and `image_warning` lines are warnings, not
-  `scan_failures`.
 - `bob highlights sync ~/bob/lib/books/example.pdf --dry-run` shows the
   expected marker page/note, sync source, sidecar path, note action, and no
   writes.
@@ -706,9 +675,6 @@ MacBook validation checklist:
 - For a TextBundle image selection, the first real write also creates
   `~/bob/ref/books/example.assets/h-<id>.<ext>` and embeds it from the generated
   callout with a vault-relative wikilink.
-- For a plain Markdown image selection whose asset is absent, the first real
-  write still creates or updates the note, renders `[!warning] Image not
-  synced`, preserves any image comment/tasks, and reports `images_unresolved`.
 - A second run with unchanged inputs reports `writes: none`.
 - If frontmatter edits or a checked generated task require PDF marker
   write-back, a dry run reports `pdf_marker_action: would-update` before any
@@ -985,7 +951,7 @@ preflight failures remain hard global failures before writes.
 | `invalid marker item on line` | A marker line is not `- key: value` or `* key: value`. | Rewrite the marker as a flat list. |
 | `duplicate marker key on line` | The marker repeats a normalized key. | Keep only one value for that key. |
 | `output path collision(s) detected before writes` | Multiple PDFs would write the same reference note path, such as `ref/books/example.md`, or the same planned image asset destination. | Rename or move one PDF before scanning. |
-| `image asset not found` / `images_unresolved` | Warning, not a per-PDF failure: the sidecar references an image file that is not present relative to the sidecar text file. This usually means the PDF was exported as plain Markdown instead of TextBundle. The note still writes with an `[!warning] Image not synced` placeholder and preserved comments/tasks. | Re-export the sidecar as TextBundle so `assets/...` files are included. |
+| `image asset not found` | The sidecar references an image file that is not present relative to the sidecar text file. This usually means the PDF was exported as plain Markdown instead of TextBundle. | Re-export the sidecar as TextBundle so `assets/...` files are included. |
 | `image asset destination exists with different bytes` | A content-addressed `ref/.../*.assets/h-<id>.<ext>` destination already exists but its bytes do not match the source asset. | Inspect the existing asset, then remove or restore it before rerunning. |
 | `refusing to modify dirty vault files` | Git reports dirty touched paths outside the allowed frontmatter and generated-task checkbox write-back case. | Commit, stash, or clean those paths. |
 | `reference note changed but --write-pdf was not supplied` | Frontmatter or the generated task contributes `status: read` or `status: abandoned` to the selected projection, so the PDF marker needs an opt-in write. | Back up the PDF, then run targeted `sync --write-pdf` or reviewed bulk `scan --write-pdfs`. |

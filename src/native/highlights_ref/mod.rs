@@ -363,18 +363,8 @@ struct RenderedHighlights {
     content: String,
     count: usize,
     image_count: usize,
-    images_unresolved: usize,
-    image_unresolved: Vec<ImageUnresolved>,
     image_assets: Vec<ImageAssetWrite>,
     block_ids_by_annotation_order: BTreeMap<usize, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ImageUnresolved {
-    annotation_order: usize,
-    target: String,
-    reason: String,
-    block_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,18 +382,6 @@ struct ImageAssetWrite {
 enum ImageAssetAction {
     Copy,
     None,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ImageAssetResolution {
-    Resolved(ImageAssetWrite),
-    Unresolved(ImageUnresolved),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SidecarImageSource {
-    Path(PathBuf),
-    Unresolved(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -477,7 +455,6 @@ struct SyncWriteReport {
     note_action: &'static str,
     marker_action: &'static str,
     image_count: usize,
-    images_unresolved: usize,
     image_assets_written: usize,
     image_assets_skipped: usize,
     routed_note_actions: usize,
@@ -701,7 +678,6 @@ fn scan_library(
             options,
             pdfs.len(),
             &plan_outcomes,
-            &styler,
         );
     } else {
         print_scan_header(config, pdfs.len(), options.dry_run, &styler);
@@ -1205,11 +1181,6 @@ fn execute_pdf_sync(
             .as_ref()
             .map(|rendered| rendered.image_count)
             .unwrap_or(0),
-        images_unresolved: plan
-            .rendered_highlights
-            .as_ref()
-            .map(|rendered| rendered.images_unresolved)
-            .unwrap_or(0),
         image_assets_written,
         image_assets_skipped,
         routed_note_actions,
@@ -1348,14 +1319,9 @@ fn print_pdf_sync_report(
         println!("highlights_count: {count}");
     }
     if let Some(rendered) = &plan.rendered_highlights
-        && rendered_has_image_report_details(rendered, plan)
+        && (rendered.image_count > 0 || !plan.image_assets.is_empty())
     {
-        let styler = Styler::detect();
         println!("images: {}", rendered.image_count);
-        if rendered.images_unresolved > 0 {
-            println!("images_unresolved: {}", rendered.images_unresolved);
-            print_image_unresolved_warnings(rendered, "", &styler);
-        }
         println!("image_assets: {}", planned_image_asset_write_count(plan));
     }
     println!("annotation_tasks_create: {}", plan.annotation_tasks_created);
@@ -1369,15 +1335,8 @@ fn print_pdf_sync_report(
 fn print_sync_write_report(report: SyncWriteReport) {
     println!("note_action: {}", report.note_action);
     println!("pdf_marker_action: {}", report.marker_action);
-    if report.image_count > 0
-        || report.images_unresolved > 0
-        || report.image_assets_written > 0
-        || report.image_assets_skipped > 0
-    {
+    if report.image_count > 0 || report.image_assets_written > 0 {
         println!("images: {}", report.image_count);
-        if report.images_unresolved > 0 {
-            println!("images_unresolved: {}", report.images_unresolved);
-        }
         println!("image_assets_written: {}", report.image_assets_written);
         println!("image_assets_skipped: {}", report.image_assets_skipped);
     }
@@ -1419,35 +1378,6 @@ fn planned_image_asset_write_count(plan: &PdfSyncPlan) -> usize {
         .count()
 }
 
-fn rendered_has_image_report_details(
-    rendered: &RenderedHighlights,
-    plan: &PdfSyncPlan,
-) -> bool {
-    rendered.image_count > 0
-        || rendered.images_unresolved > 0
-        || !plan.image_assets.is_empty()
-}
-
-fn image_unresolved_warning(unresolved: &ImageUnresolved) -> String {
-    format!(
-        "image not synced: {} - {}; re-export this PDF as a TextBundle so the area selection is included",
-        unresolved.target, unresolved.reason
-    )
-}
-
-fn print_image_unresolved_warnings(
-    rendered: &RenderedHighlights,
-    indent: &str,
-    styler: &Styler,
-) {
-    for unresolved in &rendered.image_unresolved {
-        println!(
-            "{indent}image_warning: {}",
-            styler.dim(&image_unresolved_warning(unresolved))
-        );
-    }
-}
-
 fn status_normalization_label(
     normalization: StatusNormalization,
 ) -> Option<String> {
@@ -1474,7 +1404,6 @@ fn print_verbose_scan_plan_report(
     options: SyncOptions,
     pdf_count: usize,
     plan_outcomes: &[ScanPlanOutcome],
-    styler: &Styler,
 ) {
     print_config_report("scan", config);
     println!("dry_run: {}", options.dry_run);
@@ -1483,7 +1412,7 @@ fn print_verbose_scan_plan_report(
     println!("pdf_count: {pdf_count}");
     for outcome in plan_outcomes {
         match outcome {
-            ScanPlanOutcome::Planned(plan) => print_scan_plan_entry(plan, styler),
+            ScanPlanOutcome::Planned(plan) => print_scan_plan_entry(plan),
             ScanPlanOutcome::Failed(failure) => {
                 print_scan_plan_failure_entry(failure);
             }
@@ -1627,13 +1556,6 @@ enum ScanLine {
         name: String,
         action: String,
         details: Vec<String>,
-        warnings: Vec<String>,
-    },
-    Warning {
-        name: String,
-        action: String,
-        details: Vec<String>,
-        warnings: Vec<String>,
     },
     Failed {
         name: String,
@@ -1643,68 +1565,34 @@ enum ScanLine {
 
 impl ScanLine {
     fn from_plan(plan: &PdfSyncPlan) -> Option<Self> {
-        if !scan_plan_changed(plan) {
-            return None;
-        }
-        let name = scan_display_name(&plan.note_path);
-        let action = scan_change_action(
-            plan.stable_note_action,
-            plan.marker_write_needed,
-            planned_image_asset_write_count(plan),
-            planned_routed_note_write_count(plan),
-            true,
-        );
-        let details = scan_details(plan, plan.annotation_tasks_created);
-        let warnings = scan_image_warnings(plan);
-        if warnings.is_empty() {
-            Some(Self::Success {
-                name,
-                action,
-                details,
-                warnings,
-            })
-        } else {
-            Some(Self::Warning {
-                name,
-                action,
-                details,
-                warnings,
-            })
-        }
+        scan_plan_changed(plan).then(|| Self::Success {
+            name: scan_display_name(&plan.note_path),
+            action: scan_change_action(
+                plan.stable_note_action,
+                plan.marker_write_needed,
+                planned_image_asset_write_count(plan),
+                planned_routed_note_write_count(plan),
+                true,
+            ),
+            details: scan_details(plan, plan.annotation_tasks_created),
+        })
     }
 
     fn from_write(
         plan: &PdfSyncPlan,
         report: &SyncWriteReport,
     ) -> Option<Self> {
-        if !scan_report_changed(report) {
-            return None;
-        }
-        let name = scan_display_name(&plan.note_path);
-        let action = scan_change_action(
-            report.note_action,
-            report.marker_action != "none",
-            report.image_assets_written,
-            report.routed_note_actions,
-            false,
-        );
-        let details = scan_details(plan, report.annotation_tasks_created);
-        let warnings = scan_image_warnings(plan);
-        if warnings.is_empty() {
-            Some(Self::Success {
-                name,
-                action,
-                details,
-                warnings,
-            })
-        } else {
-            Some(Self::Warning {
-                name,
-                action,
-                details,
-                warnings,
-            })
-        }
+        scan_report_changed(report).then(|| Self::Success {
+            name: scan_display_name(&plan.note_path),
+            action: scan_change_action(
+                report.note_action,
+                report.marker_action != "none",
+                report.image_assets_written,
+                report.routed_note_actions,
+                false,
+            ),
+            details: scan_details(plan, report.annotation_tasks_created),
+        })
     }
 
     fn from_failure(failure: &ScanFailure, write_failure: bool) -> Self {
@@ -1721,16 +1609,13 @@ impl ScanLine {
 
     fn name(&self) -> &str {
         match self {
-            Self::Success { name, .. }
-            | Self::Warning { name, .. }
-            | Self::Failed { name, .. } => name,
+            Self::Success { name, .. } | Self::Failed { name, .. } => name,
         }
     }
 
     fn prefix_label(&self, dry_run: bool) -> &'static str {
         match self {
             Self::Success { .. } => success_prefix_label(dry_run),
-            Self::Warning { .. } => warning_prefix_label(dry_run),
             Self::Failed { .. } => "error",
         }
     }
@@ -1745,16 +1630,12 @@ impl ScanLine {
         let prefix_label = pad_right(self.prefix_label(dry_run), prefix_width);
         let prefix = match self {
             Self::Success { .. } => styler.green(&prefix_label),
-            Self::Warning { .. } => styler.yellow(&prefix_label),
             Self::Failed { .. } => styler.red(&prefix_label),
         };
         let name = styler.cyan(&pad_right(self.name(), name_width));
 
-        let mut rendered = match self {
+        match self {
             Self::Success {
-                action, details, ..
-            }
-            | Self::Warning {
                 action, details, ..
             } => {
                 let mut rendered = format!("  {prefix}  {name}  {action}");
@@ -1768,24 +1649,7 @@ impl ScanLine {
             Self::Failed { message, .. } => {
                 format!("  {prefix}  {name}  {message}")
             }
-        };
-
-        if let Self::Success { warnings, .. }
-        | Self::Warning { warnings, .. } = self
-        {
-            for warning in warnings {
-                let warning_prefix =
-                    styler.yellow(&pad_right("warning", prefix_width));
-                let warning_name =
-                    styler.cyan(&pad_right(self.name(), name_width));
-                rendered.push('\n');
-                rendered.push_str(&format!(
-                    "  {warning_prefix}  {warning_name}  {}",
-                    styler.dim(warning)
-                ));
-            }
         }
-        rendered
     }
 }
 
@@ -1797,22 +1661,10 @@ fn success_prefix_label(dry_run: bool) -> &'static str {
     }
 }
 
-fn warning_prefix_label(dry_run: bool) -> &'static str {
-    if dry_run {
-        "[dry-run] warning"
-    } else {
-        "warning"
-    }
-}
-
 fn scan_plan_changed(plan: &PdfSyncPlan) -> bool {
     plan.stable_note_action != "none"
         || plan.marker_write_needed
         || planned_image_asset_write_count(plan) > 0
-        || plan
-            .rendered_highlights
-            .as_ref()
-            .is_some_and(|rendered| rendered.images_unresolved > 0)
         || plan.annotation_tasks_created > 0
         || planned_routed_note_write_count(plan) > 0
 }
@@ -1821,7 +1673,6 @@ fn scan_report_changed(report: &SyncWriteReport) -> bool {
     report.note_action != "none"
         || report.marker_action != "none"
         || report.image_assets_written > 0
-        || report.images_unresolved > 0
         || report.annotation_tasks_created > 0
         || report.routed_note_actions > 0
 }
@@ -1880,15 +1731,6 @@ fn scan_details(
     {
         details.push(count_phrase(rendered.image_count, "image", "images"));
     }
-    if let Some(rendered) = &plan.rendered_highlights
-        && rendered.images_unresolved > 0
-    {
-        details.push(count_phrase(
-            rendered.images_unresolved,
-            "image unresolved",
-            "images unresolved",
-        ));
-    }
     if annotation_tasks_created > 0 {
         details.push(format!(
             "+{}",
@@ -1899,19 +1741,6 @@ fn scan_details(
         details.push(format!("auto-merge ({})", plan.decision.reason));
     }
     details
-}
-
-fn scan_image_warnings(plan: &PdfSyncPlan) -> Vec<String> {
-    plan.rendered_highlights
-        .as_ref()
-        .map(|rendered| {
-            rendered
-                .image_unresolved
-                .iter()
-                .map(image_unresolved_warning)
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn scan_display_name(path: &Path) -> String {
@@ -1927,7 +1756,6 @@ struct ScanCounts {
     unchanged: usize,
     marker_updates: usize,
     images: usize,
-    images_unresolved: usize,
     image_assets: usize,
     annotation_tasks_created: usize,
     annotation_tasks_skipped: usize,
@@ -1960,11 +1788,6 @@ impl ScanCounts {
                 .iter()
                 .filter_map(|plan| plan.rendered_highlights.as_ref())
                 .map(|rendered| rendered.image_count)
-                .sum(),
-            images_unresolved: plans
-                .iter()
-                .filter_map(|plan| plan.rendered_highlights.as_ref())
-                .map(|rendered| rendered.images_unresolved)
                 .sum(),
             image_assets: plans
                 .iter()
@@ -2007,10 +1830,6 @@ impl ScanCounts {
                 .filter(|report| report.marker_action != "none")
                 .count(),
             images: reports.iter().map(|report| report.image_count).sum(),
-            images_unresolved: reports
-                .iter()
-                .map(|report| report.images_unresolved)
-                .sum(),
             image_assets: reports
                 .iter()
                 .map(|report| report.image_assets_written)
@@ -2055,16 +1874,6 @@ fn scan_summary_line(
         summary.push_str(&format!(
             " {separator} {}",
             count_phrase(counts.images, "image", "images")
-        ));
-    }
-    if counts.images_unresolved > 0 {
-        summary.push_str(&format!(
-            " {separator} {}",
-            count_phrase(
-                counts.images_unresolved,
-                "image unresolved",
-                "images unresolved"
-            )
         ));
     }
     if counts.image_assets > 0 {
@@ -2115,7 +1924,7 @@ fn plural<'a>(
     }
 }
 
-fn print_scan_plan_entry(plan: &PdfSyncPlan, styler: &Styler) {
+fn print_scan_plan_entry(plan: &PdfSyncPlan) {
     println!("pdf: {}", plan.pdf.display());
     println!("  note: {}", plan.note_path.display());
     println!(
@@ -2149,13 +1958,9 @@ fn print_scan_plan_entry(plan: &PdfSyncPlan, styler: &Styler) {
         println!("  highlights_count: {count}");
     }
     if let Some(rendered) = &plan.rendered_highlights
-        && rendered_has_image_report_details(rendered, plan)
+        && (rendered.image_count > 0 || !plan.image_assets.is_empty())
     {
         println!("  images: {}", rendered.image_count);
-        if rendered.images_unresolved > 0 {
-            println!("  images_unresolved: {}", rendered.images_unresolved);
-            print_image_unresolved_warnings(rendered, "  ", styler);
-        }
         println!("  image_assets: {}", planned_image_asset_write_count(plan));
     }
     println!(
@@ -2185,14 +1990,8 @@ fn print_scan_plan_summary(plans: &[&PdfSyncPlan], plan_failure_count: usize) {
     println!("  notes_create: {}", counts.creates);
     println!("  notes_update: {}", counts.updates);
     println!("  notes_unchanged: {}", counts.unchanged);
-    if counts.images > 0
-        || counts.images_unresolved > 0
-        || counts.image_assets > 0
-    {
+    if counts.images > 0 || counts.image_assets > 0 {
         println!("  images: {}", counts.images);
-        if counts.images_unresolved > 0 {
-            println!("  images_unresolved: {}", counts.images_unresolved);
-        }
         println!("  image_assets: {}", counts.image_assets);
     }
     println!(
@@ -2226,14 +2025,8 @@ fn print_scan_write_summary(
     println!("  notes_created: {}", counts.creates);
     println!("  notes_updated: {}", counts.updates);
     println!("  notes_unchanged: {}", counts.unchanged);
-    if counts.images > 0
-        || counts.images_unresolved > 0
-        || counts.image_assets > 0
-    {
+    if counts.images > 0 || counts.image_assets > 0 {
         println!("  images: {}", counts.images);
-        if counts.images_unresolved > 0 {
-            println!("  images_unresolved: {}", counts.images_unresolved);
-        }
         println!("  image_assets_written: {}", counts.image_assets);
     }
     println!(
@@ -3334,7 +3127,7 @@ fn resolve_sidecar_image_assets(
     pdf: &Path,
     ref_note_path: &Path,
     sidecar: &SidecarInput,
-) -> Result<BTreeMap<usize, ImageAssetResolution>> {
+) -> Result<BTreeMap<usize, ImageAssetWrite>> {
     let mut assets = BTreeMap::new();
     for annotation in &sidecar.annotations {
         if annotation.kind != SidecarAnnotationKind::Image {
@@ -3343,68 +3136,36 @@ fn resolve_sidecar_image_assets(
         let image = annotation.image.as_ref().ok_or_else(|| {
             CommandError::new("image annotation is missing image metadata")
         })?;
-        let source_path = match sidecar_image_source_path(
-            &sidecar.path,
-            &image.target,
-        )? {
-            SidecarImageSource::Path(path) => path,
-            SidecarImageSource::Unresolved(reason) => {
-                assets.insert(
-                    annotation.order,
-                    ImageAssetResolution::Unresolved(
-                        image_unresolved_marker(
-                            config, pdf, annotation, reason,
-                        )?,
-                    ),
-                );
-                continue;
+        let source_path =
+            sidecar_image_source_path(&sidecar.path, &image.target)?;
+        let source_bytes = fs::read(&source_path).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                CommandError::new(format!(
+                    "image asset not found: {} - export the sidecar as a TextBundle so images are included",
+                    image.target
+                ))
+            } else {
+                CommandError::new(format!(
+                    "read image asset {}: {error}",
+                    source_path.display()
+                ))
             }
-        };
-        let source_bytes = match fs::read(&source_path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                let reason = if error.kind() == io::ErrorKind::NotFound {
-                    format!("image asset not found: {}", image.target)
-                } else {
-                    format!(
-                        "read image asset {}: {error}",
-                        source_path.display()
-                    )
-                };
-                assets.insert(
-                    annotation.order,
-                    ImageAssetResolution::Unresolved(
-                        image_unresolved_marker(
-                            config, pdf, annotation, reason,
-                        )?,
-                    ),
-                );
-                continue;
-            }
-        };
+        })?;
         let source_sha256 = hex::encode(Sha256::digest(&source_bytes));
         let block_id = image_annotation_block_id(config, pdf, &source_sha256);
-        let Some(extension) = image_target_extension(&image.target) else {
-            assets.insert(
-                annotation.order,
-                ImageAssetResolution::Unresolved(image_unresolved_marker(
-                    config,
-                    pdf,
-                    annotation,
-                    format!(
-                        "image asset target has no supported extension: {}",
-                        image.target
-                    ),
-                )?),
-            );
-            continue;
-        };
+        let extension =
+            image_target_extension(&image.target).ok_or_else(|| {
+                CommandError::new(format!(
+                    "image asset target has no supported extension: {}",
+                    image.target
+                ))
+            })?;
         let dest_path =
             image_asset_dest_path(ref_note_path, &block_id, &extension)?;
         let action = image_asset_action(&dest_path, &source_sha256)?;
         assets.insert(
             annotation.order,
-            ImageAssetResolution::Resolved(ImageAssetWrite {
+            ImageAssetWrite {
                 annotation_order: annotation.order,
                 source_path,
                 dest_path: dest_path.clone(),
@@ -3414,7 +3175,7 @@ fn resolve_sidecar_image_assets(
                 source_sha256,
                 block_id,
                 action,
-            }),
+            },
         );
     }
     Ok(assets)
@@ -3423,7 +3184,7 @@ fn resolve_sidecar_image_assets(
 fn sidecar_image_source_path(
     sidecar_path: &Path,
     target: &str,
-) -> Result<SidecarImageSource> {
+) -> Result<PathBuf> {
     let filesystem_target =
         target.split(['?', '#']).next().unwrap_or(target).trim();
     let target_path = Path::new(filesystem_target);
@@ -3432,8 +3193,8 @@ fn sidecar_image_source_path(
             matches!(component, Component::Prefix(_) | Component::ParentDir)
         })
     {
-        return Ok(SidecarImageSource::Unresolved(format!(
-            "image asset target must be relative to the sidecar: {target}",
+        return Err(CommandError::new(format!(
+            "image asset target must be relative to the sidecar: {target}"
         )));
     }
     let sidecar_dir = sidecar_path.parent().ok_or_else(|| {
@@ -3442,7 +3203,7 @@ fn sidecar_image_source_path(
             sidecar_path.display()
         ))
     })?;
-    Ok(SidecarImageSource::Path(sidecar_dir.join(target_path)))
+    Ok(sidecar_dir.join(target_path))
 }
 
 fn image_target_extension(target: &str) -> Option<String> {
@@ -3512,7 +3273,6 @@ fn render_sidecar_highlights(
         resolve_sidecar_image_assets(config, pdf, ref_note_path, sidecar)?;
     let mut image_asset_writes_by_dest =
         BTreeMap::<PathBuf, ImageAssetWrite>::new();
-    let mut image_unresolved = Vec::new();
     let mut current_ids = BTreeSet::new();
     let mut block_ids_by_annotation_order = BTreeMap::new();
     let mut rendered = String::new();
@@ -3520,17 +3280,10 @@ fn render_sidecar_highlights(
     let mut skipped_marker_note = false;
     let mut image_count = 0usize;
 
-    for resolution in image_assets_by_order.values() {
-        match resolution {
-            ImageAssetResolution::Resolved(image_asset) => {
-                image_asset_writes_by_dest
-                    .entry(image_asset.dest_path.clone())
-                    .or_insert_with(|| image_asset.clone());
-            }
-            ImageAssetResolution::Unresolved(unresolved) => {
-                image_unresolved.push(unresolved.clone());
-            }
-        }
+    for image_asset in image_assets_by_order.values() {
+        image_asset_writes_by_dest
+            .entry(image_asset.dest_path.clone())
+            .or_insert_with(|| image_asset.clone());
     }
 
     for annotation in &sidecar.annotations {
@@ -3539,32 +3292,13 @@ fn render_sidecar_highlights(
             continue;
         }
 
-        let image_asset_resolution =
-            image_assets_by_order.get(&annotation.order);
-        let image_asset = match image_asset_resolution {
-            Some(ImageAssetResolution::Resolved(asset)) => Some(asset),
-            _ => None,
-        };
-        let unresolved_image = match image_asset_resolution {
-            Some(ImageAssetResolution::Unresolved(unresolved)) => {
-                Some(unresolved)
-            }
-            _ => None,
-        };
+        let image_asset = image_assets_by_order.get(&annotation.order);
         let block_id = match annotation.kind {
-            SidecarAnnotationKind::Image => match image_asset_resolution {
-                Some(ImageAssetResolution::Resolved(asset)) => {
-                    asset.block_id.clone()
-                }
-                Some(ImageAssetResolution::Unresolved(unresolved)) => {
-                    unresolved.block_id.clone()
-                }
-                None => {
-                    return Err(CommandError::new(
-                        "image annotation was not resolved",
-                    ));
-                }
-            },
+            SidecarAnnotationKind::Image => {
+                image_asset.map(|asset| asset.block_id.clone()).ok_or_else(
+                    || CommandError::new("image annotation was not resolved"),
+                )?
+            }
             SidecarAnnotationKind::Highlight
             | SidecarAnnotationKind::StandaloneNote => {
                 annotation_block_id(config, pdf, annotation)
@@ -3575,9 +3309,7 @@ fn render_sidecar_highlights(
         if !current_ids.insert(block_id.clone()) {
             continue;
         }
-        if annotation.kind == SidecarAnnotationKind::Image
-            && image_asset.is_some()
-        {
+        if annotation.kind == SidecarAnnotationKind::Image {
             image_count += 1;
         }
 
@@ -3594,10 +3326,11 @@ fn render_sidecar_highlights(
         }
 
         rendered.push_str(&render_annotation_block(
+            config,
+            ref_note_path,
             annotation,
             &block_id,
             image_asset,
-            unresolved_image,
         ));
     }
 
@@ -3629,8 +3362,6 @@ fn render_sidecar_highlights(
         content: rendered,
         count: current_ids.len(),
         image_count,
-        images_unresolved: image_unresolved.len(),
-        image_unresolved,
         image_assets: image_asset_writes_by_dest.into_values().collect(),
         block_ids_by_annotation_order,
     })
@@ -3671,50 +3402,12 @@ fn image_annotation_block_id(
     format!("h-{}", &digest[..12])
 }
 
-fn image_unresolved_marker(
-    config: &Config,
-    pdf: &Path,
-    annotation: &SidecarAnnotation,
-    reason: String,
-) -> Result<ImageUnresolved> {
-    let image = annotation.image.as_ref().ok_or_else(|| {
-        CommandError::new("image annotation is missing image metadata")
-    })?;
-    Ok(ImageUnresolved {
-        annotation_order: annotation.order,
-        target: image.target.clone(),
-        reason,
-        block_id: image_unresolved_block_id(config, pdf, annotation)?,
-    })
-}
-
-fn image_unresolved_block_id(
-    config: &Config,
-    pdf: &Path,
-    annotation: &SidecarAnnotation,
-) -> Result<String> {
-    let image = annotation.image.as_ref().ok_or_else(|| {
-        CommandError::new("image annotation is missing image metadata")
-    })?;
-    let mut hasher = Sha256::new();
-    hasher.update(source_pdf_value(config, pdf));
-    hasher.update([0]);
-    hasher.update("image-unresolved");
-    hasher.update([0]);
-    hasher.update(normalized_identity_text(&image.target));
-    hasher.update([0]);
-    hasher.update(annotation.page_label.as_deref().unwrap_or_default());
-    hasher.update([0]);
-    hasher.update(annotation.ordinal_on_page.to_string());
-    let digest = hex::encode(hasher.finalize());
-    Ok(format!("h-{}", &digest[..12]))
-}
-
 fn render_annotation_block(
+    config: &Config,
+    ref_note_path: &Path,
     annotation: &SidecarAnnotation,
     block_id: &str,
     image_asset: Option<&ImageAssetWrite>,
-    image_unresolved: Option<&ImageUnresolved>,
 ) -> String {
     let mut rendered = String::new();
     match annotation.kind {
@@ -3724,30 +3417,13 @@ fn render_annotation_block(
             push_annotation_comment_callout(&mut rendered, annotation);
         }
         SidecarAnnotationKind::Image => {
-            if let Some(image_asset) = image_asset {
-                let embed_path =
-                    display_path(&image_asset.vault_relative_dest_path);
-                let embed = format!("![[{embed_path}]]");
-                push_callout_block(
-                    &mut rendered,
-                    1,
-                    "[!quote] Image",
-                    &embed,
-                );
-            } else {
-                let reason = image_unresolved
-                    .map(|unresolved| unresolved.reason.as_str())
-                    .unwrap_or("image asset was not resolved");
-                let message = format!(
-                    "Re-export this PDF as a TextBundle so the area selection is included.\nReason: {reason}."
-                );
-                push_callout_block(
-                    &mut rendered,
-                    1,
-                    "[!warning] Image not synced",
-                    &message,
-                );
-            }
+            let embed_path = image_asset
+                .map(|asset| display_path(&asset.vault_relative_dest_path))
+                .unwrap_or_else(|| {
+                    vault_relative_note_link(config, ref_note_path)
+                });
+            let embed = format!("![[{embed_path}]]");
+            push_callout_block(&mut rendered, 1, "[!quote] Image", &embed);
             push_annotation_comment_callout(&mut rendered, annotation);
         }
         SidecarAnnotationKind::StandaloneNote => {
@@ -7881,7 +7557,7 @@ Comment: Compare this figure.
     }
 
     #[test]
-    fn missing_image_asset_renders_placeholder_without_dropping_highlights() {
+    fn missing_image_asset_error_points_at_textbundle_export() {
         let bob_dir = temp_bob_dir("image-missing");
         let config = test_config_for_bob_dir(bob_dir.clone());
         let pdf = bob_dir.join("lib/books/missing.pdf");
@@ -7889,206 +7565,22 @@ Comment: Compare this figure.
         let sidecar = super::SidecarInput {
             path: bob_dir.join("lib/books/missing.textbundle/text.md"),
             annotations: parse_sidecar_markdown(
-                "\
-## Page 1
-
-![Missing](assets/missing.png)
-
-Comment: Capture the missing area.
-- #task Follow up on the area selection.
-
----
-
-> Surviving quote.
-",
+                "## Page 1\n\n![Missing](assets/missing.png)\n",
             ),
         };
 
-        let rendered = super::render_sidecar_highlights(
+        let error = super::render_sidecar_highlights(
             &config,
             &pdf,
             &ref_note,
             &super::ParsedNote::empty(),
             &sidecar,
         )
-        .expect("missing image asset should degrade");
-        assert_eq!(rendered.count, 2);
-        assert_eq!(rendered.image_count, 0);
-        assert_eq!(rendered.images_unresolved, 1);
-        assert!(rendered.image_assets.is_empty());
+        .expect_err("missing image asset should fail planning");
         assert!(
-            rendered
-                .content
-                .contains("> [!warning] Image not synced"),
-            "{}",
-            rendered.content
-        );
-        assert!(
-            rendered
-                .content
-                .contains("Reason: image asset not found: assets/missing.png."),
-            "{}",
-            rendered.content
-        );
-        assert!(
-            rendered
-                .content
-                .contains("> > [!note] Comment Capture the missing area."),
-            "{}",
-            rendered.content
-        );
-        assert!(
-            rendered.content.contains("> [!quote] Surviving quote."),
-            "{}",
-            rendered.content
-        );
-
-        let candidates = super::annotation_task_candidates(
-            &config,
-            &ref_note,
-            &pdf,
-            Some(&sidecar),
-            Some(&rendered),
-        )
-        .expect("extract unresolved image comment task");
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(
-            candidates[0].task_text,
-            "#task Follow up on the area selection."
-        );
-        assert_eq!(
-            candidates[0].source_block_id,
-            rendered.image_unresolved[0].block_id
-        );
-    }
-
-    #[test]
-    fn mixed_resolved_and_unresolved_images_render_independently() {
-        let bob_dir = temp_bob_dir("image-mixed");
-        let config = test_config_for_bob_dir(bob_dir.clone());
-        let pdf = bob_dir.join("lib/books/mixed.pdf");
-        let ref_note = bob_dir.join("ref/books/mixed.md");
-        let sidecar_path = bob_dir.join("lib/books/mixed.textbundle/text.md");
-        let asset_path =
-            bob_dir.join("lib/books/mixed.textbundle/assets/ok.png");
-        write_test_file(&asset_path, "present image bytes");
-        let sidecar = super::SidecarInput {
-            path: sidecar_path,
-            annotations: parse_sidecar_markdown(
-                "\
-## Page 1
-
-![Present](assets/ok.png)
-
----
-
-![Missing](assets/missing.png)
-",
-            ),
-        };
-
-        let rendered = super::render_sidecar_highlights(
-            &config,
-            &pdf,
-            &ref_note,
-            &super::ParsedNote::empty(),
-            &sidecar,
-        )
-        .expect("render mixed image sidecar");
-
-        assert_eq!(rendered.count, 2);
-        assert_eq!(rendered.image_count, 1);
-        assert_eq!(rendered.images_unresolved, 1);
-        assert_eq!(rendered.image_assets.len(), 1);
-        assert!(
-            rendered.content.contains("> [!quote] Image ![["),
-            "{}",
-            rendered.content
-        );
-        assert!(
-            rendered
-                .content
-                .contains("> [!warning] Image not synced"),
-            "{}",
-            rendered.content
-        );
-    }
-
-    #[test]
-    fn later_textbundle_reexport_tombstones_unresolved_image_placeholder() {
-        let bob_dir = temp_bob_dir("image-reexport");
-        let config = test_config_for_bob_dir(bob_dir.clone());
-        let pdf = bob_dir.join("lib/books/reexport.pdf");
-        let ref_note = bob_dir.join("ref/books/reexport.md");
-        let sidecar_path = bob_dir.join("lib/books/reexport.md");
-        let missing_sidecar = super::SidecarInput {
-            path: sidecar_path,
-            annotations: parse_sidecar_markdown(
-                "## Page 1\n\n![Area](assets/area.png)\n",
-            ),
-        };
-        let missing_render = super::render_sidecar_highlights(
-            &config,
-            &pdf,
-            &ref_note,
-            &super::ParsedNote::empty(),
-            &missing_sidecar,
-        )
-        .expect("render unresolved image placeholder");
-        let unresolved_block_id =
-            missing_render.image_unresolved[0].block_id.clone();
-        let existing_note = super::parse_note(&format!(
-            "\
-# Reexport
-
-## Highlights
-
-{}
-
-{}{}
-",
-            super::MANAGED_BODY_BEGIN,
-            missing_render.content,
-            super::MANAGED_BODY_END
-        ));
-
-        let textbundle_sidecar_path =
-            bob_dir.join("lib/books/reexport.textbundle/text.md");
-        write_test_file(
-            &bob_dir.join("lib/books/reexport.textbundle/assets/area.png"),
-            "resolved area bytes",
-        );
-        let textbundle_sidecar = super::SidecarInput {
-            path: textbundle_sidecar_path,
-            annotations: parse_sidecar_markdown(
-                "## Page 1\n\n![Area](assets/area.png)\n",
-            ),
-        };
-
-        let resolved_render = super::render_sidecar_highlights(
-            &config,
-            &pdf,
-            &ref_note,
-            &existing_note,
-            &textbundle_sidecar,
-        )
-        .expect("render resolved image after re-export");
-
-        assert_eq!(resolved_render.image_count, 1);
-        assert_eq!(resolved_render.images_unresolved, 0);
-        assert!(
-            resolved_render
-                .content
-                .contains(super::REMOVED_HIGHLIGHTS_HEADING),
-            "{}",
-            resolved_render.content
-        );
-        assert!(
-            resolved_render
-                .content
-                .contains(&format!("^{unresolved_block_id}\n")),
-            "{}",
-            resolved_render.content
+            error.to_string().contains("image asset not found")
+                && error.to_string().contains("TextBundle"),
+            "{error}"
         );
     }
 
