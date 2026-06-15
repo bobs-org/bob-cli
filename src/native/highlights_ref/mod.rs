@@ -22,7 +22,10 @@ use lopdf::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::{env as bob_env, ob};
+use super::{
+    env as bob_env, ob,
+    style::{display_width, pad_right, Styler},
+};
 
 const COMMAND_NAME: &str = "bob highlights";
 const DEFAULT_LIB_DIR: &str = "lib";
@@ -505,7 +508,12 @@ fn run_scan(matches: &ArgMatches) -> i32 {
         write_pdf: matches.get_flag("write-pdfs"),
         prefer: None,
     };
-    report_result(scan_library(&config, options, jobs_from_matches(matches)))
+    report_result(scan_library(
+        &config,
+        options,
+        jobs_from_matches(matches),
+        matches.get_flag("verbose"),
+    ))
 }
 
 /// Resolve the requested degree of cross-PDF parallelism for `scan`.
@@ -587,6 +595,7 @@ fn scan_library(
     config: &Config,
     options: SyncOptions,
     jobs: usize,
+    verbose: bool,
 ) -> Result<()> {
     let pdfs = collect_pdf_paths(config)?;
     validate_output_collisions(config, &pdfs)?;
@@ -629,23 +638,31 @@ fn scan_library(
         })
         .collect::<Vec<_>>();
 
-    print_config_report("scan", config);
-    println!("dry_run: {}", options.dry_run);
-    println!("write_pdfs: {}", options.write_pdf);
-    println!("ob_sync: not-run");
-    println!("pdf_count: {}", pdfs.len());
-    for outcome in &plan_outcomes {
-        match outcome {
-            ScanPlanOutcome::Planned(plan) => print_scan_plan_entry(plan),
-            ScanPlanOutcome::Failed(failure) => {
-                print_scan_plan_failure_entry(failure);
-            }
-        }
+    let styler = Styler::detect();
+    if verbose {
+        print_verbose_scan_plan_report(
+            config,
+            options,
+            pdfs.len(),
+            &plan_outcomes,
+        );
+    } else {
+        print_scan_header(config, pdfs.len(), options.dry_run, &styler);
     }
 
     if options.dry_run {
-        print_scan_plan_summary(&plans, plan_failures.len());
-        println!("writes: none");
+        if verbose {
+            print_scan_plan_summary(&plans, plan_failures.len());
+            println!("writes: none");
+        } else {
+            print_concise_scan_plan_report(
+                &plan_outcomes,
+                &plans,
+                pdfs.len(),
+                plan_failures.len(),
+                &styler,
+            );
+        }
         return if plan_failures.is_empty() {
             Ok(())
         } else {
@@ -682,14 +699,26 @@ fn scan_library(
             ScanWriteOutcome::Failed(failure) => Some(failure),
         })
         .collect::<Vec<_>>();
-    for failure in &write_failures {
-        print_scan_write_failure_entry(failure);
+    if verbose {
+        for failure in &write_failures {
+            print_scan_write_failure_entry(failure);
+        }
+        print_scan_write_summary(
+            &reports,
+            plan_failures.len(),
+            write_failures.len(),
+        );
+    } else {
+        print_concise_scan_write_report(
+            &plan_outcomes,
+            &write_outcomes,
+            &reports,
+            pdfs.len(),
+            plan_failures.len(),
+            write_failures.len(),
+            &styler,
+        );
     }
-    print_scan_write_summary(
-        &reports,
-        plan_failures.len(),
-        write_failures.len(),
-    );
     if plan_failures.is_empty() && write_failures.is_empty() {
         Ok(())
     } else {
@@ -1265,6 +1294,484 @@ fn status_normalization_label(
     })
 }
 
+fn print_verbose_scan_plan_report(
+    config: &Config,
+    options: SyncOptions,
+    pdf_count: usize,
+    plan_outcomes: &[ScanPlanOutcome],
+) {
+    print_config_report("scan", config);
+    println!("dry_run: {}", options.dry_run);
+    println!("write_pdfs: {}", options.write_pdf);
+    println!("ob_sync: not-run");
+    println!("pdf_count: {pdf_count}");
+    for outcome in plan_outcomes {
+        match outcome {
+            ScanPlanOutcome::Planned(plan) => print_scan_plan_entry(plan),
+            ScanPlanOutcome::Failed(failure) => {
+                print_scan_plan_failure_entry(failure);
+            }
+        }
+    }
+}
+
+fn print_scan_header(
+    config: &Config,
+    pdf_count: usize,
+    dry_run: bool,
+    styler: &Styler,
+) {
+    let separator = styler.separator();
+    let mut header = format!(
+        "Scanning {} {} in {}",
+        pdf_count,
+        plural(pdf_count, "PDF", "PDFs"),
+        display_scan_lib_dir(config)
+    );
+    if dry_run {
+        header.push_str(&format!(" {separator} dry-run"));
+    }
+    println!("{}", styler.dim(&header));
+    println!();
+}
+
+fn display_scan_lib_dir(config: &Config) -> String {
+    config
+        .lib_dir
+        .strip_prefix(&config.bob_dir)
+        .ok()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(display_path)
+        .unwrap_or_else(|| config.lib_dir.display().to_string())
+}
+
+fn display_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn print_concise_scan_plan_report(
+    plan_outcomes: &[ScanPlanOutcome],
+    plans: &[&PdfSyncPlan],
+    pdf_count: usize,
+    plan_failure_count: usize,
+    styler: &Styler,
+) {
+    let lines = plan_outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            ScanPlanOutcome::Planned(plan) => ScanLine::from_plan(plan),
+            ScanPlanOutcome::Failed(failure) => {
+                Some(ScanLine::from_failure(failure, false))
+            }
+        })
+        .collect::<Vec<_>>();
+    print_scan_lines(&lines, true, styler);
+    println!(
+        "{}",
+        scan_summary_line(
+            pdf_count,
+            ScanCounts::from_plans(plans),
+            plan_failure_count,
+            "none",
+            styler,
+        )
+    );
+}
+
+fn print_concise_scan_write_report(
+    plan_outcomes: &[ScanPlanOutcome],
+    write_outcomes: &[ScanWriteOutcome],
+    reports: &[SyncWriteReport],
+    pdf_count: usize,
+    plan_failure_count: usize,
+    write_failure_count: usize,
+    styler: &Styler,
+) {
+    let mut write_index = 0usize;
+    let mut lines = Vec::new();
+    for outcome in plan_outcomes {
+        match outcome {
+            ScanPlanOutcome::Planned(plan) => {
+                let write_outcome = write_outcomes.get(write_index);
+                write_index += 1;
+                match write_outcome {
+                    Some(ScanWriteOutcome::Written(report)) => {
+                        if let Some(line) = ScanLine::from_write(plan, report) {
+                            lines.push(line);
+                        }
+                    }
+                    Some(ScanWriteOutcome::Failed(failure)) => {
+                        lines.push(ScanLine::from_failure(failure, true));
+                    }
+                    None => {}
+                }
+            }
+            ScanPlanOutcome::Failed(failure) => {
+                lines.push(ScanLine::from_failure(failure, false));
+            }
+        }
+    }
+
+    print_scan_lines(&lines, false, styler);
+    println!(
+        "{}",
+        scan_summary_line(
+            pdf_count,
+            ScanCounts::from_reports(reports),
+            plan_failure_count + write_failure_count,
+            write_summary_from_reports(reports),
+            styler,
+        )
+    );
+}
+
+fn print_scan_lines(lines: &[ScanLine], dry_run: bool, styler: &Styler) {
+    let prefix_width = lines
+        .iter()
+        .map(|line| display_width(line.prefix_label(dry_run)))
+        .max()
+        .unwrap_or(0);
+    let name_width = lines
+        .iter()
+        .map(|line| display_width(line.name()))
+        .max()
+        .unwrap_or(0);
+
+    for line in lines {
+        println!("{}", line.render(prefix_width, name_width, dry_run, styler));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScanLine {
+    Success {
+        name: String,
+        action: String,
+        details: Vec<String>,
+    },
+    Failed {
+        name: String,
+        message: String,
+    },
+}
+
+impl ScanLine {
+    fn from_plan(plan: &PdfSyncPlan) -> Option<Self> {
+        scan_plan_changed(plan).then(|| Self::Success {
+            name: scan_display_name(&plan.note_path),
+            action: scan_change_action(
+                plan.stable_note_action,
+                plan.marker_write_needed,
+                planned_routed_note_write_count(plan),
+                true,
+            ),
+            details: scan_details(plan, plan.annotation_tasks_created),
+        })
+    }
+
+    fn from_write(
+        plan: &PdfSyncPlan,
+        report: &SyncWriteReport,
+    ) -> Option<Self> {
+        scan_report_changed(report).then(|| Self::Success {
+            name: scan_display_name(&plan.note_path),
+            action: scan_change_action(
+                report.note_action,
+                report.marker_action != "none",
+                report.routed_note_actions,
+                false,
+            ),
+            details: scan_details(plan, report.annotation_tasks_created),
+        })
+    }
+
+    fn from_failure(failure: &ScanFailure, write_failure: bool) -> Self {
+        let message = if write_failure {
+            format!("write failed: {}", failure.error)
+        } else {
+            failure.error.to_string()
+        };
+        Self::Failed {
+            name: scan_display_name(&failure.pdf),
+            message,
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Self::Success { name, .. } | Self::Failed { name, .. } => name,
+        }
+    }
+
+    fn prefix_label(&self, dry_run: bool) -> &'static str {
+        match self {
+            Self::Success { .. } => success_prefix_label(dry_run),
+            Self::Failed { .. } => "error",
+        }
+    }
+
+    fn render(
+        &self,
+        prefix_width: usize,
+        name_width: usize,
+        dry_run: bool,
+        styler: &Styler,
+    ) -> String {
+        let prefix_label = pad_right(self.prefix_label(dry_run), prefix_width);
+        let prefix = match self {
+            Self::Success { .. } => styler.green(&prefix_label),
+            Self::Failed { .. } => styler.red(&prefix_label),
+        };
+        let name = styler.cyan(&pad_right(self.name(), name_width));
+
+        match self {
+            Self::Success {
+                action, details, ..
+            } => {
+                let mut rendered = format!("  {prefix}  {name}  {action}");
+                if !details.is_empty() {
+                    let separator = format!(" {} ", styler.separator());
+                    rendered.push_str("  ");
+                    rendered.push_str(&styler.dim(&details.join(&separator)));
+                }
+                rendered
+            }
+            Self::Failed { message, .. } => {
+                format!("  {prefix}  {name}  {message}")
+            }
+        }
+    }
+}
+
+fn success_prefix_label(dry_run: bool) -> &'static str {
+    if dry_run {
+        "[dry-run] ok"
+    } else {
+        "ok"
+    }
+}
+
+fn scan_plan_changed(plan: &PdfSyncPlan) -> bool {
+    plan.stable_note_action != "none"
+        || plan.marker_write_needed
+        || plan.annotation_tasks_created > 0
+        || planned_routed_note_write_count(plan) > 0
+}
+
+fn scan_report_changed(report: &SyncWriteReport) -> bool {
+    report.note_action != "none"
+        || report.marker_action != "none"
+        || report.annotation_tasks_created > 0
+        || report.routed_note_actions > 0
+}
+
+fn scan_change_action(
+    note_action: &str,
+    marker_changed: bool,
+    routed_note_count: usize,
+    dry_run: bool,
+) -> String {
+    let mut targets = Vec::new();
+    if note_action != "none" {
+        targets.push("note".to_string());
+    }
+    if routed_note_count > 0 {
+        targets.push(
+            plural(routed_note_count, "routed note", "routed notes")
+                .to_string(),
+        );
+    }
+    if marker_changed {
+        targets.push("marker".to_string());
+    }
+
+    if targets.is_empty() {
+        return "no changes".to_string();
+    }
+
+    let verb = match (dry_run, note_action) {
+        (true, "create") => "would create",
+        (true, _) => "would update",
+        (false, "create") => "created",
+        (false, _) => "updated",
+    };
+    format!("{verb} {}", targets.join(" + "))
+}
+
+fn scan_details(
+    plan: &PdfSyncPlan,
+    annotation_tasks_created: usize,
+) -> Vec<String> {
+    let mut details = Vec::new();
+    if let Some(count) = plan.rendered_highlights_count {
+        details.push(count_phrase(count, "highlight", "highlights"));
+    }
+    if annotation_tasks_created > 0 {
+        details.push(format!(
+            "+{}",
+            count_phrase(annotation_tasks_created, "task", "tasks")
+        ));
+    }
+    if plan.decision.source == SyncSource::AutoMerge {
+        details.push(format!("auto-merge ({})", plan.decision.reason));
+    }
+    details
+}
+
+fn scan_display_name(path: &Path) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().replace(['_', '-'], " "))
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ScanCounts {
+    creates: usize,
+    updates: usize,
+    unchanged: usize,
+    marker_updates: usize,
+    annotation_tasks_created: usize,
+    annotation_tasks_skipped: usize,
+    routed_task_note_writes: usize,
+}
+
+impl ScanCounts {
+    fn from_plans(plans: &[&PdfSyncPlan]) -> Self {
+        Self {
+            creates: plans
+                .iter()
+                .filter(|plan| plan.stable_note_action == "create")
+                .count(),
+            updates: plans
+                .iter()
+                .map(|plan| {
+                    usize::from(plan.stable_note_action == "update")
+                        + planned_routed_note_write_count(plan)
+                })
+                .sum(),
+            unchanged: plans
+                .iter()
+                .filter(|plan| plan.stable_note_action == "none")
+                .count(),
+            marker_updates: plans
+                .iter()
+                .filter(|plan| plan.marker_write_needed)
+                .count(),
+            annotation_tasks_created: plans
+                .iter()
+                .map(|plan| plan.annotation_tasks_created)
+                .sum(),
+            annotation_tasks_skipped: plans
+                .iter()
+                .map(|plan| plan.annotation_tasks_skipped)
+                .sum(),
+            routed_task_note_writes: plans
+                .iter()
+                .map(|plan| planned_routed_note_write_count(plan))
+                .sum(),
+        }
+    }
+
+    fn from_reports(reports: &[SyncWriteReport]) -> Self {
+        Self {
+            creates: reports
+                .iter()
+                .filter(|report| report.note_action == "create")
+                .count(),
+            updates: reports
+                .iter()
+                .map(|report| {
+                    usize::from(report.note_action == "update")
+                        + report.routed_note_actions
+                })
+                .sum(),
+            unchanged: reports
+                .iter()
+                .filter(|report| report.note_action == "none")
+                .count(),
+            marker_updates: reports
+                .iter()
+                .filter(|report| report.marker_action != "none")
+                .count(),
+            annotation_tasks_created: reports
+                .iter()
+                .map(|report| report.annotation_tasks_created)
+                .sum(),
+            annotation_tasks_skipped: reports
+                .iter()
+                .map(|report| report.annotation_tasks_skipped)
+                .sum(),
+            routed_task_note_writes: reports
+                .iter()
+                .map(|report| report.routed_note_actions)
+                .sum(),
+        }
+    }
+}
+
+fn scan_summary_line(
+    pdf_count: usize,
+    counts: ScanCounts,
+    failure_count: usize,
+    writes: &str,
+    styler: &Styler,
+) -> String {
+    let separator = styler.separator();
+    let mut summary = format!(
+        "{} {pdf_noun} {separator} {} created {separator} {} updated {separator} {} unchanged {separator} {} {marker_noun} {separator} {} {task_noun}",
+        pdf_count,
+        counts.creates,
+        counts.updates,
+        counts.unchanged,
+        counts.marker_updates,
+        counts.annotation_tasks_created,
+        pdf_noun = plural(pdf_count, "pdf", "pdfs"),
+        marker_noun = plural(counts.marker_updates, "marker", "markers"),
+        task_noun = plural(counts.annotation_tasks_created, "task", "tasks"),
+    );
+    if failure_count > 0 {
+        summary.push_str(&format!(
+            " {separator} {}",
+            styler.red(&count_phrase(failure_count, "failure", "failures"))
+        ));
+    }
+    summary.push_str(&format!(" {separator} writes: {writes}"));
+    summary
+}
+
+fn write_summary_from_reports(reports: &[SyncWriteReport]) -> &'static str {
+    let note_writes = reports.iter().any(|report| {
+        report.note_action != "none" || report.routed_note_actions > 0
+    });
+    let marker_writes =
+        reports.iter().any(|report| report.marker_action != "none");
+    match (note_writes, marker_writes) {
+        (false, false) => "none",
+        (true, false) => "note",
+        (false, true) => "pdf",
+        (true, true) => "note,pdf",
+    }
+}
+
+fn count_phrase(count: usize, singular: &str, plural_noun: &str) -> String {
+    format!("{count} {}", plural(count, singular, plural_noun))
+}
+
+fn plural<'a>(
+    count: usize,
+    singular: &'a str,
+    plural_noun: &'a str,
+) -> &'a str {
+    if count == 1 {
+        singular
+    } else {
+        plural_noun
+    }
+}
+
 fn print_scan_plan_entry(plan: &PdfSyncPlan) {
     println!("pdf: {}", plan.pdf.display());
     println!("  note: {}", plan.note_path.display());
@@ -1320,43 +1827,24 @@ fn print_scan_write_failure_entry(failure: &ScanFailure) {
 }
 
 fn print_scan_plan_summary(plans: &[&PdfSyncPlan], plan_failure_count: usize) {
-    let creates = plans
-        .iter()
-        .filter(|plan| plan.stable_note_action == "create")
-        .count();
-    let updates = plans
-        .iter()
-        .map(|plan| {
-            usize::from(plan.stable_note_action == "update")
-                + planned_routed_note_write_count(plan)
-        })
-        .sum::<usize>();
-    let unchanged = plans
-        .iter()
-        .filter(|plan| plan.stable_note_action == "none")
-        .count();
-    let marker_updates =
-        plans.iter().filter(|plan| plan.marker_write_needed).count();
-    let annotation_tasks_created = plans
-        .iter()
-        .map(|plan| plan.annotation_tasks_created)
-        .sum::<usize>();
-    let annotation_tasks_skipped = plans
-        .iter()
-        .map(|plan| plan.annotation_tasks_skipped)
-        .sum::<usize>();
-    let routed_task_note_writes = plans
-        .iter()
-        .map(|plan| planned_routed_note_write_count(plan))
-        .sum::<usize>();
+    let counts = ScanCounts::from_plans(plans);
     println!("summary:");
-    println!("  notes_create: {creates}");
-    println!("  notes_update: {updates}");
-    println!("  notes_unchanged: {unchanged}");
-    println!("  annotation_tasks_create: {annotation_tasks_created}");
-    println!("  annotation_tasks_skip: {annotation_tasks_skipped}");
-    println!("  routed_task_note_writes: {routed_task_note_writes}");
-    println!("  pdf_markers_would_update: {marker_updates}");
+    println!("  notes_create: {}", counts.creates);
+    println!("  notes_update: {}", counts.updates);
+    println!("  notes_unchanged: {}", counts.unchanged);
+    println!(
+        "  annotation_tasks_create: {}",
+        counts.annotation_tasks_created
+    );
+    println!(
+        "  annotation_tasks_skip: {}",
+        counts.annotation_tasks_skipped
+    );
+    println!(
+        "  routed_task_note_writes: {}",
+        counts.routed_task_note_writes
+    );
+    println!("  pdf_markers_would_update: {}", counts.marker_updates);
     println!("  pdfs_planned: {}", plans.len());
     println!("  plan_failures: {plan_failure_count}");
     println!("  scan_failures: {plan_failure_count}");
@@ -1370,45 +1858,24 @@ fn print_scan_write_summary(
     plan_failure_count: usize,
     write_failure_count: usize,
 ) {
-    let creates = reports
-        .iter()
-        .filter(|report| report.note_action == "create")
-        .count();
-    let updates = reports
-        .iter()
-        .map(|report| {
-            usize::from(report.note_action == "update")
-                + report.routed_note_actions
-        })
-        .sum::<usize>();
-    let unchanged = reports
-        .iter()
-        .filter(|report| report.note_action == "none")
-        .count();
-    let marker_updates = reports
-        .iter()
-        .filter(|report| report.marker_action != "none")
-        .count();
-    let annotation_tasks_created = reports
-        .iter()
-        .map(|report| report.annotation_tasks_created)
-        .sum::<usize>();
-    let annotation_tasks_skipped = reports
-        .iter()
-        .map(|report| report.annotation_tasks_skipped)
-        .sum::<usize>();
-    let routed_task_note_writes = reports
-        .iter()
-        .map(|report| report.routed_note_actions)
-        .sum::<usize>();
+    let counts = ScanCounts::from_reports(reports);
     println!("summary:");
-    println!("  notes_created: {creates}");
-    println!("  notes_updated: {updates}");
-    println!("  notes_unchanged: {unchanged}");
-    println!("  annotation_tasks_created: {annotation_tasks_created}");
-    println!("  annotation_tasks_skipped: {annotation_tasks_skipped}");
-    println!("  routed_task_note_writes: {routed_task_note_writes}");
-    println!("  pdf_markers_updated: {marker_updates}");
+    println!("  notes_created: {}", counts.creates);
+    println!("  notes_updated: {}", counts.updates);
+    println!("  notes_unchanged: {}", counts.unchanged);
+    println!(
+        "  annotation_tasks_created: {}",
+        counts.annotation_tasks_created
+    );
+    println!(
+        "  annotation_tasks_skipped: {}",
+        counts.annotation_tasks_skipped
+    );
+    println!(
+        "  routed_task_note_writes: {}",
+        counts.routed_task_note_writes
+    );
+    println!("  pdf_markers_updated: {}", counts.marker_updates);
     println!("  write_successes: {}", reports.len());
     println!("  plan_failures: {plan_failure_count}");
     println!("  write_failures: {write_failure_count}");
@@ -1419,20 +1886,7 @@ fn print_scan_write_summary(
     if plan_failure_count + write_failure_count > 0 {
         println!("result: partial-failure");
     }
-    let note_writes = reports.iter().any(|report| {
-        report.note_action != "none" || report.routed_note_actions > 0
-    });
-    let marker_writes =
-        reports.iter().any(|report| report.marker_action != "none");
-    println!(
-        "writes: {}",
-        match (note_writes, marker_writes) {
-            (false, false) => "none",
-            (true, false) => "note",
-            (false, true) => "pdf",
-            (true, true) => "note,pdf",
-        }
-    );
+    println!("writes: {}", write_summary_from_reports(reports));
 }
 
 fn scan_partial_failure_error(
@@ -3917,6 +4371,7 @@ fn with_scan_args(command: ClapCommand) -> ClapCommand {
         .arg(jobs_arg())
         .arg(lib_dir_arg())
         .arg(ref_dir_arg())
+        .arg(verbose_arg())
         .arg(write_pdfs_arg())
 }
 
@@ -3996,6 +4451,14 @@ fn prefer_arg() -> Arg {
         .value_name("SIDE")
         .value_parser(["marker", "frontmatter"])
         .help("Resolve a marker/frontmatter conflict using this side")
+}
+
+fn verbose_arg() -> Arg {
+    Arg::new("verbose")
+        .long("verbose")
+        .short('v')
+        .action(ArgAction::SetTrue)
+        .help("Print the detailed per-PDF scan report")
 }
 
 fn write_pdf_arg() -> Arg {

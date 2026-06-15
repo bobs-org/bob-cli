@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-15 08:39:27
-status: wip
+status: done
 prompt: sdd/prompts/202606/highlights_scan_output.md
 ---
 # Plan: Beautiful, concise `bob highlights scan` output

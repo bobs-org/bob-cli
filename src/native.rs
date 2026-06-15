@@ -9,6 +9,7 @@ mod notify;
 mod ob;
 mod pomodoro;
 mod projects;
+mod style;
 mod sync;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,10 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    env,
     ffi::OsString,
-    fs, io,
-    io::IsTerminal,
-    iter,
+    fs, io, iter,
     path::{Path, PathBuf},
 };
 
@@ -13,7 +10,10 @@ use clap::{
     Command as ClapCommand,
 };
 
-use super::env as bob_env;
+use super::{
+    env as bob_env,
+    style::{display_width, pad_right, Styler},
+};
 
 const COMMAND_NAME: &str = "bob projects";
 const PLACEHOLDER_CRITERIA: &str =
@@ -2271,64 +2271,17 @@ impl PrjTask {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Styler {
-    color: bool,
+trait ProjectStyleExt {
+    fn status(&self, padded_label: &str, status: &ProjectStatus) -> String;
+    fn open_label(&self) -> String;
+    fn success_label(&self, label: &str) -> String;
+    fn canceled_label(&self, label: &str) -> String;
+    fn warning_label(&self, label: &str) -> String;
+    fn error_label(&self, label: &str) -> String;
+    fn on_dash_label(&self) -> String;
 }
 
-impl Styler {
-    fn detect() -> Self {
-        Self {
-            color: io::stdout().is_terminal()
-                && env::var_os("NO_COLOR").is_none(),
-        }
-    }
-
-    #[cfg(test)]
-    fn plain() -> Self {
-        Self { color: false }
-    }
-
-    fn separator(&self) -> &'static str {
-        if self.color {
-            "\u{b7}"
-        } else {
-            "-"
-        }
-    }
-
-    fn cyan(&self, text: &str) -> String {
-        self.paint("36;1", text)
-    }
-
-    fn green(&self, text: &str) -> String {
-        self.paint("32;1", text)
-    }
-
-    fn yellow(&self, text: &str) -> String {
-        self.paint("33;1", text)
-    }
-
-    fn blue(&self, text: &str) -> String {
-        self.paint("34;1", text)
-    }
-
-    fn red(&self, text: &str) -> String {
-        self.paint("31;1", text)
-    }
-
-    fn dim(&self, text: &str) -> String {
-        self.paint("2", text)
-    }
-
-    fn paint(&self, code: &str, text: &str) -> String {
-        if self.color {
-            format!("\u{1b}[{code}m{text}\u{1b}[0m")
-        } else {
-            text.to_string()
-        }
-    }
-
+impl ProjectStyleExt for Styler {
     fn status(&self, padded_label: &str, status: &ProjectStatus) -> String {
         match status {
             ProjectStatus::Wip | ProjectStatus::Other(_) => {
@@ -2341,7 +2294,7 @@ impl Styler {
     }
 
     fn open_label(&self) -> String {
-        if self.color {
+        if self.is_color() {
             self.yellow("\u{25cb} open")
         } else {
             "open".to_string()
@@ -2349,7 +2302,7 @@ impl Styler {
     }
 
     fn success_label(&self, label: &str) -> String {
-        if self.color {
+        if self.is_color() {
             self.green(&format!("\u{2713} {label}"))
         } else {
             label.to_string()
@@ -2357,7 +2310,7 @@ impl Styler {
     }
 
     fn canceled_label(&self, label: &str) -> String {
-        if self.color {
+        if self.is_color() {
             self.dim(&format!("\u{2715} {label}"))
         } else {
             label.to_string()
@@ -2365,7 +2318,7 @@ impl Styler {
     }
 
     fn warning_label(&self, label: &str) -> String {
-        if self.color {
+        if self.is_color() {
             self.yellow(&format!("\u{26a0} {label}"))
         } else {
             label.to_string()
@@ -2373,35 +2326,18 @@ impl Styler {
     }
 
     fn error_label(&self, label: &str) -> String {
-        if self.color {
+        if self.is_color() {
             self.red(&format!("\u{2717} {label}"))
         } else {
             label.to_string()
         }
     }
 
-    fn success_prefix(&self, dry_run: bool) -> String {
-        let label = if dry_run { "[dry-run] ok" } else { "ok" };
-        if self.color {
-            self.green(label)
-        } else {
-            label.to_string()
-        }
-    }
-
     fn on_dash_label(&self) -> String {
-        if self.color {
+        if self.is_color() {
             self.blue("on dash")
         } else {
             "on dash".to_string()
-        }
-    }
-
-    fn warning_prefix(&self) -> String {
-        if self.color {
-            self.yellow("warning")
-        } else {
-            "warning".to_string()
         }
     }
 }
@@ -2455,15 +2391,6 @@ fn trim_cr(value: &str) -> &str {
 
 fn is_inline_field_space(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t')
-}
-
-fn pad_right(text: &str, width: usize) -> String {
-    let padding = width.saturating_sub(display_width(text));
-    format!("{text}{}", " ".repeat(padding))
-}
-
-fn display_width(text: &str) -> usize {
-    text.chars().count()
 }
 
 #[cfg(test)]

@@ -2534,6 +2534,7 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
             "-j, --jobs",
             "-l, --lib-dir",
             "-r, --ref-dir",
+            "-v, --verbose",
             "-w, --write-pdfs",
         ],
     );
@@ -2559,6 +2560,7 @@ fn highlights_ref_short_options_are_accepted() {
         .arg("lib")
         .arg("-r")
         .arg("ref")
+        .arg("-v")
         .arg("-w")
         .output()
         .expect("run bob highlights scan with short options");
@@ -2762,6 +2764,7 @@ fn highlights_ref_scan_treats_later_page_note_as_missing_marker() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
@@ -2943,6 +2946,7 @@ fn highlights_ref_rejects_wikilink_marker_parent_before_writes() {
     let scan = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
@@ -3133,6 +3137,7 @@ Note: marker note
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
@@ -3154,6 +3159,7 @@ Note: marker note
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .env("BOB_DIR", &vault)
         .output()
         .expect("write highlights scan");
@@ -3201,6 +3207,7 @@ Note: marker note
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .env("BOB_DIR", &vault)
         .output()
         .expect("repeat highlights scan");
@@ -3231,6 +3238,7 @@ fn highlights_ref_scan_dry_run_reports_valid_and_invalid_pdfs() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
@@ -3291,6 +3299,7 @@ fn highlights_ref_scan_writes_valid_pdfs_despite_invalid_pdf() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .env("BOB_DIR", &vault)
         .output()
         .expect("mixed write highlights scan");
@@ -3335,6 +3344,211 @@ fn highlights_ref_scan_writes_valid_pdfs_despite_invalid_pdf() {
 }
 
 #[test]
+fn highlights_ref_scan_default_output_is_concise() {
+    let temp = TempDir::new("bob-cli-highlights-ref-scan-concise");
+    let vault = temp.path().join("vault");
+    let create_pdf = vault.join("lib/books/create-note.pdf");
+    let update_pdf = vault.join("lib/books/update-me.pdf");
+    let settled_pdf = vault.join("lib/books/settled.pdf");
+    let create_note = vault.join("ref/books/create-note.md");
+    let update_note = vault.join("ref/books/update-me.md");
+    let settled_note = vault.join("ref/books/settled.md");
+
+    write_highlights_pdf(
+        &create_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Create Note\n",
+    );
+    write_file(
+        &create_pdf.with_extension("md"),
+        "\
+## Page 1
+
+Note: marker note mirrored from the PDF
+
+---
+
+> Create highlight.
+",
+    );
+    write_highlights_pdf(
+        &update_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Update Me\n",
+    );
+    write_highlights_pdf(
+        &settled_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Settled\n",
+    );
+
+    assert_success(
+        &bob_command()
+            .arg("highlights")
+            .arg("sync")
+            .arg(&update_pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial update sync"),
+    );
+    assert_success(
+        &bob_command()
+            .arg("highlights")
+            .arg("sync")
+            .arg(&settled_pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial settled sync"),
+    );
+
+    let checked_update = fs::read_to_string(&update_note)
+        .expect("read update note")
+        .replace("- [ ] #task", "- [x] #task");
+    write_file(&update_note, &checked_update);
+    write_file(
+        &update_pdf.with_extension("md"),
+        "\
+## Page 2
+
+Note: marker note mirrored from the PDF
+
+---
+
+> Update highlight.
+
+- #task Import this annotation task.
+",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--dry-run")
+        .arg("--write-pdfs")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("concise dry-run scan");
+
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let dry_run = stdout(&output);
+    assert!(
+        dry_run.contains("Scanning 3 PDFs in lib - dry-run"),
+        "{dry_run}"
+    );
+    assert!(
+        dry_run.contains("[dry-run] ok  create note")
+            && dry_run.contains("would create note")
+            && dry_run.contains("1 highlight"),
+        "created PDF should render as one concise line:\n{dry_run}"
+    );
+    assert!(
+        dry_run.contains("[dry-run] ok  update me")
+            && dry_run.contains("would update note + marker")
+            && dry_run.contains("+1 task"),
+        "updated PDF should render marker and task context:\n{dry_run}"
+    );
+    assert!(
+        dry_run.contains(
+            "3 pdfs - 1 created - 1 updated - 1 unchanged - 1 marker - 1 task - writes: none"
+        ),
+        "expected concise dry-run summary:\n{dry_run}"
+    );
+    assert!(
+        !dry_run.contains("settled")
+            && !dry_run.contains("pdf_count:")
+            && !dry_run.contains("sync_source:"),
+        "default scan output should suppress unchanged PDFs and verbose keys:\n{dry_run}"
+    );
+    assert!(!create_note.exists(), "dry-run must not create note");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--write-pdfs")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("concise write scan");
+
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        written.contains("Scanning 3 PDFs in lib")
+            && !written.contains("dry-run"),
+        "{written}"
+    );
+    assert!(
+        written.contains("ok  create note")
+            && written.contains("created note")
+            && written.contains("ok  update me")
+            && written.contains("updated note + marker"),
+        "write scan should use past-tense concise actions:\n{written}"
+    );
+    assert!(
+        written.contains(
+            "3 pdfs - 1 created - 1 updated - 1 unchanged - 1 marker - 1 task - writes: note,pdf"
+        ),
+        "expected concise write summary:\n{written}"
+    );
+    assert!(
+        !written.contains("settled") && !written.contains("notes_created:"),
+        "write scan should keep detailed keys out of default output:\n{written}"
+    );
+    assert!(create_note.exists(), "write scan should create note");
+    assert!(settled_note.exists(), "settled note should remain present");
+}
+
+#[test]
+fn highlights_ref_scan_default_output_reports_inline_errors() {
+    let temp = TempDir::new("bob-cli-highlights-ref-scan-concise-errors");
+    let vault = temp.path().join("vault");
+    let valid_pdf = vault.join("lib/books/valid.pdf");
+    let invalid_pdf = vault.join("lib/books/invalid.pdf");
+    write_highlights_pdf(
+        &valid_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Valid\n",
+    );
+    write_highlights_pdf(
+        &invalid_pdf,
+        "- parent: obsidian\n- title: Invalid\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("concise scan with invalid PDF");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "invalid PDF should make scan return non-zero:\n{}",
+        format_output(&output)
+    );
+    assert_stdout_has_no_ansi(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("error")
+            && report.contains("invalid  missing required marker key: status"),
+        "invalid PDF should be rendered inline:\n{report}"
+    );
+    assert!(
+        report.contains(
+            "2 pdfs - 1 created - 0 updated - 0 unchanged - 0 markers - 0 tasks - 1 failure - writes: none"
+        ),
+        "expected concise partial-failure summary:\n{report}"
+    );
+    assert!(
+        !report.contains("plan_error:") && !report.contains(path_str(&invalid_pdf)),
+        "default failure output should avoid verbose keys and full paths:\n{report}"
+    );
+    assert!(
+        stderr(&output).contains("scan completed with 1 per-PDF failure(s)"),
+        "expected partial failure stderr:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
 fn highlights_ref_scan_continues_after_write_failure() {
     let temp = TempDir::new("bob-cli-highlights-ref-scan-write-failure");
     let vault = temp.path().join("vault");
@@ -3359,7 +3573,7 @@ fn highlights_ref_scan_continues_after_write_failure() {
             "set -eu\n\
              mkdir -p \"$FAIL_PARENT\"\n\
              mkdir \"$FAIL_PARENT/.$FAIL_NAME.$$.tmp\"\n\
-             exec \"$BOB_BIN\" highlights scan\n",
+             exec \"$BOB_BIN\" highlights scan --verbose\n",
         )
         .env("BOB_BIN", BOB_BIN)
         .env("BOB_DIR", &vault)
@@ -3435,6 +3649,7 @@ fn highlights_ref_scan_jobs_flag_matches_sequential_output() {
         let output = bob_command()
             .arg("highlights")
             .arg("scan")
+            .arg("--verbose")
             .arg("--dry-run")
             .arg("--jobs")
             .arg(jobs)
@@ -3915,6 +4130,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
@@ -3934,6 +4150,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .env("BOB_DIR", &vault)
         .output()
         .expect("writing scan deprecated done migration");
@@ -4056,6 +4273,7 @@ fn highlights_ref_task_cancelled_dry_run_requires_and_writes_pdf_marker() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
@@ -4197,6 +4415,7 @@ fn highlights_ref_task_cancelled_scan_write_pdfs_writes_pdf_marker() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--write-pdfs")
         .env("BOB_DIR", &vault)
         .output()
@@ -4276,6 +4495,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--dry-run")
         .env("BOB_DIR", &vault)
         .output()
@@ -4298,6 +4518,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--dry-run")
         .arg("--write-pdfs")
         .env("BOB_DIR", &vault)
@@ -4344,6 +4565,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .env("BOB_DIR", &vault)
         .output()
         .expect("checked task scan without PDF writes");
@@ -4375,6 +4597,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--write-pdfs")
         .env("BOB_DIR", &vault)
         .output()
@@ -4623,6 +4846,7 @@ Note: marker note mirrored from the PDF
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--dry-run")
         .arg("--write-pdfs")
         .env("BOB_DIR", &vault)
@@ -4649,6 +4873,7 @@ Note: marker note mirrored from the PDF
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
+        .arg("--verbose")
         .arg("--write-pdfs")
         .env("BOB_DIR", &vault)
         .output()
