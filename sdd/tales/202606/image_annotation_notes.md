@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-15 10:38:23
-status: wip
+status: done
 prompt: sdd/prompts/202606/image_annotation_notes.md
 ---
 # Image Annotation Notes Plan

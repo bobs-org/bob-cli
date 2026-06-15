@@ -5650,6 +5650,70 @@ Comment: Compare this figure with p.14.
 }
 
 #[test]
+fn highlights_ref_sync_renders_textbundle_image_title_notes() {
+    let temp = TempDir::new("bob-cli-highlights-ref-image-title");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/books/figures.pdf");
+    let textbundle = pdf.with_extension("textbundle");
+    let sidecar = textbundle.join("text.md");
+    let source_asset = textbundle.join("assets/figure.png");
+    let note = vault.join("ref/books/figures.md");
+    let image_bytes = b"synthetic png bytes";
+
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Figures\n",
+    );
+    write_file(
+        &sidecar,
+        "\
+# Figures
+
+## Page 12
+
+Note: marker note mirrored from the PDF
+
+---
+
+![Latency figure](assets/figure.png \"Compare this figure with p.14.\")
+",
+    );
+    fs::create_dir_all(source_asset.parent().expect("asset parent"))
+        .expect("create source asset parent");
+    fs::write(&source_asset, image_bytes).expect("write source image asset");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync image title textbundle");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("images: 1")
+            && report.contains("image_assets_written: 1")
+            && report.contains("writes: note"),
+        "expected write image report:\n{}",
+        format_output(&output)
+    );
+    let contents = fs::read_to_string(&note).expect("read image note");
+    assert!(
+        contents.contains("> [!quote] Image ![[ref/books/figures.assets/h-"),
+        "{contents}"
+    );
+    // The note authored in the Markdown image title renders as the nested
+    // comment callout, and the asset path is never used as note text.
+    assert!(
+        contents
+            .contains("> > [!note] Comment Compare this figure with p.14.\n"),
+        "{contents}"
+    );
+}
+
+#[test]
 fn highlights_ref_sync_supports_linked_sidecar_style() {
     let temp = TempDir::new("bob-cli-highlights-ref-linked-sidecar");
     let vault = temp.path().join("vault");

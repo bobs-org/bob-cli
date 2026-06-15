@@ -323,6 +323,14 @@ Two Markdown sidecar shapes are supported. The simple shape is:
   after the image is treated as its comment. Multiple images in one chunk render
   as separate image annotations. Non-image targets such as PDFs remain ordinary
   standalone note text.
+- A note attached to an image annotation may be stored either as regular text
+  below the image or inside the Markdown image title, such as
+  `![alt](assets/figure.png "note text")`. Both shapes render as the image's
+  nested `[!note] Comment` callout. When both are present, the explicit text
+  below the image is used first and the title text is appended unless it merely
+  repeats that text. The image alt text is treated as metadata, not a note, so
+  generic captions are not rendered as comments, and the asset path is never
+  rendered as note text.
 - The first standalone note in sidecar order is treated as the PDF marker mirror
   and is excluded from generated content.
 

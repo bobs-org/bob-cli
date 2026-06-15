@@ -343,6 +343,7 @@ struct SidecarAnnotation {
 struct SidecarImage {
     target: String,
     alt_text: Option<String>,
+    title: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2946,6 +2947,7 @@ fn parse_sidecar_chunk(
 struct MarkdownImage {
     target: String,
     alt_text: Option<String>,
+    title: Option<String>,
     start: usize,
     end: usize,
 }
@@ -2990,6 +2992,7 @@ fn parse_image_sidecar_annotations(
                 image: SidecarImage {
                     target: markdown_image.target,
                     alt_text: markdown_image.alt_text,
+                    title: markdown_image.title,
                 },
                 comment_lines: Vec::new(),
             };
@@ -3013,15 +3016,15 @@ fn parse_image_sidecar_annotations(
     images
         .into_iter()
         .filter_map(|pending| {
-            let comment_source =
-                normalize_annotation_text(&pending.comment_lines);
+            if pending.image.target.is_empty() {
+                return None;
+            }
+            let comment_source = image_note_source(&pending);
             let comment = strip_comment_label(&comment_source);
-            let text = pending
-                .image
-                .alt_text
-                .clone()
-                .unwrap_or_else(|| pending.image.target.clone());
-            (!pending.image.target.is_empty()).then(|| SidecarAnnotation {
+            // Alt text is metadata only; never fall back to the asset path so
+            // image targets are never rendered as user note text.
+            let text = pending.image.alt_text.clone().unwrap_or_default();
+            Some(SidecarAnnotation {
                 kind: SidecarAnnotationKind::Image,
                 page_label: page_label.map(str::to_string),
                 linked_page_style,
@@ -3035,6 +3038,40 @@ fn parse_image_sidecar_annotations(
             })
         })
         .collect()
+}
+
+/// Build the combined user-authored note source for an image annotation.
+///
+/// Explicit sidecar lines adjacent to the image are the strongest source
+/// because that is the documented "regular text below the annotation" shape.
+/// Markdown image title text is treated as additional user-authored note text
+/// and appended unless it merely duplicates an explicit line. Alt text is left
+/// out: it is frequently a generic caption rather than a user note.
+fn image_note_source(pending: &PendingImageAnnotation) -> String {
+    let explicit = normalize_annotation_text(&pending.comment_lines);
+    let Some(title) = pending
+        .image
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+    else {
+        return explicit;
+    };
+    if explicit.is_empty() {
+        return title.to_string();
+    }
+    // Skip a title that merely repeats text the explicit note already carries,
+    // comparing against the label-stripped form so a `Comment:`-prefixed line
+    // still matches a bare title.
+    let already_present =
+        |source: &str| source.lines().any(|line| line.trim() == title);
+    if already_present(&explicit)
+        || already_present(&strip_comment_label(&explicit))
+    {
+        return explicit;
+    }
+    format!("{explicit}\n{title}")
 }
 
 fn push_image_comment_line(
@@ -3060,18 +3097,20 @@ fn markdown_images_in_line(line: &str) -> Vec<MarkdownImage> {
         };
         let label_end = alt_start + label_end_relative;
         let target_start = label_end + 2;
-        let Some(target_end_relative) = line[target_start..].find(')') else {
+        let Some(close_relative) = markdown_image_close(&line[target_start..])
+        else {
             break;
         };
-        let target_end = target_start + target_end_relative;
+        let target_end = target_start + close_relative;
         let end = target_end + 1;
-        if let Some(target) =
-            markdown_image_target(&line[target_start..target_end])
+        if let Some((target, title)) =
+            markdown_image_target_and_title(&line[target_start..target_end])
         {
             let alt = line[alt_start..label_end].trim();
             images.push(MarkdownImage {
                 target,
                 alt_text: (!alt.is_empty()).then(|| alt.to_string()),
+                title,
                 start,
                 end,
             });
@@ -3081,23 +3120,74 @@ fn markdown_images_in_line(line: &str) -> Vec<MarkdownImage> {
     images
 }
 
-fn markdown_image_target(destination: &str) -> Option<String> {
+/// Find the closing `)` of a Markdown image destination, ignoring `)`
+/// characters that appear inside a quoted title such as `"a (b)"`.
+fn markdown_image_close(rest: &str) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    let mut index = 0usize;
+    let mut quote: Option<u8> = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None => match byte {
+                b'"' | b'\'' => quote = Some(byte),
+                b')' => return Some(index),
+                _ => {}
+            },
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Split a Markdown image destination into its target and optional title text.
+///
+/// Supports bare targets (`assets/file.png`), angle-bracket targets
+/// (`<assets/my file.png>`), and an optional trailing title in double quotes,
+/// single quotes, or parentheses (`assets/file.png "note text"`). The title is
+/// where Highlights stores a note attached to an image annotation.
+fn markdown_image_target_and_title(
+    destination: &str,
+) -> Option<(String, Option<String>)> {
     let trimmed = destination.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    let target = if let Some(rest) = trimmed.strip_prefix('<') {
+    let (target, rest) = if let Some(rest) = trimmed.strip_prefix('<') {
         let end = rest.find('>')?;
-        &rest[..end]
+        (&rest[..end], rest[end + 1..].trim_start())
     } else if image_target_has_supported_extension(trimmed) {
-        trimmed
+        // The entire destination is the target (e.g. a path with spaces and a
+        // supported extension), so there is no title to parse.
+        (trimmed, "")
     } else {
-        trimmed.split_whitespace().next()?
+        let (target, rest) = trimmed
+            .split_once(char::is_whitespace)
+            .unwrap_or((trimmed, ""));
+        (target, rest.trim_start())
     };
 
-    image_target_has_supported_extension(target)
-        .then(|| target.trim().to_string())
+    if !image_target_has_supported_extension(target) {
+        return None;
+    }
+    Some((target.trim().to_string(), markdown_image_title(rest)))
+}
+
+fn markdown_image_title(rest: &str) -> Option<String> {
+    let rest = rest.trim();
+    let close = match rest.chars().next()? {
+        '"' => '"',
+        '\'' => '\'',
+        '(' => ')',
+        _ => return None,
+    };
+    let inner = &rest[1..];
+    let end = inner.find(close)?;
+    let title = inner[..end].trim();
+    (!title.is_empty()).then(|| title.to_string())
 }
 
 fn image_target_has_supported_extension(target: &str) -> bool {
@@ -7413,6 +7503,159 @@ Comment: Compare this figure with the appendix.
         assert_eq!(annotations[2].kind, SidecarAnnotationKind::Image);
         assert_eq!(annotations[3].kind, SidecarAnnotationKind::StandaloneNote);
         assert_eq!(annotations[3].text, "![Not an image](assets/paper.pdf)");
+    }
+
+    #[test]
+    fn sidecar_parser_reads_image_note_from_markdown_title() {
+        let annotations = parse_sidecar_markdown(
+            "\
+## Page 9
+
+![Figure 2](assets/figure.png \"Bryan's note about the figure.\")
+",
+        );
+
+        assert_eq!(annotations.len(), 1);
+        let annotation = &annotations[0];
+        assert_eq!(annotation.kind, SidecarAnnotationKind::Image);
+        assert_eq!(
+            annotation.image.as_ref().map(|image| image.target.as_str()),
+            Some("assets/figure.png")
+        );
+        assert_eq!(
+            annotation
+                .image
+                .as_ref()
+                .and_then(|image| image.alt_text.as_deref()),
+            Some("Figure 2")
+        );
+        assert_eq!(
+            annotation
+                .image
+                .as_ref()
+                .and_then(|image| image.title.as_deref()),
+            Some("Bryan's note about the figure.")
+        );
+        // The image title becomes the rendered comment; the asset path is
+        // never used as note text.
+        assert_eq!(
+            annotation.comment.as_deref(),
+            Some("Bryan's note about the figure.")
+        );
+        assert_eq!(annotation.text, "Figure 2");
+    }
+
+    #[test]
+    fn sidecar_parser_prefers_explicit_image_comment_over_title() {
+        let annotations = parse_sidecar_markdown(
+            "\
+## Page 9
+
+![Figure](assets/figure.png \"Title note.\")
+
+Comment: Explicit note below the image.
+",
+        );
+
+        assert_eq!(annotations.len(), 1);
+        let annotation = &annotations[0];
+        assert_eq!(annotation.kind, SidecarAnnotationKind::Image);
+        // The explicit adjacent line is strongest and comes first; the title
+        // is appended as an additional user note line.
+        assert_eq!(
+            annotation.comment.as_deref(),
+            Some("Explicit note below the image.\nTitle note.")
+        );
+    }
+
+    #[test]
+    fn sidecar_parser_does_not_duplicate_matching_image_title_and_comment() {
+        let annotations = parse_sidecar_markdown(
+            "\
+## Page 9
+
+![Figure](assets/figure.png \"Shared note.\")
+
+Comment: Shared note.
+",
+        );
+
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].comment.as_deref(), Some("Shared note."));
+    }
+
+    #[test]
+    fn sidecar_parser_image_without_note_has_no_comment() {
+        let annotations = parse_sidecar_markdown(
+            "## Page 9\n\n![Figure 1](assets/figure.png)\n",
+        );
+
+        assert_eq!(annotations.len(), 1);
+        let annotation = &annotations[0];
+        assert_eq!(annotation.kind, SidecarAnnotationKind::Image);
+        // Alt text alone is treated as metadata, not a user note, to avoid
+        // rendering generic captions as comments.
+        assert_eq!(annotation.comment, None);
+        assert_eq!(annotation.text, "Figure 1");
+    }
+
+    #[test]
+    fn render_sidecar_highlights_renders_image_title_note() {
+        let bob_dir = temp_bob_dir("image-title-render");
+        let sidecar_path = bob_dir.join("lib/books/figures.textbundle/text.md");
+        let asset_path =
+            bob_dir.join("lib/books/figures.textbundle/assets/figure.png");
+        write_test_file(&asset_path, "synthetic image bytes");
+        let annotations = parse_sidecar_markdown(
+            "\
+## Page 4
+
+![Figure](assets/figure.png \"Compare this figure with p.14.\")
+",
+        );
+        let sidecar = super::SidecarInput {
+            path: sidecar_path,
+            annotations,
+        };
+        let config = test_config_for_bob_dir(bob_dir.clone());
+        let pdf = bob_dir.join("lib/books/figures.pdf");
+        let ref_note = bob_dir.join("ref/books/figures.md");
+        let note = super::ParsedNote::empty();
+
+        let rendered = super::render_sidecar_highlights(
+            &config, &pdf, &ref_note, &note, &sidecar,
+        )
+        .expect("render image title selection");
+
+        assert_eq!(rendered.count, 1);
+        assert_eq!(rendered.image_count, 1);
+        let image_asset = &rendered.image_assets[0];
+        assert!(
+            rendered.content.contains(&format!(
+                "> [!quote] Image ![[{}]]\n",
+                super::display_path(&image_asset.vault_relative_dest_path)
+            )),
+            "{}",
+            rendered.content
+        );
+        assert!(
+            rendered
+                .content
+                .contains("> > [!note] Comment Compare this figure with p.14."),
+            "{}",
+            rendered.content
+        );
+        // A title-only image note carries no task, since tasks must be
+        // list-item lines.
+        let candidates = super::annotation_task_candidates(
+            &config,
+            &ref_note,
+            &pdf,
+            Some(&sidecar),
+            Some(&rendered),
+        )
+        .expect("extract image title tasks");
+        assert!(candidates.is_empty(), "{candidates:?}");
     }
 
     #[test]
