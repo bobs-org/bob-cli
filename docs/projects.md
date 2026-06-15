@@ -15,7 +15,7 @@ bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
 ```
 
 `list` is read-only. It scans project notes, prints frontmatter status, open
-`#task` count, open unprioritized task count, and the current `^prj` state.
+`#task` count, open non-hidden task count, and the current `^prj` state.
 
 `sync` mutates only the exact lines it needs to change. It prints one line for
 each action or warning, then a summary. Per-file errors are reported without
@@ -41,7 +41,7 @@ wikilink, such as `parent: "[[Parent Project]]"`.
 Each active project should contain one task line like:
 
 ```markdown
-- [ ] #task Ship the project outcome! [p::2] ^prj
+- [ ] #task Ship the project outcome! #hide ^prj
 ```
 
 The trailing block id must be exactly `^prj`. Multiple `^prj` tasks or a `^prj`
@@ -65,11 +65,11 @@ Task statuses follow the Tasks plugin convention:
 - `[x]` or `[X]` on the `^prj` task sets frontmatter `status: done`.
 - `[-]` on the `^prj` task sets frontmatter `status: canceled`.
 - Open `^prj` tasks do not change frontmatter status.
-- Active projects with zero unprioritized open tasks and no open sub-projects
-  have `[p::2]` removed from their open `^prj` task so they surface in
+- Active projects with zero non-hidden open tasks and no open sub-projects
+  have `#hide` removed from their open `^prj` task so they surface in
   `dash.md`'s Tasks section.
-- Active projects with unprioritized open tasks or open sub-projects get
-  `[p::2]` added back to their open `^prj` task immediately before `^prj`.
+- Active projects with non-hidden open tasks or open sub-projects get
+  `#hide` added back to their open `^prj` task immediately before `^prj`.
 - Active projects with open `^prj` tasks get one generated Sub-projects line
   nested directly under `^prj`, such as
   `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`.
@@ -88,10 +88,9 @@ Task statuses follow the Tasks plugin convention:
 - Terminal projects, `status: done` or `status: canceled`, never get `^prj`
   line edits.
 
-The dash Tasks query hides tasks with any `[p::N]` field. An unprioritized task
-is an open `#task` line with no `[p::...]` inline field at all; `[p::0]` is
-therefore prioritized for sync purposes. The `^prj` task itself never counts
-toward the unprioritized task count.
+The dash Tasks query hides tasks with the `#hide` tag. A non-hidden task is an
+open `#task` line with no `#hide` tag at all. The `^prj` task itself never
+counts toward the non-hidden task count.
 
 An open sub-project is another project note whose `parent` wikilink resolves to
 this note's file stem and whose own `^prj` task is open. Checked, canceled, or
@@ -110,9 +109,9 @@ is already on the generated line, but it does not resurrect older closed
 children that are not listed. Deleting a closed entry by hand prunes it
 permanently unless that child is reopened.
 
-In `bob projects list`, the `UNPRI` column is the open unprioritized task count.
-An open `^prj` task with a `p` field renders as `open`; an open `^prj` task
-without a `p` field renders as `on dash`.
+In `bob projects list`, the `SHOWN` column is the open non-hidden task count.
+An open `^prj` task with a `#hide` tag renders as `open`; an open `^prj` task
+without a `#hide` tag renders as `on dash`.
 
 When a project has no `status:` line and the `^prj` task is checked or canceled,
 `sync` inserts `status: done` or `status: canceled` immediately after the
@@ -149,14 +148,14 @@ Typical action output:
 
 ```text
   ok sase_blog  status: wip -> done  ^prj task checked
-  ok bob        removed [p::2] from ^prj  no unprioritized open tasks or open sub-projects
-  ok athena     added [p::2] to ^prj  project has open sub-projects
+  ok bob        removed #hide from ^prj  no non-hidden open tasks or open sub-projects
+  ok athena     added #hide to ^prj  project has open sub-projects
   ok athena     added [[sase_blog]] to ^prj  open sub-project
   ok athena     updated [[sase_blog]] on ^prj  sub-project completed
   ok athena     updated [[old_plan]] on ^prj  sub-project canceled
   ok athena     removed [[old_child]] from ^prj  no longer a sub-project
   ok athena     updated sub-projects on ^prj  canonical format
-  warning outlive  active project has no ^prj task  add `- [ ] #task <completion criteria> [p::2] ^prj`
+  warning outlive  active project has no ^prj task  add `- [ ] #task <completion criteria> #hide ^prj`
 
 11 projects - 1 status updated - 7 ^prj edited - 1 warnings
 ```

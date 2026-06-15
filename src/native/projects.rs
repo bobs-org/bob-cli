@@ -18,8 +18,8 @@ use super::{
 const COMMAND_NAME: &str = "bob projects";
 const PLACEHOLDER_CRITERIA: &str =
     "<short_project_completion_criteria_goes_here>";
-const PROJECT_TASK_SHAPE: &str =
-    "- [ ] #task <completion criteria> [p::2] ^prj";
+const PROJECT_TASK_SHAPE: &str = "- [ ] #task <completion criteria> #hide ^prj";
+const HIDE_TAG: &str = "#hide";
 const SUBPROJECTS_MARKER_PREFIX: &str = "🧩 **Sub-projects:**";
 const SUBPROJECTS_SEPARATOR: &str = "•";
 const SUBPROJECT_DONE_MARKER: &str = "✅";
@@ -62,9 +62,9 @@ fn build_cli() -> ClapCommand {
             "Manage Bob project notes through the completion-criteria task \
 anchored with ^prj.\n\n\
 The list subcommand is read-only: it scans project notes, counts open #task \
-items, counts open unprioritized tasks, and shows the current ^prj state. The \
-sync subcommand updates project status and manages the ^prj task's [p::2] \
-field and single Sub-projects line from that same ^prj task.",
+items, counts open non-hidden tasks, and shows the current ^prj state. The \
+sync subcommand updates project status and manages the ^prj task's #hide tag \
+and single Sub-projects line from that same ^prj task.",
         )
         .after_help(
             "Examples:\n  bob projects list\n  bob projects sync --dry-run\n  bob projects sync -b ~/bob",
@@ -86,15 +86,15 @@ fn list_command() -> ClapCommand {
 
 fn sync_command() -> ClapCommand {
     ClapCommand::new("sync")
-        .about("Sync project status and ^prj priority from ^prj tasks")
+        .about("Sync project status and ^prj #hide tag from ^prj tasks")
         .long_about(
             "Sync Bob project notes from the completion-criteria task anchored \
 with ^prj.\n\n\
 A checked ^prj task sets frontmatter status to done. A canceled ^prj task sets \
-status to canceled. Active projects with no unprioritized open tasks and no \
-open sub-projects have the [p::2] field removed from their open ^prj task so \
-it surfaces in dash.md's Tasks section; projects with unprioritized open tasks \
-or open sub-projects get [p::2] added back. Sync also maintains a single \
+status to canceled. Active projects with no non-hidden open tasks and no \
+open sub-projects have the #hide tag removed from their open ^prj task so \
+it surfaces in dash.md's Tasks section; projects with non-hidden open tasks \
+or open sub-projects get #hide added back. Sync also maintains a single \
 Sub-projects line nested directly under open ^prj tasks.",
         )
         .after_help(
@@ -223,7 +223,7 @@ struct Project {
     parent_target: Option<String>,
     status: ProjectStatus,
     open_task_count: usize,
-    open_unprioritized_count: usize,
+    open_unhidden_count: usize,
     prj_task: PrjTask,
 }
 
@@ -329,7 +329,7 @@ struct PrjTask {
     state: PrjTaskState,
     scheduled: Option<String>,
     description: String,
-    priority: Option<String>,
+    hidden: bool,
     placeholder: bool,
     sub_block: PrjSubBlock,
 }
@@ -340,7 +340,7 @@ impl PrjTask {
             state: PrjTaskState::Missing,
             scheduled: None,
             description: String::new(),
-            priority: None,
+            hidden: false,
             placeholder: false,
             sub_block: PrjSubBlock::default(),
         }
@@ -351,7 +351,7 @@ impl PrjTask {
             state,
             scheduled: None,
             description: String::new(),
-            priority: None,
+            hidden: false,
             placeholder: false,
             sub_block: PrjSubBlock::default(),
         }
@@ -698,11 +698,9 @@ enum ProjectChange {
         from: String,
         to: TargetProjectStatus,
     },
-    RemovePriority {
-        priority: String,
-    },
-    AddPriority {
-        reason: AddPriorityReason,
+    RemoveHideTag,
+    AddHideTag {
+        reason: AddHideReason,
     },
     RemoveScheduled {
         scheduled: String,
@@ -722,15 +720,15 @@ enum ProjectChange {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AddPriorityReason {
-    UnprioritizedOpenTasks,
+enum AddHideReason {
+    NonHiddenOpenTasks,
     OpenSubprojects,
 }
 
-impl AddPriorityReason {
+impl AddHideReason {
     fn label(self) -> &'static str {
         match self {
-            Self::UnprioritizedOpenTasks => "unprioritized open tasks exist",
+            Self::NonHiddenOpenTasks => "non-hidden open tasks exist",
             Self::OpenSubprojects => "project has open sub-projects",
         }
     }
@@ -745,17 +743,17 @@ impl ProjectChange {
                 to: to.label().to_string(),
                 reason: to.reason().to_string(),
             },
-            Self::RemovePriority { priority } => SyncEvent::PrjEdit {
+            Self::RemoveHideTag => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
                 action: PrjEditAction::Remove,
-                field: format!("[p::{priority}]"),
-                reason: "no unprioritized open tasks or open sub-projects"
+                field: HIDE_TAG.to_string(),
+                reason: "no non-hidden open tasks or open sub-projects"
                     .to_string(),
             },
-            Self::AddPriority { reason } => SyncEvent::PrjEdit {
+            Self::AddHideTag { reason } => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
                 action: PrjEditAction::Add,
-                field: "[p::2]".to_string(),
+                field: HIDE_TAG.to_string(),
                 reason: reason.label().to_string(),
             },
             Self::RemoveScheduled { scheduled } => SyncEvent::PrjEdit {
@@ -1054,20 +1052,18 @@ fn plan_project_sync(
             .iter()
             .any(|child| child.state.is_open());
         let should_surface =
-            project.open_unprioritized_count == 0 && !has_open_subprojects;
+            project.open_unhidden_count == 0 && !has_open_subprojects;
         if should_surface {
-            if let Some(priority) = &project.prj_task.priority {
-                plan.changes.push(ProjectChange::RemovePriority {
-                    priority: priority.clone(),
-                });
+            if project.prj_task.hidden {
+                plan.changes.push(ProjectChange::RemoveHideTag);
             }
-        } else if project.prj_task.priority.is_none() {
-            let reason = if project.open_unprioritized_count > 0 {
-                AddPriorityReason::UnprioritizedOpenTasks
+        } else if !project.prj_task.hidden {
+            let reason = if project.open_unhidden_count > 0 {
+                AddHideReason::NonHiddenOpenTasks
             } else {
-                AddPriorityReason::OpenSubprojects
+                AddHideReason::OpenSubprojects
             };
-            plan.changes.push(ProjectChange::AddPriority { reason });
+            plan.changes.push(ProjectChange::AddHideTag { reason });
         }
 
         let marker_line = project.prj_task.sub_block.first_marker_line();
@@ -1242,11 +1238,11 @@ fn apply_project_changes(
             ProjectChange::Status { to, .. } => {
                 edits.push(status_edit(contents, to.label())?);
             }
-            ProjectChange::RemovePriority { .. } => {
-                edits.push(remove_prj_inline_field_edit(contents, "p")?);
+            ProjectChange::RemoveHideTag => {
+                edits.push(remove_prj_hide_tag_edit(contents)?);
             }
-            ProjectChange::AddPriority { .. } => {
-                edits.push(add_priority_edit(contents)?);
+            ProjectChange::AddHideTag { .. } => {
+                edits.push(add_hide_tag_edit(contents)?);
             }
             ProjectChange::RemoveScheduled { .. } => {
                 edits
@@ -1332,7 +1328,7 @@ fn status_value_edit(
     })
 }
 
-fn add_priority_edit(contents: &str) -> Result<TextEdit, String> {
+fn add_hide_tag_edit(contents: &str) -> Result<TextEdit, String> {
     let frontmatter = parse_frontmatter(contents)
         .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
     for line in line_spans(contents) {
@@ -1349,11 +1345,37 @@ fn add_priority_edit(contents: &str) -> Result<TextEdit, String> {
         return Ok(TextEdit {
             start: line.start + anchor_start,
             end: line.start + anchor_start,
-            replacement: "[p::2] ".to_string(),
+            replacement: format!("{HIDE_TAG} "),
         });
     }
 
     Err("failed to locate ^prj task".to_string())
+}
+
+fn remove_prj_hide_tag_edit(contents: &str) -> Result<TextEdit, String> {
+    let frontmatter = parse_frontmatter(contents)
+        .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
+    for line in line_spans(contents) {
+        if line.line_number <= frontmatter.body_start_line {
+            continue;
+        }
+        let line_text = &contents[line.start..line.end];
+        if !has_trailing_prj_anchor(line_text) {
+            continue;
+        }
+        let Some((tag_start, tag_end)) = hide_tag_span(line_text) else {
+            continue;
+        };
+        let (start, end) =
+            inline_field_removal_range(line_text, tag_start, tag_end);
+        return Ok(TextEdit {
+            start: line.start + start,
+            end: line.start + end,
+            replacement: String::new(),
+        });
+    }
+
+    Err("failed to locate #hide tag on ^prj task".to_string())
 }
 
 fn remove_prj_inline_field_edit(
@@ -1655,7 +1677,7 @@ fn parse_project(
     let parent_target =
         frontmatter_value(&frontmatter, "parent").and_then(wikilink_target);
     let mut open_task_count = 0;
-    let mut open_unprioritized_count = 0;
+    let mut open_unhidden_count = 0;
     let mut prj_candidates = Vec::new();
     let lines = line_spans(contents);
 
@@ -1681,8 +1703,8 @@ fn parse_project(
         }
 
         open_task_count += 1;
-        if !has_prj_anchor && inline_field_value(task.text, "p").is_none() {
-            open_unprioritized_count += 1;
+        if !has_prj_anchor && !contains_hide_tag(task.text) {
+            open_unhidden_count += 1;
         }
     }
 
@@ -1702,7 +1724,7 @@ fn parse_project(
         parent_target,
         status,
         open_task_count,
-        open_unprioritized_count,
+        open_unhidden_count,
         prj_task,
     })
 }
@@ -1920,7 +1942,7 @@ fn classify_prj_task(
             TaskStatus::Canceled => PrjTaskState::Canceled,
         },
         scheduled: inline_field_value(task.text, "scheduled"),
-        priority: inline_field_value(task.text, "p"),
+        hidden: contains_hide_tag(task.text),
         description,
         placeholder,
         sub_block,
@@ -1968,19 +1990,38 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine<'_>> {
 }
 
 fn contains_task_tag(text: &str) -> bool {
+    contains_tag(text, "#task")
+}
+
+fn contains_hide_tag(text: &str) -> bool {
+    contains_tag(text, HIDE_TAG)
+}
+
+fn contains_tag(text: &str, tag: &str) -> bool {
+    tag_span(text, tag).is_some()
+}
+
+/// Locates `tag` as a whole token, honoring the same boundaries as the Tasks
+/// plugin so substrings like `#taskish` or `#hidden` are not matched.
+fn tag_span(text: &str, tag: &str) -> Option<(usize, usize)> {
     let mut offset = 0;
-    while let Some(relative_index) = text[offset..].find("#task") {
+    while let Some(relative_index) = text[offset..].find(tag) {
         let index = offset + relative_index;
+        let end = index + tag.len();
         let before = text[..index].chars().next_back();
-        let after = text[index + "#task".len()..].chars().next();
+        let after = text[end..].chars().next();
         if before.is_none_or(is_task_tag_left_boundary)
             && after.is_none_or(is_task_tag_right_boundary)
         {
-            return true;
+            return Some((index, end));
         }
         offset = index + 1;
     }
-    false
+    None
+}
+
+fn hide_tag_span(line_text: &str) -> Option<(usize, usize)> {
+    tag_span(line_text, HIDE_TAG)
 }
 
 fn is_task_tag_left_boundary(character: char) -> bool {
@@ -2043,7 +2084,7 @@ fn task_description(text: &str) -> String {
     let without_fields = remove_inline_fields(without_anchor);
     without_fields
         .split_whitespace()
-        .filter(|token| *token != "#task")
+        .filter(|token| *token != "#task" && *token != HIDE_TAG)
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -2110,7 +2151,7 @@ fn print_project_list(projects: &[Project], styler: &Styler) {
 
     println!(
         "  {:project_width$}  {:<8}  {:>4}  {:>5}  ^PRJ",
-        "PROJECT", "STATUS", "OPEN", "UNPRI"
+        "PROJECT", "STATUS", "OPEN", "SHOWN"
     );
 
     for project in projects {
@@ -2123,7 +2164,7 @@ fn print_project_list(projects: &[Project], styler: &Styler) {
             project_name,
             status,
             project.open_task_count,
-            project.open_unprioritized_count,
+            project.open_unhidden_count,
             project.prj_task.column(styler)
         );
     }
@@ -2261,7 +2302,7 @@ impl PrjTask {
                 styler.warning_label("placeholder")
             }
             PrjTaskState::Open => {
-                if self.priority.is_some() {
+                if self.hidden {
                     styler.open_label()
                 } else {
                     styler.on_dash_label()
@@ -2484,12 +2525,12 @@ mod tests {
 type: "[[project]]"
 status: wip
 ---
-- [ ] #task Finish the project [p::2] ^prj
-- [ ] #task open unprioritized
-- [/] #task in progress [p:: 1]
-- [B] #task blocked with no p
-- [ ] #task explicit p0 [p::0]
-- [ ] #task invalid p [p::high]
+- [ ] #task Finish the project #hide ^prj
+- [ ] #task shown one
+- [/] #task shown in progress
+- [B] #task shown blocked
+- [ ] #task legacy priority is shown [p::1]
+- [ ] #task hidden helper #hide
 - [x] #task finished
 - [-] #task canceled
 - [ ] #taskish not a task
@@ -2502,9 +2543,9 @@ status: wip
         assert!(issues.is_empty());
         assert_eq!(project.status, ProjectStatus::Wip);
         assert_eq!(project.open_task_count, 6);
-        assert_eq!(project.open_unprioritized_count, 2);
+        assert_eq!(project.open_unhidden_count, 4);
         assert_eq!(project.prj_task.state, PrjTaskState::Open);
-        assert_eq!(project.prj_task.priority.as_deref(), Some("2"));
+        assert!(project.prj_task.hidden);
         assert_eq!(project.prj_task.description, "Finish the project");
         assert_eq!(project.link_name, "alpha");
         assert_eq!(project.link_stem, "Alpha");
@@ -2514,7 +2555,7 @@ status: wip
     fn project_parser_reads_parent_wikilink_target() {
         let project = parse_clean_project(
             "Projects/Child.md",
-            "---\ntype: [[project]]\nparent: \"[[Areas/Parent#Now|Parent alias]]\"\n---\n- [ ] #task Ship [p::2] ^prj\n",
+            "---\ntype: [[project]]\nparent: \"[[Areas/Parent#Now|Parent alias]]\"\n---\n- [ ] #task Ship #hide ^prj\n",
         );
 
         assert_eq!(project.name, "Projects/Child");
@@ -2527,7 +2568,7 @@ status: wip
         let mut issues = Vec::new();
         let done = parse_project(
             Path::new("Done.md"),
-            "---\ntype: [[project]]\nstatus: done\n---\n- [X] #task Ship [p::2] ^prj\n",
+            "---\ntype: [[project]]\nstatus: done\n---\n- [X] #task Ship #hide ^prj\n",
             &mut issues,
         )
         .expect("bare project note");
@@ -2536,7 +2577,7 @@ status: wip
 
         let canceled = parse_project(
             Path::new("Canceled.md"),
-            "---\ntype: [[project]]\nstatus: canceled\n---\n- [-] #task Stop [p::2] ^prj\n",
+            "---\ntype: [[project]]\nstatus: canceled\n---\n- [-] #task Stop #hide ^prj\n",
             &mut issues,
         )
         .expect("canceled project note");
@@ -2547,7 +2588,7 @@ status: wip
     #[test]
     fn project_parser_records_scheduled_and_placeholder_prj() {
         let contents = format!(
-            "---\ntype: [[project]]\n---\n- [ ] #task {PLACEHOLDER_CRITERIA} [p::2] [scheduled::2026-06-11] ^prj\n"
+            "---\ntype: [[project]]\n---\n- [ ] #task {PLACEHOLDER_CRITERIA} #hide [scheduled::2026-06-11] ^prj\n"
         );
         let mut issues = Vec::new();
         let project =
@@ -2557,7 +2598,7 @@ status: wip
         assert!(issues.is_empty());
         assert_eq!(project.prj_task.state, PrjTaskState::Open);
         assert_eq!(project.prj_task.scheduled.as_deref(), Some("2026-06-11"));
-        assert_eq!(project.prj_task.priority.as_deref(), Some("2"));
+        assert!(project.prj_task.hidden);
         assert!(project.prj_task.placeholder);
         assert_eq!(project.prj_task.column(&Styler::plain()), "placeholder");
     }
@@ -2573,7 +2614,7 @@ status: wip
         .expect("project note");
 
         assert!(issues.is_empty());
-        assert_eq!(project.prj_task.priority, None);
+        assert!(!project.prj_task.hidden);
         assert_eq!(project.prj_task.column(&Styler::plain()), "on dash");
     }
 
@@ -2592,7 +2633,7 @@ status: wip
         issues.clear();
         let multiple = parse_project(
             Path::new("Multiple.md"),
-            "---\ntype: [[project]]\n---\n- [ ] #task One [p::2] ^prj\n- [ ] #task Two [p::2] ^prj\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task One #hide ^prj\n- [ ] #task Two #hide ^prj\n",
             &mut issues,
         )
         .expect("project note");
@@ -2616,13 +2657,13 @@ status: wip
     fn project_parser_records_prj_sub_block_marker_lines() {
         let project = parse_clean_project(
             "Parent.md",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[BareChild]] • [[Projects/AliasChild|Child alias]]\n\t- [[ManualChild]]\n\t- [[MentionedChild]] kickoff notes\n\t\t- 🧩 **Sub-projects:** [[Projects/DeepChild#Next]]\n\t- prose with [[InlineOnly]] link\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[BareChild]] • [[Projects/AliasChild|Child alias]]\n\t- [[ManualChild]]\n\t- [[MentionedChild]] kickoff notes\n\t\t- 🧩 **Sub-projects:** [[Projects/DeepChild#Next]]\n\t- prose with [[InlineOnly]] link\n",
         );
 
         let lines = &project.prj_task.sub_block.lines;
         assert_eq!(lines.len(), 5);
         assert_eq!(project.open_task_count, 1);
-        assert_eq!(project.open_unprioritized_count, 0);
+        assert_eq!(project.open_unhidden_count, 0);
         assert_eq!(project.prj_task.sub_block.prj_indent, "");
         assert_eq!(lines[0].indentation, "\t");
         assert!(lines[0].is_marker);
@@ -2659,7 +2700,7 @@ status: wip
     fn project_parser_stops_prj_sub_block_at_blank_line() {
         let project = parse_clean_project(
             "Parent.md",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\n\t- [[NotInBlock]]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\n\t- [[NotInBlock]]\n",
         );
 
         assert!(project.prj_task.sub_block.lines.is_empty());
@@ -2668,7 +2709,7 @@ status: wip
     #[test]
     fn project_sync_plan_flips_status_without_prj_edits_after_effective_status()
     {
-        let contents = "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship [p::2] ^prj\n";
+        let contents = "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship #hide ^prj\n";
         let mut issues = Vec::new();
         let project =
             parse_project(Path::new("Alpha.md"), contents, &mut issues)
@@ -2687,87 +2728,81 @@ status: wip
     }
 
     #[test]
-    fn project_sync_plan_manages_prj_priority_from_unprioritized_count() {
+    fn project_sync_plan_manages_prj_hide_tag_from_unhidden_count() {
         let mut issues = Vec::new();
         let stalled = parse_project(
             Path::new("Stalled.md"),
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n- [ ] #task Planned [p::1]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n- [ ] #task Planned #hide\n",
             &mut issues,
         )
         .expect("project");
         assert_eq!(
             plan_project_sync(&stalled, &[]).changes,
-            vec![ProjectChange::RemovePriority {
-                priority: "2".to_string(),
-            }]
+            vec![ProjectChange::RemoveHideTag]
         );
 
         issues.clear();
-        let has_unprioritized = parse_project(
-            Path::new("HasUnprioritized.md"),
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n- [ ] #task Needs priority\n",
+        let has_unhidden = parse_project(
+            Path::new("HasUnhidden.md"),
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n- [ ] #task Needs surfacing\n",
             &mut issues,
         )
         .expect("project");
         assert_eq!(
-            plan_project_sync(&has_unprioritized, &[]).changes,
-            vec![ProjectChange::AddPriority {
-                reason: AddPriorityReason::UnprioritizedOpenTasks,
+            plan_project_sync(&has_unhidden, &[]).changes,
+            vec![ProjectChange::AddHideTag {
+                reason: AddHideReason::NonHiddenOpenTasks,
             }]
         );
 
         issues.clear();
-        let explicit_p0_is_hidden = parse_project(
-            Path::new("ExplicitP0.md"),
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n- [ ] #task Explicit zero [p::0]\n",
+        let all_hidden_helpers = parse_project(
+            Path::new("AllHidden.md"),
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n- [ ] #task Hidden helper #hide\n",
             &mut issues,
         )
         .expect("project");
-        assert_eq!(explicit_p0_is_hidden.open_unprioritized_count, 0);
+        assert_eq!(all_hidden_helpers.open_unhidden_count, 0);
         assert_eq!(
-            plan_project_sync(&explicit_p0_is_hidden, &[]).changes,
-            vec![ProjectChange::RemovePriority {
-                priority: "2".to_string(),
-            }]
+            plan_project_sync(&all_hidden_helpers, &[]).changes,
+            vec![ProjectChange::RemoveHideTag]
         );
 
         assert!(issues.is_empty());
     }
 
     #[test]
-    fn project_sync_plan_manages_prj_priority_from_open_subprojects() {
+    fn project_sync_plan_manages_prj_hide_tag_from_open_subprojects() {
         let children = [open_subproject("Child")];
         let hidden_parent = parse_clean_project(
             "HiddenParent.md",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
         );
         assert!(
             plan_project_sync(&hidden_parent, &children)
                 .changes
                 .is_empty(),
-            "existing priority should be kept while open sub-projects exist"
+            "existing #hide tag should be kept while open sub-projects exist"
         );
 
-        let missing_priority = parse_clean_project(
-            "MissingPriorityParent.md",
+        let missing_hide_tag = parse_clean_project(
+            "MissingHideTagParent.md",
             "---\ntype: [[project]]\n---\n- [ ] #task Ship parent ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
         );
         assert_eq!(
-            plan_project_sync(&missing_priority, &children).changes,
-            vec![ProjectChange::AddPriority {
-                reason: AddPriorityReason::OpenSubprojects,
+            plan_project_sync(&missing_hide_tag, &children).changes,
+            vec![ProjectChange::AddHideTag {
+                reason: AddHideReason::OpenSubprojects,
             }]
         );
 
         let surfacing_parent = parse_clean_project(
             "SurfacingParent.md",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n",
         );
         assert_eq!(
             plan_project_sync(&surfacing_parent, &[]).changes,
-            vec![ProjectChange::RemovePriority {
-                priority: "2".to_string(),
-            }]
+            vec![ProjectChange::RemoveHideTag]
         );
     }
 
@@ -2775,7 +2810,7 @@ status: wip
     fn project_sync_plan_reconciles_subprojects_marker_line() {
         let project = parse_clean_project(
             "Parent.md",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[ExistingChild]] • [[stale_child]]\n\t- [[MentionedChild]] kickoff notes\n\t- prose with [[ManualOnly]] link\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[ExistingChild]] • [[stale_child]]\n\t- [[MentionedChild]] kickoff notes\n\t- prose with [[ManualOnly]] link\n",
         );
         let children = [
             open_subproject("AnotherChild"),
@@ -2805,7 +2840,7 @@ status: wip
     fn project_sync_plan_matches_subproject_links_case_insensitively() {
         let project = parse_clean_project(
             "Parent.md",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
         );
         let children = [open_subproject("child")];
 
@@ -2822,8 +2857,8 @@ status: wip
     fn project_sync_plan_normalizes_subprojects_marker_drift() {
         let children = [open_subproject("Alpha"), open_subproject("Beta")];
         for contents in [
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n  - 🧩 **Sub-projects:** [[Beta]], [[Alpha]]\n",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n  - 🧩 **Sub-projects:** [[Beta]], [[Alpha]]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n",
         ] {
             let project = parse_clean_project("Parent.md", contents);
             assert_eq!(
@@ -2837,7 +2872,7 @@ status: wip
     fn project_sync_plan_marks_tracked_closed_subprojects() {
         let project = parse_clean_project(
             "Parent.md",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[DoneChild]] • ~~[[CanceledChild]]~~ ❌ • [[OpenChild]]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[DoneChild]] • ~~[[CanceledChild]]~~ ❌ • [[OpenChild]]\n",
         );
         let children = [
             done_subproject("DoneChild"),
@@ -2897,7 +2932,7 @@ status: wip
     fn project_sync_plan_treats_user_sub_bullets_as_user_owned() {
         let project = parse_clean_project(
             "Parent.md",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n\t- [[Child]]\n\t- [[ManualOnly]] kickoff notes\n- [ ] #task Needs priority\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- [[Child]]\n\t- [[ManualOnly]] kickoff notes\n- [ ] #task Needs priority\n",
         );
 
         assert_eq!(
@@ -2917,11 +2952,11 @@ status: wip
         );
         let checked = parse_clean_project(
             "Checked.md",
-            "---\ntype: [[project]]\n---\n- [x] #task Ship checked [p::2] ^prj\n\t- [[OldChild]]\n",
+            "---\ntype: [[project]]\n---\n- [x] #task Ship checked #hide ^prj\n\t- [[OldChild]]\n",
         );
         let terminal = parse_clean_project(
             "Terminal.md",
-            "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task Ship terminal [p::2] ^prj\n\t- [[OldChild]]\n",
+            "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task Ship terminal #hide ^prj\n\t- [[OldChild]]\n",
         );
         let children = [open_subproject("Child")];
 
@@ -2942,27 +2977,27 @@ status: wip
     fn subproject_parent_links_classify_open_and_terminal_prj_children() {
         let parent = parse_clean_project(
             "Projects/Parent.md",
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent [p::2] ^prj\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n",
         );
         let open_child = parse_clean_project(
             "Projects/OpenChild.md",
-            "---\ntype: [[project]]\nparent: [[Projects/Parent]]\n---\n- [ ] #task Ship child [p::2] ^prj\n",
+            "---\ntype: [[project]]\nparent: [[Projects/Parent]]\n---\n- [ ] #task Ship child #hide ^prj\n",
         );
         let path_case_child = parse_clean_project(
             "Projects/PathCaseChild.md",
-            "---\ntype: [[project]]\nparent: [[areas/PARENT#Now|Parent]]\n---\n- [ ] #task Ship child [p::2] ^prj\n",
+            "---\ntype: [[project]]\nparent: [[areas/PARENT#Now|Parent]]\n---\n- [ ] #task Ship child #hide ^prj\n",
         );
         let terminal_status_open_child = parse_clean_project(
             "Projects/TerminalStatusOpenChild.md",
-            "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [ ] #task Ship child [p::2] ^prj\n",
+            "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [ ] #task Ship child #hide ^prj\n",
         );
         let checked_child = parse_clean_project(
             "Projects/CheckedChild.md",
-            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [x] #task Ship child [p::2] ^prj\n",
+            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [x] #task Ship child #hide ^prj\n",
         );
         let canceled_child = parse_clean_project(
             "Projects/CanceledChild.md",
-            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [-] #task Ship child [p::2] ^prj\n",
+            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [-] #task Ship child #hide ^prj\n",
         );
         let missing_prj_child = parse_clean_project(
             "Projects/MissingPrjChild.md",
@@ -2970,11 +3005,11 @@ status: wip
         );
         let self_link = parse_clean_project(
             "Projects/Self.md",
-            "---\ntype: [[project]]\nparent: [[Self]]\n---\n- [ ] #task Ship self [p::2] ^prj\n",
+            "---\ntype: [[project]]\nparent: [[Self]]\n---\n- [ ] #task Ship self #hide ^prj\n",
         );
         let area_child = parse_clean_project(
             "Projects/AreaChild.md",
-            "---\ntype: [[project]]\nparent: [[Area]]\n---\n- [ ] #task Ship child [p::2] ^prj\n",
+            "---\ntype: [[project]]\nparent: [[Area]]\n---\n- [ ] #task Ship child #hide ^prj\n",
         );
 
         let mut issues = Vec::new();
@@ -2986,7 +3021,7 @@ status: wip
         .expect("malformed project");
         let multiple_child = parse_project(
             Path::new("Projects/MultipleChild.md"),
-            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [ ] #task One [p::2] ^prj\n- [ ] #task Two [p::2] ^prj\n",
+            "---\ntype: [[project]]\nparent: [[Parent]]\n---\n- [ ] #task One #hide ^prj\n- [ ] #task Two #hide ^prj\n",
             &mut issues,
         )
         .expect("multiple project");
@@ -3027,11 +3062,11 @@ status: wip
     }
 
     #[test]
-    fn project_sync_plan_is_idempotent_when_prj_priority_matches_dash_state() {
+    fn project_sync_plan_is_idempotent_when_prj_hide_tag_matches_dash_state() {
         let mut issues = Vec::new();
         let already_on_dash = parse_project(
             Path::new("AlreadyOnDash.md"),
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n- [ ] #task Planned [p::1]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n- [ ] #task Planned #hide\n",
             &mut issues,
         )
         .expect("project");
@@ -3040,7 +3075,7 @@ status: wip
         issues.clear();
         let already_hidden = parse_project(
             Path::new("AlreadyHidden.md"),
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n- [ ] #task Needs priority\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n- [ ] #task Needs surfacing\n",
             &mut issues,
         )
         .expect("project");
@@ -3053,7 +3088,7 @@ status: wip
         let mut issues = Vec::new();
         let project = parse_project(
             Path::new("Scheduled.md"),
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] [scheduled::2026-06-01] ^prj\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide [scheduled::2026-06-01] ^prj\n",
             &mut issues,
         )
         .expect("project");
@@ -3062,9 +3097,7 @@ status: wip
         assert_eq!(
             plan_project_sync(&project, &[]).changes,
             vec![
-                ProjectChange::RemovePriority {
-                    priority: "2".to_string(),
-                },
+                ProjectChange::RemoveHideTag,
                 ProjectChange::RemoveScheduled {
                     scheduled: "2026-06-01".to_string(),
                 },
@@ -3075,7 +3108,7 @@ status: wip
     #[test]
     fn project_sync_plan_warns_without_auto_fixing_drift_and_placeholder() {
         let contents = format!(
-            "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task {PLACEHOLDER_CRITERIA} [p::2] ^prj\n"
+            "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task {PLACEHOLDER_CRITERIA} #hide ^prj\n"
         );
         let mut issues = Vec::new();
         let project =
@@ -3099,7 +3132,7 @@ status: wip
     }
 
     #[test]
-    fn project_changes_replace_status_append_missing_status_and_add_priority() {
+    fn project_changes_replace_status_append_missing_status_and_add_hide_tag() {
         let contents = "---\ntype: [[project]]\nstatus: waiting\n---\n- [ ] #task Ship ^prj\n";
         let output = apply_changes(
             contents,
@@ -3108,18 +3141,18 @@ status: wip
                     from: "waiting".to_string(),
                     to: TargetProjectStatus::Canceled,
                 },
-                ProjectChange::AddPriority {
-                    reason: AddPriorityReason::UnprioritizedOpenTasks,
+                ProjectChange::AddHideTag {
+                    reason: AddHideReason::NonHiddenOpenTasks,
                 },
             ],
         );
         assert_eq!(
             output,
-            "---\ntype: [[project]]\nstatus: canceled\n---\n- [ ] #task Ship [p::2] ^prj\n"
+            "---\ntype: [[project]]\nstatus: canceled\n---\n- [ ] #task Ship #hide ^prj\n"
         );
 
         let output = apply_changes(
-            "---\ntype: [[project]]\n---\n- [x] #task Ship [p::2] ^prj\n",
+            "---\ntype: [[project]]\n---\n- [x] #task Ship #hide ^prj\n",
             &[ProjectChange::Status {
                 from: "wip".to_string(),
                 to: TargetProjectStatus::Done,
@@ -3127,18 +3160,16 @@ status: wip
         );
         assert_eq!(
             output,
-            "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship [p::2] ^prj\n"
+            "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship #hide ^prj\n"
         );
     }
 
     #[test]
     fn project_changes_remove_prj_fields_with_adjacent_whitespace() {
         let output = apply_changes(
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p:: 2] [scheduled::2026-06-01] ^prj\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide [scheduled::2026-06-01] ^prj\n",
             &[
-                ProjectChange::RemovePriority {
-                    priority: "2".to_string(),
-                },
+                ProjectChange::RemoveHideTag,
                 ProjectChange::RemoveScheduled {
                     scheduled: "2026-06-01".to_string(),
                 },
@@ -3151,12 +3182,10 @@ status: wip
     }
 
     #[test]
-    fn project_changes_remove_prj_priority_with_crlf() {
+    fn project_changes_remove_prj_hide_tag_with_crlf() {
         let output = apply_changes(
-            "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship [p:: 2] ^prj\r\n",
-            &[ProjectChange::RemovePriority {
-                priority: "2".to_string(),
-            }],
+            "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship #hide ^prj\r\n",
+            &[ProjectChange::RemoveHideTag],
         );
         assert_eq!(
             output,
@@ -3167,7 +3196,7 @@ status: wip
     #[test]
     fn project_changes_preserve_crlf_when_appending_status() {
         let output = apply_changes(
-            "---\r\ntype: [[project]]\r\n---\r\n- [x] #task Ship [p::2] ^prj\r\n",
+            "---\r\ntype: [[project]]\r\n---\r\n- [x] #task Ship #hide ^prj\r\n",
             &[ProjectChange::Status {
                 from: "wip".to_string(),
                 to: TargetProjectStatus::Done,
@@ -3175,7 +3204,7 @@ status: wip
         );
         assert_eq!(
             output,
-            "---\r\ntype: [[project]]\r\nstatus: done\r\n---\r\n- [x] #task Ship [p::2] ^prj\r\n"
+            "---\r\ntype: [[project]]\r\nstatus: done\r\n---\r\n- [x] #task Ship #hide ^prj\r\n"
         );
     }
 
@@ -3183,7 +3212,7 @@ status: wip
     fn project_changes_insert_subproject_links_after_prj_with_tab_indent() {
         let desired = [open_subproject("Child")];
         let output = apply_subproject_changes(
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n## Tasks\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n## Tasks\n",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Child".to_string(),
                 state: SubprojectState::Open,
@@ -3193,7 +3222,7 @@ status: wip
 
         assert_eq!(
             output,
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n## Tasks\n"
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n## Tasks\n"
         );
     }
 
@@ -3201,7 +3230,7 @@ status: wip
     fn project_changes_insert_subproject_line_above_user_bullets() {
         let desired = [open_subproject("Beta")];
         let output = apply_subproject_changes(
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n  - [[Alpha]]\n  - prose notes\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - [[Alpha]]\n  - prose notes\n",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Beta".to_string(),
                 state: SubprojectState::Open,
@@ -3211,7 +3240,7 @@ status: wip
 
         assert_eq!(
             output,
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Beta]]\n  - [[Alpha]]\n  - prose notes\n"
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Beta]]\n  - [[Alpha]]\n  - prose notes\n"
         );
     }
 
@@ -3219,7 +3248,7 @@ status: wip
     fn project_changes_rewrite_subproject_line_in_place() {
         let desired = [open_subproject("Alpha"), open_subproject("Beta")];
         let output = apply_subproject_changes(
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- user notes\n  - 🧩 **Sub-projects:** [[Alpha]]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- user notes\n  - 🧩 **Sub-projects:** [[Alpha]]\n",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Beta".to_string(),
                 state: SubprojectState::Open,
@@ -3229,7 +3258,7 @@ status: wip
 
         assert_eq!(
             output,
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- user notes\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n"
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- user notes\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n"
         );
     }
 
@@ -3237,7 +3266,7 @@ status: wip
     fn project_changes_mark_last_child_closed_and_keep_subproject_line() {
         let desired = [done_subproject("OldChild")];
         let output = apply_subproject_changes(
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n\t- user notes\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n\t- user notes\n",
             &[ProjectChange::MarkSubproject {
                 stem: "OldChild".to_string(),
                 state: SubprojectState::Done,
@@ -3247,14 +3276,14 @@ status: wip
 
         assert_eq!(
             output,
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** ~~[[OldChild]]~~ ✅\n\t- user notes\n"
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** ~~[[OldChild]]~~ ✅\n\t- user notes\n"
         );
     }
 
     #[test]
     fn project_changes_delete_subproject_line_for_stale_child() {
         let output = apply_subproject_changes(
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n\t- user notes\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n\t- user notes\n",
             &[ProjectChange::RemoveSubprojectLink {
                 stem: "OldChild".to_string(),
             }],
@@ -3263,7 +3292,7 @@ status: wip
 
         assert_eq!(
             output,
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- user notes\n"
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- user notes\n"
         );
     }
 
@@ -3271,14 +3300,14 @@ status: wip
     fn project_changes_clean_duplicate_subproject_marker_lines() {
         let desired = [open_subproject("Alpha"), open_subproject("Beta")];
         let output = apply_subproject_changes(
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Beta]] • [[Alpha]] extra\n\t- keep me\n\t- 🧩 **Sub-projects:** [[Alpha]]\n",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Beta]] • [[Alpha]] extra\n\t- keep me\n\t- 🧩 **Sub-projects:** [[Alpha]]\n",
             &[ProjectChange::NormalizeSubprojects],
             &desired,
         );
 
         assert_eq!(
             output,
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n\t- keep me\n"
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]]\n\t- keep me\n"
         );
     }
 
@@ -3286,7 +3315,7 @@ status: wip
     fn project_changes_preserve_crlf_for_subproject_link_insertions() {
         let desired = [open_subproject("Child")];
         let output = apply_subproject_changes(
-            "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship [p::2] ^prj\r\n## Tasks\r\n",
+            "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship #hide ^prj\r\n## Tasks\r\n",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Child".to_string(),
                 state: SubprojectState::Open,
@@ -3296,7 +3325,7 @@ status: wip
 
         assert_eq!(
             output,
-            "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship [p::2] ^prj\r\n\t- 🧩 **Sub-projects:** [[Child]]\r\n## Tasks\r\n"
+            "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship #hide ^prj\r\n\t- 🧩 **Sub-projects:** [[Child]]\r\n## Tasks\r\n"
         );
     }
 
@@ -3304,7 +3333,7 @@ status: wip
     fn project_changes_insert_subproject_links_after_final_prj_line() {
         let desired = [open_subproject("Child")];
         let output = apply_subproject_changes(
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj",
             &[ProjectChange::AddSubprojectLink {
                 stem: "Child".to_string(),
                 state: SubprojectState::Open,
@@ -3314,7 +3343,7 @@ status: wip
 
         assert_eq!(
             output,
-            "---\ntype: [[project]]\n---\n- [ ] #task Ship [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]"
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]"
         );
     }
 }

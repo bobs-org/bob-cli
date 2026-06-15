@@ -446,7 +446,7 @@ Manual content outside those markers must be preserved. User edits inside the
 generated region may be overwritten.
 
 New generated notes include a title, a PDF wikilink Obsidian task line with
-`[p::2]` priority and the stable `^ref` block ID, and `## Highlights`.
+the `#hide` tag and the stable `^ref` block ID, and `## Highlights`.
 Existing notes must already contain the managed begin/end markers; otherwise
 `sync` fails instead of guessing where generated content belongs.
 
@@ -519,7 +519,7 @@ regenerated with the callout format.
 The generated task line is a completion affordance:
 
 ```md
-- [ ] #task [[lib/books/example.pdf]] [p::2] ^ref
+- [ ] #task [[lib/books/example.pdf]] #hide ^ref
 ```
 
 Checking it with `[x]` or `[X]` means `status: read`. Cancelling it with `[-]`

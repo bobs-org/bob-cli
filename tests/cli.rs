@@ -1529,10 +1529,11 @@ fn projects_list_scans_project_notes_and_renders_counts() {
 type: "[[project]]"
 status: wip
 ---
-- [ ] #task Finish Alpha [p::2] ^prj
-- [ ] #task unprioritized
-- [/] #task active prioritized [p:: 1]
-- [B] #task blocked unprioritized
+- [ ] #task Finish Alpha #hide ^prj
+- [ ] #task shown one
+- [/] #task shown in progress
+- [B] #task shown blocked
+- [ ] #task hidden helper #hide
 - [x] #task done task
 - [-] #task canceled task
 "#,
@@ -1544,7 +1545,7 @@ type: [[project]]
 status: waiting
 ---
 - [ ] #task Finish Beta [scheduled::2026-06-11] ^prj
-- [ ] #task planned [p:: 2]
+- [ ] #task planned #hide
 "#,
     );
     write_file(
@@ -1553,7 +1554,7 @@ status: waiting
 type: [[project]]
 status: done
 ---
-- [X] #task Finish Done [p::2] ^prj
+- [X] #task Finish Done #hide ^prj
 "#,
     );
     write_file(
@@ -1562,7 +1563,7 @@ status: done
 type: [[project]]
 status: canceled
 ---
-- [-] #task Cancel Canceled [p::2] ^prj
+- [-] #task Cancel Canceled #hide ^prj
 "#,
     );
     write_file(
@@ -1580,20 +1581,20 @@ status: wip
 type: [[project]]
 status: wip
 ---
-- [ ] #task <short_project_completion_criteria_goes_here> [p::2] ^prj
+- [ ] #task <short_project_completion_criteria_goes_here> #hide ^prj
 "#,
     );
     write_file(
         &vault.join("_templates/Template.md"),
-        "---\ntype: [[project]]\n---\n- [ ] #task hidden [p::2] ^prj\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task hidden #hide ^prj\n",
     );
     write_file(
         &vault.join(".obsidian/Hidden.md"),
-        "---\ntype: [[project]]\n---\n- [ ] #task hidden [p::2] ^prj\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task hidden #hide ^prj\n",
     );
     write_file(
         &vault.join("done/Archived.md"),
-        "---\ntype: [[project]]\n---\n- [ ] #task hidden [p::2] ^prj\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task hidden #hide ^prj\n",
     );
 
     let output = bob_command()
@@ -1619,13 +1620,13 @@ status: wip
     assert!(
         out.contains("PROJECT")
             && out.contains("STATUS")
-            && out.contains("UNPRI")
+            && out.contains("SHOWN")
             && out.contains("^PRJ"),
         "missing table header:\n{out}"
     );
     assert!(out.contains("Alpha") && out.contains("wip"));
     assert!(
-        out.contains("   4      2  open"),
+        out.contains("   5      3  open"),
         "unexpected Alpha counts:\n{out}"
     );
     assert!(
@@ -1665,7 +1666,7 @@ fn projects_list_reports_prj_errors_without_aborting_scan() {
     let vault = temp.path().join("vault");
     write_file(
         &vault.join("Good.md"),
-        "---\ntype: [[project]]\n---\n- [ ] #task Good project [p::2] ^prj\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task Good project #hide ^prj\n",
     );
     write_file(
         &vault.join("Malformed.md"),
@@ -1673,7 +1674,7 @@ fn projects_list_reports_prj_errors_without_aborting_scan() {
     );
     write_file(
         &vault.join("Multiple.md"),
-        "---\ntype: [[project]]\n---\n- [ ] #task One [p::2] ^prj\n- [ ] #task Two [p::2] ^prj\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task One #hide ^prj\n- [ ] #task Two #hide ^prj\n",
     );
 
     let output = bob_command()
@@ -1707,33 +1708,33 @@ fn projects_list_reports_prj_errors_without_aborting_scan() {
 }
 
 #[test]
-fn projects_sync_updates_status_prj_priority_warns_and_is_idempotent() {
+fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
     let temp = TempDir::new("bob-cli-projects-sync");
     let vault = temp.path().join("vault");
 
     write_file(
         &vault.join("DoneFlip.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship done [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship done #hide ^prj\n",
     );
     write_file(
         &vault.join("CancelFlip.md"),
-        "---\ntype: [[project]]\nstatus: waiting\n---\n- [-] #task Stop work [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: waiting\n---\n- [-] #task Stop work #hide ^prj\n",
     );
     write_file(
         &vault.join("MissingStatus.md"),
-        "---\ntype: [[project]]\n---\n- [X] #task Ship missing status [p::2] ^prj\n",
+        "---\ntype: [[project]]\n---\n- [X] #task Ship missing status #hide ^prj\n",
     );
     write_file(
         &vault.join("Stalled.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled [p::2] ^prj\n- [/] #task Secondary work [p::1]\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled #hide ^prj\n- [/] #task Secondary work #hide\n",
     );
     write_file(
         &vault.join("ZeroOpen.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open [p::2] ^prj\n- [x] #task Already done\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open #hide ^prj\n- [x] #task Already done\n",
     );
     write_file(
         &vault.join("HasUnprioritized.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has unprioritized [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has unprioritized #hide ^prj\n- [ ] #task Needs priority\n",
     );
     write_file(
         &vault.join("MissingPriority.md"),
@@ -1741,11 +1742,11 @@ fn projects_sync_updates_status_prj_priority_warns_and_is_idempotent() {
     );
     write_file(
         &vault.join("ExistingScheduled.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled [p::2] [scheduled::2026-06-01] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled #hide [scheduled::2026-06-01] ^prj\n",
     );
     write_file(
         &vault.join("TerminalOpen.md"),
-        "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task Finish drift [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task Finish drift #hide ^prj\n",
     );
     write_file(
         &vault.join("MissingPrj.md"),
@@ -1753,7 +1754,7 @@ fn projects_sync_updates_status_prj_priority_warns_and_is_idempotent() {
     );
     write_file(
         &vault.join("Placeholder.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task <short_project_completion_criteria_goes_here> [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task <short_project_completion_criteria_goes_here> #hide ^prj\n- [ ] #task Needs priority\n",
     );
 
     let dry_run_snapshot =
@@ -1777,8 +1778,8 @@ fn projects_sync_updates_status_prj_priority_warns_and_is_idempotent() {
     assert!(
         out.contains("[dry-run] ok")
             && out.contains("would set status: waiting -> canceled")
-            && out.contains("would remove [p::2] from ^prj")
-            && out.contains("would add [p::2] to ^prj")
+            && out.contains("would remove #hide from ^prj")
+            && out.contains("would add #hide to ^prj")
             && out.contains("would remove [scheduled::2026-06-01] from ^prj")
             && out.contains("active project has no ^prj task")
             && out.contains("template placeholder")
@@ -1811,8 +1812,8 @@ fn projects_sync_updates_status_prj_priority_warns_and_is_idempotent() {
     let out = stdout(&output);
     assert!(
         out.contains("status: wip -> done")
-            && out.contains("removed [p::2] from ^prj")
-            && out.contains("added [p::2] to ^prj")
+            && out.contains("removed #hide from ^prj")
+            && out.contains("added #hide to ^prj")
             && out.contains("removed [scheduled::2026-06-01] from ^prj")
             && out.contains(
                 "11 projects - 3 status updated - 5 ^prj edited - 3 warnings"
@@ -1822,20 +1823,20 @@ fn projects_sync_updates_status_prj_priority_warns_and_is_idempotent() {
 
     assert_eq!(
         fs::read_to_string(vault.join("DoneFlip.md")).expect("read done"),
-        "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship done [p::2] ^prj\n"
+        "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship done #hide ^prj\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("CancelFlip.md")).expect("read cancel"),
-        "---\ntype: [[project]]\nstatus: canceled\n---\n- [-] #task Stop work [p::2] ^prj\n"
+        "---\ntype: [[project]]\nstatus: canceled\n---\n- [-] #task Stop work #hide ^prj\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("MissingStatus.md"))
             .expect("read missing status"),
-        "---\ntype: [[project]]\nstatus: done\n---\n- [X] #task Ship missing status [p::2] ^prj\n"
+        "---\ntype: [[project]]\nstatus: done\n---\n- [X] #task Ship missing status #hide ^prj\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("Stalled.md")).expect("read stalled"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled ^prj\n- [/] #task Secondary work [p::1]\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish stalled ^prj\n- [/] #task Secondary work #hide\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("ZeroOpen.md")).expect("read zero"),
@@ -1844,12 +1845,12 @@ fn projects_sync_updates_status_prj_priority_warns_and_is_idempotent() {
     assert_eq!(
         fs::read_to_string(vault.join("HasUnprioritized.md"))
             .expect("read has unprioritized"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has unprioritized [p::2] ^prj\n- [ ] #task Needs priority\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has unprioritized #hide ^prj\n- [ ] #task Needs priority\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("MissingPriority.md"))
             .expect("read missing priority"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish missing priority [p::2] ^prj\n- [ ] #task Needs priority\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish missing priority #hide ^prj\n- [ ] #task Needs priority\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("ExistingScheduled.md"))
@@ -1882,7 +1883,7 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
 
     write_file(
         &vault.join("ParentKeep.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent keep [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent keep #hide ^prj\n",
     );
     write_file(
         &vault.join("ParentAdd.md"),
@@ -1890,15 +1891,15 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
     );
     write_file(
         &vault.join("ChildKeep.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentKeep]]\n---\n- [ ] #task Finish child [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentKeep]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
     );
     write_file(
         &vault.join("ChildAdd.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[projects/ParentAdd#Now|parent]]\n---\n- [ ] #task Finish child [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[projects/ParentAdd#Now|parent]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
     );
     write_file(
         &vault.join("ChildAlpha.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentAdd]]\n---\n- [ ] #task Finish alpha [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentAdd]]\n---\n- [ ] #task Finish alpha #hide ^prj\n- [ ] #task Needs priority\n",
     );
 
     let parent_add_snapshot =
@@ -1915,7 +1916,7 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("would add [p::2] to ^prj  project has open sub-projects")
+        out.contains("would add #hide to ^prj  project has open sub-projects")
             && out
                 .contains("would add [[ChildKeep]] to ^prj  open sub-project")
             && out.contains("would add [[ChildAdd]] to ^prj  open sub-project")
@@ -1943,7 +1944,7 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("added [p::2] to ^prj  project has open sub-projects")
+        out.contains("added #hide to ^prj  project has open sub-projects")
             && out.contains("added [[ChildKeep]] to ^prj  open sub-project")
             && out.contains("added [[ChildAdd]] to ^prj  open sub-project")
             && out.contains("added [[ChildAlpha]] to ^prj  open sub-project")
@@ -1954,11 +1955,11 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("ParentKeep.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent keep [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[ChildKeep]]\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent keep #hide ^prj\n\t- 🧩 **Sub-projects:** [[ChildKeep]]\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("ParentAdd.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent add [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[ChildAdd]] • [[ChildAlpha]]\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent add #hide ^prj\n\t- 🧩 **Sub-projects:** [[ChildAdd]] • [[ChildAlpha]]\n"
     );
 
     let output = bob_command()
@@ -1986,11 +1987,11 @@ fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
 
     write_file(
         &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
     );
     write_file(
         &vault.join("Child.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [x] #task Finish child [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [x] #task Finish child #hide ^prj\n",
     );
 
     let output = bob_command()
@@ -2006,7 +2007,7 @@ fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
     assert!(
         out.contains("status: wip -> done")
             && out.contains(
-                "removed [p::2] from ^prj  no unprioritized open tasks or open sub-projects"
+                "removed #hide from ^prj  no non-hidden open tasks or open sub-projects"
             )
             && out.contains(
                 "updated [[Child]] on ^prj  sub-project completed"
@@ -2022,7 +2023,7 @@ fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("Child.md")).expect("read child"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish child [p::2] ^prj\n"
+        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish child #hide ^prj\n"
     );
 
     let output = bob_command()
@@ -2050,11 +2051,11 @@ fn projects_sync_marks_canceled_subproject_same_run() {
 
     write_file(
         &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n",
     );
     write_file(
         &vault.join("Child.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [-] #task Stop child [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [-] #task Stop child #hide ^prj\n",
     );
 
     let output = bob_command()
@@ -2070,7 +2071,7 @@ fn projects_sync_marks_canceled_subproject_same_run() {
     assert!(
         out.contains("status: wip -> canceled")
             && out.contains(
-                "removed [p::2] from ^prj  no unprioritized open tasks or open sub-projects"
+                "removed #hide from ^prj  no non-hidden open tasks or open sub-projects"
             )
             && out
                 .contains("updated [[Child]] on ^prj  sub-project canceled")
@@ -2085,7 +2086,7 @@ fn projects_sync_marks_canceled_subproject_same_run() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("Child.md")).expect("read child"),
-        "---\ntype: [[project]]\nstatus: canceled\nparent: [[Parent]]\n---\n- [-] #task Stop child [p::2] ^prj\n"
+        "---\ntype: [[project]]\nstatus: canceled\nparent: [[Parent]]\n---\n- [-] #task Stop child #hide ^prj\n"
     );
 }
 
@@ -2096,23 +2097,23 @@ fn projects_sync_orders_open_then_closed_subprojects_in_one_run() {
 
     write_file(
         &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[DoneChild]] • [[CanceledChild]] • [[ExistingOpen]]\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[DoneChild]] • [[CanceledChild]] • [[ExistingOpen]]\n",
     );
     write_file(
         &vault.join("ExistingOpen.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish existing [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish existing #hide ^prj\n- [ ] #task Needs priority\n",
     );
     write_file(
         &vault.join("AddedOpen.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish added [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish added #hide ^prj\n- [ ] #task Needs priority\n",
     );
     write_file(
         &vault.join("DoneChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [x] #task Finish done [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [x] #task Finish done #hide ^prj\n",
     );
     write_file(
         &vault.join("CanceledChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [-] #task Stop canceled [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [-] #task Stop canceled #hide ^prj\n",
     );
 
     let output = bob_command()
@@ -2140,7 +2141,7 @@ fn projects_sync_orders_open_then_closed_subprojects_in_one_run() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[AddedOpen]] • [[ExistingOpen]] • ~~[[CanceledChild]]~~ ❌ • ~~[[DoneChild]]~~ ✅\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[AddedOpen]] • [[ExistingOpen]] • ~~[[CanceledChild]]~~ ❌ • ~~[[DoneChild]]~~ ✅\n"
     );
 
     let output = bob_command()
@@ -2172,15 +2173,15 @@ fn projects_sync_keeps_pruned_closed_entries_gone() {
     );
     write_file(
         &vault.join("KeptDone.md"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish kept [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish kept #hide ^prj\n",
     );
     write_file(
         &vault.join("PrunedDone.md"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish pruned [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish pruned #hide ^prj\n",
     );
     write_file(
         &vault.join("ReparentedChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[OtherParent]]\n---\n- [ ] #task Finish reparented [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[OtherParent]]\n---\n- [ ] #task Finish reparented #hide ^prj\n- [ ] #task Needs priority\n",
     );
 
     let output = bob_command()
@@ -2217,7 +2218,7 @@ fn projects_sync_treats_children_without_open_prj_as_childless() {
 
     write_file(
         &vault.join("ParentMissingChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n",
     );
     write_file(
         &vault.join("MissingPrjChild.md"),
@@ -2225,11 +2226,11 @@ fn projects_sync_treats_children_without_open_prj_as_childless() {
     );
     write_file(
         &vault.join("ParentCheckedChild.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n",
     );
     write_file(
         &vault.join("CheckedChild.md"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[ParentCheckedChild]]\n---\n- [x] #task Finish child [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: done\nparent: [[ParentCheckedChild]]\n---\n- [x] #task Finish child #hide ^prj\n",
     );
 
     let output = bob_command()
@@ -2268,11 +2269,11 @@ fn projects_sync_preserves_user_sub_bullets_and_inserts_subprojects_line() {
 
     write_file(
         &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- Remember to check notes\n\t- [[non_project_note]]\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- Remember to check notes\n\t- [[non_project_note]]\n",
     );
     write_file(
         &vault.join("Child.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish child [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
     );
 
     let output = bob_command()
@@ -2294,7 +2295,7 @@ fn projects_sync_preserves_user_sub_bullets_and_inserts_subprojects_line() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- Remember to check notes\n\t- [[non_project_note]]\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- Remember to check notes\n\t- [[non_project_note]]\n"
     );
 }
 
@@ -2305,15 +2306,15 @@ fn projects_sync_normalizes_mangled_subprojects_line() {
 
     write_file(
         &vault.join("Parent.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n  - 🧩 **Sub-projects:** [[ChildBeta]] plus [[ChildAlpha]]\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n  - 🧩 **Sub-projects:** [[ChildBeta]] plus [[ChildAlpha]]\n",
     );
     write_file(
         &vault.join("ChildAlpha.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish alpha [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish alpha #hide ^prj\n- [ ] #task Needs priority\n",
     );
     write_file(
         &vault.join("ChildBeta.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish beta [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish beta #hide ^prj\n- [ ] #task Needs priority\n",
     );
 
     let output = bob_command()
@@ -2335,7 +2336,7 @@ fn projects_sync_normalizes_mangled_subprojects_line() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[ChildAlpha]] • [[ChildBeta]]\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[ChildAlpha]] • [[ChildBeta]]\n"
     );
 }
 
@@ -2346,23 +2347,23 @@ fn projects_sync_subproject_line_dry_run_reports_without_writing() {
 
     write_file(
         &vault.join("ParentAdd.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish add [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish add #hide ^prj\n",
     );
     write_file(
         &vault.join("ChildAdd.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentAdd]]\n---\n- [ ] #task Finish child [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentAdd]]\n---\n- [ ] #task Finish child #hide ^prj\n- [ ] #task Needs priority\n",
     );
     write_file(
         &vault.join("ParentRemove.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish remove [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish remove #hide ^prj\n\t- 🧩 **Sub-projects:** [[OldChild]]\n- [ ] #task Needs priority\n",
     );
     write_file(
         &vault.join("ParentUpdate.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish update [p::2] ^prj\n\t- 🧩 **Sub-projects:** [[ChildUpdate]] plus notes\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish update #hide ^prj\n\t- 🧩 **Sub-projects:** [[ChildUpdate]] plus notes\n",
     );
     write_file(
         &vault.join("ChildUpdate.md"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentUpdate]]\n---\n- [ ] #task Finish update child [p::2] ^prj\n- [ ] #task Needs priority\n",
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentUpdate]]\n---\n- [ ] #task Finish update child #hide ^prj\n- [ ] #task Needs priority\n",
     );
     let snapshots = [
         (
@@ -2422,7 +2423,7 @@ fn projects_sync_reports_prj_errors_without_aborting_scan() {
 
     write_file(
         &vault.join("Good.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Good project [p::2] ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Good project #hide ^prj\n",
     );
     write_file(
         &vault.join("Malformed.md"),
@@ -2430,7 +2431,7 @@ fn projects_sync_reports_prj_errors_without_aborting_scan() {
     );
     write_file(
         &vault.join("Multiple.md"),
-        "---\ntype: [[project]]\n---\n- [ ] #task One [p::2] ^prj\n- [ ] #task Two [p::2] ^prj\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task One #hide ^prj\n- [ ] #task Two #hide ^prj\n",
     );
 
     let output = bob_command()
@@ -2461,7 +2462,7 @@ fn projects_sync_reports_prj_errors_without_aborting_scan() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("Good.md")).expect("read good"),
-        "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Good project [p::2] ^prj\n"
+        "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Good project #hide ^prj\n"
     );
 }
 
@@ -2632,7 +2633,7 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     );
     assert!(
         contents.contains(
-            "- [ ] #task [[lib/systems-performance.pdf]] [p::2] ^ref\n"
+            "- [ ] #task [[lib/systems-performance.pdf]] #hide ^ref\n"
         ),
         "{contents}"
     );
@@ -3924,7 +3925,7 @@ fn highlights_ref_marker_edit_updates_frontmatter() {
     let contents = fs::read_to_string(&note).expect("read updated ref note");
     assert!(contents.contains("status: read\n"), "{contents}");
     assert!(
-        contents.contains("- [x] #task [[lib/example.pdf]] [p::2] ^ref\n"),
+        contents.contains("- [x] #task [[lib/example.pdf]] #hide ^ref\n"),
         "{contents}"
     );
 }
@@ -4192,7 +4193,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     let migrated_note = fs::read_to_string(&note).expect("read migrated note");
     assert!(migrated_note.contains("status: read\n"), "{migrated_note}");
     assert!(
-        migrated_note.contains("- [x] #task [[lib/example.pdf]] [p::2] ^ref\n"),
+        migrated_note.contains("- [x] #task [[lib/example.pdf]] #hide ^ref\n"),
         "{migrated_note}"
     );
     assert!(
@@ -4237,7 +4238,7 @@ fn highlights_ref_task_cancelled_dry_run_requires_and_writes_pdf_marker() {
 
     let generated_note = fs::read_to_string(&note).expect("read ref note");
     let cancelled_note = generated_note.replace(
-        "- [ ] #task [[lib/example.pdf]] [p::2] ^ref",
+        "- [ ] #task [[lib/example.pdf]] #hide ^ref",
         "- [-] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] ^ref",
     );
     write_file(&note, &cancelled_note);
@@ -4441,7 +4442,7 @@ fn highlights_ref_task_cancelled_scan_write_pdfs_writes_pdf_marker() {
     );
     assert!(
         note_after_write
-            .contains("- [-] #task [[lib/example.pdf]] [p::2] ^ref\n"),
+            .contains("- [-] #task [[lib/example.pdf]] #hide ^ref\n"),
         "{note_after_write}"
     );
 }
@@ -4626,7 +4627,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     );
     assert!(
         note_after_write
-            .contains("- [x] #task [[lib/example.pdf]] [p::2] ^ref\n"),
+            .contains("- [x] #task [[lib/example.pdf]] #hide ^ref\n"),
         "{note_after_write}"
     );
     assert!(
@@ -4726,7 +4727,7 @@ Note: marker note mirrored from the PDF
     assert!(contents.contains("status: read\n"), "{contents}");
     assert!(
         contents.contains(
-            "- [x] #task [[lib/books/closing-order.pdf]] [p::2] ^ref\n"
+            "- [x] #task [[lib/books/closing-order.pdf]] #hide ^ref\n"
         ),
         "{contents}"
     );
@@ -4894,7 +4895,7 @@ Note: marker note mirrored from the PDF
     assert!(contents.contains("status: read\n"), "{contents}");
     assert!(
         contents.contains(
-            "- [x] #task [[lib/books/scan-closing.pdf]] [p::2] ^ref\n"
+            "- [x] #task [[lib/books/scan-closing.pdf]] #hide ^ref\n"
         ),
         "{contents}"
     );
@@ -4952,7 +4953,7 @@ fn highlights_ref_task_checked_dirty_tracked_note_is_allowed() {
     let contents = fs::read_to_string(&note).expect("read synced note");
     assert!(contents.contains("status: read\n"), "{contents}");
     assert!(
-        contents.contains("- [x] #task [[lib/example.pdf]] [p::2] ^ref\n"),
+        contents.contains("- [x] #task [[lib/example.pdf]] #hide ^ref\n"),
         "{contents}"
     );
 }
@@ -5140,7 +5141,7 @@ fn highlights_ref_status_abandoned_rewrites_generated_task_to_cancelled() {
         let contents = fs::read_to_string(&note).expect("read synced note");
         assert!(contents.contains("status: abandoned\n"), "{contents}");
         assert!(
-            contents.contains("- [-] #task [[lib/example.pdf]] [p::2] ^ref\n"),
+            contents.contains("- [-] #task [[lib/example.pdf]] #hide ^ref\n"),
             "{contents}"
         );
     }
@@ -5459,7 +5460,7 @@ Note: Keep a standalone observation after the marker.
     assert!(contents.contains("# Systems Performance\n"), "{contents}");
     assert!(
         contents.contains(
-            "- [ ] #task [[lib/books/systems-performance.pdf]] [p::2] ^ref\n"
+            "- [ ] #task [[lib/books/systems-performance.pdf]] #hide ^ref\n"
         ),
         "{contents}"
     );
@@ -5849,7 +5850,7 @@ Note:
     // The generated PDF reading-status task line is unchanged.
     assert!(
         contents
-            .contains("- [ ] #task [[lib/books/task-notes.pdf]] [p::2] ^ref\n"),
+            .contains("- [ ] #task [[lib/books/task-notes.pdf]] #hide ^ref\n"),
         "{contents}"
     );
 
