@@ -184,7 +184,13 @@ replacement status. PDF marker write-back for task-derived status still
 requires targeted `--write-pdf` or reviewed bulk `scan --write-pdfs`.
 
 For `lib/books/foo.pdf`, `sync` discovers `lib/books/foo.md` first and can
-parse simple `foo.textbundle/text.md` or `text.markdown` sidecars. Highlights,
+parse simple `foo.textbundle/text.md` or `text.markdown` sidecars. Image and
+area annotations require a TextBundle sidecar (`foo.textbundle/text.md` plus
+`foo.textbundle/assets/`) beside the PDF with the matching basename. Highlights
+sometimes fails to create that bundle the first time, so manually export it once
+and verify with `bob highlights scan --dry-run`; see
+[`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) for the workaround.
+Highlights,
 highlight comments, and standalone non-marker notes render into the managed
 `<!-- highlights:begin -->` region using stable `^h-...` block IDs. Existing
 manual body content outside that region is preserved, and disappeared generated

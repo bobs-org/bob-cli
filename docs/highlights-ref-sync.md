@@ -309,6 +309,42 @@ exists, `sync` still performs marker/frontmatter sync. For a new note it creates
 an empty managed region; for an existing note it preserves the existing managed
 region.
 
+### Known Highlights TextBundle Creation Bug
+
+For PDFs that contain image or area (rectangle) annotations, the Highlights app
+sometimes fails to *create* the TextBundle sidecar in the first place, even with
+autosave enabled. This is a Highlights app limitation, not a `bob highlights`
+behavior: Bob never creates or mutates sidecars, it only reads the PDF and
+sidecar content the app owns. Because Highlights can still *update* a TextBundle
+that already exists, the workaround is a one-time manual export per affected PDF.
+After the initial export, Highlights keeps the bundle updated, so this step is
+only needed once per PDF whose image annotations should sync.
+
+Create or export the bundle beside the PDF, using the exact PDF basename, so
+that `example.pdf` is paired with `example.textbundle/`. For
+`~/bob/lib/<ref_type>/example.pdf`, the expected layout is:
+
+```text
+~/bob/lib/<ref_type>/example.pdf
+~/bob/lib/<ref_type>/example.textbundle/text.md
+~/bob/lib/<ref_type>/example.textbundle/assets/figure.png
+```
+
+The sidecar text must live at `~/bob/lib/<ref_type>/example.textbundle/text.md`
+(or `text.markdown`), and every referenced image must live under
+`~/bob/lib/<ref_type>/example.textbundle/assets/`.
+
+After creating the bundle, run `bob highlights scan --dry-run` and confirm the
+affected PDF reports the expected `sidecar:` path and a nonzero `images:` count.
+The user-visible symptoms of a missing or incomplete bundle are:
+
+- A missing `.textbundle` looks like no sidecar, so `bob highlights scan`
+  performs marker/frontmatter planning but generates no image annotations.
+- A `.textbundle` without `text.md` or `text.markdown` surfaces as
+  `unsupported textbundle sidecar`.
+- A bundle whose `text.md` references images it does not actually contain under
+  `assets/` surfaces as `image asset not found`.
+
 Two Markdown sidecar shapes are supported. The simple shape is:
 
 - Page labels are Markdown headings such as `## Page 12` or `## p. 12`.
@@ -630,6 +666,11 @@ In Highlights Pro on the MacBook:
   `~/bob/lib/books/example.textbundle/text.md`.
 - Use TextBundle export for PDFs where Highlights area/rectangle selections
   should sync, because plain Markdown export does not include image assets.
+- For PDFs with image or area annotations, Highlights may fail to create the
+  TextBundle the first time even with autosave on. Manually export/create
+  `example.textbundle/` beside `example.pdf` once, then confirm it with
+  `bob highlights scan --dry-run`. See
+  [Known Highlights TextBundle Creation Bug](#known-highlights-textbundle-creation-bug).
 - Lock the Highlights Note Format to the sidecar contract above: page headings,
   `---` annotation separators, highlights as blockquote lines, highlight
   comments as plain paragraphs, standalone notes as plain paragraphs, and image
@@ -951,7 +992,7 @@ preflight failures remain hard global failures before writes.
 | `invalid marker item on line` | A marker line is not `- key: value` or `* key: value`. | Rewrite the marker as a flat list. |
 | `duplicate marker key on line` | The marker repeats a normalized key. | Keep only one value for that key. |
 | `output path collision(s) detected before writes` | Multiple PDFs would write the same reference note path, such as `ref/books/example.md`, or the same planned image asset destination. | Rename or move one PDF before scanning. |
-| `image asset not found` | The sidecar references an image file that is not present relative to the sidecar text file. This usually means the PDF was exported as plain Markdown instead of TextBundle. | Re-export the sidecar as TextBundle so `assets/...` files are included. |
+| `image asset not found` | The sidecar references an image file that is not present relative to the sidecar text file. This usually means the PDF was exported as plain Markdown, or Highlights failed to create the TextBundle for a PDF with image/area annotations. | Manually create/export the TextBundle once, beside the PDF and with the exact PDF basename, so `assets/...` files are included, then rerun. See [Known Highlights TextBundle Creation Bug](#known-highlights-textbundle-creation-bug). |
 | `image asset destination exists with different bytes` | A content-addressed `ref/.../*.assets/h-<id>.<ext>` destination already exists but its bytes do not match the source asset. | Inspect the existing asset, then remove or restore it before rerunning. |
 | `refusing to modify dirty vault files` | Git reports dirty touched paths outside the allowed frontmatter and generated-task checkbox write-back case. | Commit, stash, or clean those paths. |
 | `reference note changed but --write-pdf was not supplied` | Frontmatter or the generated task contributes `status: read` or `status: abandoned` to the selected projection, so the PDF marker needs an opt-in write. | Back up the PDF, then run targeted `sync --write-pdf` or reviewed bulk `scan --write-pdfs`. |
@@ -961,4 +1002,4 @@ preflight failures remain hard global failures before writes.
 | `changed during sync; rerun` | The note or PDF changed after planning and before writing. | Rerun after closing or pausing apps that may touch the file. |
 | `scan completed with ... per-PDF failure(s)` | A recursive scan finished reporting or writing valid PDFs, but at least one PDF had a `plan_error` or `write_failure`. | Fix the named PDFs and rerun; review successful writes before assuming the scan wrote nothing. |
 | `existing reference note is missing the managed Highlights region` | An existing ref note lacks `<!-- highlights:begin -->` and `<!-- highlights:end -->`. | Add both markers around the generated section or move the note aside and regenerate. |
-| `unsupported textbundle sidecar` | The `.textbundle` has no `text.md` or `text.markdown`. | Re-export a valid TextBundle or add one of those files. |
+| `unsupported textbundle sidecar` | The `.textbundle` has no `text.md` or `text.markdown`. | Verify the bundle contains `text.md` or `text.markdown`; manually re-export/create a valid TextBundle beside the PDF if it does not. See [Known Highlights TextBundle Creation Bug](#known-highlights-textbundle-creation-bug). |

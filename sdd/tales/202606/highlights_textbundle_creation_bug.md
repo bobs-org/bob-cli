@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-15 10:53:03
-status: wip
+status: done
 prompt: sdd/prompts/202606/highlights_textbundle_creation_bug.md
 ---
 # Plan: Document Highlights TextBundle Creation Bug
