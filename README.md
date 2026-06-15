@@ -30,6 +30,7 @@ root="$(mktemp -d)"
 cargo install --path . --locked --root "$root"
 "$root/bin/bob" --help
 "$root/bin/bob" bulk-git-commit --help
+"$root/bin/bob" capture --help
 "$root/bin/bob" dataview --help
 "$root/bin/bob" highlights --help
 "$root/bin/bob" move-done-tasks --help
@@ -56,6 +57,40 @@ Git. This command does not run `ob sync`; use `bob nightly` for the nightly path
 that syncs Obsidian before maintenance steps. `bob bulk-git-commit` mutates the
 vault repository and should only be run when Git remotes and SSH credentials are
 ready.
+
+```bash
+bob capture [OPTIONS] [--] [TEXT]...
+```
+
+Captures one task into the Bob vault without requiring desktop Obsidian to be
+open. Text is normalized to one line, written as
+`- [ ] #task <text> [created::YYYY-MM-DD]`, and routed to `mac_inbox.md` by
+default. The created date uses the local date from `BOB_NOW`, `DATE`, or the
+system clock.
+
+Automatic routing matches the Hammerspoon capture keymap: a leading
+`@route text` prefix wins, otherwise a trailing `text @route` suffix is used.
+Route names use `A-Z`, `a-z`, `0-9`, `_`, and `-`, are lower-cased, and write
+to `<route>.md` at the vault root. Routed tasks are inserted after the last
+top-level `#task` block and its indented continuation lines. Unrouted captures
+append to `mac_inbox.md`; unlike the old Lua branch, the Rust command also adds
+a separating newline if that inbox file was missing a final newline.
+
+Useful options:
+
+- `-b, --bob-dir DIR`: Bob vault root; defaults to `BOB_DIR` or `~/bob`
+- `-d, --dry-run`: parse, format, and report without writing
+- `-f, --format human|json`: human confirmation or stable JSON for callers
+- `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
+
+If `TEXT` is omitted and stdin is piped, `bob capture` reads one line from
+stdin. Put options before text, or use `--` when the task itself starts with a
+hyphen. Hammerspoon integrations should call
+`bob capture --format json -- <text>` and parse the JSON object, whose stable
+fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
+`relative_target`, `target`, `text`, `task_line`, `created`, and `placement`.
+On JSON-mode failures, stdout is still a single object with `ok: false` and an
+`error` string.
 
 ```bash
 bob nightly
@@ -284,9 +319,10 @@ Rust binaries, and the binaries carry the script assets they need.
 
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`.
 
-`BOB_NOW` sets the current timestamp for Pomodoro status and default runtime note
-selection. It also controls the default `bob move-done-tasks YYYY-MM-DD` commit
-message date. Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
+`BOB_NOW` sets the current timestamp for Pomodoro status, the `bob capture`
+`[created::YYYY-MM-DD]` stamp, and default runtime note selection. It also
+controls the default `bob move-done-tasks YYYY-MM-DD` commit message date.
+Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 `YYYY-MM-DD HH:MM:SS`.
 
 `BOB_HIGHLIGHTS_LIB_DIR` sets the Highlights PDF library directory used by
@@ -297,9 +333,9 @@ configured.
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
 `bob highlights`. It defaults to `ref` under `BOB_DIR`.
 
-`DATE` preserves the legacy date override behavior. It can be a date command
-prefix such as `date --utc`, or a timestamp in the same formats accepted by
-`BOB_NOW`.
+`DATE` preserves the legacy date override behavior, including the date used by
+`bob capture` when `BOB_NOW` is unset. It can be a date command prefix such as
+`date --utc`, or a timestamp in the same formats accepted by `BOB_NOW`.
 
 `OB_COMMAND` overrides the `ob` executable used by the shared `bob nightly`
 Obsidian sync gate.
@@ -352,6 +388,7 @@ root="$(mktemp -d)"
 cargo install --path . --locked --root "$root"
 "$root/bin/bob" --help
 "$root/bin/bob" bulk-git-commit --help
+"$root/bin/bob" capture --help
 "$root/bin/bob" dataview --help
 "$root/bin/bob" highlights --help
 "$root/bin/bob" move-done-tasks --help

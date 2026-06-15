@@ -37,6 +37,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::BulkGitCommit,
     },
     Subcommand {
+        name: "capture",
+        script_command: None,
+        about: "Capture a task into the Bob vault",
+        native_command: NativeCommand::Capture,
+    },
+    Subcommand {
         name: "dataview",
         script_command: None,
         about: "Run Dataview queries against the Bob vault",
@@ -220,6 +226,8 @@ const HELP_TEMPLATE: &str = "\
 const AFTER_HELP: &str = "\
 Examples:
   bob bulk-git-commit             Commit and push Bob vault Git changes
+  bob capture buy milk @groceries
+                                 Capture a task into groceries.md
   bob dataview --source '#project'
                                  Print matching note paths
   bob highlights scan --dry-run

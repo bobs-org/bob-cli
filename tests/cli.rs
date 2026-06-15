@@ -1,8 +1,9 @@
 use std::{
     ffi::{OsStr, OsString},
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
     sync::atomic::{AtomicUsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -113,6 +114,30 @@ fn bulk_git_commit_help_is_native_only() {
 }
 
 #[test]
+fn capture_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-capture-native-help");
+    let output = bob_command()
+        .arg("capture")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob capture --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob capture"),
+        "expected capture help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only capture should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn dataview_help_is_native_only() {
     let temp = TempDir::new("bob-cli-dataview-native-help");
     let output = bob_command()
@@ -217,6 +242,7 @@ fn highlights_ref_subcommand_help_works() {
 fn all_top_level_subcommand_help_is_safe_and_plain() {
     let cases: &[(&[&str], &str)] = &[
         (&["bulk-git-commit", "--help"], "usage: bob bulk-git-commit"),
+        (&["capture", "--help"], "bob capture"),
         (&["dataview", "--help"], "bob dataview"),
         (&["highlights", "--help"], "Usage: bob highlights"),
         (&["move-done-tasks", "--help"], "usage: bob move-done-tasks"),
@@ -249,6 +275,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
     let bob_cases: &[(&[&str], &str)] = &[
         (&["--help"], "bob --help"),
         (&["bulk-git-commit", "--help"], "bob bulk-git-commit --help"),
+        (&["capture", "--help"], "bob capture --help"),
         (&["dataview", "--help"], "bob dataview --help"),
         (&["highlights", "--help"], "bob highlights --help"),
         (
@@ -470,6 +497,333 @@ fn nightly_help_exits_before_operational_work() {
         fs::read_to_string(&log).unwrap_or_default()
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture")
+        .arg("--help")
+        .output()
+        .expect("run bob capture --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Capture one task into the Bob Obsidian vault"),
+        "expected capture long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+            "-r, --route",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_unrouted_appends_to_mac_inbox() {
+    let temp = TempDir::new("bob-cli-capture-inbox");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("buy")
+        .arg("milk")
+        .env("BOB_NOW", "2026-06-15 10:11:12")
+        .output()
+        .expect("run bob capture inbox");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected capture stderr:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains("captured  mac_inbox.md")
+            && out.contains("- [ ] #task buy milk [created::2026-06-15]"),
+        "unexpected capture output:\n{out}"
+    );
+    assert_stdout_has_no_ansi(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        "- [ ] #task buy milk [created::2026-06-15]\n"
+    );
+}
+
+#[test]
+fn capture_routed_prefix_inserts_and_suffix_creates_file() {
+    let temp = TempDir::new("bob-cli-capture-routed");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("groceries.md"),
+        "# Groceries\n- [ ] #task existing\n  detail\n\nNext\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("@Groceries")
+        .arg("pick")
+        .arg("apples")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run prefix routed capture");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("captured  groceries.md"),
+        "unexpected prefix capture output:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("groceries.md"))
+            .expect("read groceries"),
+        "# Groceries\n- [ ] #task existing\n  detail\n- [ ] #task pick apples [created::2026-06-15]\n\nNext\n"
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("call")
+        .arg("vet")
+        .arg("@Errands")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run suffix routed capture");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("captured  errands.md"),
+        "unexpected suffix capture output:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("errands.md")).expect("read errands"),
+        "- [ ] #task call vet [created::2026-06-15]\n"
+    );
+}
+
+#[test]
+fn capture_route_override_keeps_at_tokens_literal() {
+    let temp = TempDir::new("bob-cli-capture-route-override");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("Work")
+        .arg("buy")
+        .arg("milk")
+        .arg("@groceries")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run forced-route capture");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("work.md")).expect("read work route"),
+        "- [ ] #task buy milk @groceries [created::2026-06-15]\n"
+    );
+    assert!(
+        !vault.join("groceries.md").exists(),
+        "--route should bypass auto @route parsing"
+    );
+}
+
+#[test]
+fn capture_dry_run_reports_without_writing() {
+    let temp = TempDir::new("bob-cli-capture-dry-run");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("buy")
+        .arg("milk")
+        .arg("@groceries")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run dry-run capture");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("[dry-run] ok would capture  groceries.md")
+            && out.contains("- [ ] #task buy milk [created::2026-06-15]"),
+        "unexpected dry-run output:\n{out}"
+    );
+    assert!(
+        !vault.join("groceries.md").exists(),
+        "dry-run must not create routed target"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_json_output_is_machine_readable() {
+    let temp = TempDir::new("bob-cli-capture-json");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("buy")
+        .arg("milk")
+        .arg("@Groceries")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run json capture");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "json capture should keep stderr clean:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["dry_run"], false);
+    assert_eq!(json["routed"], true);
+    assert_eq!(json["route"], "groceries");
+    assert_eq!(json["route_label"], "groceries.md");
+    assert_eq!(json["relative_target"], "groceries.md");
+    assert_eq!(
+        json["target"],
+        vault.join("groceries.md").display().to_string()
+    );
+    assert_eq!(json["text"], "buy milk");
+    assert_eq!(
+        json["task_line"],
+        "- [ ] #task buy milk [created::2026-06-15]"
+    );
+    assert_eq!(json["created"], "2026-06-15");
+    assert_eq!(json["placement"], "created");
+}
+
+#[test]
+fn capture_reads_one_line_from_stdin_when_text_is_absent() {
+    let temp = TempDir::new("bob-cli-capture-stdin");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let mut child = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-06-15")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stdin capture");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe")
+        .write_all(b"ping team @work\nignored input\n")
+        .expect("write stdin");
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().expect("wait stdin capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("work.md")).expect("read work route"),
+        "- [ ] #task ping team [created::2026-06-15]\n"
+    );
+}
+
+#[test]
+fn capture_empty_input_is_usage_error() {
+    let temp = TempDir::new("bob-cli-capture-empty");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run empty capture");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "empty capture should be a usage error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stdout(&output).is_empty()
+            && stderr(&output).contains("task text is required"),
+        "expected empty-input error:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn capture_json_failure_prints_error_object() {
+    let temp = TempDir::new("bob-cli-capture-json-failure");
+    let missing_vault = temp.path().join("missing-vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&missing_vault)
+        .arg("-f")
+        .arg("json")
+        .arg("buy")
+        .arg("milk")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run json capture failure");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "missing vault should be an IO failure:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).is_empty(),
+        "json failure should keep stderr clean:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["ok"], false);
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("create target")),
+        "unexpected json failure object: {json}"
+    );
 }
 
 #[test]

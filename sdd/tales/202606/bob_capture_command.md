@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-15 16:20:45
-status: wip
+status: done
 prompt: sdd/prompts/202606/bob_capture_command.md
 ---
 # Plan: `bob capture` — Native Task Capture Command + Thin Hammerspoon Keymap
