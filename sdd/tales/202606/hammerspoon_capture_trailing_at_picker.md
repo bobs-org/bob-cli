@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-16 10:03:44
-status: wip
+status: done
 prompt: sdd/prompts/202606/hammerspoon_capture_trailing_at_picker.md
 ---
 # Plan: Hammerspoon Capture Picker Only On Trailing Bare At
