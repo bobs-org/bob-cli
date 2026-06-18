@@ -1,196 +1,174 @@
 ---
 create_time: 2026-06-18
 status: research
-topic: Replicating tpope vim-surround keymaps inside Obsidian's Vim mode
+topic: Options for vim-surround-style keymaps in Obsidian Vim mode
 ---
-# Research: vim-surround Keymaps in Obsidian
+# Research: Vim Surround Keymaps in Obsidian
 
 ## Question
 
-Can we get the same keymaps that the `vim-surround` (tpope/vim-surround) Vim plugin
-provides inside Obsidian? If so, what implementation options exist, and which should we
-use for Bob's vault?
+Bob's Obsidian vault uses Vim mode. Can Obsidian provide the same keymaps as
+Tim Pope's `vim-surround` plugin, especially `ys{motion}{replacement}`,
+`yss{replacement}`, `ds{target}`, `cs{target}{replacement}`, and visual
+`S{replacement}`? If so, what are the implementation options?
 
 ## Short Answer
 
-Partly yes. Obsidian's Vim mode is the `@replit/codemirror-vim` extension, which does **not**
-ship tpope's surround commands. The `obsidian-vimrc-support` plugin we already use adds a
-custom `:surround` Ex command. Mapped to keys, it reproduces the **add-surround** half of
-vim-surround (wrap the visual selection, or the word under the cursor in normal mode). It
-does **not** natively provide `cs` (change a surrounding pair) or `ds` (delete a surrounding
-pair), and the normal-mode form only targets the current word, not arbitrary motions/text
-objects like `ysi(` or `ys$`.
+Yes, but not by installing the real Vim plugin. Obsidian's Vim mode is
+CodeMirror Vim emulation, not embedded Vim/Neovim, so Vimscript plugins such as
+`tpope/vim-surround` cannot be loaded directly.
 
-To get full `ys` / `cs` / `ds` parity you must drop down to the plugin's `jscommand` /
-`jsfile` JavaScript escape hatch and implement change/delete yourself — which requires
-turning on `supportJsCommands`, currently deliberately disabled in this vault.
+There is a partial solution already available: `obsidian-vimrc-support` provides
+a `:surround` Ex command and examples for mappings like `s"` or `s(` that wrap
+the visual selection or the word under the cursor. That is useful and low-risk,
+but it is not the same key grammar as `vim-surround`: it does not provide full
+`ys`, `ds`, `cs`, text-object, tag, repeat, or custom-surround semantics.
 
-Recommendation: ship a no-JS surround mapping set built on `:surround` (visual-mode `S{char}`
-plus a normal-mode `ys{char}` family), which covers the overwhelmingly common case, and treat
-`cs`/`ds` as an optional later upgrade gated behind enabling JS commands.
-
-## Background: what tpope/vim-surround actually provides
-
-The real plugin has four headline operations:
-
-- `ys{motion}{char}` — add a surround around a motion/text object, e.g. `ysiw"` wraps the
-  inner word in quotes; `yss)` wraps the whole line.
-- `S{char}` — in visual mode, surround the selection.
-- `cs{old}{new}` — change an existing surrounding pair, e.g. `cs'"` turns `'x'` into `"x"`.
-- `ds{char}` — delete a surrounding pair, e.g. `ds"` removes the quotes around the cursor.
-
-Any "vim-surround in Obsidian" answer has to be measured against these four. The add
-operations (`ys`, visual `S`) are achievable today; the change/delete operations (`cs`, `ds`)
-are the hard part.
+For literal `vim-surround` keymaps inside Obsidian, the right implementation is
+a small owned Obsidian plugin that integrates with `window.CodeMirrorAdapter.Vim`
+the same way our existing Bob plugins already do. It should implement a focused
+subset first: quotes, backticks, parentheses, brackets, braces, angle brackets,
+wiki links, `ys{motion}{char}`, `yss{char}`, `ds{char}`, `cs{old}{new}`, and
+visual `S{char}`.
 
 ## Current Vault State
 
-Verified locally from `/home/bryan/bob`:
+Observed locally in `/home/bryan/bob`:
 
 - `.obsidian/app.json` has `"vimMode": true`.
-- `obsidian-vimrc-support` is installed and enabled; its `data.json` sets
-  `"vimrcFileName": "obsidian_vimrc.md"` and `"supportJsCommands": false`.
-- `obsidian_vimrc.md` opens with the comment *"JavaScript vimrc commands intentionally remain
-  disabled."* — disabling JS is a deliberate choice here, not an oversight.
-- The vimrc already uses **bare-key `nmap`s**, including `nmap [[ :bob_prev_link<CR>` and
-  `nmap ]] :bob_next_link<CR>`, plus `nmap -`, `nmap !`, `nmap [<Space>`, `nmap ]<Space>`,
-  `nmap <C-j>`, `nmap <C-k>`. This matters: the surround example in the plugin README remaps
-  `[[`, which would collide with our existing link-navigation maps (see Findings #3).
+- `obsidian-vimrc-support` is installed and enabled.
+- `.obsidian/plugins/obsidian-vimrc-support/data.json` sets
+  `"vimrcFileName": "obsidian_vimrc.md"` and
+  `"supportJsCommands": false`, which is a good default to keep.
+- `obsidian_vimrc.md` currently uses Vimrc Support for command-oriented mappings
+  such as `-`, `[[`, `]]`, `!`, `[<Space>`, `]<Space>`, `<C-j>`, and `<C-k>`.
 - No surround mappings exist in the vimrc today.
-- See the sibling note [[obsidian_vim_keymaps_embedded_focus_consolidated]] for how this
-  vault's Vim maps relate to native commands and the editor-focus boundary.
+- Local custom plugins already use `window.CodeMirrorAdapter.Vim`:
+  `bob-ledger-tools` and `task-status-cycler` register Vim actions with
+  `vim.defineAction(...)` and `vim.mapCommand(...)`.
+- Local plugins also already use CM6 editor extensions via
+  `registerEditorExtension(...)`, so an owned editor/Vim plugin fits the vault's
+  current implementation style.
+
+## What `vim-surround` Actually Provides
+
+`vim-surround` is not just "wrap selected text." It adds a small Vim language
+for adding, changing, and deleting paired surroundings:
+
+| Operation | Example | Meaning |
+| --- | --- | --- |
+| Delete | `ds"` | Delete surrounding double quotes. |
+| Change | `cs"'` | Change surrounding double quotes to single quotes. |
+| Add by motion | `ysiw]` | Surround inner word with square brackets. |
+| Add line | `yss)` | Surround the current line with parentheses. |
+| Visual | `S<p>` | Surround the visual selection with a tag. |
+
+The high-value part is the grammar: an operator-like prefix, a Vim motion or
+target, then a replacement. That grammar is why this is harder than a few
+Obsidian hotkeys.
 
 ## Key Findings
 
-### 1. The base Vim engine has no surround
+### 1. Obsidian cannot load `vim-surround` directly
 
-Obsidian's Vim mode "is mostly the codemirror-vim extension for CodeMirror" (CM6, the
-`@replit/codemirror-vim` package). That package implements operators, motions, and Ex
-commands, but there is no built-in tpope-style surround (`cs`/`ds`/`ys`). So nothing happens
-for these keys out of the box, and there is no setting to turn it on.
+`vim-surround` is Vimscript. Obsidian's editor uses CodeMirror and a JavaScript
+Vim-emulation layer. The CodeMirror Vim docs explicitly say the implementation
+tries to emulate useful Vim features but is not a complete Vim implementation.
 
-### 2. `obsidian-vimrc-support` adds a custom `:surround` command — add-only
+Practical implication: there is no `Plug 'tpope/vim-surround'` equivalent inside
+Obsidian. Exact support must be reimplemented in JavaScript against CodeMirror
+Vim, or the note must be edited in real Vim/Neovim outside Obsidian.
 
-The plugin defines an Ex command:
+### 2. Vimrc Support already has a useful but limited `surround` command
 
-> `surround [prefixText] [postfixText]` — surrounds the selected text in visual mode, or the
-> word under the cursor in normal mode.
+`obsidian-vimrc-support` documents a `:surround [prefixText] [postfixText]`
+command. Its README gives mappings such as:
 
-The README's "vim-surround emulation" example, verbatim:
-
-```
-exmap surround_wiki surround [[ ]]
+```vim
 exmap surround_double_quotes surround " "
-exmap surround_single_quotes surround ' '
-exmap surround_backticks surround ` `
 exmap surround_brackets surround ( )
-exmap surround_square_brackets surround [ ]
-exmap surround_curly_brackets surround { }
-
-map [[ :surround_wiki<CR>
-nunmap s
-vunmap s
 map s" :surround_double_quotes<CR>
+map sb :surround_brackets<CR>
+map s( :surround_brackets<CR>
 ```
 
-Important documented detail: **"must use `map` and not `nmap`"** — the command keys off the
-current mode (visual selection vs. word-under-cursor), so the mapping has to be live in both
-normal and visual mode. There is also a companion `:pasteinto` command (paste clipboard into
-the selection/word, handy for `[text](url)` links). Both `surround` and `pasteinto` were fixed
-to work with the CM6 editor as of plugin v0.6.0.
+Usage is visual selection plus `s"` / `s(`, or cursor on a word plus `s"` /
+`s(`. This is probably the fastest way to get a useful "surround selected text
+or current word" workflow in the current vault.
 
-What this gives us vs. real vim-surround:
+Limitations:
 
-- ✅ Visual `S{char}` equivalent (wrap a selection).
-- ✅ A normal-mode "wrap the current word" equivalent (rough stand-in for `ysiw{char}`).
-- ❌ No `cs` (change pair) — not supported.
-- ❌ No `ds` (delete pair) — not supported.
-- ❌ Normal-mode form is **word-only**; no motion/text-object targeting (`ysi(`, `ys$`, `yss`).
+- It does not give the same keymaps as `vim-surround`.
+- It is add-only; a GitHub discussion asks specifically about `cs` and `ds`, and
+  there is no documented built-in answer.
+- It wraps the current selection or word, not arbitrary Vim motions in the full
+  `ys{motion}{replacement}` form.
+- The local installed plugin maps a prompt-style surround operator to `<A-y>s`,
+  but that still prompts for the replacement rather than accepting the final
+  replacement key exactly like `ysiw"`.
 
-Community forum consensus matches this: the Vimrc `surround` command is a usable partial
-solution but is explicitly "not as capable as real Vim and its vim-surround plugin," with no
-native `cs`/`ds`/`ys`.
+### 3. Selection-wrapping community plugins are not Vim-surround
 
-### 3. The README example collides with our existing maps
+Plugins such as "Wrap with shortcuts", "Code Editor Shortcuts", and "Shortcuts
+extender" can wrap selections or expand selections to quotes/brackets. These are
+useful for non-Vim workflows, but they are normal Obsidian command/hotkey
+plugins. They do not understand Vim operator-pending mode, motions, `iw`, `yss`,
+`cs`, or `ds`.
 
-The canonical example does two things that are wrong for this vault:
+Practical implication: these plugins can solve "wrap selected text with a
+shortcut"; they cannot preserve `vim-surround` muscle memory.
 
-- `map [[ :surround_wiki<CR>` would override our `nmap [[ :bob_prev_link<CR>` (and `map`
-  applies in normal mode too). We must **not** remap `[[`.
-- `nunmap s` / `vunmap s` repurpose `s` as a surround prefix, sacrificing Vim's `s`
-  (substitute char) command. That is a real muscle-memory cost; `cl` is the usual fallback.
+### 4. CodeMirror Vim exposes enough API for a proper custom implementation
 
-So we cannot paste the README example as-is. A vault-specific mapping scheme is required.
+`@replit/codemirror-vim` exposes the old CodeMirror Vim API through
+`Vim`, including:
 
-### 4. JavaScript commands are the only route to `cs`/`ds` parity
+- `Vim.map(...)`
+- `Vim.unmap(...)`
+- `Vim.defineEx(...)`
+- `Vim.defineOperator(...)`
+- `Vim.mapCommand(...)`
 
-The plugin exposes `jscommand "<code>"` and `jsfile <path> "<code>"`, which run arbitrary JS
-with `editor`, `view`, and `selection` arguments. That is powerful enough to implement true
-change/delete-surround (find the nearest enclosing pair, rewrite or remove it). But:
+The source also documents the operator callback shape: an operator receives the
+computed selection ranges after a motion. That is the key primitive for
+`ys{motion}` and visual `S`.
 
-- It requires enabling `supportJsCommands`, which is **currently `false` by deliberate vault
-  policy**. Flipping it on means any code in the vimrc/jsfile runs with plugin privileges — a
-  real security/trust tradeoff for a synced vault.
-- We would be writing and maintaining the surround logic ourselves; there is no
-  ready-made, well-maintained drop-in.
+This matches local precedent: our Bob plugins already register custom Vim
+actions through `window.CodeMirrorAdapter.Vim`.
 
-### 5. No mature dedicated "surround" community plugin exists
+### 5. Exact `ys`/`cs`/`ds` is more than one `defineOperator`
 
-There is no established standalone Obsidian community plugin that implements tpope surround.
-`nvim-surround` and the original `vim-surround` target Neovim/Vim, not Obsidian. For Obsidian,
-the realistic universe of options is: the Vimrc `:surround` command, the Vimrc JS escape
-hatch, or upstream changes to `codemirror-vim` (not available today).
+The tricky part is the replacement key position:
+
+- CodeMirror Vim operators normally complete after `operator + motion`.
+- `vim-surround`'s `ysiw"` completes after `operator + motion + replacement`.
+- `cs"'` needs both an old target and a new replacement.
+- `ds"` needs to search for and remove the surrounding pair around the cursor.
+
+A prompt-based operator is straightforward: capture the motion range, open a
+dialog, and wrap with the prompt result. That is essentially what Vimrc Support's
+default prompt operator does.
+
+Literal key compatibility needs an extra pending-replacement state. A custom
+plugin would need to capture the motion range, temporarily intercept the next
+normal-mode key before CodeMirror Vim consumes it, resolve that key to a pair,
+then apply the edit. `ds` and `cs` also need a pair-finding engine for the
+current cursor context.
+
+This is feasible, but it is real editor work. It should be scoped deliberately.
 
 ## Implementation Options
 
-### Option A — Vimrc `:surround` mappings (no JS) — RECOMMENDED baseline
+### Option A: Add Vimrc Support `:surround` mappings now
 
-Add a surround block to `obsidian_vimrc.md` using `:surround`, designed around our existing
-bare-key maps. Covers add-surround in visual and normal (word) mode.
+Add mappings to `obsidian_vimrc.md`, but do not paste the README example as-is.
+The README maps `[[` to wiki-link wrapping, which would collide with the
+existing `[[` / `]]` link-navigation maps. It also repurposes `s` as a surround
+prefix, which sacrifices Vim's standard `s` substitute command.
 
-- Pros: no new plugin, no JS, keeps `supportJsCommands: false`, low risk, matches the most
-  common real-world vim-surround use (wrap a word/selection).
-- Cons: no `cs`/`ds`; normal mode is word-only (no motions/text objects).
+A safer add-only baseline is:
 
-### Option B — Vimrc JS commands for full `cs`/`ds`/`ys` parity
-
-Use `jscommand`/`jsfile` to implement change- and delete-surround (and richer add-surround).
-
-- Pros: can reach near-full vim-surround behavior, including `cs`/`ds`.
-- Cons: requires enabling `supportJsCommands` (reverses a deliberate security choice);
-  custom code to write, test against CM6, and maintain; no upstream support if it breaks.
-
-### Option C — Wait for / contribute upstream surround in `codemirror-vim`
-
-- Pros: would be the "right" long-term home, available to all Obsidian users.
-- Cons: not available now; no indication it is planned; out of our control.
-
-### Option D — Do nothing / use plain Vim edits
-
-Use native edits for surrounds: `ciw` then retype with delimiters; `xp`-style fixes; visual
-select + type. Free, but loses the ergonomics that motivated the request.
-
-## Recommended Solution
-
-Adopt **Option A now**, and keep **Option B as an explicit, opt-in upgrade** only if `cs`/`ds`
-turn out to matter in daily use.
-
-Rationale: add-surround (wrap a selection or word) is the dominant vim-surround use, and
-Option A delivers it with zero new dependencies, zero JS, and no change to the vault's
-deliberate `supportJsCommands: false` posture. `cs`/`ds` are nice but secondary, and the only
-way to get them is the JS escape hatch, which carries a trust cost that should be a conscious,
-separate decision rather than a default.
-
-Concrete mapping scheme (avoids clobbering `[[` / `]]`, and does **not** sacrifice `s`):
-
-- Visual mode: `S{char}` to surround the selection — this is exactly how real vim-surround
-  behaves in visual mode, so the muscle memory transfers directly.
-- Normal mode: a `ys{char}` family to wrap the word under the cursor — a close stand-in for
-  `ysiw{char}`, and `ys` does not collide with any existing bare-key map.
-
-Ready-to-paste block for `obsidian_vimrc.md` (append after the existing maps):
-
-```
+```vim
 " --- vim-surround emulation (add-surround only; via obsidian-vimrc-support) ---
 exmap surround_double_quotes surround " "
 exmap surround_single_quotes surround ' '
@@ -200,7 +178,7 @@ exmap surround_square        surround [ ]
 exmap surround_curly         surround { }
 exmap surround_wiki          surround [[ ]]
 
-" Visual mode: select text, then S<char> wraps it (native vim-surround feel).
+" Visual mode: select text, then S<char> wraps it.
 vmap S" :surround_double_quotes<CR>
 vmap S' :surround_single_quotes<CR>
 vmap S` :surround_backticks<CR>
@@ -212,7 +190,7 @@ vmap S{ :surround_curly<CR>
 vmap S} :surround_curly<CR>
 vmap Sw :surround_wiki<CR>
 
-" Normal mode: ys<char> wraps the word under the cursor (stand-in for ysiw<char>).
+" Normal mode: ys<char> wraps the word under the cursor.
 nmap ys" :surround_double_quotes<CR>
 nmap ys' :surround_single_quotes<CR>
 nmap ys` :surround_backticks<CR>
@@ -225,32 +203,189 @@ nmap ys} :surround_curly<CR>
 nmap ysw :surround_wiki<CR>
 ```
 
-Notes / caveats to verify when applying:
+Pros:
 
-- The README says surround "must use `map` not `nmap`." We split into `vmap` (for visual `S`)
-  and `nmap` (for normal `ys`) instead of a blanket `map` specifically to avoid touching
-  operator-pending mode and to keep visual-`S` and normal-`ys` independent. Confirm both
-  fire correctly in this plugin version after pasting; if normal-mode `ys` misbehaves, fall
-  back to `map ys… ` per the README guidance and re-test that it does not disturb `[[`/`]]`.
-- `ys` mappings introduce a short timeout on the `y` key (Vim waits to see if `s` follows).
-  If that delay on yanks is annoying, switch the normal-mode prefix to a leader (e.g.
-  `<leader>s"`), or drop normal-mode maps and rely on visual `S` only.
-- This block does **not** remap `[[`, `]]`, `-`, `!`, or `s`, so existing Bob navigation maps
-  and Vim's substitute command are preserved.
+- Fastest path.
+- Uses an already-installed plugin.
+- No JavaScript command support required.
+- Good for "wrap current word" and "wrap current visual selection."
 
-If/when `cs`/`ds` become important, open a follow-up that (1) enables `supportJsCommands`
-with eyes open to the trust implications, and (2) adds `jscommand`/`jsfile`-based change- and
-delete-surround. Keep that as a distinct decision.
+Cons:
+
+- Not the same keymaps.
+- No `ds`.
+- No `cs`.
+- No true `ys{motion}{replacement}`.
+- Normal-mode `ys` adds a short timeout to plain `y` because Vim waits to see
+  whether `s` follows.
+- Vimrc Support's README says `surround` mappings should use `map`, not `nmap`,
+  so this split `vmap` / `nmap` version should be tested in the installed plugin
+  version before relying on it. If normal-mode `ys` misbehaves, use a leader
+  mapping instead.
+
+Best for: immediate partial relief.
+
+### Option B: Use Vimrc Support JS commands or QuickAdd startup JavaScript
+
+Enable JavaScript commands in Vimrc Support or use a startup script to call
+`window.CodeMirrorAdapter.Vim` and register custom actions/operators.
+
+Pros:
+
+- Can prototype quickly.
+- No full plugin scaffold required.
+- Uses the same CodeMirror Vim API that a real plugin would use.
+
+Cons:
+
+- Vimrc Support warns that JS commands execute arbitrary code from the vault; the
+  local vault currently keeps this disabled.
+- Harder to test, version, and package than a normal plugin.
+- Still needs the same surround parsing logic for `cs`/`ds`.
+
+Best for: throwaway proof of concept only.
+
+### Option C: Install a selection-wrapping community plugin
+
+Use plugins such as:
+
+- Wrap with shortcuts
+- Code Editor Shortcuts
+- Shortcuts extender
+
+Pros:
+
+- No custom code.
+- Good for modifier hotkeys and selected-text wrapping.
+- Can support arbitrary custom wrappers in some cases.
+
+Cons:
+
+- Does not preserve Vim-surround keymaps.
+- Does not integrate with Vim motions/text objects.
+- Does not provide `ds`/`cs` semantics.
+
+Best for: users who only need "wrap current selection", not Vim muscle memory.
+
+### Option D: Implement an owned `bob-vim-surround` Obsidian plugin
+
+Create a small plugin dedicated to surround behavior. It would register Vim
+mappings through `window.CodeMirrorAdapter.Vim`, using the same pattern already
+present in `bob-ledger-tools` and `task-status-cycler`.
+
+Suggested first milestone:
+
+- `ys{motion}{char}` for charwise and linewise motions.
+- `yss{char}` for current line.
+- Visual `S{char}`.
+- `ds{char}` for quotes, backticks, `()`, `[]`, `{}`, `<>`, and maybe `[[ ]]`.
+- `cs{old}{new}` for the same targets.
+- Pair resolver for `"`, `'`, `` ` ``, `(` / `)`, `[` / `]`, `{` / `}`, `<` /
+  `>`, `b`, `B`, and markdown wiki links.
+
+Defer until later:
+
+- HTML/XML tag parsing (`t` / `<tag>`).
+- Dot-repeat fidelity.
+- Counts.
+- Function replacements (`f` / `F`).
+- Vimscript-style custom replacements.
+- Deep compatibility with every edge case in `vim-surround`.
+
+Implementation shape:
+
+- Register once on layout ready after `window.CodeMirrorAdapter?.Vim` is
+  available.
+- Use `defineOperator` for the range-capturing part of `ys`.
+- Add a short-lived pending-replacement state to consume the next key as the
+  surround replacement.
+- Add normal-mode sequence handling for `ds` and `cs` because native `d` and `c`
+  are already CodeMirror Vim operators.
+- Keep all behavior editor-scoped; do not create app-global bare-key handlers.
+- Stand down outside Markdown editor Vim normal/visual mode.
+- Add fixtures/unit tests for pair finding and replacement.
+- Manually test in Live Preview with normal text, lists, links, code spans,
+  inline Markdown markup, and multi-line selections.
+
+Pros:
+
+- Only option that can preserve `vim-surround` muscle memory inside Obsidian.
+- Keeps JavaScript out of vault notes.
+- Fits the existing Bob plugin pattern.
+- Can be scoped to the exact Markdown wrappers we care about.
+
+Cons:
+
+- More work than Vimrc mappings.
+- CodeMirror Vim internals are not a formal Obsidian API.
+- Full `vim-surround` compatibility is larger than it looks.
+
+Best for: the actual requested goal, if "same keymaps" means literal `ys`,
+`cs`, `ds`, and visual `S`.
+
+### Option E: Edit notes in Neovim for exact upstream behavior
+
+Use real Neovim/Vim against the Markdown files and install `vim-surround` or a
+modern equivalent such as `nvim-surround`.
+
+Pros:
+
+- Exact Vim plugin ecosystem.
+- Mature implementation.
+- No Obsidian editor internals.
+
+Cons:
+
+- Not inside Obsidian's editor.
+- Obsidian-specific live-preview widgets, commands, and UI state are out of
+  scope.
+
+Best for: users who primarily edit notes in Neovim and use Obsidian for reading,
+graph, search, sync, and plugins.
+
+## Recommended Solution
+
+Use a two-step path.
+
+First, add the safer Vimrc Support `:surround` mappings from Option A for the
+common wrappers. This gives an immediate improvement for visual selections and
+current-word wrapping without enabling unsafe JS commands and without new plugin
+work. Avoid the README's `[[` mapping because Bob already uses `[[` / `]]` for
+link navigation, and avoid a plain `s` prefix unless losing Vim's substitute key
+is acceptable.
+
+Then, if literal `vim-surround` muscle memory is still the goal, implement a
+small owned `bob-vim-surround` plugin. Do not try to load the real Vimscript
+plugin, and do not rely on vault-stored JavaScript snippets for the long term.
+Start with the Markdown-focused subset that matters in Obsidian: `ys`, `yss`,
+visual `S`, `ds`, and `cs` for quotes, brackets, braces, backticks, angle
+brackets, and wiki links. Treat tag support, dot-repeat, counts, and custom
+replacements as later compatibility passes.
+
+Net: Vimrc Support is the pragmatic short-term workaround; an owned CodeMirror
+Vim plugin is the recommended long-term solution for the same keymaps.
 
 ## Sources
 
-- [obsidian-vimrc-support README — surround & pasteinto](https://github.com/esm7/obsidian-vimrc-support/blob/master/README.md)
-- [obsidian-vimrc-support repo](https://github.com/esm7/obsidian-vimrc-support)
-- [Obsidian Forum — "Vim surround" thread](https://forum.obsidian.md/t/vim-surround/36661)
-- [@replit/codemirror-vim (Obsidian's Vim engine)](https://github.com/replit/codemirror-vim)
-- [tpope/vim-surround (reference for cs/ds/ys/S semantics)](https://github.com/tpope/vim-surround)
-- [esm7/obsidian-vimrc-support — Obsidian integration commands (jscommand/jsfile)](https://deepwiki.com/esm7/obsidian-vimrc-support/4.2-obsidian-integration-commands)
-- Local vault files inspected: `/home/bryan/bob/obsidian_vimrc.md`,
+- [tpope/vim-surround README](https://github.com/tpope/vim-surround)
+- [vim-surround help text](https://raw.githubusercontent.com/tpope/vim-surround/master/doc/surround.txt)
+- [Vim.org surround.vim page](https://www.vim.org/scripts/script.php?script_id=1697)
+- [Obsidian Forum: Vim surround](https://forum.obsidian.md/t/vim-surround/36661)
+- [Obsidian Vimrc Support README](https://github.com/esm7/obsidian-vimrc-support)
+- [Vimrc Support source: `defineSurround`](https://raw.githubusercontent.com/esm7/obsidian-vimrc-support/master/main.ts)
+- [Vimrc Support discussion #189: `cs` / `ds`](https://github.com/esm7/obsidian-vimrc-support/discussions/189)
+- [replit/codemirror-vim README](https://github.com/replit/codemirror-vim)
+- [replit/codemirror-vim source](https://raw.githubusercontent.com/replit/codemirror-vim/master/src/vim.js)
+- [CodeMirror 5 Vim bindings demo](https://codemirror.net/5/demo/vim.html)
+- [Obsidian Forum: Vim mode quality-of-life improvements](https://forum.obsidian.md/t/vim-mode-quality-of-life-improvements/429)
+- [Wrap with shortcuts plugin](https://github.com/manic/obsidian-wrap-with-shortcuts)
+- [Code Editor Shortcuts plugin](https://github.com/timhor/obsidian-editor-shortcuts)
+- [Shortcuts extender plugin](https://www.obsidianstats.com/plugins/shortcuts-extender)
+- Local vault files inspected:
+  `/home/bryan/bob/obsidian_vimrc.md`,
   `/home/bryan/bob/.obsidian/app.json`,
-  `/home/bryan/bob/.obsidian/plugins/obsidian-vimrc-support/data.json`.
-- Related prior research: [[obsidian_vim_keymaps_embedded_focus_consolidated]]
+  `/home/bryan/bob/.obsidian/community-plugins.json`,
+  `/home/bryan/bob/.obsidian/plugins/obsidian-vimrc-support/data.json`,
+  `/home/bryan/bob/.obsidian/plugins/obsidian-vimrc-support/main.js`,
+  `/home/bryan/bob/.obsidian/plugins/bob-ledger-tools/main.js`,
+  `/home/bryan/bob/.obsidian/plugins/task-status-cycler/main.js`.
