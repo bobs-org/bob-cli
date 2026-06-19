@@ -63,10 +63,12 @@ and written to mac_inbox.md unless an @route token or --route target is \
 provided. Existing target files prefer a Tasks section, then fall back to the \
 last top-level task block. Missing target files are created when needed.\n\n\
 A terminal '#' or '#<section-prefix>' marker captures an ordinary bullet \
-instead. It renders as '- <body> [created::YYYY-MM-DD]' and is placed in the \
-first non-Tasks section whose heading title starts with the prefix, or the \
-first non-Tasks section for a bare '#'. A terminal @route and the '#' marker \
-may appear in either order.",
+instead. It renders as '- <body> [created::YYYY-MM-DD]' and is placed in a \
+non-Tasks section whose heading title starts with the prefix (compared case \
+insensitively), or any non-Tasks section for a bare '#'. A matching non-H1 \
+section is preferred; a matching H1 heading is used only when no non-H1 \
+heading matches. A terminal @route and the '#' marker may appear in either \
+order.",
         )
         .after_help(
             "Examples:\n  bob capture buy milk @groceries\n  bob capture jot idea #Ideas @notes\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status",
@@ -634,21 +636,31 @@ struct MarkdownSection {
 
 fn target_bullet_section(
     lines: &[LineSpan<'_>],
-    headings: &[(usize, &str)],
+    headings: &[MarkdownHeading<'_>],
     section_prefix: Option<&str>,
 ) -> MarkdownSection {
-    let target = headings.iter().position(|(_, title)| {
-        *title != "Tasks"
-            && section_prefix.is_none_or(|prefix| title.starts_with(prefix))
-    });
+    let matches = |heading: &MarkdownHeading<'_>| {
+        heading.title != "Tasks"
+            && heading_matches_bullet_prefix(heading.title, section_prefix)
+    };
+    // Prefer the first matching non-H1 heading, falling back to the first
+    // matching H1 heading only when no non-H1 heading matches.
+    let target = headings
+        .iter()
+        .position(|heading| heading.level != 1 && matches(heading))
+        .or_else(|| {
+            headings
+                .iter()
+                .position(|heading| heading.level == 1 && matches(heading))
+        });
 
     match target {
         Some(pos) => {
-            let heading_index = headings[pos].0;
+            let heading_index = headings[pos].line_index;
             let heading_end = lines[heading_index].end;
             let end_line = headings
                 .get(pos + 1)
-                .map(|(index, _)| *index)
+                .map(|heading| heading.line_index)
                 .unwrap_or(lines.len());
             MarkdownSection {
                 heading_end: Some(heading_end),
@@ -664,7 +676,7 @@ fn target_bullet_section(
             };
             let end_line = headings
                 .first()
-                .map(|(index, _)| *index)
+                .map(|heading| heading.line_index)
                 .unwrap_or(lines.len());
             MarkdownSection {
                 heading_end: None,
@@ -672,6 +684,21 @@ fn target_bullet_section(
                 end_line,
                 insertion_start,
             }
+        }
+    }
+}
+
+/// Whether `title` matches a bullet capture's section prefix. A bare marker
+/// (no prefix) matches every heading; otherwise the prefix is compared against
+/// the start of `title` case insensitively.
+fn heading_matches_bullet_prefix(
+    title: &str,
+    section_prefix: Option<&str>,
+) -> bool {
+    match section_prefix {
+        None => true,
+        Some(prefix) => {
+            title.to_lowercase().starts_with(&prefix.to_lowercase())
         }
     }
 }
@@ -704,9 +731,19 @@ fn is_checkbox_marker(after_dash: &str) -> bool {
         && chars.next() == Some(']')
 }
 
-/// Collect every ATX heading as `(line_index, title)`, skipping YAML
-/// frontmatter and fenced code blocks.
-fn markdown_headings<'a>(lines: &[LineSpan<'a>]) -> Vec<(usize, &'a str)> {
+/// An ATX heading discovered while scanning a note.
+///
+/// `line_index` is the heading's line, `level` is its ATX level (number of
+/// leading `#`), and `title` is the stripped heading text.
+#[derive(Debug, Clone, Copy)]
+struct MarkdownHeading<'a> {
+    line_index: usize,
+    level: usize,
+    title: &'a str,
+}
+
+/// Collect every ATX heading, skipping YAML frontmatter and fenced code blocks.
+fn markdown_headings<'a>(lines: &[LineSpan<'a>]) -> Vec<MarkdownHeading<'a>> {
     let mut headings = Vec::new();
     let mut in_frontmatter = false;
     let mut fence = None;
@@ -736,8 +773,12 @@ fn markdown_headings<'a>(lines: &[LineSpan<'a>]) -> Vec<(usize, &'a str)> {
             continue;
         }
 
-        if let Some(title) = atx_heading_title(line.text) {
-            headings.push((index, title));
+        if let Some((level, title)) = atx_heading(line.text) {
+            headings.push(MarkdownHeading {
+                line_index: index,
+                level,
+                title,
+            });
         }
     }
 
@@ -768,11 +809,11 @@ struct TasksSection {
 
 fn tasks_section(lines: &[LineSpan<'_>]) -> Option<TasksSection> {
     let headings = markdown_headings(lines);
-    let pos = headings.iter().position(|(_, title)| *title == "Tasks")?;
-    let heading_index = headings[pos].0;
+    let pos = headings.iter().position(|heading| heading.title == "Tasks")?;
+    let heading_index = headings[pos].line_index;
     let end_line = headings
         .get(pos + 1)
-        .map(|(index, _)| *index)
+        .map(|heading| heading.line_index)
         .unwrap_or(lines.len());
     Some(TasksSection {
         heading_end: lines[heading_index].end,
@@ -818,7 +859,9 @@ fn fence_sequence(line: &str) -> Option<(FenceMarker, &str)> {
     Some((FenceMarker { character, length }, &line[length..]))
 }
 
-fn atx_heading_title(line: &str) -> Option<&str> {
+/// Parse an ATX heading into its `(level, title)`, where `level` is the number
+/// of leading `#` characters.
+fn atx_heading(line: &str) -> Option<(usize, &str)> {
     let line = markdown_indented_line(line)?;
     let hashes = line
         .as_bytes()
@@ -837,7 +880,7 @@ fn atx_heading_title(line: &str) -> Option<&str> {
         return None;
     }
 
-    Some(strip_closing_atx_hashes(line[hashes..].trim()))
+    Some((hashes, strip_closing_atx_hashes(line[hashes..].trim())))
 }
 
 fn strip_closing_atx_hashes(title: &str) -> &str {
@@ -1551,6 +1594,54 @@ mod tests {
                 format!(
                     "---\ntype: area\n---\n{BULLET}\nIntro\n## Tasks\n- [ ] #task t\n"
                 ),
+                Placement::Inserted,
+            )
+        );
+    }
+
+    #[test]
+    fn bullet_prefers_non_h1_match_over_earlier_h1_match() {
+        let contents = "# Roadmap\nintro\n\n## Research\nnotes\n";
+        assert_eq!(
+            insert_bullet_line(contents, BULLET, Some("R")),
+            (
+                format!("# Roadmap\nintro\n\n## Research\n\n{BULLET}\nnotes\n"),
+                Placement::Inserted,
+            )
+        );
+    }
+
+    #[test]
+    fn bullet_uses_h1_match_when_no_non_h1_match_exists() {
+        let contents = "# Research\nnotes\n";
+        assert_eq!(
+            insert_bullet_line(contents, BULLET, Some("R")),
+            (
+                format!("# Research\n\n{BULLET}\nnotes\n"),
+                Placement::Inserted,
+            )
+        );
+    }
+
+    #[test]
+    fn bare_bullet_marker_prefers_non_h1_section() {
+        let contents = "# Title\nintro\n\n## Notes\nbody\n";
+        assert_eq!(
+            insert_bullet_line(contents, BULLET, None),
+            (
+                format!("# Title\nintro\n\n## Notes\n\n{BULLET}\nbody\n"),
+                Placement::Inserted,
+            )
+        );
+    }
+
+    #[test]
+    fn bullet_section_prefix_matches_case_insensitively() {
+        let contents = "## Research\nnotes\n";
+        assert_eq!(
+            insert_bullet_line(contents, BULLET, Some("r")),
+            (
+                format!("## Research\n\n{BULLET}\nnotes\n"),
                 Placement::Inserted,
             )
         );

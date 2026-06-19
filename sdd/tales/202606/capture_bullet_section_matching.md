@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-19 09:38:09
-status: wip
+status: done
 prompt: sdd/prompts/202606/capture_bullet_section_matching.md
 ---
 # Plan: Capture Bullet Section Matching Refinement

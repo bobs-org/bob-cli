@@ -1074,6 +1074,43 @@ fn capture_bullet_json_reports_rendered_line() {
 }
 
 #[test]
+fn capture_bullet_prefix_prefers_non_h1_and_ignores_prefix_case() {
+    let render = |prefix: &str| -> String {
+        let temp = TempDir::new("bob-cli-capture-bullet-section");
+        let vault = temp.path().join("vault");
+        write_file(
+            &vault.join("foo.md"),
+            "# Roadmap\nintro\n\n## Research\nnotes\n",
+        );
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("Some")
+            .arg("note")
+            .arg("@foo")
+            .arg(prefix)
+            .env("BOB_NOW", "2026-06-15")
+            .output()
+            .expect("run routed bullet capture");
+
+        assert_success(&output);
+        fs::read_to_string(vault.join("foo.md")).expect("read foo")
+    };
+
+    let lowercase = render("#r");
+    assert_eq!(
+        lowercase,
+        "# Roadmap\nintro\n\n## Research\n\n- Some note [created::2026-06-15]\nnotes\n"
+    );
+
+    // A `#R` prefix selects the same section and produces identical contents.
+    let uppercase = render("#R");
+    assert_eq!(lowercase, uppercase);
+}
+
+#[test]
 fn capture_targets_json_lists_picker_targets_in_order() {
     let temp = TempDir::new("bob-cli-capture-targets-json");
     let vault = temp.path().join("vault");

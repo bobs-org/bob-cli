@@ -80,9 +80,11 @@ block and its indented continuation lines, or appending at EOF.
 
 A terminal `#` or `#<section-prefix>` marker captures an ordinary Markdown
 bullet instead of a task. It renders as `- <text> [created::YYYY-MM-DD]` and is
-placed in the first non-`Tasks` section whose heading title starts with the
-prefix, or the first non-`Tasks` section when the marker is a bare `#`. If no
-heading matches, the bullet goes into the pre-heading (zeroth) section. Within
+placed in a non-`Tasks` section whose heading title starts with the prefix
+(compared case insensitively), or any non-`Tasks` section when the marker is a
+bare `#`. A matching non-H1 section is preferred; a matching H1 heading is used
+only when no non-H1 heading matches. If no heading matches, the bullet goes
+into the pre-heading (zeroth) section. Within
 the chosen section the bullet is inserted after the last existing top-level
 bullet, otherwise just below the heading (or after any YAML frontmatter for the
 zeroth section). A terminal `@route` and the `#` marker may appear in either
