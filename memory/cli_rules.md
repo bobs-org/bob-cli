@@ -1,4 +1,6 @@
 ---
+parent: AGENTS.md
+type: long
 description: Read anytime new CLI subcommands or options are added.
 ---
 
