@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-19 07:40:09
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_open_task_jumps.md
 ---
 # Plan: Obsidian Ctrl+Shift+J/K Open-Task Navigation
