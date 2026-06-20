@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-19 22:58:15
-status: wip
+status: done
 prompt: sdd/prompts/202606/vim_surround_cs_keymap.md
 ---
 # Plan: Add `cs{target}{replacement}` (change surround) to `bob-vim-surround`
