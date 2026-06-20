@@ -202,6 +202,7 @@ The full project task contract lives in [`docs/projects.md`](docs/projects.md).
 ```bash
 bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-r|--repo DIR]
 bob plugins list [-b|--bob-dir DIR] [-f|--format table|json] [-r|--repo DIR]
+bob plugins sync [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-p|--plugin ID] [-r|--repo DIR]
 ```
 
 Lists Bryan's custom Bob Obsidian plugins from the
@@ -222,6 +223,14 @@ real error such as an unreadable repo; drift and not-installed plugins are
 reported, not failures. Pass `-f, --format json` for a stable object with `ok`,
 `repo`, `bob_dir`, `count`, `synced`, `drift`, `not_installed`, and a `plugins`
 array whose entries carry `id`, `version`, `description`, `sync`, and `vault`.
+
+`sync` deploys the repo into the vault, copying the managed files
+(`manifest.json`, `main.js`, and `styles.css` when present) into each
+`<bob-dir>/.obsidian/plugins/<id>/` while never touching runtime files such as
+`data.json`. It reports each file as copied, unchanged, or skipped. A vault file
+with uncommitted changes in the vault Git repo is skipped with a warning so
+local edits are never clobbered silently; pass `-F, --force` to overwrite it.
+Use `-d, --dry-run` to preview and `-p, --plugin <ID>` to sync a single plugin.
 
 The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 

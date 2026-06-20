@@ -50,6 +50,7 @@ install-smoke:
     "${root}/bin/bob" notify --help >/dev/null
     "${root}/bin/bob" plugins --help >/dev/null
     "${root}/bin/bob" plugins list --help >/dev/null
+    "${root}/bin/bob" plugins sync --help >/dev/null
     "${root}/bin/bob" pomodoro --help >/dev/null
     "${root}/bin/bob" projects --help >/dev/null
     "${root}/bin/bob" projects sync --help >/dev/null

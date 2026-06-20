@@ -3,10 +3,12 @@ use std::{
     ffi::OsString,
     fs, io, iter,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use clap::{
-    builder::OsStringValueParser, Arg, ArgMatches, Command as ClapCommand,
+    builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
+    Command as ClapCommand,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -36,6 +38,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
     match matches.subcommand() {
         Some(("list", sub_matches)) => run_list(sub_matches),
+        Some(("sync", sub_matches)) => run_sync(sub_matches),
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");
             2
@@ -65,15 +68,21 @@ bob-plugins repo.\n\n\
 The list subcommand is read-only: it reads each plugin manifest from the repo, \
 byte-compares the managed files against the vault copy to report sync state, \
 and reads community-plugins.json to report whether the vault has the plugin \
-enabled. Running `bob plugins` with no subcommand runs list.",
+enabled. Running `bob plugins` with no subcommand runs list.\n\n\
+The sync subcommand deploys the repo into the vault: it copies the managed \
+files (manifest.json, main.js, and styles.css) from the repo into the vault \
+plugin folder, never touching data.json or other runtime files. It refuses to \
+overwrite a vault file that has uncommitted changes in the vault Git repo \
+unless --force is given.",
         )
         .after_help(
-            "Examples:\n  bob plugins\n  bob plugins list\n  bob plugins list -f json\n  bob plugins list -r ~/projects/github/bbugyi200/bob-plugins",
+            "Examples:\n  bob plugins\n  bob plugins list\n  bob plugins list -f json\n  bob plugins sync --dry-run\n  bob plugins sync -p bob-project-tasks",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
         .arg(repo_arg())
         .subcommand(list_command())
+        .subcommand(sync_command())
 }
 
 fn list_command() -> ClapCommand {
@@ -84,6 +93,29 @@ fn list_command() -> ClapCommand {
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
+        .arg(repo_arg())
+}
+
+fn sync_command() -> ClapCommand {
+    ClapCommand::new("sync")
+        .about("Deploy repo plugin files into the vault")
+        .long_about(
+            "Deploy Bob plugins from the bob-plugins repo into the vault.\n\n\
+For each plugin, the managed files (manifest.json, main.js, and styles.css \
+when present) are copied from <repo>/plugins/<id>/ into \
+<bob-dir>/.obsidian/plugins/<id>/. Runtime files such as data.json are never \
+touched. A vault file that has uncommitted changes in the vault Git repo is \
+left alone with a warning unless --force is given, so local edits are never \
+clobbered silently. Files that already match the repo are reported as \
+unchanged.",
+        )
+        .after_help(
+            "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bbugyi200/bob-plugins",
+        )
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(force_arg())
+        .arg(plugin_arg())
         .arg(repo_arg())
 }
 
@@ -116,6 +148,30 @@ fn repo_arg() -> Arg {
             "Plugins repo root; defaults to BOB_PLUGINS_DIR or \
 ~/projects/github/bbugyi200/bob-plugins",
         )
+}
+
+fn dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('d')
+        .action(ArgAction::SetTrue)
+        .help("Preview the copies without writing any files")
+}
+
+fn force_arg() -> Arg {
+    Arg::new("force")
+        .long("force")
+        .short('F')
+        .action(ArgAction::SetTrue)
+        .help("Overwrite vault files with uncommitted Git changes")
+}
+
+fn plugin_arg() -> Arg {
+    Arg::new("plugin")
+        .long("plugin")
+        .short('p')
+        .value_name("ID")
+        .help("Sync only this plugin id; defaults to every plugin")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +240,348 @@ fn run_list(matches: &ArgMatches) -> i32 {
         0
     } else {
         1
+    }
+}
+
+fn run_sync(matches: &ArgMatches) -> i32 {
+    let options = SyncOptions {
+        repo: repo_from_matches(matches),
+        bob_dir: bob_dir_from_matches(matches),
+        only: matches.get_one::<String>("plugin").cloned(),
+        dry_run: matches.get_flag("dry-run"),
+        force: matches.get_flag("force"),
+    };
+
+    let report = sync_plugins(&options);
+    let styler = Styler::detect();
+    print_sync_report(&report, options.dry_run, &styler);
+    for issue in &report.issues {
+        eprintln!("{COMMAND_NAME}: {issue}");
+    }
+
+    // A refused dirty file is a deliberate warning, not a failure; only a real
+    // error such as an unreadable repo or a failed copy sets a non-zero exit.
+    if report.issues.is_empty() {
+        0
+    } else {
+        1
+    }
+}
+
+/// Resolved inputs for a single `bob plugins sync` invocation.
+struct SyncOptions {
+    repo: PathBuf,
+    bob_dir: PathBuf,
+    only: Option<String>,
+    dry_run: bool,
+    force: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SyncReport {
+    repo: PathBuf,
+    bob_dir: PathBuf,
+    plugins: Vec<PluginSync>,
+    issues: Vec<String>,
+}
+
+impl SyncReport {
+    fn files(&self) -> impl Iterator<Item = &FileSync> {
+        self.plugins.iter().flat_map(|plugin| plugin.files.iter())
+    }
+
+    fn copied(&self) -> usize {
+        self.files().filter(|file| file.action.is_copy()).count()
+    }
+
+    fn skipped(&self) -> usize {
+        self.files()
+            .filter(|file| file.action == FileAction::SkippedDirty)
+            .count()
+    }
+
+    fn unchanged(&self) -> usize {
+        self.files()
+            .filter(|file| file.action == FileAction::Unchanged)
+            .count()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PluginSync {
+    id: String,
+    files: Vec<FileSync>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileSync {
+    name: String,
+    action: FileAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileAction {
+    /// The vault had no copy of the file; it was created.
+    Created,
+    /// The vault copy differed and was clean in Git; it was overwritten.
+    Updated,
+    /// The vault copy was dirty in Git and was overwritten because of --force.
+    Forced,
+    /// The vault copy already matched the repo byte-for-byte.
+    Unchanged,
+    /// The vault copy was dirty in Git and was left alone without --force.
+    SkippedDirty,
+    /// Reading or writing the file failed; the cause is recorded as an issue.
+    Failed,
+}
+
+impl FileAction {
+    fn is_copy(self) -> bool {
+        matches!(self, Self::Created | Self::Updated | Self::Forced)
+    }
+
+    fn is_warning(self) -> bool {
+        matches!(self, Self::SkippedDirty | Self::Failed)
+    }
+}
+
+fn sync_plugins(options: &SyncOptions) -> SyncReport {
+    let mut report = SyncReport {
+        repo: options.repo.clone(),
+        bob_dir: options.bob_dir.clone(),
+        plugins: Vec::new(),
+        issues: Vec::new(),
+    };
+
+    let plugins_root = options.repo.join(REPO_PLUGINS_SUBDIR);
+    let entries = match read_sorted_directory(&plugins_root) {
+        Ok(entries) => entries,
+        Err(error) => {
+            report.issues.push(format!(
+                "failed to read plugins directory {}: {error}",
+                plugins_root.display()
+            ));
+            return report;
+        }
+    };
+
+    let mut matched = false;
+    for entry in entries {
+        let path = entry.path();
+        let is_dir = entry
+            .file_type()
+            .map(|file_type| file_type.is_dir())
+            .unwrap_or(false);
+        if !is_dir {
+            continue;
+        }
+        let Some(folder) = path.file_name().and_then(|name| name.to_str())
+        else {
+            continue;
+        };
+
+        let manifest = match read_manifest(&path) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                report.issues.push(format!("{folder}: {error}"));
+                continue;
+            }
+        };
+
+        let id = if manifest.id.is_empty() {
+            folder.to_string()
+        } else {
+            manifest.id
+        };
+        if options.only.as_deref().is_some_and(|only| only != id) {
+            continue;
+        }
+        matched = true;
+
+        let plugin = sync_one_plugin(options, &id, &path, &mut report.issues);
+        report.plugins.push(plugin);
+    }
+
+    if let Some(only) = &options.only
+        && !matched
+    {
+        report.issues.push(format!("plugin not found in repo: {only}"));
+    }
+
+    report.plugins.sort_by(|left, right| left.id.cmp(&right.id));
+    report
+}
+
+fn sync_one_plugin(
+    options: &SyncOptions,
+    id: &str,
+    repo_plugin_dir: &Path,
+    issues: &mut Vec<String>,
+) -> PluginSync {
+    let vault_plugin_dir =
+        options.bob_dir.join(VAULT_PLUGINS_SUBDIR).join(id);
+    let mut files = Vec::new();
+
+    for &name in MANAGED_FILES {
+        let repo_file = repo_plugin_dir.join(name);
+        if !repo_file.is_file() {
+            continue;
+        }
+        let vault_file = vault_plugin_dir.join(name);
+        let action = match sync_one_file(options, &repo_file, &vault_file) {
+            Ok(action) => action,
+            Err(message) => {
+                issues.push(format!("{id}/{name}: {message}"));
+                FileAction::Failed
+            }
+        };
+        files.push(FileSync {
+            name: name.to_string(),
+            action,
+        });
+    }
+
+    PluginSync {
+        id: id.to_string(),
+        files,
+    }
+}
+
+fn sync_one_file(
+    options: &SyncOptions,
+    repo_file: &Path,
+    vault_file: &Path,
+) -> Result<FileAction, String> {
+    let repo_bytes = fs::read(repo_file)
+        .map_err(|error| format!("failed to read repo file: {error}"))?;
+
+    let vault_exists = vault_file.is_file();
+    let mut dirty = false;
+    if vault_exists {
+        let vault_bytes = fs::read(vault_file)
+            .map_err(|error| format!("failed to read vault file: {error}"))?;
+        if vault_bytes == repo_bytes {
+            return Ok(FileAction::Unchanged);
+        }
+        dirty = vault_file_is_dirty(&options.bob_dir, vault_file);
+        if dirty && !options.force {
+            return Ok(FileAction::SkippedDirty);
+        }
+    }
+
+    let action = if !vault_exists {
+        FileAction::Created
+    } else if dirty {
+        FileAction::Forced
+    } else {
+        FileAction::Updated
+    };
+
+    if !options.dry_run {
+        if let Some(parent) = vault_file.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("failed to create vault directory: {error}")
+            })?;
+        }
+        fs::write(vault_file, &repo_bytes)
+            .map_err(|error| format!("failed to write vault file: {error}"))?;
+    }
+
+    Ok(action)
+}
+
+/// Reports whether `vault_file` has uncommitted changes in the vault Git repo.
+///
+/// Uses `git status --porcelain` scoped to the single file. A vault that is not
+/// a Git repo, or an unavailable `git`, yields `false`: there is no committed
+/// state to protect, so the copy proceeds.
+fn vault_file_is_dirty(bob_dir: &Path, vault_file: &Path) -> bool {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(bob_dir)
+        .arg("status")
+        .arg("--porcelain")
+        .arg("--")
+        .arg(vault_file)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => !output.stdout.is_empty(),
+        _ => false,
+    }
+}
+
+fn print_sync_report(report: &SyncReport, dry_run: bool, styler: &Styler) {
+    let separator = styler.separator();
+    println!(
+        "Bob Plugins {separator} sync {separator} {} -> {}",
+        report.repo.display(),
+        report.bob_dir.display()
+    );
+    println!();
+
+    let id_width = report
+        .plugins
+        .iter()
+        .map(|plugin| display_width(&plugin.id))
+        .max()
+        .unwrap_or(0);
+
+    for plugin in &report.plugins {
+        let id = styler.cyan(&pad_right(&plugin.id, id_width));
+        let changed = plugin
+            .files
+            .iter()
+            .filter(|file| file.action != FileAction::Unchanged)
+            .collect::<Vec<_>>();
+
+        if changed.is_empty() {
+            let prefix = styler.success_prefix(dry_run);
+            println!("  {prefix} {id}  up to date");
+            continue;
+        }
+
+        for file in changed {
+            let prefix = if file.action.is_warning() {
+                styler.warning_prefix()
+            } else {
+                styler.success_prefix(dry_run)
+            };
+            let detail = file_action_detail(file, dry_run);
+            println!("  {prefix} {id}  {detail}");
+        }
+    }
+
+    println!();
+    let copied_label = if dry_run { "to copy" } else { "copied" };
+    let mut summary = format!(
+        "{} {copied_label} {separator} {} skipped {separator} {} unchanged",
+        report.copied(),
+        report.skipped(),
+        report.unchanged()
+    );
+    if !report.issues.is_empty() {
+        summary.push_str(&format!(
+            " {separator} {} errors",
+            report.issues.len()
+        ));
+    }
+    println!("{summary}");
+}
+
+fn file_action_detail(file: &FileSync, dry_run: bool) -> String {
+    let name = &file.name;
+    let copy_verb = if dry_run { "would copy" } else { "copied" };
+    match file.action {
+        FileAction::Created => format!("{copy_verb} {name} (new)"),
+        FileAction::Updated => format!("{copy_verb} {name}"),
+        FileAction::Forced => {
+            format!("{copy_verb} {name} (overwrote dirty vault file)")
+        }
+        FileAction::SkippedDirty => {
+            format!("skipped {name} (dirty in vault; use -F/--force)")
+        }
+        FileAction::Failed => format!("failed to copy {name} (see error)"),
+        FileAction::Unchanged => format!("{name} unchanged"),
     }
 }
 
@@ -727,6 +1125,237 @@ mod tests {
         assert_eq!(truncate("short", 10), "short");
         assert_eq!(truncate("toolongdesc", 5), "tool\u{2026}");
         assert_eq!(truncate("anything", 0), "");
+    }
+
+    #[test]
+    fn sync_creates_updates_and_leaves_unchanged() {
+        let temp = TempDir::new("bob-cli-plugins-sync-actions");
+        let repo = temp.path().join("repo");
+        let vault = temp.path().join("vault");
+
+        write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+        write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+        write_plugin(&repo, "gamma", "1.0.0", "Gamma", "gamma");
+
+        // alpha already matches; beta drifts; gamma is not installed.
+        write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha", "alpha");
+        write_vault_plugin(&vault, "beta", "2.0.0", "Beta", "stale");
+
+        let report = sync_plugins(&options(&repo, &vault));
+        assert!(report.issues.is_empty(), "issues: {:?}", report.issues);
+
+        assert_eq!(
+            action_for(&report, "alpha", "manifest.json"),
+            Some(FileAction::Unchanged)
+        );
+        assert_eq!(
+            action_for(&report, "alpha", "main.js"),
+            Some(FileAction::Unchanged)
+        );
+        // beta's manifest matches but its main.js drifts and is rewritten.
+        assert_eq!(
+            action_for(&report, "beta", "manifest.json"),
+            Some(FileAction::Unchanged)
+        );
+        assert_eq!(
+            action_for(&report, "beta", "main.js"),
+            Some(FileAction::Updated)
+        );
+        assert_eq!(
+            action_for(&report, "gamma", "manifest.json"),
+            Some(FileAction::Created)
+        );
+
+        let beta_main =
+            vault.join(".obsidian/plugins/beta/main.js");
+        assert_eq!(fs::read_to_string(&beta_main).unwrap(), "// beta\n");
+        let gamma_manifest =
+            vault.join(".obsidian/plugins/gamma/manifest.json");
+        assert!(gamma_manifest.is_file(), "gamma should be created");
+        assert_eq!(report.copied(), 3);
+        assert_eq!(report.unchanged(), 3);
+    }
+
+    #[test]
+    fn sync_dry_run_reports_without_writing() {
+        let temp = TempDir::new("bob-cli-plugins-sync-dry");
+        let repo = temp.path().join("repo");
+        let vault = temp.path().join("vault");
+        write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+        write_vault_plugin(&vault, "beta", "2.0.0", "Beta", "stale");
+
+        let mut opts = options(&repo, &vault);
+        opts.dry_run = true;
+        let report = sync_plugins(&opts);
+
+        assert_eq!(
+            action_for(&report, "beta", "main.js"),
+            Some(FileAction::Updated)
+        );
+        let beta_main = vault.join(".obsidian/plugins/beta/main.js");
+        assert_eq!(
+            fs::read_to_string(&beta_main).unwrap(),
+            "// stale\n",
+            "dry-run must not write the vault file"
+        );
+    }
+
+    #[test]
+    fn sync_only_filters_to_a_single_plugin() {
+        let temp = TempDir::new("bob-cli-plugins-sync-only");
+        let repo = temp.path().join("repo");
+        let vault = temp.path().join("vault");
+        write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+        write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+
+        let mut opts = options(&repo, &vault);
+        opts.only = Some("beta".to_string());
+        let report = sync_plugins(&opts);
+
+        assert_eq!(report.plugins.len(), 1);
+        assert_eq!(report.plugins[0].id, "beta");
+        assert!(report.issues.is_empty());
+        assert!(
+            vault.join(".obsidian/plugins/beta/main.js").is_file(),
+            "beta should be synced"
+        );
+        assert!(
+            !vault.join(".obsidian/plugins/alpha").exists(),
+            "alpha must be left untouched"
+        );
+    }
+
+    #[test]
+    fn sync_unknown_plugin_is_an_error() {
+        let temp = TempDir::new("bob-cli-plugins-sync-unknown");
+        let repo = temp.path().join("repo");
+        let vault = temp.path().join("vault");
+        write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+
+        let mut opts = options(&repo, &vault);
+        opts.only = Some("missing".to_string());
+        let report = sync_plugins(&opts);
+
+        assert!(report.plugins.is_empty());
+        assert_eq!(report.issues.len(), 1);
+        assert!(report.issues[0].contains("plugin not found in repo: missing"));
+    }
+
+    #[test]
+    fn sync_preserves_runtime_data_json() {
+        let temp = TempDir::new("bob-cli-plugins-sync-data");
+        let repo = temp.path().join("repo");
+        let vault = temp.path().join("vault");
+        write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+        write_vault_plugin(&vault, "beta", "2.0.0", "Beta", "stale");
+        let data_json = vault.join(".obsidian/plugins/beta/data.json");
+        write_file(&data_json, "{\"setting\":true}\n");
+
+        let report = sync_plugins(&options(&repo, &vault));
+        assert!(report.issues.is_empty(), "issues: {:?}", report.issues);
+
+        assert_eq!(
+            fs::read_to_string(&data_json).unwrap(),
+            "{\"setting\":true}\n",
+            "data.json must never be touched by sync"
+        );
+        let beta_main = vault.join(".obsidian/plugins/beta/main.js");
+        assert_eq!(fs::read_to_string(&beta_main).unwrap(), "// beta\n");
+    }
+
+    #[test]
+    fn sync_refuses_then_forces_a_dirty_vault_file() {
+        let temp = TempDir::new("bob-cli-plugins-sync-dirty");
+        let repo = temp.path().join("repo");
+        let vault = temp.path().join("vault");
+        write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+        write_vault_plugin(&vault, "beta", "2.0.0", "Beta", "committed");
+
+        // Commit the vault, then dirty beta's main.js so it differs from both
+        // the committed version and the repo.
+        git_init_commit(&vault);
+        let beta_main = vault.join(".obsidian/plugins/beta/main.js");
+        write_file(&beta_main, "// local edit\n");
+
+        let report = sync_plugins(&options(&repo, &vault));
+        assert!(report.issues.is_empty(), "issues: {:?}", report.issues);
+        assert_eq!(
+            action_for(&report, "beta", "main.js"),
+            Some(FileAction::SkippedDirty)
+        );
+        assert_eq!(
+            fs::read_to_string(&beta_main).unwrap(),
+            "// local edit\n",
+            "a dirty vault file must not be overwritten without --force"
+        );
+
+        let mut opts = options(&repo, &vault);
+        opts.force = true;
+        let forced = sync_plugins(&opts);
+        assert_eq!(
+            action_for(&forced, "beta", "main.js"),
+            Some(FileAction::Forced)
+        );
+        assert_eq!(
+            fs::read_to_string(&beta_main).unwrap(),
+            "// beta\n",
+            "--force should overwrite the dirty vault file"
+        );
+    }
+
+    fn options(repo: &Path, vault: &Path) -> SyncOptions {
+        SyncOptions {
+            repo: repo.to_path_buf(),
+            bob_dir: vault.to_path_buf(),
+            only: None,
+            dry_run: false,
+            force: false,
+        }
+    }
+
+    fn action_for(
+        report: &SyncReport,
+        id: &str,
+        name: &str,
+    ) -> Option<FileAction> {
+        report
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == id)
+            .and_then(|plugin| {
+                plugin.files.iter().find(|file| file.name == name)
+            })
+            .map(|file| file.action)
+    }
+
+    fn git_init_commit(repo: &Path) {
+        run_git(repo, &["init", "-q"]);
+        run_git(repo, &["add", "-A"]);
+        run_git(
+            repo,
+            &[
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=test",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+        );
+    }
+
+    fn run_git(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .status()
+            .unwrap_or_else(|error| panic!("run git {args:?}: {error}"));
+        assert!(status.success(), "git {args:?} failed");
     }
 
     fn write_plugin(

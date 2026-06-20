@@ -81,7 +81,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
         name: "plugins",
         script_command: None,
-        about: "List Bob Obsidian plugins and their vault sync state",
+        about: "Manage Bob Obsidian plugins (list and sync to the vault)",
         native_command: NativeCommand::Plugins,
     },
     Subcommand {

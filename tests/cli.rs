@@ -326,6 +326,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["notify", "--help"], "bob notify --help"),
         (&["plugins", "--help"], "bob plugins --help"),
         (&["plugins", "list", "--help"], "bob plugins list --help"),
+        (&["plugins", "sync", "--help"], "bob plugins sync --help"),
         (&["pomodoro", "--help"], "bob pomodoro --help"),
         (&["projects", "--help"], "bob projects --help"),
         (&["projects", "list", "--help"], "bob projects list --help"),
@@ -3678,6 +3679,219 @@ fn plugins_list_unreadable_repo_reports_error() {
         stderr(&output).contains("failed to read plugins directory"),
         "expected a repo read error on stderr:\n{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn plugins_sync_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("--help")
+        .output()
+        .expect("run bob plugins sync --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Deploy Bob plugins"),
+        "expected a sync description:\n{help}"
+    );
+    assert!(
+        help.contains("-b, --bob-dir")
+            && help.contains("-d, --dry-run")
+            && help.contains("-F, --force")
+            && help.contains("-p, --plugin")
+            && help.contains("-r, --repo"),
+        "expected sync short and long options:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-F, --force",
+            "-p, --plugin",
+            "-r, --repo",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn plugins_sync_dry_run_reports_without_writing() {
+    let temp = TempDir::new("bob-cli-plugins-sync-dry");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+    let beta_main = vault.join(".obsidian/plugins/beta/main.js");
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins sync --dry-run");
+
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("Bob Plugins - sync - "),
+        "missing sync header:\n{out}"
+    );
+    assert!(
+        out.contains("would copy main.js"),
+        "expected a dry-run copy preview:\n{out}"
+    );
+    assert!(out.contains("to copy"), "expected a dry-run footer:\n{out}");
+    assert_eq!(
+        fs::read_to_string(&beta_main).expect("read beta main.js"),
+        "// beta-stale\n",
+        "dry-run must not modify the vault"
+    );
+    assert!(
+        !vault.join(".obsidian/plugins/gamma").exists(),
+        "dry-run must not create the missing gamma plugin"
+    );
+}
+
+#[test]
+fn plugins_sync_single_plugin_copies_only_that_plugin() {
+    let temp = TempDir::new("bob-cli-plugins-sync-one");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("beta")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins sync -p beta");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
+            .expect("read beta main.js"),
+        "// beta\n",
+        "beta should be synced from the repo"
+    );
+    assert!(
+        !vault.join(".obsidian/plugins/gamma").exists(),
+        "a single-plugin sync must not touch other plugins"
+    );
+}
+
+#[test]
+fn plugins_sync_preserves_runtime_data_json() {
+    let temp = TempDir::new("bob-cli-plugins-sync-data");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+    let data_json = vault.join(".obsidian/plugins/beta/data.json");
+    write_file(&data_json, "{\"setting\":true}\n");
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("beta")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins sync -p beta");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&data_json).expect("read data.json"),
+        "{\"setting\":true}\n",
+        "data.json is a runtime file and must never be synced"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
+            .expect("read beta main.js"),
+        "// beta\n",
+        "managed files should still be synced"
+    );
+}
+
+#[test]
+fn plugins_sync_refuses_dirty_vault_file_then_forces() {
+    let temp = TempDir::new("bob-cli-plugins-sync-dirty");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+
+    let manifest =
+        "{\n  \"id\": \"delta\",\n  \"version\": \"1.0.0\",\n  \"description\": \"delta\"\n}\n";
+    write_file(&repo.join("plugins/delta/manifest.json"), manifest);
+    write_file(&repo.join("plugins/delta/main.js"), "// repo\n");
+    write_file(&vault.join(".obsidian/plugins/delta/manifest.json"), manifest);
+    let vault_main = vault.join(".obsidian/plugins/delta/main.js");
+    write_file(&vault_main, "// committed\n");
+
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+
+    // Locally edit the vault copy so it is dirty in Git.
+    write_file(&vault_main, "// dirty\n");
+
+    let refused = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("delta")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins sync -p delta");
+
+    assert_success(&refused);
+    let out = stdout(&refused);
+    assert!(
+        out.contains("skipped main.js") && out.contains("dirty"),
+        "expected a dirty-file refusal warning:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(&vault_main).expect("read delta main.js"),
+        "// dirty\n",
+        "a dirty vault file must not be overwritten without --force"
+    );
+
+    let forced = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("delta")
+        .arg("-F")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins sync -p delta -F");
+
+    assert_success(&forced);
+    assert_eq!(
+        fs::read_to_string(&vault_main).expect("read delta main.js"),
+        "// repo\n",
+        "--force must overwrite the dirty vault file"
     );
 }
 
