@@ -1,2 +1,7 @@
 sdd:
   version_controlled: true
+
+sibling_repos:
+  - name: bob-plugins
+    path: ~/projects/github/bbugyi200/bob-plugins
+    description: Source-of-truth monorepo for Bryan's custom Bob Obsidian plugins, deployed to the vault via `bob plugins sync`.
