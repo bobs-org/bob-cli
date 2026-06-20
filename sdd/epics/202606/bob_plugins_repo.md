@@ -1,5 +1,7 @@
 ---
 create_time: 2026-06-20 11:00:33
+bead_id: bob-cli-8
+tier: epic
 status: wip
 prompt: sdd/prompts/202606/bob_plugins_repo.md
 ---
