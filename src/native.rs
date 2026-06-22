@@ -1,4 +1,13 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+
+const ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES: &[&str] =
+    &[".git", ".obsidian", "_generated", "_templates"];
+
+fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES.contains(&name)
+    })
+}
 
 mod capture;
 mod capture_targets;

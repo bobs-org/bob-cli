@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{
-    env as bob_env,
+    env as bob_env, is_always_excluded_note_directory_name,
     ob::{self, ChildEnv},
 };
 
@@ -164,6 +164,7 @@ struct FilePlan {
     moved_block_ids: BTreeSet<String>,
     ambiguous_moved_block_ids: BTreeSet<String>,
     moved_block_id_final_ids: BTreeMap<String, String>,
+    moved_block_final_ids: BTreeSet<String>,
     moved_block_id_rename_count: usize,
     source_link_repair_count: usize,
     archive_link_repair_count: usize,
@@ -1076,6 +1077,11 @@ fn build_collection_plan(
         } else {
             (String::new(), BTreeMap::new(), 0)
         };
+        let moved_block_final_ids = if moves_tasks {
+            block_ids_in_markdown(&archive_append).into_iter().collect()
+        } else {
+            BTreeSet::new()
+        };
         let (archive_contents, archive_metadata_updated) =
             if moves_tasks || archive_exists {
                 let source_link = source_wiki_link(&relative_source_path)?;
@@ -1123,6 +1129,7 @@ fn build_collection_plan(
             moved_block_ids,
             ambiguous_moved_block_ids,
             moved_block_id_final_ids,
+            moved_block_final_ids,
             moved_block_id_rename_count,
             source_link_repair_count: 0,
             archive_link_repair_count: 0,
@@ -1220,15 +1227,10 @@ fn apply_link_repairs_to_plan(
     vault: &Path,
     files: &mut [FilePlan],
 ) -> io::Result<Vec<LinkRepairPlan>> {
-    let moved_targets = moved_block_targets(files)?;
-    if moved_targets.is_empty() {
-        return Ok(Vec::new());
-    }
-
     let note_files = link_repair_markdown_files(vault)?;
-    let mut note_paths = BTreeSet::new();
+    let mut disk_note_paths = BTreeSet::new();
     for path in &note_files {
-        note_paths.insert(vault_relative_path(vault, path, "note")?);
+        disk_note_paths.insert(vault_relative_path(vault, path, "note")?);
     }
 
     let mut planned_contents = BTreeMap::new();
@@ -1247,14 +1249,17 @@ fn apply_link_repairs_to_plan(
         }
     }
 
-    let note_index = NoteIndex::from_paths(
-        note_paths
-            .iter()
-            .cloned()
-            .chain(planned_contents.keys().cloned()),
-    );
-    let mut repair_paths = note_paths;
-    repair_paths.extend(planned_contents.keys().cloned());
+    let mut note_paths = disk_note_paths;
+    note_paths.extend(planned_contents.keys().cloned());
+
+    let moved_targets =
+        moved_block_targets(vault, &note_paths, &planned_contents, files)?;
+    if moved_targets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let note_index = NoteIndex::from_paths(note_paths.iter().cloned());
+    let repair_paths = note_paths;
 
     let mut link_repair_counts = BTreeMap::new();
     for relative_path in repair_paths {
@@ -1331,13 +1336,96 @@ fn apply_link_repairs_to_plan(
     Ok(link_repairs)
 }
 
-fn moved_block_targets(files: &[FilePlan]) -> io::Result<MovedBlockTargets> {
+fn moved_block_targets(
+    vault: &Path,
+    note_paths: &BTreeSet<PathBuf>,
+    planned_contents: &BTreeMap<PathBuf, String>,
+    files: &[FilePlan],
+) -> io::Result<MovedBlockTargets> {
+    let mut targets =
+        archived_block_targets(vault, note_paths, planned_contents)?;
+    overlay_current_run_block_targets(files, &mut targets)?;
+    Ok(targets)
+}
+
+fn archived_block_targets(
+    vault: &Path,
+    note_paths: &BTreeSet<PathBuf>,
+    planned_contents: &BTreeMap<PathBuf, String>,
+) -> io::Result<MovedBlockTargets> {
     let mut targets = BTreeMap::new();
+    let note_index = NoteIndex::from_paths(note_paths.iter().cloned());
+    for archive_relative_path in note_paths {
+        let Some(source_relative_path) =
+            source_relative_path_from_archive(archive_relative_path)
+        else {
+            continue;
+        };
+        if !note_paths.contains(&source_relative_path) {
+            continue;
+        }
+
+        let archive_contents =
+            note_contents(vault, archive_relative_path, planned_contents)?;
+        if !archive_parent_matches_source(
+            &archive_contents,
+            archive_relative_path,
+            &source_relative_path,
+            &note_index,
+        ) {
+            continue;
+        }
+
+        let source_contents =
+            note_contents(vault, &source_relative_path, planned_contents)?;
+        let source_block_ids: BTreeSet<String> =
+            block_ids_in_markdown(&source_contents)
+                .into_iter()
+                .collect();
+        let mut archive_block_id_counts = BTreeMap::new();
+        for block_id in block_ids_in_markdown(&archive_contents) {
+            *archive_block_id_counts.entry(block_id).or_insert(0usize) += 1;
+        }
+
+        let archive_target =
+            vault_relative_link_target(archive_relative_path, "archive")?;
+        for (block_id, count) in archive_block_id_counts {
+            if count > 1 || source_block_ids.contains(&block_id) {
+                continue;
+            }
+            targets.insert(
+                (source_relative_path.clone(), block_id.clone()),
+                MovedBlockTarget {
+                    archive_target: archive_target.clone(),
+                    block_id,
+                },
+            );
+        }
+    }
+    Ok(targets)
+}
+
+fn overlay_current_run_block_targets(
+    files: &[FilePlan],
+    targets: &mut MovedBlockTargets,
+) -> io::Result<()> {
     for file in files.iter().filter(|file| file.task_count > 0) {
         let archive_target =
             vault_relative_link_target(&file.relative_archive_path, "archive")?;
+        for final_id in &file.moved_block_final_ids {
+            if !file.moved_block_ids.contains(final_id) {
+                targets.remove(&(
+                    file.relative_source_path.clone(),
+                    final_id.clone(),
+                ));
+            }
+        }
         for block_id in &file.moved_block_ids {
             if file.ambiguous_moved_block_ids.contains(block_id) {
+                targets.remove(&(
+                    file.relative_source_path.clone(),
+                    block_id.clone(),
+                ));
                 continue;
             }
             let final_block_id = file
@@ -1354,7 +1442,95 @@ fn moved_block_targets(files: &[FilePlan]) -> io::Result<MovedBlockTargets> {
             );
         }
     }
-    Ok(targets)
+    Ok(())
+}
+
+fn note_contents(
+    vault: &Path,
+    relative_path: &Path,
+    planned_contents: &BTreeMap<PathBuf, String>,
+) -> io::Result<String> {
+    if let Some(contents) = planned_contents.get(relative_path) {
+        return Ok(contents.clone());
+    }
+
+    let path = vault.join(relative_path);
+    fs::read_to_string(&path).map_err(|error| fs_error("read", &path, error))
+}
+
+fn source_relative_path_from_archive(
+    archive_relative_path: &Path,
+) -> Option<PathBuf> {
+    let archive_note_path =
+        archive_relative_path.strip_prefix(Path::new("done")).ok()?;
+    let source_stem = archive_note_path
+        .file_stem()
+        .and_then(OsStr::to_str)?
+        .strip_suffix("_done")?;
+    let mut source_relative_path =
+        archive_note_path.with_file_name(format!("{source_stem}.md"));
+    source_relative_path = source_relative_path.components().collect();
+    is_normal_relative_path(&source_relative_path)
+        .then_some(source_relative_path)
+}
+
+fn archive_parent_matches_source(
+    archive_contents: &str,
+    archive_relative_path: &Path,
+    source_relative_path: &Path,
+    note_index: &NoteIndex,
+) -> bool {
+    let Some(parent_target) = archive_parent_target(archive_contents) else {
+        return false;
+    };
+    note_index
+        .resolve(archive_relative_path, &parent_target)
+        .as_deref()
+        == Some(source_relative_path)
+}
+
+fn archive_parent_target(contents: &str) -> Option<String> {
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    if lines
+        .first()
+        .map(|line| is_frontmatter_marker(split_line_ending(line).0))
+        != Some(true)
+    {
+        return None;
+    }
+
+    let closing_index =
+        lines.iter().enumerate().skip(1).find_map(|(index, line)| {
+            is_frontmatter_marker(split_line_ending(line).0).then_some(index)
+        })?;
+    for line in lines.iter().take(closing_index).skip(1) {
+        let (content, _) = split_line_ending(line);
+        let Some(value) = content.trim_start().strip_prefix("parent:") else {
+            continue;
+        };
+        return frontmatter_wiki_target(value.trim()).map(str::to_string);
+    }
+    None
+}
+
+fn frontmatter_wiki_target(value: &str) -> Option<&str> {
+    let unquoted = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(value);
+    let inner = unquoted.strip_prefix("[[")?.strip_suffix("]]")?;
+    let without_alias =
+        inner.split_once('|').map_or(inner, |(target, _)| target);
+    Some(
+        without_alias
+            .split_once('#')
+            .map_or(without_alias, |(target, _)| target),
+    )
 }
 
 fn repair_links_in_note(
@@ -1668,8 +1844,7 @@ fn should_skip_directory(
             component,
             Component::Normal(name)
                 if (!include_done && name == OsStr::new("done"))
-                    || name == OsStr::new(".git")
-                    || name == OsStr::new(".obsidian")
+                    || is_always_excluded_note_directory_name(name)
         )
     })
 }
@@ -2968,6 +3143,14 @@ title: Project
         write_file(&vault.path().join("foo/bar.md"), "- [x] nested #task\n");
         write_file(&vault.path().join("foo/not-markdown.txt"), "#task\n");
         write_file(&vault.path().join("done/old.md"), "- [x] archived #task\n");
+        write_file(
+            &vault.path().join("_generated/topic/obsidian.md"),
+            "- [x] generated #task\n",
+        );
+        write_file(
+            &vault.path().join("_templates/template.md"),
+            "- [x] template #task\n",
+        );
         write_file(&vault.path().join(".git/config.md"), "- [x] git #task\n");
         write_file(
             &vault.path().join(".obsidian/settings.md"),
@@ -3379,6 +3562,218 @@ Old reference [[obsidian#^abc123]]
             plan.link_repairs[0].contents,
             "Archive reference [[done/obsidian_done#^abc123]].\n"
         );
+    }
+
+    #[test]
+    fn generated_tag_pages_do_not_make_source_basename_ambiguous() {
+        let vault =
+            TempDir::new("bob-cli-collect-done-generated-basename-link");
+        write_file(
+            &vault.path().join("sase.md"),
+            "\
+- [x] done #task ^auto-pair
+- [ ] active #task
+",
+        );
+        write_file(
+            &vault.path().join("_generated/tag_pages/topic/sase.md"),
+            "# Generated tag page\n",
+        );
+        write_file(
+            &vault.path().join("2026/20260621.md"),
+            "Reference [[sase#^auto-pair]].\n",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert_eq!(plan.link_repairs.len(), 1);
+        assert_eq!(
+            plan.link_repairs[0].relative_path,
+            PathBuf::from("2026/20260621.md")
+        );
+        assert_eq!(
+            plan.link_repairs[0].contents,
+            "Reference [[done/sase_done#^auto-pair]].\n"
+        );
+    }
+
+    #[test]
+    fn generated_and_template_directories_are_not_collected_or_repaired() {
+        let vault =
+            TempDir::new("bob-cli-collect-done-generated-template-skip");
+        write_file(
+            &vault.path().join("source.md"),
+            "\
+---
+done_tasks: \"[[done/source_done]]\"
+---
+
+- [ ] active #task
+",
+        );
+        write_file(
+            &vault.path().join("done/source_done.md"),
+            "\
+---
+parent: \"[[source]]\"
+type: \"[[done]]\"
+---
+
+- [x] old #task ^old
+",
+        );
+        write_file(
+            &vault.path().join("_generated/tag_pages/topic/source.md"),
+            "\
+- [x] generated #task ^generated
+Generated link [[source#^old]].
+",
+        );
+        write_file(
+            &vault.path().join("_templates/source.md"),
+            "\
+- [x] template #task ^template
+Template link [[source#^old]].
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+        assert_eq!(plan.scanned_files, 1);
+        assert!(plan.is_empty());
+        assert!(plan.link_repairs.is_empty());
+    }
+
+    #[test]
+    fn self_heals_preexisting_block_links_to_archive() {
+        let vault = TempDir::new("bob-cli-collect-done-self-heal-links");
+        write_file(
+            &vault.path().join("sase.md"),
+            "\
+---
+done_tasks: \"[[done/sase_done]]\"
+---
+
+- [ ] active #task
+",
+        );
+        write_file(
+            &vault.path().join("done/sase_done.md"),
+            "\
+---
+parent: \"[[sase]]\"
+type: \"[[done]]\"
+---
+
+- [x] archived #task ^auto-pair
+",
+        );
+        write_file(
+            &vault.path().join("daily.md"),
+            "\
+Wiki [[sase#^auto-pair]]
+Embed ![[sase#^auto-pair]]
+Alias [[sase#^auto-pair|Auto Pair]]
+Markdown [task](sase.md#^auto-pair)
+URL [task](https://example.com/sase#^auto-pair)
+",
+        );
+
+        let plan = build_collection_plan(vault.path(), 10).expect("build plan");
+
+        assert!(plan.files.is_empty());
+        assert!(!plan.is_empty());
+        assert_eq!(plan.link_repair_count(), 4);
+        assert_eq!(plan.link_repairs.len(), 1);
+        assert_eq!(
+            plan.link_repairs[0].contents,
+            "\
+Wiki [[done/sase_done#^auto-pair]]
+Embed ![[done/sase_done#^auto-pair]]
+Alias [[done/sase_done#^auto-pair|Auto Pair]]
+Markdown [task](done/sase_done.md#^auto-pair)
+URL [task](https://example.com/sase#^auto-pair)
+"
+        );
+    }
+
+    #[test]
+    fn self_healing_is_idempotent_after_links_are_repaired() {
+        let vault = TempDir::new("bob-cli-collect-done-self-heal-idempotent");
+        write_file(
+            &vault.path().join("sase.md"),
+            "\
+---
+done_tasks: \"[[done/sase_done]]\"
+---
+
+- [ ] active #task
+",
+        );
+        write_file(
+            &vault.path().join("done/sase_done.md"),
+            "\
+---
+parent: \"[[sase]]\"
+type: \"[[done]]\"
+---
+
+- [x] archived #task ^auto-pair
+",
+        );
+        write_file(
+            &vault.path().join("daily.md"),
+            "Reference [[sase#^auto-pair]].\n",
+        );
+
+        let first =
+            build_collection_plan(vault.path(), 10).expect("first plan");
+        assert_eq!(first.link_repair_count(), 1);
+        write_file(
+            &vault.path().join("daily.md"),
+            &first.link_repairs[0].contents,
+        );
+
+        let second =
+            build_collection_plan(vault.path(), 10).expect("second plan");
+
+        assert!(second.is_empty());
+        assert_eq!(second.link_repair_count(), 0);
+    }
+
+    #[test]
+    fn source_block_id_keeps_links_pointing_at_source() {
+        let vault = TempDir::new("bob-cli-collect-done-source-id-stays-live");
+        write_file(
+            &vault.path().join("sase.md"),
+            "\
+---
+done_tasks: \"[[done/sase_done]]\"
+---
+
+- [ ] active #task ^auto-pair
+",
+        );
+        write_file(
+            &vault.path().join("done/sase_done.md"),
+            "\
+---
+parent: \"[[sase]]\"
+type: \"[[done]]\"
+---
+
+- [x] archived #task ^auto-pair
+",
+        );
+        write_file(
+            &vault.path().join("daily.md"),
+            "Reference [[sase#^auto-pair]].\n",
+        );
+
+        let plan = build_collection_plan(vault.path(), 10).expect("build plan");
+
+        assert!(plan.is_empty());
+        assert_eq!(plan.link_repair_count(), 0);
     }
 
     #[test]

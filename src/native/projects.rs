@@ -11,7 +11,7 @@ use clap::{
 };
 
 use super::{
-    env as bob_env,
+    env as bob_env, is_always_excluded_note_directory_name,
     style::{display_width, pad_right, Styler},
 };
 
@@ -2438,14 +2438,10 @@ pub(crate) fn is_markdown_file(path: &Path) -> bool {
 }
 
 fn is_excluded_directory(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            matches!(
-                name,
-                ".git" | ".obsidian" | "_generated" | "_templates" | "done"
-            )
-        })
+    path.file_name().is_some_and(|name| {
+        is_always_excluded_note_directory_name(name)
+            || name.to_str() == Some("done")
+    })
 }
 
 fn trim_cr(value: &str) -> &str {
