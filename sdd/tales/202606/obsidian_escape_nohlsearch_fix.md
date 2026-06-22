@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-22 11:14:14
-status: wip
+status: done
 prompt: sdd/prompts/202606/obsidian_escape_nohlsearch_fix.md
 ---
 # Plan: Fix Normal-Mode `<Esc>` Not Clearing Obsidian Vim Search Highlight
