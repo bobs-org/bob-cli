@@ -3965,7 +3965,8 @@ fn plugins_sync_help_lists_options_alphabetically() {
         "expected a sync description:\n{help}"
     );
     assert!(
-        help.contains("-b, --bob-dir")
+        help.contains("-B, --backup-dir")
+            && help.contains("-b, --bob-dir")
             && help.contains("-d, --dry-run")
             && help.contains("-F, --force")
             && help.contains("-p, --plugin")
@@ -3975,6 +3976,7 @@ fn plugins_sync_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &[
+            "-B, --backup-dir",
             "-b, --bob-dir",
             "-d, --dry-run",
             "-F, --force",
@@ -3990,17 +3992,22 @@ fn plugins_sync_dry_run_reports_without_writing() {
     let temp = TempDir::new("bob-cli-plugins-sync-dry");
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
     write_plugins_fixture(&repo, &vault);
     let beta_main = vault.join(".obsidian/plugins/beta/main.js");
+    let beta_backup = backups.join("20260626-143000/beta/main.js");
 
     let output = bob_command()
         .arg("plugins")
         .arg("sync")
         .arg("--dry-run")
+        .arg("-B")
+        .arg(&backups)
         .arg("-r")
         .arg(&repo)
         .arg("-b")
         .arg(&vault)
+        .env("BOB_NOW", "2026-06-26 14:30:00")
         .output()
         .expect("run bob plugins sync --dry-run");
 
@@ -4015,6 +4022,22 @@ fn plugins_sync_dry_run_reports_without_writing() {
         out.contains("would copy main.js"),
         "expected a dry-run copy preview:\n{out}"
     );
+    assert!(out.contains("@@"), "expected a unified diff hunk:\n{out}");
+    assert!(
+        out.contains("-// beta-stale") && out.contains("+// beta"),
+        "expected old and new diff lines:\n{out}"
+    );
+    assert!(
+        out.contains(&format!("would back up to {}", beta_backup.display())),
+        "expected dry-run backup path:\n{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "backups would go in {}",
+            backups.join("20260626-143000").display()
+        )),
+        "expected dry-run backup footer:\n{out}"
+    );
     assert!(out.contains("to copy"), "expected a dry-run footer:\n{out}");
     assert_eq!(
         fs::read_to_string(&beta_main).expect("read beta main.js"),
@@ -4025,6 +4048,64 @@ fn plugins_sync_dry_run_reports_without_writing() {
         !vault.join(".obsidian/plugins/gamma").exists(),
         "dry-run must not create the missing gamma plugin"
     );
+    assert!(!backups.exists(), "dry-run must not create backup files");
+}
+
+#[test]
+fn plugins_sync_backs_up_overwritten_file() {
+    let temp = TempDir::new("bob-cli-plugins-sync-backup");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
+    write_plugins_fixture(&repo, &vault);
+    let beta_backup = backups.join("20260626-143000/beta/main.js");
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("beta")
+        .arg("-B")
+        .arg(&backups)
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-06-26 14:30:00")
+        .output()
+        .expect("run bob plugins sync -p beta");
+
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("@@")
+            && out.contains("-// beta-stale")
+            && out.contains("+// beta"),
+        "expected real sync diff:\n{out}"
+    );
+    assert!(
+        out.contains(&format!("backed up to {}", beta_backup.display())),
+        "expected backup path:\n{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "backups in {}",
+            backups.join("20260626-143000").display()
+        )),
+        "expected backup footer:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(&beta_backup).expect("read beta backup"),
+        "// beta-stale\n",
+        "backup should contain the overwritten vault contents"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
+            .expect("read beta main.js"),
+        "// beta\n",
+        "beta should be synced from the repo"
+    );
 }
 
 #[test]
@@ -4032,6 +4113,7 @@ fn plugins_sync_single_plugin_copies_only_that_plugin() {
     let temp = TempDir::new("bob-cli-plugins-sync-one");
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
     write_plugins_fixture(&repo, &vault);
 
     let output = bob_command()
@@ -4039,6 +4121,8 @@ fn plugins_sync_single_plugin_copies_only_that_plugin() {
         .arg("sync")
         .arg("-p")
         .arg("beta")
+        .arg("-B")
+        .arg(&backups)
         .arg("-r")
         .arg(&repo)
         .arg("-b")
@@ -4064,6 +4148,7 @@ fn plugins_sync_preserves_runtime_data_json() {
     let temp = TempDir::new("bob-cli-plugins-sync-data");
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
     write_plugins_fixture(&repo, &vault);
     let data_json = vault.join(".obsidian/plugins/beta/data.json");
     write_file(&data_json, "{\"setting\":true}\n");
@@ -4073,6 +4158,8 @@ fn plugins_sync_preserves_runtime_data_json() {
         .arg("sync")
         .arg("-p")
         .arg("beta")
+        .arg("-B")
+        .arg(&backups)
         .arg("-r")
         .arg(&repo)
         .arg("-b")
@@ -4099,6 +4186,7 @@ fn plugins_sync_refuses_dirty_vault_file_then_forces() {
     let temp = TempDir::new("bob-cli-plugins-sync-dirty");
     let repo = temp.path().join("repo");
     let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
 
     let manifest =
         "{\n  \"id\": \"delta\",\n  \"version\": \"1.0.0\",\n  \"description\": \"delta\"\n}\n";
@@ -4122,6 +4210,8 @@ fn plugins_sync_refuses_dirty_vault_file_then_forces() {
         .arg("sync")
         .arg("-p")
         .arg("delta")
+        .arg("-B")
+        .arg(&backups)
         .arg("-r")
         .arg(&repo)
         .arg("-b")
@@ -4147,6 +4237,8 @@ fn plugins_sync_refuses_dirty_vault_file_then_forces() {
         .arg("-p")
         .arg("delta")
         .arg("-F")
+        .arg("-B")
+        .arg(&backups)
         .arg("-r")
         .arg(&repo)
         .arg("-b")

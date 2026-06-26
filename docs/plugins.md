@@ -11,7 +11,7 @@ a `main.js`, and an optional `styles.css`.
 ```bash
 bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-r|--repo DIR]
 bob plugins list [-b|--bob-dir DIR] [-f|--format table|json] [-r|--repo DIR]
-bob plugins sync [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-p|--plugin ID] [-r|--repo DIR]
+bob plugins sync [-B|--backup-dir DIR] [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-p|--plugin ID] [-r|--repo DIR]
 ```
 
 `list` is read-only. Running `bob plugins` with no subcommand runs `list` with
@@ -121,21 +121,41 @@ from `<repo>/plugins/<id>/` into `<bob-dir>/.obsidian/plugins/<id>/`. Runtime
 files such as `data.json` are never read or written, so plugin settings survive
 a sync. The repo and vault roots resolve exactly as they do for `list`.
 
+Before any existing vault file is overwritten, `sync` copies the current vault
+file to a timestamped backup directory. Backups default to
+`~/.local/state/bob-cli/plugin-backups/<timestamp>/<plugin-id>/<file>`, outside
+the vault Git repo. The base directory resolves from `-B, --backup-dir`, then
+`BOB_PLUGIN_BACKUPS_DIR`, then the default above. If a backup cannot be written,
+that file is not overwritten and the command exits non-zero.
+
+For every changed text file, `sync` prints a unified diff from the current vault
+copy to the incoming repo copy. Non-UTF-8 or large minified files are summarized
+by byte size instead of dumping unreadable content. New files get a compact
+`(new file, N lines)` note because no existing vault content is at risk.
+
 For every managed file, `sync` reports one of:
 
 - `copied <file>` — the vault file was missing (`(new)`) or differed and was
-  rewritten from the repo.
+  rewritten from the repo. Existing overwritten files are backed up first, and
+  the backup path is printed.
 - `up to date` — every managed file already matched the repo byte-for-byte, so
   nothing was written.
 - `skipped <file> (dirty in vault; use -F/--force)` — the vault file differs and
-  has uncommitted changes in the vault Git repo, so it was left untouched.
+  has uncommitted changes in the vault Git repo, so it was left untouched. The
+  diff is still printed so you can decide whether to rerun with `--force`.
 
 ### Options
 
-- `-d, --dry-run` previews every action without writing any files.
+- `-B, --backup-dir <DIR>` writes overwrite backups under this directory instead
+  of `BOB_PLUGIN_BACKUPS_DIR` or
+  `~/.local/state/bob-cli/plugin-backups`.
+- `-b, --bob-dir <DIR>` selects the vault root.
+- `-d, --dry-run` previews every action, including diffs and backup paths,
+  without writing vault files or backups.
+- `-F, --force` overwrites a vault file even when it has uncommitted Git changes.
 - `-p, --plugin <ID>` syncs a single plugin instead of all of them. An id that
   the repo does not contain is an error.
-- `-F, --force` overwrites a vault file even when it has uncommitted Git changes.
+- `-r, --repo <DIR>` selects the plugins repo root.
 
 ### Dirty-file guard
 
@@ -145,6 +165,10 @@ skipped with a warning so local edits are never clobbered silently; pass
 `-F, --force` to overwrite anyway. A vault that is not a Git repo has no
 committed state to protect, so the copy proceeds. A file that already matches
 the repo is reported as unchanged and never triggers the guard.
+
+Dry-run mode follows the same decision path and prints the same diffs, but it
+uses `would copy` and `would back up to` wording and writes nothing. This makes
+`bob plugins sync -d` the review step before a real sync.
 
 ### Exit status
 

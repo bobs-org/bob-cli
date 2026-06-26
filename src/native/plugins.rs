@@ -12,6 +12,7 @@ use clap::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use similar::{ChangeTag, TextDiff};
 
 use super::{
     env as bob_env,
@@ -26,6 +27,11 @@ const COMMUNITY_PLUGINS_FILE: &str = ".obsidian/community-plugins.json";
 const MANAGED_FILES: &[&str] = &["manifest.json", "main.js", "styles.css"];
 /// Width target for the human table when `$COLUMNS` is unavailable.
 const DEFAULT_TERM_WIDTH: usize = 100;
+const DIFF_CONTEXT_LINES: usize = 3;
+const DIFF_BODY_LINE_LIMIT: usize = 60;
+const MINIFIED_BYTE_THRESHOLD: usize = 16 * 1024;
+const MINIFIED_LINE_THRESHOLD: usize = 2;
+const DETAIL_INDENT: &str = "             ";
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
@@ -73,7 +79,8 @@ The sync subcommand deploys the repo into the vault: it copies the managed \
 files (manifest.json, main.js, and styles.css) from the repo into the vault \
 plugin folder, never touching data.json or other runtime files. It refuses to \
 overwrite a vault file that has uncommitted changes in the vault Git repo \
-unless --force is given.",
+unless --force is given. For files that would change, sync prints a diff, and \
+every overwritten vault file is backed up before it is replaced.",
         )
         .after_help(
             "Examples:\n  bob plugins\n  bob plugins list\n  bob plugins list -f json\n  bob plugins sync --dry-run\n  bob plugins sync -p bob-project-tasks",
@@ -106,17 +113,31 @@ when present) are copied from <repo>/plugins/<id>/ into \
 <bob-dir>/.obsidian/plugins/<id>/. Runtime files such as data.json are never \
 touched. A vault file that has uncommitted changes in the vault Git repo is \
 left alone with a warning unless --force is given, so local edits are never \
-clobbered silently. Files that already match the repo are reported as \
-unchanged.",
+clobbered silently. Files that would change are shown as unified diffs; \
+overwritten vault files are copied to a timestamped backup directory first. \
+Files that already match the repo are reported as unchanged.",
         )
         .after_help(
             "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
         )
+        .arg(backup_dir_arg())
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
         .arg(force_arg())
         .arg(plugin_arg())
         .arg(repo_arg())
+}
+
+fn backup_dir_arg() -> Arg {
+    Arg::new("backup-dir")
+        .long("backup-dir")
+        .short('B')
+        .value_name("DIR")
+        .value_parser(OsStringValueParser::new())
+        .help(
+            "Directory for backups of overwritten vault files; defaults to \
+BOB_PLUGIN_BACKUPS_DIR or ~/.local/state/bob-cli/plugin-backups",
+        )
 }
 
 fn bob_dir_arg() -> Arg {
@@ -209,6 +230,14 @@ fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
         .unwrap_or_else(bob_env::bob_dir)
 }
 
+fn backup_dir_from_matches(matches: &ArgMatches) -> PathBuf {
+    matches
+        .get_one::<OsString>("backup-dir")
+        .map(PathBuf::from)
+        .map(|path| bob_env::expand_tilde(&path))
+        .unwrap_or_else(bob_env::plugin_backups_dir)
+}
+
 fn run_list(matches: &ArgMatches) -> i32 {
     let repo = repo_from_matches(matches);
     let bob_dir = bob_dir_from_matches(matches);
@@ -244,9 +273,12 @@ fn run_list(matches: &ArgMatches) -> i32 {
 }
 
 fn run_sync(matches: &ArgMatches) -> i32 {
+    let timestamp = bob_env::current_datetime().format("%Y%m%d-%H%M%S");
     let options = SyncOptions {
         repo: repo_from_matches(matches),
         bob_dir: bob_dir_from_matches(matches),
+        backup_run_dir: backup_dir_from_matches(matches)
+            .join(timestamp.to_string()),
         only: matches.get_one::<String>("plugin").cloned(),
         dry_run: matches.get_flag("dry-run"),
         force: matches.get_flag("force"),
@@ -272,6 +304,7 @@ fn run_sync(matches: &ArgMatches) -> i32 {
 struct SyncOptions {
     repo: PathBuf,
     bob_dir: PathBuf,
+    backup_run_dir: PathBuf,
     only: Option<String>,
     dry_run: bool,
     force: bool,
@@ -281,6 +314,7 @@ struct SyncOptions {
 struct SyncReport {
     repo: PathBuf,
     bob_dir: PathBuf,
+    backup_run_dir: PathBuf,
     plugins: Vec<PluginSync>,
     issues: Vec<String>,
 }
@@ -305,6 +339,18 @@ impl SyncReport {
             .filter(|file| file.action == FileAction::Unchanged)
             .count()
     }
+
+    fn has_backup_paths(&self) -> bool {
+        self.files().any(|file| file.backup.is_some())
+    }
+
+    fn has_written_backups(&self) -> bool {
+        self.files().any(|file| {
+            file.backup
+                .as_ref()
+                .is_some_and(|backup| backup.written)
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +363,54 @@ struct PluginSync {
 struct FileSync {
     name: String,
     action: FileAction,
+    diff: Option<FileDiff>,
+    backup: Option<BackupOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FileDiff {
+    Text {
+        lines: Vec<DiffLine>,
+        added: usize,
+        removed: usize,
+        hidden: usize,
+    },
+    Binary {
+        old_len: usize,
+        new_len: usize,
+    },
+    NewFile {
+        lines: usize,
+        bytes: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiffLine {
+    kind: DiffKind,
+    text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffKind {
+    Hunk,
+    Context,
+    Add,
+    Del,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BackupOutcome {
+    path: PathBuf,
+    written: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileOutcome {
+    action: FileAction,
+    diff: Option<FileDiff>,
+    backup: Option<BackupOutcome>,
+    issue: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,6 +443,7 @@ fn sync_plugins(options: &SyncOptions) -> SyncReport {
     let mut report = SyncReport {
         repo: options.repo.clone(),
         bob_dir: options.bob_dir.clone(),
+        backup_run_dir: options.backup_run_dir.clone(),
         plugins: Vec::new(),
         issues: Vec::new(),
     };
@@ -405,7 +500,9 @@ fn sync_plugins(options: &SyncOptions) -> SyncReport {
     if let Some(only) = &options.only
         && !matched
     {
-        report.issues.push(format!("plugin not found in repo: {only}"));
+        report
+            .issues
+            .push(format!("plugin not found in repo: {only}"));
     }
 
     report.plugins.sort_by(|left, right| left.id.cmp(&right.id));
@@ -418,8 +515,7 @@ fn sync_one_plugin(
     repo_plugin_dir: &Path,
     issues: &mut Vec<String>,
 ) -> PluginSync {
-    let vault_plugin_dir =
-        options.bob_dir.join(VAULT_PLUGINS_SUBDIR).join(id);
+    let vault_plugin_dir = options.bob_dir.join(VAULT_PLUGINS_SUBDIR).join(id);
     let mut files = Vec::new();
 
     for &name in MANAGED_FILES {
@@ -428,16 +524,31 @@ fn sync_one_plugin(
             continue;
         }
         let vault_file = vault_plugin_dir.join(name);
-        let action = match sync_one_file(options, &repo_file, &vault_file) {
-            Ok(action) => action,
-            Err(message) => {
-                issues.push(format!("{id}/{name}: {message}"));
-                FileAction::Failed
-            }
-        };
+        let backup_file = options.backup_run_dir.join(id).join(name);
+        let outcome =
+            match sync_one_file(options, &repo_file, &vault_file, &backup_file)
+            {
+                Ok(outcome) => {
+                    if let Some(issue) = &outcome.issue {
+                        issues.push(format!("{id}/{name}: {issue}"));
+                    }
+                    outcome
+                }
+                Err(message) => {
+                    issues.push(format!("{id}/{name}: {message}"));
+                    FileOutcome {
+                        action: FileAction::Failed,
+                        diff: None,
+                        backup: None,
+                        issue: None,
+                    }
+                }
+            };
         files.push(FileSync {
             name: name.to_string(),
-            action,
+            action: outcome.action,
+            diff: outcome.diff,
+            backup: outcome.backup,
         });
     }
 
@@ -451,22 +562,40 @@ fn sync_one_file(
     options: &SyncOptions,
     repo_file: &Path,
     vault_file: &Path,
-) -> Result<FileAction, String> {
+    backup_file: &Path,
+) -> Result<FileOutcome, String> {
     let repo_bytes = fs::read(repo_file)
         .map_err(|error| format!("failed to read repo file: {error}"))?;
 
     let vault_exists = vault_file.is_file();
     let mut dirty = false;
+    let diff;
     if vault_exists {
         let vault_bytes = fs::read(vault_file)
             .map_err(|error| format!("failed to read vault file: {error}"))?;
         if vault_bytes == repo_bytes {
-            return Ok(FileAction::Unchanged);
+            return Ok(FileOutcome {
+                action: FileAction::Unchanged,
+                diff: None,
+                backup: None,
+                issue: None,
+            });
         }
+        diff = Some(diff_existing_file(&vault_bytes, &repo_bytes));
         dirty = vault_file_is_dirty(&options.bob_dir, vault_file);
         if dirty && !options.force {
-            return Ok(FileAction::SkippedDirty);
+            return Ok(FileOutcome {
+                action: FileAction::SkippedDirty,
+                diff,
+                backup: None,
+                issue: None,
+            });
         }
+    } else {
+        diff = Some(FileDiff::NewFile {
+            lines: byte_line_count(&repo_bytes),
+            bytes: repo_bytes.len(),
+        });
     }
 
     let action = if !vault_exists {
@@ -477,17 +606,163 @@ fn sync_one_file(
         FileAction::Updated
     };
 
-    if !options.dry_run {
-        if let Some(parent) = vault_file.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!("failed to create vault directory: {error}")
-            })?;
+    let mut backup = None;
+    if matches!(action, FileAction::Updated | FileAction::Forced) {
+        backup = Some(BackupOutcome {
+            path: backup_file.to_path_buf(),
+            written: false,
+        });
+        if !options.dry_run {
+            if let Some(parent) = backup_file.parent() {
+                if let Err(error) = fs::create_dir_all(parent) {
+                    return Ok(FileOutcome {
+                        action: FileAction::Failed,
+                        diff,
+                        backup,
+                        issue: Some(format!(
+                            "failed to create backup directory {}: {error}",
+                            parent.display()
+                        )),
+                    });
+                }
+            }
+            if let Err(error) = fs::copy(vault_file, backup_file) {
+                return Ok(FileOutcome {
+                    action: FileAction::Failed,
+                    diff,
+                    backup,
+                    issue: Some(format!(
+                        "failed to back up vault file to {}: {error}",
+                        backup_file.display()
+                    )),
+                });
+            }
+            backup = Some(BackupOutcome {
+                path: backup_file.to_path_buf(),
+                written: true,
+            });
         }
-        fs::write(vault_file, &repo_bytes)
-            .map_err(|error| format!("failed to write vault file: {error}"))?;
     }
 
-    Ok(action)
+    if !options.dry_run {
+        if let Some(parent) = vault_file.parent() {
+            if let Err(error) = fs::create_dir_all(parent) {
+                return Ok(FileOutcome {
+                    action: FileAction::Failed,
+                    diff,
+                    backup,
+                    issue: Some(format!(
+                        "failed to create vault directory: {error}"
+                    )),
+                });
+            }
+        }
+        if let Err(error) = fs::write(vault_file, &repo_bytes) {
+            return Ok(FileOutcome {
+                action: FileAction::Failed,
+                diff,
+                backup,
+                issue: Some(format!("failed to write vault file: {error}")),
+            });
+        }
+    }
+
+    Ok(FileOutcome {
+        action,
+        diff,
+        backup,
+        issue: None,
+    })
+}
+
+fn diff_existing_file(old: &[u8], new: &[u8]) -> FileDiff {
+    if is_binary_or_minified(old, new) {
+        return FileDiff::Binary {
+            old_len: old.len(),
+            new_len: new.len(),
+        };
+    }
+
+    let Ok(old_text) = std::str::from_utf8(old) else {
+        return FileDiff::Binary {
+            old_len: old.len(),
+            new_len: new.len(),
+        };
+    };
+    let Ok(new_text) = std::str::from_utf8(new) else {
+        return FileDiff::Binary {
+            old_len: old.len(),
+            new_len: new.len(),
+        };
+    };
+
+    diff_text(old_text, new_text)
+}
+
+fn is_binary_or_minified(old: &[u8], new: &[u8]) -> bool {
+    if std::str::from_utf8(old).is_err() || std::str::from_utf8(new).is_err() {
+        return true;
+    }
+
+    old.len().max(new.len()) >= MINIFIED_BYTE_THRESHOLD
+        && (byte_line_count(old) <= MINIFIED_LINE_THRESHOLD
+            || byte_line_count(new) <= MINIFIED_LINE_THRESHOLD)
+}
+
+fn diff_text(old: &str, new: &str) -> FileDiff {
+    let diff = TextDiff::from_lines(old, new);
+    let mut added = 0;
+    let mut removed = 0;
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Insert => added += 1,
+            ChangeTag::Delete => removed += 1,
+            ChangeTag::Equal => {}
+        }
+    }
+
+    let mut lines = Vec::new();
+    let mut unified = diff.unified_diff();
+    unified.context_radius(DIFF_CONTEXT_LINES);
+    for hunk in unified.iter_hunks() {
+        lines.push(DiffLine {
+            kind: DiffKind::Hunk,
+            text: hunk.header().to_string(),
+        });
+        for change in hunk.iter_changes() {
+            let kind = match change.tag() {
+                ChangeTag::Insert => DiffKind::Add,
+                ChangeTag::Delete => DiffKind::Del,
+                ChangeTag::Equal => DiffKind::Context,
+            };
+            let value = change.value().trim_end_matches(['\r', '\n']);
+            lines.push(DiffLine {
+                kind,
+                text: format!("{}{value}", change.tag()),
+            });
+        }
+    }
+
+    let hidden = lines.len().saturating_sub(DIFF_BODY_LINE_LIMIT);
+    lines.truncate(DIFF_BODY_LINE_LIMIT);
+    FileDiff::Text {
+        lines,
+        added,
+        removed,
+        hidden,
+    }
+}
+
+fn byte_line_count(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let lines = bytes.iter().filter(|byte| **byte == b'\n').count();
+    if bytes.ends_with(b"\n") {
+        lines
+    } else {
+        lines + 1
+    }
 }
 
 /// Reports whether `vault_file` has uncommitted changes in the vault Git repo.
@@ -546,8 +821,10 @@ fn print_sync_report(report: &SyncReport, dry_run: bool, styler: &Styler) {
             } else {
                 styler.success_prefix(dry_run)
             };
-            let detail = file_action_detail(file, dry_run);
+            let detail = file_action_detail(file, dry_run, styler);
             println!("  {prefix} {id}  {detail}");
+            print_file_diff(file, styler);
+            print_backup_outcome(file, dry_run, styler);
         }
     }
 
@@ -560,19 +837,42 @@ fn print_sync_report(report: &SyncReport, dry_run: bool, styler: &Styler) {
         report.unchanged()
     );
     if !report.issues.is_empty() {
+        summary
+            .push_str(&format!(" {separator} {} errors", report.issues.len()));
+    }
+    let show_backup_footer = (dry_run && report.has_backup_paths())
+        || (!dry_run && report.has_written_backups());
+    if show_backup_footer {
+        let backup_label = if dry_run {
+            "backups would go in"
+        } else {
+            "backups in"
+        };
         summary.push_str(&format!(
-            " {separator} {} errors",
-            report.issues.len()
+            " {separator} {backup_label} {}",
+            report.backup_run_dir.display()
         ));
     }
     println!("{summary}");
 }
 
-fn file_action_detail(file: &FileSync, dry_run: bool) -> String {
+fn file_action_detail(
+    file: &FileSync,
+    dry_run: bool,
+    styler: &Styler,
+) -> String {
     let name = &file.name;
     let copy_verb = if dry_run { "would copy" } else { "copied" };
-    match file.action {
-        FileAction::Created => format!("{copy_verb} {name} (new)"),
+    let mut detail = match file.action {
+        FileAction::Created => match &file.diff {
+            Some(FileDiff::NewFile { lines, .. }) => {
+                format!(
+                    "{copy_verb} {name} (new file, {})",
+                    pluralize(*lines, "line")
+                )
+            }
+            _ => format!("{copy_verb} {name} (new)"),
+        },
         FileAction::Updated => format!("{copy_verb} {name}"),
         FileAction::Forced => {
             format!("{copy_verb} {name} (overwrote dirty vault file)")
@@ -582,7 +882,109 @@ fn file_action_detail(file: &FileSync, dry_run: bool) -> String {
         }
         FileAction::Failed => format!("failed to copy {name} (see error)"),
         FileAction::Unchanged => format!("{name} unchanged"),
+    };
+
+    if let Some(stat) = diff_stat(&file.diff, styler) {
+        detail.push_str("   ");
+        detail.push_str(&stat);
     }
+
+    detail
+}
+
+fn diff_stat(diff: &Option<FileDiff>, styler: &Styler) -> Option<String> {
+    match diff {
+        Some(FileDiff::Text { added, removed, .. }) => Some(format!(
+            "{} {}",
+            styler.green(&format!("+{added}")),
+            styler.red(&format!("-{removed}"))
+        )),
+        _ => None,
+    }
+}
+
+fn print_file_diff(file: &FileSync, styler: &Styler) {
+    let Some(diff) = &file.diff else {
+        return;
+    };
+
+    match diff {
+        FileDiff::Text { lines, hidden, .. } => {
+            let line_width =
+                terminal_width().saturating_sub(display_width(DETAIL_INDENT));
+            for line in lines {
+                let text = truncate(&line.text, line_width);
+                println!(
+                    "{DETAIL_INDENT}{}",
+                    paint_diff_line(line.kind, &text, styler)
+                );
+            }
+            if *hidden > 0 {
+                let text = format!("... and {} more diff lines", hidden);
+                println!("{DETAIL_INDENT}{}", styler.dim(&text));
+            }
+        }
+        FileDiff::Binary { old_len, new_len } => {
+            let text = format!(
+                "binary or minified file differs ({} -> {})",
+                format_bytes(*old_len),
+                format_bytes(*new_len)
+            );
+            println!("{DETAIL_INDENT}{}", styler.dim(&text));
+        }
+        FileDiff::NewFile { .. } => {}
+    }
+}
+
+fn paint_diff_line(kind: DiffKind, text: &str, styler: &Styler) -> String {
+    match kind {
+        DiffKind::Hunk => styler.dim(text),
+        DiffKind::Add => styler.green(text),
+        DiffKind::Del => styler.red(text),
+        DiffKind::Context => text.to_string(),
+    }
+}
+
+fn print_backup_outcome(file: &FileSync, dry_run: bool, styler: &Styler) {
+    let Some(backup) = &file.backup else {
+        return;
+    };
+
+    let label = if dry_run {
+        "would back up to"
+    } else if backup.written {
+        "backed up to"
+    } else {
+        "backup failed at"
+    };
+    let text = format!("\u{21b3} {label} {}", backup.path.display());
+    let rendered = if backup.written || dry_run {
+        styler.blue(&text)
+    } else {
+        styler.red(&text)
+    };
+    println!("{DETAIL_INDENT}{rendered}");
+}
+
+fn pluralize(count: usize, singular: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {singular}s")
+    }
+}
+
+fn format_bytes(bytes: usize) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+
+    let kib = bytes as f64 / 1024.0;
+    if kib < 1024.0 {
+        return format!("{kib:.1} KB");
+    }
+
+    format!("{:.1} MB", kib / 1024.0)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1166,9 +1568,24 @@ mod tests {
             Some(FileAction::Created)
         );
 
-        let beta_main =
-            vault.join(".obsidian/plugins/beta/main.js");
+        let beta_main = vault.join(".obsidian/plugins/beta/main.js");
         assert_eq!(fs::read_to_string(&beta_main).unwrap(), "// beta\n");
+        let beta_backup =
+            temp.path().join("backups/20260626-143000/beta/main.js");
+        assert_eq!(
+            fs::read_to_string(&beta_backup).unwrap(),
+            "// stale\n",
+            "updated files must be backed up before overwrite"
+        );
+        let beta_sync =
+            file_for(&report, "beta", "main.js").expect("beta main sync");
+        assert_eq!(
+            beta_sync.backup,
+            Some(BackupOutcome {
+                path: beta_backup,
+                written: true,
+            })
+        );
         let gamma_manifest =
             vault.join(".obsidian/plugins/gamma/manifest.json");
         assert!(gamma_manifest.is_file(), "gamma should be created");
@@ -1191,6 +1608,19 @@ mod tests {
         assert_eq!(
             action_for(&report, "beta", "main.js"),
             Some(FileAction::Updated)
+        );
+        let beta_sync =
+            file_for(&report, "beta", "main.js").expect("beta main sync");
+        assert_eq!(
+            beta_sync.backup,
+            Some(BackupOutcome {
+                path: temp.path().join("backups/20260626-143000/beta/main.js"),
+                written: false,
+            })
+        );
+        assert!(
+            !temp.path().join("backups").exists(),
+            "dry-run must not create the backup directory"
         );
         let beta_main = vault.join(".obsidian/plugins/beta/main.js");
         assert_eq!(
@@ -1283,6 +1713,9 @@ mod tests {
             action_for(&report, "beta", "main.js"),
             Some(FileAction::SkippedDirty)
         );
+        let skipped =
+            file_for(&report, "beta", "main.js").expect("skipped beta main");
+        assert!(skipped.backup.is_none(), "skipped files are untouched");
         assert_eq!(
             fs::read_to_string(&beta_main).unwrap(),
             "// local edit\n",
@@ -1296,6 +1729,13 @@ mod tests {
             action_for(&forced, "beta", "main.js"),
             Some(FileAction::Forced)
         );
+        let forced_backup =
+            temp.path().join("backups/20260626-143000/beta/main.js");
+        assert_eq!(
+            fs::read_to_string(&forced_backup).unwrap(),
+            "// local edit\n",
+            "forced dirty overwrite must preserve the dirty file"
+        );
         assert_eq!(
             fs::read_to_string(&beta_main).unwrap(),
             "// beta\n",
@@ -1303,10 +1743,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sync_reports_text_diff_for_changed_files() {
+        let old = "alpha\nbeta\ngamma\n";
+        let new = "alpha\nbeta changed\ngamma\ndelta\n";
+
+        let FileDiff::Text {
+            lines,
+            added,
+            removed,
+            hidden,
+        } = diff_text(old, new)
+        else {
+            panic!("expected text diff");
+        };
+
+        assert_eq!(added, 2);
+        assert_eq!(removed, 1);
+        assert_eq!(hidden, 0);
+        assert!(
+            lines.iter().any(|line| line.kind == DiffKind::Hunk
+                && line.text.starts_with("@@")),
+            "expected a hunk header: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.kind == DiffKind::Del && line.text == "-beta"),
+            "expected deleted line: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.kind == DiffKind::Add
+                && line.text == "+beta changed"),
+            "expected added line: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn sync_summarizes_binary_and_minified_diffs() {
+        assert_eq!(
+            diff_existing_file(b"\xffold", b"\xffnew"),
+            FileDiff::Binary {
+                old_len: 4,
+                new_len: 4,
+            }
+        );
+
+        let old = "a".repeat(MINIFIED_BYTE_THRESHOLD);
+        let new = "b".repeat(MINIFIED_BYTE_THRESHOLD);
+        assert_eq!(
+            diff_existing_file(old.as_bytes(), new.as_bytes()),
+            FileDiff::Binary {
+                old_len: MINIFIED_BYTE_THRESHOLD,
+                new_len: MINIFIED_BYTE_THRESHOLD,
+            }
+        );
+    }
+
+    #[test]
+    fn backup_failure_aborts_overwrite() {
+        let temp = TempDir::new("bob-cli-plugins-backup-failure");
+        let repo = temp.path().join("repo");
+        let vault = temp.path().join("vault");
+        write_plugin(&repo, "beta", "2.0.0", "Beta", "beta");
+        write_vault_plugin(&vault, "beta", "2.0.0", "Beta", "stale");
+        let backup_run_dir = temp.path().join("not-a-directory");
+        write_file(&backup_run_dir, "I am a file, not a directory\n");
+
+        let mut opts = options(&repo, &vault);
+        opts.backup_run_dir = backup_run_dir;
+        let report = sync_plugins(&opts);
+
+        assert_eq!(
+            action_for(&report, "beta", "main.js"),
+            Some(FileAction::Failed)
+        );
+        assert_eq!(report.issues.len(), 1);
+        assert!(
+            report.issues[0].contains("failed to create backup directory"),
+            "unexpected issue: {:?}",
+            report.issues
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
+                .unwrap(),
+            "// stale\n",
+            "overwrite must be aborted when backup cannot be written"
+        );
+    }
+
     fn options(repo: &Path, vault: &Path) -> SyncOptions {
         SyncOptions {
             repo: repo.to_path_buf(),
             bob_dir: vault.to_path_buf(),
+            backup_run_dir: vault
+                .parent()
+                .unwrap_or(vault)
+                .join("backups/20260626-143000"),
             only: None,
             dry_run: false,
             force: false,
@@ -1326,6 +1859,20 @@ mod tests {
                 plugin.files.iter().find(|file| file.name == name)
             })
             .map(|file| file.action)
+    }
+
+    fn file_for<'a>(
+        report: &'a SyncReport,
+        id: &str,
+        name: &str,
+    ) -> Option<&'a FileSync> {
+        report
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == id)
+            .and_then(|plugin| {
+                plugin.files.iter().find(|file| file.name == name)
+            })
     }
 
     fn git_init_commit(repo: &Path) {

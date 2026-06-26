@@ -25,6 +25,16 @@ pub fn plugins_dir() -> PathBuf {
         })
 }
 
+pub fn plugin_backups_dir() -> PathBuf {
+    env::var_os("BOB_PLUGIN_BACKUPS_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| expand_tilde(&path))
+        .unwrap_or_else(|| {
+            home_dir().join(".local/state/bob-cli/plugin-backups")
+        })
+}
+
 pub fn home_dir() -> PathBuf {
     env::var_os("HOME")
         .filter(|value| !value.is_empty())
