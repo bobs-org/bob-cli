@@ -1,318 +1,329 @@
 ---
 create_time: 2026-06-26
 status: research
-topic: Best ways to search for particular bullets or tasks in the Bob Obsidian vault
+topic: Searching for particular bullets and tasks in Obsidian
 ---
-# Research: Searching for Bullets and Tasks in Obsidian
+# Research: Obsidian Bullet and Task Search
 
 ## Question
 
-What is the best way to search for a *particular* bullet (plain list item) or
-task (checkbox item) in Bryan's `~/bob` Obsidian vault — both for quick
-interactive lookups and for repeatable, scriptable queries?
+What is the best way to search for particular bullets or tasks in Bryan's
+Obsidian vault, with enough precision to find the actual list item rather than
+only the note that contains it?
 
-## Short Answer
+## Executive Summary
 
-There is no single tool. The right answer is a small, layered toolkit, picked by
-how the search is used:
+Obsidian has several good partial answers, but no single native "search list
+items as first-class rows" surface.
 
-1. **Interactive, one-off "where did I write that?" lookups → core Search
-   operators.** Already enabled, zero setup. Use `task:`, `task-todo:`,
-   `task-done:` for tasks and `line:` / `block:` / `section:` for bullets, plus
-   `path:`, `tag:`, regex `/.../`, and boolean `OR` / `-` / `()`. Promote the
-   ones you run often into **bookmarked searches** and **embedded ` ```query `
-   blocks** on a dashboard note.
-2. **Living task dashboards and rich task filtering → the Tasks plugin.** Its
-   query blocks filter on real task properties (status type, due / scheduled /
-   start, priority, recurrence, `description regex`) and sort, group, and limit.
-   This is the best tool for tasks, but it only sees `#task`-filtered checkbox
-   lines — not plain bullets.
-3. **Repeatable, scripted, or headless cross-vault search → `bob dataview`.**
-   Verified working today for both tasks (`TASK WHERE contains(...)`) and plain
-   bullets (`LIST ... FLATTEN file.lists`), with JSON output and no desktop app
-   required. This is the uniquely-Bryan layer and the natural home for any
-   future automation.
+The best answer depends on the target:
 
-Optional: install **Omnisearch** only if core Search's *ranking* (not its
-operators) becomes the pain point — it adds fuzzy, typo-tolerant, BM25-ranked
-full-text search.
+- Use Obsidian's core Search for fast ad hoc text probes, especially when the
+  exact phrase is known.
+- Use the Tasks plugin for task-native searches that need status, dates,
+  priority, tags, path filters, backlinks, and task editing/toggling in the UI.
+- Use Dataview for structured task/list-item data, especially when searching
+  task-line inline fields or ordinary bullets.
+- Use `bob dataview` for headless task search and automation, but do not assume
+  Bob's native Dataview subset can express every desktop Dataview `file.lists`
+  query yet.
 
-The recommended solution (bottom of this doc) is to standardize on these three
-layers and, if bullet/task search becomes a recurring CLI need, add a thin
-`bob find` wrapper over `bob dataview` so common searches don't require
-hand-writing DQL.
+For Bryan's vault, the long-term "great" solution is a small Bob-specific
+list-item search surface that treats bullets and tasks as indexed records. It
+should use the same storage conventions already in place: `#task`, Tasks'
+Dataview task format, Dataview inline fields, block IDs, path, heading/section,
+line number, and task status.
 
-## Verified Local Context
+## Local State Checked
 
-Checked on 2026-06-26 against `~/bob` and this `bob-cli` workspace:
+Checked on 2026-06-26.
 
-- Vault `~/bob` exists with **5,231** Markdown notes (excluding `.obsidian` and
-  `.trash`).
-- Core plugins relevant to search are **enabled**: `global-search`, `switcher`
-  (Quick Switcher), `backlink`, `tag-pane`, `bookmarks`, and `bases`.
-- Enabled community plugins include `dataview` (**0.5.68**),
-  `obsidian-tasks-plugin` (**8.0.0**), `metadata-menu`, `quickadd`,
-  `templater-obsidian`, `task-status-cycler`, and the custom
-  `bob-project-tasks` plugin ("Keep project task counts materialized in
-  frontmatter"). **Omnisearch is not installed.**
-- Tasks settings: `globalFilter: "#task"`, `taskFormat: "dataview"`, with
-  created / done / cancelled date tracking on. Custom statuses: `/` →
-  In Progress (`IN_PROGRESS`), `B` → Blocked (`ON_HOLD`), `-` → Canceled
-  (`CANCELLED`).
-- `bob dataview` works headlessly against the local Markdown index. Confirmed
-  end-to-end today:
-  - **Task search:** `bob dataview --format markdown --query 'TASK WHERE
-    contains(tags,"#task") AND contains(lower(text),"obsidian") LIMIT 3'`
-    returned rendered task lines such as
-    `- [x] (0800-0915) #task Make Obsidian Better!`.
-  - **Bullet search:** `bob dataview --format json --query 'LIST WITHOUT ID
-    L.text FROM "2026" FLATTEN file.lists AS L WHERE
-    contains(lower(L.text),"obsidian") LIMIT 3'` returned `type: list` rows with
-    their source path. So `bob dataview` can search arbitrary list items, not
-    just tasks.
-- `bob` has no dedicated `search` / `find` / `grep` subcommand today. The
-  closest surfaces are `bob dataview` (general query) and `bob projects` (which
-  manages project notes via their `^prj` tasks).
+- Project memory says `~/bob` is Bryan's active Obsidian vault, and `ob`
+  provides Obsidian Sync/headless support for local workflows.
+- Enabled vault plugins include `dataview`, `obsidian-tasks-plugin`,
+  `metadata-menu`, `quickadd`, `task-status-cycler`, `bob-project-tasks`, and
+  other Bob plugins.
+- Dataview is installed at `0.5.68`.
+- Tasks is installed at `8.0.0`; the latest upstream release observed today is
+  `8.2.2`, released 2026-06-22. The newer release does not change the high-level
+  recommendation.
+- Tasks settings use `globalFilter: "#task"` and `taskFormat: "dataview"`.
+- Tasks auto-created, done, and cancelled dates are enabled.
+- Custom task statuses are present for in-progress `/`, blocked `B`, and
+  cancelled `-`.
+- `bob dataview --format json --query 'TASK WHERE contains(tags, "#task") AND !completed LIMIT 3'`
+  returns task rows with useful search fields such as `path`, `line`, `status`,
+  `tags`, `text`, `section`, `blockId`, `outlinks`, and inherited page fields.
+- The desktop Obsidian engine was not reachable from this shell:
+  `obsidian` reported that it could not find a running Obsidian instance.
 
-## Framing: "Bullet" vs "Task", and the Four Search Axes
+The local conclusion is important: Bryan already has the right task data model.
+The gap is not storage. The gap is a polished search surface that works at the
+list-item level.
 
-A precise tool choice depends on two distinctions.
+## What "Good" Needs To Mean
 
-**Bullet vs task.** In this vault every checkbox task is also a list item, but
-not every list item is a task:
+A useful bullet/task search should support:
 
-```markdown
-- a plain bullet                      ← list item only
-- [ ] #task a real task               ← list item AND task
-```
+- text or regex over the item text;
+- exact task rows, not just matching note files;
+- open/done/in-progress/blocked/cancelled status filters;
+- `#task` and other tag filters;
+- path/folder filters;
+- source heading or section filters;
+- inline fields such as `[scheduled::]`, `[due::]`, `[p::]`, `[task_source::]`,
+  `[source_page::]`, and `[id::]`;
+- ordinary bullets as well as checkbox tasks;
+- stable navigation back to the source line, block ID, or section;
+- a good UI path for opening or editing a task;
+- a headless path for scripting when GUI Obsidian is closed.
 
-This matters because the *task-aware* tools only see checkbox lines:
+No off-the-shelf tool covers all of that cleanly.
 
-- The **Tasks plugin** only indexes lines matching the `#task` global filter.
-- Core Search's `task:` / `task-todo:` / `task-done:` only match checkbox items.
-- To search **plain bullets**, use core `line:` / `block:`, or Dataview's
-  `FLATTEN file.lists` (which yields both list items *and* tasks).
+## Option 1: Obsidian Core Search
 
-**Four axes** that decide the tool:
+Core Search is the fastest zero-install answer. It supports text, exact
+phrases, boolean combinations, regex, and operators such as `path:`, `file:`,
+`section:`, `block:`, `line:`, `tag:`, `task:`, `task-todo:`, and `task-done:`.
+The official CLI also has `search` and `search:context` commands for vault text
+search, plus task commands, when the Obsidian runtime is available.
 
-| Axis | Options |
-| --- | --- |
-| Target | plain bullet · checkbox task · either |
-| Match on | free text · tag · inline field (`[due:: …]`) · task status / date / priority |
-| Where consumed | interactive (sidebar / switcher) · embedded in a note · terminal / script |
-| Match style | exact / boolean / regex · fuzzy / ranked |
-
-## Tool Survey
-
-### 1. Core Search (interactive default; bullets *and* tasks)
-
-Obsidian's built-in Search (the `global-search` core plugin, already enabled) is
-the fastest, lowest-friction option and the right default for "find that one
-bullet/task" while working. It searches the whole vault and supports a rich
-operator set:
-
-| Operator | Finds | Notes |
-| --- | --- | --- |
-| `task:(term)` | any task whose text matches `term` | `task:""` matches all tasks |
-| `task-todo:(term)` | incomplete tasks | |
-| `task-done:(term)` | completed tasks | |
-| `line:(term)` | terms on the **same single line** | best for "this one bullet has X and Y" |
-| `block:(term)` | terms within the **same block** | a task plus its sub-bullets count as one block |
-| `section:(term)` | terms within the same heading section | |
-| `path:`, `file:` | by location / filename | scope a search to a folder or note |
-| `tag:#task` | by tag | combine to narrow tasks |
-| `["key":"value"]` | by note property (frontmatter) | |
-| `/regex/` | regular expression | case-insensitive unless flagged |
-
-Operators combine with boolean `OR`, `-` (negation), `()` grouping, and `""`
-for exact phrases, and nest: `task:(call OR email)` matches tasks mentioning
-either word. Examples:
+Useful examples:
 
 ```text
-task-todo:(invoice)                  → open tasks about invoices
-task-todo:("follow up") -tag:#someday → open follow-ups, excluding someday
-line:(obsidian search)               → one bullet mentioning both words
-block:(roadmap) section:(Pomodoros)  → blocks under a "Pomodoros" heading
-path:"2026/" task-done:(migrate)     → completed "migrate" tasks in 2026 dailies
+task-todo:(#task "weekly review")
+task:(scheduled:: 2026-06-26)
+line:/^\s*[-*+]\s+.*weekly review/
+block:(#task "source_page")
+path:ref task-todo:("task_source:: highlights")
 ```
 
-Make recurring searches durable two ways, both already available:
+Strengths:
 
-- **Bookmark a search.** With the `bookmarks` core plugin (enabled), save a
-  Search query so it is one click to re-run. Good for "Open #task triage" or
-  "Unprocessed inbox bullets".
-- **Embed a live query in a note.** A fenced ` ```query ` block renders live
-  Search results inside any note — e.g. a `search.md` dashboard with one block
-  per saved view. (Embedded queries can't use the Search-pane settings unless
-  you add the `obsidian-query-control` plugin.)
+- already installed;
+- interactive and fast;
+- good when the search phrase is known;
+- can distinguish todo and done tasks;
+- good enough for occasional one-off lookup.
 
-Strengths: instant, no query language, works on bullets and tasks, regex.
-Weakness: substring/boolean matching with no relevance ranking — a common word
-buries the bullet you want, and there is no fuzzy / typo tolerance.
+Weaknesses:
 
-### 2. Tasks Plugin (best for tasks; dashboards and rich filters)
+- result objects are still search hits, not normalized list-item records;
+- filtering by Dataview/Tasks fields is textual rather than semantic;
+- no first-class sort/group by due date, priority, heading, source PDF, etc.;
+- ordinary bullet searches require regex or line/block tricks;
+- not the best surface for recurring task dashboards.
 
-For checkbox tasks specifically, the installed Tasks plugin (8.0.0) is the
-strongest tool. A fenced ` ```tasks ` block filters on genuine task properties
-rather than raw text, and sorts / groups / limits the result:
+Verdict: keep it as the quick lookup tool, but do not make it the main design.
+
+## Option 2: Tasks Plugin Query Blocks
+
+Tasks is the best interactive UI for checkbox tasks. It understands task status,
+done state, dates, priority, recurrence, dependencies, path/folder filters, tags,
+and description filters. It can render backlinks and provide edit/toggle
+workflows.
+
+Useful query shape:
 
 ```tasks
 not done
-description regex matches /invoice|receipt/i
-path includes 2026
+description includes weekly review
+tag includes #task
+path includes prj
 sort by due
-group by path
-limit groups to 3
+sort by scheduled
 ```
 
-It understands this vault's custom statuses, so you can target work state
-directly instead of guessing checkbox symbols:
+For Bob, Tasks is especially relevant because the vault is already configured
+with:
 
-```tasks
-(status.type is TODO) OR (status.type is IN_PROGRESS)
-```
+- `#task` as the global filter;
+- Dataview task format;
+- created/done/cancelled date tracking;
+- custom statuses used by Bob workflows.
 
-Because the vault uses `taskFormat: dataview`, Tasks reads inline fields like
-`[due:: 2026-07-01]` and `[p:: 1]`, so date/priority filters work on the
-existing data. Boolean combinators (`AND` / `OR` / `NOT`, capitalized) and
-`description regex matches /.../` cover precise text search.
+Strengths:
 
-Strengths: the only tool that filters on task semantics (due, scheduled,
-priority, recurrence, status type) and renders an interactive, editable list.
-Weakness: only sees `#task`-filtered checkbox lines — useless for plain bullets
-— and lives inside the desktop app.
+- best task-native UI;
+- understands task fields instead of just text;
+- can open/edit/toggle tasks from rendered results;
+- saved query blocks make durable task dashboards.
 
-### 3. Dataview / `bob dataview` (bullets via FLATTEN; headless & scriptable)
+Weaknesses:
 
-Dataview is the most general matcher and the only one of the three that is also
-available headless through `bob dataview` — which fits Bryan's CLI/automation
-workflow and needs no running Obsidian.
+- intentionally task-focused, not a general bullet search tool;
+- query blocks are not a general command-palette fuzzy search;
+- arbitrary Dataview inline fields are not always as natural as built-in Tasks
+  fields;
+- not the right headless automation API by itself.
 
-**Tasks**, with full inline-field and tag access:
+Verdict: use Tasks for task dashboards and task editing. It should be one layer
+of the solution, not the whole solution.
 
-```bash
-bob dataview --format markdown --query '
+## Option 3: Dataview
+
+Dataview is the best model for treating list items as data. Its docs describe
+tasks and list items as having implicit fields, including status, checked state,
+completion state, text, line number, section, tags, links, children, and block
+IDs. It also supports task/list inline fields.
+
+Task query example:
+
+```dataview
 TASK
 WHERE contains(tags, "#task")
   AND !completed
-  AND contains(lower(text), "invoice")
-'
+  AND contains(lower(text), "weekly review")
 ```
 
-**Plain bullets** (and tasks), by flattening every note's list items — the key
-move for non-task bullet search:
+Ordinary bullet query example for desktop Dataview:
 
-```bash
-bob dataview --format json --query '
-LIST WITHOUT ID L.text
-FROM "2026"
-FLATTEN file.lists AS L
-WHERE contains(lower(L.text), "obsidian")
-'
+```dataview
+TABLE item.link AS Link, item.text AS Text, item.section AS Section
+FLATTEN file.lists AS item
+WHERE !item.task
+  AND contains(lower(item.text), "weekly review")
 ```
 
-You can filter flattened items by `meta(L.section)` (heading), `L.tags`, or
-inline fields, and `--format json` returns `path` + `line` per row for scripts.
-Both queries above were verified against `~/bob` today.
+Field-oriented task query:
 
-Strengths: searches bullets and tasks, filters on inline fields/sections/tags,
-returns structured JSON, runs from the terminal or cron. Weakness: you must
-write DQL, and it is read-only (a matcher, not an interactive jump-to).
+```dataview
+TASK
+WHERE contains(tags, "#task")
+  AND scheduled
+  AND scheduled <= date(today) + dur(7 days)
+  AND contains(lower(text), "review")
+```
 
-### 4. Optional: Omnisearch and Query Control
+Strengths:
 
-- **Omnisearch** (not installed) adds fuzzy, typo-tolerant, BM25-ranked
-  full-text search with a Quick-Switcher-style UI. It solves core Search's
-  *ranking* weakness, not its operator set — and it is note/excerpt ranked, not
-  a per-bullet/per-task operator engine. Worth installing only if "the right
-  note ranks too low" is the actual pain; it does not replace Tasks or Dataview
-  for structured filtering.
-- **Query Control** (not installed) upgrades embedded ` ```query ` blocks with
-  sorting, context, and collapse controls. A nice-to-have if the embedded-search
-  dashboard route (layer 1) becomes central.
+- can query tasks and ordinary bullets;
+- exposes list item fields as data;
+- fits Bob's existing Dataview inline-field conventions;
+- can be used in notes as saved dashboards;
+- `bob dataview` gives a headless path for many task searches.
 
-## Decision Matrix
+Weaknesses:
 
-| You want to… | Use |
-| --- | --- |
-| Jump to one bullet/task you half-remember, right now | Core Search operators (`line:` / `block:` / `task-todo:`) |
-| Re-run the same lookup often, inside Obsidian | Bookmarked search **or** embedded ` ```query ` block |
-| A filtered, sortable, editable task list (due/priority/status) | Tasks plugin ` ```tasks ` block |
-| Find **plain bullets** (non-task list items) by text/tag/section | Core `line:`/`block:`, or `bob dataview` `LIST … FLATTEN file.lists` |
-| Search from the terminal / a script / cron, structured output | `bob dataview` (`TASK …` or `LIST … FLATTEN`) |
-| Better relevance ranking / typo tolerance across notes | Omnisearch (optional install) |
+- rendered Dataview views are weaker than Tasks for task editing;
+- static query blocks are not as fluid as a real search UI;
+- desktop Dataview and Bob's native Dataview engine are not identical;
+- local testing showed Bob native `TASK` queries work well, but `file.lists`
+  flattening for ordinary bullets is rough today.
+
+Verdict: Dataview is the right semantic layer for list items. Use it directly
+for dashboards and as the model for any custom search tool.
+
+## Option 4: Omnisearch
+
+Omnisearch is a strong full-text/fuzzy search plugin. Its README describes a
+BM25-based search engine, typo tolerance, file-type filters, in-file search,
+attachment/PDF/image indexing through Text Extractor, and a keyboard-first UI.
+The latest release observed today is `1.29.3` from 2026-05-24.
+
+Strengths:
+
+- likely better than core Search for fuzzy full-text lookup;
+- useful if the search problem includes PDFs, Office documents, OCR, or vague
+  phrases;
+- mature and popular.
+
+Weaknesses:
+
+- not installed in `~/bob` today;
+- not task-native;
+- does not make bullets/tasks into structured records;
+- would add another search index and plugin dependency.
+
+Verdict: install only if fuzzy full-text search becomes a separate requirement.
+It is not the best primary answer for structured bullet/task search.
+
+## Option 5: Obsidian Bases
+
+Bases is increasingly important for note-level views, but it is not a good fit
+for this problem. Bases is organized around notes, properties, formulas, and
+views. The target here is a row per bullet or task line inside notes.
+
+Verdict: useful adjacent tooling, but not the answer for bullet/task search.
+
+## Option 6: A Bob-Specific List-Item Search Surface
+
+A dedicated Bob search surface would close the gap between the existing tools:
+
+- Core Search is fast but text-oriented.
+- Tasks is task-native but does not cover ordinary bullets.
+- Dataview has the right data model but not a polished interactive search UI.
+- `bob dataview` gives headless task search but not full desktop Dataview parity
+  for every list-item query.
+
+The custom tool could be an Obsidian plugin command/pane, a `bob` CLI command,
+or both. The Obsidian plugin is the better first UI because it can open the
+source note at the selected item and delegate task editing to the Obsidian/Tasks
+runtime. A CLI companion would be useful later for automation.
+
+Suggested MVP:
+
+- Command: `Bob: Search list items`.
+- Search rows: every Markdown list item and task in the vault.
+- Row fields: type (`bullet` or `task`), task status, checked/completed,
+  `#task`, tags, path, heading/section, line, block ID, text, links, and
+  Dataview inline fields.
+- Query syntax: plain text by default, plus simple filters such as
+  `type:task`, `type:bullet`, `done:false`, `status:B`, `tag:#task`,
+  `path:ref`, `field:scheduled`, `scheduled<=today`, and quoted phrases.
+- Result action: open source note at the line/block; for tasks, optionally open
+  the Tasks edit modal or run the existing status-cycler command.
+- Index source: start with Obsidian's cached Markdown metadata when running in
+  Obsidian; use Dataview's API if it makes inline fields easier; fall back to a
+  conservative Markdown parser only for a future headless CLI.
+- Saved searches: allow named searches for common flows, such as open project
+  tasks, highlight-derived tasks, unscheduled tasks, and bullets matching a
+  topic under `ref/`.
+
+This is not a large new data model. It is a better presentation/query layer over
+the model Bryan already uses.
+
+## Sources Checked
+
+- Obsidian Search docs: https://obsidian.md/help/plugins/search
+- Obsidian CLI docs: https://obsidian.md/help/cli
+- Dataview task/list metadata: https://blacksmithgu.github.io/obsidian-dataview/annotation/metadata-tasks/
+- Dataview query types: https://blacksmithgu.github.io/obsidian-dataview/queries/query-types/
+- Tasks filters: https://publish.obsidian.md/tasks/Queries/Filters
+- Tasks sorting: https://publish.obsidian.md/tasks/Queries/Sorting
+- Tasks examples: https://publish.obsidian.md/tasks/Queries/Examples
+- Tasks latest release: https://github.com/obsidian-tasks-group/obsidian-tasks/releases/latest
+- Obsidian Bases docs: https://obsidian.md/help/plugins/bases
+- Omnisearch README: https://github.com/scambier/obsidian-omnisearch
+- Omnisearch community listing: https://community.obsidian.md/plugins/omnisearch
+- Local Bob docs: `docs/dataview.md`, `docs/plugins.md`
+- Prior Bob research:
+  `sdd/research/202606/bulk_obsidian_task_properties.md`,
+  `sdd/research/202606/hammerspoon_quickadd_task_capture_consolidated.md`,
+  `sdd/research/202606/bob_obsidian_plugins_repo_consolidated.md`
 
 ## Recommended Solution
 
-Adopt the three native layers already present, mapped to intent, and add one
-small CLI affordance if bullet/task search becomes a recurring terminal need.
+Use a layered solution now, and build a small Bob list-item search surface if
+this becomes a frequent workflow.
 
-1. **Make core Search the default interactive tool, and learn six operators.**
-   `task-todo:`, `task-done:`, `line:`, `block:`, `section:`, plus regex
-   `/.../`, combined with `path:`, `tag:`, `OR`, `-`, `()`. This covers almost
-   every "find that bullet/task" moment with zero setup and works on both
-   bullets and tasks.
+Immediate workflow:
 
-2. **Persist the recurring searches.** Create a `search.md` (or extend a
-   dashboard note) with embedded ` ```query ` blocks for the handful of searches
-   run weekly (e.g. open inbox bullets, open `#task` by area), and bookmark the
-   same queries for one-click reuse. This converts ad-hoc operator strings into
-   durable, named views without any plugin install.
+1. Use core Search for quick ad hoc lookup by exact phrase:
+   `task-todo:(#task "term")` for tasks and `line:/^\s*[-*+]\s+.*term/` for
+   bullets.
+2. Create a saved Obsidian note of Tasks query blocks for task-native searches:
+   open tasks, blocked tasks, scheduled tasks, project tasks, and tasks matching
+   description/path/tag filters.
+3. Create a companion Dataview note for structured list-item searches,
+   especially ordinary bullets and task-line inline fields.
+4. Use `bob dataview` for headless task searches and scripts where its native
+   `TASK` support is sufficient.
 
-3. **Use the Tasks plugin for anything task-shaped that needs filtering or
-   sorting.** Lean on `status.type`, `description regex matches /.../`, `due` /
-   `scheduled` filters, and `group by` / `limit`. It is already configured for
-   this vault's `#task` filter, dataview format, and custom statuses, so it is
-   the highest-leverage tool for tasks specifically.
+Best durable solution:
 
-4. **Reach for `bob dataview` for plain-bullet search, repeatability, and
-   automation.** Keep a couple of canned `.dql` files (one `TASK` template, one
-   `LIST … FLATTEN file.lists` bullet template) so a headless search is a single
-   command. This is the only layer that searches non-task bullets from the
-   terminal and returns JSON for scripts.
-
-5. **Optional, only if a specific gap bites:** install **Omnisearch** if note
-   ranking/typo tolerance is the frustration; install **Query Control** if the
-   embedded-query dashboard becomes central.
-
-**Forward-looking enhancement (optional, SDD-worthy).** Because Bryan already
-wraps vault operations in ergonomic subcommands (`bob projects` over `^prj`
-tasks, `bob capture`, `bob move-done-tasks`), the cleanest long-term answer to
-"search for a particular bullet or task" is a thin **`bob find`** (or
-`bob search`) subcommand layered over `bob dataview`. It would translate simple
-flags into the verified DQL patterns above — e.g.:
-
-```bash
-bob find --task --open --text invoice          # → TASK WHERE !completed AND contains(...)
-bob find --bullet --in 2026 --text obsidian     # → LIST … FLATTEN file.lists WHERE contains(...)
-bob find --task --tag gtd --section Pomodoros
-```
-
-This keeps the powerful query engine but removes the need to hand-write DQL for
-common bullet/task searches, and it composes with the rest of `bob-cli` and
-cron. It is a candidate for a follow-up tale/epic, not a prerequisite — layers
-1–4 are usable today.
-
-## Sources
-
-- Obsidian Search (operators, embedded queries):
-  https://obsidian.md/help/plugins/search
-- Obsidian Search — Five Hidden Features (`line:`, `block:`, `section:`,
-  `task:`, nested terms, embedding):
-  https://obsidian.rocks/obsidian-search-five-hidden-features/
-- Tasks — Filters: https://publish.obsidian.md/tasks/Queries/Filters
-- Tasks — Regular Expressions:
-  https://publish.obsidian.md/tasks/Queries/Regular+Expressions
-- Tasks — About Queries: https://publish.obsidian.md/tasks/Queries/About+Queries
-- Dataview — list items via `FLATTEN file.lists` (show list items containing a
-  tag / under a heading):
-  https://s-blu.github.io/obsidian_dataview_example_vault/20%20Dataview%20Queries/Show%20list%20items%20containing%20a%20certain%20tag/
-- Dataview — Query structure:
-  https://blacksmithgu.github.io/obsidian-dataview/queries/structure/
-- Omnisearch: https://github.com/scambier/obsidian-omnisearch
-- Query Control (embedded query enhancements):
-  https://github.com/nothingislost/obsidian-query-control
-- Local: `docs/dataview.md`; `sdd/research/202606/bulk_obsidian_task_properties.md`;
-  `sdd/research/202606/obsidian_improvements_consolidated.md`
-- Local verification: `bob dataview` TASK and `LIST … FLATTEN file.lists`
-  queries plus `~/bob/.obsidian` plugin/settings inspection on 2026-06-26.
+Build a `Bob: Search list items` Obsidian plugin command that indexes bullets
+and tasks as first-class rows, with filters for text, type, status, tags, path,
+section, block ID, and inline fields. Keep Tasks as the task editing layer and
+Dataview as the data/query model. Do not install Omnisearch for this specific
+problem unless fuzzy full-text or attachment search becomes a separate goal.
