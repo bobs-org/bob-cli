@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-28 14:45:26
-status: wip
+status: done
 prompt: sdd/prompts/202606/depends_on_single_bullet.md
 ---
 # Plan: Single, Sub-projects-styled `**DEPENDS ON:**` navigation bullet
