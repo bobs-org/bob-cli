@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-29 14:06:30
-status: wip
+status: done
 prompt: sdd/prompts/202606/capture_scheduled_offset.md
 ---
 # Plan: `s:<N>` scheduled-offset syntax for `bob capture`

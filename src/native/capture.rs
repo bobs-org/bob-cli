@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::Datelike;
+use chrono::{Datelike, Days, NaiveDate};
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
     Command as ClapCommand,
@@ -62,6 +62,11 @@ Text is normalized to one line, formatted as a #task with a [created::] stamp, \
 and written to mac_inbox.md unless an @route token or --route target is \
 provided. Existing target files prefer a Tasks section, then fall back to the \
 last top-level task block. Missing target files are created when needed.\n\n\
+Append a trailing lowercase 's:<N>' token, where N is a non-negative integer, \
+to schedule the capture N days from today. The token is removed from the task \
+text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It \
+may appear before or after a trailing @route token and is recognized only at \
+the very end of the input.\n\n\
 Append '#<section-prefix>' or a bare '#' to an @route token (such as \
 '@notes#Ideas' or '@notes#') to capture an ordinary bullet instead. It renders \
 as '- <body> [created::YYYY-MM-DD]' and is placed in a non-Tasks section whose \
@@ -77,7 +82,7 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -242,11 +247,18 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         request.forced_route.as_deref(),
         request.forced_section.as_deref(),
     )?;
-    let created = current_date_string();
+    let today = bob_env::current_datetime().date();
+    let created = date_string(today);
+    let scheduled = parsed
+        .scheduled_offset
+        .map(|offset| scheduled_date_string(today, offset))
+        .transpose()?;
     let capture_line = match &parsed.kind {
-        CaptureKind::Task => format_task_line(&parsed.body, &created),
+        CaptureKind::Task => {
+            format_task_line(&parsed.body, &created, scheduled.as_deref())
+        }
         CaptureKind::Bullet { .. } => {
-            format_bullet_line(&parsed.body, &created)
+            format_bullet_line(&parsed.body, &created, scheduled.as_deref())
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);
@@ -275,6 +287,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         task_line: capture_line,
         kind: kind_label,
         created,
+        scheduled,
         placement,
     })
 }
@@ -286,9 +299,21 @@ fn capture_kind_label(kind: &CaptureKind) -> &'static str {
     }
 }
 
-fn current_date_string() -> String {
-    let now = bob_env::current_datetime();
-    format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day())
+fn date_string(date: NaiveDate) -> String {
+    format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day())
+}
+
+fn scheduled_date_string(
+    today: NaiveDate,
+    offset_days: u64,
+) -> Result<String, CaptureError> {
+    let scheduled =
+        today
+            .checked_add_days(Days::new(offset_days))
+            .ok_or_else(|| {
+                CaptureError::usage("scheduled offset is out of range")
+            })?;
+    Ok(date_string(scheduled))
 }
 
 fn relative_target(route: Option<&str>) -> PathBuf {
@@ -305,12 +330,30 @@ pub(crate) fn route_label(route: &str) -> String {
     format!("{route}.md")
 }
 
-fn format_task_line(body: &str, created: &str) -> String {
-    format!("- [ ] #task {body} [created::{created}]")
+fn format_task_line(
+    body: &str,
+    created: &str,
+    scheduled: Option<&str>,
+) -> String {
+    let mut line = format!("- [ ] #task {body} [created::{created}]");
+    append_scheduled_property(&mut line, scheduled);
+    line
 }
 
-fn format_bullet_line(body: &str, created: &str) -> String {
-    format!("- {body} [created::{created}]")
+fn format_bullet_line(
+    body: &str,
+    created: &str,
+    scheduled: Option<&str>,
+) -> String {
+    let mut line = format!("- {body} [created::{created}]");
+    append_scheduled_property(&mut line, scheduled);
+    line
+}
+
+fn append_scheduled_property(line: &mut String, scheduled: Option<&str>) {
+    if let Some(scheduled) = scheduled {
+        line.push_str(&format!(" [scheduled::{scheduled}]"));
+    }
 }
 
 fn capture_to_target(
@@ -383,6 +426,7 @@ struct ParsedCaptureText {
     body: String,
     route: Option<String>,
     kind: CaptureKind,
+    scheduled_offset: Option<u64>,
 }
 
 /// A parsed `@route` token, optionally carrying a bullet marker.
@@ -396,7 +440,11 @@ struct RouteToken {
 }
 
 impl RouteToken {
-    fn into_parsed(self, body: String) -> ParsedCaptureText {
+    fn into_parsed(
+        self,
+        body: String,
+        scheduled_offset: Option<u64>,
+    ) -> ParsedCaptureText {
         let kind = match self.bullet {
             Some(section_prefix) => CaptureKind::Bullet {
                 section_prefix,
@@ -408,6 +456,7 @@ impl RouteToken {
             body,
             route: Some(self.route),
             kind,
+            scheduled_offset,
         }
     }
 }
@@ -422,7 +471,12 @@ fn parse_capture_text(
         return Err(missing_text_error());
     }
 
-    let tokens: Vec<&str> = normalized.split(' ').collect();
+    let mut tokens: Vec<&str> = normalized.split(' ').collect();
+    let scheduled_offset = extract_trailing_schedule(&mut tokens);
+    if tokens.is_empty() {
+        return Err(missing_text_error());
+    }
+    let body = tokens.join(" ");
 
     if let Some(section) = forced_section {
         let Some(route) = forced_route else {
@@ -434,12 +488,13 @@ fn parse_capture_text(
         let route = normalize_forced_route(route)?;
         reject_legacy_bullet_markers(&tokens, false)?;
         return Ok(ParsedCaptureText {
-            body: normalized,
+            body,
             route: Some(route),
             kind: CaptureKind::Bullet {
                 section_prefix: Some(section.to_string()),
                 exact: true,
             },
+            scheduled_offset,
         });
     }
 
@@ -447,9 +502,10 @@ fn parse_capture_text(
         let route = normalize_forced_route(route)?;
         reject_legacy_bullet_markers(&tokens, false)?;
         return Ok(ParsedCaptureText {
-            body: normalized,
+            body,
             route: Some(route),
             kind: CaptureKind::Task,
+            scheduled_offset,
         });
     }
 
@@ -466,7 +522,7 @@ fn parse_capture_text(
             }
             // A bare `@foo` with no body stays literal task text.
         } else {
-            return Ok(token.into_parsed(body));
+            return Ok(token.into_parsed(body, scheduled_offset));
         }
     }
 
@@ -475,13 +531,14 @@ fn parse_capture_text(
         && !rest.is_empty()
         && let Some(token) = parse_route_token(last)
     {
-        return Ok(token.into_parsed(rest.join(" ")));
+        return Ok(token.into_parsed(rest.join(" "), scheduled_offset));
     }
 
     Ok(ParsedCaptureText {
-        body: normalized,
+        body,
         route: None,
         kind: CaptureKind::Task,
+        scheduled_offset,
     })
 }
 
@@ -518,6 +575,40 @@ fn parse_route_token(token: &str) -> Option<RouteToken> {
         route: route_part.to_ascii_lowercase(),
         bullet,
     })
+}
+
+/// Parse one whitespace-free token as a schedule offset (`s:<N>`), returning
+/// the non-negative day count. Invalid or overflowing tokens stay literal.
+fn parse_schedule_token(token: &str) -> Option<u64> {
+    let digits = token.strip_prefix("s:")?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok()
+}
+
+/// Remove one terminal schedule token from the input region. A schedule token
+/// may be the final token, or immediately before a final route token.
+fn extract_trailing_schedule(tokens: &mut Vec<&str>) -> Option<u64> {
+    if let Some(&last) = tokens.last()
+        && let Some(offset) = parse_schedule_token(last)
+    {
+        tokens.pop();
+        return Some(offset);
+    }
+
+    if tokens.len() >= 2 {
+        let route_index = tokens.len() - 1;
+        let schedule_index = tokens.len() - 2;
+        if parse_route_token(tokens[route_index]).is_some()
+            && let Some(offset) = parse_schedule_token(tokens[schedule_index])
+        {
+            tokens.remove(schedule_index);
+            return Some(offset);
+        }
+    }
+
+    None
 }
 
 /// Reject the retired standalone bullet marker forms so they fail clearly
@@ -1107,6 +1198,7 @@ struct CaptureResult {
     task_line: String,
     kind: &'static str,
     created: String,
+    scheduled: Option<String>,
     placement: Placement,
 }
 
@@ -1224,6 +1316,52 @@ mod tests {
     }
 
     #[test]
+    fn parses_schedule_tokens() {
+        assert_eq!(parse_schedule_token("s:0"), Some(0));
+        assert_eq!(parse_schedule_token("s:1"), Some(1));
+        assert_eq!(parse_schedule_token("s:42"), Some(42));
+
+        for token in [
+            "s:",
+            "s:abc",
+            "s:-1",
+            "s:1.5",
+            "S:1",
+            "sx:1",
+            "s:18446744073709551616",
+        ] {
+            assert_eq!(parse_schedule_token(token), None, "{token}");
+        }
+    }
+
+    #[test]
+    fn extracts_trailing_schedule_from_terminal_region() {
+        let mut tokens = vec!["buy", "milk", "s:1"];
+        assert_eq!(extract_trailing_schedule(&mut tokens), Some(1));
+        assert_eq!(tokens, vec!["buy", "milk"]);
+
+        let mut tokens = vec!["buy", "milk", "s:2", "@groceries"];
+        assert_eq!(extract_trailing_schedule(&mut tokens), Some(2));
+        assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
+
+        let mut tokens = vec!["buy", "milk", "@groceries", "s:3"];
+        assert_eq!(extract_trailing_schedule(&mut tokens), Some(3));
+        assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
+
+        let mut tokens = vec!["take", "s:1", "pill"];
+        assert_eq!(extract_trailing_schedule(&mut tokens), None);
+        assert_eq!(tokens, vec!["take", "s:1", "pill"]);
+
+        let mut tokens = vec!["buy", "s:1", "s:2"];
+        assert_eq!(extract_trailing_schedule(&mut tokens), Some(2));
+        assert_eq!(tokens, vec!["buy", "s:1"]);
+
+        let mut tokens = vec!["buy", "s:abc"];
+        assert_eq!(extract_trailing_schedule(&mut tokens), None);
+        assert_eq!(tokens, vec!["buy", "s:abc"]);
+    }
+
+    #[test]
     fn parses_auto_routes_like_hammerspoon() {
         let cases = [
             (
@@ -1271,12 +1409,60 @@ mod tests {
     }
 
     #[test]
+    fn parses_scheduled_offsets_with_routes() {
+        let cases = [
+            ("Buy Milk s:1", "Buy Milk", None, Some(1)),
+            (
+                "Buy Milk s:2 @Groceries",
+                "Buy Milk",
+                Some("groceries"),
+                Some(2),
+            ),
+            (
+                "Buy Milk @Groceries s:2",
+                "Buy Milk",
+                Some("groceries"),
+                Some(2),
+            ),
+            (
+                "@Groceries Buy Milk s:3",
+                "Buy Milk",
+                Some("groceries"),
+                Some(3),
+            ),
+            ("take s:1 pill", "take s:1 pill", None, None),
+            ("Buy Milk s:1 s:2", "Buy Milk s:1", None, Some(2)),
+            ("Buy Milk s:abc", "Buy Milk s:abc", None, None),
+            ("Buy Milk S:1", "Buy Milk S:1", None, None),
+        ];
+
+        for (raw, body, route, offset) in cases {
+            let parsed = parse_capture_text(raw, None)
+                .unwrap_or_else(|error| panic!("{raw}: {error:?}"));
+            assert_eq!(parsed.body, body, "{raw}");
+            assert_eq!(parsed.route.as_deref(), route, "{raw}");
+            assert_eq!(parsed.scheduled_offset, offset, "{raw}");
+        }
+
+        let error = parse_capture_text("s:1", None).expect_err("schedule only");
+        assert_eq!(error.kind, CaptureErrorKind::Usage);
+    }
+
+    #[test]
     fn forced_route_bypasses_auto_route_parsing() {
         let parsed =
             parse_capture_text("Buy milk @Groceries", Some("Work-Queue"))
                 .expect("parse forced route");
         assert_eq!(parsed.body, "Buy milk @Groceries");
         assert_eq!(parsed.route.as_deref(), Some("work-queue"));
+        assert_eq!(parsed.scheduled_offset, None);
+
+        let parsed =
+            parse_capture_text("Buy milk s:2 @Groceries", Some("Work-Queue"))
+                .expect("parse forced route with schedule");
+        assert_eq!(parsed.body, "Buy milk @Groceries");
+        assert_eq!(parsed.route.as_deref(), Some("work-queue"));
+        assert_eq!(parsed.scheduled_offset, Some(2));
 
         let error = parse_capture_text("Buy milk", Some("../bad"))
             .expect_err("invalid forced route must fail");
@@ -1286,9 +1472,30 @@ mod tests {
     #[test]
     fn formats_task_line() {
         assert_eq!(
-            format_task_line("buy milk", "2026-06-15"),
+            format_task_line("buy milk", "2026-06-15", None),
             "- [ ] #task buy milk [created::2026-06-15]"
         );
+        assert_eq!(
+            format_task_line("buy milk", "2026-06-15", Some("2026-06-16")),
+            "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
+        );
+    }
+
+    #[test]
+    fn formats_scheduled_date_from_offset() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 15).expect("valid date");
+        assert_eq!(
+            scheduled_date_string(today, 0).expect("same day"),
+            "2026-06-15"
+        );
+        assert_eq!(
+            scheduled_date_string(today, 1).expect("tomorrow"),
+            "2026-06-16"
+        );
+
+        let error = scheduled_date_string(today, 9_999_999_999)
+            .expect_err("calendar overflow must fail");
+        assert_eq!(error.kind, CaptureErrorKind::Usage);
     }
 
     #[test]
@@ -1510,6 +1717,7 @@ mod tests {
             task_line: "- [ ] #task buy milk [created::2026-06-15]".to_string(),
             kind: "task",
             created: "2026-06-15".to_string(),
+            scheduled: None,
             placement: Placement::Inserted,
         };
 
@@ -1529,6 +1737,7 @@ mod tests {
         );
         assert_eq!(value["kind"], "task");
         assert_eq!(value["created"], "2026-06-15");
+        assert!(value["scheduled"].is_null(), "{value}");
         assert_eq!(value["placement"], "inserted");
     }
 
@@ -1591,13 +1800,14 @@ mod tests {
     #[test]
     fn forced_section_forces_exact_bullet_with_forced_route() {
         let parsed = super::parse_capture_text(
-            "Some note @other",
+            "Some note @other s:1",
             Some("Foo"),
             Some("Ideas"),
         )
         .expect("parse forced section");
         assert_eq!(parsed.body, "Some note @other");
         assert_eq!(parsed.route.as_deref(), Some("foo"));
+        assert_eq!(parsed.scheduled_offset, Some(1));
         assert_eq!(
             parsed.kind,
             CaptureKind::Bullet {
@@ -1675,8 +1885,12 @@ mod tests {
     #[test]
     fn formats_bullet_line() {
         assert_eq!(
-            format_bullet_line("some idea", "2026-06-15"),
+            format_bullet_line("some idea", "2026-06-15", None),
             "- some idea [created::2026-06-15]"
+        );
+        assert_eq!(
+            format_bullet_line("some idea", "2026-06-15", Some("2026-06-16")),
+            "- some idea [created::2026-06-15] [scheduled::2026-06-16]"
         );
     }
 

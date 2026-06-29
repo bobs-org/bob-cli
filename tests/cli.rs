@@ -572,6 +572,12 @@ fn capture_help_lists_options_alphabetically() {
         help.contains("Capture one task into the Bob Obsidian vault"),
         "expected capture long help:\n{help}"
     );
+    assert!(
+        help.contains("Append a trailing lowercase 's:<N>' token")
+            && help.contains("bob capture buy milk s:1")
+            && help.contains("bob capture buy milk s:2 @groceries"),
+        "expected capture schedule help:\n{help}"
+    );
     assert_text_order(
         &help,
         &[
@@ -664,6 +670,61 @@ fn capture_unrouted_appends_to_mac_inbox() {
 }
 
 #[test]
+fn capture_unrouted_scheduled_offset_appends_property() {
+    let temp = TempDir::new("bob-cli-capture-scheduled-inbox");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("buy")
+        .arg("milk")
+        .arg("s:1")
+        .env("BOB_NOW", "2026-06-15 10:11:12")
+        .output()
+        .expect("run scheduled inbox capture");
+
+    assert_success(&output);
+    let expected =
+        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]";
+    assert!(
+        stdout(&output).contains(expected),
+        "unexpected capture output:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        format!("{expected}\n")
+    );
+}
+
+#[test]
+fn capture_scheduled_zero_uses_created_date() {
+    let temp = TempDir::new("bob-cli-capture-scheduled-zero");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("buy")
+        .arg("milk")
+        .arg("s:0")
+        .env("BOB_NOW", "2026-06-15 10:11:12")
+        .output()
+        .expect("run zero scheduled capture");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-15]\n"
+    );
+}
+
+#[test]
 fn capture_unrouted_prefers_tasks_section_in_existing_inbox() {
     let temp = TempDir::new("bob-cli-capture-inbox-tasks-section");
     let vault = temp.path().join("vault");
@@ -750,6 +811,42 @@ fn capture_routed_prefix_inserts_and_suffix_creates_file() {
 }
 
 #[test]
+fn capture_scheduled_offset_routes_in_either_order() {
+    let render = |args: &[&str]| -> String {
+        let temp = TempDir::new("bob-cli-capture-scheduled-route-order");
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(&vault).expect("create vault");
+
+        let mut command = bob_command();
+        command.arg("capture").arg("-b").arg(&vault);
+        for arg in args {
+            command.arg(arg);
+        }
+        let output = command
+            .env("BOB_NOW", "2026-06-15 10:11:12")
+            .output()
+            .expect("run scheduled routed capture");
+
+        assert_success(&output);
+        fs::read_to_string(vault.join("groceries.md")).expect("read groceries")
+    };
+
+    let schedule_then_route = render(&["buy", "milk", "s:2", "@groceries"]);
+    let route_then_schedule = render(&["buy", "milk", "@groceries", "s:2"]);
+    assert_eq!(schedule_then_route, route_then_schedule);
+    assert_eq!(
+        schedule_then_route,
+        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-17]\n"
+    );
+
+    let leading_route = render(&["@groceries", "buy", "milk", "s:3"]);
+    assert_eq!(
+        leading_route,
+        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-18]\n"
+    );
+}
+
+#[test]
 fn capture_routed_prefers_tasks_section_over_root_task() {
     let temp = TempDir::new("bob-cli-capture-routed-tasks-section");
     let vault = temp.path().join("vault");
@@ -779,6 +876,30 @@ fn capture_routed_prefers_tasks_section_over_root_task() {
         fs::read_to_string(vault.join("groceries.md"))
             .expect("read groceries"),
         "# Groceries\n- [ ] #task root\n## Tasks\n\n- [ ] #task pick apples [created::2026-06-15]\nNotes\n"
+    );
+}
+
+#[test]
+fn capture_nonterminal_schedule_token_stays_literal() {
+    let temp = TempDir::new("bob-cli-capture-scheduled-literal-middle");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("take")
+        .arg("s:1")
+        .arg("pill")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run literal middle schedule capture");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        "- [ ] #task take s:1 pill [created::2026-06-15]\n"
     );
 }
 
@@ -845,6 +966,41 @@ fn capture_dry_run_reports_without_writing() {
 }
 
 #[test]
+fn capture_scheduled_dry_run_reports_without_writing() {
+    let temp = TempDir::new("bob-cli-capture-scheduled-dry-run");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("buy")
+        .arg("milk")
+        .arg("s:1")
+        .arg("@groceries")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run scheduled dry-run capture");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("[dry-run] ok would capture  groceries.md")
+            && out.contains(
+                "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
+            ),
+        "unexpected dry-run output:\n{out}"
+    );
+    assert!(
+        !vault.join("groceries.md").exists(),
+        "dry-run must not create routed target"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_json_output_is_machine_readable() {
     let temp = TempDir::new("bob-cli-capture-json");
     let vault = temp.path().join("vault");
@@ -889,7 +1045,41 @@ fn capture_json_output_is_machine_readable() {
         "- [ ] #task buy milk [created::2026-06-15]"
     );
     assert_eq!(json["created"], "2026-06-15");
+    assert!(json["scheduled"].is_null(), "unexpected json: {json}");
     assert_eq!(json["placement"], "created");
+}
+
+#[test]
+fn capture_json_output_includes_scheduled_date() {
+    let temp = TempDir::new("bob-cli-capture-scheduled-json");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("buy")
+        .arg("milk")
+        .arg("s:1")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run scheduled json capture");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["text"], "buy milk");
+    assert_eq!(json["created"], "2026-06-15");
+    assert_eq!(json["scheduled"], "2026-06-16");
+    assert_eq!(
+        json["task_line"],
+        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
+    );
 }
 
 #[test]
@@ -948,6 +1138,72 @@ fn capture_empty_input_is_usage_error() {
             && stderr(&output).contains("task text is required"),
         "expected empty-input error:\n{}",
         format_output(&output)
+    );
+}
+
+#[test]
+fn capture_schedule_only_is_usage_error() {
+    let temp = TempDir::new("bob-cli-capture-schedule-only");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("s:1")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run schedule-only capture");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "schedule-only capture should be a usage error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("task text is required"),
+        "expected schedule-only error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !vault.join("mac_inbox.md").exists(),
+        "usage error must not write inbox"
+    );
+}
+
+#[test]
+fn capture_scheduled_offset_out_of_range_is_usage_error() {
+    let temp = TempDir::new("bob-cli-capture-schedule-overflow");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("buy")
+        .arg("milk")
+        .arg("s:9999999999")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run schedule overflow capture");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "overflow capture should be a usage error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("scheduled offset is out of range"),
+        "expected schedule overflow error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !vault.join("mac_inbox.md").exists(),
+        "usage error must not write inbox"
     );
 }
 
