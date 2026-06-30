@@ -1,6 +1,6 @@
 ---
 create_time: 2026-06-30 09:30:16
-status: wip
+status: done
 prompt: sdd/prompts/202606/blocked_task_marking.md
 ---
 # Plan: Mark dependency-blocked tasks in the `^^` task-link picker
