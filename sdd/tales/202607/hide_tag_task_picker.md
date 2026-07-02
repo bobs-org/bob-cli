@@ -1,6 +1,6 @@
 ---
 create_time: 2026-07-02 06:49:00
-status: wip
+status: done
 prompt: sdd/prompts/202607/hide_tag_task_picker.md
 ---
 # Plan: Exclude `#hide` tasks from the `^^` task-link picker
