@@ -1,6 +1,6 @@
 ---
 create_time: 2026-07-07 19:39:53
-status: wip
+status: done
 prompt: sdd/prompts/202607/counted_transclusion_keymaps.md
 ---
 # Plan: Counted `!` and `@` Transcluded Task Keymaps
