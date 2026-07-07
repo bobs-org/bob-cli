@@ -1,6 +1,6 @@
 ---
 create_time: 2026-07-07 19:27:00
-status: wip
+status: done
 prompt: sdd/prompts/202607/transcluded_at_toggle.md
 ---
 # Plan: Toggle @ Transcluded Task Start State
