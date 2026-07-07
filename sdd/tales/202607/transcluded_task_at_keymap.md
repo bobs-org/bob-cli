@@ -1,6 +1,6 @@
 ---
 create_time: 2026-07-07 19:15:59
-status: wip
+status: done
 prompt: sdd/prompts/202607/transcluded_task_at_keymap.md
 ---
 # Plan: Conditional `@` Keymap for Transcluded Task Starts
