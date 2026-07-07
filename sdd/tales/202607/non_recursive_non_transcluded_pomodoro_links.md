@@ -1,6 +1,6 @@
 ---
 create_time: 2026-07-07 18:19:22
-status: wip
+status: done
 prompt: sdd/prompts/202607/non_recursive_non_transcluded_pomodoro_links.md
 ---
 # Plan: Make Bare Pomodoro Task Link Starts Non-Recursive
