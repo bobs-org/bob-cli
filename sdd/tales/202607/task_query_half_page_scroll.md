@@ -1,6 +1,6 @@
 ---
 create_time: 2026-07-07 19:24:59
-status: wip
+status: done
 prompt: sdd/prompts/202607/task_query_half_page_scroll.md
 ---
 # Plan: Natural Ctrl-d/u Scrolling Through Rendered Tasks Queries
