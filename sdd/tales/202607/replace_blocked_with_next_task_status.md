@@ -1,6 +1,6 @@
 ---
 create_time: 2026-07-08 12:48:27
-status: wip
+status: done
 prompt: sdd/prompts/202607/replace_blocked_with_next_task_status.md
 ---
 # Plan: Replace the `[B]` "Blocked" task status with a `[*]` "Next" status

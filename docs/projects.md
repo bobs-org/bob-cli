@@ -55,7 +55,7 @@ Task statuses follow the Tasks plugin convention:
 ```text
 [ ]  open
 [/]  open
-[B]  open
+[*]  open
 [x]  done
 [X]  done
 [-]  canceled

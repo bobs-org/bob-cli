@@ -2546,7 +2546,7 @@ status: wip
 - [ ] #task #prj Finish the project #hide ^prj
 - [ ] #task shown one
 - [/] #task shown in progress
-- [B] #task shown blocked
+- [*] #task shown next
 - [ ] #task legacy priority is shown [p::1]
 - [ ] #task hidden helper #hide
 - [x] #task finished

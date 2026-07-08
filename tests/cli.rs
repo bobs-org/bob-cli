@@ -3004,7 +3004,7 @@ status: wip
 - [ ] #task Finish Alpha #hide ^prj
 - [ ] #task shown one
 - [/] #task shown in progress
-- [B] #task shown blocked
+- [*] #task shown next
 - [ ] #task hidden helper #hide
 - [x] #task done task
 - [-] #task canceled task

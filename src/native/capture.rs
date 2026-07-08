@@ -1554,10 +1554,10 @@ mod tests {
 
     #[test]
     fn adds_leading_newline_when_inserting_after_non_newline_eof() {
-        let contents = "- [B] #task old";
+        let contents = "- [*] #task old";
         assert_eq!(
             insert_task_line(contents, TASK),
-            (format!("- [B] #task old\n{TASK}\n"), Placement::Inserted,)
+            (format!("- [*] #task old\n{TASK}\n"), Placement::Inserted,)
         );
     }
 
