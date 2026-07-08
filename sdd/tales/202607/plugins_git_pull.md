@@ -1,6 +1,6 @@
 ---
 create_time: 2026-07-08 12:33:51
-status: wip
+status: done
 prompt: sdd/prompts/202607/plugins_git_pull.md
 ---
 # Plan: `git pull` the bob-plugins repo before `bob plugins list` / `sync`

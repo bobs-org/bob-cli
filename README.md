@@ -207,9 +207,9 @@ get `[scheduled::YYYY-mm-dd]` appended to the open `^prj` task. Use
 The full project task contract lives in [`docs/projects.md`](docs/projects.md).
 
 ```bash
-bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-r|--repo DIR]
-bob plugins list [-b|--bob-dir DIR] [-f|--format table|json] [-r|--repo DIR]
-bob plugins sync [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-p|--plugin ID] [-r|--repo DIR]
+bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
+bob plugins list [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
+bob plugins sync [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-n|--no-pull] [-p|--plugin ID] [-r|--repo DIR]
 ```
 
 Lists Bryan's custom Bob Obsidian plugins from the
@@ -225,11 +225,15 @@ footer summarizes `N synced · M drift · K not installed`.
 
 The repo root resolves from `-r, --repo`, then `BOB_PLUGINS_DIR`, then the
 default `~/projects/github/bobs-org/bob-plugins`. The vault root resolves from
-`-b, --bob-dir`, then `BOB_DIR`, then `~/bob`. `list` exits non-zero only on a
-real error such as an unreadable repo; drift and not-installed plugins are
-reported, not failures. Pass `-f, --format json` for a stable object with `ok`,
-`repo`, `bob_dir`, `count`, `synced`, `drift`, `not_installed`, and a `plugins`
-array whose entries carry `id`, `version`, `description`, `sync`, and `vault`.
+`-b, --bob-dir`, then `BOB_DIR`, then `~/bob`. By default, `list` and `sync`
+run a non-interactive `git pull` in the plugins repo before analysis; pass
+`-n, --no-pull` to use the current checkout. Non-Git repos skip the pull
+silently, and pull failures warn on stderr but continue with the existing
+checkout. `list` exits non-zero only on a real error such as an unreadable repo;
+drift and not-installed plugins are reported, not failures. Pass
+`-f, --format json` for a stable object with `ok`, `repo`, `bob_dir`, `count`,
+`synced`, `drift`, `not_installed`, and a `plugins` array whose entries carry
+`id`, `version`, `description`, `sync`, and `vault`.
 
 `sync` deploys the repo into the vault, copying the managed files
 (`manifest.json`, `main.js`, and `styles.css` when present) into each

@@ -3,7 +3,7 @@ use std::{
     ffi::OsString,
     fs, io, iter,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output},
 };
 
 use clap::{
@@ -15,7 +15,7 @@ use serde_json::json;
 use similar::{ChangeTag, TextDiff};
 
 use super::{
-    env as bob_env,
+    env as bob_env, ob,
     style::{display_width, pad_right, Styler},
 };
 
@@ -75,6 +75,9 @@ The list subcommand is read-only: it reads each plugin manifest from the repo, \
 byte-compares the managed files against the vault copy to report sync state, \
 and reads community-plugins.json to report whether the vault has the plugin \
 enabled. Running `bob plugins` with no subcommand runs list.\n\n\
+Before list or sync analyzes files, the plugins repo is refreshed with a \
+non-interactive `git pull` unless --no-pull is given. Pull failures warn and \
+continue with the existing checkout.\n\n\
 The sync subcommand deploys the repo into the vault: it copies the managed \
 files (manifest.json, main.js, and styles.css) from the repo into the vault \
 plugin folder, never touching data.json or other runtime files. It refuses to \
@@ -83,10 +86,11 @@ unless --force is given. For files that would change, sync prints a diff, and \
 every overwritten vault file is backed up before it is replaced.",
         )
         .after_help(
-            "Examples:\n  bob plugins\n  bob plugins list\n  bob plugins list -f json\n  bob plugins sync --dry-run\n  bob plugins sync -p bob-project-tasks",
+            "Examples:\n  bob plugins\n  bob plugins list\n  bob plugins list -f json\n  bob plugins sync --dry-run\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
+        .arg(no_pull_arg())
         .arg(repo_arg())
         .subcommand(list_command())
         .subcommand(sync_command())
@@ -96,10 +100,11 @@ fn list_command() -> ClapCommand {
     ClapCommand::new("list")
         .about("List Bob plugins with repo version and vault sync state")
         .after_help(
-            "Examples:\n  bob plugins list\n  bob plugins list -f json\n  bob plugins list -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
+            "Examples:\n  bob plugins list\n  bob plugins list -f json\n  bob plugins list --no-pull\n  bob plugins list -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
+        .arg(no_pull_arg())
         .arg(repo_arg())
 }
 
@@ -115,15 +120,18 @@ touched. A vault file that has uncommitted changes in the vault Git repo is \
 left alone with a warning unless --force is given, so local edits are never \
 clobbered silently. Files that would change are shown as unified diffs; \
 overwritten vault files are copied to a timestamped backup directory first. \
-Files that already match the repo are reported as unchanged.",
+Files that already match the repo are reported as unchanged. The plugins repo \
+is refreshed with a non-interactive `git pull` before analysis unless \
+--no-pull is given.",
         )
         .after_help(
-            "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
+            "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
         )
         .arg(backup_dir_arg())
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
         .arg(force_arg())
+        .arg(no_pull_arg())
         .arg(plugin_arg())
         .arg(repo_arg())
 }
@@ -187,6 +195,14 @@ fn force_arg() -> Arg {
         .help("Overwrite vault files with uncommitted Git changes")
 }
 
+fn no_pull_arg() -> Arg {
+    Arg::new("no-pull")
+        .long("no-pull")
+        .short('n')
+        .action(ArgAction::SetTrue)
+        .help("Skip 'git pull' on the plugins repo before analyzing")
+}
+
 fn plugin_arg() -> Arg {
     Arg::new("plugin")
         .long("plugin")
@@ -240,6 +256,7 @@ fn backup_dir_from_matches(matches: &ArgMatches) -> PathBuf {
 
 fn run_list(matches: &ArgMatches) -> i32 {
     let repo = repo_from_matches(matches);
+    maybe_pull_repo(matches, &repo);
     let bob_dir = bob_dir_from_matches(matches);
     let report = scan_plugins(&repo, &bob_dir);
 
@@ -273,9 +290,11 @@ fn run_list(matches: &ArgMatches) -> i32 {
 }
 
 fn run_sync(matches: &ArgMatches) -> i32 {
+    let repo = repo_from_matches(matches);
+    maybe_pull_repo(matches, &repo);
     let timestamp = bob_env::current_datetime().format("%Y%m%d-%H%M%S");
     let options = SyncOptions {
-        repo: repo_from_matches(matches),
+        repo,
         bob_dir: bob_dir_from_matches(matches),
         backup_run_dir: backup_dir_from_matches(matches)
             .join(timestamp.to_string()),
@@ -298,6 +317,155 @@ fn run_sync(matches: &ArgMatches) -> i32 {
     } else {
         1
     }
+}
+
+fn maybe_pull_repo(matches: &ArgMatches, repo: &Path) {
+    if matches.get_flag("no-pull") {
+        return;
+    }
+    print_pull_outcome(pull_repo(repo));
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PullOutcome {
+    Skipped,
+    Pulled { summary: String },
+    Failed { message: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitDetection {
+    Worktree,
+    NotWorktree,
+    MissingGit,
+}
+
+fn pull_repo(repo: &Path) -> PullOutcome {
+    let child_env = ob::child_env();
+    match detect_git_worktree(repo, &child_env) {
+        GitDetection::Worktree => {}
+        GitDetection::NotWorktree | GitDetection::MissingGit => {
+            return PullOutcome::Skipped;
+        }
+    }
+
+    let output = ob::git_command(repo, &child_env)
+        .arg("pull")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => PullOutcome::Pulled {
+            summary: summarize_git_pull(&output),
+        },
+        Ok(output) => PullOutcome::Failed {
+            message: git_pull_failure_message(&output),
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            PullOutcome::Skipped
+        }
+        Err(error) => PullOutcome::Failed {
+            message: format!("failed to run git pull: {error}"),
+        },
+    }
+}
+
+fn detect_git_worktree(repo: &Path, child_env: &ob::ChildEnv) -> GitDetection {
+    let output = ob::git_command(repo, child_env)
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .output();
+
+    match output {
+        Ok(output)
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == "true" =>
+        {
+            GitDetection::Worktree
+        }
+        Ok(output) if output.status.success() => GitDetection::NotWorktree,
+        Ok(_) => GitDetection::NotWorktree,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            GitDetection::MissingGit
+        }
+        Err(_) => GitDetection::NotWorktree,
+    }
+}
+
+fn print_pull_outcome(outcome: PullOutcome) {
+    match outcome {
+        PullOutcome::Skipped => {}
+        PullOutcome::Pulled { summary } => {
+            if !is_up_to_date_summary(&summary) {
+                eprintln!("{COMMAND_NAME}: git pull: {summary}");
+            }
+        }
+        PullOutcome::Failed { message } => {
+            eprintln!(
+                "{COMMAND_NAME}: warning: git pull failed; using existing checkout: {message}"
+            );
+        }
+    }
+}
+
+fn summarize_git_pull(output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    if lines.is_empty() {
+        return "completed".to_string();
+    }
+
+    if let Some(line) = lines.iter().find(|line| is_up_to_date_summary(line)) {
+        return (*line).to_string();
+    }
+
+    if lines.contains(&"Fast-forward") {
+        if let Some(stat) = lines
+            .iter()
+            .rev()
+            .find(|line| line.contains("file changed"))
+        {
+            return format!("Fast-forward ({stat})");
+        }
+        return "Fast-forward".to_string();
+    }
+
+    lines[0].to_string()
+}
+
+fn is_up_to_date_summary(summary: &str) -> bool {
+    matches!(summary, "Already up to date." | "Already up-to-date.")
+}
+
+fn git_pull_failure_message(output: &Output) -> String {
+    let stderr = one_line_output(&output.stderr);
+    if !stderr.is_empty() {
+        return stderr;
+    }
+
+    let stdout = one_line_output(&output.stdout);
+    if !stdout.is_empty() {
+        return stdout;
+    }
+
+    format!(
+        "git pull exited with code {}",
+        bob_env::exit_code(output.status)
+    )
+}
+
+fn one_line_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Resolved inputs for a single `bob plugins sync` invocation.
@@ -346,9 +514,7 @@ impl SyncReport {
 
     fn has_written_backups(&self) -> bool {
         self.files().any(|file| {
-            file.backup
-                .as_ref()
-                .is_some_and(|backup| backup.written)
+            file.backup.as_ref().is_some_and(|backup| backup.written)
         })
     }
 }
@@ -1497,6 +1663,71 @@ mod tests {
     }
 
     #[test]
+    fn pull_repo_skips_non_git_directory() {
+        let temp = TempDir::new("bob-cli-plugins-pull-non-git");
+        let repo = temp.path().join("repo");
+        write_file(&repo.join("plugins/alpha/main.js"), "// local\n");
+
+        assert_eq!(pull_repo(&repo), PullOutcome::Skipped);
+        assert_eq!(
+            fs::read_to_string(repo.join("plugins/alpha/main.js")).unwrap(),
+            "// local\n"
+        );
+    }
+
+    #[test]
+    fn pull_repo_fast_forwards_from_remote() {
+        let temp = TempDir::new("bob-cli-plugins-pull");
+        let remote = temp.path().join("remote.git");
+        let seed = temp.path().join("seed");
+        let repo = temp.path().join("repo");
+        let upstream = temp.path().join("upstream");
+
+        run_git(temp.path(), &["init", "-q", "--bare", path_str(&remote)]);
+        run_git(
+            temp.path(),
+            &["clone", "-q", path_str(&remote), path_str(&seed)],
+        );
+        git_config_identity(&seed);
+        write_plugin(&seed, "alpha", "1.0.0", "Alpha plugin", "old");
+        run_git(&seed, &["add", "."]);
+        run_git(&seed, &["commit", "-q", "-m", "initial"]);
+        run_git(&seed, &["push", "-q", "-u", "origin", "HEAD"]);
+
+        run_git(
+            temp.path(),
+            &["clone", "-q", path_str(&remote), path_str(&repo)],
+        );
+        run_git(
+            temp.path(),
+            &["clone", "-q", path_str(&remote), path_str(&upstream)],
+        );
+        git_config_identity(&upstream);
+        write_file(&upstream.join("plugins/alpha/main.js"), "// new\n");
+        run_git(&upstream, &["add", "."]);
+        run_git(&upstream, &["commit", "-q", "-m", "update alpha"]);
+        run_git(&upstream, &["push", "-q"]);
+
+        assert_eq!(
+            fs::read_to_string(repo.join("plugins/alpha/main.js")).unwrap(),
+            "// old\n"
+        );
+        match pull_repo(&repo) {
+            PullOutcome::Pulled { summary } => {
+                assert!(
+                    summary.contains("Fast-forward") || summary == "completed",
+                    "unexpected pull summary: {summary}"
+                );
+            }
+            outcome => panic!("expected pull to run, got {outcome:?}"),
+        }
+        assert_eq!(
+            fs::read_to_string(repo.join("plugins/alpha/main.js")).unwrap(),
+            "// new\n"
+        );
+    }
+
+    #[test]
     fn json_shape_is_stable() {
         let temp = TempDir::new("bob-cli-plugins-json");
         let repo = temp.path().join("repo");
@@ -1895,6 +2126,12 @@ mod tests {
         );
     }
 
+    fn git_config_identity(repo: &Path) {
+        run_git(repo, &["config", "user.name", "Test User"]);
+        run_git(repo, &["config", "user.email", "test@example.com"]);
+        run_git(repo, &["config", "commit.gpgsign", "false"]);
+    }
+
     fn run_git(repo: &Path, args: &[&str]) {
         let status = Command::new("git")
             .arg("-C")
@@ -1903,6 +2140,11 @@ mod tests {
             .status()
             .unwrap_or_else(|error| panic!("run git {args:?}: {error}"));
         assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn path_str(path: &Path) -> &str {
+        path.to_str()
+            .unwrap_or_else(|| panic!("path is not UTF-8: {}", path.display()))
     }
 
     fn write_plugin(

@@ -4023,8 +4023,18 @@ fn plugins_help_lists_subcommand_and_options() {
     let help = stdout(&output);
     assert!(
         help.contains("Manage Bryan's custom Bob Obsidian plugins")
-            && help.contains("\n  list "),
+            && help.contains("\n  list ")
+            && help.contains("-n, --no-pull"),
         "expected plugins help to describe the list subcommand:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-f, --format",
+            "-n, --no-pull",
+            "-r, --repo",
+        ],
     );
     assert_stdout_has_no_ansi(&output);
 
@@ -4040,10 +4050,19 @@ fn plugins_help_lists_subcommand_and_options() {
     assert!(
         help.contains("-b, --bob-dir")
             && help.contains("-f, --format")
+            && help.contains("-n, --no-pull")
             && help.contains("-r, --repo"),
         "expected list short and long options:\n{help}"
     );
-    assert_text_order(&help, &["-b, --bob-dir", "-f, --format", "-r, --repo"]);
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-f, --format",
+            "-n, --no-pull",
+            "-r, --repo",
+        ],
+    );
     assert_stdout_has_no_ansi(&output);
 }
 
@@ -4175,6 +4194,116 @@ fn plugins_list_json_is_machine_readable() {
 }
 
 #[test]
+fn plugins_list_pulls_repo_before_analysis() {
+    let temp = TempDir::new("bob-cli-plugins-list-pull");
+    let (repo, upstream) = init_pullable_plugins_repo(&temp);
+    let vault = temp.path().join("vault");
+    advance_plugins_remote(&upstream, "new");
+    write_plugin(
+        &vault.join(".obsidian/plugins/alpha"),
+        "alpha",
+        "1.0.0",
+        "new",
+    );
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("list")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins list with pull");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("alpha") && stdout(&output).contains("synced"),
+        "list should analyze the pulled repo checkout:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("plugins/alpha/main.js"))
+            .expect("read pulled plugin"),
+        "// new\n"
+    );
+}
+
+#[test]
+fn plugins_list_no_pull_uses_existing_checkout() {
+    let temp = TempDir::new("bob-cli-plugins-list-no-pull");
+    let (repo, upstream) = init_pullable_plugins_repo(&temp);
+    let vault = temp.path().join("vault");
+    advance_plugins_remote(&upstream, "new");
+    write_plugin(
+        &vault.join(".obsidian/plugins/alpha"),
+        "alpha",
+        "1.0.0",
+        "new",
+    );
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("list")
+        .arg("--no-pull")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins list --no-pull");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "--no-pull should not run git or warn:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stdout(&output).contains("alpha") && stdout(&output).contains("drift"),
+        "list should analyze the existing stale checkout:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("plugins/alpha/main.js"))
+            .expect("read unpulled plugin"),
+        "// old\n"
+    );
+}
+
+#[test]
+fn plugins_list_json_stdout_stays_machine_readable_after_pull() {
+    let temp = TempDir::new("bob-cli-plugins-json-pull");
+    let (repo, upstream) = init_pullable_plugins_repo(&temp);
+    let vault = temp.path().join("vault");
+    advance_plugins_remote(&upstream, "new");
+    write_plugin(
+        &vault.join(".obsidian/plugins/alpha"),
+        "alpha",
+        "1.0.0",
+        "new",
+    );
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("list")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run bob plugins list -f json with pull");
+
+    assert_success(&output);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("parse plugins json");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["plugins"][0]["sync"], "synced");
+}
+
+#[test]
 fn plugins_list_unreadable_repo_reports_error() {
     let temp = TempDir::new("bob-cli-plugins-missing");
     let output = bob_command()
@@ -4225,6 +4354,7 @@ fn plugins_sync_help_lists_options_alphabetically() {
             && help.contains("-b, --bob-dir")
             && help.contains("-d, --dry-run")
             && help.contains("-F, --force")
+            && help.contains("-n, --no-pull")
             && help.contains("-p, --plugin")
             && help.contains("-r, --repo"),
         "expected sync short and long options:\n{help}"
@@ -4236,11 +4366,40 @@ fn plugins_sync_help_lists_options_alphabetically() {
             "-b, --bob-dir",
             "-d, --dry-run",
             "-F, --force",
+            "-n, --no-pull",
             "-p, --plugin",
             "-r, --repo",
         ],
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn plugins_sync_pulls_repo_before_copying() {
+    let temp = TempDir::new("bob-cli-plugins-sync-pull");
+    let (repo, upstream) = init_pullable_plugins_repo(&temp);
+    let vault = temp.path().join("vault");
+    advance_plugins_remote(&upstream, "new");
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(temp.path().join("backups"))
+        .output()
+        .expect("run bob plugins sync with pull");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("read synced plugin"),
+        "// new\n",
+        "sync should copy the pulled repo bytes into the vault"
+    );
 }
 
 #[test]
@@ -10789,16 +10948,6 @@ fn write_file(path: &Path, contents: &str) {
 /// `alpha` is synced and enabled, `beta` drifts and is disabled, and `gamma`
 /// is absent from the vault (not installed).
 fn write_plugins_fixture(repo: &Path, vault: &Path) {
-    let write_plugin = |dir: &Path, id: &str, version: &str, body: &str| {
-        write_file(
-            &dir.join("manifest.json"),
-            &format!(
-                "{{\n  \"id\": \"{id}\",\n  \"version\": \"{version}\",\n  \"description\": \"{id} keeps things tidy\"\n}}\n"
-            ),
-        );
-        write_file(&dir.join("main.js"), &format!("// {body}\n"));
-    };
-
     write_plugin(&repo.join("plugins/alpha"), "alpha", "1.0.0", "alpha");
     write_plugin(&repo.join("plugins/beta"), "beta", "2.0.0", "beta");
     write_plugin(&repo.join("plugins/gamma"), "gamma", "1.5.0", "gamma");
@@ -10820,6 +10969,52 @@ fn write_plugins_fixture(repo: &Path, vault: &Path) {
         &vault.join(".obsidian/community-plugins.json"),
         "[\"alpha\"]\n",
     );
+}
+
+fn write_plugin(dir: &Path, id: &str, version: &str, body: &str) {
+    write_file(
+        &dir.join("manifest.json"),
+        &format!(
+            "{{\n  \"id\": \"{id}\",\n  \"version\": \"{version}\",\n  \"description\": \"{id} keeps things tidy\"\n}}\n"
+        ),
+    );
+    write_file(&dir.join("main.js"), &format!("// {body}\n"));
+}
+
+fn init_pullable_plugins_repo(temp: &TempDir) -> (PathBuf, PathBuf) {
+    let remote = temp.path().join("plugins-remote.git");
+    let seed = temp.path().join("plugins-seed");
+    let repo = temp.path().join("repo");
+    let upstream = temp.path().join("plugins-upstream");
+
+    git(["init", "-q", "--bare", path_str(&remote)]);
+    git(["clone", "-q", path_str(&remote), path_str(&seed)]);
+    configure_test_git_identity(&seed);
+    write_plugin(&seed.join("plugins/alpha"), "alpha", "1.0.0", "old");
+    git_in(&seed, ["add", "."]);
+    git_in(&seed, ["commit", "-q", "-m", "initial plugins"]);
+    git_in(&seed, ["push", "-q", "-u", "origin", "HEAD"]);
+
+    git(["clone", "-q", path_str(&remote), path_str(&repo)]);
+    git(["clone", "-q", path_str(&remote), path_str(&upstream)]);
+    configure_test_git_identity(&upstream);
+    (repo, upstream)
+}
+
+fn advance_plugins_remote(upstream: &Path, body: &str) {
+    write_file(
+        &upstream.join("plugins/alpha/main.js"),
+        &format!("// {body}\n"),
+    );
+    git_in(upstream, ["add", "."]);
+    git_in(upstream, ["commit", "-q", "-m", "update alpha"]);
+    git_in(upstream, ["push", "-q"]);
+}
+
+fn configure_test_git_identity(repo: &Path) {
+    git_in(repo, ["config", "user.name", "Test User"]);
+    git_in(repo, ["config", "user.email", "test@example.com"]);
+    git_in(repo, ["config", "commit.gpgsign", "false"]);
 }
 
 fn write_executable(path: &Path, contents: &str) {

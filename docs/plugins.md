@@ -9,13 +9,27 @@ a `main.js`, and an optional `styles.css`.
 ## Commands
 
 ```bash
-bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-r|--repo DIR]
-bob plugins list [-b|--bob-dir DIR] [-f|--format table|json] [-r|--repo DIR]
-bob plugins sync [-B|--backup-dir DIR] [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-p|--plugin ID] [-r|--repo DIR]
+bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
+bob plugins list [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
+bob plugins sync [-B|--backup-dir DIR] [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-n|--no-pull] [-p|--plugin ID] [-r|--repo DIR]
 ```
 
 `list` is read-only. Running `bob plugins` with no subcommand runs `list` with
 the same options. `sync` deploys the repo into the vault (see [Sync](#sync)).
+
+## Repo Refresh
+
+Before `list` or `sync` analyzes plugin files, it runs a non-interactive
+`git pull` in the plugins repo so the checked-out files reflect the latest
+committed source. Pass `-n, --no-pull` to skip this refresh and use the current
+checkout exactly as-is.
+
+A repo path that is not a Git worktree, or a system without `git`, skips the
+refresh silently. If `git pull` fails because the network is unavailable,
+authentication would require a prompt, histories diverged, or local edits block
+the pull, the command writes a warning to stderr and continues with the
+existing checkout. Pull output never goes to stdout, so table and JSON output
+stay parseable.
 
 ## Discovery
 
@@ -153,6 +167,8 @@ For every managed file, `sync` reports one of:
 - `-d, --dry-run` previews every action, including diffs and backup paths,
   without writing vault files or backups.
 - `-F, --force` overwrites a vault file even when it has uncommitted Git changes.
+- `-n, --no-pull` skips the default `git pull` before analyzing the plugins
+  repo.
 - `-p, --plugin <ID>` syncs a single plugin instead of all of them. An id that
   the repo does not contain is an error.
 - `-r, --repo <DIR>` selects the plugins repo root.
@@ -185,6 +201,7 @@ bob plugins list
 bob plugins list -f json
 bob plugins list -b ~/bob -r ~/projects/github/bobs-org/bob-plugins
 bob plugins sync --dry-run
+bob plugins sync --no-pull --dry-run
 bob plugins sync -p bob-project-tasks
 bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins
 ```
