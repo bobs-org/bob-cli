@@ -1,6 +1,6 @@
 ---
 create_time: 2026-07-08 13:04:34
-status: wip
+status: done
 prompt: sdd/prompts/202607/next_status_on_pomodoro_task_link.md
 ---
 # Plan: Set a pomodoro-linked task to the new `[*]` "Next" status when completing a `^^` task link
