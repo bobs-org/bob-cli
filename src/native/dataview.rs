@@ -30,6 +30,7 @@ use self::{
 use super::env as bob_env;
 
 mod index;
+mod tasks;
 mod value;
 
 const COMMAND_NAME: &str = "bob query";
@@ -213,10 +214,18 @@ struct Request {
 enum QueryInput {
     Source(String),
     Dql(DqlInput),
+    Tasks(TasksInput),
+    TasksNote(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DqlInput {
+    Inline(String),
+    File(PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TasksInput {
     Inline(String),
     File(PathBuf),
 }
@@ -313,6 +322,18 @@ fn run_native(request: &Request) -> Result<(), DataviewError> {
                 emit_native_output(request, output)
             }
         }
+        QueryInput::Tasks(input) => tasks::run(
+            &request.vault.bob_dir,
+            &input.read_query()?,
+            request.format,
+        ),
+        QueryInput::TasksNote(path) => Err(DataviewError::TasksQuery {
+            message: format!(
+                "running Tasks code blocks from {} is not available yet; use \
+                 --tasks or --tasks-file for the filterless native query",
+                path.display()
+            ),
+        }),
     }
 }
 
@@ -6124,6 +6145,17 @@ enum DataviewError {
     StrictPaths {
         warnings: Vec<String>,
     },
+    TasksQuery {
+        message: String,
+    },
+    TasksSettingsParse {
+        path: PathBuf,
+        error: serde_json::Error,
+    },
+    TasksSettingsRead {
+        path: PathBuf,
+        error: io::Error,
+    },
 }
 
 impl DataviewError {
@@ -6242,6 +6274,22 @@ impl DataviewError {
                      omit --strict-paths for best-effort path output."
                 );
             }
+            Self::TasksQuery { message } => {
+                eprintln!("{COMMAND_NAME}: Tasks query failed");
+                eprintln!("{message}");
+            }
+            Self::TasksSettingsParse { path, error } => {
+                eprintln!(
+                    "{COMMAND_NAME}: failed to parse Tasks settings {}: {error}",
+                    path.display()
+                );
+            }
+            Self::TasksSettingsRead { path, error } => {
+                eprintln!(
+                    "{COMMAND_NAME}: failed to read Tasks settings {}: {error}",
+                    path.display()
+                );
+            }
         }
     }
 
@@ -6287,25 +6335,32 @@ fn redact_generated_code(output: &str) -> String {
 
 fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Run Dataview queries against the Bob vault")
+        .about("Run Dataview or Obsidian Tasks queries against the Bob vault")
         .long_about(
-            "Run Dataview source expressions or DQL queries against the Bob \
-vault.\n\n\
-Source expressions return matching page paths. DQL queries support path, JSON, \
-and markdown output modes. The default native engine is a headless local \
-implementation of the supported Bob source-expression and DQL surface. The \
-explicit Obsidian engine runs against the live Dataview plugin when exact \
-installed-plugin behavior is needed.",
+            "Run Dataview source expressions, Dataview DQL, or Obsidian Tasks \
+queries against the Bob vault.\n\n\
+The default native engine is headless and local. Dataview DQL supports paths, \
+JSON, and markdown output. The initial Tasks query surface supports filterless \
+native queries in paths and JSON formats. The explicit Obsidian engine runs \
+Dataview queries against the live plugin when exact installed-plugin behavior \
+is needed.",
         )
         .after_help(
-            "Examples:\n  bob query --source '#project and -\"archive\"'\n  bob query --query 'LIST FROM #waiting'\n  bob query --format json --query-file ~/queries/projects.dql",
+            "Examples:\n  bob query --source '#project and -\"archive\"'\n  bob query --query 'LIST FROM #waiting'\n  bob query --format json --query-file ~/queries/projects.dql\n  bob query --tasks ''\n  bob query --format json --tasks-file ~/queries/tasks.txt",
         )
         .arg_required_else_help(true)
         .group(
             ArgGroup::new("query-input")
                 .required(true)
                 .multiple(false)
-                .args(["source", "query", "query-file"]),
+                .args([
+                    "query",
+                    "query-file",
+                    "source",
+                    "tasks",
+                    "tasks-file",
+                    "tasks-note",
+                ]),
         )
         .arg(bob_dir_arg())
         .arg(engine_arg())
@@ -6315,6 +6370,9 @@ installed-plugin behavior is needed.",
         .arg(query_file_arg())
         .arg(source_arg())
         .arg(strict_paths_arg())
+        .arg(tasks_arg())
+        .arg(tasks_file_arg())
+        .arg(tasks_note_arg())
         .arg(vault_arg())
 }
 
@@ -6344,7 +6402,7 @@ fn format_arg() -> Arg {
         .value_name("FORMAT")
         .default_value("paths")
         .value_parser(["json", "markdown", "paths"])
-        .help("Output format; markdown is available only for DQL")
+        .help("Output format; Tasks queries currently support paths and json")
 }
 
 fn origin_arg() -> Arg {
@@ -6353,7 +6411,7 @@ fn origin_arg() -> Arg {
         .short('o')
         .value_name("VAULT_RELATIVE_PATH")
         .value_parser(OsStringValueParser::new())
-        .help("Origin note for relative links and this")
+        .help("Origin note for Dataview this or Tasks query context")
 }
 
 fn query_arg() -> Arg {
@@ -6391,6 +6449,32 @@ fn strict_paths_arg() -> Arg {
         .help("Fail when paths output cannot derive clean note paths")
 }
 
+fn tasks_arg() -> Arg {
+    Arg::new("tasks")
+        .long("tasks")
+        .short('t')
+        .value_name("QUERY")
+        .help("Inline Obsidian Tasks query; the filterless query is supported")
+}
+
+fn tasks_file_arg() -> Arg {
+    Arg::new("tasks-file")
+        .long("tasks-file")
+        .short('T')
+        .value_name("PATH")
+        .value_parser(OsStringValueParser::new())
+        .help("Read an Obsidian Tasks query from a file; use - for stdin")
+}
+
+fn tasks_note_arg() -> Arg {
+    Arg::new("tasks-note")
+        .long("tasks-note")
+        .short('n')
+        .value_name("VAULT_RELATIVE_PATH")
+        .value_parser(OsStringValueParser::new())
+        .help("Run every Tasks code block in a vault note (reserved)")
+}
+
 fn vault_arg() -> Arg {
     Arg::new("vault")
         .long("vault")
@@ -6417,6 +6501,33 @@ impl Request {
                 ErrorKind::ArgumentConflict,
                 "--format markdown requires a DQL query",
             ));
+        }
+
+        if query.is_tasks() && format == OutputFormat::Markdown {
+            return Err(command.error(
+                ErrorKind::ArgumentConflict,
+                "--format markdown is not available for Tasks queries yet; \
+                 use --format paths or --format json",
+            ));
+        }
+
+        if query.is_tasks() && engine == Engine::Obsidian {
+            return Err(command.error(
+                ErrorKind::ArgumentConflict,
+                "--engine obsidian does not support Tasks queries yet; use \
+                 --engine native",
+            ));
+        }
+
+        if let QueryInput::TasksNote(path) = &query {
+            validate_vault_relative_argument(path, "--tasks-note", command)?;
+            if matches.get_one::<OsString>("origin").is_some() {
+                return Err(command.error(
+                    ErrorKind::ArgumentConflict,
+                    "--origin cannot be used with --tasks-note; the note is its \
+                     own query origin",
+                ));
+            }
         }
 
         if strict_paths && format != OutputFormat::Paths {
@@ -6459,6 +6570,13 @@ impl Request {
             QueryInput::Dql(input) => ObsidianEvalQuery::Dql {
                 query: input.read_query()?,
             },
+            QueryInput::Tasks(_) | QueryInput::TasksNote(_) => {
+                return Err(DataviewError::TasksQuery {
+                    message:
+                        "the Obsidian engine does not support Tasks queries"
+                            .to_string(),
+                });
+            }
         };
 
         Ok(ObsidianEvalRequest {
@@ -6483,6 +6601,18 @@ impl QueryInput {
             return Self::Dql(DqlInput::Inline(query.clone()));
         }
 
+        if let Some(query) = matches.get_one::<String>("tasks") {
+            return Self::Tasks(TasksInput::Inline(query.clone()));
+        }
+
+        if let Some(query_file) = matches.get_one::<OsString>("tasks-file") {
+            return Self::Tasks(TasksInput::File(query_file.into()));
+        }
+
+        if let Some(note) = matches.get_one::<OsString>("tasks-note") {
+            return Self::TasksNote(note.into());
+        }
+
         let query_file = matches
             .get_one::<OsString>("query-file")
             .expect("clap query-input group requires query-file")
@@ -6493,9 +6623,34 @@ impl QueryInput {
     fn is_source(&self) -> bool {
         matches!(self, Self::Source(_))
     }
+
+    fn is_tasks(&self) -> bool {
+        matches!(self, Self::Tasks(_) | Self::TasksNote(_))
+    }
 }
 
 impl DqlInput {
+    fn read_query(&self) -> Result<String, DataviewError> {
+        match self {
+            Self::Inline(query) => Ok(query.clone()),
+            Self::File(path) if path.as_os_str() == OsStr::new("-") => {
+                let mut query = String::new();
+                io::stdin().read_to_string(&mut query).map_err(|error| {
+                    DataviewError::QueryRead { path: None, error }
+                })?;
+                Ok(query)
+            }
+            Self::File(path) => fs::read_to_string(path).map_err(|error| {
+                DataviewError::QueryRead {
+                    path: Some(path.clone()),
+                    error,
+                }
+            }),
+        }
+    }
+}
+
+impl TasksInput {
     fn read_query(&self) -> Result<String, DataviewError> {
         match self {
             Self::Inline(query) => Ok(query.clone()),
@@ -6626,6 +6781,19 @@ fn validate_origin_path(
         command.error(
             ErrorKind::ValueValidation,
             format!("invalid --origin {}: {reason}", origin.display()),
+        )
+    })
+}
+
+fn validate_vault_relative_argument(
+    path: &Path,
+    argument: &str,
+    command: &mut ClapCommand,
+) -> Result<(), clap::Error> {
+    validate_vault_relative_path(path).map_err(|reason| {
+        command.error(
+            ErrorKind::ValueValidation,
+            format!("invalid {argument} {}: {reason}", path.display()),
         )
     })
 }

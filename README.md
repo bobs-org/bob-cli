@@ -172,16 +172,21 @@ later wrapped steps from running.
 bob query --source '#project'
 bob query --query 'LIST FROM #waiting'
 bob query --format json --query-file queries/projects.dql
+bob query --tasks ''
+bob query --format json --tasks-file queries/all.tasks
 ```
 
-Runs Dataview source expressions and DQL queries from the shell. The default
-native engine evaluates queries against the local Markdown vault, so scripts do
-not need a running desktop Obsidian app. `paths` output prints one vault-relative
-Markdown path per line, `json` output is stable for scripts, and `markdown`
-output prints Dataview-rendered Markdown for supported DQL results. This command
-does not run `ob sync`; vault freshness is handled by the external background or
-cron sync path. Use `--engine obsidian` when you want exact behavior from the
-live Dataview plugin in an open Obsidian vault.
+Runs Dataview source expressions, DQL queries, and Obsidian Tasks queries from
+the shell. The default native engine evaluates queries against the local
+Markdown vault, so scripts do not need a running desktop Obsidian app. `paths`
+output prints vault-relative Markdown paths, `json` output is stable for
+scripts, and `markdown` output prints Dataview-rendered Markdown for supported
+DQL results. The current Tasks slice accepts empty/comment-only inline or file
+queries and returns all tasks allowed by the Tasks plugin's global filter in
+`paths` or `json` format. This command does not run `ob sync`; vault freshness
+is handled by the external background or cron sync path. Use `--engine
+obsidian` when you want exact behavior from the live Dataview plugin in an open
+Obsidian vault; Tasks inputs are currently native-only.
 
 The full command contract and live smoke-test steps live in
 [`docs/dataview.md`](docs/dataview.md).

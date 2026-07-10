@@ -1,10 +1,10 @@
 # bob query
 
-`bob query` runs Dataview source expressions and DQL queries from the shell.
-The default engine is `native`, which evaluates queries against the local
-Markdown vault without a running desktop Obsidian app. Use `--engine obsidian`
-when you need exact behavior from the live Dataview plugin in an open Obsidian
-vault.
+`bob query` runs Dataview source expressions, Dataview DQL, and Obsidian Tasks
+queries from the shell. The default engine is `native`, which evaluates queries
+against the local Markdown vault without a running desktop Obsidian app. Use
+`--engine obsidian` when you need exact behavior from the live Dataview plugin
+in an open Obsidian vault; Tasks inputs are native-only for now.
 
 Stdout is reserved for query results only. Paths, JSON, and rendered Markdown
 can be piped into scripts without sync logs, engine warnings, or diagnostics
@@ -46,25 +46,44 @@ bob query --query-file ~/queries/waiting.dql
 printf 'LIST FROM #waiting\n' | bob query --query-file -
 ```
 
+Run the current filterless Tasks query slice. It reads the vault's Tasks plugin
+settings, applies the global filter, and returns every matching task. An empty
+inline query or an empty/comment-only file is accepted:
+
+```bash
+bob query --tasks ''
+bob query --format json --tasks-file queries/all.tasks
+printf '# all globally-filtered tasks\n' | bob query --tasks-file -
+```
+
+The complete Tasks instruction language, Markdown rendering, and whole-note
+execution through `--tasks-note` are reserved by the CLI but not implemented in
+this initial slice. Unsupported uses fail explicitly instead of silently
+returning incomplete results.
+
 ## Options
 
 `-b, --bob-dir <PATH>` sets the Bob vault root. It defaults to `BOB_DIR` or `~/bob`.
 The path is validated when it is supplied explicitly or when the native engine
 is used.
 
-`-e, --engine <native|obsidian>` selects the query engine. The default is `native`,
-the local headless implementation of Bob's supported source expression and DQL
-surface. `obsidian` evaluates through the live Dataview plugin and is useful as
-an oracle or fallback when installed-plugin behavior matters.
+`-e, --engine <native|obsidian>` selects the query engine. The default is
+`native`, the local headless implementation of Bob's supported Dataview and
+Tasks surface. `obsidian` evaluates Dataview through the live plugin and is
+useful as an oracle or fallback when installed-plugin behavior matters. Tasks
+inputs currently reject the Obsidian engine.
 
 `-f, --format <paths|json|markdown>` selects the output format. `paths` is the
-default and prints matching source note paths for DQL `LIST` and `TABLE`
-queries. Use `json` for structured rows and `markdown` for rendered DQL `LIST`,
-`TABLE`, and `TASK` output.
+default and prints matching source note paths for Dataview results or unique
+note paths containing matched Tasks results. Use `json` for structured output
+and `markdown` for rendered Dataview DQL `LIST`, `TABLE`, and `TASK` output.
+Tasks queries currently support only `paths` and `json`.
 
-`-o, --origin <VAULT_RELATIVE_PATH>` sets the origin note for Dataview `this` and
-relative links. It must be vault-relative; absolute paths and `..` traversal are
-rejected.
+`-o, --origin <VAULT_RELATIVE_PATH>` sets the origin note for Dataview `this`
+and relative links, or the future Tasks `query.file.*` context and Query File
+Defaults. It must be vault-relative; absolute paths and `..` traversal are
+rejected. It cannot be combined with `--tasks-note`, whose note supplies its own
+origin.
 
 `-q, --query <DQL>` runs an inline Dataview DQL query.
 
@@ -77,18 +96,31 @@ query from stdin.
 cleanly from every DQL row. Without it, best-effort path extraction warnings go
 to stderr and the command prints the paths it can derive.
 
+`-t, --tasks <QUERY>` runs an inline Obsidian Tasks query. The current native
+slice accepts an empty or comment-only query and returns every task allowed by
+the configured global filter.
+
+`-T, --tasks-file <PATH>` reads an Obsidian Tasks query from a file. Use `-` to
+read the query from stdin. Empty and comment-only input use the filterless
+slice.
+
+`-n, --tasks-note <VAULT_RELATIVE_PATH>` reserves whole-note Tasks block
+execution. The path is validated now; execution will be enabled when Query File
+Defaults, placeholders, and multi-block rendering are implemented.
+
 `-v, --vault <NAME_OR_ID>` forwards an Obsidian vault name or ID to the
 Obsidian CLI. It can only be used with `--engine obsidian`. If omitted in Obsidian mode,
 `BOB_DATAVIEW_VAULT` is used when set.
 
-Exactly one of `-s|--source`, `-q|--query`, and `-Q|--query-file` is required.
+Exactly one of `-s|--source`, `-q|--query`, `-Q|--query-file`, `-t|--tasks`,
+`-T|--tasks-file`, and `-n|--tasks-note` is required.
 
 `bob query` does not run `ob sync` or `ob sync-status`. Vault freshness is
 owned by the external background or cron sync path.
 
 ## JSON Output
 
-JSON output is a stable object for scripts. It includes:
+Dataview JSON output is a stable object for scripts. It includes:
 
 - `engine`: `native` or `obsidian`
 - `query_kind`: `source` or `dql`
@@ -96,6 +128,10 @@ JSON output is a stable object for scripts. It includes:
 - `paths`: extracted vault-relative note paths
 - `result`: structured DQL data for DQL queries
 - `warnings`: path extraction or compatibility warnings
+
+Filterless Tasks JSON uses the same wrapper with `query_kind: "tasks"`. Its
+`result` contains the matched task count and minimal `path`, `status`, and
+`text` records; `settings` contains the Tasks settings that governed the scan.
 
 ## Manual Smoke Test
 
@@ -108,6 +144,8 @@ bob query --format json --query 'TABLE file.path FROM #project'
 bob query --format markdown --origin Home.md --query 'TABLE file.link FROM #project'
 printf 'LIST FROM #project\n' >/tmp/bob-dataview-smoke.dql
 bob query --query-file /tmp/bob-dataview-smoke.dql
+bob query --tasks ''
+bob query --format json --tasks '' | jq '.result.count'
 ```
 
 If the smoke test needs recently synced state, let the external background or
@@ -122,6 +160,17 @@ BOB_DATAVIEW_PARITY_LIVE=1 \
 BOB_DATAVIEW_PARITY_VAULT=<opened-fixture-vault-name-or-id> \
 cargo test --test dataview_parity dataview_live_obsidian_parity_harness_compares_supported_native_cases -- --nocapture
 ```
+
+The Tasks parity fixture and filterless goldens run without Obsidian:
+
+```bash
+cargo test --test tasks_parity
+```
+
+`BOB_TASKS_PARITY_LIVE=1` with `BOB_TASKS_PARITY_VAULT` enables the documented
+live-oracle scaffold. A later parity phase will render fenced `tasks` blocks
+through Obsidian's `MarkdownRenderer`, wait for the Tasks plugin's asynchronous
+DOM output, and scrape matched rows and group headings.
 
 For real-vault native smoke tests, use read-only queries against `~/bob`. These
 cover the supported local surface without requiring Obsidian:

@@ -2262,6 +2262,9 @@ fn dataview_help_lists_options_alphabetically() {
             "-Q, --query-file ",
             "-s, --source ",
             "-S, --strict-paths",
+            "-t, --tasks ",
+            "-T, --tasks-file ",
+            "-n, --tasks-note ",
             "-v, --vault ",
         ],
     );

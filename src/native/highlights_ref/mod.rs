@@ -4644,11 +4644,9 @@ fn apply_pdf_task_status_signal(
         status,
         status_contributed: None,
     };
-    let Some(target_status) = pdf_task_target_status(
-        status,
-        base_projection,
-        base_status_normalized,
-    ) else {
+    let Some(target_status) =
+        pdf_task_target_status(status, base_projection, base_status_normalized)
+    else {
         return Ok(signal);
     };
     if projection_status_is(&resolution.projection, target_status) {
@@ -8364,8 +8362,8 @@ Keep me here.
     }
 
     #[test]
-    fn highlights_ref_pdf_task_status_signal_reopen_conflicts_with_competing_edit()
-    {
+    fn highlights_ref_pdf_task_status_signal_reopen_conflicts_with_competing_edit(
+    ) {
         let base = test_projection(vec![
             ("status", string_value(super::STATUS_READ)),
             ("parent", string_value("[[obsidian]]")),
