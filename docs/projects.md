@@ -14,8 +14,9 @@ bob projects list [-b|--bob-dir DIR]
 bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
 ```
 
-`list` is read-only. It scans project notes, prints frontmatter status, open
-`#task` count, open non-hidden task count, and the current `^prj` state.
+`list` is read-only. It scans project notes, validates project scheduling,
+prints frontmatter status, open `#task` count, open non-hidden task count, and
+the current `^prj` state.
 
 `sync` mutates only the exact lines it needs to change. It prints one line for
 each action or warning, then a summary. Per-file errors are reported without
@@ -35,6 +36,18 @@ Bare `type: [[project]]` is accepted too. The scan skips `done/`, `.git/`,
 
 `sync` also reads an optional `parent` frontmatter field when it is an Obsidian
 wikilink, such as `parent: "[[Parent Project]]"`.
+
+Project scheduling is an optional frontmatter date:
+
+```yaml
+scheduled: 2026-07-16
+```
+
+Quoted values such as `scheduled: "2026-07-16"` are also accepted. The value
+must be exactly `YYYY-MM-DD` and must be a real calendar date. Empty values,
+timestamps, shortened dates, and impossible dates such as `2026-02-30` are
+per-file scan errors for both `list` and `sync`. `sync` leaves a project with an
+invalid schedule untouched and continues processing other project files.
 
 ## The `^prj` Task
 
@@ -75,6 +88,17 @@ Task statuses follow the Tasks plugin convention:
   `dash.md`'s Tasks section.
 - Active projects with non-hidden open tasks or open sub-projects get
   `#hide` added back to their open `^prj` task immediately before `^prj`.
+- A valid `scheduled` frontmatter date overrides both of the preceding `^prj`
+  surfacing rules. When the date is later than the machine's local current
+  date, every Markdown task line in the project gets exactly one whole-token
+  `#hide`. On the scheduled date and afterward, all whole-token `#hide` tags
+  are removed from every task in that project. `BOB_NOW` overrides the clock
+  for deterministic previews and tests.
+- Schedule visibility applies to open, in-progress, completed, canceled,
+  nested, ordered-list, and lifecycle tasks. It preserves list markers,
+  indentation, inline fields, trailing block IDs, line endings, and unrelated
+  tags such as `#hidden`. Frontmatter, fenced code examples, and checkbox-like
+  prose are ignored. Repeated syncs are idempotent.
 - Active projects with open `^prj` tasks get one generated Sub-projects line
   nested directly under `^prj`, such as
   `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`.
@@ -89,7 +113,8 @@ Task statuses follow the Tasks plugin convention:
   like `- [[scratch_note]]`; `sync` never removes or uses them to suppress the
   generated line.
 - Existing `[scheduled::...]` fields are removed from open `^prj` tasks on
-  active projects. `scheduled` is no longer used for project surfacing.
+  active projects. Frontmatter `scheduled` is the sole schedule and visibility
+  source.
 - Terminal projects, `status: done` or `status: canceled`, get no `^prj` line
   edits while their `^prj` task stays closed or missing. Reopening the `^prj`
   task makes the project active again in the same run, so the surfacing,
@@ -124,6 +149,15 @@ without a `#hide` tag renders as `on dash`.
 When a project has no `status:` line and the `^prj` task is checked or canceled,
 `sync` inserts `status: done` or `status: canceled` immediately after the
 `type:` line.
+
+The Bob Navigation Hotkeys "Create project note from task" command transfers a
+valid `[scheduled:: YYYY-MM-DD]` source-task field into the new project's
+frontmatter and removes it from the completion criteria. Invalid or duplicate
+schedule fields stop creation with a focused notice. In the `<ctrl+=>` child
+note picker, future-scheduled projects show a `calendar-clock` chip immediately
+before the status pill; the chip says `Tomorrow`, `Jul 16`, or `Jul 16, 2027`
+while its tooltip and accessible label expose the full date. Today, past,
+missing, and invalid dates do not receive a chip.
 
 ## Warnings
 
@@ -162,7 +196,12 @@ Typical action output:
   ok athena     updated [[old_plan]] on ^prj  sub-project canceled
   ok athena     removed [[old_child]] from ^prj  no longer a sub-project
   ok athena     updated sub-projects on ^prj  canonical format
+  ok roadmap    hid 4 tasks  scheduled 2026-07-16 is future
   warning outlive  active project has no ^prj task  add `- [ ] #task #prj <completion criteria> #hide ^prj`
 
-11 projects - 1 status updated - 7 ^prj edited - 1 warnings
+11 projects - 1 status updated - 7 ^prj edited - 4 task visibility updated - 1 warnings
 ```
+
+Scheduled visibility is reported once per project rather than once per task.
+The action includes the schedule date, direction (`future` or `due`), and the
+number of affected tasks; the summary totals affected task lines.

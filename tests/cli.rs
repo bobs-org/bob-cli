@@ -2945,6 +2945,7 @@ fn projects_help_lists_subcommands_and_options() {
     let help = stdout(&output);
     assert!(
         help.contains("Manage Bob project notes")
+            && help.contains("scheduled: YYYY-MM-DD")
             && help.contains("\n  list ")
             && help.contains("\n  sync "),
         "expected projects help to list subcommands:\n{help}"
@@ -2977,7 +2978,10 @@ fn projects_help_lists_subcommands_and_options() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("-b, --bob-dir") && help.contains("-d, --dry-run"),
+        help.contains("-b, --bob-dir")
+            && help.contains("-d, --dry-run")
+            && help.contains("future dates")
+            && help.contains("Invalid dates"),
         "expected sync short and long options:\n{help}"
     );
     assert_text_order(&help, &["-b, --bob-dir", "-d, --dry-run"]);
@@ -3252,7 +3256,7 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
             && out.contains("active project has no ^prj task")
             && out.contains("template placeholder")
             && out.contains(
-                "11 projects - 4 status updated - 6 ^prj edited - 2 warnings"
+                "11 projects - 4 status updated - 6 ^prj edited - 0 task visibility updated - 2 warnings"
             ),
         "unexpected dry-run output:\n{out}"
     );
@@ -3285,7 +3289,7 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
             && out.contains("added #hide to ^prj")
             && out.contains("removed [scheduled::2026-06-01] from ^prj")
             && out.contains(
-                "11 projects - 4 status updated - 6 ^prj edited - 2 warnings"
+                "11 projects - 4 status updated - 6 ^prj edited - 0 task visibility updated - 2 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3343,7 +3347,7 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
     assert_success(&output);
     assert!(
         stdout(&output).contains(
-            "11 projects - 0 status updated - 0 ^prj edited - 2 warnings"
+            "11 projects - 0 status updated - 0 ^prj edited - 0 task visibility updated - 2 warnings"
         ),
         "second run should have zero actions:\n{}",
         format_output(&output)
@@ -3397,7 +3401,7 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
             && out
                 .contains("would add [[ChildAlpha]] to ^prj  open sub-project")
             && out.contains(
-                "5 projects - 0 status updated - 4 ^prj edited - 0 warnings"
+                "5 projects - 0 status updated - 4 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected dry-run output:\n{out}"
     );
@@ -3423,7 +3427,7 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
             && out.contains("added [[ChildAdd]] to ^prj  open sub-project")
             && out.contains("added [[ChildAlpha]] to ^prj  open sub-project")
             && out.contains(
-                "5 projects - 0 status updated - 4 ^prj edited - 0 warnings"
+                "5 projects - 0 status updated - 4 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3447,7 +3451,7 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
     assert_success(&output);
     assert!(
         stdout(&output).contains(
-            "5 projects - 0 status updated - 0 ^prj edited - 0 warnings"
+            "5 projects - 0 status updated - 0 ^prj edited - 0 task visibility updated - 0 warnings"
         ),
         "second run should have zero actions:\n{}",
         format_output(&output)
@@ -3487,7 +3491,7 @@ fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
                 "updated [[Child]] on ^prj  sub-project completed"
             )
             && out.contains(
-                "2 projects - 1 status updated - 2 ^prj edited - 0 warnings"
+                "2 projects - 1 status updated - 2 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3511,7 +3515,7 @@ fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
     assert_success(&output);
     assert!(
         stdout(&output).contains(
-            "2 projects - 0 status updated - 0 ^prj edited - 0 warnings"
+            "2 projects - 0 status updated - 0 ^prj edited - 0 task visibility updated - 0 warnings"
         ),
         "second run should have zero actions:\n{}",
         format_output(&output)
@@ -3552,7 +3556,7 @@ fn projects_sync_reopens_parent_ledger_when_child_prj_is_reopened_same_run() {
             )
             && out.contains("updated [[Child]] on ^prj  open sub-project")
             && out.contains(
-                "2 projects - 1 status updated - 2 ^prj edited - 0 warnings"
+                "2 projects - 1 status updated - 2 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3576,7 +3580,7 @@ fn projects_sync_reopens_parent_ledger_when_child_prj_is_reopened_same_run() {
     assert_success(&output);
     assert!(
         stdout(&output).contains(
-            "2 projects - 0 status updated - 0 ^prj edited - 0 warnings"
+            "2 projects - 0 status updated - 0 ^prj edited - 0 task visibility updated - 0 warnings"
         ),
         "second run should have zero actions:\n{}",
         format_output(&output)
@@ -3615,7 +3619,7 @@ fn projects_sync_marks_canceled_subproject_same_run() {
             && out
                 .contains("updated [[Child]] on ^prj  sub-project canceled")
             && out.contains(
-                "2 projects - 1 status updated - 2 ^prj edited - 0 warnings"
+                "2 projects - 1 status updated - 2 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3674,7 +3678,7 @@ fn projects_sync_orders_open_then_closed_subprojects_in_one_run() {
                 "updated [[CanceledChild]] on ^prj  sub-project canceled"
             )
             && out.contains(
-                "5 projects - 2 status updated - 3 ^prj edited - 0 warnings"
+                "5 projects - 2 status updated - 3 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3694,7 +3698,7 @@ fn projects_sync_orders_open_then_closed_subprojects_in_one_run() {
     assert_success(&output);
     assert!(
         stdout(&output).contains(
-            "5 projects - 0 status updated - 0 ^prj edited - 0 warnings"
+            "5 projects - 0 status updated - 0 ^prj edited - 0 task visibility updated - 0 warnings"
         ),
         "second run should have zero actions:\n{}",
         format_output(&output)
@@ -3740,7 +3744,7 @@ fn projects_sync_keeps_pruned_closed_entries_gone() {
             "removed [[ReparentedChild]] from ^prj  no longer a sub-project"
         ) && !out.contains("PrunedDone]]")
             && out.contains(
-                "4 projects - 0 status updated - 2 ^prj edited - 0 warnings"
+                "4 projects - 0 status updated - 2 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3785,7 +3789,7 @@ fn projects_sync_treats_children_without_open_prj_as_childless() {
     assert!(
         out.contains("active project has no ^prj task")
             && out.contains(
-                "4 projects - 0 status updated - 2 ^prj edited - 1 warnings"
+                "4 projects - 0 status updated - 2 ^prj edited - 0 task visibility updated - 1 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3828,7 +3832,7 @@ fn projects_sync_preserves_user_sub_bullets_and_inserts_subprojects_line() {
     assert!(
         out.contains("added [[Child]] to ^prj  open sub-project")
             && out.contains(
-                "2 projects - 0 status updated - 1 ^prj edited - 0 warnings"
+                "2 projects - 0 status updated - 1 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3869,7 +3873,7 @@ fn projects_sync_normalizes_mangled_subprojects_line() {
     assert!(
         out.contains("updated sub-projects on ^prj  canonical format")
             && out.contains(
-                "3 projects - 0 status updated - 1 ^prj edited - 0 warnings"
+                "3 projects - 0 status updated - 1 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -3942,7 +3946,7 @@ fn projects_sync_subproject_line_dry_run_reports_without_writing() {
                 "would update sub-projects on ^prj  canonical format"
             )
             && out.contains(
-                "5 projects - 0 status updated - 3 ^prj edited - 0 warnings"
+                "5 projects - 0 status updated - 3 ^prj edited - 0 task visibility updated - 0 warnings"
             ),
         "unexpected dry-run output:\n{out}"
     );
@@ -3989,7 +3993,7 @@ fn projects_sync_reports_prj_errors_without_aborting_scan() {
     );
     assert!(
         stdout(&output)
-            .contains("3 projects - 1 status updated - 0 ^prj edited - 0 warnings - 2 errors"),
+            .contains("3 projects - 1 status updated - 0 ^prj edited - 0 task visibility updated - 0 warnings - 2 errors"),
         "unexpected sync summary:\n{}",
         format_output(&output)
     );
@@ -4003,6 +4007,127 @@ fn projects_sync_reports_prj_errors_without_aborting_scan() {
         fs::read_to_string(vault.join("Good.md")).expect("read good"),
         "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Good project #hide ^prj\n"
     );
+}
+
+#[test]
+fn projects_sync_reconciles_scheduled_task_visibility_at_date_boundary() {
+    let temp = TempDir::new("bob-cli-projects-scheduled-visibility");
+    let vault = temp.path().join("vault");
+    let project = vault.join("Future.md");
+    let original = "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] ^prj\r\n  - [/] #task Nested work ^nested\r\n1. [x] Completed #hide\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
+    write_file(&project, original);
+
+    let preview = bob_command()
+        .args(["projects", "sync", "--dry-run", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-10 12:00:00")
+        .output()
+        .expect("preview future scheduled project");
+    assert_success(&preview);
+    assert_eq!(fs::read_to_string(&project).unwrap(), original);
+    assert!(
+        stdout(&preview)
+            .contains("would hide 3 tasks  scheduled 2026-07-11 is future")
+            && stdout(&preview).contains("3 task visibility updated"),
+        "unexpected preview:\n{}",
+        format_output(&preview)
+    );
+
+    let applied = bob_command()
+        .args(["projects", "sync", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-10 12:00:00")
+        .output()
+        .expect("apply future scheduled project");
+    assert_success(&applied);
+    assert!(
+        stdout(&applied)
+            .contains("hid 3 tasks  scheduled 2026-07-11 is future"),
+        "unexpected sync output:\n{}",
+        format_output(&applied)
+    );
+    assert_eq!(
+        fs::read_to_string(&project).unwrap(),
+        "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] #hide ^prj\r\n  - [/] #task Nested work #hide ^nested\r\n1. [x] Completed #hide\r\n- [-] Canceled #hidden #hide\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
+    );
+
+    let due = bob_command()
+        .args(["projects", "sync", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-11")
+        .output()
+        .expect("advance to scheduled day");
+    assert_success(&due);
+    assert!(
+        stdout(&due).contains("showed 4 tasks  scheduled 2026-07-11 is due"),
+        "unexpected due output:\n{}",
+        format_output(&due)
+    );
+    assert_eq!(
+        fs::read_to_string(&project).unwrap(),
+        "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] ^prj\r\n  - [/] #task Nested work ^nested\r\n1. [x] Completed\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
+    );
+
+    let second = bob_command()
+        .args(["projects", "sync", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-12")
+        .output()
+        .expect("rerun due scheduled project");
+    assert_success(&second);
+    assert!(
+        stdout(&second).contains("0 task visibility updated"),
+        "second sync should be a no-op:\n{}",
+        format_output(&second)
+    );
+}
+
+#[test]
+fn projects_schedule_errors_are_per_file_and_leave_invalid_file_untouched() {
+    let temp = TempDir::new("bob-cli-projects-scheduled-errors");
+    let vault = temp.path().join("vault");
+    let invalid = vault.join("Invalid.md");
+    let invalid_contents = "---\ntype: [[project]]\nscheduled: 2026-02-30\n---\n- [ ] #task Invalid ^prj\n";
+    write_file(&invalid, invalid_contents);
+    write_file(
+        &vault.join("Quoted.md"),
+        "---\ntype: [[project]]\nscheduled: \"2026-07-11\"\n---\n- [ ] #task Quoted ^prj\n",
+    );
+
+    let listed = bob_command()
+        .args(["projects", "list", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-10")
+        .output()
+        .expect("list scheduled projects with one error");
+    assert_eq!(listed.status.code(), Some(1));
+    assert!(
+        stdout(&listed).contains("Invalid")
+            && stdout(&listed).contains("Quoted")
+    );
+    assert!(
+        stderr(&listed).contains(
+            "Invalid.md:3: scheduled is not a valid calendar date: 2026-02-30"
+        ),
+        "unexpected list error:\n{}",
+        format_output(&listed)
+    );
+
+    let synced = bob_command()
+        .args(["projects", "sync", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-10")
+        .output()
+        .expect("sync scheduled projects with one error");
+    assert_eq!(synced.status.code(), Some(1));
+    assert_eq!(fs::read_to_string(&invalid).unwrap(), invalid_contents);
+    assert!(
+        fs::read_to_string(vault.join("Quoted.md"))
+            .unwrap()
+            .contains("#hide ^prj"),
+        "valid quoted schedule should still sync"
+    );
+    assert!(stdout(&synced).contains("1 task visibility updated"));
 }
 
 #[test]

@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chrono::NaiveDate;
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
     Command as ClapCommand,
@@ -63,10 +64,11 @@ fn build_cli() -> ClapCommand {
         .long_about(
             "Manage Bob project notes through the completion-criteria task \
 anchored with ^prj.\n\n\
-The list subcommand is read-only: it scans project notes, counts open #task \
-items, counts open non-hidden tasks, and shows the current ^prj state. The \
-sync subcommand updates project status and manages the ^prj task's #hide tag \
-and single Sub-projects line from that same ^prj task.",
+The list subcommand is read-only: it scans project notes, validates optional \
+scheduled: YYYY-MM-DD frontmatter, counts open #task items, counts open \
+non-hidden tasks, and shows the current ^prj state. The sync subcommand \
+updates project status, reconciles task visibility, and manages the single \
+Sub-projects line from the ^prj task.",
         )
         .after_help(
             "Examples:\n  bob projects list\n  bob projects sync --dry-run\n  bob projects sync -b ~/bob",
@@ -88,7 +90,7 @@ fn list_command() -> ClapCommand {
 
 fn sync_command() -> ClapCommand {
     ClapCommand::new("sync")
-        .about("Sync project status and ^prj #hide tag from ^prj tasks")
+        .about("Sync project status, task visibility, and sub-projects")
         .long_about(
             "Sync Bob project notes from the completion-criteria task anchored \
 with ^prj.\n\n\
@@ -97,7 +99,10 @@ status to canceled. Active projects with no non-hidden open tasks and no \
 open sub-projects have the #hide tag removed from their open ^prj task so \
 it surfaces in dash.md's Tasks section; projects with non-hidden open tasks \
 or open sub-projects get #hide added back. Sync also maintains a single \
-Sub-projects line nested directly under open ^prj tasks.",
+Sub-projects line nested directly under open ^prj tasks. When valid scheduled \
+frontmatter is present, it overrides the normal surfacing rule: future dates \
+add #hide to every task, while today and past dates remove #hide from every \
+task. Invalid dates are reported and that file is left untouched.",
         )
         .after_help(
             "Examples:\n  bob projects sync --dry-run\n  bob projects sync -d -b ~/bob\n  bob projects sync --bob-dir /tmp/bob-vault",
@@ -223,10 +228,23 @@ struct Project {
     link_name: String,
     link_stem: String,
     parent_target: Option<String>,
+    scheduled: Option<ProjectSchedule>,
     status: ProjectStatus,
     open_task_count: usize,
     open_unhidden_count: usize,
+    task_lines: Vec<ProjectTaskLine>,
     prj_task: PrjTask,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectSchedule {
+    raw: String,
+    date: NaiveDate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProjectTaskLine {
+    hide_tag_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -443,9 +461,7 @@ enum SubprojectState {
 
 impl SubprojectState {
     fn from_project(project: &Project) -> Option<Self> {
-        if let Some(target) =
-            project.prj_task.target_status(&project.status)
-        {
+        if let Some(target) = project.prj_task.target_status(&project.status) {
             return Some(Self::from_target_status(target));
         }
         match project.status {
@@ -655,6 +671,18 @@ impl SyncReport {
             .count()
     }
 
+    fn task_visibility_count(&self) -> usize {
+        self.events
+            .iter()
+            .filter_map(|event| match event {
+                SyncEvent::TaskVisibility { task_count, .. } => {
+                    Some(*task_count)
+                }
+                _ => None,
+            })
+            .sum()
+    }
+
     fn warning_count(&self) -> usize {
         self.events
             .iter()
@@ -691,6 +719,12 @@ enum SyncEvent {
         field: String,
         reason: String,
     },
+    TaskVisibility {
+        project_name: String,
+        scheduled: String,
+        hide: bool,
+        task_count: usize,
+    },
     Warning {
         project_name: String,
         message: String,
@@ -721,6 +755,11 @@ enum ProjectChange {
     RemoveHideTag,
     AddHideTag {
         reason: AddHideReason,
+    },
+    ReconcileTaskVisibility {
+        scheduled: String,
+        hide: bool,
+        task_count: usize,
     },
     RemoveScheduled {
         scheduled: String,
@@ -775,6 +814,16 @@ impl ProjectChange {
                 action: PrjEditAction::Add,
                 field: HIDE_TAG.to_string(),
                 reason: reason.label().to_string(),
+            },
+            Self::ReconcileTaskVisibility {
+                scheduled,
+                hide,
+                task_count,
+            } => SyncEvent::TaskVisibility {
+                project_name: project_name.to_string(),
+                scheduled: scheduled.clone(),
+                hide: *hide,
+                task_count: *task_count,
             },
             Self::RemoveScheduled { scheduled } => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
@@ -843,11 +892,12 @@ struct FrontmatterLayout {
 fn sync_projects(bob_dir: &Path, dry_run: bool) -> SyncReport {
     let mut report = SyncReport::default();
     let mut files = Vec::new();
+    let today = bob_env::current_datetime().date();
     collect_sync_directory(bob_dir, bob_dir, &mut report, &mut files);
     let subproject_children = subproject_children_by_parent_link_name(
         files.iter().filter_map(SyncFile::clean_project),
     );
-    apply_sync_plans(&files, &subproject_children, dry_run, &mut report);
+    apply_sync_plans(&files, &subproject_children, today, dry_run, &mut report);
     report
 }
 
@@ -932,6 +982,7 @@ fn collect_sync_markdown_file(
 fn apply_sync_plans(
     files: &[SyncFile],
     subproject_children: &HashMap<String, Vec<SubprojectEntry>>,
+    today: NaiveDate,
     dry_run: bool,
     report: &mut SyncReport,
 ) {
@@ -944,7 +995,7 @@ fn apply_sync_plans(
             .get(&file.project.link_name)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let plan = plan_project_sync(&file.project, children);
+        let plan = plan_project_sync_at(&file.project, children, today);
         report.events.extend(plan.warnings);
 
         if plan.changes.is_empty() {
@@ -1019,9 +1070,22 @@ fn subproject_children_by_parent_link_name<'a>(
         .collect()
 }
 
+#[cfg(test)]
 fn plan_project_sync(
     project: &Project,
     subproject_children: &[SubprojectEntry],
+) -> ProjectPlan {
+    plan_project_sync_at(
+        project,
+        subproject_children,
+        bob_env::current_datetime().date(),
+    )
+}
+
+fn plan_project_sync_at(
+    project: &Project,
+    subproject_children: &[SubprojectEntry],
+    today: NaiveDate,
 ) -> ProjectPlan {
     let mut plan = ProjectPlan::default();
 
@@ -1055,6 +1119,28 @@ fn plan_project_sync(
         effective_status = target.as_project_status();
     }
 
+    if let Some(scheduled) = &project.scheduled {
+        let hide = scheduled.date > today;
+        let task_count = project
+            .task_lines
+            .iter()
+            .filter(|task| {
+                if hide {
+                    task.hide_tag_count != 1
+                } else {
+                    task.hide_tag_count > 0
+                }
+            })
+            .count();
+        if task_count > 0 {
+            plan.changes.push(ProjectChange::ReconcileTaskVisibility {
+                scheduled: scheduled.raw.clone(),
+                hide,
+                task_count,
+            });
+        }
+    }
+
     if !effective_status.is_terminal()
         && project.prj_task.state == PrjTaskState::Open
     {
@@ -1063,17 +1149,19 @@ fn plan_project_sync(
             .any(|child| child.state.is_open());
         let should_surface =
             project.open_unhidden_count == 0 && !has_open_subprojects;
-        if should_surface {
-            if project.prj_task.hidden {
-                plan.changes.push(ProjectChange::RemoveHideTag);
+        if project.scheduled.is_none() {
+            if should_surface {
+                if project.prj_task.hidden {
+                    plan.changes.push(ProjectChange::RemoveHideTag);
+                }
+            } else if !project.prj_task.hidden {
+                let reason = if project.open_unhidden_count > 0 {
+                    AddHideReason::NonHiddenOpenTasks
+                } else {
+                    AddHideReason::OpenSubprojects
+                };
+                plan.changes.push(ProjectChange::AddHideTag { reason });
             }
-        } else if !project.prj_task.hidden {
-            let reason = if project.open_unhidden_count > 0 {
-                AddHideReason::NonHiddenOpenTasks
-            } else {
-                AddHideReason::OpenSubprojects
-            };
-            plan.changes.push(ProjectChange::AddHideTag { reason });
         }
 
         let marker_line = project.prj_task.sub_block.first_marker_line();
@@ -1254,6 +1342,9 @@ fn apply_project_changes(
             ProjectChange::AddHideTag { .. } => {
                 edits.push(add_hide_tag_edit(contents)?);
             }
+            ProjectChange::ReconcileTaskVisibility { hide, .. } => {
+                edits.extend(task_visibility_edits(contents, *hide)?);
+            }
             ProjectChange::RemoveScheduled { .. } => {
                 edits
                     .push(remove_prj_inline_field_edit(contents, "scheduled")?);
@@ -1288,6 +1379,81 @@ fn apply_project_changes(
         output.replace_range(edit.start..edit.end, &edit.replacement);
     }
     Ok(output)
+}
+
+fn task_visibility_edits(
+    contents: &str,
+    hide: bool,
+) -> Result<Vec<TextEdit>, String> {
+    let frontmatter = parse_frontmatter(contents)
+        .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
+    let lines = line_spans(contents);
+    let mut fence = None;
+    let mut edits = Vec::new();
+
+    for line in &lines {
+        if line.line_number <= frontmatter.body_start_line {
+            continue;
+        }
+        let line_text = trim_cr(&contents[line.start..line.end]);
+        if markdown_fence_line(line_text, &mut fence) {
+            continue;
+        }
+        let Some(task) = parse_task_line(line_text) else {
+            continue;
+        };
+        let tag_spans = tag_spans(task.text, HIDE_TAG);
+        let task_text_offset =
+            task.text.as_ptr() as usize - line_text.as_ptr() as usize;
+
+        if hide {
+            if tag_spans.is_empty() {
+                let insertion = task_hide_tag_insertion_offset(line_text);
+                edits.push(TextEdit {
+                    start: line.start + insertion,
+                    end: line.start + insertion,
+                    replacement: format!(" {HIDE_TAG}"),
+                });
+            } else {
+                for (tag_start, tag_end) in tag_spans.into_iter().skip(1) {
+                    let tag_start = task_text_offset + tag_start;
+                    let tag_end = task_text_offset + tag_end;
+                    let (start, end) = inline_field_removal_range(
+                        line_text, tag_start, tag_end,
+                    );
+                    edits.push(TextEdit {
+                        start: line.start + start,
+                        end: line.start + end,
+                        replacement: String::new(),
+                    });
+                }
+            }
+        } else {
+            for (tag_start, tag_end) in tag_spans {
+                let tag_start = task_text_offset + tag_start;
+                let tag_end = task_text_offset + tag_end;
+                let (start, end) =
+                    inline_field_removal_range(line_text, tag_start, tag_end);
+                edits.push(TextEdit {
+                    start: line.start + start,
+                    end: line.start + end,
+                    replacement: String::new(),
+                });
+            }
+        }
+    }
+
+    Ok(edits)
+}
+
+fn task_hide_tag_insertion_offset(line: &str) -> usize {
+    let trimmed = line.trim_end();
+    let without_block_id = strip_trailing_block_id(trimmed);
+    if without_block_id.len() < trimmed.len() {
+        without_block_id.len()
+    } else {
+        trimmed.len()
+    }
 }
 
 fn status_edit(contents: &str, status: &str) -> Result<TextEdit, String> {
@@ -1686,16 +1852,22 @@ fn parse_project(
         ProjectStatus::parse(frontmatter_value(&frontmatter, "status"));
     let parent_target =
         frontmatter_value(&frontmatter, "parent").and_then(wikilink_target);
+    let scheduled = parse_project_schedule(relative_path, &frontmatter, issues);
     let mut open_task_count = 0;
     let mut open_unhidden_count = 0;
+    let mut task_lines = Vec::new();
     let mut prj_candidates = Vec::new();
     let lines = line_spans(contents);
+    let mut fence = None;
 
     for (line_index, line_span) in lines.iter().enumerate() {
         if line_span.line_number <= frontmatter.body_start_line {
             continue;
         }
         let line = trim_cr(&contents[line_span.start..line_span.end]);
+        if markdown_fence_line(line, &mut fence) {
+            continue;
+        }
         let has_prj_anchor = has_trailing_prj_anchor(line);
         if has_prj_anchor {
             prj_candidates.push(PrjCandidate {
@@ -1708,6 +1880,9 @@ fn parse_project(
         let Some(task) = parse_task_line(line) else {
             continue;
         };
+        task_lines.push(ProjectTaskLine {
+            hide_tag_count: tag_spans(task.text, HIDE_TAG).len(),
+        });
         if !contains_task_tag(task.text) || !task.status.is_open() {
             continue;
         }
@@ -1732,11 +1907,75 @@ fn parse_project(
         link_name: project_link_name(relative_path),
         link_stem: project_link_stem(relative_path),
         parent_target,
+        scheduled,
         status,
         open_task_count,
         open_unhidden_count,
+        task_lines,
         prj_task,
     })
+}
+
+fn parse_project_schedule(
+    relative_path: &Path,
+    frontmatter: &Frontmatter<'_>,
+    issues: &mut Vec<ScanIssue>,
+) -> Option<ProjectSchedule> {
+    let fields = frontmatter
+        .lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let trimmed = line.trim_start();
+            let rest = trimmed.strip_prefix("scheduled")?;
+            let value = rest.strip_prefix(':')?;
+            Some((index + 2, value.trim()))
+        })
+        .collect::<Vec<_>>();
+
+    let Some(&(line_number, raw_value)) = fields.first() else {
+        return None;
+    };
+    if fields.len() > 1 {
+        issues.push(ScanIssue::line(
+            relative_path,
+            fields[1].0,
+            "multiple scheduled properties found; keep exactly one",
+        ));
+        return None;
+    }
+
+    let value = trim_yaml_scalar(raw_value);
+    if !is_exact_date_shape(value) {
+        issues.push(ScanIssue::line(
+            relative_path,
+            line_number,
+            "scheduled must be a calendar date in YYYY-MM-DD format",
+        ));
+        return None;
+    }
+
+    let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") else {
+        issues.push(ScanIssue::line(
+            relative_path,
+            line_number,
+            format!("scheduled is not a valid calendar date: {value}"),
+        ));
+        return None;
+    };
+
+    Some(ProjectSchedule {
+        raw: value.to_string(),
+        date,
+    })
+}
+
+fn is_exact_date_shape(value: &str) -> bool {
+    value.len() == 10
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            4 | 7 => byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
 }
 
 pub(crate) fn parse_frontmatter(contents: &str) -> Option<Frontmatter<'_>> {
@@ -1976,19 +2215,18 @@ fn malformed_prj_issue(relative_path: &Path, line_number: usize) -> ScanIssue {
 }
 
 fn parse_task_line(line: &str) -> Option<ParsedTaskLine<'_>> {
-    let trimmed = line.trim_start();
-    let bullet = trimmed.chars().next()?;
-    if !matches!(bullet, '-' | '*' | '+') {
+    let mut trimmed = line.trim_start();
+    while let Some(after_quote) = trimmed.strip_prefix('>') {
+        trimmed = after_quote.trim_start_matches([' ', '\t']);
+    }
+    let marker_end = markdown_list_marker_end(trimmed)?;
+    let after_marker = &trimmed[marker_end..];
+    if !after_marker.chars().next().is_some_and(char::is_whitespace) {
         return None;
     }
 
-    let after_bullet = &trimmed[bullet.len_utf8()..];
-    if !after_bullet.chars().next().is_some_and(char::is_whitespace) {
-        return None;
-    }
-
-    let after_bullet = after_bullet.trim_start();
-    let after_open_bracket = after_bullet.strip_prefix('[')?;
+    let after_marker = after_marker.trim_start();
+    let after_open_bracket = after_marker.strip_prefix('[')?;
     let mark = after_open_bracket.chars().next()?;
     let after_mark = &after_open_bracket[mark.len_utf8()..];
     let after_close_bracket = after_mark.strip_prefix(']')?;
@@ -2007,6 +2245,21 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine<'_>> {
     })
 }
 
+fn markdown_list_marker_end(line: &str) -> Option<usize> {
+    let first = line.chars().next()?;
+    if matches!(first, '-' | '*' | '+') {
+        return Some(first.len_utf8());
+    }
+
+    let digit_end = line
+        .char_indices()
+        .take_while(|(_, character)| character.is_ascii_digit())
+        .map(|(index, character)| index + character.len_utf8())
+        .last()?;
+    matches!(line[digit_end..].chars().next(), Some('.' | ')'))
+        .then_some(digit_end + 1)
+}
+
 fn contains_task_tag(text: &str) -> bool {
     contains_tag(text, "#task")
 }
@@ -2017,6 +2270,19 @@ fn contains_hide_tag(text: &str) -> bool {
 
 fn contains_tag(text: &str, tag: &str) -> bool {
     tag_span(text, tag).is_some()
+}
+
+fn tag_spans(text: &str, tag: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut offset = 0;
+    while offset < text.len() {
+        let Some((start, end)) = tag_span(&text[offset..], tag) else {
+            break;
+        };
+        spans.push((offset + start, offset + end));
+        offset += end;
+    }
+    spans
 }
 
 /// Locates `tag` as a whole token, honoring the same boundaries as the Tasks
@@ -2064,6 +2330,38 @@ fn has_trailing_prj_anchor(line: &str) -> bool {
             .chars()
             .next_back()
             .is_some_and(char::is_whitespace)
+}
+
+fn markdown_fence_line(line: &str, fence: &mut Option<(char, usize)>) -> bool {
+    let trimmed = line.trim_start_matches(' ');
+    let indentation = line.len() - trimmed.len();
+    if indentation > 3 {
+        return fence.is_some();
+    }
+
+    if let Some((marker, opening_length)) = *fence {
+        let marker_count =
+            trimmed.chars().take_while(|ch| ch == &marker).count();
+        if marker_count >= opening_length
+            && trimmed[marker_count..].trim().is_empty()
+        {
+            *fence = None;
+        }
+        return true;
+    }
+
+    let Some(marker) = trimmed.chars().next() else {
+        return false;
+    };
+    if !matches!(marker, '`' | '~') {
+        return false;
+    }
+    let marker_count = trimmed.chars().take_while(|ch| ch == &marker).count();
+    if marker_count < 3 {
+        return false;
+    }
+    *fence = Some((marker, marker_count));
+    true
 }
 
 fn inline_field_value(text: &str, key: &str) -> Option<String> {
@@ -2207,10 +2505,11 @@ fn print_sync_report(report: &SyncReport, dry_run: bool, styler: &Styler) {
 
     let separator = styler.separator();
     let mut summary = format!(
-        "{} projects {separator} {} status updated {separator} {} ^prj edited {separator} {} warnings",
+        "{} projects {separator} {} status updated {separator} {} ^prj edited {separator} {} task visibility updated {separator} {} warnings",
         report.project_count,
         report.status_update_count(),
         report.prj_edit_count(),
+        report.task_visibility_count(),
         report.warning_count()
     );
     if !report.issues.is_empty() {
@@ -2225,6 +2524,7 @@ impl SyncEvent {
         match self {
             Self::Status { project_name, .. }
             | Self::PrjEdit { project_name, .. }
+            | Self::TaskVisibility { project_name, .. }
             | Self::Warning { project_name, .. } => project_name,
         }
     }
@@ -2268,6 +2568,25 @@ impl SyncEvent {
                 };
                 format!(
                     "  {prefix} {project_name}  {verb} {field} {preposition} ^prj  {reason}"
+                )
+            }
+            Self::TaskVisibility {
+                scheduled,
+                hide,
+                task_count,
+                ..
+            } => {
+                let prefix = styler.success_prefix(dry_run);
+                let verb = match (dry_run, hide) {
+                    (true, true) => "would hide",
+                    (true, false) => "would show",
+                    (false, true) => "hid",
+                    (false, false) => "showed",
+                };
+                let noun = if *task_count == 1 { "task" } else { "tasks" };
+                let direction = if *hide { "future" } else { "due" };
+                format!(
+                    "  {prefix} {project_name}  {verb} {task_count} {noun}  scheduled {scheduled} is {direction}"
                 )
             }
             Self::Warning {
@@ -3185,8 +3504,7 @@ status: wip
             let contents = format!(
                 "---\ntype: [[project]]\nstatus: {terminal}\n---\n- [ ] #task Ship #hide ^prj\n"
             );
-            let project =
-                parse_clean_project("Reopened.md", &contents);
+            let project = parse_clean_project("Reopened.md", &contents);
             let plan = plan_project_sync(&project, &[]);
 
             // The open ^prj reopens the terminal project to wip, and because
@@ -3476,6 +3794,136 @@ status: wip
         assert_eq!(
             output,
             "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]"
+        );
+    }
+
+    #[test]
+    fn project_schedule_accepts_quoted_dates_and_rejects_bad_dates() {
+        for scalar in ["2026-07-11", "\"2026-07-11\"", "'2026-07-11'"] {
+            let contents = format!(
+                "---\ntype: [[project]]\nscheduled: {scalar}\n---\n- [ ] #task Ship ^prj\n"
+            );
+            let project = parse_clean_project("Valid.md", &contents);
+            assert_eq!(
+                project.scheduled,
+                Some(ProjectSchedule {
+                    raw: "2026-07-11".to_string(),
+                    date: NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                })
+            );
+        }
+
+        for (scalar, expected) in [
+            ("", "YYYY-MM-DD"),
+            ("2026-7-11", "YYYY-MM-DD"),
+            ("2026-02-30", "not a valid calendar date"),
+        ] {
+            let contents = format!(
+                "---\ntype: [[project]]\nscheduled: {scalar}\n---\n- [ ] #task Ship ^prj\n"
+            );
+            let mut issues = Vec::new();
+            let project =
+                parse_project(Path::new("Invalid.md"), &contents, &mut issues)
+                    .expect("project");
+            assert!(project.scheduled.is_none());
+            assert_eq!(issues[0].line_number, Some(3));
+            assert!(issues[0].message.contains(expected), "{issues:?}");
+        }
+    }
+
+    #[test]
+    fn scheduled_visibility_precedes_prj_surfacing_at_local_date_boundary() {
+        let future = parse_clean_project(
+            "Future.md",
+            "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n- [ ] #task Work\n",
+        );
+        let today = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
+        assert_eq!(
+            plan_project_sync_at(&future, &[], today).changes,
+            vec![ProjectChange::ReconcileTaskVisibility {
+                scheduled: "2026-07-11".to_string(),
+                hide: true,
+                task_count: 2,
+            }]
+        );
+
+        for scheduled_today in [
+            NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+        ] {
+            let due = parse_clean_project(
+                "Due.md",
+                "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n- [x] #task Done #hide\n",
+            );
+            assert_eq!(
+                plan_project_sync_at(&due, &[], scheduled_today).changes,
+                vec![ProjectChange::ReconcileTaskVisibility {
+                    scheduled: "2026-07-11".to_string(),
+                    hide: false,
+                    task_count: 2,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn scheduled_visibility_keeps_subproject_ledger_planning() {
+        let project = parse_clean_project(
+            "Parent.md",
+            "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n",
+        );
+        let plan = plan_project_sync_at(
+            &project,
+            &[open_subproject("Child")],
+            NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+        );
+
+        assert!(plan.changes.iter().any(|change| matches!(
+            change,
+            ProjectChange::ReconcileTaskVisibility {
+                hide: true,
+                task_count: 1,
+                ..
+            }
+        )));
+        assert!(plan.changes.iter().any(|change| matches!(
+            change,
+            ProjectChange::AddSubprojectLink { stem, .. } if stem == "Child"
+        )));
+        assert_eq!(
+            plan.desired_subprojects,
+            Some(vec![open_subproject("Child")])
+        );
+    }
+
+    #[test]
+    fn task_visibility_edits_every_real_task_and_preserves_other_text() {
+        let contents = "---\r\ntype: [[project]]\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] ^prj\r\n  1. [x] Nested done ^nested\r\n> - [ ] Quoted task\r\n- [-] Canceled #hidden\r\n- [/] Active #hide #hide\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
+        let hidden = apply_changes(
+            contents,
+            &[ProjectChange::ReconcileTaskVisibility {
+                scheduled: "2026-07-11".to_string(),
+                hide: true,
+                task_count: 5,
+            }],
+        );
+        assert_eq!(
+            hidden,
+            "---\r\ntype: [[project]]\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] #hide ^prj\r\n  1. [x] Nested done #hide ^nested\r\n> - [ ] Quoted task #hide\r\n- [-] Canceled #hidden #hide\r\n- [/] Active #hide\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
+        );
+
+        let shown = apply_changes(
+            &hidden,
+            &[ProjectChange::ReconcileTaskVisibility {
+                scheduled: "2026-07-11".to_string(),
+                hide: false,
+                task_count: 5,
+            }],
+        );
+        assert_eq!(
+            shown,
+            contents
+                .replace("- [/] Active #hide #hide\r\n", "- [/] Active\r\n")
         );
     }
 }
