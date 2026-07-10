@@ -1708,6 +1708,7 @@ fn parse_regex(value: &str) -> Result<(String, Option<String>), String> {
     if source.is_empty()
         || flags.chars().any(|flag| !"dgimsuvy".contains(flag))
         || flags.chars().any(|flag| flags.matches(flag).count() > 1)
+        || (flags.contains('u') && flags.contains('v'))
     {
         return Err(invalid_regex(value));
     }

@@ -4,6 +4,7 @@ use super::{bob_env, print_json, DataviewError, OutputFormat};
 
 use self::{index::TaskIndex, settings::TasksSettings};
 
+mod filter;
 mod index;
 mod parse;
 mod settings;
@@ -17,9 +18,15 @@ pub(super) fn run(
 ) -> Result<(), DataviewError> {
     let settings = TasksSettings::read(vault)?;
     let query = parse::parse(vault, origin, query, &settings)?;
-    let index = TaskIndex::read(vault, &settings, bob_env::current_datetime())?;
-    let paths = index
-        .tasks
+    let now = bob_env::current_datetime();
+    let index = TaskIndex::read(vault, &settings, now)?;
+    let tasks = filter::apply(
+        &query.filters,
+        index.tasks,
+        now,
+        &settings.global_filter,
+    )?;
+    let paths = tasks
         .iter()
         .map(|task| task.path.clone())
         .collect::<BTreeSet<_>>()
@@ -41,8 +48,8 @@ pub(super) fn run(
             "paths": paths,
             "result": {
                 "type": "tasks",
-                "count": index.tasks.len(),
-                "tasks": index.tasks,
+                "count": tasks.len(),
+                "tasks": tasks,
             },
             "settings": settings,
             "warnings": [],

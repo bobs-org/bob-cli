@@ -498,7 +498,7 @@ fn tasks_short_flags_files_stdin_and_comments_reach_filterless_slice() {
     assert_success(&origin);
     assert_eq!(
         stdout(&origin).lines().count(),
-        9,
+        8,
         "{}",
         format_output(&origin)
     );
@@ -655,6 +655,198 @@ fn tasks_query_parser_accepts_the_daily_note_query_surface() {
 }
 
 #[test]
+fn tasks_native_filter_families_match_fixture_goldens() {
+    for (query, expected) in [
+        (
+            "status.type is IN_PROGRESS",
+            &["#task In Progress status", "#task Dashboard WIP"][..],
+        ),
+        (
+            "status.name includes next",
+            &["#task Next status", "#task Dashboard NEXT"][..],
+        ),
+        (
+            "description regex matches /COMPLETE DATAVIEW/i",
+            &["#task Complete dataview metadata #hide"][..],
+        ),
+        (
+            "tag includes hide",
+            &[
+                "#task Complete dataview metadata #hide",
+                "#task Complete emoji metadata #hide 🔺",
+            ][..],
+        ),
+        (
+            "priority is above medium",
+            &["#task Complete dataview metadata #hide"][..],
+        ),
+        (
+            "recurrence includes week",
+            &["#task Complete dataview metadata #hide"][..],
+        ),
+        (
+            "is blocked",
+            &[
+                "#task Blocked child",
+                "#task Mixed dependencies",
+                "#task Self dependency",
+                "#task Duplicate id dependent",
+            ][..],
+        ),
+        (
+            "is blocking",
+            &[
+                "#task Blocking root",
+                "#task Self dependency",
+                "#task Duplicate id open instance",
+            ][..],
+        ),
+        ("exclude sub-items", &[]),
+    ] {
+        let actual = filtered_descriptions(query);
+        if query == "exclude sub-items" {
+            assert!(
+                !actual.iter().any(|description| {
+                    description.starts_with("#task Child task")
+                        || description.starts_with(
+                            "#task Child under a non-task list item",
+                        )
+                }),
+                "{query}: {actual:?}"
+            );
+            assert!(
+                actual
+                    .iter()
+                    .any(|description| description == "#task Parent task"),
+                "{query}: {actual:?}"
+            );
+        } else {
+            assert_description_prefixes(query, &actual, expected);
+        }
+    }
+}
+
+#[test]
+fn tasks_native_date_filters_match_pinned_range_boundaries() {
+    for (query, expected) in [
+        (
+            "scheduled today",
+            &[
+                "#task Daily note task",
+                "#task Complete dataview metadata #hide",
+                "#task Dashboard WIP",
+            ][..],
+        ),
+        (
+            "due this week",
+            &["#task Complete dataview metadata #hide"][..],
+        ),
+        (
+            "scheduled date is invalid",
+            &["#task Syntactically valid but nonexistent date"][..],
+        ),
+        (
+            "happens on 2026-07-10",
+            &[
+                "#task Daily note task",
+                "#task Complete dataview metadata #hide",
+                "#task Dashboard WIP",
+            ][..],
+        ),
+        (
+            "starts after today",
+            &[
+                // Tasks v8 intentionally treats a missing start date as a
+                // match for every starts comparison.
+                "#task Daily note task",
+            ][..],
+        ),
+    ] {
+        let actual = filtered_descriptions(query);
+        if query == "starts after today" {
+            assert!(
+                actual
+                    .iter()
+                    .any(|description| description == "#task Daily note task"),
+                "{query}: {actual:?}"
+            );
+            assert!(
+                !actual.iter().any(|description| {
+                    description.starts_with("#task Complete dataview metadata")
+                }),
+                "{query}: {actual:?}"
+            );
+        } else {
+            assert_description_prefixes(query, &actual, expected);
+        }
+    }
+}
+
+#[test]
+fn tasks_native_boolean_and_implicit_and_filters_match_goldens() {
+    let boolean = filtered_descriptions(
+        "(status.type is TODO) AND NOT ((is blocked) OR (tag includes #hide))",
+    );
+    assert!(
+        boolean
+            .iter()
+            .any(|description| description == "#task Todo status"),
+        "{boolean:?}"
+    );
+    assert!(
+        !boolean.iter().any(|description| {
+            description.starts_with("#task Blocked child")
+                || description.starts_with("#task Complete dataview metadata")
+        }),
+        "{boolean:?}"
+    );
+
+    assert_eq!(
+        filtered_descriptions("status.type is TODO\nfolder includes Tasks/"),
+        filtered_descriptions(
+            "(status.type is TODO) AND (folder includes Tasks/)",
+        )
+    );
+    assert!(filtered_descriptions("description includes #task").is_empty());
+}
+
+#[test]
+fn tasks_native_dashboard_non_function_subset_is_hand_verified() {
+    let output = run_fixture(&[
+        "--format",
+        "json",
+        "--origin",
+        "dash.md",
+        "--tasks",
+        "status.type is TODO",
+    ]);
+    assert_success(&output);
+    let actual = json_stdout(&output);
+    let descriptions = result_descriptions(&actual);
+    assert_eq!(actual["result"]["count"], 18);
+    for excluded in [
+        "#task Blocked child",
+        "#task Mixed dependencies",
+        "#task Self dependency",
+        "#task Duplicate id dependent",
+        "#task Template task is indexed",
+    ] {
+        assert!(
+            !descriptions
+                .iter()
+                .any(|description| description.starts_with(excluded)),
+            "unexpected {excluded:?} in {descriptions:?}"
+        );
+    }
+    assert!(
+        descriptions
+            .iter()
+            .any(|description| description == "#task Dashboard READY"),
+        "{descriptions:?}"
+    );
+}
+
+#[test]
 fn tasks_live_obsidian_parity_harness_scaffold_documents_render_oracle() {
     if env::var_os(LIVE_PARITY_ENV).is_none() {
         return;
@@ -685,6 +877,40 @@ fn find_task<'a>(tasks: &'a [Value], description: &str) -> &'a Value {
         .unwrap_or_else(|| {
             panic!("missing task with description {description:?}")
         })
+}
+
+fn filtered_descriptions(query: &str) -> Vec<String> {
+    let output = run_fixture(&["--format", "json", "--tasks", query]);
+    assert_success(&output);
+    result_descriptions(&json_stdout(&output))
+}
+
+fn result_descriptions(value: &Value) -> Vec<String> {
+    value["result"]["tasks"]
+        .as_array()
+        .expect("Tasks result array")
+        .iter()
+        .map(|task| {
+            task["description"]
+                .as_str()
+                .expect("task description")
+                .to_string()
+        })
+        .collect()
+}
+
+fn assert_description_prefixes(
+    query: &str,
+    actual: &[String],
+    expected: &[&str],
+) {
+    assert_eq!(actual.len(), expected.len(), "{query}: {actual:?}");
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert!(
+            actual.starts_with(expected),
+            "{query}: expected {expected:?}, got {actual:?}"
+        );
+    }
 }
 
 fn run_fixture(args: &[&str]) -> Output {

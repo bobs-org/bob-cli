@@ -92,6 +92,18 @@ impl StatusType {
     pub(super) fn is_done(self) -> bool {
         matches!(self, Self::Done | Self::Cancelled | Self::NonTask)
     }
+
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Todo => "TODO",
+            Self::Done => "DONE",
+            Self::InProgress => "IN_PROGRESS",
+            Self::OnHold => "ON_HOLD",
+            Self::Cancelled => "CANCELLED",
+            Self::NonTask => "NON_TASK",
+            Self::Empty => "EMPTY",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -229,7 +241,7 @@ impl TaskDate {
         }
     }
 
-    fn valid_date(&self) -> Option<NaiveDate> {
+    pub(super) fn valid_date(&self) -> Option<NaiveDate> {
         self.date
     }
 }
