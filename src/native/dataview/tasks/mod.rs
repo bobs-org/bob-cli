@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::Path};
+use std::path::Path;
 
 use super::{bob_env, print_json, DataviewError, OutputFormat};
 
@@ -8,6 +8,8 @@ mod filter;
 mod index;
 mod js;
 mod parse;
+mod render;
+mod result;
 mod settings;
 mod task;
 
@@ -21,23 +23,27 @@ pub(super) fn run(
     let query = parse::parse(vault, origin, query, &settings)?;
     let now = bob_env::current_datetime();
     let index = TaskIndex::read(vault, &settings, now)?;
+    let all_tasks = index.tasks.clone();
     let mut javascript =
         js::JsSandbox::new(&index.tasks, query.context.as_ref(), now)?;
-    let mut tasks = filter::apply(
+    let tasks = filter::apply(
         &query.filters,
         index.tasks,
         now,
         &settings.global_filter,
         &mut javascript,
     )?;
-    javascript.apply_function_sorts(&query.sorting, &mut tasks)?;
-    let function_groups = javascript.function_groups(&query.grouping, &tasks);
-    let paths = tasks
-        .iter()
-        .map(|task| task.path.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
+    let result = result::build(
+        &query,
+        tasks,
+        all_tasks,
+        now,
+        &settings.global_filter,
+        &mut javascript,
+    )?;
+    let function_groups =
+        javascript.function_groups(&query.grouping, &result.tasks);
+    let paths = result.paths();
 
     match format {
         OutputFormat::Paths => {
@@ -54,16 +60,24 @@ pub(super) fn run(
             "paths": paths,
             "result": {
                 "type": "tasks",
-                "count": tasks.len(),
-                "tasks": tasks,
+                "count": result.count,
+                "countBeforeLimit": result.count_before_limit,
+                "countText": result.count_text,
+                "tasks": result.tasks,
+                "groups": result.groups,
+                "explanation": result.explanation,
                 "functionGroups": function_groups,
             },
             "settings": settings,
             "warnings": [],
         })),
-        OutputFormat::Markdown => Err(DataviewError::TasksQuery {
-            message: "markdown output is not available for Tasks queries yet"
-                .to_string(),
-        }),
+        OutputFormat::Markdown => {
+            let markdown =
+                render::markdown(&result, &query, settings.task_format);
+            if !markdown.is_empty() {
+                println!("{markdown}");
+            }
+            Ok(())
+        }
     }
 }

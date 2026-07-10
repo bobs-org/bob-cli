@@ -317,10 +317,9 @@ impl JsSandbox {
         }
     }
 
-    pub(super) fn apply_function_sorts(
+    pub(super) fn validate_function_sorts(
         &mut self,
         sorting: &[SortInstruction],
-        tasks: &mut [Task],
     ) -> Result<(), DataviewError> {
         let functions = sorting
             .iter()
@@ -331,38 +330,20 @@ impl JsSandbox {
                 instruction.function.as_deref().unwrap_or_default(),
             )?;
         }
-        if functions.is_empty() {
-            return Ok(());
-        }
+        Ok(())
+    }
 
-        let mut error = None;
-        tasks.sort_by(|left, right| {
-            if error.is_some() {
-                return Ordering::Equal;
-            }
-            for instruction in &functions {
-                let source = instruction.function.as_deref().unwrap_or_default();
-                match self.compare(source, left, right) {
-                    Ok(Ordering::Equal) => {}
-                    Ok(ordering) => {
-                        return if instruction.reverse { ordering.reverse() } else { ordering };
-                    }
-                    Err(message) => {
-                        error = Some(query_error(format!(
-                            "{message}: while evaluating instruction 'sort by function {}{}'",
-                            if instruction.reverse { "reverse " } else { "" },
-                            source
-                        )));
-                        return Ordering::Equal;
-                    }
-                }
-            }
-            Ordering::Equal
-        });
-        match error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+    pub(super) fn compare_function_sort(
+        &mut self,
+        source: &str,
+        left: &Task,
+        right: &Task,
+    ) -> Result<Ordering, DataviewError> {
+        self.compare(source, left, right).map_err(|message| {
+            query_error(format!(
+                "{message}: while evaluating instruction 'sort by function {source}'"
+            ))
+        })
     }
 
     pub(super) fn function_groups(
@@ -379,7 +360,7 @@ impl JsSandbox {
                 let entries = tasks
                     .iter()
                     .map(|task| {
-                        let groups = self.group_keys(source, task);
+                        let groups = self.function_group_keys(source, task);
                         json!({
                             "path": task.path,
                             "lineNumber": task.line_number,
@@ -397,7 +378,11 @@ impl JsSandbox {
         Value::Array(evaluations)
     }
 
-    fn group_keys(&mut self, source: &str, task: &Task) -> Vec<String> {
+    pub(super) fn function_group_keys(
+        &mut self,
+        source: &str,
+        task: &Task,
+    ) -> Vec<String> {
         let result = self.expression_for(source, task).and_then(|expression| {
             eval_string(
                 &self.context,

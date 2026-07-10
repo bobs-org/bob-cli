@@ -193,15 +193,15 @@ fn tasks_native_filterless_paths_golden_includes_underscore_folders() {
     assert_eq!(
         stdout(&output),
         concat!(
+            "dash.md\n",
+            "Tasks/Statuses.md\n",
+            "Tasks/MetadataDataview.md\n",
             "Daily/2026-07-10.md\n",
             "Tasks/Dependencies.md\n",
-            "Tasks/MetadataDataview.md\n",
             "Tasks/MetadataEmoji.md\n",
             "Tasks/Nested.md\n",
-            "Tasks/Statuses.md\n",
             "_generated/Generated.md\n",
             "_templates/Task.md\n",
-            "dash.md\n",
         ),
         "filterless Tasks paths golden changed:\n{}",
         format_output(&output)
@@ -223,15 +223,15 @@ fn tasks_native_filterless_json_golden_reads_settings_and_tasks() {
     assert_eq!(
         actual["paths"],
         json!([
+            "dash.md",
+            "Tasks/Statuses.md",
+            "Tasks/MetadataDataview.md",
             "Daily/2026-07-10.md",
             "Tasks/Dependencies.md",
-            "Tasks/MetadataDataview.md",
             "Tasks/MetadataEmoji.md",
             "Tasks/Nested.md",
-            "Tasks/Statuses.md",
             "_generated/Generated.md",
-            "_templates/Task.md",
-            "dash.md"
+            "_templates/Task.md"
         ])
     );
     assert_eq!(actual["result"]["type"], "tasks");
@@ -538,10 +538,6 @@ fn tasks_cli_rejects_invalid_combinations_and_unsupported_surface() {
     let cases: &[(&[&str], &str)] = &[
         (&["--tasks", "", "--query", "LIST"], "cannot be used with"),
         (
-            &["--tasks", "", "--format", "markdown"],
-            "--format markdown is not available for Tasks queries yet",
-        ),
-        (
             &["--tasks", "", "--engine", "obsidian"],
             "--engine obsidian does not support Tasks queries yet",
         ),
@@ -803,6 +799,195 @@ fn tasks_by_function_surfaces_parse_return_type_and_sort_errors() {
 }
 
 #[test]
+fn tasks_result_pipeline_sorts_groups_and_limits_like_tasks_v8() {
+    let output = run_fixture(&[
+        "--format",
+        "json",
+        "--tasks",
+        concat!(
+            "folder includes Tasks/\n",
+            "sort by status.name\n",
+            "sort by function task.lineNumber\n",
+            "group by status.type\n",
+            "group by path\n",
+            "limit groups 2",
+        ),
+    ]);
+    assert_success(&output);
+    let actual = json_stdout(&output);
+
+    assert_eq!(actual["result"]["countBeforeLimit"], 27);
+    assert_eq!(actual["result"]["count"], 18);
+    assert_eq!(actual["result"]["countText"], "18 of 27 tasks");
+    assert_eq!(
+        actual["paths"],
+        json!([
+            "Tasks/Statuses.md",
+            "Tasks/Dependencies.md",
+            "Tasks/MetadataDataview.md",
+            "Tasks/MetadataEmoji.md",
+            "Tasks/Nested.md"
+        ])
+    );
+
+    let groups = actual["result"]["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 12);
+    assert_eq!(
+        groups[0]["names"],
+        json!(["%%1%%IN_PROGRESS", "Tasks/Statuses"])
+    );
+    assert_eq!(
+        groups[0]["headings"],
+        json!([
+            {"level": 0, "name": "%%1%%IN_PROGRESS"},
+            {"level": 1, "name": "Tasks/Statuses"}
+        ])
+    );
+    let limited = groups
+        .iter()
+        .find(|group| {
+            group["names"] == json!(["%%2%%TODO", "Tasks/Dependencies"])
+        })
+        .unwrap();
+    assert_eq!(limited["count"], 2);
+    assert_eq!(limited["countBeforeLimit"], 9);
+    assert_eq!(limited["countText"], "2 of 9 tasks");
+    assert_eq!(
+        limited["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|task| task["description"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["#task Blocking root", "#task Blocked child"]
+    );
+}
+
+#[test]
+fn tasks_markdown_honors_tree_layout_fields_counts_and_explain() {
+    let tree = run_fixture(&[
+        "--format",
+        "markdown",
+        "--tasks",
+        concat!(
+            "description includes Parent task\n",
+            "show tree\n",
+            "hide backlink\n",
+            "hide task count\n",
+            "hide id\n",
+            "hide tags",
+        ),
+    ]);
+    assert_success(&tree);
+    assert_eq!(
+        stdout(&tree),
+        concat!(
+            "- [ ] Parent task ^parent-task\n",
+            "    - [ ] Child task ^child-task\n",
+            "        - [x] Done grandchild ^grandchild-task\n",
+        )
+    );
+
+    let explained = run_fixture(&[
+        "--format",
+        "markdown",
+        "--tasks",
+        concat!(
+            "description includes Dashboard WIP\n",
+            "hide backlink\n",
+            "short mode\n",
+            "explain",
+        ),
+    ]);
+    assert_success(&explained);
+    assert_eq!(
+        stdout(&explained),
+        concat!(
+            "Only tasks containing the global filter '#task'.\n",
+            "\n",
+            "Explanation of this Tasks code block query:\n",
+            "\n",
+            "  description includes Dashboard WIP\n",
+            "\n",
+            "  hide backlink\n",
+            "\n",
+            "  short mode\n",
+            "\n",
+            "- [/] #task Dashboard WIP [scheduled::]\n",
+            "\n",
+            "1 task\n",
+        )
+    );
+}
+
+#[test]
+fn tasks_every_native_sort_and_group_key_executes() {
+    for key in [
+        "cancelled",
+        "created",
+        "description",
+        "done",
+        "due",
+        "filename",
+        "happens",
+        "heading",
+        "id",
+        "path",
+        "priority",
+        "random",
+        "recurring",
+        "scheduled",
+        "start",
+        "status",
+        "status.name",
+        "status.type",
+        "tag",
+        "urgency",
+    ] {
+        let query = format!("sort by {key} reverse\nlimit 3");
+        let output = run_fixture(&["--format", "json", "--tasks", &query]);
+        assert_success(&output);
+        assert_eq!(json_stdout(&output)["result"]["count"], 3, "{key}");
+    }
+
+    for key in [
+        "backlink",
+        "cancelled",
+        "created",
+        "done",
+        "due",
+        "filename",
+        "folder",
+        "happens",
+        "heading",
+        "id",
+        "path",
+        "priority",
+        "recurrence",
+        "recurring",
+        "root",
+        "scheduled",
+        "start",
+        "status",
+        "status.name",
+        "status.type",
+        "tags",
+        "urgency",
+    ] {
+        let query = format!("group by {key} reverse\nlimit groups 1");
+        let output = run_fixture(&["--format", "json", "--tasks", &query]);
+        assert_success(&output);
+        assert!(
+            !json_stdout(&output)["result"]["groups"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{key}"
+        );
+    }
+}
+
+#[test]
 fn tasks_native_filter_families_match_fixture_goldens() {
     for (query, expected) in [
         (
@@ -1031,7 +1216,10 @@ fn find_task<'a>(tasks: &'a [Value], description: &str) -> &'a Value {
 }
 
 fn filtered_descriptions(query: &str) -> Vec<String> {
-    let output = run_fixture(&["--format", "json", "--tasks", query]);
+    let query = format!(
+        "{query}\nsort by function task.file.path\nsort by function task.lineNumber"
+    );
+    let output = run_fixture(&["--format", "json", "--tasks", &query]);
     assert_success(&output);
     result_descriptions(&json_stdout(&output))
 }

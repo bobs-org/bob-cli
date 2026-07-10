@@ -6505,14 +6505,6 @@ impl Request {
             ));
         }
 
-        if query.is_tasks() && format == OutputFormat::Markdown {
-            return Err(command.error(
-                ErrorKind::ArgumentConflict,
-                "--format markdown is not available for Tasks queries yet; \
-                 use --format paths or --format json",
-            ));
-        }
-
         if query.is_tasks() && engine == Engine::Obsidian {
             return Err(command.error(
                 ErrorKind::ArgumentConflict,
