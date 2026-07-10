@@ -91,6 +91,30 @@ fn move_done_tasks_help_is_native_only() {
 }
 
 #[test]
+fn mark_next_tasks_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-mark-next-tasks-native-help");
+    let output = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob mark-next-tasks --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("Usage: bob mark-next-tasks"),
+        "expected mark-next-tasks help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only mark-next-tasks should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn bulk_git_commit_help_is_native_only() {
     let temp = TempDir::new("bob-cli-bulk-git-commit-native-help");
     let output = bob_command()
@@ -295,6 +319,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture-targets", "--help"], "bob capture-targets"),
         (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob highlights"),
+        (&["mark-next-tasks", "--help"], "Usage: bob mark-next-tasks"),
         (&["move-done-tasks", "--help"], "usage: bob move-done-tasks"),
         (&["nightly", "--help"], "usage: bob nightly"),
         (&["notify", "--help"], "Notify me when"),
@@ -334,6 +359,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["capture-targets", "--help"], "bob capture-targets --help"),
         (&["query", "--help"], "bob query --help"),
         (&["highlights", "--help"], "bob highlights --help"),
+        (&["mark-next-tasks", "--help"], "bob mark-next-tasks --help"),
         (
             &["highlights", "doctor", "--help"],
             "bob highlights doctor --help",
@@ -596,6 +622,177 @@ fn capture_help_lists_options_alphabetically() {
         ],
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn mark_next_tasks_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--help")
+        .output()
+        .expect("run bob mark-next-tasks --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Make today's Pomodoro ledger the source of truth")
+            && help.contains("BOB_DAY_FILE")
+            && help.contains("bob mark-next-tasks --dry-run"),
+        "expected mark-next-tasks long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
+    let temp = TempDir::new("bob-cli-mark-next-tasks-sync");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let dev = vault.join("dev.md");
+    let alpha = vault.join("Projects/Alpha.md");
+    write_file(&daily, include_str!("fixtures/mark_next/2026/20260710.md"));
+    write_file(&dev, include_str!("fixtures/mark_next/dev.md"));
+    write_file(&alpha, include_str!("fixtures/mark_next/Projects/Alpha.md"));
+    let original_dev = fs::read(&dev).expect("read fixture before dry-run");
+    let original_alpha = fs::read(&alpha).expect("read fixture before dry-run");
+
+    let dry_run = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run mark-next-tasks fixture");
+    assert_success(&dry_run);
+    assert_eq!(
+        fs::read(&dev).expect("read dev after dry-run"),
+        original_dev
+    );
+    assert_eq!(
+        fs::read(&alpha).expect("read alpha after dry-run"),
+        original_alpha
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).expect("dry-run JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["daily_file"], "2026/20260710.md");
+    assert_eq!(json["open_pomodoros"], 1);
+    assert_eq!(json["references"], 3);
+    assert_eq!(json["scanned_files"], 3);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
+    assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
+    assert_eq!(json["kept_next"], 1);
+    assert_eq!(json["kept_in_progress"], 1);
+    assert_eq!(json["unresolved_references"], serde_json::json!([]));
+    assert_eq!(json["marked_next"][0]["path"], "dev.md");
+    assert_eq!(json["marked_next"][0]["block_id"], "promote");
+
+    let applied = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply mark-next-tasks fixture");
+    assert_success(&applied);
+    let report = stdout(&applied);
+    assert!(
+        report.contains("marked next")
+            && report.contains("cleared")
+            && report.contains("Summary: 1 marked next, 1 cleared"),
+        "unexpected mark-next report:\n{}",
+        format_output(&applied)
+    );
+    let dev_contents = fs::read_to_string(&dev).expect("read updated dev");
+    assert!(dev_contents.contains("- [*] #task Promote me ^promote"));
+    assert!(dev_contents.contains("- [*] #task Already next ^already"));
+    assert!(dev_contents.contains("- [ ] #task Clear me ^orphan"));
+    assert!(dev_contents
+        .contains("- [ ] #task Closed reference stays todo ^closed"));
+    assert!(dev_contents.contains("- [x] #task Done stays done ^done"));
+    assert!(dev_contents
+        .contains("- [-] #task Cancelled stays cancelled ^cancelled"));
+    assert!(dev_contents.contains("- [?] #task Unknown stays unknown ^unknown"));
+    assert!(dev_contents.contains("- [*] Not a Tasks task ^not-a-task"));
+    assert_eq!(
+        fs::read(&alpha).expect("read unchanged alpha"),
+        original_alpha
+    );
+
+    let second = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun mark-next-tasks fixture");
+    assert_success(&second);
+    assert!(
+        stdout(&second).contains("already in sync, no changes"),
+        "expected idempotent no-op:\n{}",
+        format_output(&second)
+    );
+}
+
+#[test]
+fn mark_next_tasks_guard_rails_leave_tasks_unchanged() {
+    let temp = TempDir::new("bob-cli-mark-next-tasks-guards");
+    let vault = temp.path().join("vault");
+    let task_file = vault.join("tasks.md");
+    let missing_daily = vault.join("missing.md");
+    write_file(&task_file, "- [*] #task Must remain next ^keep\n");
+
+    let missing = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &missing_daily)
+        .output()
+        .expect("run with missing daily note");
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(stderr(&missing).contains("daily note does not exist"));
+    assert_eq!(
+        fs::read_to_string(&task_file).unwrap(),
+        "- [*] #task Must remain next ^keep\n"
+    );
+
+    let malformed_daily = vault.join("malformed.md");
+    write_file(&malformed_daily, "# Daily note\n\nNo ledger here.\n");
+    let malformed = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &malformed_daily)
+        .output()
+        .expect("run with malformed daily note");
+    assert_eq!(malformed.status.code(), Some(1));
+    assert!(stderr(&malformed).is_empty());
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&malformed).trim()).expect("guard JSON");
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("has no Pomodoros section"));
+    assert_eq!(
+        fs::read_to_string(&task_file).unwrap(),
+        "- [*] #task Must remain next ^keep\n"
+    );
 }
 
 #[test]

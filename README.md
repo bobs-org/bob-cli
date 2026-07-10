@@ -33,6 +33,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" capture --help
 "$root/bin/bob" query --help
 "$root/bin/bob" highlights --help
+"$root/bin/bob" mark-next-tasks --help
 "$root/bin/bob" move-done-tasks --help
 "$root/bin/bob" nightly --help
 "$root/bin/bob" notify --help
@@ -192,6 +193,27 @@ Obsidian vault; Tasks inputs are currently native-only.
 
 The full command contract and live smoke-test steps live in
 [`docs/dataview.md`](docs/dataview.md).
+
+```bash
+bob mark-next-tasks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
+```
+
+Synchronizes the vault's `[*]` Next tasks from block links beneath open
+Pomodoros in today's daily note. A linked `[ ]` task becomes `[*]`; an
+unlinked `[*]` task becomes `[ ]`. In-progress `[/]`, completed, canceled,
+unknown, and non-Tasks checkboxes are not changed.
+
+For example, this open ledger entry makes the linked task Next:
+
+```markdown
+- [ ] Work session (0900-0930)
+  - [[Projects/Alpha#^ship-design]]
+```
+
+Run `bob mark-next-tasks --dry-run` to preview every promotion and clear. The
+command refuses to change files if the daily note is missing or lacks a
+`Pomodoros` section. The full sync, link-resolution, exclusion, output, and
+JSON contract lives in [`docs/mark-next-tasks.md`](docs/mark-next-tasks.md).
 
 ```bash
 bob move-done-tasks [-t|--threshold N]
@@ -433,12 +455,13 @@ Rust binaries, and the binaries carry the script assets they need.
 `BOB_DATAVIEW_VAULT` sets the default Obsidian vault name or ID forwarded to
 `obsidian eval` by `bob query --engine obsidian`.
 
-`BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro` and
-Pomodoro-linked `bob capture` requests.
+`BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`,
+Pomodoro-linked `bob capture` requests, and `bob mark-next-tasks`.
 
 `BOB_NOW` sets the current timestamp for Pomodoro status, the `bob capture`
-`[created::YYYY-MM-DD]` stamp, and default runtime note selection. It also
-controls the default `bob move-done-tasks YYYY-MM-DD` commit message date.
+`[created::YYYY-MM-DD]` stamp, and default runtime note selection, including
+the daily note used by `bob mark-next-tasks`. It also controls the default
+`bob move-done-tasks YYYY-MM-DD` commit message date.
 Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 `YYYY-MM-DD HH:MM:SS`.
 

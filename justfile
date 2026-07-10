@@ -45,6 +45,7 @@ install-smoke:
     "${root}/bin/bob" capture-targets --help >/dev/null
     "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null
+    "${root}/bin/bob" mark-next-tasks --help >/dev/null
     "${root}/bin/bob" move-done-tasks --help >/dev/null
     "${root}/bin/bob" nightly --help >/dev/null
     "${root}/bin/bob" notify --help >/dev/null

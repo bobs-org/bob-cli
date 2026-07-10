@@ -16,6 +16,7 @@ mod collect_done;
 mod dataview;
 mod env;
 mod highlights_ref;
+mod mark_next;
 mod nightly;
 mod notify;
 mod ob;
@@ -33,6 +34,7 @@ pub(crate) enum NativeCommand {
     CaptureTargets,
     Query,
     Highlights,
+    MarkNextTasks,
     MoveDoneTasks,
     Nightly,
     Notify,
@@ -62,6 +64,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::CaptureTargets => capture_targets::run(args),
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),
+        NativeCommand::MarkNextTasks => mark_next::run(args),
         NativeCommand::MoveDoneTasks => collect_done::run(args),
         NativeCommand::Nightly => nightly::run(args),
         NativeCommand::Notify => notify::run(args),

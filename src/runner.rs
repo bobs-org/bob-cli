@@ -61,6 +61,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Highlights,
     },
     Subcommand {
+        name: "mark-next-tasks",
+        script_command: None,
+        about: "Sync Next-status tasks from today's open pomodoros",
+        native_command: NativeCommand::MarkNextTasks,
+    },
+    Subcommand {
         name: "move-done-tasks",
         script_command: None,
         about: "Move done and canceled tasks and maintain done links",
@@ -256,6 +262,7 @@ Examples:
                                  Print matching note paths
   bob highlights scan --dry-run
                                  Preview Highlights reference note sync
+  bob mark-next-tasks --dry-run  Preview Next-status task synchronization
   bob move-done-tasks --threshold 10
                                  Move tasks and maintain done links
   bob nightly                    Run the nightly sync and maintenance steps
