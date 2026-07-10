@@ -202,6 +202,41 @@ BOB_TASKS_PARITY_VAULT=<opened-fixture-vault-name-or-id> \
 cargo test --test tasks_parity tasks_live_obsidian_parity_harness_renders_and_scrapes_tasks_blocks -- --nocapture
 ```
 
+### Real-vault Tasks acceptance
+
+The gated real-vault acceptance test first snapshots the vault's Markdown and
+installed Tasks settings so background sync cannot change the inputs between
+queries. It then independently scans raw task lines without calling the native
+Tasks parser or filter engine. It derives the expected WIP, NEXT, and READY
+sets using the dashboard's global-filter, status, scheduled-date, `#hide`,
+`_templates`, `dash.md` self-exclusion, and dependency-blocking rules. It
+compares those sets by path, zero-based line number, and status symbol with both
+`--tasks-note dash.md` and the three individual `--tasks ... --origin dash.md`
+executions. It also executes every other fenced Tasks block in the snapshot and
+verifies that none are skipped.
+
+Pin `BOB_NOW` so scheduled-date behavior remains reproducible:
+
+```bash
+BOB_TASKS_REAL_VAULT_PARITY=1 \
+BOB_DIR="$HOME/bob" \
+BOB_NOW=2026-07-10T12:00:00-04:00 \
+cargo test --test tasks_real_vault_parity -- --nocapture
+```
+
+The 2026-07-10 acceptance run matched all three independently derived sets: 6
+WIP, 8 NEXT, and 40 READY tasks. All 13 other Tasks blocks present in the vault
+also parsed and executed successfully. The phase design's earlier inventory of
+14 non-dashboard blocks had changed by acceptance time.
+
+Desktop Obsidian was unavailable for that run, so live DOM-renderer
+confirmation of the real `dash.md` remains a manual acceptance check. Native
+Tasks queries intentionally remain read-only and do not render or mutate
+interactive toolbar, edit, postpone, recurrence-generation, or completion
+actions; Tasks inputs also remain unsupported by the public `--engine
+obsidian` surface. These are explicit non-goals, not silent native-query
+fallbacks.
+
 For real-vault native smoke tests, use read-only queries against `~/bob`. These
 cover the supported local surface without requiring Obsidian:
 
