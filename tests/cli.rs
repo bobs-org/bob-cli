@@ -3459,6 +3459,145 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
 }
 
 #[test]
+fn projects_sync_reconciles_future_subproject_markers_at_date_boundary() {
+    let temp = TempDir::new("bob-cli-projects-sync-future-subprojects");
+    let vault = temp.path().join("vault");
+
+    write_file(
+        &vault.join("Parent.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[FutureOpen]] • [[Today]] • [[Unscheduled]] • ~~[[FutureClosed]]~~ ✅\n\t- user-owned context\n",
+    );
+    write_file(
+        &vault.join("Unscheduled.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish unscheduled ^prj\n",
+    );
+    write_file(
+        &vault.join("Today.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\nscheduled: 2026-07-10\n---\n- [ ] #task Finish today ^prj\n",
+    );
+    write_file(
+        &vault.join("FutureOpen.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\nscheduled: 2026-07-11\n---\n- [ ] #task Finish future #hide ^prj\n",
+    );
+    write_file(
+        &vault.join("FutureClosed.md"),
+        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\nscheduled: 2026-07-11\n---\n- [x] #task Finish closed #hide ^prj\n",
+    );
+
+    let parent_before =
+        fs::read_to_string(vault.join("Parent.md")).expect("read parent");
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-10")
+        .output()
+        .expect("preview future sub-project marker sync");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "would add 🗓️ [[FutureOpen]] to ^prj  sub-project scheduled in future"
+        ) && out.contains(
+            "would add 🗓️ [[FutureClosed]] to ^prj  sub-project scheduled in future"
+        ) && out.contains(
+            "5 projects - 0 status updated - 2 ^prj edited - 0 task visibility updated - 0 warnings"
+        ),
+        "unexpected dry-run output:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
+        parent_before,
+        "dry-run must not edit the parent ledger"
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-10")
+        .output()
+        .expect("apply future sub-project markers");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "added 🗓️ [[FutureOpen]] to ^prj  sub-project scheduled in future"
+        ) && out.contains(
+            "added 🗓️ [[FutureClosed]] to ^prj  sub-project scheduled in future"
+        ),
+        "unexpected sync output:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** 🗓️ [[FutureOpen]] • [[Today]] • [[Unscheduled]] • 🗓️ ~~[[FutureClosed]]~~ ✅\n\t- user-owned context\n"
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-10")
+        .output()
+        .expect("rerun future sub-project marker sync");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains(
+            "5 projects - 0 status updated - 0 ^prj edited - 0 task visibility updated - 0 warnings"
+        ),
+        "second run should be a no-op:\n{}",
+        format_output(&output)
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-11")
+        .output()
+        .expect("sync at scheduled date boundary");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "removed 🗓️ [[FutureOpen]] from ^prj  sub-project no longer scheduled in future"
+        ) && out.contains(
+            "removed 🗓️ [[FutureClosed]] from ^prj  sub-project no longer scheduled in future"
+        ) && out.contains(
+            "5 projects - 0 status updated - 2 ^prj edited - 2 task visibility updated - 0 warnings"
+        ),
+        "unexpected boundary output:\n{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[FutureOpen]] • [[Today]] • [[Unscheduled]] • ~~[[FutureClosed]]~~ ✅\n\t- user-owned context\n"
+    );
+
+    let output = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-11")
+        .output()
+        .expect("rerun scheduled date boundary sync");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains(
+            "5 projects - 0 status updated - 0 ^prj edited - 0 task visibility updated - 0 warnings"
+        ),
+        "boundary rerun should be a no-op:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
 fn projects_sync_unhides_parent_when_child_prj_is_checked_same_run() {
     let temp = TempDir::new("bob-cli-projects-sync-checked-subproject");
     let vault = temp.path().join("vault");

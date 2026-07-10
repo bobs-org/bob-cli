@@ -102,13 +102,21 @@ Task statuses follow the Tasks plugin convention:
 - Active projects with open `^prj` tasks get one generated Sub-projects line
   nested directly under `^prj`, such as
   `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`.
+- A child with a valid `scheduled` frontmatter date later than the machine's
+  local current date is prefixed with `🗓️`, such as
+  `- 🧩 **Sub-projects:** 🗓️ [[future_child]] • [[ordinary_child]]`.
+  Today, past, absent, and invalid schedules do not receive the marker.
+  `BOB_NOW` controls this date boundary as it does for task visibility.
 - The marker-prefixed Sub-projects line is fully machine-owned and rewritten
   into canonical form. Duplicate marker lines are removed. The line is deleted
   only when there are no open sub-projects and no tracked closed sub-projects
-  left to show.
+  left to show. Sync adds or removes `🗓️` as schedules change and removes it
+  automatically on the scheduled date.
 - Closed sub-projects already present on the generated line are retained as a
   ledger: done children render as `~~[[child]]~~ ✅`, and canceled children
-  render as `~~[[child]]~~ ❌`.
+  render as `~~[[child]]~~ ❌`. Schedule and lifecycle decorations are
+  independent, so a retained future-scheduled done child renders as
+  `🗓️ ~~[[child]]~~ ✅`.
 - Every other sub-bullet under `^prj` is user-owned, including bare wikilinks
   like `- [[scratch_note]]`; `sync` never removes or uses them to suppress the
   generated line.
@@ -157,7 +165,9 @@ schedule fields stop creation with a focused notice. In the `<ctrl+=>` child
 note picker, future-scheduled projects show a `calendar-clock` chip immediately
 before the status pill; the chip says `Tomorrow`, `Jul 16`, or `Jul 16, 2027`
 while its tooltip and accessible label expose the full date. Today, past,
-missing, and invalid dates do not receive a chip.
+missing, and invalid dates do not receive a chip. The compact `🗓️` in the
+generated parent ledger represents the same future-only state without the
+picker's labeled date chip.
 
 ## Warnings
 
@@ -195,11 +205,13 @@ Typical action output:
   ok athena     updated [[sase_blog]] on ^prj  sub-project completed
   ok athena     updated [[old_plan]] on ^prj  sub-project canceled
   ok athena     removed [[old_child]] from ^prj  no longer a sub-project
+  ok athena     added 🗓️ [[future_child]] to ^prj  sub-project scheduled in future
+  ok athena     removed 🗓️ [[due_child]] from ^prj  sub-project no longer scheduled in future
   ok athena     updated sub-projects on ^prj  canonical format
   ok roadmap    hid 4 tasks  scheduled 2026-07-16 is future
   warning outlive  active project has no ^prj task  add `- [ ] #task #prj <completion criteria> #hide ^prj`
 
-11 projects - 1 status updated - 7 ^prj edited - 4 task visibility updated - 1 warnings
+11 projects - 1 status updated - 9 ^prj edited - 4 task visibility updated - 1 warnings
 ```
 
 Scheduled visibility is reported once per project rather than once per task.

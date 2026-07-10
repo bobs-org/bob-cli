@@ -25,6 +25,7 @@ const HIDE_TAG: &str = "#hide";
 const PROJECT_TASK_TAG: &str = "#prj";
 const SUBPROJECTS_MARKER_PREFIX: &str = "🧩 **Sub-projects:**";
 const SUBPROJECTS_SEPARATOR: &str = "•";
+const SUBPROJECT_FUTURE_SCHEDULE_MARKER: &str = "🗓️";
 const SUBPROJECT_DONE_MARKER: &str = "✅";
 const SUBPROJECT_CANCELED_MARKER: &str = "❌";
 
@@ -518,6 +519,13 @@ struct SubprojectEntry {
     link_name: String,
     stem: String,
     state: SubprojectState,
+    future_scheduled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SubprojectDisplay {
+    state: SubprojectState,
+    future_scheduled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -775,6 +783,12 @@ enum ProjectChange {
         stem: String,
         state: SubprojectState,
     },
+    AddSubprojectScheduleMarker {
+        stem: String,
+    },
+    RemoveSubprojectScheduleMarker {
+        stem: String,
+    },
     NormalizeSubprojects,
 }
 
@@ -849,6 +863,25 @@ impl ProjectChange {
                 field: format!("[[{stem}]]"),
                 reason: state.reason().to_string(),
             },
+            Self::AddSubprojectScheduleMarker { stem } => SyncEvent::PrjEdit {
+                project_name: project_name.to_string(),
+                action: PrjEditAction::Add,
+                field: format!(
+                    "{SUBPROJECT_FUTURE_SCHEDULE_MARKER} [[{stem}]]"
+                ),
+                reason: "sub-project scheduled in future".to_string(),
+            },
+            Self::RemoveSubprojectScheduleMarker { stem } => {
+                SyncEvent::PrjEdit {
+                    project_name: project_name.to_string(),
+                    action: PrjEditAction::Remove,
+                    field: format!(
+                        "{SUBPROJECT_FUTURE_SCHEDULE_MARKER} [[{stem}]]"
+                    ),
+                    reason: "sub-project no longer scheduled in future"
+                        .to_string(),
+                }
+            }
             Self::NormalizeSubprojects => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
                 action: PrjEditAction::Update,
@@ -896,6 +929,7 @@ fn sync_projects(bob_dir: &Path, dry_run: bool) -> SyncReport {
     collect_sync_directory(bob_dir, bob_dir, &mut report, &mut files);
     let subproject_children = subproject_children_by_parent_link_name(
         files.iter().filter_map(SyncFile::clean_project),
+        today,
     );
     apply_sync_plans(&files, &subproject_children, today, dry_run, &mut report);
     report
@@ -1035,6 +1069,7 @@ fn apply_sync_plans(
 
 fn subproject_children_by_parent_link_name<'a>(
     projects: impl IntoIterator<Item = &'a Project>,
+    today: NaiveDate,
 ) -> HashMap<String, Vec<SubprojectEntry>> {
     let mut children_by_parent: HashMap<
         String,
@@ -1059,6 +1094,10 @@ fn subproject_children_by_parent_link_name<'a>(
                 link_name: project.link_name.clone(),
                 stem: project.link_stem.clone(),
                 state,
+                future_scheduled: project
+                    .scheduled
+                    .as_ref()
+                    .is_some_and(|scheduled| scheduled.date > today),
             });
     }
 
@@ -1177,10 +1216,8 @@ fn plan_project_sync_at(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let marker_display_states = marker_line
-            .map(|line| {
-                subproject_display_states_in_marker_line(&line.trimmed_text)
-            })
+        let marker_displays = marker_line
+            .map(|line| subproject_displays_in_marker_line(&line.trimmed_text))
             .unwrap_or_default();
         let desired_subprojects =
             desired_subproject_entries(subproject_children, &marker_targets);
@@ -1211,15 +1248,30 @@ fn plan_project_sync_at(
             if !marker_targets.contains(&entry.link_name) {
                 continue;
             }
-            let display_state = marker_display_states
+            let display = marker_displays
                 .get(&entry.link_name)
                 .copied()
-                .unwrap_or(SubprojectState::Open);
-            if display_state != entry.state {
+                .unwrap_or(SubprojectDisplay {
+                    state: SubprojectState::Open,
+                    future_scheduled: false,
+                });
+            if display.state != entry.state {
                 plan.changes.push(ProjectChange::MarkSubproject {
                     stem: entry.stem.clone(),
                     state: entry.state,
                 });
+            }
+            if display.future_scheduled != entry.future_scheduled {
+                let change = if entry.future_scheduled {
+                    ProjectChange::AddSubprojectScheduleMarker {
+                        stem: entry.stem.clone(),
+                    }
+                } else {
+                    ProjectChange::RemoveSubprojectScheduleMarker {
+                        stem: entry.stem.clone(),
+                    }
+                };
+                plan.changes.push(change);
             }
         }
 
@@ -1269,39 +1321,46 @@ fn desired_subproject_entries(
     open_entries
 }
 
-fn subproject_display_states_in_marker_line(
+fn subproject_displays_in_marker_line(
     line: &str,
-) -> HashMap<String, SubprojectState> {
-    let mut states = HashMap::new();
+) -> HashMap<String, SubprojectDisplay> {
+    let mut displays = HashMap::new();
     for span in wikilink_spans_in_line(line) {
-        states.entry(span.link.link_name).or_insert_with(|| {
-            display_state_for_wikilink(line, span.start, span.end)
+        displays.entry(span.link.link_name).or_insert_with(|| {
+            display_for_wikilink(line, span.start, span.end)
         });
     }
-    states
+    displays
 }
 
-fn display_state_for_wikilink(
+fn display_for_wikilink(
     line: &str,
     link_start: usize,
     link_end: usize,
-) -> SubprojectState {
+) -> SubprojectDisplay {
     let before_link = line[..link_start].trim_end();
     let after_link = line[link_end..].trim_start();
-    if !before_link.ends_with("~~") {
-        return SubprojectState::Open;
-    }
-
-    let Some(after_strike) = after_link.strip_prefix("~~") else {
-        return SubprojectState::Open;
-    };
-    let marker = after_strike.trim_start();
-    if marker.starts_with(SUBPROJECT_DONE_MARKER) {
-        SubprojectState::Done
-    } else if marker.starts_with(SUBPROJECT_CANCELED_MARKER) {
-        SubprojectState::Canceled
+    let (before_entry, state) = if let Some(before_strike) =
+        before_link.strip_suffix("~~")
+        && let Some(after_strike) = after_link.strip_prefix("~~")
+    {
+        let marker = after_strike.trim_start();
+        let state = if marker.starts_with(SUBPROJECT_DONE_MARKER) {
+            SubprojectState::Done
+        } else if marker.starts_with(SUBPROJECT_CANCELED_MARKER) {
+            SubprojectState::Canceled
+        } else {
+            SubprojectState::Open
+        };
+        (before_strike.trim_end(), state)
     } else {
-        SubprojectState::Open
+        (before_link, SubprojectState::Open)
+    };
+
+    SubprojectDisplay {
+        state,
+        future_scheduled: before_entry
+            .ends_with(SUBPROJECT_FUTURE_SCHEDULE_MARKER),
     }
 }
 
@@ -1352,6 +1411,8 @@ fn apply_project_changes(
             ProjectChange::AddSubprojectLink { .. }
             | ProjectChange::RemoveSubprojectLink { .. }
             | ProjectChange::MarkSubproject { .. }
+            | ProjectChange::AddSubprojectScheduleMarker { .. }
+            | ProjectChange::RemoveSubprojectScheduleMarker { .. }
             | ProjectChange::NormalizeSubprojects => {
                 sync_subprojects = true;
             }
@@ -1702,9 +1763,14 @@ fn sorted_subproject_entries(
 }
 
 fn render_subproject_entry(entry: &SubprojectEntry) -> String {
-    match entry.state.closed_marker() {
+    let link = match entry.state.closed_marker() {
         Some(marker) => format!("~~[[{}]]~~ {marker}", entry.stem),
         None => format!("[[{}]]", entry.stem),
+    };
+    if entry.future_scheduled {
+        format!("{SUBPROJECT_FUTURE_SCHEDULE_MARKER} {link}")
+    } else {
+        link
     }
 }
 
@@ -2788,6 +2854,17 @@ mod tests {
             link_name: stem.to_ascii_lowercase(),
             stem: stem.to_string(),
             state,
+            future_scheduled: false,
+        }
+    }
+
+    fn future_subproject(
+        stem: &str,
+        state: SubprojectState,
+    ) -> SubprojectEntry {
+        SubprojectEntry {
+            future_scheduled: true,
+            ..subproject(stem, state)
         }
     }
 
@@ -3279,16 +3356,98 @@ status: wip
     #[test]
     fn render_subprojects_line_formats_closed_children_after_open_children() {
         let entries = [
-            done_subproject("Gamma"),
+            future_subproject("Gamma", SubprojectState::Done),
             open_subproject("Beta"),
             canceled_subproject("Delta"),
-            open_subproject("Alpha"),
+            future_subproject("Alpha", SubprojectState::Open),
         ];
 
         assert_eq!(
             render_subprojects_line_text(&entries),
-            "- 🧩 **Sub-projects:** [[Alpha]] • [[Beta]] • ~~[[Delta]]~~ ❌ • ~~[[Gamma]]~~ ✅"
+            "- 🧩 **Sub-projects:** 🗓️ [[Alpha]] • [[Beta]] • ~~[[Delta]]~~ ❌ • 🗓️ ~~[[Gamma]]~~ ✅"
         );
+    }
+
+    #[test]
+    fn subproject_display_parser_scopes_schedule_and_lifecycle_markers() {
+        let displays = subproject_displays_in_marker_line(
+            "- 🧩 **Sub-projects:** 🗓️ [[FutureOpen]] • [[PlainOpen]] • 🗓️ ~~[[FutureDone]]~~ ✅ • ~~[[PlainCanceled]]~~ ❌",
+        );
+
+        assert_eq!(
+            displays.get("futureopen"),
+            Some(&SubprojectDisplay {
+                state: SubprojectState::Open,
+                future_scheduled: true,
+            })
+        );
+        assert_eq!(
+            displays.get("plainopen"),
+            Some(&SubprojectDisplay {
+                state: SubprojectState::Open,
+                future_scheduled: false,
+            })
+        );
+        assert_eq!(
+            displays.get("futuredone"),
+            Some(&SubprojectDisplay {
+                state: SubprojectState::Done,
+                future_scheduled: true,
+            })
+        );
+        assert_eq!(
+            displays.get("plaincanceled"),
+            Some(&SubprojectDisplay {
+                state: SubprojectState::Canceled,
+                future_scheduled: false,
+            })
+        );
+    }
+
+    #[test]
+    fn project_sync_plan_reconciles_subproject_schedule_markers() {
+        let project = parse_clean_project(
+            "Parent.md",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** 🗓️ [[DueOpen]] • [[FutureOpen]] • 🗓️ ~~[[DueClosed]]~~ ❌ • ~~[[FutureClosed]]~~ ✅\n",
+        );
+        let children = [
+            open_subproject("DueOpen"),
+            future_subproject("FutureOpen", SubprojectState::Open),
+            canceled_subproject("DueClosed"),
+            future_subproject("FutureClosed", SubprojectState::Done),
+        ];
+
+        let plan = plan_project_sync(&project, &children);
+        assert_eq!(
+            plan.changes,
+            vec![
+                ProjectChange::RemoveSubprojectScheduleMarker {
+                    stem: "DueOpen".to_string(),
+                },
+                ProjectChange::AddSubprojectScheduleMarker {
+                    stem: "FutureOpen".to_string(),
+                },
+                ProjectChange::RemoveSubprojectScheduleMarker {
+                    stem: "DueClosed".to_string(),
+                },
+                ProjectChange::AddSubprojectScheduleMarker {
+                    stem: "FutureClosed".to_string(),
+                },
+            ]
+        );
+        let desired = plan.desired_subprojects.expect("desired ledger");
+        let output = apply_subproject_changes(
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** 🗓️ [[DueOpen]] • [[FutureOpen]] • 🗓️ ~~[[DueClosed]]~~ ❌ • ~~[[FutureClosed]]~~ ✅\n",
+            &plan.changes,
+            &desired,
+        );
+        assert_eq!(
+            output,
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[DueOpen]] • 🗓️ [[FutureOpen]] • ~~[[DueClosed]]~~ ❌ • 🗓️ ~~[[FutureClosed]]~~ ✅\n"
+        );
+
+        let canonical = parse_clean_project("Parent.md", &output);
+        assert!(plan_project_sync(&canonical, &children).changes.is_empty());
     }
 
     #[test]
@@ -3390,18 +3549,22 @@ status: wip
         .expect("multiple project");
         assert_eq!(issues.len(), 2);
 
-        let children_by_parent = subproject_children_by_parent_link_name([
-            &open_child,
-            &path_case_child,
-            &terminal_status_open_child,
-            &checked_child,
-            &canceled_child,
-            &missing_prj_child,
-            &malformed_child,
-            &multiple_child,
-            &self_link,
-            &area_child,
-        ]);
+        let today = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
+        let children_by_parent = subproject_children_by_parent_link_name(
+            [
+                &open_child,
+                &path_case_child,
+                &terminal_status_open_child,
+                &checked_child,
+                &canceled_child,
+                &missing_prj_child,
+                &malformed_child,
+                &multiple_child,
+                &self_link,
+                &area_child,
+            ],
+            today,
+        );
 
         assert_eq!(
             children_by_parent.get(&parent.link_name),
@@ -3420,7 +3583,7 @@ status: wip
         assert!(!children_by_parent.contains_key(&self_link.link_name));
 
         let non_parent_links =
-            subproject_children_by_parent_link_name([&area_child]);
+            subproject_children_by_parent_link_name([&area_child], today);
         assert!(!non_parent_links.contains_key(&parent.link_name));
     }
 
@@ -3474,6 +3637,51 @@ status: wip
         .expect("project");
         assert!(plan_project_sync(&already_hidden, &[]).changes.is_empty());
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn subproject_aggregation_marks_only_schedules_after_shared_today() {
+        let project = |name: &str, scheduled: Option<&str>, task: &str| {
+            let scheduled = scheduled
+                .map(|date| format!("scheduled: {date}\n"))
+                .unwrap_or_default();
+            parse_clean_project(
+                &format!("{name}.md"),
+                &format!(
+                    "---\ntype: [[project]]\nparent: [[Parent]]\n{scheduled}---\n{task}\n"
+                ),
+            )
+        };
+        let tomorrow = project(
+            "Tomorrow",
+            Some("2026-07-11"),
+            "- [ ] #task Ship tomorrow #hide ^prj",
+        );
+        let today =
+            project("Today", Some("2026-07-10"), "- [ ] #task Ship today ^prj");
+        let past =
+            project("Past", Some("2026-07-09"), "- [ ] #task Ship past ^prj");
+        let absent = project("Absent", None, "- [ ] #task Ship absent ^prj");
+        let closed_future = project(
+            "ClosedFuture",
+            Some("2026-07-12"),
+            "- [x] #task Ship closed #hide ^prj",
+        );
+
+        let children = subproject_children_by_parent_link_name(
+            [&tomorrow, &today, &past, &absent, &closed_future],
+            NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+        );
+        assert_eq!(
+            children.get("parent"),
+            Some(&vec![
+                open_subproject("Absent"),
+                future_subproject("ClosedFuture", SubprojectState::Done),
+                open_subproject("Past"),
+                open_subproject("Today"),
+                future_subproject("Tomorrow", SubprojectState::Open),
+            ])
+        );
     }
 
     #[test]
