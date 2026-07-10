@@ -498,7 +498,7 @@ fn tasks_short_flags_files_stdin_and_comments_reach_filterless_slice() {
     assert_success(&origin);
     assert_eq!(
         stdout(&origin).lines().count(),
-        8,
+        7,
         "{}",
         format_output(&origin)
     );
@@ -625,7 +625,7 @@ fn tasks_query_parser_accepts_the_daily_note_query_surface() {
         "( status.type is TODO ) OR ( status.type is IN_PROGRESS )\n",
         "is not blocked\n",
         "filter by function task.file.path !== query.file.path\n",
-        "filter by function !task.scheduled.moment || \\\n+         task.scheduled.moment.isSameOrBefore(moment(query.file.filenameWithoutExtension, \"YYYYMMDD\"), \"day\")\n",
+        "filter by function !task.scheduled.moment || \\\n         task.scheduled.moment.isSameOrBefore(moment(query.file.filenameWithoutExtension, \"YYYYMMDD\"), \"day\")\n",
         "filter by function !task.tags.includes(\"#hide\")\n",
         "group by path\n",
         "limit groups to 3 tasks\n",
@@ -652,6 +652,154 @@ fn tasks_query_parser_accepts_the_daily_note_query_surface() {
     assert_eq!(query["limitGroups"], 3);
     assert_eq!(query["layout"]["shortMode"], true);
     assert_eq!(query["layout"]["showToolbar"], false);
+}
+
+#[test]
+fn tasks_by_function_exposes_tasks_query_context_and_real_moment_dates() {
+    let query = concat!(
+        "filter by function task.descriptionWithoutTags === \"Complete dataview metadata\"\n",
+        "filter by function task.status.type === \"TODO\" && task.priorityName === \"High\" && task.priorityNumber === 1\n",
+        "filter by function task.due.moment.isSame(moment(\"2026-07-12\"), \"day\") && task.scheduled.formatAsDate() === \"2026-07-10\"\n",
+        "filter by function task.file.path === \"Tasks/MetadataDataview.md\" && task.file.folder === \"Tasks/\" && task.heading === \"Dataview Task Metadata\" && task.lineNumber === 2\n",
+        "filter by function task.isRecurring && task.id === \"dv-all\" && task.dependsOn.includes(\"done-root\") && !task.isBlocked(query.allTasks)\n",
+        "filter by function query.allTasks.length === 33 && query.file.path === \"Daily/2026-07-10.md\" && query.file.hasProperty(\"date\") && query.file.property(\"date\") === \"2026-07-10\"\n",
+        "filter by function moment().format(\"YYYY-MM-DD HH:mm\") === \"2026-07-10 12:00\"\n",
+    );
+    let output = run_fixture(&[
+        "--format",
+        "json",
+        "--origin",
+        "Daily/2026-07-10.md",
+        "--tasks",
+        query,
+    ]);
+
+    assert_success(&output);
+    let actual = json_stdout(&output);
+    assert_eq!(actual["result"]["count"], 1);
+    assert_eq!(
+        actual["result"]["tasks"][0]["description"],
+        "#task Complete dataview metadata #hide"
+    );
+}
+
+#[test]
+fn tasks_by_function_runs_dash_filters_and_stacked_sorts() {
+    let query = concat!(
+        "filter by function task.file.path !== query.file.path\n",
+        "filter by function !task.scheduled.moment || task.scheduled.moment.isSameOrBefore(moment(), \"day\")\n",
+        "filter by function !task.tags.includes(\"#hide\")\n",
+        "sort by function task.file.path\n",
+        "sort by function task.lineNumber\n",
+    );
+    let output = run_fixture(&[
+        "--format", "json", "--origin", "dash.md", "--tasks", query,
+    ]);
+
+    assert_success(&output);
+    let actual = json_stdout(&output);
+    let tasks = actual["result"]["tasks"].as_array().unwrap();
+    assert!(tasks.iter().all(|task| task["path"] != "dash.md"));
+    assert!(tasks.iter().all(|task| {
+        !task["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == "#hide")
+    }));
+    let keys = tasks
+        .iter()
+        .map(|task| {
+            (
+                task["path"].as_str().unwrap(),
+                task["lineNumber"].as_u64().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]), "{keys:?}");
+}
+
+#[test]
+fn tasks_group_by_function_reports_array_keys_and_runtime_errors() {
+    let output = run_fixture(&[
+        "--format",
+        "json",
+        "--tasks",
+        "group by function task.tags.length ? task.tags : [\"untagged\"]",
+    ]);
+    assert_success(&output);
+    let actual = json_stdout(&output);
+    let entries = actual["result"]["functionGroups"][0]["tasks"]
+        .as_array()
+        .unwrap();
+    let tagged = entries
+        .iter()
+        .find(|entry| {
+            entry["path"] == "Tasks/MetadataDataview.md"
+                && entry["lineNumber"] == 2
+        })
+        .unwrap();
+    assert_eq!(tagged["groups"], json!(["#hide"]));
+    assert!(entries
+        .iter()
+        .any(|entry| entry["groups"] == json!(["untagged"])));
+
+    let error = run_fixture(&[
+        "--format",
+        "json",
+        "--tasks",
+        "group by function task.missing.property",
+    ]);
+    assert_success(&error);
+    let error = json_stdout(&error);
+    let groups = &error["result"]["functionGroups"][0]["tasks"][0]["groups"];
+    assert!(
+        groups[0]
+            .as_str()
+            .unwrap()
+            .contains("Failed calculating expression"),
+        "{groups}"
+    );
+}
+
+#[test]
+fn tasks_by_function_surfaces_parse_return_type_and_sort_errors() {
+    for query in [
+        "filter by function task.description.length",
+        "filter by function task.missing(",
+        "sort by function task.missing",
+    ] {
+        let output = run_fixture(&["--format", "json", "--tasks", query]);
+        assert!(
+            !output.status.success(),
+            "{query}\n{}",
+            format_output(&output)
+        );
+        let error = stderr(&output);
+        assert!(error.contains("Tasks query failed"), "{query}: {error}");
+        assert!(
+            error.contains("JavaScript")
+                || error.contains("filtering function"),
+            "{query}: {error}"
+        );
+    }
+
+    let interrupted = run_fixture(&[
+        "--format",
+        "json",
+        "--tasks",
+        "filter by function while (true) {} return true",
+    ]);
+    assert!(
+        !interrupted.status.success(),
+        "{}",
+        format_output(&interrupted)
+    );
+    assert!(
+        stderr(&interrupted).contains("interrupted"),
+        "{}",
+        format_output(&interrupted)
+    );
 }
 
 #[test]
@@ -811,7 +959,7 @@ fn tasks_native_boolean_and_implicit_and_filters_match_goldens() {
 }
 
 #[test]
-fn tasks_native_dashboard_non_function_subset_is_hand_verified() {
+fn tasks_native_dashboard_defaults_run_function_filters_with_pinned_moment() {
     let output = run_fixture(&[
         "--format",
         "json",
@@ -823,13 +971,16 @@ fn tasks_native_dashboard_non_function_subset_is_hand_verified() {
     assert_success(&output);
     let actual = json_stdout(&output);
     let descriptions = result_descriptions(&actual);
-    assert_eq!(actual["result"]["count"], 18);
+    assert_eq!(actual["result"]["count"], 14);
     for excluded in [
         "#task Blocked child",
         "#task Mixed dependencies",
         "#task Self dependency",
         "#task Duplicate id dependent",
         "#task Template task is indexed",
+        "#task Complete dataview metadata #hide",
+        "#task Complete emoji metadata #hide",
+        "#task Dashboard READY",
     ] {
         assert!(
             !descriptions
@@ -841,7 +992,7 @@ fn tasks_native_dashboard_non_function_subset_is_hand_verified() {
     assert!(
         descriptions
             .iter()
-            .any(|description| description == "#task Dashboard READY"),
+            .any(|description| description == "#task Daily note task"),
         "{descriptions:?}"
     );
 }

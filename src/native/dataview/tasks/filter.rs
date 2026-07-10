@@ -2,6 +2,7 @@ use chrono::{Datelike, Duration, Months, NaiveDate, NaiveDateTime, Weekday};
 use regex::RegexBuilder;
 
 use super::{
+    js::JsSandbox,
     parse::{
         DateField, DateRelation, FilterExpr, Presence, PresenceField,
         PriorityRelation, TextField, TextOperator,
@@ -15,10 +16,12 @@ pub(super) fn apply(
     tasks: Vec<Task>,
     now: NaiveDateTime,
     global_filter: &str,
+    javascript: &mut JsSandbox,
 ) -> Result<Vec<Task>, DataviewError> {
     for filter in filters {
         validate_filter(filter, now.date())
             .map_err(|message| DataviewError::TasksQuery { message })?;
+        validate_function_filter(filter, javascript)?;
     }
     tasks
         .into_iter()
@@ -27,7 +30,13 @@ pub(super) fn apply(
                 if !matched {
                     Ok(false)
                 } else {
-                    matches_filter(filter, &task, now.date(), global_filter)
+                    matches_filter(
+                        filter,
+                        &task,
+                        now.date(),
+                        global_filter,
+                        javascript,
+                    )
                 }
             });
             match result {
@@ -39,6 +48,27 @@ pub(super) fn apply(
             }
         })
         .collect()
+}
+
+fn validate_function_filter(
+    filter: &FilterExpr,
+    javascript: &mut JsSandbox,
+) -> Result<(), DataviewError> {
+    match filter {
+        FilterExpr::And { left, right }
+        | FilterExpr::Or { left, right }
+        | FilterExpr::Xor { left, right } => {
+            validate_function_filter(left, javascript)?;
+            validate_function_filter(right, javascript)
+        }
+        FilterExpr::Not { expression } => {
+            validate_function_filter(expression, javascript)
+        }
+        FilterExpr::Function { source } => {
+            javascript.validate_expression(source)
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_filter(
@@ -83,23 +113,52 @@ fn matches_filter(
     task: &Task,
     today: NaiveDate,
     global_filter: &str,
+    javascript: &mut JsSandbox,
 ) -> Result<bool, String> {
     match filter {
         FilterExpr::And { left, right } => {
-            Ok(matches_filter(left, task, today, global_filter)?
-                && matches_filter(right, task, today, global_filter)?)
+            Ok(
+                matches_filter(left, task, today, global_filter, javascript)?
+                    && matches_filter(
+                        right,
+                        task,
+                        today,
+                        global_filter,
+                        javascript,
+                    )?,
+            )
         }
         FilterExpr::Or { left, right } => {
-            Ok(matches_filter(left, task, today, global_filter)?
-                || matches_filter(right, task, today, global_filter)?)
+            Ok(
+                matches_filter(left, task, today, global_filter, javascript)?
+                    || matches_filter(
+                        right,
+                        task,
+                        today,
+                        global_filter,
+                        javascript,
+                    )?,
+            )
         }
         FilterExpr::Xor { left, right } => {
-            Ok(matches_filter(left, task, today, global_filter)?
-                ^ matches_filter(right, task, today, global_filter)?)
+            Ok(
+                matches_filter(left, task, today, global_filter, javascript)?
+                    ^ matches_filter(
+                        right,
+                        task,
+                        today,
+                        global_filter,
+                        javascript,
+                    )?,
+            )
         }
-        FilterExpr::Not { expression } => {
-            Ok(!matches_filter(expression, task, today, global_filter)?)
-        }
+        FilterExpr::Not { expression } => Ok(!matches_filter(
+            expression,
+            task,
+            today,
+            global_filter,
+            javascript,
+        )?),
         FilterExpr::Done { done } => Ok(task.is_done == *done),
         FilterExpr::StatusType { negated, value } => {
             let matched = task.status.status_type.as_str() == value;
@@ -150,9 +209,12 @@ fn matches_filter(
         }
         FilterExpr::Blocked { blocked } => Ok(task.is_blocked == *blocked),
         FilterExpr::Blocking { blocking } => Ok(task.is_blocking == *blocking),
-        // Phase 5 evaluates JavaScript. Keeping function filters neutral here
-        // lets Phase 4 execute and verify the non-function subset of a query.
-        FilterExpr::Function { .. } => Ok(true),
+        FilterExpr::Function { source } => javascript
+            .matches_filter(source, task)
+            .map_err(|error| match error {
+                DataviewError::TasksQuery { message } => message,
+                other => format!("{other:?}"),
+            }),
         FilterExpr::ExcludeSubItems => Ok(is_top_level(task)),
     }
 }

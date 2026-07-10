@@ -19,6 +19,8 @@ pub(super) struct QueryAst {
     pub(super) layout: LayoutOptions,
     pub(super) explain: bool,
     pub(super) ignore_global_query: bool,
+    #[serde(skip)]
+    pub(super) context: Option<QueryContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -315,10 +317,10 @@ impl Default for LayoutOptions {
     }
 }
 
-#[derive(Debug, Clone)]
-struct QueryContext {
-    file: TaskFile,
-    properties: BTreeMap<String, serde_yaml::Value>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct QueryContext {
+    pub(super) file: TaskFile,
+    pub(super) properties: BTreeMap<String, serde_yaml::Value>,
 }
 
 pub(super) fn parse(
@@ -356,6 +358,7 @@ pub(super) fn parse(
         result.ignore_global_query = false;
     }
     result.append(defaults_and_query);
+    result.context = context;
     Ok(result)
 }
 

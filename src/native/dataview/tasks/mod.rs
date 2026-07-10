@@ -6,6 +6,7 @@ use self::{index::TaskIndex, settings::TasksSettings};
 
 mod filter;
 mod index;
+mod js;
 mod parse;
 mod settings;
 mod task;
@@ -20,12 +21,17 @@ pub(super) fn run(
     let query = parse::parse(vault, origin, query, &settings)?;
     let now = bob_env::current_datetime();
     let index = TaskIndex::read(vault, &settings, now)?;
-    let tasks = filter::apply(
+    let mut javascript =
+        js::JsSandbox::new(&index.tasks, query.context.as_ref(), now)?;
+    let mut tasks = filter::apply(
         &query.filters,
         index.tasks,
         now,
         &settings.global_filter,
+        &mut javascript,
     )?;
+    javascript.apply_function_sorts(&query.sorting, &mut tasks)?;
+    let function_groups = javascript.function_groups(&query.grouping, &tasks);
     let paths = tasks
         .iter()
         .map(|task| task.path.clone())
@@ -50,6 +56,7 @@ pub(super) fn run(
                 "type": "tasks",
                 "count": tasks.len(),
                 "tasks": tasks,
+                "functionGroups": function_groups,
             },
             "settings": settings,
             "warnings": [],
