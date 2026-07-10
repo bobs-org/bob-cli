@@ -183,8 +183,10 @@ output prints vault-relative Markdown paths, `json` output is stable for
 scripts, and `markdown` output prints Dataview-rendered Markdown for supported
 DQL results. The current Tasks slice accepts empty/comment-only inline or file
 queries and returns all tasks allowed by the Tasks plugin's global filter in
-`paths` or `json` format. This command does not run `ob sync`; vault freshness
-is handled by the external background or cron sync path. Use `--engine
+`paths` or `json` format. JSON task records include parsed metadata, status and
+priority, source location and hierarchy, dependencies, blocked/blocking state,
+and urgency. This command does not run `ob sync`; vault freshness is handled by
+the external background or cron sync path. Use `--engine
 obsidian` when you want exact behavior from the live Dataview plugin in an open
 Obsidian vault; Tasks inputs are currently native-only.
 

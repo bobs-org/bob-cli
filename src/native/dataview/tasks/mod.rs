@@ -1,24 +1,12 @@
-use std::{
-    collections::BTreeSet,
-    ffi::OsStr,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeSet, path::Path};
 
-use serde::Serialize;
+use super::{bob_env, print_json, DataviewError, OutputFormat};
 
-use super::{print_json, DataviewError, OutputFormat};
+use self::{index::TaskIndex, settings::TasksSettings};
 
-use self::settings::TasksSettings;
-
+mod index;
 mod settings;
-
-#[derive(Debug, Serialize)]
-struct IndexedTask {
-    path: String,
-    status: char,
-    text: String,
-}
+mod task;
 
 pub(super) fn run(
     vault: &Path,
@@ -27,8 +15,9 @@ pub(super) fn run(
 ) -> Result<(), DataviewError> {
     let settings = TasksSettings::read(vault)?;
     validate_filterless_query(query, &settings.global_query)?;
-    let tasks = read_tasks(vault, &settings.global_filter)?;
-    let paths = tasks
+    let index = TaskIndex::read(vault, &settings, bob_env::current_datetime())?;
+    let paths = index
+        .tasks
         .iter()
         .map(|task| task.path.clone())
         .collect::<BTreeSet<_>>()
@@ -49,8 +38,8 @@ pub(super) fn run(
             "paths": paths,
             "result": {
                 "type": "tasks",
-                "count": tasks.len(),
-                "tasks": tasks,
+                "count": index.tasks.len(),
+                "tasks": index.tasks,
             },
             "settings": settings,
             "warnings": [],
@@ -92,172 +81,9 @@ fn first_instruction(query: &str) -> Option<&str> {
         .find(|line| !line.is_empty() && !line.starts_with('#'))
 }
 
-fn read_tasks(
-    vault: &Path,
-    global_filter: &str,
-) -> Result<Vec<IndexedTask>, DataviewError> {
-    let mut markdown_paths = Vec::new();
-    collect_markdown_paths(vault, &mut markdown_paths)?;
-    markdown_paths.sort();
-
-    let mut tasks = Vec::new();
-    for path in markdown_paths {
-        let contents = fs::read_to_string(&path).map_err(|error| {
-            DataviewError::NativeVaultRead {
-                path: path.clone(),
-                error,
-            }
-        })?;
-        let relative_path = path.strip_prefix(vault).map_err(|error| {
-            DataviewError::TasksQuery {
-                message: format!(
-                    "failed to make {} vault-relative: {error}",
-                    path.display()
-                ),
-            }
-        })?;
-        let relative_path = relative_path.to_string_lossy().replace('\\', "/");
-
-        let mut fence = None;
-        for line in contents.lines() {
-            if update_fence(line, &mut fence) {
-                continue;
-            }
-            if fence.is_some() {
-                continue;
-            }
-            let Some((status, text)) = parse_task_line(line) else {
-                continue;
-            };
-            if !global_filter.is_empty() && !text.contains(global_filter) {
-                continue;
-            }
-            tasks.push(IndexedTask {
-                path: relative_path.clone(),
-                status,
-                text: text.to_string(),
-            });
-        }
-    }
-    Ok(tasks)
-}
-
-fn collect_markdown_paths(
-    directory: &Path,
-    paths: &mut Vec<PathBuf>,
-) -> Result<(), DataviewError> {
-    let entries = fs::read_dir(directory).map_err(|error| {
-        DataviewError::NativeVaultRead {
-            path: directory.to_path_buf(),
-            error,
-        }
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|error| DataviewError::NativeVaultRead {
-            path: directory.to_path_buf(),
-            error,
-        })?;
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|error| {
-            DataviewError::NativeVaultRead {
-                path: path.clone(),
-                error,
-            }
-        })?;
-        if file_type.is_dir() {
-            if !entry.file_name().to_string_lossy().starts_with('.') {
-                collect_markdown_paths(&path, paths)?;
-            }
-        } else if file_type.is_file() && is_markdown(&path) {
-            paths.push(path);
-        }
-    }
-    Ok(())
-}
-
-fn is_markdown(path: &Path) -> bool {
-    path.extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
-}
-
-fn parse_task_line(line: &str) -> Option<(char, &str)> {
-    let line = line.trim_start_matches([' ', '\t']);
-    let after_marker = if let Some(rest) = line
-        .strip_prefix("- ")
-        .or_else(|| line.strip_prefix("* "))
-        .or_else(|| line.strip_prefix("+ "))
-    {
-        rest
-    } else {
-        let digit_count = line.bytes().take_while(u8::is_ascii_digit).count();
-        if digit_count == 0 {
-            return None;
-        }
-        let rest = &line[digit_count..];
-        rest.strip_prefix(". ")
-            .or_else(|| rest.strip_prefix(") "))?
-    };
-
-    let after_open = after_marker.strip_prefix('[')?;
-    let mut chars = after_open.chars();
-    let status = chars.next()?;
-    let after_status = chars.as_str().strip_prefix(']')?;
-    if !after_status.is_empty()
-        && !after_status.starts_with(char::is_whitespace)
-    {
-        return None;
-    }
-    Some((status, after_status.trim_start()))
-}
-
-fn update_fence(line: &str, fence: &mut Option<(char, usize)>) -> bool {
-    let trimmed = line.trim_start();
-    let marker = trimmed.chars().next();
-    let Some(marker @ ('`' | '~')) = marker else {
-        return false;
-    };
-    let count = trimmed.chars().take_while(|value| *value == marker).count();
-    if count < 3 {
-        return false;
-    }
-
-    match *fence {
-        Some((open_marker, open_count))
-            if marker == open_marker && count >= open_count =>
-        {
-            *fence = None;
-        }
-        None => *fence = Some((marker, count)),
-        Some(_) => {}
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn task_line_parser_accepts_supported_markers() {
-        for line in [
-            "- [ ] task",
-            "  * [/] task",
-            "\t+ [*] task",
-            "1. [x] task",
-            "22) [-] task",
-        ] {
-            assert!(parse_task_line(line).is_some(), "{line}");
-        }
-    }
-
-    #[test]
-    fn task_line_parser_rejects_non_tasks() {
-        for line in ["- plain", "text - [ ] task", "- [] task", "- [ ]task"] {
-            assert!(parse_task_line(line).is_none(), "{line}");
-        }
-    }
 
     #[test]
     fn comments_are_filterless_query_input() {

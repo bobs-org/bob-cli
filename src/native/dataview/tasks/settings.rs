@@ -49,11 +49,14 @@ impl Default for TasksSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize,
+)]
 pub(super) enum TaskFormat {
+    #[serde(rename = "dataview")]
     Dataview,
     #[default]
+    #[serde(rename = "tasksPluginEmoji", alias = "emoji")]
     Emoji,
 }
 
@@ -62,6 +65,7 @@ pub(super) enum TaskFormat {
 pub(super) struct StatusSettings {
     #[serde(default = "default_core_statuses")]
     pub(super) core_statuses: Vec<TaskStatus>,
+    #[serde(default = "default_custom_statuses")]
     pub(super) custom_statuses: Vec<TaskStatus>,
 }
 
@@ -69,7 +73,7 @@ impl Default for StatusSettings {
     fn default() -> Self {
         Self {
             core_statuses: default_core_statuses(),
-            custom_statuses: Vec::new(),
+            custom_statuses: default_custom_statuses(),
         }
     }
 }
@@ -100,6 +104,25 @@ fn default_core_statuses() -> Vec<TaskStatus> {
             next_status_symbol: " ".to_string(),
             available_as_command: true,
             status_type: "DONE".to_string(),
+        },
+    ]
+}
+
+fn default_custom_statuses() -> Vec<TaskStatus> {
+    vec![
+        TaskStatus {
+            symbol: "/".to_string(),
+            name: "In Progress".to_string(),
+            next_status_symbol: "x".to_string(),
+            available_as_command: true,
+            status_type: "IN_PROGRESS".to_string(),
+        },
+        TaskStatus {
+            symbol: "-".to_string(),
+            name: "Cancelled".to_string(),
+            next_status_symbol: " ".to_string(),
+            available_as_command: true,
+            status_type: "CANCELLED".to_string(),
         },
     ]
 }

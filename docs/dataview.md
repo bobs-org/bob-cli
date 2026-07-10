@@ -130,8 +130,13 @@ Dataview JSON output is a stable object for scripts. It includes:
 - `warnings`: path extraction or compatibility warnings
 
 Filterless Tasks JSON uses the same wrapper with `query_kind: "tasks"`. Its
-`result` contains the matched task count and minimal `path`, `status`, and
-`text` records; `settings` contains the Tasks settings that governed the scan.
+`result` contains the matched task count and a full record for each task:
+parsed status, descriptions, dates (including invalid-date state), priority,
+recurrence, dependency and block-link metadata, tags, file and heading context,
+list hierarchy, blocked/blocking state, and urgency. Line numbers are
+zero-based, matching the Tasks plugin scripting API. `settings` contains the
+Tasks settings that governed the scan. Metadata is parsed using the configured
+Tasks format (`dataview` or `tasksPluginEmoji`).
 
 ## Manual Smoke Test
 
