@@ -1,6 +1,6 @@
 # Dataview Parity Fixture
 
-This vault is a deterministic corpus for `bob dataview` native parity work.
+This vault is a deterministic corpus for `bob query` native parity work.
 It intentionally combines cases the current native engine can read with cases
 reserved for later native parity phases.
 

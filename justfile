@@ -43,7 +43,7 @@ install-smoke:
     "${root}/bin/bob" bulk-git-commit --help >/dev/null
     "${root}/bin/bob" capture --help >/dev/null
     "${root}/bin/bob" capture-targets --help >/dev/null
-    "${root}/bin/bob" dataview --help >/dev/null
+    "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null
     "${root}/bin/bob" move-done-tasks --help >/dev/null
     "${root}/bin/bob" nightly --help >/dev/null

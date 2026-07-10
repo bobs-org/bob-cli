@@ -32,7 +32,7 @@ use super::env as bob_env;
 mod index;
 mod value;
 
-const COMMAND_NAME: &str = "bob dataview";
+const COMMAND_NAME: &str = "bob query";
 const ENV_OBSIDIAN_COMMAND: &str = "BOB_DATAVIEW_OBSIDIAN_COMMAND";
 const ENV_VAULT: &str = "BOB_DATAVIEW_VAULT";
 const RESULT_PREFIX: &str = "BOB_DATAVIEW_RESULT\t";
@@ -6298,7 +6298,7 @@ explicit Obsidian engine runs against the live Dataview plugin when exact \
 installed-plugin behavior is needed.",
         )
         .after_help(
-            "Examples:\n  bob dataview --source '#project and -\"archive\"'\n  bob dataview --query 'LIST FROM #waiting'\n  bob dataview --format json --query-file ~/queries/projects.dql",
+            "Examples:\n  bob query --source '#project and -\"archive\"'\n  bob query --query 'LIST FROM #waiting'\n  bob query --format json --query-file ~/queries/projects.dql",
         )
         .arg_required_else_help(true)
         .group(

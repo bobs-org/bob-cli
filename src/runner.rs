@@ -55,12 +55,6 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::CaptureTargets,
     },
     Subcommand {
-        name: "dataview",
-        script_command: None,
-        about: "Run Dataview queries against the Bob vault",
-        native_command: NativeCommand::Dataview,
-    },
-    Subcommand {
         name: "highlights",
         script_command: None,
         about: "Sync Highlights PDF annotations into reference notes",
@@ -101,6 +95,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         script_command: None,
         about: "Manage project notes via their ^prj tasks",
         native_command: NativeCommand::Projects,
+    },
+    Subcommand {
+        name: "query",
+        script_command: None,
+        about: "Run Dataview queries against the Bob vault",
+        native_command: NativeCommand::Query,
     },
     Subcommand {
         name: "tmux-pomodoro",
@@ -250,7 +250,7 @@ Examples:
                                  List picker sections for one capture target
   bob capture-targets --format json
                                  List picker targets for task capture
-  bob dataview --source '#project'
+  bob query --source '#project'
                                  Print matching note paths
   bob highlights scan --dry-run
                                  Preview Highlights reference note sync

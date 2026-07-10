@@ -31,7 +31,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" --help
 "$root/bin/bob" bulk-git-commit --help
 "$root/bin/bob" capture --help
-"$root/bin/bob" dataview --help
+"$root/bin/bob" query --help
 "$root/bin/bob" highlights --help
 "$root/bin/bob" move-done-tasks --help
 "$root/bin/bob" nightly --help
@@ -129,9 +129,9 @@ steps touch the vault; a failed wrapped step is reported but does not prevent
 later wrapped steps from running.
 
 ```bash
-bob dataview --source '#project'
-bob dataview --query 'LIST FROM #waiting'
-bob dataview --format json --query-file queries/projects.dql
+bob query --source '#project'
+bob query --query 'LIST FROM #waiting'
+bob query --format json --query-file queries/projects.dql
 ```
 
 Runs Dataview source expressions and DQL queries from the shell. The default
@@ -366,7 +366,7 @@ The remaining runtime dependencies are:
 
 - `ob` from obsidian-headless for the shared `bob nightly` Obsidian sync gate
 - `obsidian` CLI plus a running desktop Obsidian vault with the Dataview plugin
-  only when using `bob dataview --engine obsidian`
+  only when using `bob query --engine obsidian`
 - `git` and `ssh` for `bob bulk-git-commit` and for `bob move-done-tasks`
   commit/push behavior when the vault is a Git worktree
 - `notify-send` for desktop notifications from `bob notify`
@@ -381,10 +381,10 @@ Rust binaries, and the binaries carry the script assets they need.
 `BOB_DIR` sets the Bob vault directory. It defaults to `~/bob`.
 
 `BOB_DATAVIEW_OBSIDIAN_COMMAND` overrides the executable used by
-`bob dataview --engine obsidian`.
+`bob query --engine obsidian`.
 
 `BOB_DATAVIEW_VAULT` sets the default Obsidian vault name or ID forwarded to
-`obsidian eval` by `bob dataview --engine obsidian`.
+`obsidian eval` by `bob query --engine obsidian`.
 
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`.
 
@@ -430,10 +430,10 @@ Use `bob pomodoro`, `bob notify`, `bob bulk-git-commit`, and
 done and canceled task blocks should be archived from the vault.
 
 The old top-level commands were renamed: `bob collect-done` is now
-`bob move-done-tasks`, `bob highlights-ref` is now `bob highlights`, and
-`bob sync` is now `bob bulk-git-commit`. The old top-level names are no longer
-registered. Legacy installed binaries such as `bob_sync` remain compatibility
-shims for existing callers.
+`bob move-done-tasks`, `bob dataview` is now `bob query`, `bob highlights-ref`
+is now `bob highlights`, and `bob sync` is now `bob bulk-git-commit`. The old
+top-level names are no longer registered. Legacy installed binaries such as
+`bob_sync` remain compatibility shims for existing callers.
 
 The original script implementations remain embedded only as a rollback path.
 New integrations should rely on the native Rust command behavior.
@@ -458,7 +458,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" --help
 "$root/bin/bob" bulk-git-commit --help
 "$root/bin/bob" capture --help
-"$root/bin/bob" dataview --help
+"$root/bin/bob" query --help
 "$root/bin/bob" highlights --help
 "$root/bin/bob" move-done-tasks --help
 "$root/bin/bob" nightly --help
@@ -486,7 +486,7 @@ verify that `~/bob` is the intended vault, inspect `git -C ~/bob status --short`
 and review any local edits that may be included when touched candidate files are
 rewritten.
 
-The default `bob dataview` smoke tests are local and headless. Before running
+The default `bob query` smoke tests are local and headless. Before running
 live Obsidian smoke tests, start desktop Obsidian, open the target vault, enable
 Dataview, and use the explicit `--engine obsidian` examples in
 [`docs/dataview.md`](docs/dataview.md).

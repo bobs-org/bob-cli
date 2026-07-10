@@ -1,6 +1,6 @@
-# bob dataview
+# bob query
 
-`bob dataview` runs Dataview source expressions and DQL queries from the shell.
+`bob query` runs Dataview source expressions and DQL queries from the shell.
 The default engine is `native`, which evaluates queries against the local
 Markdown vault without a running desktop Obsidian app. Use `--engine obsidian`
 when you need exact behavior from the live Dataview plugin in an open Obsidian
@@ -15,35 +15,35 @@ mixed in.
 Run a source query and print one vault-relative Markdown path per matching note:
 
 ```bash
-bob dataview --source '#project and -"archive"'
+bob query --source '#project and -"archive"'
 ```
 
 Run DQL and print source note paths. `paths` is the default format, including
 for `TABLE` queries:
 
 ```bash
-bob dataview --query 'LIST FROM #waiting'
-bob dataview --strict-paths --query 'TABLE file.link, status FROM #project'
+bob query --query 'LIST FROM #waiting'
+bob query --strict-paths --query 'TABLE file.link, status FROM #project'
 ```
 
 Use JSON when a script needs metadata and the structured Dataview result:
 
 ```bash
-bob dataview --format json --query 'TABLE status, due FROM #project'
-bob dataview --format json --query-file ~/queries/projects.dql | jq '.paths'
+bob query --format json --query 'TABLE status, due FROM #project'
+bob query --format json --query-file ~/queries/projects.dql | jq '.paths'
 ```
 
 Render a visible Dataview table. Markdown output requires DQL:
 
 ```bash
-bob dataview --format markdown --origin Home.md --query 'TABLE file.link FROM #project'
+bob query --format markdown --origin Home.md --query 'TABLE file.link FROM #project'
 ```
 
 Read a query from a file, or from stdin with `-`:
 
 ```bash
-bob dataview --query-file ~/queries/waiting.dql
-printf 'LIST FROM #waiting\n' | bob dataview --query-file -
+bob query --query-file ~/queries/waiting.dql
+printf 'LIST FROM #waiting\n' | bob query --query-file -
 ```
 
 ## Options
@@ -83,7 +83,7 @@ Obsidian CLI. It can only be used with `--engine obsidian`. If omitted in Obsidi
 
 Exactly one of `-s|--source`, `-q|--query`, and `-Q|--query-file` is required.
 
-`bob dataview` does not run `ob sync` or `ob sync-status`. Vault freshness is
+`bob query` does not run `ob sync` or `ob sync-status`. Vault freshness is
 owned by the external background or cron sync path.
 
 ## JSON Output
@@ -102,16 +102,16 @@ JSON output is a stable object for scripts. It includes:
 For local smoke tests, adjust tags or folders to values that exist in the vault.
 
 ```bash
-bob dataview --source '#project'
-bob dataview --query 'LIST FROM #project'
-bob dataview --format json --query 'TABLE file.path FROM #project'
-bob dataview --format markdown --origin Home.md --query 'TABLE file.link FROM #project'
+bob query --source '#project'
+bob query --query 'LIST FROM #project'
+bob query --format json --query 'TABLE file.path FROM #project'
+bob query --format markdown --origin Home.md --query 'TABLE file.link FROM #project'
 printf 'LIST FROM #project\n' >/tmp/bob-dataview-smoke.dql
-bob dataview --query-file /tmp/bob-dataview-smoke.dql
+bob query --query-file /tmp/bob-dataview-smoke.dql
 ```
 
 If the smoke test needs recently synced state, let the external background or
-cron sync path finish first. `bob dataview` only reads the current vault state.
+cron sync path finish first. `bob query` only reads the current vault state.
 
 The fixture parity harness compares supported native fixture queries against the
 live Obsidian engine. It is intentionally gated because it requires desktop
@@ -127,7 +127,7 @@ For real-vault native smoke tests, use read-only queries against `~/bob`. These
 cover the supported local surface without requiring Obsidian:
 
 ```bash
-bob dataview --strict-paths --query '
+bob query --strict-paths --query '
 LIST
 FROM "ref"
 WHERE source_pdf
@@ -139,15 +139,15 @@ WHERE source_pdf
     OR parent.parent.parent.parent.parent = [[ai_ref]]
   )
 '
-bob dataview --source '#project'
-bob dataview --source '"prj"'
-bob dataview --strict-paths --query 'LIST FROM "prj" LIMIT 5'
-bob dataview --strict-paths --query 'TABLE file.mday, parent FROM "prj" LIMIT 5'
-bob dataview --strict-paths --query 'TASK LIMIT 3'
-bob dataview --strict-paths --query 'CALENDAR file.day WHERE file.day LIMIT 5'
-bob dataview --format markdown --query 'LIST FROM "prj" LIMIT 3'
-bob dataview --format markdown --query 'TABLE file.mday, parent FROM "prj" LIMIT 3'
-bob dataview --format markdown --query 'TASK LIMIT 3'
+bob query --source '#project'
+bob query --source '"prj"'
+bob query --strict-paths --query 'LIST FROM "prj" LIMIT 5'
+bob query --strict-paths --query 'TABLE file.mday, parent FROM "prj" LIMIT 5'
+bob query --strict-paths --query 'TASK LIMIT 3'
+bob query --strict-paths --query 'CALENDAR file.day WHERE file.day LIMIT 5'
+bob query --format markdown --query 'LIST FROM "prj" LIMIT 3'
+bob query --format markdown --query 'TABLE file.mday, parent FROM "prj" LIMIT 3'
+bob query --format markdown --query 'TASK LIMIT 3'
 ```
 
 Native indexing may warn about ambiguous bare wikilinks when multiple notes
@@ -160,7 +160,7 @@ Native mode runs against the local Markdown index. It does not call Obsidian or
 the live Dataview plugin.
 
 ```bash
-bob dataview --strict-paths --query '
+bob query --strict-paths --query '
 LIST
 FROM "ref"
 WHERE source_pdf
@@ -183,7 +183,7 @@ retains source identity. Native `json` output emits the stable Bob wrapper.
 Native `markdown` output renders DQL `LIST`, `TABLE`, and `TASK` results and
 fails cleanly for `CALENDAR`, matching Dataview's Markdown export behavior.
 
-Native mode remains scoped to the shell contract exposed by `bob dataview`. It
+Native mode remains scoped to the shell contract exposed by `bob query`. It
 does not implement DataviewJS, inline DQL modes, Obsidian DOM rendering,
 interactive task checking, or every plugin setting. Quoted native sources
 resolve an exact note path first and otherwise act as folder sources; use a
@@ -196,8 +196,8 @@ The target vault must already be open in desktop Obsidian, and the Dataview
 community plugin must be enabled.
 
 ```bash
-bob dataview --engine obsidian --source '#project'
-bob dataview --engine obsidian --format markdown --origin Home.md --query 'TABLE file.link FROM #project'
+bob query --engine obsidian --source '#project'
+bob query --engine obsidian --format markdown --origin Home.md --query 'TABLE file.link FROM #project'
 ```
 
 Set `BOB_DATAVIEW_OBSIDIAN_COMMAND` to use a specific Obsidian CLI executable.

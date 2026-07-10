@@ -189,22 +189,22 @@ fn capture_targets_help_is_native_only() {
 fn dataview_help_is_native_only() {
     let temp = TempDir::new("bob-cli-dataview-native-help");
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--help")
         .env("BOB_CLI_USE_SCRIPT", "1")
         .env("XDG_CACHE_HOME", temp.path())
         .output()
-        .expect("run native-only bob dataview --help");
+        .expect("run native-only bob query --help");
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("bob dataview"),
-        "expected dataview help text:\n{}",
+        stdout(&output).contains("bob query"),
+        "expected query help text:\n{}",
         format_output(&output)
     );
     assert!(
         !temp.path().join("bob-cli/scripts").exists(),
-        "native-only dataview should not extract script assets"
+        "native-only query should not extract script assets"
     );
     assert_stdout_has_no_ansi(&output);
 }
@@ -293,7 +293,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture", "--help"], "bob capture"),
         (&["capture-sections", "--help"], "bob capture-sections"),
         (&["capture-targets", "--help"], "bob capture-targets"),
-        (&["dataview", "--help"], "bob dataview"),
+        (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob highlights"),
         (&["move-done-tasks", "--help"], "usage: bob move-done-tasks"),
         (&["nightly", "--help"], "usage: bob nightly"),
@@ -332,7 +332,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             "bob capture-sections --help",
         ),
         (&["capture-targets", "--help"], "bob capture-targets --help"),
-        (&["dataview", "--help"], "bob dataview --help"),
+        (&["query", "--help"], "bob query --help"),
         (&["highlights", "--help"], "bob highlights --help"),
         (
             &["highlights", "doctor", "--help"],
@@ -1947,10 +1947,10 @@ fn capture_targets_json_failure_prints_error_object() {
 #[test]
 fn dataview_help_lists_options_alphabetically() {
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--help")
         .output()
-        .expect("run bob dataview --help");
+        .expect("run bob query --help");
 
     assert_success(&output);
     let help = stdout(&output);
@@ -1984,7 +1984,7 @@ fn dataview_short_options_are_accepted() {
     write_file(&query_file, "LIST FROM #project");
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("-b")
         .arg(&vault)
         .arg("-f")
@@ -1994,7 +1994,7 @@ fn dataview_short_options_are_accepted() {
         .arg("-Q")
         .arg(&query_file)
         .output()
-        .expect("run bob dataview with short query-file options");
+        .expect("run bob query with short query-file options");
 
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
@@ -2005,14 +2005,14 @@ fn dataview_short_options_are_accepted() {
     assert_eq!(json["paths"][0], "Projects/Alpha.md");
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("-b")
         .arg(&vault)
         .arg("-S")
         .arg("-q")
         .arg("LIST FROM #project")
         .output()
-        .expect("run bob dataview with short strict-paths/query options");
+        .expect("run bob query with short strict-paths/query options");
 
     assert_success(&output);
     assert_eq!(stdout(&output), "Projects/Alpha.md\n");
@@ -2022,7 +2022,7 @@ fn dataview_short_options_are_accepted() {
         r##"{"status":"ok","kind":"source_paths","paths":["Projects/Alpha.md"],"warnings":[]}"##,
     );
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("-e")
         .arg("obsidian")
         .arg("-s")
@@ -2033,7 +2033,7 @@ fn dataview_short_options_are_accepted() {
         .env_remove("BOB_DATAVIEW_VAULT")
         .env("STUB_LOG", &log)
         .output()
-        .expect("run bob dataview with short obsidian options");
+        .expect("run bob query with short obsidian options");
 
     assert_success(&output);
     assert_eq!(stdout(&output), "Projects/Alpha.md\n");
@@ -2045,26 +2045,20 @@ fn dataview_short_options_are_accepted() {
 fn dataview_rejects_invalid_argument_combinations() {
     let cases: &[(&[&str], &str)] = &[
         (
-            &["dataview", "--source", "#project", "--query", "LIST"],
+            &["query", "--source", "#project", "--query", "LIST"],
             "cannot be used with",
         ),
         (
-            &["dataview", "--source", "#project", "--format", "markdown"],
+            &["query", "--source", "#project", "--format", "markdown"],
             "--format markdown requires a DQL query",
         ),
         (
-            &[
-                "dataview",
-                "--vault",
-                "Bob",
-                "--query",
-                "LIST FROM #project",
-            ],
+            &["query", "--vault", "Bob", "--query", "LIST FROM #project"],
             "--vault can only be used with --engine obsidian",
         ),
         (
             &[
-                "dataview",
+                "query",
                 "--query",
                 "LIST FROM #project",
                 "--format",
@@ -2084,12 +2078,12 @@ fn dataview_rejects_invalid_argument_combinations() {
         assert_eq!(
             output.status.code(),
             Some(2),
-            "invalid dataview args should fail with usage:\n{}",
+            "invalid query args should fail with usage:\n{}",
             format_output(&output)
         );
         assert!(
             stderr(&output).contains(marker),
-            "expected `{marker}` in dataview validation error:\n{}",
+            "expected `{marker}` in query validation error:\n{}",
             format_output(&output)
         );
         assert!(
@@ -2113,7 +2107,7 @@ fn dataview_obsidian_source_uses_path_command_and_sentinel_protocol() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--engine")
         .arg("obsidian")
         .arg("--source")
@@ -2125,7 +2119,7 @@ fn dataview_obsidian_source_uses_path_command_and_sentinel_protocol() {
         .env("PATH", path_with_prefix(&stub_bin))
         .env("STUB_LOG", &log)
         .output()
-        .expect("run bob dataview source query");
+        .expect("run bob query source query");
 
     assert_success(&output);
     assert_eq!(
@@ -2161,7 +2155,7 @@ fn dataview_obsidian_dql_paths_extracts_and_deduplicates_note_paths() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--engine")
         .arg("obsidian")
         .arg("--query")
@@ -2170,7 +2164,7 @@ fn dataview_obsidian_dql_paths_extracts_and_deduplicates_note_paths() {
         .env_remove("BOB_DATAVIEW_VAULT")
         .env("STUB_LOG", &log)
         .output()
-        .expect("run bob dataview dql paths query");
+        .expect("run bob query dql paths query");
 
     assert_success(&output);
     assert_eq!(
@@ -2181,7 +2175,7 @@ fn dataview_obsidian_dql_paths_extracts_and_deduplicates_note_paths() {
     );
     assert!(
         stderr(&output).is_empty(),
-        "unexpected dataview stderr:\n{}",
+        "unexpected query stderr:\n{}",
         format_output(&output)
     );
 }
@@ -2197,7 +2191,7 @@ fn dataview_obsidian_dql_paths_warn_or_fail_for_missing_identities() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--engine")
         .arg("obsidian")
         .arg("--query")
@@ -2206,7 +2200,7 @@ fn dataview_obsidian_dql_paths_warn_or_fail_for_missing_identities() {
         .env_remove("BOB_DATAVIEW_VAULT")
         .env("STUB_LOG", &log)
         .output()
-        .expect("run non-strict bob dataview dql paths query");
+        .expect("run non-strict bob query dql paths query");
 
     assert_success(&output);
     assert_eq!(
@@ -2222,7 +2216,7 @@ fn dataview_obsidian_dql_paths_warn_or_fail_for_missing_identities() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--engine")
         .arg("obsidian")
         .arg("--query")
@@ -2232,7 +2226,7 @@ fn dataview_obsidian_dql_paths_warn_or_fail_for_missing_identities() {
         .env_remove("BOB_DATAVIEW_VAULT")
         .env("STUB_LOG", &log)
         .output()
-        .expect("run strict bob dataview dql paths query");
+        .expect("run strict bob query dql paths query");
 
     assert_eq!(
         output.status.code(),
@@ -2268,7 +2262,7 @@ fn dataview_obsidian_dql_json_reads_query_file_and_forwards_env_vault() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--engine")
         .arg("obsidian")
         .arg("--format")
@@ -2281,12 +2275,12 @@ fn dataview_obsidian_dql_json_reads_query_file_and_forwards_env_vault() {
         .env("BOB_DATAVIEW_VAULT", "Bob")
         .env("STUB_LOG", &log)
         .output()
-        .expect("run bob dataview dql json query");
+        .expect("run bob query dql json query");
 
     assert_success(&output);
     assert!(
         stderr(&output).is_empty(),
-        "unexpected dataview stderr:\n{}",
+        "unexpected query stderr:\n{}",
         format_output(&output)
     );
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
@@ -2325,7 +2319,7 @@ fn dataview_obsidian_markdown_prints_rendered_markdown() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--engine")
         .arg("obsidian")
         .arg("--format")
@@ -2336,13 +2330,13 @@ fn dataview_obsidian_markdown_prints_rendered_markdown() {
         .env_remove("BOB_DATAVIEW_VAULT")
         .env("STUB_LOG", &log)
         .output()
-        .expect("run bob dataview markdown query");
+        .expect("run bob query markdown query");
 
     assert_success(&output);
     assert_eq!(stdout(&output), "| File |\n| --- |\n| Alpha |\n");
     assert!(
         stderr(&output).is_empty(),
-        "unexpected dataview stderr:\n{}",
+        "unexpected query stderr:\n{}",
         format_output(&output)
     );
     let log_text = fs::read_to_string(&log).expect("read obsidian argv log");
@@ -2377,7 +2371,7 @@ fn dataview_obsidian_reports_protocol_errors() {
         write_obsidian_success_stub(&obsidian, payload);
 
         let output = bob_command()
-            .arg("dataview")
+            .arg("query")
             .arg("--engine")
             .arg("obsidian")
             .arg("--format")
@@ -2389,7 +2383,7 @@ fn dataview_obsidian_reports_protocol_errors() {
             .env("STUB_LOG", &log)
             .output()
             .unwrap_or_else(|error| {
-                panic!("run bob dataview protocol error {name}: {error}")
+                panic!("run bob query protocol error {name}: {error}")
             });
 
         assert_eq!(
@@ -2435,7 +2429,7 @@ fn dataview_obsidian_reports_missing_and_malformed_sentinel() {
         write_executable(&obsidian, script);
 
         let output = bob_command()
-            .arg("dataview")
+            .arg("query")
             .arg("--engine")
             .arg("obsidian")
             .arg("--format")
@@ -2446,7 +2440,7 @@ fn dataview_obsidian_reports_missing_and_malformed_sentinel() {
             .env_remove("BOB_DATAVIEW_VAULT")
             .output()
             .unwrap_or_else(|error| {
-                panic!("run bob dataview sentinel case {name}: {error}")
+                panic!("run bob query sentinel case {name}: {error}")
             });
 
         assert_eq!(
@@ -2475,7 +2469,7 @@ fn dataview_obsidian_reports_missing_command_without_query_blob() {
     let missing = temp.path().join("missing-obsidian");
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--engine")
         .arg("obsidian")
         .arg("--format")
@@ -2485,7 +2479,7 @@ fn dataview_obsidian_reports_missing_command_without_query_blob() {
         .env("BOB_DATAVIEW_OBSIDIAN_COMMAND", &missing)
         .env_remove("BOB_DATAVIEW_VAULT")
         .output()
-        .expect("run bob dataview with missing obsidian");
+        .expect("run bob query with missing obsidian");
 
     assert_eq!(
         output.status.code(),
@@ -2515,7 +2509,7 @@ fn dataview_obsidian_reports_not_running_without_javascript_blob() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--engine")
         .arg("obsidian")
         .arg("--format")
@@ -2525,7 +2519,7 @@ fn dataview_obsidian_reports_not_running_without_javascript_blob() {
         .env("BOB_DATAVIEW_OBSIDIAN_COMMAND", &obsidian)
         .env_remove("BOB_DATAVIEW_VAULT")
         .output()
-        .expect("run bob dataview when Obsidian is not running");
+        .expect("run bob query when Obsidian is not running");
 
     assert_eq!(
         output.status.code(),
@@ -2568,7 +2562,7 @@ exit 99
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--bob-dir")
         .arg(&vault)
         .arg("--engine")
@@ -2581,7 +2575,7 @@ exit 99
         .env("OB_LOG", &ob_log)
         .env("STUB_LOG", &obsidian_log)
         .output()
-        .expect("run bob dataview query with failing ob stub");
+        .expect("run bob query with failing ob stub");
 
     assert_success(&output);
     assert_eq!(
@@ -2592,12 +2586,12 @@ exit 99
     );
     assert!(
         stderr(&output).is_empty(),
-        "dataview should not surface ob output:\n{}",
+        "query should not surface ob output:\n{}",
         format_output(&output)
     );
     assert!(
         !ob_log.exists(),
-        "bob dataview must not run OB_COMMAND:\n{}",
+        "bob query must not run OB_COMMAND:\n{}",
         fs::read_to_string(&ob_log).unwrap_or_default()
     );
 }
@@ -2613,14 +2607,14 @@ fn dataview_rejects_removed_sync_option() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--sync")
         .arg("--source")
         .arg("#project")
         .env("OB_COMMAND", &ob)
         .env("OB_LOG", &ob_log)
         .output()
-        .expect("run bob dataview with removed sync flag");
+        .expect("run bob query with removed sync flag");
 
     assert_eq!(
         output.status.code(),
@@ -2655,7 +2649,7 @@ fn dataview_rejects_unsafe_origin_and_missing_bob_dir() {
     let cases = [
         (
             vec![
-                OsString::from("dataview"),
+                OsString::from("query"),
                 OsString::from("--bob-dir"),
                 vault.clone().into_os_string(),
                 OsString::from("--origin"),
@@ -2668,7 +2662,7 @@ fn dataview_rejects_unsafe_origin_and_missing_bob_dir() {
         ),
         (
             vec![
-                OsString::from("dataview"),
+                OsString::from("query"),
                 OsString::from("--bob-dir"),
                 vault.into_os_string(),
                 OsString::from("--origin"),
@@ -2681,7 +2675,7 @@ fn dataview_rejects_unsafe_origin_and_missing_bob_dir() {
         ),
         (
             vec![
-                OsString::from("dataview"),
+                OsString::from("query"),
                 OsString::from("--bob-dir"),
                 missing_vault.into_os_string(),
                 OsString::from("--query"),
@@ -2696,7 +2690,7 @@ fn dataview_rejects_unsafe_origin_and_missing_bob_dir() {
         let output = bob_command()
             .args(args)
             .output()
-            .expect("run invalid dataview path case");
+            .expect("run invalid query path case");
 
         assert_eq!(
             output.status.code(),
@@ -2733,14 +2727,14 @@ WHERE source_pdf
 "#;
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--bob-dir")
         .arg(&vault)
         .arg("--strict-paths")
         .arg("--query")
         .arg(query)
         .output()
-        .expect("run native dataview parent query");
+        .expect("run native query parent query");
 
     assert_success(&output);
     assert_eq!(
@@ -2777,7 +2771,7 @@ WHERE source_pdf
         format!("TABLE status, parent, source_path\n{query_tail}");
 
     let list_output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--bob-dir")
         .arg(&vault)
         .arg("--engine")
@@ -2786,9 +2780,9 @@ WHERE source_pdf
         .arg("--query")
         .arg(&list_query)
         .output()
-        .expect("run native dataview list parent query");
+        .expect("run native query list parent query");
     let table_output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--bob-dir")
         .arg(&vault)
         .arg("--engine")
@@ -2797,7 +2791,7 @@ WHERE source_pdf
         .arg("--query")
         .arg(&table_query)
         .output()
-        .expect("run native dataview table parent query");
+        .expect("run native query table parent query");
 
     assert_success(&list_output);
     assert_success(&table_output);
@@ -2834,7 +2828,7 @@ fn dataview_native_table_json_projects_frontmatter_rows() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--bob-dir")
         .arg(&vault)
         .arg("--engine")
@@ -2844,7 +2838,7 @@ fn dataview_native_table_json_projects_frontmatter_rows() {
         .arg("--query")
         .arg("TABLE status, parent, ready, missing FROM \"ref\"")
         .output()
-        .expect("run native dataview table JSON query");
+        .expect("run native query table JSON query");
 
     assert_success(&output);
     assert!(
@@ -2921,7 +2915,7 @@ fn dataview_native_where_false_returns_no_rows() {
     );
 
     let output = bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--bob-dir")
         .arg(&vault)
         .arg("--engine")
@@ -2929,7 +2923,7 @@ fn dataview_native_where_false_returns_no_rows() {
         .arg("--query")
         .arg("LIST FROM \"ref\" WHERE false")
         .output()
-        .expect("run native dataview false query");
+        .expect("run native query false query");
 
     assert_success(&output);
     assert!(
@@ -10216,7 +10210,7 @@ fn legacy_bob_sync_binary_runs_bulk_git_commit_native_path() {
 
 #[test]
 fn renamed_old_top_level_commands_are_unknown() {
-    for command in ["move-done-tasks", "bulk-git-commit"] {
+    for command in ["move-done-tasks", "bulk-git-commit", "query"] {
         let output = bob_command()
             .arg(command)
             .arg("--help")
@@ -10227,7 +10221,13 @@ fn renamed_old_top_level_commands_are_unknown() {
         assert_success(&output);
     }
 
-    for command in ["collect-done", "cronjob", "highlights-ref", "sync"] {
+    for command in [
+        "collect-done",
+        "cronjob",
+        "dataview",
+        "highlights-ref",
+        "sync",
+    ] {
         let output = bob_command()
             .arg(command)
             .arg("--help")
@@ -10261,13 +10261,13 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "capture",
         "capture-sections",
         "capture-targets",
-        "dataview",
         "highlights",
         "move-done-tasks",
         "nightly",
         "notify",
         "pomodoro",
         "projects",
+        "query",
         "tmux-pomodoro",
     ];
     let mut last = 0;
@@ -10288,12 +10288,16 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
             && help.contains("bob bulk-git-commit")
             && help.contains("bob capture-sections --route cash --format json")
             && help.contains("bob capture-targets --format json")
-            && help.contains("bob dataview --source '#project'")
+            && help.contains("bob query --source '#project'")
             && help.contains("bob highlights scan --dry-run")
             && help.contains("bob move-done-tasks --threshold 10")
             && help.contains("bob nightly")
             && help.contains("bob pomodoro"),
         "expected an Examples section:\n{help}"
+    );
+    assert!(
+        !help.contains("bob dataview"),
+        "top-level help should not advertise the old dataview spelling:\n{help}"
     );
     assert!(
         !help.contains("cronjob"),

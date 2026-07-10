@@ -1559,7 +1559,7 @@ fn run_obsidian_stub(args: &[&str], payload: &str) -> Output {
     let obsidian = temp.path().join("obsidian");
     write_obsidian_protocol_stub(&obsidian, payload);
     bob_command()
-        .arg("dataview")
+        .arg("query")
         .arg("--engine")
         .arg("obsidian")
         .args(args)
@@ -1567,7 +1567,7 @@ fn run_obsidian_stub(args: &[&str], payload: &str) -> Output {
         .env_remove("BOB_DATAVIEW_VAULT")
         .output()
         .unwrap_or_else(|error| {
-            panic!("run bob dataview with Obsidian protocol stub: {error}")
+            panic!("run bob query with Obsidian protocol stub: {error}")
         })
 }
 
@@ -1578,7 +1578,7 @@ fn run_bob_dataview(
     args: &[&str],
 ) -> Output {
     let mut command = bob_command();
-    command.arg("dataview").arg("--bob-dir").arg(vault);
+    command.arg("query").arg("--bob-dir").arg(vault);
     if let Some(engine) = engine {
         command.arg("--engine").arg(engine);
     }
@@ -1588,7 +1588,7 @@ fn run_bob_dataview(
         command.env_remove("BOB_DATAVIEW_VAULT");
     }
     command.args(args).output().unwrap_or_else(|error| {
-        panic!("run bob dataview against {}: {error}", vault.display())
+        panic!("run bob query against {}: {error}", vault.display())
     })
 }
 
