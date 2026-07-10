@@ -380,6 +380,19 @@ pub(crate) fn open_ledger_task(line: &str) -> Option<&str> {
     Some(rest.trim_end())
 }
 
+pub(crate) fn completed_ledger_task(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    let rest = line.strip_prefix('-')?;
+    let rest = trim_one_or_more_spaces(rest)?;
+    let after_open = rest.strip_prefix('[')?;
+    let close_index = after_open.find(']')?;
+    let checkbox = &after_open[..close_index];
+    if !checkbox.trim().eq_ignore_ascii_case("x") {
+        return None;
+    }
+    trim_one_or_more_spaces(&after_open[close_index + 1..]).map(str::trim_end)
+}
+
 pub(crate) fn task_time_range(task: &str) -> Option<(&str, String, String)> {
     let mut search_start = 0;
     while let Some(open_offset) = task[search_start..].find('(') {
@@ -571,4 +584,21 @@ environment:
 options:
   -h, --help     show this help message and exit"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_ledger_parser_only_accepts_x_checkbox_entries() {
+        assert_eq!(
+            completed_ledger_task("- [x] Finished (0900-0930)"),
+            Some("Finished (0900-0930)")
+        );
+        assert_eq!(completed_ledger_task("- [X] Finished"), Some("Finished"));
+        for line in ["- [ ] Open", "- [-] Canceled", "- Plain entry"] {
+            assert_eq!(completed_ledger_task(line), None);
+        }
+    }
 }

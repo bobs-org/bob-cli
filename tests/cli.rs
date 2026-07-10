@@ -664,6 +664,7 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     write_file(&alpha, include_str!("fixtures/mark_next/Projects/Alpha.md"));
     let original_dev = fs::read(&dev).expect("read fixture before dry-run");
     let original_alpha = fs::read(&alpha).expect("read fixture before dry-run");
+    let original_daily = fs::read(&daily).expect("read daily before dry-run");
 
     let dry_run = bob_command()
         .arg("mark-next-tasks")
@@ -684,18 +685,33 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         fs::read(&alpha).expect("read alpha after dry-run"),
         original_alpha
     );
+    assert_eq!(
+        fs::read(&daily).expect("read daily after dry-run"),
+        original_daily
+    );
     let json: serde_json::Value =
         serde_json::from_str(stdout(&dry_run).trim()).expect("dry-run JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["dry_run"], true);
     assert_eq!(json["daily_file"], "2026/20260710.md");
-    assert_eq!(json["open_pomodoros"], 1);
-    assert_eq!(json["references"], 3);
+    assert_eq!(json["open_pomodoros"], 2);
+    assert_eq!(json["references"], 4);
     assert_eq!(json["scanned_files"], 3);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
     assert_eq!(json["kept_next"], 1);
     assert_eq!(json["kept_in_progress"], 1);
+    assert_eq!(
+        json["embedded_completed_references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        json["moved_completed_references"].as_array().unwrap().len(),
+        1
+    );
     assert_eq!(json["unresolved_references"], serde_json::json!([]));
     assert_eq!(json["marked_next"][0]["path"], "dev.md");
     assert_eq!(json["marked_next"][0]["block_id"], "promote");
@@ -727,6 +743,14 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         .contains("- [-] #task Cancelled stays cancelled ^cancelled"));
     assert!(dev_contents.contains("- [?] #task Unknown stays unknown ^unknown"));
     assert!(dev_contents.contains("- [*] Not a Tasks task ^not-a-task"));
+    let daily_contents =
+        fs::read_to_string(&daily).expect("read updated daily");
+    assert!(daily_contents.contains(concat!(
+        "  - ![[dev#^done|already embedded]]\n",
+        "  - Finish ![[dev#^done|completed work]] with [[dev#^promote]]\n",
+        "    - Keep this nested detail with the moved bullet.\n",
+        "- [ ] Future session\n",
+    )));
     assert_eq!(
         fs::read(&alpha).expect("read unchanged alpha"),
         original_alpha
@@ -792,6 +816,165 @@ fn mark_next_tasks_guard_rails_leave_tasks_unchanged() {
     assert_eq!(
         fs::read_to_string(&task_file).unwrap(),
         "- [*] #task Must remain next ^keep\n"
+    );
+
+    let multiple_current = vault.join("multiple-current.md");
+    write_file(
+        &multiple_current,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] First (0900-0930)\n",
+            "- [ ] Second (0930-1000)\n",
+        ),
+    );
+    let multiple = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &multiple_current)
+        .output()
+        .expect("run with multiple current Pomodoros");
+    assert_eq!(multiple.status.code(), Some(1));
+    assert!(stderr(&multiple).contains("multiple open timed Pomodoros"));
+    assert_eq!(
+        fs::read_to_string(&task_file).unwrap(),
+        "- [*] #task Must remain next ^keep\n"
+    );
+}
+
+#[test]
+fn mark_next_tasks_uses_custom_done_status_and_completed_fallback() {
+    let temp = TempDir::new("bob-cli-mark-next-tasks-custom-done");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let tasks = vault.join("tasks.md");
+    let settings =
+        vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [x] Last completed\n",
+            "- [ ] Future\n",
+            "    - Review [[tasks#^custom|custom done]]\n",
+        ),
+    );
+    write_file(&tasks, "- [D] #task Custom completion ^custom\n");
+    write_file(
+        &settings,
+        r##"{
+  "globalFilter": "#task",
+  "statusSettings": {
+    "customStatuses": [{"symbol": "D", "type": "DONE"}]
+  }
+}"##,
+    );
+
+    let output = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("run custom DONE fallback case");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("custom done JSON");
+    assert_eq!(
+        json["embedded_completed_references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        json["moved_completed_references"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(&daily).unwrap(),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [x] Last completed\n",
+            "    - Review ![[tasks#^custom|custom done]]\n",
+            "- [ ] Future\n",
+        )
+    );
+}
+
+#[test]
+fn mark_next_tasks_embeds_in_place_when_no_relocation_target_exists() {
+    let temp = TempDir::new("bob-cli-mark-next-tasks-no-target");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\r\n\r\n",
+            "- [ ] Future without a time\r\n",
+            "  - [[tasks#^done|finished]]\r\n",
+        ),
+    );
+    write_file(&tasks, "- [X] #task Finished ^done\n");
+
+    let output = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("run no-target case");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&daily).unwrap(),
+        concat!(
+            "## Pomodoros\r\n\r\n",
+            "- [ ] Future without a time\r\n",
+            "  - ![[tasks#^done|finished]]\r\n",
+        )
+    );
+}
+
+#[test]
+fn mark_next_tasks_composes_daily_status_and_structural_edits() {
+    let temp = TempDir::new("bob-cli-mark-next-tasks-daily-composition");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "- [ ] Future\n",
+            "  - [[tasks#^done]]\n\n",
+            "## Tasks\n\n",
+            "- [*] #task Daily orphan ^daily-orphan\n",
+        ),
+    );
+    write_file(&tasks, "- [x] #task Finished ^done\n");
+
+    let output = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("run composed daily-note edits");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&daily).unwrap(),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - ![[tasks#^done]]\n",
+            "- [ ] Future\n\n",
+            "## Tasks\n\n",
+            "- [ ] #task Daily orphan ^daily-orphan\n",
+        )
     );
 }
 

@@ -1,7 +1,8 @@
 # Next Task Sync
 
 `bob mark-next-tasks` makes today's Pomodoro ledger the source of truth for
-which vault tasks have the Obsidian Tasks **Next** status (`[*]`).
+which vault tasks have the Obsidian Tasks **Next** status (`[*]`) and keeps
+references to completed tasks embedded beneath the most relevant Pomodoro.
 
 ## Usage
 
@@ -46,6 +47,53 @@ The command scans Markdown task lines allowed by the Obsidian Tasks
 | `[/]` | either | unchanged |
 | done, canceled, or unknown | either | unchanged |
 
+Completion is classified separately from Next synchronization. Conventional
+`[x]` and `[X]` tasks are complete. A custom checkbox symbol is also complete
+when its entry in `statusSettings.coreStatuses` or
+`statusSettings.customStatuses` has type `DONE`. `CANCELLED`, `IN_PROGRESS`,
+`ON_HOLD`, `NON_TASK`, unknown, and unchecked statuses are not complete.
+
+For each bullet beneath an open Pomodoro that contains a block link resolving
+unambiguously to a completed Tasks task, the command inserts `!` immediately
+before that link. Aliases and neighboring text are preserved, so
+`[[dev#^done|result]]` becomes `![[dev#^done|result]]`. Already embedded links
+are unchanged. On mixed-content bullets, only links proven complete are
+embedded.
+
+The containing bullet is relocated according to this order:
+
+1. The single open top-level Pomodoro with a valid time range is the current
+   Pomodoro.
+2. If there is no current Pomodoro, the last completed (`[x]` or `[X]`)
+   top-level Pomodoro in document order is used.
+3. If neither exists, the bullet stays where it is and only the link is
+   embedded.
+
+Relocation happens at bullet granularity. Nested descendants move with their
+parent, multiple moved bullets retain their document order, and the root
+indentation is normalized to the destination's child indentation. When the
+current Pomodoro is already the owner, only embedding is needed.
+
+For example, a completed task under a future Pomodoro is moved to the current
+timed entry:
+
+```markdown
+- [ ] Current work (0900-0930)
+  - ![[dev#^finished]]
+- [ ] Future work
+```
+
+With no timed open entry, the last completed entry is the fallback:
+
+```markdown
+- [x] Earlier work
+  - ![[dev#^finished]]
+- [ ] Future work
+```
+
+With only untimed open entries, the link is embedded in place because no
+relocation target exists.
+
 A task must have a trailing `^block-id` to be linked. The edit changes only
 the status character, preserving indentation, list markers, descriptions,
 block IDs, and line endings.
@@ -56,18 +104,24 @@ The vault scan skips dot-prefixed directories, `done/`, `_generated/`, and
 ## Guard Rails
 
 The command exits with status 1 and writes nothing when today's daily note is
-missing or has no `## Pomodoros` section. A valid but empty section is a valid
-source of truth: it clears every scanned `[*]` task. This distinction prevents
-a missing or malformed daily note from causing a mass clear.
+missing, has no `## Pomodoros` section, or contains multiple open timed
+Pomodoros. A valid but empty section is a valid source of truth: it clears
+every scanned `[*]` task. This distinction prevents a missing or malformed
+daily note from causing a mass clear.
 
 Unresolved links are warnings, not failures. If duplicate task block IDs occur
 in one resolved note, every matching task is synchronized and the ambiguity is
-reported.
+reported. Completed-link normalization proceeds only when all duplicate
+matches are complete; conflicting completion states are warned and left
+structurally unchanged.
 
 ## Output
 
-Human output lists every promotion and clear, followed by a summary. Warnings
-go to stderr. A no-op prints a single `already in sync` line.
+Human output lists every promotion, clear, embed, and move, followed by a
+summary. Dry-run uses the same planning path and reports what would happen
+without changing any file. Warnings go to stderr. A no-op prints a single
+`already in sync` line only when neither task statuses nor daily-note links
+need changes.
 
 JSON mode prints one object on stdout with these stable fields:
 
@@ -88,6 +142,21 @@ JSON mode prints one object on stdout with these stable fields:
     }
   ],
   "cleared": [],
+  "embedded_completed_references": [
+    {
+      "target": "dev",
+      "block_id": "finished",
+      "pomodoro": "- [ ] Future work"
+    }
+  ],
+  "moved_completed_references": [
+    {
+      "target": "dev",
+      "block_id": "finished",
+      "source_pomodoro": "- [ ] Future work",
+      "destination_pomodoro": "- [ ] Current work (0900-0930)"
+    }
+  ],
   "kept_next": 0,
   "kept_in_progress": 1,
   "unresolved_references": []
