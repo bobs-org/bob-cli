@@ -324,6 +324,7 @@ fn run_native(request: &Request) -> Result<(), DataviewError> {
         }
         QueryInput::Tasks(input) => tasks::run(
             &request.vault.bob_dir,
+            request.vault.origin.as_deref(),
             &input.read_query()?,
             request.format,
         ),
@@ -6340,8 +6341,9 @@ fn build_cli() -> ClapCommand {
             "Run Dataview source expressions, Dataview DQL, or Obsidian Tasks \
 queries against the Bob vault.\n\n\
 The default native engine is headless and local. Dataview DQL supports paths, \
-JSON, and markdown output. The initial Tasks query surface supports filterless \
-native queries in paths and JSON formats. The explicit Obsidian engine runs \
+JSON, and markdown output. Native Tasks queries support the complete Tasks v8 \
+query language parser in paths and JSON formats; filter evaluation is being \
+built in later phases. The explicit Obsidian engine runs \
 Dataview queries against the live plugin when exact installed-plugin behavior \
 is needed.",
         )
@@ -6454,7 +6456,7 @@ fn tasks_arg() -> Arg {
         .long("tasks")
         .short('t')
         .value_name("QUERY")
-        .help("Inline Obsidian Tasks query; the filterless query is supported")
+        .help("Inline Obsidian Tasks query")
 }
 
 fn tasks_file_arg() -> Arg {

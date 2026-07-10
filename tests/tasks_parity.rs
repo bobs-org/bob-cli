@@ -168,6 +168,21 @@ fn tasks_parity_fixture_vault_covers_phase1_contract() {
     ] {
         assert!(dash.contains(query), "missing dashboard query {query}");
     }
+
+    let daily = fs::read_to_string(vault.join("Daily/2026-07-10.md"))
+        .expect("read daily-note fixture");
+    assert_eq!(daily.matches("```tasks").count(), 1, "{daily}");
+    for instruction in [
+        "( status.type is TODO ) OR ( status.type is IN_PROGRESS )",
+        "limit groups to 3 tasks",
+        "sort by function task.lineNumber",
+        "hide toolbar",
+    ] {
+        assert!(
+            daily.contains(instruction),
+            "missing daily-note instruction {instruction}"
+        );
+    }
 }
 
 #[test]
@@ -548,9 +563,10 @@ fn tasks_cli_rejects_invalid_combinations_and_unsupported_surface() {
     }
 
     for (args, marker) in [
+        (&["--tasks", "spaghetti"][..], "do not understand query"),
         (
-            &["--tasks", "status.type is TODO"][..],
-            "only an empty or comment-only Tasks query is supported yet",
+            &["--tasks", "description regex matches apple sauce"][..],
+            "Regular expressions must look like",
         ),
         (
             &["-n", "dash.md"][..],
@@ -565,6 +581,77 @@ fn tasks_cli_rejects_invalid_combinations_and_unsupported_surface() {
             format_output(&output)
         );
     }
+}
+
+#[test]
+fn tasks_query_parser_composes_dash_defaults_and_serializes_the_ast() {
+    let output = run_fixture(&[
+        "--format",
+        "json",
+        "--origin",
+        "dash.md",
+        "--tasks",
+        "status.type is IN_PROGRESS",
+    ]);
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let actual = json_stdout(&output);
+    let query = &actual["query"];
+    assert_eq!(query["filters"].as_array().map(Vec::len), Some(6));
+    assert_eq!(query["sorting"].as_array().map(Vec::len), Some(2));
+    assert_eq!(query["grouping"], json!([]));
+    assert_eq!(query["ignoreGlobalQuery"], false);
+    assert_eq!(query["sorting"][0]["key"], "function");
+    assert_eq!(query["sorting"][0]["function"], "task.file.path");
+    assert_eq!(query["sorting"][1]["function"], "task.lineNumber");
+    assert_eq!(query["filters"][5]["type"], "statusType");
+    assert_eq!(query["filters"][5]["value"], "IN_PROGRESS");
+    assert!(query["statements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|statement| {
+            statement["source"] == "queryFileDefaults"
+                && statement["instruction"]
+                    == "folder does not include _templates"
+        }));
+}
+
+#[test]
+fn tasks_query_parser_accepts_the_daily_note_query_surface() {
+    let query = concat!(
+        "# comment\n",
+        "( status.type is TODO ) OR ( status.type is IN_PROGRESS )\n",
+        "is not blocked\n",
+        "filter by function task.file.path !== query.file.path\n",
+        "filter by function !task.scheduled.moment || \\\n+         task.scheduled.moment.isSameOrBefore(moment(query.file.filenameWithoutExtension, \"YYYYMMDD\"), \"day\")\n",
+        "filter by function !task.tags.includes(\"#hide\")\n",
+        "group by path\n",
+        "limit groups to 3 tasks\n",
+        "sort by function task.file.path\n",
+        "sort by function task.lineNumber\n",
+        "short mode\n",
+        "hide toolbar\n",
+    );
+    let output = run_fixture(&[
+        "--format",
+        "json",
+        "--origin",
+        "Daily/2026-07-10.md",
+        "--tasks",
+        query,
+    ]);
+
+    assert_success(&output);
+    let actual = json_stdout(&output);
+    let query = &actual["query"];
+    assert_eq!(query["filters"].as_array().map(Vec::len), Some(5));
+    assert_eq!(query["sorting"].as_array().map(Vec::len), Some(2));
+    assert_eq!(query["grouping"].as_array().map(Vec::len), Some(1));
+    assert_eq!(query["limitGroups"], 3);
+    assert_eq!(query["layout"]["shortMode"], true);
+    assert_eq!(query["layout"]["showToolbar"], false);
 }
 
 #[test]

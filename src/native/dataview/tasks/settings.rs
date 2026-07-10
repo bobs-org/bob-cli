@@ -15,6 +15,7 @@ pub(super) struct TasksSettings {
     pub(super) remove_global_filter: bool,
     pub(super) task_format: TaskFormat,
     pub(super) status_settings: StatusSettings,
+    #[serde(default = "default_presets")]
     pub(super) presets: BTreeMap<String, String>,
 }
 
@@ -44,7 +45,7 @@ impl Default for TasksSettings {
             remove_global_filter: false,
             task_format: TaskFormat::Emoji,
             status_settings: StatusSettings::default(),
-            presets: BTreeMap::new(),
+            presets: default_presets(),
         }
     }
 }
@@ -125,4 +126,41 @@ fn default_custom_statuses() -> Vec<TaskStatus> {
             status_type: "CANCELLED".to_string(),
         },
     ]
+}
+
+fn default_presets() -> BTreeMap<String, String> {
+    [
+        (
+            "this_file",
+            "path includes {{query.file.path}}",
+        ),
+        (
+            "this_folder",
+            "folder includes {{query.file.folder}}",
+        ),
+        (
+            "this_folder_only",
+            "filter by function task.file.folder === query.file.folder",
+        ),
+        ("this_root", "root includes {{query.file.root}}"),
+        (
+            "hide_date_fields",
+            "# Hide any values for all date fields\nhide due date\nhide scheduled date\nhide start date\nhide created date\nhide done date\nhide cancelled date",
+        ),
+        (
+            "hide_non_date_fields",
+            "# Hide all the non-date fields, but not tags\nhide id\nhide depends on\nhide recurrence rule\nhide on completion\nhide priority",
+        ),
+        (
+            "hide_query_elements",
+            "# Hide toolbar, postpone, edit and backlinks\nhide toolbar\nhide postpone button\nhide edit button\nhide backlinks",
+        ),
+        (
+            "hide_everything",
+            "# Hide everything except description and any tags\npreset hide_date_fields\npreset hide_non_date_fields\npreset hide_query_elements",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_string(), value.to_string()))
+    .collect()
 }
