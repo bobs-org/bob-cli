@@ -79,9 +79,9 @@ the `Tasks` heading when the section has no tasks yet. Files without a `Tasks`
 section keep the older fallback of inserting after the last top-level `#task`
 block and its indented continuation lines, or appending at EOF.
 
-Use a leading or trailing `@!<route>:<block-id>` marker to create a
+Use a leading or trailing `@<route>:<block-id>` marker to create a
 Pomodoro-linked next task. For example,
-`bob capture '@!dev:foobar' 'Some foobar task.'` writes:
+`bob capture '@dev:foobar' 'Some foobar task.'` writes:
 
 ```markdown
 - [*] #task Some foobar task. [created::2026-07-10] ^foobar
@@ -152,12 +152,14 @@ Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 `block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`. Ordinary
 capture JSON remains unchanged.
 
-The Hammerspoon panel opened by `cmd+shift+ctrl+i` also supports a trailing
-shorthand. Submit `<task> @!` to choose an area or project and then enter its
-block ID, or submit `<task> @!<route>` to skip the note picker and go directly
-to the block-ID prompt. The panel validates the ID before enabling Capture and
-retains the staged task, route, and ID when the CLI reports a failure. Existing
-`@`, `@#`, and `@route#` picker flows are unchanged.
+The Hammerspoon panel opened by `cmd+shift+ctrl+i` also supports incomplete
+trailing markers. Use `<task> @:` to choose an area or project and then enter a
+block ID, `<task> @route:` to prompt only for the block ID, or
+`<task> @:block-id` to prompt only for the destination. A complete
+`<task> @route:block-id` request captures immediately. The panel validates
+each supplied or prompted component, emits only the canonical colon marker,
+and retains staged values when validation or capture fails. Existing `@`,
+`@#`, and `@route#` picker flows are unchanged.
 
 ```bash
 bob nightly

@@ -605,8 +605,8 @@ fn capture_help_lists_options_alphabetically() {
         "expected capture schedule help:\n{help}"
     );
     assert!(
-        help.contains("@!<route>:<block-id>")
-            && help.contains("bob capture '@!dev:foobar'")
+        help.contains("@<route>:<block-id>")
+            && help.contains("bob capture '@dev:foobar'")
             && help.contains("BOB_DAY_FILE"),
         "expected Pomodoro-linked capture help:\n{help}"
     );
@@ -1079,7 +1079,7 @@ fn capture_pomodoro_linked_task_updates_both_notes_and_reports_json() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@!Dev:foobar")
+        .arg("@Dev:foobar")
         .arg("Some")
         .arg("foobar")
         .arg("task.")
@@ -1190,7 +1190,7 @@ fn capture_pomodoro_dry_run_validates_and_changes_neither_note() {
         .arg("json")
         .arg("Preview")
         .arg("s:1")
-        .arg("@!dev:preview")
+        .arg("@dev:preview")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -1258,9 +1258,9 @@ fn capture_pomodoro_preflight_failures_leave_both_notes_untouched() {
             .arg("Do")
             .arg("work")
             .arg(if name == "duplicate-id" {
-                "@!dev:dup"
+                "@dev:dup"
             } else {
-                "@!dev:new-id"
+                "@dev:new-id"
             })
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-07-10 13:40:00")
@@ -1308,7 +1308,7 @@ fn capture_pomodoro_missing_daily_note_does_not_create_target() {
         .arg(&vault)
         .arg("Do")
         .arg("work")
-        .arg("@!dev:new-id")
+        .arg("@dev:new-id")
         .env("BOB_DAY_FILE", &missing_day)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -1331,12 +1331,12 @@ fn capture_malformed_pomodoro_marker_is_usage_error_without_writes() {
         .arg(&vault)
         .arg("Do")
         .arg("work")
-        .arg("@!dev")
+        .arg("@dev:")
         .output()
         .expect("run malformed Pomodoro capture");
 
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
-    assert!(stderr(&output).contains("@!<route>:<block-id>"));
+    assert!(stderr(&output).contains("block ID must be non-empty"));
     assert_eq!(fs::read_dir(&vault).expect("read vault").count(), 0);
 }
 

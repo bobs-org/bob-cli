@@ -68,7 +68,7 @@ to schedule the capture N days from today. The token is removed from the task \
 text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It \
 may appear before or after a trailing @route token and is recognized only at \
 the very end of the input.\n\n\
-Use '@!<route>:<block-id>' in the same leading or trailing position to create \
+Use '@<route>:<block-id>' in the same leading or trailing position to create \
 a next-status task and link it from today's Pomodoro ledger. The routed task \
 renders as '- [*] #task <body> [created::YYYY-MM-DD] ^<block-id>' (with any \
 scheduled property before the final block ID). The daily note comes from \
@@ -92,7 +92,7 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture '@!dev:foobar' 'Some foobar task.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_DAY_FILE  exact daily note used by Pomodoro-linked capture\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time override",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_DAY_FILE  exact daily note used by Pomodoro-linked capture\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time override",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -981,21 +981,24 @@ fn parse_route_token(token: &str) -> Option<RouteToken> {
 fn parse_terminal_route_token(
     token: &str,
 ) -> Result<Option<RouteToken>, CaptureError> {
-    if token.starts_with("@!") {
+    if is_pomodoro_marker_candidate(token) {
         return parse_pomodoro_route_token(token).map(Some);
     }
     Ok(parse_route_token(token))
 }
 
 fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, CaptureError> {
-    let marker = token.strip_prefix("@!").ok_or_else(|| {
-        CaptureError::usage(
-            "Pomodoro capture markers must use @!<route>:<block-id>",
-        )
-    })?;
+    let marker = token
+        .strip_prefix("@!")
+        .or_else(|| token.strip_prefix('@'))
+        .ok_or_else(|| {
+            CaptureError::usage(
+                "Pomodoro capture markers must use @<route>:<block-id>",
+            )
+        })?;
     let Some((route, block_id)) = marker.split_once(':') else {
         return Err(CaptureError::usage(
-            "Pomodoro capture markers must use @!<route>:<block-id>",
+            "Pomodoro capture markers must use @<route>:<block-id>",
         ));
     };
     if !is_route_token(route) {
@@ -1017,11 +1020,28 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, CaptureError> {
     })
 }
 
+/// Return whether a terminal token belongs to the Pomodoro-marker grammar.
+/// A colon that follows `#` remains part of an ordinary bullet section prefix.
+fn is_pomodoro_marker_candidate(token: &str) -> bool {
+    let Some(marker) =
+        token.strip_prefix("@!").or_else(|| token.strip_prefix('@'))
+    else {
+        return false;
+    };
+    if token.starts_with("@!") {
+        return true;
+    }
+
+    let colon = marker.find(':');
+    let hash = marker.find('#');
+    colon.is_some_and(|colon| hash.is_none_or(|hash| colon < hash))
+}
+
 fn validate_special_terminal_markers(
     tokens: &[&str],
 ) -> Result<(), CaptureError> {
     for token in tokens.first().into_iter().chain(tokens.last()) {
-        if token.starts_with("@!") {
+        if is_pomodoro_marker_candidate(token) {
             parse_pomodoro_route_token(token)?;
         }
     }
@@ -1068,7 +1088,7 @@ fn extract_trailing_schedule(tokens: &mut Vec<&str>) -> Option<u64> {
 
 fn is_route_marker(token: &str) -> bool {
     parse_route_token(token).is_some()
-        || (token.starts_with("@!")
+        || (is_pomodoro_marker_candidate(token)
             && parse_pomodoro_route_token(token).is_ok())
 }
 
@@ -1935,11 +1955,14 @@ mod tests {
     #[test]
     fn parses_pomodoro_routes_in_terminal_positions_with_schedules() {
         let cases = [
+            ("@Dev:Foo_Bar Do thing", "Do thing", None),
+            ("Do thing @Dev:Foo_Bar", "Do thing", None),
+            ("Do thing s:2 @Dev:Foo_Bar", "Do thing", Some(2)),
+            ("Do thing @Dev:Foo_Bar s:2", "Do thing", Some(2)),
+            ("@Dev:Foo_Bar Do thing s:2", "Do thing", Some(2)),
             ("@!Dev:Foo_Bar Do thing", "Do thing", None),
             ("Do thing @!Dev:Foo_Bar", "Do thing", None),
-            ("Do thing s:2 @!Dev:Foo_Bar", "Do thing", Some(2)),
             ("Do thing @!Dev:Foo_Bar s:2", "Do thing", Some(2)),
-            ("@!Dev:Foo_Bar Do thing s:2", "Do thing", Some(2)),
         ];
 
         for (raw, body, scheduled_offset) in cases {
@@ -1961,6 +1984,12 @@ mod tests {
     #[test]
     fn malformed_terminal_pomodoro_routes_are_usage_errors() {
         for raw in [
+            "Do thing @:",
+            "Do thing @:id",
+            "Do thing @dev:",
+            "Do thing @dev:bad.id",
+            "Do thing @bad/route:id",
+            "Do thing @dev:id:extra",
             "Do thing @!",
             "Do thing @!dev",
             "Do thing @!:id",
@@ -1978,20 +2007,32 @@ mod tests {
 
     #[test]
     fn pomodoro_route_requires_a_body_and_stays_literal_in_middle_or_forced() {
-        let error = parse_capture_text("@!dev:id", None)
+        let error = parse_capture_text("@dev:id", None)
             .expect_err("marker-only capture should fail");
         assert_eq!(error.kind, CaptureErrorKind::Usage);
 
-        let parsed = parse_capture_text("Discuss @!dev:id later", None)
+        let parsed = parse_capture_text("Discuss @dev:id later", None)
             .expect("middle marker stays literal");
-        assert_eq!(parsed.body, "Discuss @!dev:id later");
+        assert_eq!(parsed.body, "Discuss @dev:id later");
         assert_eq!(parsed.kind, CaptureKind::Task);
 
-        let parsed = parse_capture_text("Do thing @!dev:id", Some("Work"))
+        let parsed = parse_capture_text("Do thing @dev:id", Some("Work"))
             .expect("forced route keeps marker literal");
-        assert_eq!(parsed.body, "Do thing @!dev:id");
+        assert_eq!(parsed.body, "Do thing @dev:id");
         assert_eq!(parsed.route.as_deref(), Some("work"));
         assert_eq!(parsed.kind, CaptureKind::Task);
+
+        let parsed = parse_capture_text("Jot @notes#time:box", None)
+            .expect("a colon in a bullet prefix is not a Pomodoro marker");
+        assert_eq!(parsed.body, "Jot");
+        assert_eq!(parsed.route.as_deref(), Some("notes"));
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::Bullet {
+                section_prefix: Some("time:box".to_string()),
+                exact: false,
+            }
+        );
     }
 
     #[test]
