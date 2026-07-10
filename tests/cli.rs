@@ -578,6 +578,12 @@ fn capture_help_lists_options_alphabetically() {
             && help.contains("bob capture buy milk s:2 @groceries"),
         "expected capture schedule help:\n{help}"
     );
+    assert!(
+        help.contains("@!<route>:<block-id>")
+            && help.contains("bob capture '@!dev:foobar'")
+            && help.contains("BOB_DAY_FILE"),
+        "expected Pomodoro-linked capture help:\n{help}"
+    );
     assert_text_order(
         &help,
         &[
@@ -629,7 +635,12 @@ fn capture_targets_help_lists_options_alphabetically() {
     );
     assert_text_order(
         &help,
-        &["-b, --bob-dir", "-f, --format", "-h, --help", "-v, --verbose"],
+        &[
+            "-b, --bob-dir",
+            "-f, --format",
+            "-h, --help",
+            "-v, --verbose",
+        ],
     );
     assert_stdout_has_no_ansi(&output);
 }
@@ -844,6 +855,292 @@ fn capture_scheduled_offset_routes_in_either_order() {
         leading_route,
         "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-18]\n"
     );
+}
+
+#[test]
+fn capture_pomodoro_linked_task_updates_both_notes_and_reports_json() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-json");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing\n");
+    write_file(
+        &day_file,
+        concat!(
+            "# 2026-07-10\n",
+            "## Pomodoros\n",
+            "- [ ] Untimed planning\n",
+            "- [ ] (**1330-1400** [t:: 30m]) Current work\n",
+            "  - existing context\n",
+            "## Later\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@!Dev:foobar")
+        .arg("Some")
+        .arg("foobar")
+        .arg("task.")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run Pomodoro-linked capture");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["kind"], "pomodoro_task");
+    assert_eq!(json["route"], "dev");
+    assert_eq!(json["block_id"], "foobar");
+    assert_eq!(json["day_file"], day_file.display().to_string());
+    assert_eq!(json["block_link"], "[[dev#^foobar]]");
+    assert_eq!(json["placement"], "inserted");
+    assert_eq!(json["pomodoro_link_placement"], "inserted");
+    assert_eq!(
+        json["task_line"],
+        "- [*] #task Some foobar task. [created::2026-07-10] ^foobar"
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("read routed note"),
+        concat!(
+            "# Dev\n",
+            "## Tasks\n",
+            "- [ ] #task Existing\n",
+            "- [*] #task Some foobar task. [created::2026-07-10] ^foobar\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read daily note"),
+        concat!(
+            "# 2026-07-10\n",
+            "## Pomodoros\n",
+            "- [ ] Untimed planning\n",
+            "- [ ] (**1330-1400** [t:: 30m]) Current work\n",
+            "  - existing context\n",
+            "  - [[dev#^foobar]]\n",
+            "## Later\n",
+        )
+    );
+}
+
+#[test]
+fn capture_pomodoro_link_uses_default_day_file_and_untimed_fallback() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-default-day");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260710.md");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [x] Completed (1200-1230)\n- [ ] Next open\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("Plan")
+        .arg("work")
+        .arg("@!Dev:next-work")
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run default-day Pomodoro capture");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(out.contains("captured  dev.md"), "{out}");
+    assert!(out.contains("linked"), "{out}");
+    assert!(out.contains("[[dev#^next-work]]"), "{out}");
+    assert_eq!(
+        fs::read_to_string(vault.join("dev.md")).expect("read new route"),
+        "- [*] #task Plan work [created::2026-07-10] ^next-work\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read default day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [x] Completed (1200-1230)\n",
+            "- [ ] Next open\n",
+            "  - [[dev#^next-work]]\n",
+        )
+    );
+}
+
+#[test]
+fn capture_pomodoro_dry_run_validates_and_changes_neither_note() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-dry-run");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    let target_before = "## Tasks\n- [ ] #task Existing\n";
+    let day_before = "## Pomodoros\n- [ ] (1330-1400 [t:: 30m]) Work\n";
+    write_file(&target, target_before);
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .arg("Preview")
+        .arg("s:1")
+        .arg("@!dev:preview")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run dry-run Pomodoro capture");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("dry-run JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["scheduled"], "2026-07-11");
+    assert_eq!(json["block_link"], "[[dev#^preview]]");
+    assert_eq!(
+        fs::read_to_string(&target).expect("read untouched route"),
+        target_before
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read untouched day"),
+        day_before
+    );
+}
+
+#[test]
+fn capture_pomodoro_preflight_failures_leave_both_notes_untouched() {
+    let cases = [
+        (
+            "missing-section",
+            "## Notes\n- [ ] (1330-1400) Outside\n",
+            "- [ ] #task Existing\n",
+            "no Pomodoros section",
+        ),
+        (
+            "no-open",
+            "## Pomodoros\n- [x] (1330-1400) Done\n",
+            "- [ ] #task Existing\n",
+            "no eligible open Pomodoro",
+        ),
+        (
+            "ambiguous",
+            "## Pomodoros\n- [ ] (1300-1330) One\n- [ ] (**1330-1400**) Two\n",
+            "- [ ] #task Existing\n",
+            "multiple open timed Pomodoros",
+        ),
+        (
+            "duplicate-id",
+            "## Pomodoros\n- [ ] (1330-1400) Work\n",
+            "- [ ] #task Existing ^dup\n",
+            "block ID ^dup already exists",
+        ),
+    ];
+
+    for (name, day_before, target_before, expected_error) in cases {
+        let temp = TempDir::new(&format!("bob-cli-capture-pomodoro-{name}"));
+        let vault = temp.path().join("vault");
+        let target = vault.join("dev.md");
+        let day_file = vault.join("day.md");
+        write_file(&target, target_before);
+        write_file(&day_file, day_before);
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("Do")
+            .arg("work")
+            .arg(if name == "duplicate-id" {
+                "@!dev:dup"
+            } else {
+                "@!dev:new-id"
+            })
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 13:40:00")
+            .output()
+            .expect("run failing Pomodoro capture");
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: {}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
+        assert_eq!(json["ok"], false, "{name}");
+        assert!(
+            json["error"]
+                .as_str()
+                .is_some_and(|error| error.contains(expected_error)),
+            "{name}: {json}"
+        );
+        assert_eq!(
+            fs::read_to_string(&target).expect("read untouched target"),
+            target_before,
+            "{name}"
+        );
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("read untouched day"),
+            day_before,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn capture_pomodoro_missing_daily_note_does_not_create_target() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-missing-day");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let missing_day = vault.join("missing-day.md");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("Do")
+        .arg("work")
+        .arg("@!dev:new-id")
+        .env("BOB_DAY_FILE", &missing_day)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run capture with missing day");
+
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(stderr(&output).contains("daily note does not exist"));
+    assert!(!vault.join("dev.md").exists());
+}
+
+#[test]
+fn capture_malformed_pomodoro_marker_is_usage_error_without_writes() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-malformed");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("Do")
+        .arg("work")
+        .arg("@!dev")
+        .output()
+        .expect("run malformed Pomodoro capture");
+
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(stderr(&output).contains("@!<route>:<block-id>"));
+    assert_eq!(fs::read_dir(&vault).expect("read vault").count(), 0);
 }
 
 #[test]
@@ -4865,7 +5162,10 @@ fn plugins_sync_refuses_dirty_vault_file_then_forces() {
         "{\n  \"id\": \"delta\",\n  \"version\": \"1.0.0\",\n  \"description\": \"delta\"\n}\n";
     write_file(&repo.join("plugins/delta/manifest.json"), manifest);
     write_file(&repo.join("plugins/delta/main.js"), "// repo\n");
-    write_file(&vault.join(".obsidian/plugins/delta/manifest.json"), manifest);
+    write_file(
+        &vault.join(".obsidian/plugins/delta/manifest.json"),
+        manifest,
+    );
     let vault_main = vault.join(".obsidian/plugins/delta/main.js");
     write_file(&vault_main, "// committed\n");
 
@@ -7142,9 +7442,8 @@ fn highlights_ref_task_unchecked_scan_reopens_read_ref_to_wip() {
     let read_note = fs::read_to_string(&note).expect("read ref note");
     assert!(
         read_note.contains("status: read\n")
-            && read_note.contains(
-                "- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"
-            ),
+            && read_note
+                .contains("- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
         "expected a read ref with a checked ^ref task:\n{read_note}"
     );
     // The user unchecks the generated ^ref task to reopen the ref.
@@ -7232,7 +7531,10 @@ fn highlights_ref_task_unchecked_scan_reopens_read_ref_to_wip() {
     let marker = pdf_marker_contents(&pdf);
     assert!(marker.contains("- status: wip\n"), "{marker}");
     let note_after_write = fs::read_to_string(&note).expect("read note");
-    assert!(note_after_write.contains("status: wip\n"), "{note_after_write}");
+    assert!(
+        note_after_write.contains("status: wip\n"),
+        "{note_after_write}"
+    );
     assert!(
         note_after_write
             .contains("- [ ] #task #ref [[lib/example.pdf]] #hide ^ref\n"),

@@ -4,6 +4,7 @@ use std::{
     io::{self, BufRead, IsTerminal, Write},
     iter,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use chrono::{Datelike, Days, NaiveDate};
@@ -14,7 +15,7 @@ use clap::{
 use serde::Serialize;
 use serde_json::json;
 
-use super::{env as bob_env, style::Styler};
+use super::{collect_done, env as bob_env, pomodoro, style::Styler};
 
 const COMMAND_NAME: &str = "bob capture";
 pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
@@ -67,6 +68,15 @@ to schedule the capture N days from today. The token is removed from the task \
 text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It \
 may appear before or after a trailing @route token and is recognized only at \
 the very end of the input.\n\n\
+Use '@!<route>:<block-id>' in the same leading or trailing position to create \
+a next-status task and link it from today's Pomodoro ledger. The routed task \
+renders as '- [*] #task <body> [created::YYYY-MM-DD] ^<block-id>' (with any \
+scheduled property before the final block ID). The daily note comes from \
+BOB_DAY_FILE or <bob-dir>/YYYY/YYYYMMDD.md. Capture prefers the single open \
+timed entry in its Pomodoros section and otherwise uses the first open entry. \
+Both notes are fully validated before either is replaced; duplicate block IDs, \
+missing ledger structure, no open entry, and multiple open timed entries fail \
+without a partial capture.\n\n\
 Append '#<section-prefix>' or a bare '#' to an @route token (such as \
 '@notes#Ideas' or '@notes#') to capture an ordinary bullet instead. It renders \
 as '- <body> [created::YYYY-MM-DD]' and is placed in a non-Tasks section whose \
@@ -82,7 +92,7 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture '@!dev:foobar' 'Some foobar task.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_DAY_FILE  exact daily note used by Pomodoro-linked capture\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time override",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -108,7 +118,7 @@ fn dry_run_arg() -> Arg {
         .long("dry-run")
         .short('d')
         .action(ArgAction::SetTrue)
-        .help("Parse, format, and report without writing a file")
+        .help("Parse, validate, format, and report without writing notes")
 }
 
 fn format_arg() -> Arg {
@@ -260,16 +270,43 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         CaptureKind::Bullet { .. } => {
             format_bullet_line(&parsed.body, &created, scheduled.as_deref())
         }
+        CaptureKind::Pomodoro { block_id } => format_pomodoro_task_line(
+            &parsed.body,
+            &created,
+            scheduled.as_deref(),
+            block_id,
+        ),
     };
     let kind_label = capture_kind_label(&parsed.kind);
     let relative_target = relative_target(parsed.route.as_deref());
     let target = request.bob_dir.join(&relative_target);
-    let placement = capture_to_target(
-        &target,
-        &capture_line,
-        &parsed.kind,
-        request.dry_run,
-    )?;
+    let special = match &parsed.kind {
+        CaptureKind::Pomodoro { block_id } => {
+            let route = parsed.route.as_deref().ok_or_else(|| {
+                CaptureError::io(
+                    "Pomodoro capture invariant failed: route is missing",
+                )
+            })?;
+            Some(capture_with_pomodoro_link(
+                &request.bob_dir,
+                &target,
+                route,
+                block_id,
+                &capture_line,
+                request.dry_run,
+            )?)
+        }
+        _ => None,
+    };
+    let placement = match &special {
+        Some(details) => details.placement,
+        None => capture_to_target(
+            &target,
+            &capture_line,
+            &parsed.kind,
+            request.dry_run,
+        )?,
+    };
 
     Ok(CaptureResult {
         ok: true,
@@ -289,6 +326,12 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         created,
         scheduled,
         placement,
+        block_id: special.as_ref().map(|details| details.block_id.clone()),
+        day_file: special.as_ref().map(|details| details.day_file.clone()),
+        block_link: special.as_ref().map(|details| details.block_link.clone()),
+        pomodoro_link_placement: special
+            .as_ref()
+            .map(|details| details.pomodoro_link_placement),
     })
 }
 
@@ -296,6 +339,7 @@ fn capture_kind_label(kind: &CaptureKind) -> &'static str {
     match kind {
         CaptureKind::Task => "task",
         CaptureKind::Bullet { .. } => "bullet",
+        CaptureKind::Pomodoro { .. } => "pomodoro_task",
     }
 }
 
@@ -350,6 +394,18 @@ fn format_bullet_line(
     line
 }
 
+fn format_pomodoro_task_line(
+    body: &str,
+    created: &str,
+    scheduled: Option<&str>,
+    block_id: &str,
+) -> String {
+    let mut line = format!("- [*] #task {body} [created::{created}]");
+    append_scheduled_property(&mut line, scheduled);
+    line.push_str(&format!(" ^{block_id}"));
+    line
+}
+
 fn append_scheduled_property(line: &mut String, scheduled: Option<&str>) {
     if let Some(scheduled) = scheduled {
         line.push_str(&format!(" [scheduled::{scheduled}]"));
@@ -371,7 +427,9 @@ fn capture_to_target(
 
     let contents = read_target(target)?;
     let (updated, placement) = match kind {
-        CaptureKind::Task => insert_task_line(&contents, capture_line),
+        CaptureKind::Task | CaptureKind::Pomodoro { .. } => {
+            insert_task_line(&contents, capture_line)
+        }
         CaptureKind::Bullet {
             section_prefix,
             exact,
@@ -387,6 +445,352 @@ fn capture_to_target(
             .map_err(|error| fs_error("write target", target, error))?;
     }
     Ok(placement)
+}
+
+#[derive(Debug)]
+struct PomodoroCaptureDetails {
+    placement: Placement,
+    block_id: String,
+    day_file: String,
+    block_link: String,
+    pomodoro_link_placement: Placement,
+}
+
+fn capture_with_pomodoro_link(
+    bob_dir: &Path,
+    target: &Path,
+    route: &str,
+    block_id: &str,
+    capture_line: &str,
+    dry_run: bool,
+) -> Result<PomodoroCaptureDetails, CaptureError> {
+    let target_existed = target.exists();
+    let original_target = if target_existed {
+        read_target(target)?
+    } else {
+        String::new()
+    };
+    if collect_done::block_ids_in_markdown(&original_target)
+        .iter()
+        .any(|existing| existing == block_id)
+    {
+        return Err(CaptureError::io(format!(
+            "block ID ^{block_id} already exists in {}",
+            target.display()
+        )));
+    }
+
+    let (updated_target, placement) = if target_existed {
+        insert_task_line(&original_target, capture_line)
+    } else {
+        (format!("{capture_line}\n"), Placement::Created)
+    };
+
+    let day_file = pomodoro::day_file_for(bob_dir);
+    if !day_file.is_file() {
+        return Err(CaptureError::io(format!(
+            "Bob daily note does not exist: {}",
+            day_file.display()
+        )));
+    }
+    if paths_refer_to_same_file(target, &day_file) {
+        return Err(CaptureError::io(
+            "routed note and Bob daily note must be different files",
+        ));
+    }
+
+    let original_day = read_target(&day_file)?;
+    let block_link = format!("[[{route}#^{block_id}]]");
+    let (updated_day, pomodoro_link_placement) =
+        insert_pomodoro_block_link(&original_day, &block_link)?;
+
+    if !dry_run {
+        coordinated_replace(
+            target,
+            target_existed.then_some(original_target.as_str()),
+            &updated_target,
+            &day_file,
+            &updated_day,
+        )?;
+    }
+
+    Ok(PomodoroCaptureDetails {
+        placement,
+        block_id: block_id.to_string(),
+        day_file: day_file.display().to_string(),
+        block_link,
+        pomodoro_link_placement,
+    })
+}
+
+fn paths_refer_to_same_file(first: &Path, second: &Path) -> bool {
+    if first == second {
+        return true;
+    }
+    match (fs::canonicalize(first), fs::canonicalize(second)) {
+        (Ok(first), Ok(second)) => first == second,
+        _ => false,
+    }
+}
+
+fn insert_pomodoro_block_link(
+    contents: &str,
+    block_link: &str,
+) -> Result<(String, Placement), CaptureError> {
+    let lines = line_spans(contents);
+    let line_text = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+    let section =
+        pomodoro::pomodoros_section_range(&line_text).ok_or_else(|| {
+            CaptureError::io("Bob daily note has no Pomodoros section")
+        })?;
+
+    let mut open = Vec::new();
+    let mut timed = Vec::new();
+    for index in section.clone() {
+        let line = lines[index].text;
+        if is_indented_line(line) {
+            continue;
+        }
+        let Some(task) = pomodoro::open_ledger_task(line) else {
+            continue;
+        };
+        open.push(index);
+        if pomodoro::task_time_range(task).is_some() {
+            timed.push(index);
+        }
+    }
+
+    if timed.len() > 1 {
+        return Err(CaptureError::io(
+            "Bob daily note has multiple open timed Pomodoros",
+        ));
+    }
+    let selected = timed
+        .first()
+        .copied()
+        .or_else(|| open.first().copied())
+        .ok_or_else(|| {
+            CaptureError::io("Bob daily note has no eligible open Pomodoro")
+        })?;
+    let insertion_index = task_block_end(&lines, selected);
+    let indentation =
+        child_bullet_indentation(&lines, selected + 1, insertion_index)
+            .or_else(|| {
+                nearby_child_bullet_indentation(
+                    &lines,
+                    section.start,
+                    section.end,
+                )
+            })
+            .unwrap_or_else(|| "  ".to_string());
+    let line = format!("{indentation}- {block_link}");
+    let addition = insertion_text_preserving_line_endings(
+        contents,
+        insertion_index,
+        &line,
+    );
+    let placement = if insertion_index >= contents.len() {
+        Placement::Appended
+    } else {
+        Placement::Inserted
+    };
+    Ok((insert_at(contents, insertion_index, &addition), placement))
+}
+
+fn child_bullet_indentation(
+    lines: &[LineSpan<'_>],
+    start_line: usize,
+    insertion_index: usize,
+) -> Option<String> {
+    lines[start_line..]
+        .iter()
+        .take_while(|line| line.end <= insertion_index)
+        .find_map(|line| unordered_child_indentation(line.text))
+}
+
+fn nearby_child_bullet_indentation(
+    lines: &[LineSpan<'_>],
+    start_line: usize,
+    end_line: usize,
+) -> Option<String> {
+    lines[start_line..end_line]
+        .iter()
+        .find_map(|line| unordered_child_indentation(line.text))
+}
+
+fn unordered_child_indentation(line: &str) -> Option<String> {
+    let indentation_len = line
+        .as_bytes()
+        .iter()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    if indentation_len == 0 {
+        return None;
+    }
+    let rest = &line[indentation_len..];
+    matches!(rest.as_bytes(), [b'-' | b'*' | b'+', b' ', ..])
+        .then(|| line[..indentation_len].to_string())
+}
+
+fn insertion_text_preserving_line_endings(
+    contents: &str,
+    index: usize,
+    line: &str,
+) -> String {
+    let ending = if contents.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let needs_leading_ending = index > 0 && !contents[..index].ends_with('\n');
+    if needs_leading_ending {
+        format!("{ending}{line}{ending}")
+    } else {
+        format!("{line}{ending}")
+    }
+}
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn coordinated_replace(
+    target: &Path,
+    original_target: Option<&str>,
+    updated_target: &str,
+    day_file: &Path,
+    updated_day: &str,
+) -> Result<(), CaptureError> {
+    let target_temp = write_temporary_file(target, updated_target, "target")?;
+    let day_temp = match write_temporary_file(day_file, updated_day, "day") {
+        Ok(path) => path,
+        Err(error) => {
+            remove_temporary_file(&target_temp);
+            return Err(error);
+        }
+    };
+    let target_backup = match original_target {
+        Some(contents) => {
+            match write_temporary_file(target, contents, "backup") {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    remove_temporary_file(&target_temp);
+                    remove_temporary_file(&day_temp);
+                    return Err(error);
+                }
+            }
+        }
+        None => None,
+    };
+
+    if let Err(error) = fs::rename(&target_temp, target) {
+        remove_temporary_file(&target_temp);
+        remove_temporary_file(&day_temp);
+        if let Some(backup) = &target_backup {
+            remove_temporary_file(backup);
+        }
+        return Err(fs_error("replace target", target, error));
+    }
+
+    if let Err(error) = fs::rename(&day_temp, day_file) {
+        let rollback = match &target_backup {
+            Some(backup) => fs::rename(backup, target),
+            None => fs::remove_file(target),
+        };
+        remove_temporary_file(&day_temp);
+        let mut message =
+            format!("replace daily note {}: {error}", day_file.display());
+        if let Err(rollback_error) = rollback {
+            message.push_str(&format!(
+                "; rollback of {} also failed: {rollback_error}{}",
+                target.display(),
+                target_backup
+                    .as_ref()
+                    .map(|backup| format!(
+                        "; original remains at {}",
+                        backup.display()
+                    ))
+                    .unwrap_or_default()
+            ));
+        }
+        return Err(CaptureError::io(message));
+    }
+
+    if let Some(backup) = &target_backup {
+        remove_temporary_file(backup);
+    }
+    Ok(())
+}
+
+fn write_temporary_file(
+    destination: &Path,
+    contents: &str,
+    role: &str,
+) -> Result<PathBuf, CaptureError> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("note");
+
+    for _ in 0..100 {
+        let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!(
+            ".{file_name}.bob-capture-{}-{sequence}-{role}.tmp",
+            std::process::id()
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                continue;
+            }
+            Err(error) => {
+                return Err(fs_error(
+                    "create temporary file for",
+                    destination,
+                    error,
+                ));
+            }
+        };
+        if let Ok(metadata) = fs::metadata(destination)
+            && let Err(error) = file.set_permissions(metadata.permissions())
+        {
+            remove_temporary_file(&path);
+            return Err(fs_error(
+                "set temporary file permissions for",
+                destination,
+                error,
+            ));
+        }
+        if let Err(error) = file.write_all(contents.as_bytes()) {
+            remove_temporary_file(&path);
+            return Err(fs_error(
+                "write temporary file for",
+                destination,
+                error,
+            ));
+        }
+        if let Err(error) = file.sync_all() {
+            remove_temporary_file(&path);
+            return Err(fs_error(
+                "sync temporary file for",
+                destination,
+                error,
+            ));
+        }
+        return Ok(path);
+    }
+
+    Err(CaptureError::io(format!(
+        "could not allocate temporary file for {}",
+        destination.display()
+    )))
+}
+
+fn remove_temporary_file(path: &Path) {
+    let _ = fs::remove_file(path);
 }
 
 fn read_target(target: &Path) -> Result<String, CaptureError> {
@@ -419,6 +823,9 @@ enum CaptureKind {
         section_prefix: Option<String>,
         exact: bool,
     },
+    Pomodoro {
+        block_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,14 +836,9 @@ struct ParsedCaptureText {
     scheduled_offset: Option<u64>,
 }
 
-/// A parsed `@route` token, optionally carrying a bullet marker.
-///
-/// `bullet` records the token's `#` suffix: `None` means a plain route
-/// (`@foo`), `Some(None)` a bare bullet marker (`@foo#`), and
-/// `Some(Some(prefix))` a bullet marker with a section prefix (`@foo#bar`).
 struct RouteToken {
     route: String,
-    bullet: Option<Option<String>>,
+    kind: CaptureKind,
 }
 
 impl RouteToken {
@@ -445,17 +847,10 @@ impl RouteToken {
         body: String,
         scheduled_offset: Option<u64>,
     ) -> ParsedCaptureText {
-        let kind = match self.bullet {
-            Some(section_prefix) => CaptureKind::Bullet {
-                section_prefix,
-                exact: false,
-            },
-            None => CaptureKind::Task,
-        };
         ParsedCaptureText {
             body,
             route: Some(self.route),
-            kind,
+            kind: self.kind,
             scheduled_offset,
         }
     }
@@ -510,14 +905,14 @@ fn parse_capture_text(
     }
 
     reject_legacy_bullet_markers(&tokens, true)?;
+    validate_special_terminal_markers(&tokens)?;
 
     // Leading route wins: when the first token is a route token followed by
     // body text, route by it and do not inspect later route-looking tokens.
-    if let Some(token) = parse_route_token(tokens[0]) {
+    if let Some(token) = parse_terminal_route_token(tokens[0])? {
         let body = tokens[1..].join(" ");
         if body.is_empty() {
-            // `@foo#bar`/`@foo#` clearly request a routed bullet with no body.
-            if token.bullet.is_some() {
+            if !matches!(token.kind, CaptureKind::Task) {
                 return Err(missing_text_error());
             }
             // A bare `@foo` with no body stays literal task text.
@@ -529,7 +924,7 @@ fn parse_capture_text(
     // Otherwise a trailing route token routes the body that precedes it.
     if let Some((&last, rest)) = tokens.split_last()
         && !rest.is_empty()
-        && let Some(token) = parse_route_token(last)
+        && let Some(token) = parse_terminal_route_token(last)?
     {
         return Ok(token.into_parsed(rest.join(" "), scheduled_offset));
     }
@@ -573,8 +968,68 @@ fn parse_route_token(token: &str) -> Option<RouteToken> {
     };
     is_route_token(route_part).then(|| RouteToken {
         route: route_part.to_ascii_lowercase(),
-        bullet,
+        kind: match bullet {
+            Some(section_prefix) => CaptureKind::Bullet {
+                section_prefix,
+                exact: false,
+            },
+            None => CaptureKind::Task,
+        },
     })
+}
+
+fn parse_terminal_route_token(
+    token: &str,
+) -> Result<Option<RouteToken>, CaptureError> {
+    if token.starts_with("@!") {
+        return parse_pomodoro_route_token(token).map(Some);
+    }
+    Ok(parse_route_token(token))
+}
+
+fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, CaptureError> {
+    let marker = token.strip_prefix("@!").ok_or_else(|| {
+        CaptureError::usage(
+            "Pomodoro capture markers must use @!<route>:<block-id>",
+        )
+    })?;
+    let Some((route, block_id)) = marker.split_once(':') else {
+        return Err(CaptureError::usage(
+            "Pomodoro capture markers must use @!<route>:<block-id>",
+        ));
+    };
+    if !is_route_token(route) {
+        return Err(CaptureError::usage(
+            "Pomodoro capture route must contain only A-Z, a-z, 0-9, '_' or '-'",
+        ));
+    }
+    if !is_block_id(block_id) {
+        return Err(CaptureError::usage(
+            "Pomodoro capture block ID must be non-empty and contain only A-Z, a-z, 0-9, '_' or '-'",
+        ));
+    }
+
+    Ok(RouteToken {
+        route: route.to_ascii_lowercase(),
+        kind: CaptureKind::Pomodoro {
+            block_id: block_id.to_string(),
+        },
+    })
+}
+
+fn validate_special_terminal_markers(
+    tokens: &[&str],
+) -> Result<(), CaptureError> {
+    for token in tokens.first().into_iter().chain(tokens.last()) {
+        if token.starts_with("@!") {
+            parse_pomodoro_route_token(token)?;
+        }
+    }
+    Ok(())
+}
+
+fn is_block_id(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(collect_done::is_block_id_byte)
 }
 
 /// Parse one whitespace-free token as a schedule offset (`s:<N>`), returning
@@ -600,7 +1055,7 @@ fn extract_trailing_schedule(tokens: &mut Vec<&str>) -> Option<u64> {
     if tokens.len() >= 2 {
         let route_index = tokens.len() - 1;
         let schedule_index = tokens.len() - 2;
-        if parse_route_token(tokens[route_index]).is_some()
+        if is_route_marker(tokens[route_index])
             && let Some(offset) = parse_schedule_token(tokens[schedule_index])
         {
             tokens.remove(schedule_index);
@@ -609,6 +1064,12 @@ fn extract_trailing_schedule(tokens: &mut Vec<&str>) -> Option<u64> {
     }
 
     None
+}
+
+fn is_route_marker(token: &str) -> bool {
+    parse_route_token(token).is_some()
+        || (token.starts_with("@!")
+            && parse_pomodoro_route_token(token).is_ok())
 }
 
 /// Reject the retired standalone bullet marker forms so they fail clearly
@@ -633,7 +1094,8 @@ fn reject_legacy_bullet_markers(
     if allow_route
         && tokens.len() >= 2
         && tokens[tokens.len() - 2].starts_with('#')
-        && parse_route_token(last).is_some_and(|token| token.bullet.is_none())
+        && parse_route_token(last)
+            .is_some_and(|token| matches!(token.kind, CaptureKind::Task))
     {
         return Err(legacy_marker_error());
     }
@@ -692,7 +1154,7 @@ fn insert_task_line(contents: &str, task_line: &str) -> (String, Placement) {
 fn insert_at(contents: &str, index: usize, addition: &str) -> String {
     let mut updated = String::with_capacity(contents.len() + addition.len());
     updated.push_str(&contents[..index]);
-    updated.push_str(&addition);
+    updated.push_str(addition);
     updated.push_str(&contents[index..]);
     updated
 }
@@ -740,7 +1202,8 @@ fn insert_bullet_line(
 ) -> (String, Placement) {
     let lines = line_spans(contents);
     let headings = markdown_headings(&lines);
-    let section = target_bullet_section(&lines, &headings, section_prefix, exact);
+    let section =
+        target_bullet_section(&lines, &headings, section_prefix, exact);
 
     if let Some(index) = last_bullet_block_insert_index_in_range(
         &lines,
@@ -998,7 +1461,9 @@ struct TasksSection {
 
 fn tasks_section(lines: &[LineSpan<'_>]) -> Option<TasksSection> {
     let headings = markdown_headings(lines);
-    let pos = headings.iter().position(|heading| heading.title == "Tasks")?;
+    let pos = headings
+        .iter()
+        .position(|heading| heading.title == "Tasks")?;
     let heading_index = headings[pos].line_index;
     let end_line = headings
         .get(pos + 1)
@@ -1200,6 +1665,14 @@ struct CaptureResult {
     created: String,
     scheduled: Option<String>,
     placement: Placement,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    day_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block_link: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_link_placement: Option<Placement>,
 }
 
 fn print_success(result: &CaptureResult, output_format: OutputFormat) {
@@ -1229,6 +1702,17 @@ fn print_human_success(result: &CaptureResult) {
     };
     println!("{prefix} {verb}  {target_label}");
     println!("  {}", styler.dim(&result.task_line));
+    if let (Some(day_file), Some(block_link)) =
+        (&result.day_file, &result.block_link)
+    {
+        let link_verb = if result.dry_run {
+            "would link"
+        } else {
+            "linked"
+        };
+        println!("{prefix} {link_verb}   {}", styler.cyan(day_file));
+        println!("  {}", styler.dim(&format!("- {block_link}")));
+    }
 }
 
 fn success_json(result: &CaptureResult) -> String {
@@ -1449,6 +1933,68 @@ mod tests {
     }
 
     #[test]
+    fn parses_pomodoro_routes_in_terminal_positions_with_schedules() {
+        let cases = [
+            ("@!Dev:Foo_Bar Do thing", "Do thing", None),
+            ("Do thing @!Dev:Foo_Bar", "Do thing", None),
+            ("Do thing s:2 @!Dev:Foo_Bar", "Do thing", Some(2)),
+            ("Do thing @!Dev:Foo_Bar s:2", "Do thing", Some(2)),
+            ("@!Dev:Foo_Bar Do thing s:2", "Do thing", Some(2)),
+        ];
+
+        for (raw, body, scheduled_offset) in cases {
+            let parsed = parse_capture_text(raw, None)
+                .unwrap_or_else(|error| panic!("{raw}: {error:?}"));
+            assert_eq!(parsed.body, body, "{raw}");
+            assert_eq!(parsed.route.as_deref(), Some("dev"), "{raw}");
+            assert_eq!(parsed.scheduled_offset, scheduled_offset, "{raw}");
+            assert_eq!(
+                parsed.kind,
+                CaptureKind::Pomodoro {
+                    block_id: "Foo_Bar".to_string(),
+                },
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_terminal_pomodoro_routes_are_usage_errors() {
+        for raw in [
+            "Do thing @!",
+            "Do thing @!dev",
+            "Do thing @!:id",
+            "Do thing @!dev:",
+            "Do thing @!dev:bad.id",
+            "Do thing @!bad/route:id",
+            "Do thing @!dev:id:extra",
+            "@!dev Do thing",
+        ] {
+            let error = parse_capture_text(raw, None)
+                .expect_err(&format!("{raw} should fail"));
+            assert_eq!(error.kind, CaptureErrorKind::Usage, "{raw}");
+        }
+    }
+
+    #[test]
+    fn pomodoro_route_requires_a_body_and_stays_literal_in_middle_or_forced() {
+        let error = parse_capture_text("@!dev:id", None)
+            .expect_err("marker-only capture should fail");
+        assert_eq!(error.kind, CaptureErrorKind::Usage);
+
+        let parsed = parse_capture_text("Discuss @!dev:id later", None)
+            .expect("middle marker stays literal");
+        assert_eq!(parsed.body, "Discuss @!dev:id later");
+        assert_eq!(parsed.kind, CaptureKind::Task);
+
+        let parsed = parse_capture_text("Do thing @!dev:id", Some("Work"))
+            .expect("forced route keeps marker literal");
+        assert_eq!(parsed.body, "Do thing @!dev:id");
+        assert_eq!(parsed.route.as_deref(), Some("work"));
+        assert_eq!(parsed.kind, CaptureKind::Task);
+    }
+
+    #[test]
     fn forced_route_bypasses_auto_route_parsing() {
         let parsed =
             parse_capture_text("Buy milk @Groceries", Some("Work-Queue"))
@@ -1479,6 +2025,141 @@ mod tests {
             format_task_line("buy milk", "2026-06-15", Some("2026-06-16")),
             "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
         );
+    }
+
+    #[test]
+    fn formats_pomodoro_task_with_block_id_as_final_token() {
+        assert_eq!(
+            format_pomodoro_task_line(
+                "Some foobar task.",
+                "2026-07-10",
+                None,
+                "foobar",
+            ),
+            "- [*] #task Some foobar task. [created::2026-07-10] ^foobar"
+        );
+        assert_eq!(
+            format_pomodoro_task_line(
+                "Some foobar task.",
+                "2026-07-10",
+                Some("2026-07-12"),
+                "foobar",
+            ),
+            "- [*] #task Some foobar task. [created::2026-07-10] [scheduled::2026-07-12] ^foobar"
+        );
+    }
+
+    #[test]
+    fn pomodoro_link_prefers_the_single_timed_open_entry() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] Untimed first\n",
+            "- [x] Completed (0800-0830)\n",
+            "- [ ] (**0900-0930** [t:: 30m]) Timed\n",
+            "  - existing child\n",
+            "## Later\n",
+            "- [ ] Outside (1000-1030)\n",
+        );
+        let (updated, placement) =
+            insert_pomodoro_block_link(contents, "[[dev#^foobar]]")
+                .expect("select timed Pomodoro");
+        assert_eq!(placement, Placement::Inserted);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] Untimed first\n",
+                "- [x] Completed (0800-0830)\n",
+                "- [ ] (**0900-0930** [t:: 30m]) Timed\n",
+                "  - existing child\n",
+                "  - [[dev#^foobar]]\n",
+                "## Later\n",
+                "- [ ] Outside (1000-1030)\n",
+            )
+        );
+    }
+
+    #[test]
+    fn pomodoro_link_falls_back_to_first_open_and_ignores_nested_tasks() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] Completed\n",
+            "  - [ ] Nested (0800-0830)\n",
+            "- [ ] First open\n",
+            "- [ ] Second open\n",
+        );
+        let (updated, placement) =
+            insert_pomodoro_block_link(contents, "[[dev#^fallback]]")
+                .expect("select first open Pomodoro");
+        assert_eq!(placement, Placement::Inserted);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] Completed\n",
+                "  - [ ] Nested (0800-0830)\n",
+                "- [ ] First open\n",
+                "  - [[dev#^fallback]]\n",
+                "- [ ] Second open\n",
+            )
+        );
+    }
+
+    #[test]
+    fn pomodoro_link_rejects_missing_section_target_and_timed_ambiguity() {
+        for (contents, expected) in [
+            ("## Notes\n- [ ] (0800-0830) Outside\n", "no Pomodoros"),
+            ("## Pomodoros\n- [x] Complete\n", "no eligible"),
+            (
+                "## Pomodoros\n- [ ] (0800-0830) One\n- [ ] (**0900-0930**) Two\n",
+                "multiple open timed",
+            ),
+        ] {
+            let error = insert_pomodoro_block_link(contents, "[[dev#^id]]")
+                .expect_err("invalid ledger should fail");
+            assert!(error.message.contains(expected), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn pomodoro_link_preserves_crlf_and_reuses_nearby_child_indentation() {
+        let contents = concat!(
+            "## Pomodoros\r\n",
+            "- [x] Old\r\n",
+            "\t- old child\r\n",
+            "- [ ] Next\r\n",
+        );
+        let (updated, placement) =
+            insert_pomodoro_block_link(contents, "[[dev#^id]]")
+                .expect("insert CRLF link");
+        assert_eq!(placement, Placement::Appended);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\r\n",
+                "- [x] Old\r\n",
+                "\t- old child\r\n",
+                "- [ ] Next\r\n",
+                "\t- [[dev#^id]]\r\n",
+            )
+        );
+    }
+
+    #[test]
+    fn pomodoro_section_scan_ignores_fenced_lookalikes() {
+        let contents = concat!(
+            "```md\n",
+            "## Pomodoros\n",
+            "- [ ] (0800-0830) Example\n",
+            "```\n",
+            "## Pomodoros\n",
+            "- [ ] Real\n",
+        );
+        let (updated, _) =
+            insert_pomodoro_block_link(contents, "[[dev#^real]]")
+                .expect("find real section");
+        assert!(updated.ends_with("- [ ] Real\n  - [[dev#^real]]\n"));
+        assert!(!updated.contains("Example\n  - [[dev#^real]]"));
     }
 
     #[test]
@@ -1719,6 +2400,10 @@ mod tests {
             created: "2026-06-15".to_string(),
             scheduled: None,
             placement: Placement::Inserted,
+            block_id: None,
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
         };
 
         let value: serde_json::Value =
@@ -1739,6 +2424,14 @@ mod tests {
         assert_eq!(value["created"], "2026-06-15");
         assert!(value["scheduled"].is_null(), "{value}");
         assert_eq!(value["placement"], "inserted");
+        for special_field in [
+            "block_id",
+            "day_file",
+            "block_link",
+            "pomodoro_link_placement",
+        ] {
+            assert!(value.get(special_field).is_none(), "{value}");
+        }
     }
 
     #[test]
@@ -1827,8 +2520,9 @@ mod tests {
             "unexpected error: {error:?}"
         );
 
-        let error = super::parse_capture_text("Some note", Some("foo"), Some(""))
-            .expect_err("empty section must fail");
+        let error =
+            super::parse_capture_text("Some note", Some("foo"), Some(""))
+                .expect_err("empty section must fail");
         assert_eq!(error.kind, CaptureErrorKind::Usage);
         assert!(
             error.message.contains("must not be empty"),
@@ -1938,7 +2632,9 @@ mod tests {
         assert_eq!(
             insert_bullet_line(contents, BULLET, Some("Ta")),
             (
-                format!("## Tasks\n- [ ] #task t\n## Ta-da\n\n{BULLET}\nNotes\n"),
+                format!(
+                    "## Tasks\n- [ ] #task t\n## Ta-da\n\n{BULLET}\nNotes\n"
+                ),
                 Placement::Inserted,
             )
         );
@@ -1950,7 +2646,9 @@ mod tests {
         assert_eq!(
             insert_bullet_line(contents, BULLET, None),
             (
-                format!("## Tasks\n- [ ] #task t\n## Ideas\n\n{BULLET}\nNotes\n"),
+                format!(
+                    "## Tasks\n- [ ] #task t\n## Ideas\n\n{BULLET}\nNotes\n"
+                ),
                 Placement::Inserted,
             )
         );
@@ -1970,8 +2668,7 @@ mod tests {
 
     #[test]
     fn zeroth_section_insertion_after_frontmatter() {
-        let contents =
-            "---\ntype: area\n---\nIntro\n## Tasks\n- [ ] #task t\n";
+        let contents = "---\ntype: area\n---\nIntro\n## Tasks\n- [ ] #task t\n";
         assert_eq!(
             insert_bullet_line(contents, BULLET, Some("Ideas")),
             (

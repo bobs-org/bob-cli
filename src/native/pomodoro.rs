@@ -2,6 +2,7 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs, io,
+    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -200,10 +201,14 @@ enum ParseResult {
 }
 
 fn day_file() -> PathBuf {
+    day_file_for(&bob_env::bob_dir())
+}
+
+pub(crate) fn day_file_for(bob_dir: &Path) -> PathBuf {
     env::var_os("BOB_DAY_FILE")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| bob_env::default_day_file(&bob_env::bob_dir()))
+        .unwrap_or_else(|| bob_env::default_day_file(bob_dir))
 }
 
 fn day_date(day_file: &Path) -> NaiveDate {
@@ -235,23 +240,13 @@ fn latest_ledger_pomodoro(
     day_file: &Path,
 ) -> io::Result<Option<LedgerPomodoro>> {
     let contents = fs::read_to_string(day_file)?;
-    let mut in_pomodoros = false;
+    let lines = contents.lines().collect::<Vec<_>>();
+    let Some(section) = pomodoros_section_range(&lines) else {
+        return Ok(None);
+    };
     let mut last = None;
 
-    for line in contents.lines() {
-        if is_pomodoros_heading(line) {
-            in_pomodoros = true;
-            continue;
-        }
-
-        if in_pomodoros && is_level_two_heading(line) {
-            in_pomodoros = false;
-        }
-
-        if !in_pomodoros {
-            continue;
-        }
-
+    for line in &lines[section] {
         if let Some(task) = open_ledger_task(line)
             && let Some((raw_range, start, end)) = task_time_range(task)
         {
@@ -269,7 +264,81 @@ fn latest_ledger_pomodoro(
     Ok(last)
 }
 
-fn is_pomodoros_heading(line: &str) -> bool {
+pub(crate) fn pomodoros_section_range(lines: &[&str]) -> Option<Range<usize>> {
+    let mut section_start = None;
+    let mut in_frontmatter = false;
+    let mut fence = None;
+
+    for (index, line) in lines.iter().enumerate() {
+        if index == 0 && line.trim() == "---" {
+            in_frontmatter = true;
+            continue;
+        }
+        if in_frontmatter {
+            if line.trim() == "---" {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+
+        if let Some(open_fence) = fence {
+            if closes_markdown_fence(line, open_fence) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(open_fence) = markdown_fence(line) {
+            fence = Some(open_fence);
+            continue;
+        }
+
+        if let Some(start) = section_start {
+            if is_level_two_heading(line) {
+                return Some(start..index);
+            }
+        } else if is_pomodoros_heading(line) {
+            section_start = Some(index + 1);
+        }
+    }
+
+    section_start.map(|start| start..lines.len())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MarkdownFence {
+    character: u8,
+    length: usize,
+}
+
+fn markdown_fence(line: &str) -> Option<MarkdownFence> {
+    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+    if indentation > 3 {
+        return None;
+    }
+    let line = &line[indentation..];
+    let character = *line.as_bytes().first()?;
+    if !matches!(character, b'`' | b'~') {
+        return None;
+    }
+    let length = line
+        .as_bytes()
+        .iter()
+        .take_while(|byte| **byte == character)
+        .count();
+    (length >= 3).then_some(MarkdownFence { character, length })
+}
+
+fn closes_markdown_fence(line: &str, open: MarkdownFence) -> bool {
+    let Some(marker) = markdown_fence(line) else {
+        return false;
+    };
+    let trimmed = line.trim_start();
+    marker.character == open.character
+        && marker.length >= open.length
+        && trimmed[marker.length..].trim().is_empty()
+}
+
+pub(crate) fn is_pomodoros_heading(line: &str) -> bool {
     let Some(rest) = line.strip_prefix("##") else {
         return false;
     };
@@ -282,7 +351,7 @@ fn is_pomodoros_heading(line: &str) -> bool {
     rest.is_empty() || rest.starts_with(char::is_whitespace)
 }
 
-fn is_level_two_heading(line: &str) -> bool {
+pub(crate) fn is_level_two_heading(line: &str) -> bool {
     line.strip_prefix("##")
         .and_then(trim_one_or_more_spaces)
         .is_some()
@@ -293,7 +362,7 @@ fn trim_one_or_more_spaces(value: &str) -> Option<&str> {
     (trimmed.len() < value.len()).then_some(trimmed)
 }
 
-fn open_ledger_task(line: &str) -> Option<&str> {
+pub(crate) fn open_ledger_task(line: &str) -> Option<&str> {
     let line = line.trim_start();
     let rest = line.strip_prefix('-')?;
     let rest = trim_one_or_more_spaces(rest)?;
@@ -311,7 +380,7 @@ fn open_ledger_task(line: &str) -> Option<&str> {
     Some(rest.trim_end())
 }
 
-fn task_time_range(task: &str) -> Option<(&str, String, String)> {
+pub(crate) fn task_time_range(task: &str) -> Option<(&str, String, String)> {
     let mut search_start = 0;
     while let Some(open_offset) = task[search_start..].find('(') {
         let open = search_start + open_offset;

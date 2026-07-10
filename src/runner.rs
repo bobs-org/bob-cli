@@ -246,6 +246,8 @@ Examples:
   bob bulk-git-commit             Commit and push Bob vault Git changes
   bob capture buy milk @groceries
                                  Capture a task into groceries.md
+  bob capture '@!dev:foobar' 'Some foobar task.'
+                                 Capture and link a next Pomodoro task
   bob capture-sections --route cash --format json
                                  List picker sections for one capture target
   bob capture-targets --format json

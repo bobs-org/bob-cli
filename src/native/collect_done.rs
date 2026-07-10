@@ -1977,7 +1977,7 @@ fn transform_markdown(contents: &str) -> Transform {
     }
 }
 
-fn block_ids_in_markdown(contents: &str) -> Vec<String> {
+pub(crate) fn block_ids_in_markdown(contents: &str) -> Vec<String> {
     let mut block_ids = Vec::new();
     for line in contents.split_inclusive('\n') {
         let (content, _) = split_line_ending(line);
@@ -2035,7 +2035,7 @@ fn block_id_occurrences_in_text(text: &str) -> Vec<BlockIdOccurrence> {
     occurrences
 }
 
-fn is_block_id_byte(byte: u8) -> bool {
+pub(crate) fn is_block_id_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
 }
 

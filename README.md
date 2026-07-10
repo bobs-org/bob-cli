@@ -78,6 +78,35 @@ the `Tasks` heading when the section has no tasks yet. Files without a `Tasks`
 section keep the older fallback of inserting after the last top-level `#task`
 block and its indented continuation lines, or appending at EOF.
 
+Use a leading or trailing `@!<route>:<block-id>` marker to create a
+Pomodoro-linked next task. For example,
+`bob capture '@!dev:foobar' 'Some foobar task.'` writes:
+
+```markdown
+- [*] #task Some foobar task. [created::2026-07-10] ^foobar
+```
+
+It also adds `[[dev#^foobar]]` as a child bullet of an eligible open Pomodoro
+in today's daily note. The route is lower-cased; route and block-ID characters
+are limited to letters, digits, `_`, and `-`. Scheduled offsets work in either
+terminal order, and the block ID remains the final task token after any
+`[scheduled::YYYY-MM-DD]` property.
+
+The daily note is selected from `BOB_DAY_FILE` when set, otherwise from
+`<bob-dir>/YYYY/YYYYMMDD.md` using `BOB_NOW` or the local date. Within its
+`Pomodoros` section, capture prefers the single open top-level entry with a
+recognized bold or legacy time range; when there is no timed entry, it uses the
+first open top-level entry. Completed and nested entries are ignored. Multiple
+open timed entries are treated as an invariant error. The link is inserted
+after the selected entry's existing children and reuses their indentation when
+possible.
+
+The routed note and daily note are both parsed and validated before either is
+replaced. A missing daily note or Pomodoros section, no eligible entry, timed
+ambiguity, malformed marker, or duplicate block ID leaves both notes unchanged.
+`--dry-run` performs the same validation and reports both planned edits without
+writing either file.
+
 Append `#<section-prefix>` or a bare `#` to an `@route` token, as in
 `@notes#Ideas` or `@notes#`, to capture an ordinary Markdown bullet instead of
 a task. It renders as `- <text> [created::YYYY-MM-DD]` and is placed in a
@@ -117,6 +146,17 @@ fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `placement`. The `kind` field is `"task"` or `"bullet"`, and `task_line` holds
 the rendered line for either kind. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
+
+Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
+`block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`. Ordinary
+capture JSON remains unchanged.
+
+The Hammerspoon panel opened by `cmd+shift+ctrl+i` also supports a trailing
+shorthand. Submit `<task> @!` to choose an area or project and then enter its
+block ID, or submit `<task> @!<route>` to skip the note picker and go directly
+to the block-ID prompt. The panel validates the ID before enabling Capture and
+retains the staged task, route, and ID when the CLI reports a failure. Existing
+`@`, `@#`, and `@route#` picker flows are unchanged.
 
 ```bash
 bob nightly
@@ -386,7 +426,8 @@ Rust binaries, and the binaries carry the script assets they need.
 `BOB_DATAVIEW_VAULT` sets the default Obsidian vault name or ID forwarded to
 `obsidian eval` by `bob query --engine obsidian`.
 
-`BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`.
+`BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro` and
+Pomodoro-linked `bob capture` requests.
 
 `BOB_NOW` sets the current timestamp for Pomodoro status, the `bob capture`
 `[created::YYYY-MM-DD]` stamp, and default runtime note selection. It also
