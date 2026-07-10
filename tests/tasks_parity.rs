@@ -539,7 +539,7 @@ fn tasks_cli_rejects_invalid_combinations_and_unsupported_surface() {
         (&["--tasks", "", "--query", "LIST"], "cannot be used with"),
         (
             &["--tasks", "", "--engine", "obsidian"],
-            "--engine obsidian does not support Tasks queries yet",
+            "--engine obsidian does not support Tasks queries",
         ),
         (
             &["--tasks-note", "dash.md", "--origin", "Home.md"],
@@ -564,10 +564,6 @@ fn tasks_cli_rejects_invalid_combinations_and_unsupported_surface() {
             &["--tasks", "description regex matches apple sauce"][..],
             "Regular expressions must look like",
         ),
-        (
-            &["-n", "dash.md"][..],
-            "running Tasks code blocks from dash.md is not available yet",
-        ),
     ] {
         let output = run_fixture(args);
         assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
@@ -577,6 +573,122 @@ fn tasks_cli_rejects_invalid_combinations_and_unsupported_surface() {
             format_output(&output)
         );
     }
+}
+
+#[test]
+fn tasks_note_executes_every_dashboard_block_with_origin_defaults() {
+    let output = run_fixture(&["--format", "json", "--tasks-note", "dash.md"]);
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+
+    let actual = json_stdout(&output);
+    assert_eq!(actual["engine"], "native");
+    assert_eq!(actual["query_kind"], "tasks_note");
+    assert_eq!(actual["format"], "json");
+    assert_eq!(actual["note"], "dash.md");
+    assert_eq!(actual["warnings"], json!([]));
+    let blocks = actual["blocks"].as_array().expect("tasks note blocks");
+    assert_eq!(blocks.len(), 3);
+
+    for (index, heading, query, count) in [
+        (1, "WIP", "status.type is IN_PROGRESS", 1),
+        (2, "NEXT", "status.name includes Next", 1),
+        (3, "READY", "status.type is TODO", 14),
+    ] {
+        let block = &blocks[index - 1];
+        assert_eq!(block["index"], index);
+        assert_eq!(block["heading"], heading);
+        assert_eq!(block["query"], query);
+        assert_eq!(block["result"]["count"], count);
+        assert_eq!(
+            block["parsedQuery"]["filters"].as_array().map(Vec::len),
+            Some(6),
+            "query-file defaults were not composed for {heading}: {block}"
+        );
+        assert!(block["result"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|task| task["path"] != "dash.md"));
+    }
+
+    let inline = run_fixture(&[
+        "--format",
+        "json",
+        "--origin",
+        "dash.md",
+        "--tasks",
+        "status.type is IN_PROGRESS",
+    ]);
+    assert_success(&inline);
+    assert_eq!(
+        json_stdout(&inline)["result"]["tasks"],
+        blocks[0]["result"]["tasks"],
+        "--origin and --tasks-note must apply identical note context/defaults"
+    );
+}
+
+#[test]
+fn tasks_note_identifies_blocks_in_paths_and_markdown_output() {
+    let paths = run_fixture(&["--tasks-note", "dash.md"]);
+    assert_success(&paths);
+    let paths = stdout(&paths);
+    for marker in [
+        "[dash.md#WIP (block 1, line 20)]",
+        "[dash.md#NEXT (block 2, line 26)]",
+        "[dash.md#READY (block 3, line 32)]",
+    ] {
+        assert!(paths.contains(marker), "missing {marker:?}:\n{paths}");
+    }
+
+    let markdown =
+        run_fixture(&["--format", "markdown", "--tasks-note", "dash.md"]);
+    assert_success(&markdown);
+    let markdown = stdout(&markdown);
+    assert!(markdown.contains("## WIP (block 1)\n"), "{markdown}");
+    assert!(markdown.contains("## NEXT (block 2)\n"), "{markdown}");
+    assert!(markdown.contains("## READY (block 3)\n"), "{markdown}");
+    assert!(markdown.contains("#task In Progress status"), "{markdown}");
+    assert!(!markdown.contains("Dashboard WIP"), "{markdown}");
+}
+
+#[test]
+fn tasks_note_and_origin_normalize_leading_current_directory_components() {
+    let note = run_fixture(&["--format", "json", "--tasks-note", "./dash.md"]);
+    assert_success(&note);
+    let note = json_stdout(&note);
+    assert_eq!(note["note"], "dash.md");
+
+    let inline = run_fixture(&[
+        "--format",
+        "json",
+        "--origin",
+        "./dash.md",
+        "--tasks",
+        "status.type is IN_PROGRESS",
+    ]);
+    assert_success(&inline);
+    assert_eq!(
+        json_stdout(&inline)["result"]["tasks"],
+        note["blocks"][0]["result"]["tasks"]
+    );
+}
+
+#[test]
+fn tasks_note_reports_the_failing_block_context() {
+    let temp = TempDir::new("bob-cli-tasks-note-error");
+    write_file(
+        &temp.path().join("Queries.md"),
+        "# Queries\n\n## Broken\n\n```tasks\nspaghetti\n```\n",
+    );
+    let output = run_tasks(temp.path(), &["--tasks-note", "Queries.md"]);
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(stdout(&output).is_empty(), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("Queries.md#Broken (block 1, line 5)"),
+        "{}",
+        format_output(&output)
+    );
 }
 
 #[test]
@@ -1183,7 +1295,7 @@ fn tasks_native_dashboard_defaults_run_function_filters_with_pinned_moment() {
 }
 
 #[test]
-fn tasks_live_obsidian_parity_harness_scaffold_documents_render_oracle() {
+fn tasks_live_obsidian_parity_harness_renders_and_scrapes_tasks_blocks() {
     if env::var_os(LIVE_PARITY_ENV).is_none() {
         return;
     }
@@ -1195,11 +1307,156 @@ fn tasks_live_obsidian_parity_harness_scaffold_documents_render_oracle() {
             fixture_vault_path().display()
         )
     });
-    eprintln!(
-        "Tasks live-oracle scaffold enabled for {vault}: Phase 7 will render \
-         fenced tasks blocks with MarkdownRenderer.render, wait for async Tasks \
-         output, and scrape task rows and group headings from the DOM"
+    let query = "status.type is IN_PROGRESS";
+    let Some(oracle) = run_live_tasks_oracle(&vault, "dash.md", query) else {
+        eprintln!(
+            "Tasks live oracle skipped: Obsidian is unavailable or is not \
+             running with vault {vault:?} open"
+        );
+        return;
+    };
+
+    assert!(
+        oracle["errors"].as_array().is_some_and(Vec::is_empty),
+        "live Tasks renderer errors: {oracle}"
     );
+    assert!(oracle["groupHeadings"].is_array(), "{oracle}");
+    let rows = oracle["tasks"].as_array().expect("oracle task rows");
+    assert!(
+        !rows.is_empty(),
+        "live Tasks oracle returned no rows: {oracle}"
+    );
+
+    let native = run_fixture(&[
+        "--format", "json", "--origin", "dash.md", "--tasks", query,
+    ]);
+    assert_success(&native);
+    let native = json_stdout(&native);
+    let expected = native["result"]["tasks"]
+        .as_array()
+        .expect("native task rows");
+    assert_eq!(rows.len(), expected.len(), "live/native count mismatch");
+    for task in expected {
+        let description = task["displayDescription"].as_str().unwrap();
+        let symbol = task["status"]["symbol"].as_str().unwrap();
+        assert!(
+            rows.iter().any(|row| {
+                row["description"]
+                    .as_str()
+                    .is_some_and(|actual| actual.contains(description))
+                    && row["statusSymbol"] == symbol
+            }),
+            "live oracle did not contain native task {description:?}: {oracle}"
+        );
+    }
+}
+
+fn run_live_tasks_oracle(
+    vault: &str,
+    source_path: &str,
+    query: &str,
+) -> Option<Value> {
+    let request = json!({
+        "markdown": format!("```tasks\n{query}\n```"),
+        "sourcePath": source_path,
+    });
+    let request =
+        serde_json::to_string(&request).expect("serialize oracle request");
+    let prefix = "BOB_TASKS_RESULT\t";
+    let prefix_json = serde_json::to_string(prefix).unwrap();
+    let script = format!(
+        r#"
+(async () => {{
+  const request = {request};
+  const prefix = {prefix_json};
+  const {{ MarkdownRenderer, Component }} = require("obsidian");
+  const root = document.createElement("div");
+  root.style.display = "none";
+  document.body.appendChild(root);
+  const component = new Component();
+  component.load();
+  try {{
+    await MarkdownRenderer.render(
+      app,
+      request.markdown,
+      root,
+      request.sourcePath,
+      component,
+    );
+    let previous = "";
+    let stable = 0;
+    for (let attempt = 0; attempt < 100; attempt += 1) {{
+      const signature = root.innerHTML;
+      stable = signature === previous ? stable + 1 : 0;
+      previous = signature;
+      if (stable >= 3 && root.querySelector("li.task-list-item, .tasks-error, .plugin-tasks-query-result")) break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }}
+    const tasks = [...root.querySelectorAll("li.task-list-item")].map(row => {{
+      const descriptionNode = row.querySelector(".task-description");
+      const clone = (descriptionNode ?? row).cloneNode(true);
+      clone.querySelectorAll(
+        "input, button, ul, ol, .tasks-backlink, .task-extras, .task-list-item-checkbox"
+      ).forEach(node => node.remove());
+      const checkbox = row.querySelector("input[type=checkbox]");
+      const backlink = row.querySelector(
+        ".tasks-backlink a.internal-link, a.tasks-backlink, a.internal-link[data-href]"
+      );
+      return {{
+        description: (clone.textContent ?? "").replace(/\s+/g, " ").trim(),
+        statusSymbol: row.getAttribute("data-task")
+          ?? checkbox?.getAttribute("data-task")
+          ?? (checkbox?.checked ? "x" : " "),
+        backlinkTarget: backlink?.getAttribute("data-href")
+          ?? backlink?.getAttribute("href")
+          ?? null,
+      }};
+    }});
+    const groupHeadings = [...root.querySelectorAll(
+      ".task-group > h4, .task-group > h5, .task-group > h6, .tasks-group-heading"
+    )].map(node => (node.textContent ?? "").replace(/\s+/g, " ").trim());
+    const errors = [...root.querySelectorAll(".tasks-error")]
+      .map(node => (node.textContent ?? "").replace(/\s+/g, " ").trim());
+    console.log(prefix + JSON.stringify({{ tasks, groupHeadings, errors }}));
+  }} catch (error) {{
+    console.log(prefix + JSON.stringify({{
+      tasks: [],
+      groupHeadings: [],
+      errors: [String(error?.stack ?? error)],
+    }}));
+  }} finally {{
+    component.unload();
+    root.remove();
+  }}
+}})();
+"#
+    );
+
+    let command = env::var_os("BOB_DATAVIEW_OBSIDIAN_COMMAND")
+        .unwrap_or_else(|| "obsidian".into());
+    let output = match Command::new(command)
+        .arg(format!("vault={vault}"))
+        .arg("eval")
+        .arg(format!("code={script}"))
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return None;
+        }
+        Err(error) => panic!("run Obsidian Tasks live oracle: {error}"),
+    };
+    if !output.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let payloads = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix(prefix))
+        .collect::<Vec<_>>();
+    assert_eq!(payloads.len(), 1, "malformed live oracle output: {stdout}");
+    Some(serde_json::from_str(payloads[0]).expect("parse live oracle JSON"))
 }
 
 fn find_task<'a>(tasks: &'a [Value], description: &str) -> &'a Value {

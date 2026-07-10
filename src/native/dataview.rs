@@ -328,13 +328,9 @@ fn run_native(request: &Request) -> Result<(), DataviewError> {
             &input.read_query()?,
             request.format,
         ),
-        QueryInput::TasksNote(path) => Err(DataviewError::TasksQuery {
-            message: format!(
-                "running Tasks code blocks from {} is not available yet; use \
-                 --tasks or --tasks-file for the filterless native query",
-                path.display()
-            ),
-        }),
+        QueryInput::TasksNote(path) => {
+            tasks::run_note(&request.vault.bob_dir, path, request.format)
+        }
     }
 }
 
@@ -6341,15 +6337,16 @@ fn build_cli() -> ClapCommand {
             "Run Dataview source expressions, Dataview DQL, or Obsidian Tasks \
 queries against the Bob vault.\n\n\
 The default native engine is headless and local. Dataview DQL supports paths, \
-JSON, and markdown output. Native Tasks queries support the complete Tasks v8 \
-query language parser in paths and JSON formats; filter evaluation is being \
-built in later phases. The explicit Obsidian engine runs \
+JSON, and markdown output. Native Tasks queries support Tasks v8 filters, \
+JavaScript by-function instructions, sorting, grouping, layout, and whole-note \
+block execution. The explicit Obsidian engine runs \
 Dataview queries against the live plugin when exact installed-plugin behavior \
 is needed.",
         )
         .after_help(
-            "Examples:\n  bob query --source '#project and -\"archive\"'\n  bob query --query 'LIST FROM #waiting'\n  bob query --format json --query-file ~/queries/projects.dql\n  bob query --tasks ''\n  bob query --format json --tasks-file ~/queries/tasks.txt",
+            "Examples:\n  bob query --source '#project and -\"archive\"'\n  bob query --query 'LIST FROM #waiting'\n  bob query --format json --query-file ~/queries/projects.dql\n  bob query --tasks 'status.type is TODO' --origin dash.md\n  bob query --format json --tasks-file ~/queries/tasks.txt\n  bob query --tasks-note dash.md --format markdown",
         )
+        .disable_help_flag(true)
         .arg_required_else_help(true)
         .group(
             ArgGroup::new("query-input")
@@ -6367,6 +6364,7 @@ is needed.",
         .arg(bob_dir_arg())
         .arg(engine_arg())
         .arg(format_arg())
+        .arg(help_arg())
         .arg(origin_arg())
         .arg(query_arg())
         .arg(query_file_arg())
@@ -6394,7 +6392,7 @@ fn engine_arg() -> Arg {
         .value_name("ENGINE")
         .default_value("native")
         .value_parser(["native", "obsidian"])
-        .help("Query engine: native for local headless Dataview, obsidian for exact live Dataview")
+        .help("Query engine: native for Dataview and Tasks, obsidian for live Dataview")
 }
 
 fn format_arg() -> Arg {
@@ -6404,7 +6402,15 @@ fn format_arg() -> Arg {
         .value_name("FORMAT")
         .default_value("paths")
         .value_parser(["json", "markdown", "paths"])
-        .help("Output format; Tasks queries currently support paths and json")
+        .help("Output format: paths, structured json, or rendered markdown")
+}
+
+fn help_arg() -> Arg {
+    Arg::new("help")
+        .long("help")
+        .short('h')
+        .action(ArgAction::Help)
+        .help("Print help")
 }
 
 fn origin_arg() -> Arg {
@@ -6474,7 +6480,7 @@ fn tasks_note_arg() -> Arg {
         .short('n')
         .value_name("VAULT_RELATIVE_PATH")
         .value_parser(OsStringValueParser::new())
-        .help("Run every Tasks code block in a vault note (reserved)")
+        .help("Run every Tasks code block in a vault note")
 }
 
 fn vault_arg() -> Arg {
@@ -6493,7 +6499,7 @@ impl Request {
         matches: &ArgMatches,
         command: &mut ClapCommand,
     ) -> Result<Self, clap::Error> {
-        let query = QueryInput::from_matches(matches);
+        let mut query = QueryInput::from_matches(matches);
         let format = OutputFormat::from_matches(matches);
         let engine = Engine::from_matches(matches);
         let strict_paths = matches.get_flag("strict-paths");
@@ -6508,13 +6514,15 @@ impl Request {
         if query.is_tasks() && engine == Engine::Obsidian {
             return Err(command.error(
                 ErrorKind::ArgumentConflict,
-                "--engine obsidian does not support Tasks queries yet; use \
-                 --engine native",
+                "--engine obsidian does not support Tasks queries; use \
+                 --engine native (the live Tasks oracle is available through \
+                 the parity harness)",
             ));
         }
 
-        if let QueryInput::TasksNote(path) = &query {
+        if let QueryInput::TasksNote(path) = &mut query {
             validate_vault_relative_argument(path, "--tasks-note", command)?;
+            *path = normalize_vault_relative_path(path);
             if matches.get_one::<OsString>("origin").is_some() {
                 return Err(command.error(
                     ErrorKind::ArgumentConflict,
@@ -6730,7 +6738,7 @@ impl VaultConfig {
             .map(PathBuf::from)
             .map(|path| {
                 validate_origin_path(&path, command)?;
-                Ok::<PathBuf, clap::Error>(path)
+                Ok::<PathBuf, clap::Error>(normalize_vault_relative_path(&path))
             })
             .transpose()?;
         let obsidian_vault = use_obsidian_vault
@@ -6816,6 +6824,18 @@ fn validate_vault_relative_path(path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn normalize_vault_relative_path(path: &Path) -> PathBuf {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value),
+            Component::CurDir => None,
+            Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => None,
+        })
+        .collect()
 }
 
 fn default_vault_from_env() -> Option<String> {

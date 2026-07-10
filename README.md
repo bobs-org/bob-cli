@@ -173,8 +173,9 @@ later wrapped steps from running.
 bob query --source '#project'
 bob query --query 'LIST FROM #waiting'
 bob query --format json --query-file queries/projects.dql
-bob query --tasks ''
+bob query --tasks 'status.type is TODO' --origin dash.md
 bob query --format json --tasks-file queries/all.tasks
+bob query --format markdown --tasks-note dash.md
 ```
 
 Runs Dataview source expressions, DQL queries, and Obsidian Tasks queries from
@@ -182,14 +183,17 @@ the shell. The default native engine evaluates queries against the local
 Markdown vault, so scripts do not need a running desktop Obsidian app. `paths`
 output prints vault-relative Markdown paths, `json` output is stable for
 scripts, and `markdown` output prints Dataview-rendered Markdown for supported
-DQL results. The current Tasks slice accepts empty/comment-only inline or file
-queries and returns all tasks allowed by the Tasks plugin's global filter in
-`paths` or `json` format. JSON task records include parsed metadata, status and
+DQL results. Native Tasks support includes filters, Boolean expressions,
+JavaScript `by function` instructions with Moment, sorting, grouping, limits,
+layout instructions, Query File Defaults, placeholders, and rendered Markdown.
+`--tasks-note` runs every fenced Tasks block with its note context and identifies
+each result by heading. JSON task records include parsed metadata, status and
 priority, source location and hierarchy, dependencies, blocked/blocking state,
 and urgency. This command does not run `ob sync`; vault freshness is handled by
-the external background or cron sync path. Use `--engine
-obsidian` when you want exact behavior from the live Dataview plugin in an open
-Obsidian vault; Tasks inputs are currently native-only.
+the external background or cron sync path. Use `--engine obsidian` when you want
+exact behavior from the live Dataview plugin in an open Obsidian vault; Tasks
+inputs remain native-only, with an env-gated live renderer harness for parity
+checks.
 
 The full command contract and live smoke-test steps live in
 [`docs/dataview.md`](docs/dataview.md).

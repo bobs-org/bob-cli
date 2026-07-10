@@ -2454,6 +2454,7 @@ fn dataview_help_lists_options_alphabetically() {
             "-b, --bob-dir ",
             "-e, --engine ",
             "-f, --format ",
+            "-h, --help",
             "-o, --origin ",
             "-q, --query ",
             "-Q, --query-file ",
@@ -2464,6 +2465,15 @@ fn dataview_help_lists_options_alphabetically() {
             "-n, --tasks-note ",
             "-v, --vault ",
         ],
+    );
+    assert!(
+        help.contains(
+            "Run Dataview source expressions, Dataview DQL, or Obsidian Tasks"
+        ) && help.contains("whole-note block execution")
+            && help
+                .contains("bob query --tasks-note dash.md --format markdown")
+            && help.contains("Run every Tasks code block in a vault note"),
+        "expected complete Tasks query help:\n{help}"
     );
     assert_stdout_has_no_ansi(&output);
 }
