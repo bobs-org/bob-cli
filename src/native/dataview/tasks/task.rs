@@ -463,7 +463,7 @@ pub(super) fn parse_list_line(line: &str) -> Option<ListLine> {
             return None;
         }
         let suffix = rest.as_bytes().get(digits).copied()?;
-        if !matches!(suffix, b'.' | b')') {
+        if suffix != b'.' {
             return None;
         }
         (rest[..=digits].to_string(), &rest[digits + 1..])
@@ -535,7 +535,7 @@ fn parse_details(line: &str, format: TaskFormat) -> TaskDetails {
     let mut state = line.trim().to_string();
     let mut trailing_tags = Vec::new();
 
-    for _ in 0..=20 {
+    for _ in 0..20 {
         let parsed_field = match format {
             TaskFormat::Dataview => {
                 try_take_dataview_field(&mut state, &mut details)
@@ -709,11 +709,20 @@ fn remove_global_filter_as_word(description: &str, filter: &str) -> String {
     if filter.is_empty() {
         return description.to_string();
     }
-    description
-        .split_whitespace()
-        .filter(|word| *word != filter)
-        .collect::<Vec<_>>()
-        .join(" ")
+    let Some((start, _)) =
+        description.match_indices(filter).find(|(start, _)| {
+            let end = start + filter.len();
+            let before = description[..*start].chars().next_back();
+            let after = description[end..].chars().next();
+            before.is_none_or(char::is_whitespace)
+                && after.is_none_or(char::is_whitespace)
+        })
+    else {
+        return description.to_string();
+    };
+    let mut result = description.to_string();
+    result.replace_range(start..start + filter.len(), "");
+    result.trim().to_string()
 }
 
 fn normalize_recurrence(value: &str) -> Option<String> {
@@ -866,12 +875,17 @@ fn title_case(value: &str) -> String {
 fn calculate_urgency(details: &TaskDetails, now: NaiveDateTime) -> f64 {
     let today = now.date();
     let mut urgency = details.priority.urgency();
-    if let Some(due) = details.due.as_ref().and_then(TaskDate::valid_date) {
-        let days_overdue = today.signed_duration_since(due).num_days() as f64;
-        let multiplier = if days_overdue >= 7.0 {
-            1.0
-        } else if days_overdue >= -14.0 {
-            ((days_overdue + 14.0) * 0.8) / 21.0 + 0.2
+    if let Some(due) = details.due.as_ref() {
+        let multiplier = if let Some(due) = due.valid_date() {
+            let days_overdue =
+                today.signed_duration_since(due).num_days() as f64;
+            if days_overdue >= 7.0 {
+                1.0
+            } else if days_overdue >= -14.0 {
+                ((days_overdue + 14.0) * 0.8) / 21.0 + 0.2
+            } else {
+                0.2
+            }
         } else {
             0.2
         };
@@ -934,12 +948,17 @@ mod tests {
             "  * [/] task",
             "\t+ [*] task",
             "1. [x] task",
-            "22) [-] task",
             "> - [?] quoted",
         ] {
             assert!(parse_task_line(line).is_some(), "{line}");
         }
-        for line in ["- plain", "text - [ ] task", "- [] task", "-[ ] task"] {
+        for line in [
+            "- plain",
+            "text - [ ] task",
+            "- [] task",
+            "-[ ] task",
+            "22) [-] task",
+        ] {
             assert!(parse_task_line(line).is_none(), "{line}");
         }
     }
@@ -1137,9 +1156,11 @@ mod tests {
             calculate_urgency(&low(None, None, Some("2026-07-10")), now),
             0.0
         );
-        assert_eq!(
-            calculate_urgency(&low(Some("2026-99-99"), None, None), now),
-            0.0
+        assert!(
+            (calculate_urgency(&low(Some("2026-99-99"), None, None), now)
+                - 2.4)
+                .abs()
+                < 0.00001
         );
     }
 
@@ -1167,6 +1188,14 @@ mod tests {
         assert_eq!(task.description, "#task Unknown #task/subtag");
         assert_eq!(task.display_description, "Unknown #task/subtag");
         assert_eq!(task.tags, ["#task/subtag"]);
+    }
+
+    #[test]
+    fn removing_global_filter_preserves_spacing_and_only_removes_first_word() {
+        assert_eq!(
+            remove_global_filter_as_word("#task  keep\t#task", "#task"),
+            "keep\t#task"
+        );
     }
 
     #[test]

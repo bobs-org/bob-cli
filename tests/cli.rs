@@ -4367,7 +4367,7 @@ fn projects_sync_reconciles_future_subproject_markers_at_date_boundary() {
         ) && out.contains(
             "removed 🗓️ [[FutureClosed]] from ^prj  sub-project no longer scheduled in future"
         ) && out.contains(
-            "5 projects - 0 status updated - 2 ^prj edited - 2 task visibility updated - 0 warnings"
+            "5 projects - 0 status updated - 2 ^prj edited - 1 task visibility updated - 0 warnings"
         ),
         "unexpected boundary output:\n{out}"
     );

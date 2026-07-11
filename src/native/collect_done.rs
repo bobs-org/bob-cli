@@ -5,6 +5,7 @@ use std::{
     fs, io,
     path::{Component, Path, PathBuf},
     process::{self, Command, Output, Stdio},
+    sync::LazyLock,
 };
 
 use super::{
@@ -16,6 +17,13 @@ const COMMAND_NAME: &str = "bob move-done-tasks";
 pub(crate) const DEFAULT_THRESHOLD: usize = 10;
 const ARCHIVE_TYPE_LINE: &str = "type: \"[[done]]\"";
 const DONE_TASKS_KEY: &str = "done_tasks:";
+
+static DEPENDENCY_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?m)(?P<open>[\[(])(?P<prefix>[ \t]*)(?P<key>id|dependsOn)(?P<sep>[ \t]*::[ \t]*)(?P<value>[^\]\)\n]*)(?P<close>[\])])",
+    )
+    .expect("dependency metadata regex")
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Args {
@@ -1041,11 +1049,20 @@ fn build_collection_plan(
     threshold: usize,
 ) -> io::Result<CollectionPlan> {
     let markdown_files = markdown_files(vault)?;
-    validate_dependency_identity_index(vault, &markdown_files)?;
+    let note_contents = markdown_files
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path).map(|contents| (path.clone(), contents))
+        })
+        .collect::<io::Result<BTreeMap<_, _>>>()?;
+    validate_dependency_identity_index(vault, &note_contents)?;
     let mut files = Vec::new();
 
     for path in &markdown_files {
-        let contents = fs::read_to_string(path)?;
+        let contents = note_contents
+            .get(path)
+            .expect("all markdown files were read")
+            .clone();
         let relative_source_path = path
             .strip_prefix(vault)
             .map_err(|error| {
@@ -1189,14 +1206,17 @@ fn build_collection_plan(
 
 fn validate_dependency_identity_index(
     vault: &Path,
-    markdown_files: &[PathBuf],
+    note_contents: &BTreeMap<PathBuf, String>,
 ) -> io::Result<()> {
     let mut identities: BTreeMap<String, PathBuf> = BTreeMap::new();
-    for absolute_path in markdown_files {
+    let mut skipped = BTreeSet::new();
+    for (absolute_path, contents) in note_contents {
         let relative_path = vault_relative_path(vault, absolute_path, "note")?;
-        let contents = fs::read_to_string(absolute_path)?;
-        for block_id in block_ids_in_markdown(&contents) {
-            let id = dependency_id(&relative_path, &block_id)?;
+        for block_id in block_ids_in_markdown(contents) {
+            let Ok(id) = dependency_id(&relative_path, &block_id) else {
+                skipped.insert(relative_path.clone());
+                continue;
+            };
             if let Some(existing_path) = identities.get(&id)
                 && existing_path != &relative_path
             {
@@ -1211,6 +1231,16 @@ fn validate_dependency_identity_index(
             }
             identities.insert(id, relative_path.clone());
         }
+    }
+    if !skipped.is_empty() {
+        eprintln!(
+            "{COMMAND_NAME}: warning: skipped dependency identities for notes with unsupported path characters: {}",
+            skipped
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
     Ok(())
 }
@@ -1484,18 +1514,18 @@ fn archived_block_targets(
             if count > 1 || source_block_ids.contains(&block_id) {
                 continue;
             }
+            let (Ok(old_dependency_id), Ok(new_dependency_id)) = (
+                dependency_id(&source_relative_path, &block_id),
+                dependency_id(archive_relative_path, &block_id),
+            ) else {
+                continue;
+            };
             targets.insert(
                 (source_relative_path.clone(), block_id.clone()),
                 MovedBlockTarget {
                     archive_target: archive_target.clone(),
-                    old_dependency_id: dependency_id(
-                        &source_relative_path,
-                        &block_id,
-                    )?,
-                    new_dependency_id: dependency_id(
-                        archive_relative_path,
-                        &block_id,
-                    )?,
+                    old_dependency_id,
+                    new_dependency_id,
                     block_id,
                 },
             );
@@ -1691,61 +1721,135 @@ fn repair_dependency_metadata(
         };
     }
 
-    let field_re = Regex::new(r"\[(id|dependsOn)::([^\]\n]*)\]")
-        .expect("dependency metadata regex");
     let mut count = 0usize;
-    let next =
-        field_re.replace_all(contents, |captures: &regex::Captures<'_>| {
-            let key = captures.get(1).map_or("", |value| value.as_str());
-            let value = captures.get(2).map_or("", |value| value.as_str());
+    let lines = contents.lines().collect::<Vec<_>>();
+    let fenced = super::markdown::fenced_lines(&lines, 0..lines.len());
+    let mut next = String::with_capacity(contents.len());
+    for (line_index, line_with_ending) in
+        contents.split_inclusive('\n').enumerate()
+    {
+        let (line, ending) = split_line_ending(line_with_ending);
+        if fenced.contains(&line_index) {
+            next.push_str(line_with_ending);
+            continue;
+        }
+        let code_spans = inline_code_spans(line);
+        let mut cursor = 0;
+        for captures in DEPENDENCY_FIELD_RE.captures_iter(line) {
+            let whole = captures.get(0).expect("whole dependency field");
+            if code_spans.iter().any(|span| span.contains(&whole.start()))
+                || !matches!(
+                    (
+                        captures.name("open").unwrap().as_str(),
+                        captures.name("close").unwrap().as_str()
+                    ),
+                    ("[", "]") | ("(", ")")
+                )
+            {
+                continue;
+            }
+            next.push_str(&line[cursor..whole.start()]);
+            let key = captures.name("key").map_or("", |value| value.as_str());
+            let value =
+                captures.name("value").map_or("", |value| value.as_str());
+            let mut replacement_value = None;
             if key == "id" {
                 let trimmed = value.trim();
-                let Some(replacement) = replacements.get(trimmed) else {
-                    return captures.get(0).unwrap().as_str().to_string();
-                };
-                count += 1;
-                let leading_len = value.len() - value.trim_start().len();
-                let trailing_len = value.len() - value.trim_end().len();
-                return format!(
-                    "[id::{}{}{}]",
-                    &value[..leading_len],
-                    replacement,
-                    &value[value.len() - trailing_len..]
-                );
-            }
-
-            let mut field_changed = false;
-            let next_value = value
-                .split(',')
-                .map(|segment| {
-                    let trimmed = segment.trim();
-                    let Some(replacement) = replacements.get(trimmed) else {
-                        return segment.to_string();
-                    };
+                if let Some(replacement) = replacements.get(trimmed) {
                     count += 1;
-                    field_changed = true;
-                    let leading_len =
-                        segment.len() - segment.trim_start().len();
-                    let trailing_len = segment.len() - segment.trim_end().len();
-                    format!(
+                    let leading_len = value.len() - value.trim_start().len();
+                    let trailing_start = value.trim_end().len();
+                    replacement_value = Some(format!(
                         "{}{}{}",
-                        &segment[..leading_len],
+                        &value[..leading_len],
                         replacement,
-                        &segment[segment.len() - trailing_len..]
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            if field_changed {
-                format!("[dependsOn::{next_value}]")
+                        &value[trailing_start..]
+                    ));
+                }
             } else {
-                captures.get(0).unwrap().as_str().to_string()
+                let mut changed = false;
+                let value = value
+                    .split(',')
+                    .map(|segment| {
+                        let trimmed = segment.trim();
+                        let Some(replacement) = replacements.get(trimmed)
+                        else {
+                            return segment.to_string();
+                        };
+                        changed = true;
+                        count += 1;
+                        let leading_len =
+                            segment.len() - segment.trim_start().len();
+                        let trailing_start = segment.trim_end().len();
+                        format!(
+                            "{}{}{}",
+                            &segment[..leading_len],
+                            replacement,
+                            &segment[trailing_start..]
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if changed {
+                    replacement_value = Some(value);
+                }
             }
-        });
+            if let Some(value) = replacement_value {
+                next.push_str(captures.name("open").unwrap().as_str());
+                next.push_str(captures.name("prefix").unwrap().as_str());
+                next.push_str(key);
+                next.push_str(captures.name("sep").unwrap().as_str());
+                next.push_str(&value);
+                next.push_str(captures.name("close").unwrap().as_str());
+            } else {
+                next.push_str(whole.as_str());
+            }
+            cursor = whole.end();
+        }
+        next.push_str(&line[cursor..]);
+        next.push_str(ending);
+    }
     DependencyMetadataRepair {
-        contents: next.into_owned(),
+        contents: next,
         count,
     }
+}
+
+fn inline_code_spans(line: &str) -> Vec<std::ops::Range<usize>> {
+    let bytes = line.as_bytes();
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'`' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && bytes[index] == b'`' {
+            index += 1;
+        }
+        let width = index - start;
+        let mut search = index;
+        while search < bytes.len() {
+            if bytes[search] != b'`' {
+                search += 1;
+                continue;
+            }
+            let close = search;
+            while search < bytes.len() && bytes[search] == b'`' {
+                search += 1;
+            }
+            if search - close == width {
+                spans.push(start..search);
+                index = search;
+                break;
+            }
+        }
+        if index == start + width {
+            break;
+        }
+    }
+    spans
 }
 
 fn repair_wiki_links(
@@ -2212,49 +2316,30 @@ fn block_ids_in_text(text: &str) -> Vec<String> {
 }
 
 fn block_id_occurrences_in_text(text: &str) -> Vec<BlockIdOccurrence> {
-    let bytes = text.as_bytes();
-    let mut occurrences = Vec::new();
-    let mut index = 0;
-
-    while index < bytes.len() {
-        if bytes[index] != b'^' {
-            index += 1;
-            continue;
-        }
-
-        let previous_is_boundary = index == 0
-            || text[..index]
+    let trimmed = text.trim_end();
+    let Some(start) = trimmed.rfind('^') else {
+        return Vec::new();
+    };
+    let id_start = start + 1;
+    if id_start == trimmed.len()
+        || !trimmed[id_start..].bytes().all(is_block_id_byte)
+        || (start > 0
+            && !trimmed[..start]
                 .chars()
                 .next_back()
-                .map(char::is_whitespace)
-                .unwrap_or(false);
-        if !previous_is_boundary {
-            index += 1;
-            continue;
-        }
-
-        let mut end = index + 1;
-        while end < bytes.len() && is_block_id_byte(bytes[end]) {
-            end += 1;
-        }
-
-        if end > index + 1 {
-            occurrences.push(BlockIdOccurrence {
-                id: text[index + 1..end].to_string(),
-                start: index + 1,
-                end,
-            });
-            index = end;
-        } else {
-            index += 1;
-        }
+                .is_some_and(char::is_whitespace))
+    {
+        return Vec::new();
     }
-
-    occurrences
+    vec![BlockIdOccurrence {
+        id: trimmed[id_start..].to_string(),
+        start: id_start,
+        end: trimmed.len(),
+    }]
 }
 
 pub(crate) fn is_block_id_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+    byte.is_ascii_alphanumeric() || byte == b'-'
 }
 
 fn task_block_end(lines: &[&str], start: usize, task_indent: usize) -> usize {
@@ -2477,7 +2562,7 @@ options:
 mod tests {
     use super::{
         archive_contents, archive_relative_path, archive_wiki_link,
-        build_collection_plan, dependency_id,
+        block_ids_in_markdown, build_collection_plan, dependency_id,
         ensure_source_done_tasks_frontmatter, parse_args,
         repair_dependency_metadata, repair_links_in_note, source_wiki_link,
         transform_markdown, Args, MovedBlockTarget, MovedBlockTargets,
@@ -2542,6 +2627,55 @@ Prose projects__Shared__review\n",
             "[dependsOn:: done__projects__Shared__review, unrelated]"
         ));
         assert!(repair.contents.contains("Prose projects__Shared__review"));
+    }
+
+    #[test]
+    fn dependency_metadata_repair_supports_task_field_grammar_and_skips_code() {
+        let targets = moved_targets([(
+            "projects/Shared.md",
+            "review",
+            "done/projects/Shared",
+        )]);
+        let repair = repair_dependency_metadata(
+            "(dependsOn:: projects__Shared__review)\n[ dependsOn :: projects__Shared__review]\n`[id:: projects__Shared__review]`\n```\n[dependsOn:: projects__Shared__review]\n```\n",
+            &targets,
+        );
+        assert_eq!(repair.count, 2);
+        assert!(repair
+            .contents
+            .contains("(dependsOn:: done__projects__Shared__review)"));
+        assert!(repair
+            .contents
+            .contains("[ dependsOn :: done__projects__Shared__review]"));
+        assert!(repair
+            .contents
+            .contains("`[id:: projects__Shared__review]`"));
+        assert!(repair
+            .contents
+            .contains("```\n[dependsOn:: projects__Shared__review]\n```"));
+    }
+
+    #[test]
+    fn block_ids_are_only_end_of_line_obsidian_anchors() {
+        assert_eq!(
+            block_ids_in_markdown(
+                "see ^c for details\n10 ^2 equals 100\nreal ^ok-id\n"
+            ),
+            vec!["ok-id"]
+        );
+        assert!(block_ids_in_markdown("underscore ^not_valid\n").is_empty());
+    }
+
+    #[test]
+    fn unqualifiable_paths_do_not_abort_identity_indexing() {
+        let vault = TempDir::new("unsupported dependency path");
+        write_file(
+            &vault.path().join("Untitled 1.md"),
+            "- [ ] #task Keep ^task\n",
+        );
+        let plan = build_collection_plan(vault.path(), 10)
+            .expect("unsupported path is skipped");
+        assert!(plan.is_empty());
     }
 
     #[test]
@@ -4116,18 +4250,16 @@ type: \"[[done]]\"
                     MovedBlockTarget {
                         archive_target: target.to_string(),
                         block_id: block_id.to_string(),
-                        old_dependency_id: format!(
-                            "{}__{}",
-                            source_path
-                                .trim_end_matches(".md")
-                                .replace('/', "__"),
-                            block_id
-                        ),
-                        new_dependency_id: format!(
-                            "{}__{}",
-                            target.replace('/', "__"),
-                            block_id
-                        ),
+                        old_dependency_id: dependency_id(
+                            Path::new(source_path),
+                            block_id,
+                        )
+                        .expect("valid source dependency id"),
+                        new_dependency_id: dependency_id(
+                            &PathBuf::from(format!("{target}.md")),
+                            block_id,
+                        )
+                        .expect("valid archive dependency id"),
                     },
                 )
             })

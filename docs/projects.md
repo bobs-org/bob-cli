@@ -96,8 +96,9 @@ Task statuses follow the Tasks plugin convention:
   state when the note contains any other Markdown task; if `^prj` is the only
   task, its `#hide` tags are removed too. `BOB_NOW` overrides the clock for
   deterministic previews and tests.
-- Schedule visibility applies to open, in-progress, completed, canceled,
-  nested, ordered-list, and lifecycle tasks. It preserves list markers,
+- Schedule visibility applies only to non-terminal projects, including their
+  open, in-progress, completed, canceled, nested, ordered-list, and lifecycle
+  tasks. It preserves list markers,
   indentation, inline fields, trailing block IDs, line endings, and unrelated
   tags such as `#hidden`. Frontmatter, fenced code examples, and checkbox-like
   prose are ignored. Repeated syncs are idempotent.

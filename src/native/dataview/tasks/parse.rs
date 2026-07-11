@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path, sync::LazyLock};
 
 use regex::Regex;
 use serde::Serialize;
@@ -6,6 +6,9 @@ use serde::Serialize;
 use super::{super::DataviewError, settings::TasksSettings, task::TaskFile};
 
 const MAX_EXPANSION_DEPTH: usize = 32;
+static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\{\{(.*?)\}\}").expect("valid placeholder regular expression")
+});
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -488,7 +491,7 @@ fn parse_frontmatter(
         .collect())
 }
 
-fn frontmatter_block(contents: &str) -> Option<&str> {
+pub(super) fn frontmatter_block(contents: &str) -> Option<&str> {
     let marker_len = if contents.starts_with("---\r\n") {
         5
     } else if contents.starts_with("---\n") {
@@ -697,13 +700,11 @@ impl Parser<'_> {
             )));
         };
 
-        let placeholder = Regex::new(r"\{\{(.*?)\}\}")
-            .expect("valid placeholder regular expression");
         let mut expanded = source.to_string();
         for _ in 0..10 {
             let previous = expanded.clone();
             let mut error = None;
-            expanded = placeholder
+            expanded = PLACEHOLDER
                 .replace_all(&previous, |captures: &regex::Captures<'_>| {
                     let expression = captures.get(1).unwrap().as_str().trim();
                     match self.resolve_placeholder(expression, context) {
@@ -1175,27 +1176,44 @@ fn looks_boolean(line: &str) -> bool {
 }
 
 fn parse_boolean(line: &str) -> Result<FilterExpr, String> {
-    let trimmed = line.trim();
-    let unwrapped = strip_wrapping_delimiters(trimmed).unwrap_or(trimmed);
-    if unwrapped != trimmed && !has_any_top_level_boolean(unwrapped) {
-        return parse_filter_expr(unwrapped);
+    parse_boolean_inner(line.trim(), line)
+}
+
+fn parse_boolean_inner(
+    source: &str,
+    original: &str,
+) -> Result<FilterExpr, String> {
+    let source = source.trim();
+    // Quoted operands are always leaves. Quotes and apostrophes inside an
+    // ordinary operand are literal, as in Tasks 7+.
+    if matches!(source.chars().next(), Some('\'' | '"'))
+        && let Some(unwrapped) = strip_wrapping_delimiters(source)
+    {
+        return parse_leaf_filter(unwrapped);
     }
 
+    if let Some(unwrapped) = strip_wrapping_delimiters(source) {
+        return if has_any_top_level_boolean(unwrapped)
+            || (starts_with_ci(unwrapped, "NOT ")
+                && !unwrapped.eq_ignore_ascii_case("not done"))
+        {
+            parse_boolean_inner(unwrapped, original)
+        } else {
+            parse_leaf_filter(unwrapped)
+        };
+    }
+
+    // Split on the right-most operator of the lowest precedence to produce a
+    // left-associative tree: NOT > AND > XOR > OR.
     for operator in [" OR ", " XOR ", " AND "] {
-        if let Some(index) = find_top_level_operator(unwrapped, operator) {
-            let left_source = unwrapped[..index].trim();
-            let right_source = unwrapped[index + operator.len()..].trim();
-            if !boolean_operand_is_delimited(left_source)
-                || !boolean_operand_is_delimited(right_source)
-            {
-                return Err(format!(
-                    "Could not interpret the following instruction as a Boolean combination:\n    {line}\n\nAll filters in a Boolean instruction must be inside parentheses or matching quote/bracket delimiters"
-                ));
+        if let Some(index) = find_last_top_level_operator(source, operator) {
+            let left_source = source[..index].trim();
+            let right_source = source[index + operator.len()..].trim();
+            if left_source.is_empty() || right_source.is_empty() {
+                return Err(boolean_delimiter_error(original));
             }
-            let left = parse_boolean(left_source)?;
-            let right = parse_boolean(right_source)?;
-            let left = Box::new(left);
-            let right = Box::new(right);
+            let left = Box::new(parse_boolean_inner(left_source, original)?);
+            let right = Box::new(parse_boolean_inner(right_source, original)?);
             return Ok(match operator {
                 " OR " => FilterExpr::Or { left, right },
                 " XOR " => FilterExpr::Xor { left, right },
@@ -1205,20 +1223,23 @@ fn parse_boolean(line: &str) -> Result<FilterExpr, String> {
         }
     }
 
-    if let Some(rest) = strip_prefix_ci(unwrapped, "NOT ") {
+    if let Some(rest) = strip_prefix_ci(source, "NOT ") {
         if !is_wrapped_filter(rest.trim()) {
             return Err(format!(
-                "Could not interpret the following instruction as a Boolean combination:\n    {line}\n\nThe filter after NOT must be inside parentheses or matching quote/bracket delimiters"
+                "Could not interpret the following instruction as a Boolean combination:\n    {original}\n\nThe filter after NOT must be inside parentheses or matching quote/bracket delimiters"
             ));
         }
         return Ok(FilterExpr::Not {
-            expression: Box::new(parse_boolean(rest)?),
+            expression: Box::new(parse_boolean_inner(rest, original)?),
         });
     }
-    parse_leaf_filter(unwrapped).map_err(|message| {
+
+    // A leaf in a Boolean instruction must have had its own delimiters; if we
+    // reach it here, an operator had an undelimited operand.
+    parse_leaf_filter(source).and_then(|_| Err(boolean_delimiter_error(original))).map_err(|message| {
         if message.is_empty() {
             format!(
-                "Could not interpret the following instruction as a Boolean combination:\n    {line}"
+                "Could not interpret the following instruction as a Boolean combination:\n    {original}"
             )
         } else {
             message
@@ -1226,18 +1247,18 @@ fn parse_boolean(line: &str) -> Result<FilterExpr, String> {
     })
 }
 
-fn boolean_operand_is_delimited(value: &str) -> bool {
-    if let Some(rest) = strip_prefix_ci(value, "NOT ") {
-        return is_wrapped_filter(rest.trim());
-    }
-    is_wrapped_filter(value)
+fn boolean_delimiter_error(line: &str) -> String {
+    format!(
+        "Could not interpret the following instruction as a Boolean combination:\n    {line}\n\nAll filters in a Boolean instruction must be inside parentheses or matching quote/bracket delimiters"
+    )
 }
 
 fn has_any_top_level_boolean(line: &str) -> bool {
     [" OR ", " XOR ", " AND "]
         .iter()
         .any(|operator| has_top_level_operator(line, operator))
-        || starts_with_ci(line, "NOT ")
+        || (starts_with_ci(line, "NOT ")
+            && !line.eq_ignore_ascii_case("not done"))
 }
 
 fn has_top_level_operator(line: &str, operator: &str) -> bool {
@@ -1245,39 +1266,67 @@ fn has_top_level_operator(line: &str, operator: &str) -> bool {
 }
 
 fn find_top_level_operator(line: &str, operator: &str) -> Option<usize> {
+    top_level_operator_indices(line, operator).next()
+}
+
+fn find_last_top_level_operator(line: &str, operator: &str) -> Option<usize> {
+    top_level_operator_indices(line, operator).last()
+}
+
+fn top_level_operator_indices<'a>(
+    line: &'a str,
+    operator: &'a str,
+) -> impl Iterator<Item = usize> + 'a {
     let bytes = line.as_bytes();
     let operator_bytes = operator.as_bytes();
     let mut stack = Vec::new();
     let mut quote = None;
     let mut escaped = false;
     let mut index = 0;
-    while index + operator_bytes.len() <= bytes.len() {
-        let character = bytes[index] as char;
-        if let Some(active_quote) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == active_quote {
-                quote = None;
+    std::iter::from_fn(move || {
+        while index + operator_bytes.len() <= bytes.len() {
+            let character = bytes[index] as char;
+            if let Some(active_quote) = quote {
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == active_quote {
+                    quote = None;
+                }
+                index += 1;
+                continue;
+            }
+            match character {
+                '\'' | '"' if quote_starts_operand(line, index) => {
+                    quote = Some(character)
+                }
+                '(' | '[' | '{' => stack.push(character),
+                ')' | ']' | '}' => {
+                    stack.pop();
+                }
+                _ => {}
+            }
+            if stack.is_empty() && bytes[index..].starts_with(operator_bytes) {
+                let found = index;
+                index += operator_bytes.len();
+                return Some(found);
             }
             index += 1;
-            continue;
         }
-        match character {
-            '\'' | '"' => quote = Some(character),
-            '(' | '[' | '{' => stack.push(character),
-            ')' | ']' | '}' => {
-                stack.pop();
-            }
-            _ => {}
-        }
-        if stack.is_empty() && bytes[index..].starts_with(operator_bytes) {
-            return Some(index);
-        }
-        index += 1;
-    }
-    None
+        None
+    })
+}
+
+fn quote_starts_operand(line: &str, index: usize) -> bool {
+    let before = line[..index].trim_end();
+    before.is_empty()
+        || before.ends_with('(')
+        || before.ends_with('[')
+        || before.ends_with('{')
+        || [" OR", " XOR", " AND", " NOT"]
+            .iter()
+            .any(|operator| before.to_ascii_uppercase().ends_with(operator))
 }
 
 fn is_wrapped_filter(line: &str) -> bool {
@@ -1302,21 +1351,8 @@ fn strip_wrapping_delimiters(line: &str) -> Option<&str> {
     }
 
     let mut depth = 0usize;
-    let mut quote = None;
-    let mut escaped = false;
     for (index, character) in line.char_indices() {
-        if let Some(active_quote) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == active_quote {
-                quote = None;
-            }
-            continue;
-        }
         match character {
-            '\'' | '"' => quote = Some(character),
             value if value == open => depth += 1,
             value if value == close => {
                 depth = depth.saturating_sub(1);
@@ -1386,7 +1422,9 @@ fn parse_leaf_filter(line: &str) -> Result<FilterExpr, String> {
             source: source.trim().to_string(),
         });
     }
-    if starts_with_ci(line, "status.type") {
+    if strip_prefix_ci(line, "status.type")
+        .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+    {
         return parse_status_type(line);
     }
     if starts_with_ci(line, "priority") {
@@ -1447,6 +1485,20 @@ fn parse_priority(line: &str) -> Result<FilterExpr, String> {
                 && is.eq_ignore_ascii_case("is") =>
         {
             (PriorityRelation::Is, *value)
+        }
+        [field, relation, value] if field.eq_ignore_ascii_case("priority") => {
+            let relation = if relation.eq_ignore_ascii_case("above") {
+                PriorityRelation::Above
+            } else if relation.eq_ignore_ascii_case("below") {
+                PriorityRelation::Below
+            } else if relation.eq_ignore_ascii_case("not") {
+                PriorityRelation::IsNot
+            } else {
+                return Err(
+                    "do not understand query filter (priority)".to_string()
+                );
+            };
+            (relation, *value)
         }
         [field, is, relation, value]
             if field.eq_ignore_ascii_case("priority")
@@ -1582,7 +1634,23 @@ fn looks_like_date_expression(value: &str) -> bool {
                 part.chars().all(|character| character.is_ascii_digit())
             })
     };
-    if matches!(words.as_slice(), [one] if iso_date(one))
+    let numbered_range = |word: &str| {
+        let bytes = word.as_bytes();
+        (bytes.len() == 4 && bytes.iter().all(u8::is_ascii_digit))
+            || (bytes.len() == 7
+                && bytes[4] == b'-'
+                && bytes[..4].iter().all(u8::is_ascii_digit)
+                && bytes[5..].iter().all(u8::is_ascii_digit))
+            || (bytes.len() == 7
+                && bytes[4] == b'-'
+                && matches!(bytes[5], b'q' | b'Q')
+                && matches!(bytes[6], b'1'..=b'4'))
+            || (bytes.len() == 8
+                && bytes[4] == b'-'
+                && matches!(bytes[5], b'w' | b'W')
+                && bytes[6..].iter().all(u8::is_ascii_digit))
+    };
+    if matches!(words.as_slice(), [one] if iso_date(one) || numbered_range(one))
         || matches!(words.as_slice(), [one, two] if iso_date(one) && iso_date(two))
     {
         return true;
@@ -1782,6 +1850,45 @@ mod tests {
                 panic!("failed to parse {line:?}: {error}")
             });
         }
+    }
+
+    #[test]
+    fn boolean_chains_use_tasks_precedence_and_allow_operand_apostrophes() {
+        let expression = parse_filter_expr(
+            "(done) OR (is blocked) OR (has due date) AND (not done)",
+        )
+        .unwrap();
+        let FilterExpr::Or { left, right } = expression else {
+            panic!("outer expression should be OR");
+        };
+        assert!(matches!(*left, FilterExpr::Or { .. }));
+        assert!(matches!(*right, FilterExpr::And { .. }));
+
+        parse_filter_expr("(description includes John's) AND (not done)")
+            .unwrap();
+        parse_filter_expr(
+            "(description includes \"quoted\" words) AND (not done)",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn numbered_date_ranges_optional_priority_is_and_status_boundary_parse() {
+        for query in [
+            "due in 2026",
+            "due in 2026-07",
+            "due in 2026-Q3",
+            "due in 2026-W28",
+            "due next tuesday",
+            "due last friday",
+            "priority above medium",
+            "priority below high",
+            "priority not low",
+        ] {
+            parse_filter_expr(query)
+                .unwrap_or_else(|error| panic!("{query}: {error}"));
+        }
+        assert!(parse_filter_expr("status.typeis TODO").is_err());
     }
 
     #[test]

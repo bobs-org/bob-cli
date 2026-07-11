@@ -240,11 +240,11 @@ fn tasks_native_filterless_paths_golden_includes_underscore_folders() {
             "Tasks/Statuses.md\n",
             "Tasks/MetadataDataview.md\n",
             "Daily/2026-07-10.md\n",
+            "_generated/Generated.md\n",
+            "_templates/Task.md\n",
             "Tasks/Dependencies.md\n",
             "Tasks/MetadataEmoji.md\n",
             "Tasks/Nested.md\n",
-            "_generated/Generated.md\n",
-            "_templates/Task.md\n",
         ),
         "filterless Tasks paths golden changed:\n{}",
         format_output(&output)
@@ -270,11 +270,11 @@ fn tasks_native_filterless_json_golden_reads_settings_and_tasks() {
             "Tasks/Statuses.md",
             "Tasks/MetadataDataview.md",
             "Daily/2026-07-10.md",
+            "_generated/Generated.md",
+            "_templates/Task.md",
             "Tasks/Dependencies.md",
             "Tasks/MetadataEmoji.md",
-            "Tasks/Nested.md",
-            "_generated/Generated.md",
-            "_templates/Task.md"
+            "Tasks/Nested.md"
         ])
     );
     assert_eq!(actual["result"]["type"], "tasks");
@@ -722,16 +722,25 @@ fn tasks_note_reports_the_failing_block_context() {
     let temp = TempDir::new("bob-cli-tasks-note-error");
     write_file(
         &temp.path().join("Queries.md"),
-        "# Queries\n\n## Broken\n\n```tasks\nspaghetti\n```\n",
+        concat!(
+            "# Queries\n\n## Broken\n\n```tasks\nspaghetti\n```\n",
+            "\n## Working\n\n```tasks\nnot done\n```\n",
+        ),
     );
-    let output = run_tasks(temp.path(), &["--tasks-note", "Queries.md"]);
+    write_file(&temp.path().join("Tasks.md"), "- [ ] A task\n");
+    let output = run_tasks(
+        temp.path(),
+        &["--format", "json", "--tasks-note", "Queries.md"],
+    );
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
-    assert!(stdout(&output).is_empty(), "{}", format_output(&output));
-    assert!(
-        stderr(&output).contains("Queries.md#Broken (block 1, line 5)"),
-        "{}",
-        format_output(&output)
-    );
+    let actual = json_stdout(&output);
+    assert!(actual["blocks"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("Queries.md#Broken (block 1, line 5)"));
+    assert_eq!(actual["blocks"][0]["result"], Value::Null);
+    assert_eq!(actual["blocks"][1]["error"], Value::Null);
+    assert_eq!(actual["blocks"][1]["result"]["count"], 1);
 }
 
 #[test]
@@ -871,6 +880,47 @@ fn tasks_by_function_runs_dash_filters_and_stacked_sorts() {
 }
 
 #[test]
+fn tasks_javascript_exposes_priority_digits_and_pins_all_moment_clocks() {
+    let output = run_fixture(&[
+        "--format",
+        "json",
+        "--tasks",
+        concat!(
+            "filter by function typeof task.priority === 'string' && /^[0-5]$/.test(task.priority)\n",
+            "filter by function moment.utc().format('YYYY-MM-DD') === '2026-07-10'\n",
+            "filter by function moment.now() === moment().valueOf()",
+        ),
+    ]);
+    assert_success(&output);
+    assert_eq!(json_stdout(&output)["result"]["count"], 33);
+}
+
+#[test]
+fn hide_tags_only_removes_recognized_task_tags() {
+    let temp = TempDir::new("bob-cli-tasks-hide-tags");
+    write_file(
+        &temp.path().join("Tasks.md"),
+        "- [ ] Learning C# and a bare # marker #real-tag\n",
+    );
+    let output = run_tasks(
+        temp.path(),
+        &[
+            "--format",
+            "markdown",
+            "--tasks",
+            "hide tags\nhide backlink\nhide task count",
+        ],
+    );
+    assert_success(&output);
+    let markdown = stdout(&output);
+    assert!(
+        markdown.contains("Learning C# and a bare # marker"),
+        "{markdown}"
+    );
+    assert!(!markdown.contains("#real-tag"), "{markdown}");
+}
+
+#[test]
 fn tasks_group_by_function_reports_array_keys_and_runtime_errors() {
     let output = run_fixture(&[
         "--format",
@@ -911,6 +961,42 @@ fn tasks_group_by_function_reports_array_keys_and_runtime_errors() {
             .contains("Failed calculating expression"),
         "{groups}"
     );
+}
+
+#[test]
+fn tasks_group_by_function_keeps_null_empty_array_and_empty_string_tasks() {
+    for expression in ["null", "[]", "''"] {
+        let output = run_fixture(&[
+            "--format",
+            "json",
+            "--tasks",
+            &format!("group by function {expression}"),
+        ]);
+        assert_success(&output);
+        let actual = json_stdout(&output);
+        assert_eq!(actual["result"]["count"], 33, "{expression}");
+        assert_eq!(actual["result"]["groups"][0]["names"], json!([""]));
+    }
+
+    let markdown = run_fixture(&[
+        "--format",
+        "markdown",
+        "--tasks",
+        "group by function null\nlimit 1\nhide backlink\nhide task count",
+    ]);
+    assert_success(&markdown);
+    assert!(!stdout(&markdown).contains("#### "));
+}
+
+#[test]
+fn sort_by_function_evaluates_each_task_key_once() {
+    let query = concat!(
+        "sort by function globalThis.calls = (globalThis.calls ?? 0) + 1; ",
+        "if (globalThis.calls > query.allTasks.length) throw new Error('re-evaluated'); ",
+        "return task.lineNumber",
+    );
+    let output = run_fixture(&["--format", "json", "--tasks", query]);
+    assert_success(&output);
 }
 
 #[test]
@@ -1041,6 +1127,23 @@ fn tasks_markdown_honors_tree_layout_fields_counts_and_explain() {
             "    - [ ] Child task ^child-task\n",
             "        - [x] Done grandchild ^grandchild-task\n",
         )
+    );
+
+    let sparse_matches = run_fixture(&[
+        "--format",
+        "markdown",
+        "--tasks",
+        concat!(
+            "(description includes Parent task) OR (description includes Done grandchild)\n",
+            "show tree\n",
+            "hide backlink\n",
+            "hide task count",
+        ),
+    ]);
+    assert_success(&sparse_matches);
+    assert_eq!(
+        stdout(&sparse_matches).matches("Done grandchild").count(),
+        1
     );
 
     let explained = run_fixture(&[

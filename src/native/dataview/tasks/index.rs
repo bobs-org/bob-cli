@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     ffi::OsStr,
     fs,
     path::{Path, PathBuf},
@@ -8,6 +8,7 @@ use std::{
 use chrono::NaiveDateTime;
 
 use super::{
+    parse::frontmatter_block,
     settings::TasksSettings,
     task::{parse_list_line, StatusRegistry, Task, TaskFile},
 };
@@ -124,20 +125,14 @@ fn parse_file(
     let mut current_heading = None;
     let mut previous_plain_line = None::<String>;
     let mut fence = None;
-    let mut in_frontmatter = false;
+    let frontmatter_line_count = frontmatter_block(contents)
+        .map(|block| block.lines().count() + 2)
+        .unwrap_or(0);
     let mut in_comment = false;
 
     for (line_number, line) in contents.lines().enumerate() {
         let trimmed = line.trim();
-        if line_number == 0 && trimmed == "---" {
-            in_frontmatter = true;
-            previous_plain_line = None;
-            continue;
-        }
-        if in_frontmatter {
-            if matches!(trimmed, "---" | "...") {
-                in_frontmatter = false;
-            }
+        if line_number < frontmatter_line_count {
             continue;
         }
         if in_comment {
@@ -178,6 +173,7 @@ fn parse_file(
             if trimmed.is_empty() {
                 previous_plain_line = None;
             } else {
+                stack.clear();
                 previous_plain_line = Some(trimmed.to_string());
             }
             continue;
@@ -297,24 +293,30 @@ fn apply_hierarchy(nodes: &[ListNode], tasks: &mut [Task], task_start: usize) {
 }
 
 fn apply_dependencies(tasks: &mut [Task]) {
-    let dependency_data = tasks
+    let unfinished_ids = tasks
         .iter()
-        .map(|task| (task.id.clone(), task.depends_on.clone(), task.is_done))
-        .collect::<Vec<_>>();
+        .filter(|task| !task.is_done && !task.id.is_empty())
+        .map(|task| task.id.clone())
+        .collect::<HashSet<_>>();
+    let mut unfinished_dependents = HashMap::<String, usize>::new();
+    for dependency in tasks
+        .iter()
+        .filter(|task| !task.is_done)
+        .flat_map(|task| &task.depends_on)
+    {
+        *unfinished_dependents.entry(dependency.clone()).or_default() += 1;
+    }
 
     for task in tasks {
         task.is_blocked = !task.is_done
             && !task.depends_on.is_empty()
-            && task.depends_on.iter().any(|dependency| {
-                dependency_data.iter().any(|(id, _, done)| {
-                    id == dependency && !id.is_empty() && !done
-                })
-            });
+            && task
+                .depends_on
+                .iter()
+                .any(|dependency| unfinished_ids.contains(dependency));
         task.is_blocking = !task.is_done
             && !task.id.is_empty()
-            && dependency_data.iter().any(|(_, depends_on, done)| {
-                !done && depends_on.contains(&task.id)
-            });
+            && unfinished_dependents.contains_key(&task.id);
     }
 }
 
@@ -331,7 +333,15 @@ fn parse_atx_heading(line: &str) -> Option<String> {
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
     }
-    let heading = rest.trim().trim_end_matches('#').trim().to_string();
+    let rest = rest.trim();
+    let closing_start = rest.trim_end_matches('#').len();
+    let heading = if closing_start < rest.len()
+        && rest[..closing_start].ends_with(char::is_whitespace)
+    {
+        rest[..closing_start].trim().to_string()
+    } else {
+        rest.to_string()
+    };
     Some(heading)
 }
 
@@ -340,7 +350,7 @@ fn is_setext_underline(line: &str) -> bool {
     let Some(marker @ ('=' | '-')) = characters.next() else {
         return false;
     };
-    characters.count() >= 2 && line.chars().all(|value| value == marker)
+    line.chars().all(|value| value == marker)
 }
 
 fn update_fence(line: &str, fence: &mut Option<(char, usize)>) -> bool {
@@ -370,6 +380,21 @@ fn update_fence(line: &str, fence: &mut Option<(char, usize)>) -> bool {
 mod tests {
     use super::*;
     use crate::native::env as bob_env;
+
+    fn parsed(contents: &str) -> Vec<Task> {
+        let settings = TasksSettings::default();
+        let statuses = StatusRegistry::new(&settings.status_settings);
+        let mut tasks = Vec::new();
+        parse_file(
+            contents,
+            TaskFile::new("Note.md".to_string()),
+            &settings,
+            &statuses,
+            bob_env::current_datetime(),
+            &mut tasks,
+        );
+        tasks
+    }
 
     #[test]
     fn fixture_index_builds_hierarchy_and_ignores_fences_and_dot_directories() {
@@ -473,5 +498,34 @@ mod tests {
         assert!(parse_atx_heading("####### Not a heading").is_none());
         assert!(is_setext_underline("---"));
         assert!(is_setext_underline("===="));
+        assert!(is_setext_underline("="));
+        assert_eq!(
+            parse_atx_heading("## Learning C#").as_deref(),
+            Some("Learning C#")
+        );
+    }
+
+    #[test]
+    fn frontmatter_is_only_a_strictly_closed_column_zero_block() {
+        let closed = parsed("---\ntitle: Note\n---\n- [ ] visible\n");
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].description, "visible");
+
+        let unclosed = parsed("---\n- [ ] visible despite opener\n");
+        assert_eq!(unclosed.len(), 1);
+        let indented = parsed("  ---\n- [ ] visible after indent\n");
+        assert_eq!(indented.len(), 1);
+        let dots = parsed("---\n- [ ] before dots\n...\n- [ ] after dots\n");
+        assert_eq!(dots.len(), 2);
+    }
+
+    #[test]
+    fn paragraphs_break_list_hierarchy() {
+        let tasks = parsed(
+            "- [ ] parent\nA paragraph between lists.\n  - [ ] independent\n",
+        );
+        assert_eq!(tasks.len(), 2);
+        assert!(tasks[1].is_root);
+        assert_eq!(tasks[1].parent_task_line_number, None);
     }
 }

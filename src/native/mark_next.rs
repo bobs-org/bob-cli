@@ -195,7 +195,6 @@ struct SyncResult {
     marked_next: Vec<ChangeItem>,
     cleared: Vec<ChangeItem>,
     struck_completed_references: Vec<StruckCompletedReference>,
-    #[serde(default)]
     embedded_completed_references: Vec<StruckCompletedReference>,
     moved_completed_references: Vec<MovedCompletedReference>,
     kept_next: usize,
@@ -258,6 +257,7 @@ struct LinkOccurrence {
     canonical_token: String,
     embedded: bool,
     canonical: bool,
+    struck: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -352,9 +352,13 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
     let markdown_files = markdown_files(&request.bob_dir).map_err(|error| {
         SyncError::io("scan vault", &request.bob_dir, error)
     })?;
+    let canonical_daily_path = daily_path.canonicalize().ok();
     let mut files = Vec::with_capacity(markdown_files.len());
     for path in markdown_files {
-        let contents = if same_file_path(&path, &daily_path) {
+        let contents = if path == daily_path
+            || canonical_daily_path.as_ref().is_some_and(|daily| {
+                path.canonicalize().ok().as_ref() == Some(daily)
+            }) {
             daily_contents.clone()
         } else {
             fs::read_to_string(&path)
@@ -490,8 +494,7 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
                                 block_id.clone(),
                             ))
                         });
-                    let item = change_item(file, task, dependency);
-                    marked_next.push(item.clone());
+                    marked_next.push(change_item(file, task, dependency));
                     changes.push(PlannedChange {
                         file_index,
                         status_byte_offset: task.status_byte_offset,
@@ -499,8 +502,7 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
                     });
                 }
                 Transition::Clear => {
-                    let item = change_item(file, task, false);
-                    cleared.push(item.clone());
+                    cleared.push(change_item(file, task, false));
                     changes.push(PlannedChange {
                         file_index,
                         status_byte_offset: task.status_byte_offset,
@@ -555,13 +557,6 @@ fn transition(status: char, referenced: bool) -> Transition {
         ('/', true) => Transition::KeptInProgress,
         _ => Transition::Unchanged,
     }
-}
-
-fn same_file_path(left: &Path, right: &Path) -> bool {
-    left == right
-        || (left.exists()
-            && right.exists()
-            && left.canonicalize().ok() == right.canonicalize().ok())
 }
 
 fn logical_lines(contents: &str) -> Vec<&str> {
@@ -625,8 +620,12 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
             all_references
                 .extend(links.iter().map(|link| link.reference.clone()));
             if entry.open {
-                raw_references
-                    .extend(links.iter().map(|link| link.reference.clone()));
+                raw_references.extend(
+                    links
+                        .iter()
+                        .filter(|link| !link.struck)
+                        .map(|link| link.reference.clone()),
+                );
             }
             bullets.push(LinkBullet {
                 entry_index,
@@ -686,6 +685,7 @@ fn bullet_indentation(line: &str) -> Option<String> {
 
 fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
     let mut links = Vec::new();
+    let struck_spans = strikethrough_spans(line);
     let mut rest = line;
     let mut base = 0;
     while let Some(open) = rest.find("[[") {
@@ -705,15 +705,35 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
             {
                 let embedded = line[..absolute_open].ends_with('!');
                 let token_start = absolute_open - usize::from(embedded);
-                let struck = line[..token_start].ends_with("~~")
-                    && line[link_end..].starts_with("~~");
-                let edit_start = token_start - if struck { 2 } else { 0 };
-                let edit_end = link_end + if struck { 2 } else { 0 };
+                let struck_span = struck_spans.iter().find(|span| {
+                    token_start >= span.start + 2 && link_end <= span.end - 2
+                });
+                let struck = struck_span.is_some();
+                let exact_struck_span = struck_span.filter(|span| {
+                    token_start == span.start + 2 && link_end == span.end - 2
+                });
+                let edit_start = exact_struck_span
+                    .filter(|_| embedded)
+                    .map_or(token_start, |span| span.start);
+                let edit_end = exact_struck_span
+                    .filter(|_| embedded)
+                    .map_or(link_end, |span| span.end);
                 let wikilink = &line[absolute_open..link_end];
-                let canonical_token = format!("~~{wikilink}~~");
-                let canonical = !embedded
-                    && struck
-                    && &line[edit_start..edit_end] == canonical_token;
+                let before = if !struck
+                    && token_start >= 2
+                    && &line[token_start - 2..token_start] == "~~"
+                {
+                    " "
+                } else {
+                    ""
+                };
+                let after = if !struck && line[link_end..].starts_with("~~") {
+                    " "
+                } else {
+                    ""
+                };
+                let canonical_token = format!("{before}~~{wikilink}~~{after}");
+                let canonical = struck && !embedded;
                 links.push(LinkOccurrence {
                     reference: RawReference {
                         target: target.to_string(),
@@ -724,6 +744,7 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
                     canonical_token,
                     embedded,
                     canonical,
+                    struck,
                 });
             }
         }
@@ -731,6 +752,20 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
         rest = &after_open[close + 2..];
     }
     links
+}
+
+fn strikethrough_spans(line: &str) -> Vec<std::ops::Range<usize>> {
+    let mut delimiters = Vec::new();
+    let mut cursor = 0;
+    while let Some(offset) = line[cursor..].find("~~") {
+        let position = cursor + offset;
+        delimiters.push(position);
+        cursor = position + 2;
+    }
+    delimiters
+        .chunks_exact(2)
+        .map(|pair| pair[0]..pair[1] + 2)
+        .collect()
 }
 
 fn read_tasks_settings(vault: &Path) -> TasksSettings {
@@ -775,52 +810,8 @@ fn read_tasks_settings(vault: &Path) -> TasksSettings {
     settings
 }
 
-#[derive(Debug, Clone, Copy)]
-struct MarkdownFence {
-    character: u8,
-    length: usize,
-}
-
 fn fenced_lines(lines: &[&str], section: Range<usize>) -> BTreeSet<usize> {
-    let mut fenced = BTreeSet::new();
-    let mut open = None;
-    for index in section {
-        let line = lines[index];
-        if let Some(marker) = open {
-            fenced.insert(index);
-            if closes_fence(line, marker) {
-                open = None;
-            }
-        } else if let Some(marker) = fence_marker(line) {
-            fenced.insert(index);
-            open = Some(marker);
-        }
-    }
-    fenced
-}
-
-fn fence_marker(line: &str) -> Option<MarkdownFence> {
-    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
-    if indentation > 3 {
-        return None;
-    }
-    let line = &line[indentation..];
-    let character = *line.as_bytes().first()?;
-    if !matches!(character, b'`' | b'~') {
-        return None;
-    }
-    let length = line.bytes().take_while(|byte| *byte == character).count();
-    (length >= 3).then_some(MarkdownFence { character, length })
-}
-
-fn closes_fence(line: &str, open: MarkdownFence) -> bool {
-    let Some(marker) = fence_marker(line) else {
-        return false;
-    };
-    let trimmed = line.trim_start();
-    marker.character == open.character
-        && marker.length >= open.length
-        && trimmed[marker.length..].trim().is_empty()
+    super::markdown::fenced_lines(lines, section)
 }
 
 fn entry_block_end(
@@ -955,6 +946,17 @@ fn plan_structural_changes(
             continue;
         };
         if target == bullet.entry_index {
+            continue;
+        }
+        let has_live_reference = bullet.links.iter().any(|link| {
+            resolved.get(&link.reference).is_some_and(|reference| {
+                reference
+                    .statuses
+                    .iter()
+                    .any(|status| !is_done_status(*status, done_statuses))
+            })
+        });
+        if !model.entries[target].open && has_live_reference {
             continue;
         }
         move_candidates.push(BulletMove {
@@ -1250,9 +1252,8 @@ impl NoteIndex {
         let mut relative_paths = BTreeSet::new();
         let mut basename_paths = BTreeMap::new();
         for path in paths {
-            if let Some(stem) = path.file_stem().and_then(OsStr::to_str) {
-                let stem = stem.to_lowercase();
-                match basename_paths.entry(stem) {
+            if let Some(name) = markdown_basename(&path) {
+                match basename_paths.entry(name.to_lowercase()) {
                     std::collections::btree_map::Entry::Vacant(entry) => {
                         entry.insert(Some(path.clone()));
                     }
@@ -1286,14 +1287,22 @@ impl NoteIndex {
         if target.contains('/') || target.contains('\\') {
             return None;
         }
-        let basename = Path::new(target)
-            .file_stem()
-            .and_then(OsStr::to_str)?
+        let basename = target
+            .strip_suffix(".md")
+            .or_else(|| target.strip_suffix(".MD"))
+            .unwrap_or(target)
             .to_lowercase();
         self.basename_paths
             .get(&basename)
             .and_then(|path| path.clone())
     }
+}
+
+fn markdown_basename(path: &Path) -> Option<&str> {
+    let name = path.file_name()?.to_str()?;
+    name.strip_suffix(".md")
+        .or_else(|| name.strip_suffix(".MD"))
+        .or(Some(name))
 }
 
 fn target_to_markdown_path(target: &str) -> Option<PathBuf> {
@@ -1309,7 +1318,8 @@ fn target_to_markdown_path(target: &str) -> Option<PathBuf> {
         .and_then(OsStr::to_str)
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
     {
-        path.set_extension("md");
+        let file_name = path.file_name()?.to_os_string();
+        path.set_file_name(format!("{}.md", file_name.to_string_lossy()));
     }
     Some(path)
 }
@@ -1338,6 +1348,9 @@ fn dependency_edges(
     let mut edges: BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> =
         BTreeMap::new();
     for file in files {
+        if !file.tasks.iter().any(|task| task.block_id.is_some()) {
+            continue;
+        }
         let lines = logical_lines(&file.contents);
         let fenced = fenced_lines(&lines, 0..lines.len());
         for task in &file.tasks {
@@ -1352,13 +1365,15 @@ fn dependency_edges(
                 if line.trim().is_empty() {
                     continue;
                 }
+                if fenced.contains(&line_index) {
+                    continue;
+                }
                 let indentation = leading_indentation_width(line);
                 if indentation <= source_indent {
                     break;
                 }
-                if fenced.contains(&line_index)
-                    || nearest_parent_list_item(&lines, line_index)
-                        != Some(task.line_index)
+                if nearest_parent_list_item(&lines, line_index)
+                    != Some(task.line_index)
                 {
                     continue;
                 }
@@ -1534,22 +1549,25 @@ fn compose_outputs(
         updated.insert(file_index, contents);
     }
 
-    let daily_file_index = files
-        .iter()
-        .position(|file| same_file_path(&file.path, daily_path));
+    let canonical_daily_path = daily_path.canonicalize().ok();
+    let daily_file_index = files.iter().position(|file| {
+        file.path == daily_path
+            || canonical_daily_path.as_ref().is_some_and(|daily| {
+                file.path.canonicalize().ok().as_ref() == Some(daily)
+            })
+    });
     let daily_base = daily_file_index
         .and_then(|index| updated.get(&index))
         .map(String::as_str)
         .unwrap_or(daily_contents);
     let updated_daily =
         apply_structural_plan(daily_base, pomodoro_model, structural_plan);
-    if let Some(index) = daily_file_index {
-        if updated_daily != files[index].contents {
-            updated.insert(index, updated_daily.clone());
-        } else {
-            updated.remove(&index);
-        }
-    }
+    let external_daily = if let Some(index) = daily_file_index {
+        updated.insert(index, updated_daily);
+        None
+    } else {
+        Some(updated_daily)
+    };
 
     let mut outputs = updated
         .into_iter()
@@ -1558,7 +1576,9 @@ fn compose_outputs(
                 .then(|| (files[index].path.clone(), contents))
         })
         .collect::<Vec<_>>();
-    if daily_file_index.is_none() && updated_daily != daily_contents {
+    if let Some(updated_daily) = external_daily
+        && updated_daily != daily_contents
+    {
         outputs.push((daily_path.to_path_buf(), updated_daily));
     }
     outputs
@@ -1875,6 +1895,86 @@ mod tests {
             PathBuf::from("Projects/home.md"),
         ]);
         assert_eq!(index.resolve(None, "home"), None);
+    }
+
+    #[test]
+    fn dotted_note_names_keep_the_full_basename() {
+        let index = NoteIndex::from_paths([
+            PathBuf::from("Notes.md"),
+            PathBuf::from("Notes.v2.md"),
+        ]);
+        assert_eq!(
+            index.resolve(None, "Notes.v2"),
+            Some(PathBuf::from("Notes.v2.md"))
+        );
+        assert_eq!(
+            target_to_markdown_path("Notes.v2"),
+            Some(PathBuf::from("Notes.v2.md"))
+        );
+    }
+
+    #[test]
+    fn struck_references_are_retired_and_spans_are_paired() {
+        let lines = [
+            "- [ ] Current",
+            "  - ~~[[dev#^old]]~~",
+            "  - ~~before~~[[dev#^live]]~~after~~",
+        ];
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        assert!(!model.raw_references.contains(&reference("dev", "old")));
+        assert!(model.raw_references.contains(&reference("dev", "live")));
+        let live = &model.bullets[1].links[0];
+        assert!(!live.struck);
+        assert!(live.canonical_token.starts_with(" ~~"));
+    }
+
+    #[test]
+    fn fenced_column_zero_content_does_not_end_dependency_scan() {
+        let settings = "#task";
+        let a_contents =
+            "- [ ] #task A ^a\n  ```\nnot a list item\n  ```\n  - ![[B#^b]]\n";
+        let b_contents = "- [ ] #task B ^b\n";
+        let files = vec![
+            FileScan {
+                path: PathBuf::from("A.md"),
+                relative_path: PathBuf::from("A.md"),
+                contents: a_contents.to_string(),
+                tasks: parse_tasks(a_contents, settings),
+            },
+            FileScan {
+                path: PathBuf::from("B.md"),
+                relative_path: PathBuf::from("B.md"),
+                contents: b_contents.to_string(),
+                tasks: parse_tasks(b_contents, settings),
+            },
+        ];
+        let index = NoteIndex::from_paths(
+            files.iter().map(|file| file.relative_path.clone()),
+        );
+        let blocks = task_blocks(&files);
+        let edges = dependency_edges(&files, &index, &blocks, &mut Vec::new());
+        assert!(edges[&(PathBuf::from("A.md"), "a".to_string())]
+            .contains(&(PathBuf::from("B.md"), "b".to_string())));
+    }
+
+    #[test]
+    fn completed_fallback_does_not_take_mixed_live_bullets() {
+        let lines = [
+            "- [x] Completed (0800-0830)",
+            "- [ ] Untimed",
+            "  - [[dev#^done]] and [[dev#^live]]",
+        ];
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let plan = plan_structural_changes(
+            &model,
+            &resolved(&[
+                ("dev", "done", vec!['x']),
+                ("dev", "live", vec![' ']),
+            ]),
+            &BTreeSet::from(['x', 'X']),
+        );
+        assert!(plan.moves.is_empty());
+        assert_eq!(plan.struck.len(), 1);
     }
 
     #[test]

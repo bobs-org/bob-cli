@@ -1,4 +1,7 @@
-use std::{cmp::Ordering, collections::HashSet};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+};
 
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use serde::Serialize;
@@ -50,9 +53,8 @@ impl TaskResult {
         self.groups
             .iter()
             .flat_map(|group| &group.tasks)
-            .filter_map(|task| {
-                seen.insert(task.path.clone()).then(|| task.path.clone())
-            })
+            .filter(|task| seen.insert(task.path.clone()))
+            .map(|task| task.path.clone())
             .collect()
     }
 }
@@ -115,7 +117,8 @@ fn sort_tasks(
     now: NaiveDateTime,
     javascript: &mut JsSandbox,
 ) -> Result<(), DataviewError> {
-    javascript.validate_function_sorts(instructions)?;
+    let function_sort_handles =
+        javascript.prepare_function_sorts(instructions, tasks)?;
     let defaults = [
         SortKey::StatusType,
         SortKey::Urgency,
@@ -128,10 +131,12 @@ fn sort_tasks(
         if error.is_some() {
             return Ordering::Equal;
         }
-        for instruction in instructions {
+        for (instruction_index, instruction) in instructions.iter().enumerate()
+        {
             let ordering = if instruction.key == SortKey::Function {
-                javascript.compare_function_sort(
-                    instruction.function.as_deref().unwrap_or_default(),
+                javascript.compare_precomputed_function_sort(
+                    function_sort_handles[instruction_index]
+                        .expect("function sort has a precomputed key set"),
                     left,
                     right,
                 )
@@ -273,6 +278,7 @@ fn group_tasks(
     }
 
     let mut groups = Vec::<TaskGroup>::new();
+    let mut group_indices = HashMap::<Vec<String>, usize>::new();
     for task in tasks {
         let mut names = vec![Vec::<String>::new()];
         for instruction in instructions {
@@ -288,11 +294,10 @@ fn group_tasks(
             names = expanded;
         }
         for name_path in names {
-            if let Some(group) =
-                groups.iter_mut().find(|group| group.names == name_path)
-            {
-                group.tasks.push(task.clone());
+            if let Some(index) = group_indices.get(&name_path).copied() {
+                groups[index].tasks.push(task.clone());
             } else {
+                group_indices.insert(name_path.clone(), groups.len());
                 groups.push(TaskGroup {
                     names: name_path,
                     headings: Vec::new(),
@@ -432,6 +437,7 @@ fn explain(query: &QueryAst, global_filter: &str) -> String {
             StatementSource::QueryFileDefaults,
             "Explanation of the Query File Defaults (from properties/frontmatter in the query's file)",
         ),
+        (StatementSource::Preset, "Explanation of expanded presets"),
         (
             StatementSource::Query,
             "Explanation of this Tasks code block query",
@@ -580,8 +586,10 @@ fn random_key(task: &Task, now: NaiveDateTime) -> i32 {
 }
 
 fn natural_compare(left: &str, right: &str) -> Ordering {
-    let mut left = left.chars().peekable();
-    let mut right = right.chars().peekable();
+    let left_folded = left.to_lowercase();
+    let right_folded = right.to_lowercase();
+    let mut left = left_folded.chars().peekable();
+    let mut right = right_folded.chars().peekable();
     loop {
         match (left.peek(), right.peek()) {
             (Some(a), Some(b)) if a.is_ascii_digit() && b.is_ascii_digit() => {
@@ -620,4 +628,32 @@ fn take_digits(iter: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
         result.push(iter.next().expect("peeked digit"));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::dataview::tasks::parse::{FilterExpr, Statement};
+
+    #[test]
+    fn natural_collation_is_case_insensitive_and_numeric() {
+        assert_eq!(natural_compare("apple", "Banana"), Ordering::Less);
+        assert_eq!(natural_compare("item2", "item10"), Ordering::Less);
+        assert_eq!(natural_compare("ALPHA", "alpha"), Ordering::Equal);
+    }
+
+    #[test]
+    fn explanations_include_expanded_preset_statements() {
+        let mut query = QueryAst::default();
+        query.statements.push(Statement {
+            source: StatementSource::Preset,
+            instruction: "not done".to_string(),
+            parsed: Instruction::Filter {
+                expression: FilterExpr::Done { done: false },
+            },
+        });
+        let explanation = explain(&query, "");
+        assert!(explanation.contains("Explanation of expanded presets"));
+        assert!(explanation.contains("not done"));
+    }
 }

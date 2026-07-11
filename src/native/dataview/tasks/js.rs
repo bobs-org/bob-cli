@@ -44,6 +44,12 @@ for (const key of Object.keys(__bobOriginalMoment)) {
     __bobMoment[key] = __bobOriginalMoment[key];
 }
 __bobMoment.fn = __bobOriginalMoment.fn;
+__bobMoment.now = () => __bobOriginalMoment(
+    __bobPinnedNow, "YYYY-MM-DDTHH:mm:ss", true
+).valueOf();
+__bobMoment.utc = (...args) => args.length === 0
+    ? __bobOriginalMoment.utc(__bobPinnedNow, "YYYY-MM-DDTHH:mm:ss", true)
+    : __bobOriginalMoment.utc(...args);
 globalThis.moment = __bobMoment;
 
 class TasksDate {
@@ -98,6 +104,7 @@ const hydrateTasksFile = function(file) {
 function __bobHydrateTask(task) {
     task.file = hydrateTasksFile(task.file);
     task.priorityName = task.priority;
+    task.priority = String(task.priorityNumber);
     for (const field of ["cancelled", "created", "done", "due", "scheduled", "start"]) {
         const value = task[field];
         task[field] = new TasksDate(value === null ? null : value.raw);
@@ -165,8 +172,10 @@ function __bobCompareSortKeys(left, right) {
 }
 
 function __bobGroupKeys(value) {
-    if (Array.isArray(value)) return value.map(item => item.toString());
-    if (value === null) return [];
+    if (Array.isArray(value)) return value.length === 0
+        ? [""]
+        : value.map(item => item.toString());
+    if (value === null) return [""];
     if (typeof value === "number" && !Number.isInteger(value)) return [value.toFixed(5)];
     return [value.toString()];
 }
@@ -186,6 +195,7 @@ pub(super) struct JsSandbox {
     context: Context,
     deadline: Deadline,
     task_indices: HashMap<(String, usize), usize>,
+    next_sort_key_set: usize,
 }
 
 impl JsSandbox {
@@ -245,6 +255,7 @@ impl JsSandbox {
             "globalThis.__bobTasks = JSON.parse({tasks_json});\n\
              globalThis.__bobQuery = JSON.parse({query_json});\n\
              globalThis.__bobNow = {now};\n\
+             globalThis.__bobSortKeySets = [];\n\
              {MOMENT_SOURCE}\n{BOOTSTRAP_SOURCE}\n{HYDRATE_SOURCE}"
         );
         eval_unit(
@@ -270,6 +281,7 @@ impl JsSandbox {
             context,
             deadline,
             task_indices,
+            next_sort_key_set: 0,
         })
     }
 
@@ -317,32 +329,76 @@ impl JsSandbox {
         }
     }
 
-    pub(super) fn validate_function_sorts(
+    pub(super) fn prepare_function_sorts(
         &mut self,
         sorting: &[SortInstruction],
-    ) -> Result<(), DataviewError> {
-        let functions = sorting
-            .iter()
-            .filter(|instruction| instruction.key == SortKey::Function)
-            .collect::<Vec<_>>();
-        for instruction in &functions {
-            self.validate_expression(
-                instruction.function.as_deref().unwrap_or_default(),
+        tasks: &[Task],
+    ) -> Result<Vec<Option<usize>>, DataviewError> {
+        let mut handles = Vec::with_capacity(sorting.len());
+        for instruction in sorting {
+            if instruction.key != SortKey::Function {
+                handles.push(None);
+                continue;
+            }
+            let source = instruction.function.as_deref().unwrap_or_default();
+            self.validate_expression(source)?;
+            let expressions = tasks
+                .iter()
+                .map(|task| {
+                    Ok(format!(
+                        "[{}, {}]",
+                        self.task_index(task)?,
+                        self.expression_for(source, task)?
+                    ))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let handle = self.next_sort_key_set;
+            self.next_sort_key_set += 1;
+            let script = format!(
+                "(() => {{ const entries = [{}]; const values = [];\n\
+                 for (const [index, value] of entries) {{\n\
+                   __bobCompareSortKeys(value, value); values[index] = value;\n\
+                 }}\n\
+                 const representative = entries.map(entry => entry[1]).find(value => value !== null);\n\
+                 if (representative !== undefined) {{\n\
+                   for (const [, value] of entries) __bobCompareSortKeys(representative, value);\n\
+                 }}\n\
+                 globalThis.__bobSortKeySets[{handle}] = values; }})()",
+                expressions.join(",")
+            );
+            eval_unit(
+                &self.context,
+                &self.deadline,
+                &script,
+                &format!("evaluating instruction 'sort by function {source}'"),
             )?;
+            handles.push(Some(handle));
         }
-        Ok(())
+        Ok(handles)
     }
 
-    pub(super) fn compare_function_sort(
+    pub(super) fn compare_precomputed_function_sort(
         &mut self,
-        source: &str,
+        handle: usize,
         left: &Task,
         right: &Task,
     ) -> Result<Ordering, DataviewError> {
-        self.compare(source, left, right).map_err(|message| {
-            query_error(format!(
-                "{message}: while evaluating instruction 'sort by function {source}'"
-            ))
+        let left = self.task_index(left)?;
+        let right = self.task_index(right)?;
+        let number = eval_number(
+            &self.context,
+            &self.deadline,
+            &format!(
+                "__bobCompareSortKeys(__bobSortKeySets[{handle}][{left}], __bobSortKeySets[{handle}][{right}])"
+            ),
+            "comparing precomputed sort-by-function keys",
+        )?;
+        Ok(if number < 0.0 {
+            Ordering::Less
+        } else if number > 0.0 {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
         })
     }
 
@@ -404,50 +460,25 @@ impl JsSandbox {
         }
     }
 
-    fn compare(
-        &mut self,
-        source: &str,
-        left: &Task,
-        right: &Task,
-    ) -> Result<Ordering, String> {
-        let left = self
-            .expression_for(source, left)
-            .map_err(task_error_message)?;
-        let right = self
-            .expression_for(source, right)
-            .map_err(task_error_message)?;
-        let number = eval_number(
-            &self.context,
-            &self.deadline,
-            &format!("__bobCompareSortKeys({left}, {right})"),
-            "evaluating sort by function",
-        )
-        .map_err(task_error_message)?;
-        Ok(if number < 0.0 {
-            Ordering::Less
-        } else if number > 0.0 {
-            Ordering::Greater
-        } else {
-            Ordering::Equal
-        })
-    }
-
     fn expression_for(
         &self,
         source: &str,
         task: &Task,
     ) -> Result<String, DataviewError> {
-        let index = self
-            .task_indices
-            .get(&(task.path.clone(), task.line_number))
-            .copied()
-            .ok_or_else(|| {
-                query_error("task was not registered in the JavaScript sandbox")
-            })?;
+        let index = self.task_index(task)?;
         Ok(format!(
             "{}(__bobTasks[{index}], __bobQuery)",
             expression_function(source)
         ))
+    }
+
+    fn task_index(&self, task: &Task) -> Result<usize, DataviewError> {
+        self.task_indices
+            .get(&(task.path.clone(), task.line_number))
+            .copied()
+            .ok_or_else(|| {
+                query_error("task was not registered in the JavaScript sandbox")
+            })
     }
 }
 

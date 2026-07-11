@@ -57,7 +57,7 @@ pub(super) enum TaskFormat {
     #[serde(rename = "dataview")]
     Dataview,
     #[default]
-    #[serde(rename = "tasksPluginEmoji", alias = "emoji")]
+    #[serde(other, rename = "tasksPluginEmoji", alias = "emoji")]
     Emoji,
 }
 
@@ -163,4 +163,16 @@ fn default_presets() -> BTreeMap<String, String> {
     .into_iter()
     .map(|(name, value)| (name.to_string(), value.to_string()))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_task_format_falls_back_to_emoji() {
+        let settings: TasksSettings =
+            serde_json::from_str(r#"{"taskFormat":"future-format"}"#).unwrap();
+        assert_eq!(settings.task_format, TaskFormat::Emoji);
+    }
 }

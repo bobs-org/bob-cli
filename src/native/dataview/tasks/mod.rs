@@ -26,6 +26,11 @@ struct Execution {
     paths: Vec<String>,
 }
 
+struct NoteExecution {
+    execution: Option<Execution>,
+    error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NoteBlock {
@@ -65,7 +70,11 @@ pub(super) fn run(
     let settings = TasksSettings::read(vault)?;
     let now = bob_env::current_datetime();
     let index = TaskIndex::read(vault, &settings, now)?;
-    let execution = execute(vault, origin, query, &settings, &index, now)?;
+    let query = parse::parse(vault, origin, query, &settings)?;
+    let mut javascript =
+        js::JsSandbox::new(&index.tasks, query.context.as_ref(), now)?;
+    let execution =
+        execute_query(query, &settings, &index, now, &mut javascript)?;
     emit_single(execution, &settings, format)
 }
 
@@ -85,34 +94,70 @@ pub(super) fn run_note(
     let settings = TasksSettings::read(vault)?;
     let now = bob_env::current_datetime();
     let index = TaskIndex::read(vault, &settings, now)?;
+    let parsed = blocks
+        .iter()
+        .map(|block| parse::parse(vault, Some(note), &block.query, &settings))
+        .collect::<Vec<_>>();
+    let first_query = parsed.iter().find_map(|query| query.as_ref().ok());
+    let mut javascript = first_query
+        .map(|query| {
+            js::JsSandbox::new(&index.tasks, query.context.as_ref(), now)
+        })
+        .transpose()?;
     let mut executions = Vec::with_capacity(blocks.len());
-    for block in &blocks {
-        let execution =
-            execute(vault, Some(note), &block.query, &settings, &index, now)
-                .map_err(|error| add_block_context(error, block, note))?;
-        executions.push(execution);
+    for (block, query) in blocks.iter().zip(parsed) {
+        let result = query.and_then(|query| {
+            execute_query(
+                query,
+                &settings,
+                &index,
+                now,
+                javascript
+                    .as_mut()
+                    .expect("a parsed query created a JavaScript sandbox"),
+            )
+        });
+        match result {
+            Ok(execution) => executions.push(NoteExecution {
+                execution: Some(execution),
+                error: None,
+            }),
+            Err(error) => executions.push(NoteExecution {
+                execution: None,
+                error: Some(error_message(add_block_context(
+                    error, block, note,
+                ))),
+            }),
+        }
     }
-    emit_note(note, &blocks, &executions, &settings, format)
+    let failed = executions
+        .iter()
+        .filter(|result| result.error.is_some())
+        .count();
+    emit_note(note, &blocks, &executions, &settings, format)?;
+    if failed == 0 {
+        Ok(())
+    } else {
+        Err(DataviewError::TasksQuery {
+            message: format!("{failed} Tasks block(s) failed; errors are included in the block output"),
+        })
+    }
 }
 
-fn execute(
-    vault: &Path,
-    origin: Option<&Path>,
-    source: &str,
+fn execute_query(
+    query: QueryAst,
     settings: &TasksSettings,
     index: &TaskIndex,
     now: chrono::NaiveDateTime,
+    javascript: &mut js::JsSandbox,
 ) -> Result<Execution, DataviewError> {
-    let query = parse::parse(vault, origin, source, settings)?;
     let all_tasks = index.tasks.clone();
-    let mut javascript =
-        js::JsSandbox::new(&index.tasks, query.context.as_ref(), now)?;
     let tasks = filter::apply(
         &query.filters,
         index.tasks.clone(),
         now,
         &settings.global_filter,
-        &mut javascript,
+        javascript,
     )?;
     let result = result::build(
         &query,
@@ -120,7 +165,7 @@ fn execute(
         all_tasks,
         now,
         &settings.global_filter,
-        &mut javascript,
+        javascript,
     )?;
     let function_groups =
         javascript.function_groups(&query.grouping, &result.tasks);
@@ -160,6 +205,7 @@ fn emit_single(
                 &execution.result,
                 &execution.query,
                 settings.task_format,
+                &settings.global_filter,
             );
             if !markdown.is_empty() {
                 println!("{markdown}");
@@ -172,7 +218,7 @@ fn emit_single(
 fn emit_note(
     note: &Path,
     blocks: &[NoteBlock],
-    executions: &[Execution],
+    executions: &[NoteExecution],
     settings: &TasksSettings,
     format: OutputFormat,
 ) -> Result<(), DataviewError> {
@@ -181,9 +227,14 @@ fn emit_note(
             let output = blocks
                 .iter()
                 .zip(executions)
-                .map(|(block, execution)| {
+                .map(|(block, outcome)| {
                     let mut lines = vec![format!("[{}]", block.label(note))];
-                    lines.extend(execution.paths.iter().cloned());
+                    if let Some(execution) = &outcome.execution {
+                        lines.extend(execution.paths.iter().cloned());
+                    }
+                    if let Some(error) = &outcome.error {
+                        lines.push(format!("Error: {error}"));
+                    }
                     lines.join("\n")
                 })
                 .collect::<Vec<_>>()
@@ -197,23 +248,38 @@ fn emit_note(
             let blocks = blocks
                 .iter()
                 .zip(executions)
-                .map(|(block, execution)| {
-                    serde_json::json!({
-                        "index": block.index,
-                        "lineNumber": block.line_number,
-                        "heading": block.heading,
-                        "query": block.query,
-                        "paths": execution.paths,
-                        "parsedQuery": execution.query,
-                        "result": result_json(
-                            &execution.result,
-                            execution.function_groups.clone(),
-                        ),
-                    })
+                .map(|(block, outcome)| {
+                    if let Some(execution) = &outcome.execution {
+                        serde_json::json!({
+                            "index": block.index,
+                            "lineNumber": block.line_number,
+                            "heading": block.heading,
+                            "query": block.query,
+                            "paths": execution.paths,
+                            "parsedQuery": execution.query,
+                            "result": result_json(
+                                &execution.result,
+                                execution.function_groups.clone(),
+                            ),
+                            "error": null,
+                        })
+                    } else {
+                        serde_json::json!({
+                            "index": block.index,
+                            "lineNumber": block.line_number,
+                            "heading": block.heading,
+                            "query": block.query,
+                            "paths": [],
+                            "parsedQuery": null,
+                            "result": null,
+                            "error": outcome.error,
+                        })
+                    }
                 })
                 .collect::<Vec<_>>();
             let paths = executions
                 .iter()
+                .filter_map(|outcome| outcome.execution.as_ref())
                 .flat_map(|execution| execution.paths.iter())
                 .fold(Vec::<String>::new(), |mut paths, path| {
                     if !paths.contains(path) {
@@ -236,17 +302,29 @@ fn emit_note(
             let output = blocks
                 .iter()
                 .zip(executions)
-                .map(|(block, execution)| {
+                .map(|(block, outcome)| {
                     let heading = format!(
                         "## {} (block {})",
                         block.display_heading(),
                         block.index
                     );
-                    let markdown = render::markdown(
-                        &execution.result,
-                        &execution.query,
-                        settings.task_format,
-                    );
+                    let markdown = if let Some(execution) = &outcome.execution {
+                        render::markdown(
+                            &execution.result,
+                            &execution.query,
+                            settings.task_format,
+                            &settings.global_filter,
+                        )
+                    } else {
+                        format!(
+                            "> [!error] Tasks query failed\n> {}",
+                            outcome
+                                .error
+                                .as_deref()
+                                .unwrap_or("unknown error")
+                                .replace('\n', "\n> ")
+                        )
+                    };
                     if markdown.is_empty() {
                         heading
                     } else {
@@ -289,6 +367,13 @@ fn add_block_context(
     }
 }
 
+fn error_message(error: DataviewError) -> String {
+    match error {
+        DataviewError::TasksQuery { message } => message,
+        other => format!("{other:?}"),
+    }
+}
+
 fn extract_note_blocks(contents: &str) -> Vec<NoteBlock> {
     struct Fence {
         marker: char,
@@ -316,7 +401,7 @@ fn extract_note_blocks(contents: &str) -> Vec<NoteBlock> {
                     });
                 }
             } else if open.tasks {
-                open.query.push(line.to_string());
+                open.query.push(strip_blockquote_prefixes(line).to_string());
             }
             continue;
         }
@@ -354,6 +439,7 @@ fn extract_note_blocks(contents: &str) -> Vec<NoteBlock> {
 }
 
 fn opening_fence(line: &str) -> Option<(char, usize, &str)> {
+    let line = strip_blockquote_prefixes(line);
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > 3 {
         return None;
@@ -368,6 +454,7 @@ fn opening_fence(line: &str) -> Option<(char, usize, &str)> {
 }
 
 fn is_closing_fence(line: &str, marker: char, minimum: usize) -> bool {
+    let line = strip_blockquote_prefixes(line);
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > 3 {
         return false;
@@ -378,6 +465,7 @@ fn is_closing_fence(line: &str, marker: char, minimum: usize) -> bool {
 }
 
 fn atx_heading(line: &str) -> Option<String> {
+    let line = strip_blockquote_prefixes(line);
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > 3 {
         return None;
@@ -392,12 +480,29 @@ fn atx_heading(line: &str) -> Option<String> {
     {
         return None;
     }
-    let value = line[hashes..]
-        .trim()
-        .trim_end_matches('#')
-        .trim()
-        .to_string();
+    let rest = line[hashes..].trim();
+    let closing_start = rest.trim_end_matches('#').len();
+    let value = if closing_start < rest.len()
+        && rest[..closing_start].ends_with(char::is_whitespace)
+    {
+        rest[..closing_start].trim().to_string()
+    } else {
+        rest.to_string()
+    };
     (!value.is_empty()).then_some(value)
+}
+
+fn strip_blockquote_prefixes(mut line: &str) -> &str {
+    loop {
+        let spaces = line.bytes().take_while(|byte| *byte == b' ').count();
+        if spaces > 3 || line.as_bytes().get(spaces) != Some(&b'>') {
+            return line;
+        }
+        line = &line[spaces + 1..];
+        if let Some(rest) = line.strip_prefix(' ') {
+            line = rest;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -421,5 +526,21 @@ mod tests {
         assert_eq!(blocks[0].query, "status.type is IN_PROGRESS");
         assert_eq!(blocks[1].heading.as_deref(), Some("Ready"));
         assert_eq!(blocks[1].query, "status.type is TODO");
+    }
+
+    #[test]
+    fn extracts_tasks_fences_from_nested_blockquotes_and_callouts() {
+        let blocks = extract_note_blocks(concat!(
+            "> [!todo]\n",
+            "> ```tasks\n",
+            "> not done\n",
+            "> ```\n",
+            ">> ~~~tasks\n",
+            ">> done\n",
+            ">> ~~~\n",
+        ));
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].query, "not done");
+        assert_eq!(blocks[1].query, "done");
     }
 }

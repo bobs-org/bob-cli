@@ -245,8 +245,17 @@ fn latest_ledger_pomodoro(
         return Ok(None);
     };
     let mut last = None;
+    let fenced = super::markdown::fenced_lines(&lines, section.clone());
 
-    for line in &lines[section] {
+    for (index, line) in lines
+        .iter()
+        .enumerate()
+        .skip(section.start)
+        .take(section.len())
+    {
+        if fenced.contains(&index) {
+            continue;
+        }
         if let Some(task) = open_ledger_task(line)
             && let Some((raw_range, start, end)) = task_time_range(task)
         {
@@ -266,28 +275,22 @@ fn latest_ledger_pomodoro(
 
 pub(crate) fn pomodoros_section_range(lines: &[&str]) -> Option<Range<usize>> {
     let mut section_start = None;
-    let mut in_frontmatter = false;
+    let frontmatter_end =
+        super::markdown::strictly_closed_frontmatter_end(lines);
     let mut fence = None;
 
     for (index, line) in lines.iter().enumerate() {
-        if index == 0 && line.trim() == "---" {
-            in_frontmatter = true;
-            continue;
-        }
-        if in_frontmatter {
-            if line.trim() == "---" {
-                in_frontmatter = false;
-            }
+        if frontmatter_end.is_some_and(|end| index <= end) {
             continue;
         }
 
         if let Some(open_fence) = fence {
-            if closes_markdown_fence(line, open_fence) {
+            if super::markdown::closes_fence(line, open_fence) {
                 fence = None;
             }
             continue;
         }
-        if let Some(open_fence) = markdown_fence(line) {
+        if let Some(open_fence) = super::markdown::fence_marker(line) {
             fence = Some(open_fence);
             continue;
         }
@@ -302,40 +305,6 @@ pub(crate) fn pomodoros_section_range(lines: &[&str]) -> Option<Range<usize>> {
     }
 
     section_start.map(|start| start..lines.len())
-}
-
-#[derive(Debug, Clone, Copy)]
-struct MarkdownFence {
-    character: u8,
-    length: usize,
-}
-
-fn markdown_fence(line: &str) -> Option<MarkdownFence> {
-    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
-    if indentation > 3 {
-        return None;
-    }
-    let line = &line[indentation..];
-    let character = *line.as_bytes().first()?;
-    if !matches!(character, b'`' | b'~') {
-        return None;
-    }
-    let length = line
-        .as_bytes()
-        .iter()
-        .take_while(|byte| **byte == character)
-        .count();
-    (length >= 3).then_some(MarkdownFence { character, length })
-}
-
-fn closes_markdown_fence(line: &str, open: MarkdownFence) -> bool {
-    let Some(marker) = markdown_fence(line) else {
-        return false;
-    };
-    let trimmed = line.trim_start();
-    marker.character == open.character
-        && marker.length >= open.length
-        && trimmed[marker.length..].trim().is_empty()
 }
 
 pub(crate) fn is_pomodoros_heading(line: &str) -> bool {
@@ -371,13 +340,13 @@ pub(crate) fn open_ledger_task(line: &str) -> Option<&str> {
         let close_index = after_open.find(']')?;
         let checkbox = &after_open[..close_index];
         let task = trim_one_or_more_spaces(&after_open[close_index + 1..])?;
-        if checkbox.trim().eq_ignore_ascii_case("x") {
+        if checkbox.trim().eq_ignore_ascii_case("x") || checkbox.trim() == "-" {
             return None;
         }
         return Some(task.trim_end());
     }
 
-    Some(rest.trim_end())
+    None
 }
 
 pub(crate) fn completed_ledger_task(line: &str) -> Option<&str> {
@@ -600,5 +569,22 @@ mod tests {
         for line in ["- [ ] Open", "- [-] Canceled", "- Plain entry"] {
             assert_eq!(completed_ledger_task(line), None);
         }
+    }
+
+    #[test]
+    fn open_ledger_parser_requires_an_open_checkbox() {
+        assert_eq!(
+            open_ledger_task("- [ ] Open (0900-0930)"),
+            Some("Open (0900-0930)")
+        );
+        for line in ["- [-] Canceled", "- [x] Done", "- Plain note"] {
+            assert_eq!(open_ledger_task(line), None);
+        }
+    }
+
+    #[test]
+    fn unclosed_frontmatter_delimiter_is_content() {
+        let lines = ["---", "## Pomodoros", "- [ ] Open"];
+        assert_eq!(pomodoros_section_range(&lines), Some(2..3));
     }
 }

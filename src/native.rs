@@ -17,6 +17,7 @@ mod dataview;
 mod env;
 mod highlights_ref;
 mod mark_next;
+mod markdown;
 mod nightly;
 mod notify;
 mod ob;

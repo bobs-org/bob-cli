@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{Datelike, Duration, Months, NaiveDate, NaiveDateTime, Weekday};
 use regex::RegexBuilder;
 
@@ -18,6 +20,8 @@ pub(super) fn apply(
     global_filter: &str,
     javascript: &mut JsSandbox,
 ) -> Result<Vec<Task>, DataviewError> {
+    let regexes = compile_filter_regexes(filters)
+        .map_err(|message| DataviewError::TasksQuery { message })?;
     for filter in filters {
         validate_filter(filter, now.date())
             .map_err(|message| DataviewError::TasksQuery { message })?;
@@ -36,6 +40,7 @@ pub(super) fn apply(
                         now.date(),
                         global_filter,
                         javascript,
+                        &regexes,
                     )
                 }
             });
@@ -48,6 +53,46 @@ pub(super) fn apply(
             }
         })
         .collect()
+}
+
+fn compile_filter_regexes(
+    filters: &[FilterExpr],
+) -> Result<HashMap<(String, String), regex::Regex>, String> {
+    fn visit(
+        filter: &FilterExpr,
+        regexes: &mut HashMap<(String, String), regex::Regex>,
+    ) -> Result<(), String> {
+        match filter {
+            FilterExpr::And { left, right }
+            | FilterExpr::Or { left, right }
+            | FilterExpr::Xor { left, right } => {
+                visit(left, regexes)?;
+                visit(right, regexes)
+            }
+            FilterExpr::Not { expression } => visit(expression, regexes),
+            FilterExpr::Text {
+                operator:
+                    TextOperator::RegexMatches | TextOperator::RegexDoesNotMatch,
+                value,
+                regex_flags,
+                ..
+            } => {
+                let key =
+                    (value.clone(), regex_flags.clone().unwrap_or_default());
+                if !regexes.contains_key(&key) {
+                    regexes.insert(key.clone(), build_regex(&key.0, &key.1)?);
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    let mut regexes = HashMap::new();
+    for filter in filters {
+        visit(filter, &mut regexes)?;
+    }
+    Ok(regexes)
 }
 
 fn validate_function_filter(
@@ -83,19 +128,6 @@ fn validate_filter(
             validate_filter(right, today)
         }
         FilterExpr::Not { expression } => validate_filter(expression, today),
-        FilterExpr::Text {
-            operator,
-            value,
-            regex_flags,
-            ..
-        } if matches!(
-            operator,
-            TextOperator::RegexMatches | TextOperator::RegexDoesNotMatch
-        ) =>
-        {
-            build_regex(value, regex_flags.as_deref().unwrap_or_default())
-                .map(|_| ())
-        }
         FilterExpr::Date { field, value, .. } => {
             parse_date_range(value, today).map(|_| ()).ok_or_else(|| {
                 format!(
@@ -114,50 +146,61 @@ fn matches_filter(
     today: NaiveDate,
     global_filter: &str,
     javascript: &mut JsSandbox,
+    regexes: &HashMap<(String, String), regex::Regex>,
 ) -> Result<bool, String> {
     match filter {
-        FilterExpr::And { left, right } => {
-            Ok(
-                matches_filter(left, task, today, global_filter, javascript)?
-                    && matches_filter(
-                        right,
-                        task,
-                        today,
-                        global_filter,
-                        javascript,
-                    )?,
-            )
-        }
-        FilterExpr::Or { left, right } => {
-            Ok(
-                matches_filter(left, task, today, global_filter, javascript)?
-                    || matches_filter(
-                        right,
-                        task,
-                        today,
-                        global_filter,
-                        javascript,
-                    )?,
-            )
-        }
-        FilterExpr::Xor { left, right } => {
-            Ok(
-                matches_filter(left, task, today, global_filter, javascript)?
-                    ^ matches_filter(
-                        right,
-                        task,
-                        today,
-                        global_filter,
-                        javascript,
-                    )?,
-            )
-        }
+        FilterExpr::And { left, right } => Ok(matches_filter(
+            left,
+            task,
+            today,
+            global_filter,
+            javascript,
+            regexes,
+        )? && matches_filter(
+            right,
+            task,
+            today,
+            global_filter,
+            javascript,
+            regexes,
+        )?),
+        FilterExpr::Or { left, right } => Ok(matches_filter(
+            left,
+            task,
+            today,
+            global_filter,
+            javascript,
+            regexes,
+        )? || matches_filter(
+            right,
+            task,
+            today,
+            global_filter,
+            javascript,
+            regexes,
+        )?),
+        FilterExpr::Xor { left, right } => Ok(matches_filter(
+            left,
+            task,
+            today,
+            global_filter,
+            javascript,
+            regexes,
+        )? ^ matches_filter(
+            right,
+            task,
+            today,
+            global_filter,
+            javascript,
+            regexes,
+        )?),
         FilterExpr::Not { expression } => Ok(!matches_filter(
             expression,
             task,
             today,
             global_filter,
             javascript,
+            regexes,
         )?),
         FilterExpr::Done { done } => Ok(task.is_done == *done),
         FilterExpr::StatusType { negated, value } => {
@@ -176,6 +219,7 @@ fn matches_filter(
             regex_flags.as_deref(),
             task,
             global_filter,
+            regexes,
         ),
         FilterExpr::Date {
             field,
@@ -226,6 +270,7 @@ fn matches_text(
     flags: Option<&str>,
     task: &Task,
     global_filter: &str,
+    regexes: &HashMap<(String, String), regex::Regex>,
 ) -> Result<bool, String> {
     let values = text_values(field, task, global_filter);
     let matched = match operator {
@@ -238,7 +283,11 @@ fn matches_text(
             .iter()
             .all(|value| !includes_case_insensitive(value, needle)),
         TextOperator::RegexMatches | TextOperator::RegexDoesNotMatch => {
-            let regex = build_regex(needle, flags.unwrap_or_default())?;
+            let key =
+                (needle.to_string(), flags.unwrap_or_default().to_string());
+            let regex = regexes
+                .get(&key)
+                .expect("regex filters are compiled before matching");
             let any = values.iter().any(|value| regex.is_match(value));
             if operator == TextOperator::RegexDoesNotMatch {
                 !any
@@ -281,7 +330,10 @@ fn remove_global_filter(description: &str, global_filter: &str) -> String {
     if global_filter.is_empty() {
         return description.to_string();
     }
-    description.replace(global_filter, "").trim().to_string()
+    description
+        .replacen(global_filter, "", 1)
+        .trim()
+        .to_string()
 }
 
 fn includes_case_insensitive(haystack: &str, needle: &str) -> bool {
@@ -412,19 +464,46 @@ fn parse_date_range(
         _ => {}
     }
 
-    if let Some(weekday) = parse_weekday(&value) {
-        let days = (weekday.num_days_from_monday() as i64
+    let words = value.split_whitespace().collect::<Vec<_>>();
+    if let [direction, weekday] = words.as_slice()
+        && matches!(*direction, "next" | "last")
+        && let Some(weekday) = parse_weekday(weekday)
+    {
+        let forward = (weekday.num_days_from_monday() as i64
             - today.weekday().num_days_from_monday() as i64)
             .rem_euclid(7);
+        let days = if *direction == "next" {
+            if forward == 0 {
+                7
+            } else {
+                forward
+            }
+        } else if forward == 0 {
+            -7
+        } else {
+            forward - 7
+        };
         let date = today.checked_add_signed(Duration::days(days))?;
         return Some((date, date));
+    }
+
+    if let Some(weekday) = parse_weekday(&value) {
+        let forward = (weekday.num_days_from_monday() as i64
+            - today.weekday().num_days_from_monday() as i64)
+            .rem_euclid(7);
+        let closest = if forward > 3 { forward - 7 } else { forward };
+        let date = today.checked_add_signed(Duration::days(closest))?;
+        return Some((date, date));
+    }
+
+    if let Some(range) = parse_numbered_range(&value) {
+        return Some(range);
     }
 
     if let Some(range) = parse_named_range(&value, today) {
         return Some(range);
     }
 
-    let words = value.split_whitespace().collect::<Vec<_>>();
     if let [first, second] = words.as_slice()
         && let (Ok(first), Ok(second)) = (
             NaiveDate::parse_from_str(first, "%Y-%m-%d"),
@@ -443,6 +522,46 @@ fn parse_date_range(
         return Some((date, date));
     }
     parse_offset(&words, today).map(|date| (date, date))
+}
+
+fn parse_numbered_range(value: &str) -> Option<(NaiveDate, NaiveDate)> {
+    if value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        let year = value.parse().ok()?;
+        return Some((
+            NaiveDate::from_ymd_opt(year, 1, 1)?,
+            NaiveDate::from_ymd_opt(year, 12, 31)?,
+        ));
+    }
+    if let Some((year, month)) = value.split_once('-')
+        && year.len() == 4
+        && month.len() == 2
+        && year.bytes().all(|byte| byte.is_ascii_digit())
+        && month.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        let start = NaiveDate::from_ymd_opt(
+            year.parse().ok()?,
+            month.parse().ok()?,
+            1,
+        )?;
+        return Some((start, end_of_month(start)?));
+    }
+    if value.len() == 7 && &value[4..6] == "-q" {
+        let year = value[..4].parse().ok()?;
+        let quarter = value[6..].parse::<u32>().ok()?;
+        if !(1..=4).contains(&quarter) {
+            return None;
+        }
+        let start = NaiveDate::from_ymd_opt(year, (quarter - 1) * 3 + 1, 1)?;
+        let end = start.checked_add_months(Months::new(3))?.pred_opt()?;
+        return Some((start, end));
+    }
+    if value.len() == 8 && &value[4..6] == "-w" {
+        let year = value[..4].parse().ok()?;
+        let week = value[6..].parse().ok()?;
+        let start = NaiveDate::from_isoywd_opt(year, week, Weekday::Mon)?;
+        return Some((start, start.checked_add_signed(Duration::days(6))?));
+    }
+    None
 }
 
 fn parse_named_range(
@@ -607,12 +726,45 @@ mod tests {
             Some((date("2026-07-13"), date("2026-07-13")))
         );
         assert_eq!(
+            parse_date_range("tuesday", date("2026-07-08")),
+            Some((date("2026-07-07"), date("2026-07-07")))
+        );
+        assert_eq!(
+            parse_date_range("next monday", today),
+            Some((date("2026-07-13"), date("2026-07-13")))
+        );
+        assert_eq!(
+            parse_date_range("last monday", today),
+            Some((date("2026-07-06"), date("2026-07-06")))
+        );
+        assert_eq!(
             parse_date_range("2 weeks", today),
             Some((date("2026-07-24"), date("2026-07-24")))
         );
         assert_eq!(
             parse_date_range("3 days ago", today),
             Some((date("2026-07-07"), date("2026-07-07")))
+        );
+    }
+
+    #[test]
+    fn numbered_ranges_cover_year_month_quarter_and_iso_week() {
+        let today = date("2026-07-10");
+        assert_eq!(
+            parse_date_range("2026", today),
+            Some((date("2026-01-01"), date("2026-12-31")))
+        );
+        assert_eq!(
+            parse_date_range("2026-02", today),
+            Some((date("2026-02-01"), date("2026-02-28")))
+        );
+        assert_eq!(
+            parse_date_range("2026-Q3", today),
+            Some((date("2026-07-01"), date("2026-09-30")))
+        );
+        assert_eq!(
+            parse_date_range("2026-W01", today),
+            Some((date("2025-12-29"), date("2026-01-04")))
         );
     }
 
@@ -631,5 +783,13 @@ mod tests {
         // d and g only affect match metadata/state in JavaScript, and u/v
         // select Unicode behavior. None changes a Boolean Tasks match.
         assert!(build_regex("café", "dgv").unwrap().is_match("un café"));
+    }
+
+    #[test]
+    fn global_filter_removal_only_removes_the_first_occurrence() {
+        assert_eq!(
+            remove_global_filter("#task keep #task", "#task"),
+            "keep #task"
+        );
     }
 }

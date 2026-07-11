@@ -9,17 +9,23 @@ pub(super) fn markdown(
     result: &TaskResult,
     query: &QueryAst,
     format: TaskFormat,
+    global_filter: &str,
 ) -> String {
     // Static CLI output has no toolbar or edit/postpone controls to render.
     // Their parsed toggles remain visible in the JSON query metadata.
     let mut lines = Vec::new();
-    if let Some(explanation) = &result.explanation {
+    if let Some(explanation) = &result.explanation
+        && !explanation.is_empty()
+    {
         lines.extend(explanation.lines().map(str::to_string));
         lines.push(String::new());
     }
 
     for group in &result.groups {
         for heading in &group.headings {
+            if heading.name.is_empty() {
+                continue;
+            }
             lines.push(format!(
                 "{} {}",
                 "#".repeat((4 + heading.level).min(6)),
@@ -33,6 +39,7 @@ pub(super) fn markdown(
             &result.tree_tasks,
             &query.layout,
             format,
+            global_filter,
         );
         if !group.tasks.is_empty() {
             lines.push(String::new());
@@ -54,12 +61,13 @@ fn render_group_tasks(
     all_tasks: &[Task],
     layout: &LayoutOptions,
     format: TaskFormat,
+    global_filter: &str,
 ) {
     if !layout.show_tree {
         lines.extend(
-            tasks
-                .iter()
-                .map(|task| render_task(task, 0, layout, format)),
+            tasks.iter().map(|task| {
+                render_task(task, 0, layout, format, global_filter)
+            }),
         );
         return;
     }
@@ -69,14 +77,32 @@ fn render_group_tasks(
         .map(|task| (task.path.as_str(), task.line_number))
         .collect::<std::collections::HashSet<_>>();
     for task in tasks {
-        if task
-            .parent_task_line_number
-            .is_some_and(|parent| keys.contains(&(task.path.as_str(), parent)))
-        {
+        if has_matched_ancestor(task, all_tasks, &keys) {
             continue;
         }
-        render_tree(lines, task, all_tasks, 0, layout, format);
+        render_tree(lines, task, all_tasks, 0, layout, format, global_filter);
     }
+}
+
+fn has_matched_ancestor(
+    task: &Task,
+    all_tasks: &[Task],
+    matched: &std::collections::HashSet<(&str, usize)>,
+) -> bool {
+    let mut parent = task.parent_task_line_number;
+    while let Some(line_number) = parent {
+        if matched.contains(&(task.path.as_str(), line_number)) {
+            return true;
+        }
+        parent = all_tasks
+            .iter()
+            .find(|candidate| {
+                candidate.path == task.path
+                    && candidate.line_number == line_number
+            })
+            .and_then(|candidate| candidate.parent_task_line_number);
+    }
+    false
 }
 
 fn render_tree(
@@ -86,13 +112,22 @@ fn render_tree(
     depth: usize,
     layout: &LayoutOptions,
     format: TaskFormat,
+    global_filter: &str,
 ) {
-    lines.push(render_task(task, depth, layout, format));
+    lines.push(render_task(task, depth, layout, format, global_filter));
     for child_line in &task.child_task_line_numbers {
         if let Some(child) = tasks.iter().find(|candidate| {
             candidate.path == task.path && candidate.line_number == *child_line
         }) {
-            render_tree(lines, child, tasks, depth + 1, layout, format);
+            render_tree(
+                lines,
+                child,
+                tasks,
+                depth + 1,
+                layout,
+                format,
+                global_filter,
+            );
         }
     }
 }
@@ -102,14 +137,39 @@ fn render_task(
     depth: usize,
     layout: &LayoutOptions,
     format: TaskFormat,
+    global_filter: &str,
 ) -> String {
     let mut description = task.display_description.clone();
     if !layout.show_tags {
-        description = description
-            .split_whitespace()
-            .filter(|word| !word.starts_with('#'))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let tags = task.tags.iter().map(String::as_str).chain(
+            (global_filter.starts_with('#') && !global_filter.is_empty())
+                .then_some(global_filter),
+        );
+        let mut ranges = tags
+            .flat_map(|tag| description.match_indices(tag))
+            .filter_map(|(start, tag)| {
+                let end = start + tag.len();
+                let before = description[..start].chars().next_back();
+                let after = description[end..].chars().next();
+                (before.is_none_or(char::is_whitespace)
+                    && after.is_none_or(char::is_whitespace))
+                .then(|| {
+                    if start == 0 {
+                        start..end + after.map_or(0, char::len_utf8)
+                    } else {
+                        start
+                            - before
+                                .expect("non-start has a character")
+                                .len_utf8()..end
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        ranges.sort_by_key(|range| range.start);
+        ranges.dedup();
+        for range in ranges.into_iter().rev() {
+            description.replace_range(range, "");
+        }
     }
     let mut components = vec![description];
     push_field(

@@ -501,6 +501,11 @@ fn capture_with_pomodoro_link(
 
     let original_day = read_target(&day_file)?;
     let block_link = format!("[[{route}#^{block_id}]]");
+    if original_day.contains(&block_link) {
+        return Err(CaptureError::io(format!(
+            "Pomodoro ledger already contains {block_link}"
+        )));
+    }
     let (updated_day, pomodoro_link_placement) =
         insert_pomodoro_block_link(&original_day, &block_link)?;
 
@@ -546,7 +551,11 @@ fn insert_pomodoro_block_link(
 
     let mut open = Vec::new();
     let mut timed = Vec::new();
+    let fenced = super::markdown::fenced_lines(&line_text, section.clone());
     for index in section.clone() {
+        if fenced.contains(&index) {
+            continue;
+        }
         let line = lines[index].text;
         if is_indented_line(line) {
             continue;
@@ -905,7 +914,6 @@ fn parse_capture_text(
     }
 
     reject_legacy_bullet_markers(&tokens, true)?;
-    validate_special_terminal_markers(&tokens)?;
 
     // Leading route wins: when the first token is a route token followed by
     // body text, route by it and do not inspect later route-looking tokens.
@@ -920,6 +928,8 @@ fn parse_capture_text(
             return Ok(token.into_parsed(body, scheduled_offset));
         }
     }
+
+    validate_special_terminal_markers(&tokens)?;
 
     // Otherwise a trailing route token routes the body that precedes it.
     if let Some((&last, rest)) = tokens.split_last()
@@ -1034,7 +1044,12 @@ fn is_pomodoro_marker_candidate(token: &str) -> bool {
 
     let colon = marker.find(':');
     let hash = marker.find('#');
-    colon.is_some_and(|colon| hash.is_none_or(|hash| colon < hash))
+    colon.is_some_and(|colon| {
+        hash.is_none_or(|hash| colon < hash)
+            && marker[..colon]
+                .bytes()
+                .any(|byte| byte.is_ascii_alphabetic())
+    })
 }
 
 fn validate_special_terminal_markers(
@@ -1913,6 +1928,23 @@ mod tests {
     }
 
     #[test]
+    fn time_tokens_stay_literal_and_leading_route_wins() {
+        for raw in ["call dentist @5:30pm", "standup @10:00"] {
+            let parsed = parse_capture_text(raw, None).expect("time literal");
+            assert_eq!(parsed.body, raw);
+            assert_eq!(parsed.route, None);
+            assert_eq!(parsed.kind, CaptureKind::Task);
+        }
+        let parsed =
+            parse_capture_text("task @dev:foo", None).expect("valid marker");
+        assert_eq!(parsed.route.as_deref(), Some("dev"));
+        let parsed = parse_capture_text("@groceries ping @x:", None)
+            .expect("leading route wins");
+        assert_eq!(parsed.route.as_deref(), Some("groceries"));
+        assert_eq!(parsed.body, "ping @x:");
+    }
+
+    #[test]
     fn parses_scheduled_offsets_with_routes() {
         let cases = [
             ("Buy Milk s:1", "Buy Milk", None, Some(1)),
@@ -1955,14 +1987,14 @@ mod tests {
     #[test]
     fn parses_pomodoro_routes_in_terminal_positions_with_schedules() {
         let cases = [
-            ("@Dev:Foo_Bar Do thing", "Do thing", None),
-            ("Do thing @Dev:Foo_Bar", "Do thing", None),
-            ("Do thing s:2 @Dev:Foo_Bar", "Do thing", Some(2)),
-            ("Do thing @Dev:Foo_Bar s:2", "Do thing", Some(2)),
-            ("@Dev:Foo_Bar Do thing s:2", "Do thing", Some(2)),
-            ("@!Dev:Foo_Bar Do thing", "Do thing", None),
-            ("Do thing @!Dev:Foo_Bar", "Do thing", None),
-            ("Do thing @!Dev:Foo_Bar s:2", "Do thing", Some(2)),
+            ("@Dev:Foo-Bar Do thing", "Do thing", None),
+            ("Do thing @Dev:Foo-Bar", "Do thing", None),
+            ("Do thing s:2 @Dev:Foo-Bar", "Do thing", Some(2)),
+            ("Do thing @Dev:Foo-Bar s:2", "Do thing", Some(2)),
+            ("@Dev:Foo-Bar Do thing s:2", "Do thing", Some(2)),
+            ("@!Dev:Foo-Bar Do thing", "Do thing", None),
+            ("Do thing @!Dev:Foo-Bar", "Do thing", None),
+            ("Do thing @!Dev:Foo-Bar s:2", "Do thing", Some(2)),
         ];
 
         for (raw, body, scheduled_offset) in cases {
@@ -1974,7 +2006,7 @@ mod tests {
             assert_eq!(
                 parsed.kind,
                 CaptureKind::Pomodoro {
-                    block_id: "Foo_Bar".to_string(),
+                    block_id: "Foo-Bar".to_string(),
                 },
                 "{raw}"
             );
@@ -1984,8 +2016,6 @@ mod tests {
     #[test]
     fn malformed_terminal_pomodoro_routes_are_usage_errors() {
         for raw in [
-            "Do thing @:",
-            "Do thing @:id",
             "Do thing @dev:",
             "Do thing @dev:bad.id",
             "Do thing @bad/route:id",

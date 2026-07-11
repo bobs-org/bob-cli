@@ -726,11 +726,12 @@ struct SyncFile {
     contents: String,
     project: Project,
     can_plan: bool,
+    can_be_subproject: bool,
 }
 
 impl SyncFile {
     fn clean_project(&self) -> Option<&Project> {
-        self.can_plan.then_some(&self.project)
+        self.can_be_subproject.then_some(&self.project)
     }
 }
 
@@ -1026,12 +1027,23 @@ fn collect_sync_markdown_file(
     };
     report.project_count += 1;
     let can_plan = report.issues.len() == issue_count;
+    let can_be_subproject =
+        can_plan || issues_allow_subproject(&report.issues[issue_count..]);
     files.push(SyncFile {
         path: path.to_path_buf(),
         contents,
         project,
         can_plan,
+        can_be_subproject,
     });
+}
+
+fn issues_allow_subproject(issues: &[ScanIssue]) -> bool {
+    !issues.is_empty()
+        && issues.iter().all(|issue| {
+            issue.message.starts_with("scheduled ")
+                || issue.message.starts_with("multiple scheduled ")
+        })
 }
 
 fn apply_sync_plans(
@@ -1179,7 +1191,9 @@ fn plan_project_sync_at(
         effective_status = target.as_project_status();
     }
 
-    if let Some(scheduled) = &project.scheduled {
+    if !effective_status.is_terminal()
+        && let Some(scheduled) = &project.scheduled
+    {
         let hide = scheduled.date > today;
         let policy =
             TaskVisibilityPolicy::for_schedule(hide, project.task_lines.len());
@@ -1459,6 +1473,17 @@ fn apply_project_changes(
             .then_with(|| right.end.cmp(&left.end))
     });
 
+    for pair in edits.windows(2) {
+        let later = &pair[0];
+        let earlier = &pair[1];
+        if later.start < earlier.end {
+            return Err(format!(
+                "overlapping project edits at byte ranges {}..{} and {}..{}",
+                earlier.start, earlier.end, later.start, later.end
+            ));
+        }
+    }
+
     let mut output = contents.to_string();
     for edit in edits {
         output.replace_range(edit.start..edit.end, &edit.replacement);
@@ -1507,35 +1532,78 @@ fn task_visibility_edits(
                     replacement: format!(" {HIDE_TAG}"),
                 });
             } else {
-                for (tag_start, tag_end) in tag_spans.into_iter().skip(1) {
-                    let tag_start = task_text_offset + tag_start;
-                    let tag_end = task_text_offset + tag_end;
-                    let (start, end) = inline_field_removal_range(
-                        line_text, tag_start, tag_end,
+                if tag_spans.len() > 1 {
+                    let mut replacement = remove_tag_spans_from_line(
+                        line_text,
+                        task_text_offset,
+                        &tag_spans[1..],
                     );
+                    if contents[line.start..line.end].ends_with('\r') {
+                        replacement.push('\r');
+                    }
                     edits.push(TextEdit {
-                        start: line.start + start,
-                        end: line.start + end,
-                        replacement: String::new(),
+                        start: line.start,
+                        end: line.end,
+                        replacement,
                     });
                 }
             }
         } else {
-            for (tag_start, tag_end) in tag_spans {
-                let tag_start = task_text_offset + tag_start;
-                let tag_end = task_text_offset + tag_end;
-                let (start, end) =
-                    inline_field_removal_range(line_text, tag_start, tag_end);
+            if !tag_spans.is_empty() {
+                let mut replacement = remove_tag_spans_from_line(
+                    line_text,
+                    task_text_offset,
+                    &tag_spans,
+                );
+                if contents[line.start..line.end].ends_with('\r') {
+                    replacement.push('\r');
+                }
                 edits.push(TextEdit {
-                    start: line.start + start,
-                    end: line.start + end,
-                    replacement: String::new(),
+                    start: line.start,
+                    end: line.end,
+                    replacement,
                 });
             }
         }
     }
 
     Ok(edits)
+}
+
+fn remove_tag_spans_from_line(
+    line: &str,
+    task_text_offset: usize,
+    spans: &[(usize, usize)],
+) -> String {
+    let mut removal_ranges = spans
+        .iter()
+        .map(|(start, end)| {
+            inline_field_removal_range(
+                line,
+                task_text_offset + start,
+                task_text_offset + end,
+            )
+        })
+        .collect::<Vec<_>>();
+    removal_ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for range in removal_ranges {
+        if let Some(last) = merged.last_mut()
+            && range.0 <= last.1
+        {
+            last.1 = last.1.max(range.1);
+        } else {
+            merged.push(range);
+        }
+    }
+    let mut output = String::with_capacity(line.len());
+    let mut cursor = 0;
+    for (start, end) in merged {
+        output.push_str(&line[cursor..start]);
+        cursor = end;
+    }
+    output.push_str(&line[cursor..]);
+    output
 }
 
 fn task_hide_tag_insertion_offset(line: &str) -> usize {
@@ -1888,8 +1956,7 @@ fn frontmatter_layout(contents: &str) -> Option<FrontmatterLayout> {
 }
 
 fn frontmatter_line_has_key(line: &str, key: &str) -> bool {
-    line.trim_start()
-        .strip_prefix(key)
+    line.strip_prefix(key)
         .is_some_and(|rest| rest.starts_with(':'))
 }
 
@@ -2024,8 +2091,7 @@ fn parse_project_schedule(
         .iter()
         .enumerate()
         .filter_map(|(index, line)| {
-            let trimmed = line.trim_start();
-            let rest = trimmed.strip_prefix("scheduled")?;
+            let rest = line.strip_prefix("scheduled")?;
             let value = rest.strip_prefix(':')?;
             Some((index + 2, value.trim()))
         })
@@ -2117,8 +2183,7 @@ pub(crate) fn frontmatter_value<'a>(
     key: &str,
 ) -> Option<&'a str> {
     for line in &frontmatter.lines {
-        let trimmed = line.trim_start();
-        let Some(rest) = trimmed.strip_prefix(key) else {
+        let Some(rest) = line.strip_prefix(key) else {
             continue;
         };
         let Some(value) = rest.strip_prefix(':') else {
@@ -4073,6 +4138,53 @@ status: wip
             assert_eq!(issues[0].line_number, Some(3));
             assert!(issues[0].message.contains(expected), "{issues:?}");
         }
+    }
+
+    #[test]
+    fn frontmatter_keys_must_start_at_column_zero() {
+        let mut issues = Vec::new();
+        let project = parse_project(
+            Path::new("Indented.md"),
+            "---\ntype: [[project]]\nnotes: |\n  scheduled: nope\n---\n- [ ] #task Ship ^prj\n",
+            &mut issues,
+        )
+        .expect("project");
+        assert!(issues.is_empty());
+        assert!(project.scheduled.is_none());
+        let frontmatter =
+            parse_frontmatter("---\nnotes: |\n  status: done\n---\n").unwrap();
+        assert_eq!(frontmatter_value(&frontmatter, "status"), None);
+    }
+
+    #[test]
+    fn terminal_projects_do_not_reconcile_schedule_visibility() {
+        let project = parse_clean_project(
+            "Done.md",
+            "---\ntype: [[project]]\nstatus: done\nscheduled: 2026-07-10\n---\n- [x] #task Finished #hide ^prj\n",
+        );
+        let plan = plan_project_sync_at(
+            &project,
+            &[],
+            NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+        );
+        assert!(!plan.changes.iter().any(|change| matches!(
+            change,
+            ProjectChange::ReconcileTaskVisibility { .. }
+        )));
+    }
+
+    #[test]
+    fn schedule_only_issues_still_allow_subproject_aggregation() {
+        assert!(issues_allow_subproject(&[ScanIssue::line(
+            "Child.md",
+            4,
+            "scheduled must be a calendar date in YYYY-MM-DD format",
+        )]));
+        assert!(!issues_allow_subproject(&[ScanIssue::line(
+            "Child.md",
+            5,
+            "multiple ^prj tasks found",
+        )]));
     }
 
     #[test]
