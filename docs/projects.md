@@ -171,6 +171,22 @@ missing, and invalid dates do not receive a chip. The compact `🗓️` in the
 generated parent ledger represents the same future-only state without the
 picker's labeled date chip.
 
+### Scheduling from the `^prj` task
+
+With the cursor on a valid `#task ... ^prj` lifecycle task, Bob Navigation
+Hotkeys' `Ctrl+Shift+P` **Set bullet property** picker treats `scheduled` as a
+project-note property. Choosing a date writes canonical `scheduled: YYYY-MM-DD`
+YAML, removes any stale inline `[scheduled:: ...]` field from `^prj`, and
+immediately applies the same future-versus-due `#hide` visibility policy as
+`bob projects sync`. Other picker properties, including `dependsOn`, remain
+inline Dataview fields on the task.
+
+Pressing `Ctrl+D` on the project-backed `scheduled` item removes the YAML
+property and any stale inline schedule field, but deliberately leaves existing
+`#hide` tags unchanged. Once a project is unscheduled, the broader `^prj`
+surfacing decision depends on open tasks and sub-project relationships and
+remains owned by `bob projects sync`.
+
 ## Warnings
 
 Warnings do not make the command fail and are not auto-fixed:
