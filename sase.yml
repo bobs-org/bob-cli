@@ -1,5 +1,4 @@
-memory:
-  enabled: true
+is_sase_managed: true
 linked_repos:
   - name: bob-plugins
     path: ~/projects/github/bobs-org/bob-plugins
