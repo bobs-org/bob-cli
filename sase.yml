@@ -1,5 +1,5 @@
-sdd:
-  storage: separate_repo
+memory:
+  enabled: true
 linked_repos:
   - name: bob-plugins
     path: ~/projects/github/bobs-org/bob-plugins
