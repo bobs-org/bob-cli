@@ -92,8 +92,10 @@ Task statuses follow the Tasks plugin convention:
   surfacing rules. When the date is later than the machine's local current
   date, every Markdown task line in the project gets exactly one whole-token
   `#hide`. On the scheduled date and afterward, all whole-token `#hide` tags
-  are removed from every task in that project. `BOB_NOW` overrides the clock
-  for deterministic previews and tests.
+  are removed from ordinary tasks. The `^prj` task keeps its existing `#hide`
+  state when the note contains any other Markdown task; if `^prj` is the only
+  task, its `#hide` tags are removed too. `BOB_NOW` overrides the clock for
+  deterministic previews and tests.
 - Schedule visibility applies to open, in-progress, completed, canceled,
   nested, ordered-list, and lifecycle tasks. It preserves list markers,
   indentation, inline fields, trailing block IDs, line endings, and unrelated

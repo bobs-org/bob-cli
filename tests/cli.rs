@@ -4888,13 +4888,14 @@ fn projects_sync_reconciles_scheduled_task_visibility_at_date_boundary() {
         .expect("advance to scheduled day");
     assert_success(&due);
     assert!(
-        stdout(&due).contains("showed 4 tasks  scheduled 2026-07-11 is due"),
+        stdout(&due).contains("showed 3 tasks  scheduled 2026-07-11 is due")
+            && stdout(&due).contains("3 task visibility updated"),
         "unexpected due output:\n{}",
         format_output(&due)
     );
     assert_eq!(
         fs::read_to_string(&project).unwrap(),
-        "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] ^prj\r\n  - [/] #task Nested work ^nested\r\n1. [x] Completed\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
+        "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] #hide ^prj\r\n  - [/] #task Nested work ^nested\r\n1. [x] Completed\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
     );
 
     let second = bob_command()
@@ -4908,6 +4909,35 @@ fn projects_sync_reconciles_scheduled_task_visibility_at_date_boundary() {
         stdout(&second).contains("0 task visibility updated"),
         "second sync should be a no-op:\n{}",
         format_output(&second)
+    );
+}
+
+#[test]
+fn projects_sync_shows_sole_prj_task_when_schedule_is_due() {
+    let temp = TempDir::new("bob-cli-projects-scheduled-sole-prj");
+    let vault = temp.path().join("vault");
+    let project = vault.join("Sole.md");
+    write_file(
+        &project,
+        "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n",
+    );
+
+    let output = bob_command()
+        .args(["projects", "sync", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-11")
+        .output()
+        .expect("sync due project whose only task is ^prj");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("showed 1 task  scheduled 2026-07-11 is due")
+            && stdout(&output).contains("1 task visibility updated"),
+        "unexpected due output:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(project).unwrap(),
+        "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n"
     );
 }
 

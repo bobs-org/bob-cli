@@ -102,8 +102,9 @@ it surfaces in dash.md's Tasks section; projects with non-hidden open tasks \
 or open sub-projects get #hide added back. Sync also maintains a single \
 Sub-projects line nested directly under open ^prj tasks. When valid scheduled \
 frontmatter is present, it overrides the normal surfacing rule: future dates \
-add #hide to every task, while today and past dates remove #hide from every \
-task. Invalid dates are reported and that file is left untouched.",
+add #hide to every task. Today and past dates remove #hide from ordinary tasks, \
+but preserve it on ^prj unless ^prj is the note's only task. Invalid dates are \
+reported and that file is left untouched.",
         )
         .after_help(
             "Examples:\n  bob projects sync --dry-run\n  bob projects sync -d -b ~/bob\n  bob projects sync --bob-dir /tmp/bob-vault",
@@ -246,6 +247,26 @@ struct ProjectSchedule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProjectTaskLine {
     hide_tag_count: usize,
+    is_prj: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TaskVisibilityPolicy {
+    hide: bool,
+    include_prj: bool,
+}
+
+impl TaskVisibilityPolicy {
+    fn for_schedule(hide: bool, task_count: usize) -> Self {
+        Self {
+            hide,
+            include_prj: hide || task_count == 1,
+        }
+    }
+
+    fn includes(self, task: ProjectTaskLine) -> bool {
+        self.include_prj || !task.is_prj
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -766,7 +787,7 @@ enum ProjectChange {
     },
     ReconcileTaskVisibility {
         scheduled: String,
-        hide: bool,
+        policy: TaskVisibilityPolicy,
         task_count: usize,
     },
     RemoveScheduled {
@@ -831,12 +852,12 @@ impl ProjectChange {
             },
             Self::ReconcileTaskVisibility {
                 scheduled,
-                hide,
+                policy,
                 task_count,
             } => SyncEvent::TaskVisibility {
                 project_name: project_name.to_string(),
                 scheduled: scheduled.clone(),
-                hide: *hide,
+                hide: policy.hide,
                 task_count: *task_count,
             },
             Self::RemoveScheduled { scheduled } => SyncEvent::PrjEdit {
@@ -1160,21 +1181,24 @@ fn plan_project_sync_at(
 
     if let Some(scheduled) = &project.scheduled {
         let hide = scheduled.date > today;
+        let policy =
+            TaskVisibilityPolicy::for_schedule(hide, project.task_lines.len());
         let task_count = project
             .task_lines
             .iter()
             .filter(|task| {
-                if hide {
-                    task.hide_tag_count != 1
-                } else {
-                    task.hide_tag_count > 0
-                }
+                policy.includes(**task)
+                    && if hide {
+                        task.hide_tag_count != 1
+                    } else {
+                        task.hide_tag_count > 0
+                    }
             })
             .count();
         if task_count > 0 {
             plan.changes.push(ProjectChange::ReconcileTaskVisibility {
                 scheduled: scheduled.raw.clone(),
-                hide,
+                policy,
                 task_count,
             });
         }
@@ -1401,8 +1425,8 @@ fn apply_project_changes(
             ProjectChange::AddHideTag { .. } => {
                 edits.push(add_hide_tag_edit(contents)?);
             }
-            ProjectChange::ReconcileTaskVisibility { hide, .. } => {
-                edits.extend(task_visibility_edits(contents, *hide)?);
+            ProjectChange::ReconcileTaskVisibility { policy, .. } => {
+                edits.extend(task_visibility_edits(contents, *policy)?);
             }
             ProjectChange::RemoveScheduled { .. } => {
                 edits
@@ -1444,7 +1468,7 @@ fn apply_project_changes(
 
 fn task_visibility_edits(
     contents: &str,
-    hide: bool,
+    policy: TaskVisibilityPolicy,
 ) -> Result<Vec<TextEdit>, String> {
     let frontmatter = parse_frontmatter(contents)
         .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
@@ -1463,11 +1487,18 @@ fn task_visibility_edits(
         let Some(task) = parse_task_line(line_text) else {
             continue;
         };
+        let task_line = ProjectTaskLine {
+            hide_tag_count: tag_spans(task.text, HIDE_TAG).len(),
+            is_prj: is_valid_prj_task_line(line_text, task),
+        };
+        if !policy.includes(task_line) {
+            continue;
+        }
         let tag_spans = tag_spans(task.text, HIDE_TAG);
         let task_text_offset =
             task.text.as_ptr() as usize - line_text.as_ptr() as usize;
 
-        if hide {
+        if policy.hide {
             if tag_spans.is_empty() {
                 let insertion = task_hide_tag_insertion_offset(line_text);
                 edits.push(TextEdit {
@@ -1948,6 +1979,7 @@ fn parse_project(
         };
         task_lines.push(ProjectTaskLine {
             hide_tag_count: tag_spans(task.text, HIDE_TAG).len(),
+            is_prj: is_valid_prj_task_line(line, task),
         });
         if !contains_task_tag(task.text) || !task.status.is_open() {
             continue;
@@ -2270,6 +2302,10 @@ fn classify_prj_task(
         placeholder,
         sub_block,
     }
+}
+
+fn is_valid_prj_task_line(line: &str, task: ParsedTaskLine<'_>) -> bool {
+    has_trailing_prj_anchor(line) && contains_task_tag(task.text)
 }
 
 fn malformed_prj_issue(relative_path: &Path, line_number: usize) -> ScanIssue {
@@ -4050,7 +4086,7 @@ status: wip
             plan_project_sync_at(&future, &[], today).changes,
             vec![ProjectChange::ReconcileTaskVisibility {
                 scheduled: "2026-07-11".to_string(),
-                hide: true,
+                policy: TaskVisibilityPolicy::for_schedule(true, 2),
                 task_count: 2,
             }]
         );
@@ -4067,11 +4103,29 @@ status: wip
                 plan_project_sync_at(&due, &[], scheduled_today).changes,
                 vec![ProjectChange::ReconcileTaskVisibility {
                     scheduled: "2026-07-11".to_string(),
-                    hide: false,
-                    task_count: 2,
+                    policy: TaskVisibilityPolicy::for_schedule(false, 2),
+                    task_count: 1,
                 }]
             );
         }
+
+        let sole_prj = parse_clean_project(
+            "Sole.md",
+            "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n",
+        );
+        assert_eq!(
+            plan_project_sync_at(
+                &sole_prj,
+                &[],
+                NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+            )
+            .changes,
+            vec![ProjectChange::ReconcileTaskVisibility {
+                scheduled: "2026-07-11".to_string(),
+                policy: TaskVisibilityPolicy::for_schedule(false, 1),
+                task_count: 1,
+            }]
+        );
     }
 
     #[test]
@@ -4089,7 +4143,7 @@ status: wip
         assert!(plan.changes.iter().any(|change| matches!(
             change,
             ProjectChange::ReconcileTaskVisibility {
-                hide: true,
+                policy: TaskVisibilityPolicy { hide: true, .. },
                 task_count: 1,
                 ..
             }
@@ -4111,7 +4165,7 @@ status: wip
             contents,
             &[ProjectChange::ReconcileTaskVisibility {
                 scheduled: "2026-07-11".to_string(),
-                hide: true,
+                policy: TaskVisibilityPolicy::for_schedule(true, 5),
                 task_count: 5,
             }],
         );
@@ -4124,14 +4178,31 @@ status: wip
             &hidden,
             &[ProjectChange::ReconcileTaskVisibility {
                 scheduled: "2026-07-11".to_string(),
-                hide: false,
-                task_count: 5,
+                policy: TaskVisibilityPolicy::for_schedule(false, 5),
+                task_count: 4,
             }],
         );
         assert_eq!(
             shown,
             contents
+                .replace(
+                    "- [ ] #task Ship [p:: 1] ^prj\r\n",
+                    "- [ ] #task Ship [p:: 1] #hide ^prj\r\n",
+                )
                 .replace("- [/] Active #hide #hide\r\n", "- [/] Active\r\n")
+        );
+
+        let sole_prj = "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n";
+        assert_eq!(
+            apply_changes(
+                sole_prj,
+                &[ProjectChange::ReconcileTaskVisibility {
+                    scheduled: "2026-07-11".to_string(),
+                    policy: TaskVisibilityPolicy::for_schedule(false, 1),
+                    task_count: 1,
+                }],
+            ),
+            "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n"
         );
     }
 }
