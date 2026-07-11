@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::{OsStr, OsString},
     fs, io, iter,
     ops::Range,
@@ -57,12 +57,13 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Sync Next tasks and rehome completed Pomodoro links")
+        .about("Sync Next tasks, including transcluded dependency chains")
         .long_about(
             "Make today's Pomodoro ledger the source of truth for Next tasks.\n\n\
 Tasks block-linked from child bullets of open Pomodoro entries are promoted \
-from [ ] to [*]. Existing [*] tasks not linked from an open entry are reset \
-to [ ]. Completed linked tasks are embedded and their containing bullets are \
+from [ ] to [*]. Their dependency tasks are discovered recursively from sole \
+transcluded block-link child bullets and promoted too. Existing [*] tasks not \
+reachable from an open entry are reset to [ ]. Completed linked tasks are embedded and their containing bullets are \
 moved beneath the current timed Pomodoro, or the last completed Pomodoro when \
 there is no current one. In-progress [/] tasks and all other statuses are left \
 unchanged.\n\n\
@@ -154,6 +155,7 @@ struct ChangeItem {
     line_number: usize,
     block_id: String,
     description: String,
+    dependency: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -185,6 +187,7 @@ struct SyncResult {
     daily_file: String,
     open_pomodoros: usize,
     references: usize,
+    dependency_references: usize,
     scanned_files: usize,
     marked_next: Vec<ChangeItem>,
     cleared: Vec<ChangeItem>,
@@ -365,6 +368,8 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
     let task_blocks = task_blocks(&files);
     let daily_relative = daily_path.strip_prefix(&request.bob_dir).ok();
     let mut unresolved = Vec::new();
+    let dependency_edges =
+        dependency_edges(&files, &note_index, &task_blocks, &mut unresolved);
     let mut resolved_references = BTreeMap::new();
     for reference in &pomodoro_model.raw_references {
         let resolved =
@@ -435,13 +440,18 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
         .expect("the structural rewrite preserves the Pomodoros section");
     let final_references =
         scan_pomodoros(&updated_lines, updated_section).raw_references;
-    let desired = final_references
+    let direct_desired = final_references
         .iter()
         .filter_map(|reference| {
             resolved_references.get(reference).map(|resolved| {
                 (resolved.path.clone(), reference.block_id.clone())
             })
         })
+        .collect::<BTreeSet<_>>();
+    let desired = dependency_closure(&direct_desired, &dependency_edges);
+    let dependency_desired = desired
+        .difference(&direct_desired)
+        .cloned()
         .collect::<BTreeSet<_>>();
 
     let mut marked_next = Vec::new();
@@ -457,7 +467,14 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
             });
             match transition(task.status, referenced) {
                 Transition::Promote => {
-                    let item = change_item(file, task);
+                    let dependency =
+                        task.block_id.as_ref().is_some_and(|block_id| {
+                            dependency_desired.contains(&(
+                                file.relative_path.clone(),
+                                block_id.clone(),
+                            ))
+                        });
+                    let item = change_item(file, task, dependency);
                     marked_next.push(item.clone());
                     changes.push(PlannedChange {
                         file_index,
@@ -466,7 +483,7 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
                     });
                 }
                 Transition::Clear => {
-                    let item = change_item(file, task);
+                    let item = change_item(file, task, false);
                     cleared.push(item.clone());
                     changes.push(PlannedChange {
                         file_index,
@@ -501,6 +518,7 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
             .unwrap_or_else(|| daily_path.to_string_lossy().into_owned()),
         open_pomodoros: pomodoro_model.open_pomodoros,
         references: pomodoro_model.raw_references.len(),
+        dependency_references: dependency_desired.len(),
         scanned_files: files.len(),
         marked_next,
         cleared,
@@ -1266,12 +1284,166 @@ fn task_blocks(files: &[FileScan]) -> BTreeMap<(PathBuf, String), Vec<char>> {
     blocks
 }
 
-fn change_item(file: &FileScan, task: &TaskLine) -> ChangeItem {
+fn dependency_edges(
+    files: &[FileScan],
+    note_index: &NoteIndex,
+    task_blocks: &BTreeMap<(PathBuf, String), Vec<char>>,
+    unresolved: &mut Vec<UnresolvedReference>,
+) -> BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> {
+    let mut edges: BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> =
+        BTreeMap::new();
+    for file in files {
+        let lines = logical_lines(&file.contents);
+        let fenced = fenced_lines(&lines, 0..lines.len());
+        for task in &file.tasks {
+            let Some(source_block_id) = &task.block_id else {
+                continue;
+            };
+            let source = (file.relative_path.clone(), source_block_id.clone());
+            let source_indent =
+                leading_indentation_width(lines[task.line_index]);
+            for line_index in task.line_index + 1..lines.len() {
+                let line = lines[line_index];
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let indentation = leading_indentation_width(line);
+                if indentation <= source_indent {
+                    break;
+                }
+                if fenced.contains(&line_index)
+                    || nearest_parent_list_item(&lines, line_index)
+                        != Some(task.line_index)
+                {
+                    continue;
+                }
+                let Some(reference) = sole_transcluded_block_reference(line)
+                else {
+                    continue;
+                };
+                let Some(target_path) = note_index.resolve(
+                    Some(&file.relative_path),
+                    reference.target.trim(),
+                ) else {
+                    unresolved.push(UnresolvedReference {
+                        target: reference.target,
+                        block_id: reference.block_id,
+                        reason: format!(
+                            "dependency from {}:{} did not resolve uniquely",
+                            display_path(&file.relative_path),
+                            task.line_index + 1
+                        ),
+                    });
+                    continue;
+                };
+                let target = (target_path.clone(), reference.block_id.clone());
+                if !task_blocks.contains_key(&target) {
+                    unresolved.push(UnresolvedReference {
+                        target: reference.target,
+                        block_id: reference.block_id,
+                        reason: format!(
+                            "dependency from {}:{} resolved to {}, which has no matching task block",
+                            display_path(&file.relative_path),
+                            task.line_index + 1,
+                            display_path(&target_path)
+                        ),
+                    });
+                    continue;
+                }
+                edges.entry(source.clone()).or_default().insert(target);
+            }
+        }
+    }
+    edges
+}
+
+fn dependency_closure(
+    direct: &BTreeSet<(PathBuf, String)>,
+    edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
+) -> BTreeSet<(PathBuf, String)> {
+    let mut closure = direct.clone();
+    let mut queue = direct.iter().cloned().collect::<VecDeque<_>>();
+    while let Some(source) = queue.pop_front() {
+        let Some(targets) = edges.get(&source) else {
+            continue;
+        };
+        for target in targets {
+            if closure.insert(target.clone()) {
+                queue.push_back(target.clone());
+            }
+        }
+    }
+    closure
+}
+
+fn leading_indentation_width(line: &str) -> usize {
+    line.bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .fold(0, |width, byte| {
+            if byte == b'\t' {
+                width + (4 - width % 4)
+            } else {
+                width + 1
+            }
+        })
+}
+
+fn nearest_parent_list_item(
+    lines: &[&str],
+    child_line: usize,
+) -> Option<usize> {
+    let child_indent = leading_indentation_width(lines.get(child_line)?);
+    for line_index in (0..child_line).rev() {
+        let line = lines[line_index];
+        if line.trim().is_empty()
+            || leading_indentation_width(line) >= child_indent
+        {
+            continue;
+        }
+        let byte_indent = line
+            .bytes()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        if after_list_marker(line, byte_indent).is_some() {
+            return Some(line_index);
+        }
+    }
+    None
+}
+
+fn sole_transcluded_block_reference(line: &str) -> Option<RawReference> {
+    let byte_indent = line
+        .bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    let marker_end = after_list_marker(line, byte_indent)?;
+    let body = line[marker_end..].trim();
+    let inside = body.strip_prefix("![[")?.strip_suffix("]]")?;
+    if inside.contains('|') {
+        return None;
+    }
+    let fragment = inside.find("#^")?;
+    let target = inside[..fragment].trim();
+    let block_id = inside[fragment + 2..].trim();
+    (!block_id.is_empty()
+        && block_id.bytes().all(collect_done::is_block_id_byte))
+    .then(|| RawReference {
+        target: target.to_string(),
+        block_id: block_id.to_string(),
+    })
+}
+
+fn change_item(
+    file: &FileScan,
+    task: &TaskLine,
+    dependency: bool,
+) -> ChangeItem {
     ChangeItem {
         path: display_path(&file.relative_path),
         line_number: task.line_index + 1,
         block_id: task.block_id.clone().unwrap_or_default(),
         description: task.description.clone(),
+        dependency,
     }
 }
 
@@ -1408,8 +1580,11 @@ fn print_human_result(result: &SyncResult) {
         styler.cyan(&result.daily_file)
     );
     println!(
-        "  {} open pomodoros \u{b7} {} references \u{b7} {} files scanned",
-        result.open_pomodoros, result.references, result.scanned_files
+        "  {} open pomodoros \u{b7} {} direct references \u{b7} {} dependency references \u{b7} {} files scanned",
+        result.open_pomodoros,
+        result.references,
+        result.dependency_references,
+        result.scanned_files
     );
     print_change_section(
         &styler,
@@ -1515,9 +1690,14 @@ fn print_change_section(
         };
         let description = pad_right(&change.description, description_width);
         println!(
-            "    {transition}  {description}  {} ^{}",
+            "    {transition}  {description}  {} ^{}{}",
             styler.cyan(&change.path),
-            change.block_id
+            change.block_id,
+            if change.dependency {
+                " (dependency)"
+            } else {
+                ""
+            }
         );
     }
 }
@@ -1698,6 +1878,23 @@ mod tests {
         assert_eq!(links[0].reference, reference("dev", "done"));
         assert!(!links[1].embedded);
         assert_eq!(links[1].reference, reference("dev", "todo"));
+    }
+
+    #[test]
+    fn dependency_reference_requires_a_sole_transcluded_block_link() {
+        assert_eq!(
+            sole_transcluded_block_reference("  - ![[Projects/A#^dep]]"),
+            Some(reference("Projects/A", "dep"))
+        );
+        for line in [
+            "  - [[#^plain]]",
+            "  - ![[#^dep|alias]]",
+            "  - text ![[#^dep]]",
+            "  - ![[#^dep]] trailing",
+            "  - ![[#heading]]",
+        ] {
+            assert_eq!(sole_transcluded_block_reference(line), None, "{line}");
+        }
     }
 
     #[test]

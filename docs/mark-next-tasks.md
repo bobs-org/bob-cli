@@ -2,7 +2,9 @@
 
 `bob mark-next-tasks` makes today's Pomodoro ledger the source of truth for
 which vault tasks have the Obsidian Tasks **Next** status (`[*]`) and keeps
-references to completed tasks embedded beneath the most relevant Pomodoro.
+references to completed tasks embedded beneath the most relevant Pomodoro. It
+also follows transcluded dependency bullets recursively, so the complete
+active dependency chain becomes Next.
 
 ## Usage
 
@@ -35,11 +37,33 @@ links and heading links do not. Targets resolve by an exact vault-relative
 path first and then by a unique, case-insensitive note basename. Ambiguous or
 missing targets produce warnings and are not guessed.
 
+After resolving direct Pomodoro links, the command reads dependency edges from
+the linked tasks' child blocks. An edge must be a child bullet whose entire
+content is one transcluded block link:
+
+```markdown
+- [ ] #task Ship the feature ^ship
+  - ![[#^write-tests]]
+  - ![[Quality/Review#^review]]
+- [ ] #task Write tests ^write-tests
+```
+
+Same-note and cross-note targets use the same resolver as Pomodoro links. The
+target block must belong to a scanned Tasks task. Plain `[[#^id]]` links,
+aliases, mixed-content bullets, fenced examples, non-task `#^ref` blocks, and
+unresolvable targets are not dependency edges. Unresolvable candidates emit a
+warning naming the referencing task's file and line.
+
+Traversal is breadth-first and cycle-safe. Dependencies of dependencies are
+included, while a task reached both directly and through a dependency is
+counted as direct. Removing a Pomodoro link removes that task's otherwise
+unreachable dependency chain from the desired set on the next run.
+
 The command scans Markdown task lines allowed by the Obsidian Tasks
 `globalFilter` setting. If that setting cannot be read, the filter defaults to
 `#task`. It then applies these transitions:
 
-| Existing status | Linked from an open Pomodoro | Result |
+| Existing status | Reachable from an open Pomodoro | Result |
 | --- | --- | --- |
 | `[ ]` | yes | `[*]` |
 | `[*]` | no | `[ ]` |
@@ -100,6 +124,8 @@ block IDs, and line endings.
 
 The vault scan skips dot-prefixed directories, `done/`, `_generated/`, and
 `_templates/`, so archived tasks and templates are never synchronized.
+Consequently, a dependency link into `done/` is reported as unresolved; the
+archived task itself remains untouched.
 
 ## Guard Rails
 
@@ -109,16 +135,17 @@ Pomodoros. A valid but empty section is a valid source of truth: it clears
 every scanned `[*]` task. This distinction prevents a missing or malformed
 daily note from causing a mass clear.
 
-Unresolved links are warnings, not failures. If duplicate task block IDs occur
-in one resolved note, every matching task is synchronized and the ambiguity is
-reported. Completed-link normalization proceeds only when all duplicate
-matches are complete; conflicting completion states are warned and left
-structurally unchanged.
+Unresolved direct or dependency links are warnings, not failures. If duplicate
+task block IDs occur in one resolved note, every matching task is synchronized
+and the ambiguity is reported. Completed-link normalization proceeds only when
+all duplicate matches are complete; conflicting completion states are warned
+and left structurally unchanged.
 
 ## Output
 
 Human output lists every promotion, clear, embed, and move, followed by a
-summary. Dry-run uses the same planning path and reports what would happen
+summary. Dependency-derived promotions carry a `(dependency)` suffix. Dry-run
+uses the same planning path and reports what would happen
 without changing any file. Warnings go to stderr. A no-op prints a single
 `already in sync` line only when neither task statuses nor daily-note links
 need changes.
@@ -132,13 +159,22 @@ JSON mode prints one object on stdout with these stable fields:
   "daily_file": "2026/20260710.md",
   "open_pomodoros": 1,
   "references": 2,
+  "dependency_references": 1,
   "scanned_files": 128,
   "marked_next": [
     {
       "path": "dev.md",
       "line_number": 12,
       "block_id": "write-design",
-      "description": "Write the design"
+      "description": "Write the design",
+      "dependency": false
+    },
+    {
+      "path": "dev.md",
+      "line_number": 18,
+      "block_id": "write-tests",
+      "description": "Write tests",
+      "dependency": true
     }
   ],
   "cleared": [],
@@ -163,5 +199,8 @@ JSON mode prints one object on stdout with these stable fields:
 }
 ```
 
-Each unresolved reference contains `target`, `block_id`, and `reason`. JSON
+`references` counts direct Pomodoro block links; `dependency_references` counts
+additional unique task blocks reached through dependency edges. Each change
+item's `dependency` boolean distinguishes the two sources. Each unresolved
+reference contains `target`, `block_id`, and `reason`. JSON
 failures also remain machine-readable as `{ "ok": false, "error": "..." }`.

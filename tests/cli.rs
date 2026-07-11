@@ -696,9 +696,10 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     assert_eq!(json["daily_file"], "2026/20260710.md");
     assert_eq!(json["open_pomodoros"], 2);
     assert_eq!(json["references"], 4);
+    assert_eq!(json["dependency_references"], 3);
     assert_eq!(json["scanned_files"], 3);
-    assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
-    assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 3);
+    assert_eq!(json["cleared"].as_array().unwrap().len(), 2);
     assert_eq!(json["kept_next"], 1);
     assert_eq!(json["kept_in_progress"], 1);
     assert_eq!(
@@ -712,9 +713,25 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         json["moved_completed_references"].as_array().unwrap().len(),
         1
     );
-    assert_eq!(json["unresolved_references"], serde_json::json!([]));
-    assert_eq!(json["marked_next"][0]["path"], "dev.md");
-    assert_eq!(json["marked_next"][0]["block_id"], "promote");
+    assert_eq!(json["unresolved_references"].as_array().unwrap().len(), 1);
+    assert!(json["unresolved_references"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("dependency from dev.md:3"));
+    let marked = json["marked_next"].as_array().unwrap();
+    assert!(marked.iter().any(|item| {
+        item["path"] == "dev.md"
+            && item["block_id"] == "promote"
+            && item["dependency"] == false
+    }));
+    assert!(marked.iter().any(|item| {
+        item["block_id"] == "dep-one" && item["dependency"] == true
+    }));
+    assert!(marked.iter().any(|item| {
+        item["path"] == "Projects/Alpha.md"
+            && item["block_id"] == "dep-two"
+            && item["dependency"] == true
+    }));
 
     let applied = bob_command()
         .arg("mark-next-tasks")
@@ -728,12 +745,23 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     assert!(
         report.contains("marked next")
             && report.contains("cleared")
-            && report.contains("Summary: 1 marked next, 1 cleared"),
+            && report.contains("(dependency)")
+            && report.contains("Summary: 3 marked next, 2 cleared"),
         "unexpected mark-next report:\n{}",
         format_output(&applied)
     );
     let dev_contents = fs::read_to_string(&dev).expect("read updated dev");
     assert!(dev_contents.contains("- [*] #task Promote me ^promote"));
+    assert!(dev_contents.contains("- [*] #task Same-file dependency ^dep-one"));
+    assert!(dev_contents
+        .contains("- [x] #task Completed dependency stays done ^done-dep"));
+    assert!(dev_contents
+        .contains("- [ ] #task Plain link is not a dependency ^plain"));
+    assert!(dev_contents.contains(
+        "- [ ] #task Fenced transclusion is not a dependency ^fenced-dep"
+    ));
+    assert!(dev_contents
+        .contains("- [ ] #task Stale dependency clears ^stale-child"));
     assert!(dev_contents.contains("- [*] #task Already next ^already"));
     assert!(dev_contents.contains("- [ ] #task Clear me ^orphan"));
     assert!(dev_contents
@@ -751,10 +779,10 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         "    - Keep this nested detail with the moved bullet.\n",
         "- [ ] Future session\n",
     )));
-    assert_eq!(
-        fs::read(&alpha).expect("read unchanged alpha"),
-        original_alpha
-    );
+    let alpha_contents =
+        fs::read_to_string(&alpha).expect("read updated alpha");
+    assert!(alpha_contents
+        .contains("- [*] #task Cross-file recursive dependency ^dep-two"));
 
     let second = bob_command()
         .arg("mark-next-tasks")
@@ -769,6 +797,26 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         "expected idempotent no-op:\n{}",
         format_output(&second)
     );
+
+    let without_root = fs::read_to_string(&daily)
+        .expect("read daily before removing root link")
+        .replace("[[dev#^promote]]", "[[dev]]");
+    write_file(&daily, &without_root);
+    let stale_chain = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("clear stale dependency chain");
+    assert_success(&stale_chain);
+    let dev_contents = fs::read_to_string(&dev).expect("read cleared chain");
+    assert!(dev_contents.contains("- [ ] #task Promote me ^promote"));
+    assert!(dev_contents.contains("- [ ] #task Same-file dependency ^dep-one"));
+    let alpha_contents =
+        fs::read_to_string(&alpha).expect("read cleared alpha");
+    assert!(alpha_contents
+        .contains("- [ ] #task Cross-file recursive dependency ^dep-two"));
 }
 
 #[test]
