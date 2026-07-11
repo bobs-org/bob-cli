@@ -186,6 +186,49 @@ fn tasks_parity_fixture_vault_covers_phase1_contract() {
 }
 
 #[test]
+fn path_qualified_dependency_ids_keep_duplicate_block_fragments_distinct() {
+    let temp = TempDir::new("bob-cli-tasks-qualified-dependencies");
+    let vault = temp.path();
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        include_str!(
+            "fixtures/tasks_parity/vault/.obsidian/plugins/obsidian-tasks-plugin/data.json"
+        ),
+    );
+    write_file(
+        &vault.join("Alpha.md"),
+        include_str!("fixtures/tasks_dependency_identity/Alpha.md"),
+    );
+    write_file(
+        &vault.join("Beta.md"),
+        include_str!("fixtures/tasks_dependency_identity/Beta.md"),
+    );
+    write_file(
+        &vault.join("Dependents.md"),
+        include_str!("fixtures/tasks_dependency_identity/Dependents.md"),
+    );
+
+    let output = run_tasks(vault, &["--format", "json", "--tasks", ""]);
+    assert_success(&output);
+    let value = json_stdout(&output);
+    let tasks = value["result"]["tasks"].as_array().unwrap();
+    let alpha = find_task(tasks, "#task Alpha review");
+    let beta = find_task(tasks, "#task Beta review");
+    assert_eq!(alpha["blockId"], "review");
+    assert_eq!(beta["blockId"], "review");
+    assert_eq!(alpha["id"], "alpha__review");
+    assert_eq!(beta["id"], "beta__review");
+    assert_eq!(
+        find_task(tasks, "#task Blocked only by Alpha")["isBlocked"],
+        true
+    );
+    assert_eq!(
+        find_task(tasks, "#task Ready after Beta")["isBlocked"],
+        false
+    );
+}
+
+#[test]
 fn tasks_native_filterless_paths_golden_includes_underscore_folders() {
     let output = run_fixture(&["--tasks", ""]);
 

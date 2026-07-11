@@ -260,6 +260,14 @@ because the intended block is ambiguous. Only explicit `^block-id` targets can
 be rewritten; heading links and tasks without block ids do not have a stable
 target to repair.
 
+Task dependency metadata has a separate vault-wide identity from its Obsidian
+block link. A task at `projects/foo.md#^abc123` uses
+`[id:: projects__foo__abc123]`, and dependents use the same value in
+`[dependsOn:: projects__foo__abc123]`; the trailing block token remains
+`^abc123`. When a task moves, the command rewrites its `[id::]` to the archive
+path/final block ID and repairs exact dependency tokens across all planned
+files. Metadata and link repair share the same atomic preview/write plan.
+
 The command itself does not run `ob sync`; `bob nightly` runs the shared
 Obsidian sync gate before invoking it. In a Git worktree, the command stages
 only the files it touches, commits with a `bob move-done-tasks YYYY-MM-DD`

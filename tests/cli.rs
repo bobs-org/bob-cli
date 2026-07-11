@@ -820,6 +820,41 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
 }
 
 #[test]
+fn mark_next_tasks_resolves_duplicate_fragments_by_explicit_note_path() {
+    let temp = TempDir::new("bob-cli-mark-next-duplicate-fragments");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260711.md");
+    write_file(
+        &daily,
+        "# Daily\n\n## Pomodoros\n\n- [ ] Open session (0900-0930)\n  - [[Root#^root]]\n",
+    );
+    write_file(
+        &vault.join("Root.md"),
+        "- [ ] #task Root ^root\n  - ![[Alpha#^dep]]\n",
+    );
+    write_file(&vault.join("Alpha.md"), "- [ ] #task Alpha ^dep\n");
+    write_file(&vault.join("Beta.md"), "- [ ] #task Beta ^dep\n");
+
+    let output = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("mark next duplicate fragments");
+    assert_success(&output);
+    assert!(fs::read_to_string(vault.join("Root.md"))
+        .unwrap()
+        .contains("- [*] #task Root ^root"));
+    assert!(fs::read_to_string(vault.join("Alpha.md"))
+        .unwrap()
+        .contains("- [*] #task Alpha ^dep"));
+    assert!(fs::read_to_string(vault.join("Beta.md"))
+        .unwrap()
+        .contains("- [ ] #task Beta ^dep"));
+}
+
+#[test]
 fn mark_next_tasks_guard_rails_leave_tasks_unchanged() {
     let temp = TempDir::new("bob-cli-mark-next-tasks-guards");
     let vault = temp.path().join("vault");

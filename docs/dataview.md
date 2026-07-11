@@ -148,6 +148,13 @@ zero-based, matching the Tasks plugin scripting API. `settings` contains the
 Tasks settings that governed the scan. Metadata is parsed using the configured
 Tasks format (`dataview` or `tasksPluginEmoji`).
 
+Dependency equality follows Obsidian Tasks exactly and is vault-wide. Bob uses
+`<note-path-with-slashes-as-__>__<block-id>` for `[id::]` and
+`[dependsOn::]`, while the navigation block remains file-local. For example,
+`projects/Shared.md#^review` is represented as
+`projects__Shared__review`. This lets separate notes reuse `^review` without
+colliding in blocked/blocking calculations.
+
 Whole-note JSON uses `query_kind: "tasks_note"`, includes `note`, the union of
 matched `paths`, and one entry per code block in `blocks`. Each block has
 `index`, zero-based `lineNumber`, `heading`, raw `query`, `parsedQuery`, `paths`,

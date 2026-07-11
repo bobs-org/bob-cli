@@ -54,6 +54,13 @@ aliases, mixed-content bullets, fenced examples, non-task `#^ref` blocks, and
 unresolvable targets are not dependency edges. Unresolvable candidates emit a
 warning naming the referencing task's file and line.
 
+Block fragments are file-scoped: `Alpha.md#^review` and `Beta.md#^review` are
+distinct graph nodes, and an explicit transclusion path selects only its named
+note. The command deliberately traverses these resolved path-plus-fragment
+links rather than `[id::]`/`[dependsOn::]` metadata. Tasks metadata represents
+the same target vault-wide with a path-qualified value such as
+`Alpha__review`.
+
 Traversal is breadth-first and cycle-safe. Dependencies of dependencies are
 included, while a task reached both directly and through a dependency is
 counted as direct. Removing a Pomodoro link removes that task's otherwise

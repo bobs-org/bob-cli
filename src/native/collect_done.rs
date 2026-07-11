@@ -1,3 +1,4 @@
+use regex::Regex;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
@@ -107,19 +108,44 @@ impl CollectionPlan {
         file_repairs + link_only_repairs
     }
 
+    fn dependency_metadata_repair_count(&self) -> usize {
+        let file_repairs: usize = self
+            .files
+            .iter()
+            .map(|file| {
+                file.source_dependency_metadata_repair_count
+                    + file.archive_dependency_metadata_repair_count
+            })
+            .sum();
+        file_repairs
+            + self
+                .link_repairs
+                .iter()
+                .map(|repair| repair.dependency_metadata_count)
+                .sum::<usize>()
+    }
+
     fn link_repair_file_count(&self) -> usize {
         let mut paths = BTreeSet::new();
         for file in &self.files {
-            if file.source_link_repair_count > 0 {
+            if file.source_link_repair_count > 0
+                || file.source_dependency_metadata_repair_count > 0
+            {
                 paths.insert(file.relative_source_path.clone());
             }
-            if file.archive_link_repair_count > 0 {
+            if file.archive_link_repair_count > 0
+                || file.archive_dependency_metadata_repair_count > 0
+            {
                 paths.insert(file.relative_archive_path.clone());
             }
         }
         paths.extend(
             self.link_repairs
                 .iter()
+                .filter(|repair| {
+                    repair.link_count > 0
+                        || repair.dependency_metadata_count > 0
+                })
                 .map(|repair| repair.relative_path.clone()),
         );
         paths.len()
@@ -168,6 +194,8 @@ struct FilePlan {
     moved_block_id_rename_count: usize,
     source_link_repair_count: usize,
     archive_link_repair_count: usize,
+    source_dependency_metadata_repair_count: usize,
+    archive_dependency_metadata_repair_count: usize,
 }
 
 impl FilePlan {
@@ -175,6 +203,7 @@ impl FilePlan {
         self.task_count > 0
             || self.source_metadata_updated
             || self.source_link_repair_count > 0
+            || self.source_dependency_metadata_repair_count > 0
     }
 
     fn writes_archive(&self) -> bool {
@@ -187,6 +216,7 @@ struct LinkRepairPlan {
     relative_path: PathBuf,
     contents: String,
     link_count: usize,
+    dependency_metadata_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,6 +339,10 @@ pub(crate) fn run_collection(threshold: usize, child_env: &ChildEnv) -> i32 {
         plan.moved_block_id_rename_count()
     );
     println!("  Obsidian links repaired: {}", plan.link_repair_count());
+    println!(
+        "  dependency metadata repaired: {}",
+        plan.dependency_metadata_repair_count()
+    );
     println!("  link-repair files: {}", plan.link_repair_file_count());
     println!("  planned bytes: {}", plan.planned_bytes());
 
@@ -387,9 +421,10 @@ pub(crate) fn run_collection(threshold: usize, child_env: &ChildEnv) -> i32 {
     }
     for repair in &plan.link_repairs {
         println!(
-            "  {} ({} Obsidian link repairs)",
+            "  {} ({} Obsidian link repairs, {} dependency metadata repairs)",
             repair.relative_path.display(),
-            repair.link_count
+            repair.link_count,
+            repair.dependency_metadata_count
         );
         if let Err(error) = apply_link_repair_plan(&vault, repair) {
             eprintln!("{COMMAND_NAME}: failed to write vault changes: {error}");
@@ -420,6 +455,10 @@ pub(crate) fn run_collection(threshold: usize, child_env: &ChildEnv) -> i32 {
         plan.moved_block_id_rename_count()
     );
     println!("  Obsidian links repaired: {}", plan.link_repair_count());
+    println!(
+        "  dependency metadata repaired: {}",
+        plan.dependency_metadata_repair_count()
+    );
     println!(
         "  link-repair files updated: {}",
         plan.link_repair_file_count()
@@ -1002,6 +1041,7 @@ fn build_collection_plan(
     threshold: usize,
 ) -> io::Result<CollectionPlan> {
     let markdown_files = markdown_files(vault)?;
+    validate_dependency_identity_index(vault, &markdown_files)?;
     let mut files = Vec::new();
 
     for path in &markdown_files {
@@ -1133,6 +1173,8 @@ fn build_collection_plan(
             moved_block_id_rename_count,
             source_link_repair_count: 0,
             archive_link_repair_count: 0,
+            source_dependency_metadata_repair_count: 0,
+            archive_dependency_metadata_repair_count: 0,
         });
     }
 
@@ -1145,18 +1187,49 @@ fn build_collection_plan(
     })
 }
 
+fn validate_dependency_identity_index(
+    vault: &Path,
+    markdown_files: &[PathBuf],
+) -> io::Result<()> {
+    let mut identities: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for absolute_path in markdown_files {
+        let relative_path = vault_relative_path(vault, absolute_path, "note")?;
+        let contents = fs::read_to_string(absolute_path)?;
+        for block_id in block_ids_in_markdown(&contents) {
+            let id = dependency_id(&relative_path, &block_id)?;
+            if let Some(existing_path) = identities.get(&id)
+                && existing_path != &relative_path
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "dependency identity collision {id}: {} and {}",
+                        existing_path.display(),
+                        relative_path.display()
+                    ),
+                ));
+            }
+            identities.insert(id, relative_path.clone());
+        }
+    }
+    Ok(())
+}
+
 type MovedBlockTargets = BTreeMap<(PathBuf, String), MovedBlockTarget>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MovedBlockTarget {
     archive_target: String,
     block_id: String,
+    old_dependency_id: String,
+    new_dependency_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LinkRepairResult {
     contents: String,
     link_count: usize,
+    dependency_metadata_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1273,23 +1346,31 @@ fn apply_link_repairs_to_plan(
             &note_index,
             &moved_targets,
         );
-        if repair.link_count > 0 {
+        if repair.link_count > 0 || repair.dependency_metadata_count > 0 {
             planned_contents.insert(relative_path.clone(), repair.contents);
-            link_repair_counts.insert(relative_path, repair.link_count);
+            link_repair_counts.insert(
+                relative_path,
+                (repair.link_count, repair.dependency_metadata_count),
+            );
         }
     }
 
     for file in files.iter_mut() {
-        let source_link_repair_count = link_repair_counts
-            .remove(&file.relative_source_path)
-            .unwrap_or(0);
-        if source_link_repair_count > 0 {
+        let (source_link_repair_count, source_dependency_metadata_repair_count) =
+            link_repair_counts
+                .remove(&file.relative_source_path)
+                .unwrap_or((0, 0));
+        if source_link_repair_count > 0
+            || source_dependency_metadata_repair_count > 0
+        {
             file.source_contents = planned_contents
                 .remove(&file.relative_source_path)
                 .ok_or_else(|| {
                     missing_planned_contents(&file.relative_source_path)
                 })?;
             file.source_link_repair_count = source_link_repair_count;
+            file.source_dependency_metadata_repair_count =
+                source_dependency_metadata_repair_count;
         } else if file.task_count > 0 || file.source_metadata_updated {
             file.source_contents = planned_contents
                 .remove(&file.relative_source_path)
@@ -1298,10 +1379,15 @@ fn apply_link_repairs_to_plan(
                 })?;
         }
 
-        let archive_link_repair_count = link_repair_counts
+        let (
+            archive_link_repair_count,
+            archive_dependency_metadata_repair_count,
+        ) = link_repair_counts
             .remove(&file.relative_archive_path)
-            .unwrap_or(0);
-        if archive_link_repair_count > 0 {
+            .unwrap_or((0, 0));
+        if archive_link_repair_count > 0
+            || archive_dependency_metadata_repair_count > 0
+        {
             file.archive_contents = Some(
                 planned_contents
                     .remove(&file.relative_archive_path)
@@ -1310,6 +1396,8 @@ fn apply_link_repairs_to_plan(
                     })?,
             );
             file.archive_link_repair_count = archive_link_repair_count;
+            file.archive_dependency_metadata_repair_count =
+                archive_dependency_metadata_repair_count;
         } else if file.archive_contents.is_some() {
             file.archive_contents = Some(
                 planned_contents
@@ -1323,11 +1411,14 @@ fn apply_link_repairs_to_plan(
 
     let mut link_repairs = Vec::new();
     for (relative_path, contents) in planned_contents {
-        if let Some(link_count) = link_repair_counts.remove(&relative_path) {
+        if let Some((link_count, dependency_metadata_count)) =
+            link_repair_counts.remove(&relative_path)
+        {
             link_repairs.push(LinkRepairPlan {
                 relative_path,
                 contents,
                 link_count,
+                dependency_metadata_count,
             });
         }
     }
@@ -1397,6 +1488,14 @@ fn archived_block_targets(
                 (source_relative_path.clone(), block_id.clone()),
                 MovedBlockTarget {
                     archive_target: archive_target.clone(),
+                    old_dependency_id: dependency_id(
+                        &source_relative_path,
+                        &block_id,
+                    )?,
+                    new_dependency_id: dependency_id(
+                        archive_relative_path,
+                        &block_id,
+                    )?,
                     block_id,
                 },
             );
@@ -1437,6 +1536,14 @@ fn overlay_current_run_block_targets(
                 (file.relative_source_path.clone(), block_id.clone()),
                 MovedBlockTarget {
                     archive_target: archive_target.clone(),
+                    old_dependency_id: dependency_id(
+                        &file.relative_source_path,
+                        block_id,
+                    )?,
+                    new_dependency_id: dependency_id(
+                        &file.relative_archive_path,
+                        &final_block_id,
+                    )?,
                     block_id: final_block_id,
                 },
             );
@@ -1547,10 +1654,97 @@ fn repair_links_in_note(
         note_index,
         moved_targets,
     );
+    let metadata_repair =
+        repair_dependency_metadata(&markdown_repair.contents, moved_targets);
 
     LinkRepairResult {
-        contents: markdown_repair.contents,
+        contents: metadata_repair.contents,
         link_count: wiki_repair.link_count + markdown_repair.link_count,
+        dependency_metadata_count: metadata_repair.count,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DependencyMetadataRepair {
+    contents: String,
+    count: usize,
+}
+
+fn repair_dependency_metadata(
+    contents: &str,
+    moved_targets: &MovedBlockTargets,
+) -> DependencyMetadataRepair {
+    let replacements: BTreeMap<&str, &str> = moved_targets
+        .values()
+        .filter(|target| target.old_dependency_id != target.new_dependency_id)
+        .map(|target| {
+            (
+                target.old_dependency_id.as_str(),
+                target.new_dependency_id.as_str(),
+            )
+        })
+        .collect();
+    if replacements.is_empty() {
+        return DependencyMetadataRepair {
+            contents: contents.to_string(),
+            count: 0,
+        };
+    }
+
+    let field_re = Regex::new(r"\[(id|dependsOn)::([^\]\n]*)\]")
+        .expect("dependency metadata regex");
+    let mut count = 0usize;
+    let next =
+        field_re.replace_all(contents, |captures: &regex::Captures<'_>| {
+            let key = captures.get(1).map_or("", |value| value.as_str());
+            let value = captures.get(2).map_or("", |value| value.as_str());
+            if key == "id" {
+                let trimmed = value.trim();
+                let Some(replacement) = replacements.get(trimmed) else {
+                    return captures.get(0).unwrap().as_str().to_string();
+                };
+                count += 1;
+                let leading_len = value.len() - value.trim_start().len();
+                let trailing_len = value.len() - value.trim_end().len();
+                return format!(
+                    "[id::{}{}{}]",
+                    &value[..leading_len],
+                    replacement,
+                    &value[value.len() - trailing_len..]
+                );
+            }
+
+            let mut field_changed = false;
+            let next_value = value
+                .split(',')
+                .map(|segment| {
+                    let trimmed = segment.trim();
+                    let Some(replacement) = replacements.get(trimmed) else {
+                        return segment.to_string();
+                    };
+                    count += 1;
+                    field_changed = true;
+                    let leading_len =
+                        segment.len() - segment.trim_start().len();
+                    let trailing_len = segment.len() - segment.trim_end().len();
+                    format!(
+                        "{}{}{}",
+                        &segment[..leading_len],
+                        replacement,
+                        &segment[segment.len() - trailing_len..]
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            if field_changed {
+                format!("[dependsOn::{next_value}]")
+            } else {
+                captures.get(0).unwrap().as_str().to_string()
+            }
+        });
+    DependencyMetadataRepair {
+        contents: next.into_owned(),
+        count,
     }
 }
 
@@ -1594,6 +1788,7 @@ fn repair_wiki_links(
     LinkRepairResult {
         contents: repaired,
         link_count,
+        dependency_metadata_count: 0,
     }
 }
 
@@ -1670,6 +1865,7 @@ fn repair_markdown_links(
     LinkRepairResult {
         contents: repaired,
         link_count,
+        dependency_metadata_count: 0,
     }
 }
 
@@ -1927,6 +2123,28 @@ fn vault_relative_link_target(
     }
 
     Ok(components.join("/"))
+}
+
+fn dependency_id(relative_path: &Path, block_id: &str) -> io::Result<String> {
+    if block_id.is_empty() || !block_id.bytes().all(is_block_id_byte) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid task dependency block id: {block_id}"),
+        ));
+    }
+    let note = vault_relative_link_target(relative_path, "dependency note")?;
+    let value = format!("{}__{block_id}", note.replace('/', "__"));
+    if !value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
+    }) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "dependency id contains unsupported path characters: {value}"
+            ),
+        ));
+    }
+    Ok(value)
 }
 
 fn transform_markdown(contents: &str) -> Transform {
@@ -2259,10 +2477,11 @@ options:
 mod tests {
     use super::{
         archive_contents, archive_relative_path, archive_wiki_link,
-        build_collection_plan, ensure_source_done_tasks_frontmatter,
-        parse_args, repair_links_in_note, source_wiki_link, transform_markdown,
-        Args, MovedBlockTarget, MovedBlockTargets, NoteIndex, ParseResult,
-        DEFAULT_THRESHOLD,
+        build_collection_plan, dependency_id,
+        ensure_source_done_tasks_frontmatter, parse_args,
+        repair_dependency_metadata, repair_links_in_note, source_wiki_link,
+        transform_markdown, Args, MovedBlockTarget, MovedBlockTargets,
+        NoteIndex, ParseResult, DEFAULT_THRESHOLD,
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -2291,6 +2510,38 @@ mod tests {
             ParseResult::Run(args) => assert_eq!(args, Args { threshold: 15 }),
             _ => panic!("expected runnable args"),
         }
+    }
+
+    #[test]
+    fn dependency_ids_preserve_path_case_and_qualify_nested_notes() {
+        assert_eq!(
+            dependency_id(Path::new("projects/Shared.md"), "review").unwrap(),
+            "projects__Shared__review"
+        );
+        assert!(dependency_id(Path::new("My Notes.md"), "review").is_err());
+    }
+
+    #[test]
+    fn dependency_metadata_repair_rewrites_exact_tokens_only() {
+        let targets = moved_targets([(
+            "projects/Shared.md",
+            "review",
+            "done/projects/Shared",
+        )]);
+        let repair = repair_dependency_metadata(
+            "- [x] #task Target [id:: projects__Shared__review] ^review\n\
+- [ ] #task A [dependsOn:: projects__Shared__review, unrelated]\n\
+Prose projects__Shared__review\n",
+            &targets,
+        );
+        assert_eq!(repair.count, 2);
+        assert!(repair
+            .contents
+            .contains("[id:: done__projects__Shared__review] ^review"));
+        assert!(repair.contents.contains(
+            "[dependsOn:: done__projects__Shared__review, unrelated]"
+        ));
+        assert!(repair.contents.contains("Prose projects__Shared__review"));
     }
 
     #[test]
@@ -3304,6 +3555,53 @@ type: \"[[done]]\"
     }
 
     #[test]
+    fn task_moves_repair_dependency_ids_in_archive_and_all_dependents() {
+        let vault = TempDir::new("bob-cli-collect-done-dependency-metadata");
+        write_file(
+            &vault.path().join("projects/Shared.md"),
+            "- [x] #task Review [id:: projects__Shared__review] ^review\n",
+        );
+        write_file(
+            &vault.path().join("A.md"),
+            "- [ ] #task A [dependsOn:: projects__Shared__review]\n",
+        );
+        write_file(
+            &vault.path().join("nested/B.md"),
+            "- [ ] #task B [dependsOn:: projects__Shared__review, other]\n",
+        );
+
+        let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+        assert_eq!(plan.dependency_metadata_repair_count(), 3);
+        let moved = plan
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_source_path == Path::new("projects/Shared.md")
+            })
+            .expect("moved source");
+        assert!(moved
+            .archive_contents
+            .as_deref()
+            .unwrap()
+            .contains("[id:: done__projects__Shared_done__review] ^review"));
+        assert_eq!(plan.link_repairs.len(), 2);
+        for repair in &plan.link_repairs {
+            assert!(repair
+                .contents
+                .contains("[dependsOn:: done__projects__Shared_done__review"));
+        }
+
+        for file in &plan.files {
+            super::apply_file_plan(vault.path(), file).unwrap();
+        }
+        for repair in &plan.link_repairs {
+            super::apply_link_repair_plan(vault.path(), repair).unwrap();
+        }
+        let rerun = build_collection_plan(vault.path(), 1).expect("rerun plan");
+        assert_eq!(rerun.dependency_metadata_repair_count(), 0);
+    }
+
+    #[test]
     fn collecting_tasks_adds_done_tasks_to_source() {
         let vault = TempDir::new("bob-cli-collect-done-source-link");
         write_file(
@@ -3818,6 +4116,18 @@ type: \"[[done]]\"
                     MovedBlockTarget {
                         archive_target: target.to_string(),
                         block_id: block_id.to_string(),
+                        old_dependency_id: format!(
+                            "{}__{}",
+                            source_path
+                                .trim_end_matches(".md")
+                                .replace('/', "__"),
+                            block_id
+                        ),
+                        new_dependency_id: format!(
+                            "{}__{}",
+                            target.replace('/', "__"),
+                            block_id
+                        ),
                     },
                 )
             })
