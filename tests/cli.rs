@@ -707,8 +707,20 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
             .as_array()
             .unwrap()
             .len(),
-        1
+        0
     );
+    assert_eq!(
+        json["struck_completed_references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert!(json["struck_completed_references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["removed_embed"] == true));
     assert_eq!(
         json["moved_completed_references"].as_array().unwrap().len(),
         1
@@ -774,10 +786,15 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     let daily_contents =
         fs::read_to_string(&daily).expect("read updated daily");
     assert!(daily_contents.contains(concat!(
-        "  - ![[dev#^done|already embedded]]\n",
-        "  - Finish ![[dev#^done|completed work]] with [[dev#^promote]]\n",
+        "  - ~~[[dev#^done|already embedded]]~~\n",
+        "  - Finish ~~[[dev#^done|completed work]]~~ with [[dev#^promote]]\n",
         "    - Keep this nested detail with the moved bullet.\n",
         "- [ ] Future session\n",
+    )));
+    assert!(daily_contents.contains(concat!(
+        "- [x] Closed session (0930-1000)\n",
+        "  - [[dev#^closed]]\n",
+        "  - ~~[[dev#^done|historical completed work]]~~\n",
     )));
     let alpha_contents =
         fs::read_to_string(&alpha).expect("read updated alpha");
@@ -970,6 +987,13 @@ fn mark_next_tasks_uses_custom_done_status_and_completed_fallback() {
             .as_array()
             .unwrap()
             .len(),
+        0
+    );
+    assert_eq!(
+        json["struck_completed_references"]
+            .as_array()
+            .unwrap()
+            .len(),
         1
     );
     assert_eq!(
@@ -981,14 +1005,14 @@ fn mark_next_tasks_uses_custom_done_status_and_completed_fallback() {
         concat!(
             "## Pomodoros\n\n",
             "- [x] Last completed\n",
-            "    - Review ![[tasks#^custom|custom done]]\n",
+            "    - Review ~~[[tasks#^custom|custom done]]~~\n",
             "- [ ] Future\n",
         )
     );
 }
 
 #[test]
-fn mark_next_tasks_embeds_in_place_when_no_relocation_target_exists() {
+fn mark_next_tasks_strikes_in_place_when_no_relocation_target_exists() {
     let temp = TempDir::new("bob-cli-mark-next-tasks-no-target");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260710.md");
@@ -1016,7 +1040,7 @@ fn mark_next_tasks_embeds_in_place_when_no_relocation_target_exists() {
         concat!(
             "## Pomodoros\r\n\r\n",
             "- [ ] Future without a time\r\n",
-            "  - ![[tasks#^done|finished]]\r\n",
+            "  - ~~[[tasks#^done|finished]]~~\r\n",
         )
     );
 }
@@ -1053,7 +1077,7 @@ fn mark_next_tasks_composes_daily_status_and_structural_edits() {
         concat!(
             "## Pomodoros\n\n",
             "- [ ] Current (0900-0930)\n",
-            "  - ![[tasks#^done]]\n",
+            "  - ~~[[tasks#^done]]~~\n",
             "- [ ] Future\n\n",
             "## Tasks\n\n",
             "- [ ] #task Daily orphan ^daily-orphan\n",

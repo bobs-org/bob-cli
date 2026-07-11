@@ -63,7 +63,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
         name: "mark-next-tasks",
         script_command: None,
-        about: "Sync Next tasks and rehome completed Pomodoro links",
+        about: "Sync Next tasks and retire completed Pomodoro links",
         native_command: NativeCommand::MarkNextTasks,
     },
     Subcommand {

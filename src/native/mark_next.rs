@@ -63,8 +63,10 @@ fn build_cli() -> ClapCommand {
 Tasks block-linked from child bullets of open Pomodoro entries are promoted \
 from [ ] to [*]. Their dependency tasks are discovered recursively from sole \
 transcluded block-link child bullets and promoted too. Existing [*] tasks not \
-reachable from an open entry are reset to [ ]. Completed linked tasks are embedded and their containing bullets are \
-moved beneath the current timed Pomodoro, or the last completed Pomodoro when \
+reachable from an open entry are reset to [ ]. Completed linked-task references \
+are retired as struck, non-embedded links. References found under open \
+Pomodoros keep the existing policy of moving their containing bullets beneath \
+the current timed Pomodoro, or the last completed Pomodoro when \
 there is no current one. In-progress [/] tasks and all other statuses are left \
 unchanged.\n\n\
 Only Markdown checkbox lines allowed by the Obsidian Tasks globalFilter are \
@@ -166,10 +168,11 @@ struct UnresolvedReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct EmbeddedCompletedReference {
+struct StruckCompletedReference {
     target: String,
     block_id: String,
     pomodoro: String,
+    removed_embed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -191,7 +194,9 @@ struct SyncResult {
     scanned_files: usize,
     marked_next: Vec<ChangeItem>,
     cleared: Vec<ChangeItem>,
-    embedded_completed_references: Vec<EmbeddedCompletedReference>,
+    struck_completed_references: Vec<StruckCompletedReference>,
+    #[serde(default)]
+    embedded_completed_references: Vec<StruckCompletedReference>,
     moved_completed_references: Vec<MovedCompletedReference>,
     kept_next: usize,
     kept_in_progress: usize,
@@ -248,8 +253,11 @@ struct PomodoroEntry {
 #[derive(Debug, Clone)]
 struct LinkOccurrence {
     reference: RawReference,
-    open_offset: usize,
+    edit_start: usize,
+    edit_end: usize,
+    canonical_token: String,
     embedded: bool,
+    canonical: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -267,6 +275,7 @@ struct PomodoroModel {
     bullets: Vec<LinkBullet>,
     open_pomodoros: usize,
     raw_references: BTreeSet<RawReference>,
+    all_references: BTreeSet<RawReference>,
 }
 
 #[derive(Debug, Clone)]
@@ -277,11 +286,18 @@ struct ResolvedReference {
 
 #[derive(Debug, Clone)]
 struct StructuralPlan {
-    embed_offsets: BTreeMap<usize, BTreeSet<usize>>,
+    token_edits: BTreeMap<usize, Vec<TokenEdit>>,
     moves: Vec<BulletMove>,
     target_entry: Option<usize>,
-    embedded: Vec<EmbeddedCompletedReference>,
+    struck: Vec<StruckCompletedReference>,
     moved: Vec<MovedCompletedReference>,
+}
+
+#[derive(Debug, Clone)]
+struct TokenEdit {
+    start: usize,
+    end: usize,
+    replacement: String,
 }
 
 #[derive(Debug, Clone)]
@@ -371,7 +387,7 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
     let dependency_edges =
         dependency_edges(&files, &note_index, &task_blocks, &mut unresolved);
     let mut resolved_references = BTreeMap::new();
-    for reference in &pomodoro_model.raw_references {
+    for reference in &pomodoro_model.all_references {
         let resolved =
             note_index.resolve(daily_relative, reference.target.trim());
         let Some(path) = resolved else {
@@ -522,7 +538,8 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
         scanned_files: files.len(),
         marked_next,
         cleared,
-        embedded_completed_references: structural_plan.embedded,
+        struck_completed_references: structural_plan.struck,
+        embedded_completed_references: Vec::new(),
         moved_completed_references: structural_plan.moved,
         kept_next,
         kept_in_progress,
@@ -591,10 +608,8 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
 
     let mut bullets = Vec::new();
     let mut raw_references = BTreeSet::new();
+    let mut all_references = BTreeSet::new();
     for (entry_index, entry) in entries.iter().enumerate() {
-        if !entry.open {
-            continue;
-        }
         for line_index in entry.line_index + 1..entry.end_line {
             if fenced_lines.contains(&line_index) {
                 continue;
@@ -607,8 +622,12 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
             if links.is_empty() {
                 continue;
             }
-            raw_references
+            all_references
                 .extend(links.iter().map(|link| link.reference.clone()));
+            if entry.open {
+                raw_references
+                    .extend(links.iter().map(|link| link.reference.clone()));
+            }
             bullets.push(LinkBullet {
                 entry_index,
                 line_index,
@@ -629,6 +648,7 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
         entries,
         bullets,
         raw_references,
+        all_references,
     }
 }
 
@@ -675,6 +695,7 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
             break;
         };
         let inside = &after_open[..close];
+        let link_end = absolute_open + 2 + close + 2;
         let link_target = inside.split('|').next().unwrap_or("");
         if let Some(fragment) = link_target.find("#^") {
             let target = link_target[..fragment].trim();
@@ -682,13 +703,27 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
             if !block_id.is_empty()
                 && block_id.bytes().all(collect_done::is_block_id_byte)
             {
+                let embedded = line[..absolute_open].ends_with('!');
+                let token_start = absolute_open - usize::from(embedded);
+                let struck = line[..token_start].ends_with("~~")
+                    && line[link_end..].starts_with("~~");
+                let edit_start = token_start - if struck { 2 } else { 0 };
+                let edit_end = link_end + if struck { 2 } else { 0 };
+                let wikilink = &line[absolute_open..link_end];
+                let canonical_token = format!("~~{wikilink}~~");
+                let canonical = !embedded
+                    && struck
+                    && &line[edit_start..edit_end] == canonical_token;
                 links.push(LinkOccurrence {
                     reference: RawReference {
                         target: target.to_string(),
                         block_id: block_id.to_string(),
                     },
-                    open_offset: absolute_open,
-                    embedded: line[..absolute_open].ends_with('!'),
+                    edit_start,
+                    edit_end,
+                    canonical_token,
+                    embedded,
+                    canonical,
                 });
             }
         }
@@ -874,9 +909,9 @@ fn plan_structural_changes(
         .position(|entry| entry.open && entry.timed);
     let fallback = model.entries.iter().rposition(|entry| entry.completed);
     let target_entry = current.or(fallback);
-    let mut embed_offsets: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+    let mut token_edits: BTreeMap<usize, Vec<TokenEdit>> = BTreeMap::new();
     let mut move_candidates = Vec::new();
-    let mut embedded = Vec::new();
+    let mut struck = Vec::new();
     let mut moved = Vec::new();
 
     for bullet in &model.bullets {
@@ -897,17 +932,24 @@ fn plan_structural_changes(
         }
         let source = &model.entries[bullet.entry_index];
         for link in &completed_links {
-            if !link.embedded {
-                embed_offsets
-                    .entry(bullet.line_index)
-                    .or_default()
-                    .insert(link.open_offset);
-                embedded.push(EmbeddedCompletedReference {
+            if !link.canonical {
+                token_edits.entry(bullet.line_index).or_default().push(
+                    TokenEdit {
+                        start: link.edit_start,
+                        end: link.edit_end,
+                        replacement: link.canonical_token.clone(),
+                    },
+                );
+                struck.push(StruckCompletedReference {
                     target: link.reference.target.clone(),
                     block_id: link.reference.block_id.clone(),
                     pomodoro: source.context.clone(),
+                    removed_embed: link.embedded,
                 });
             }
+        }
+        if !source.open {
+            continue;
         }
         let Some(target) = target_entry else {
             continue;
@@ -943,10 +985,10 @@ fn plan_structural_changes(
     }
 
     StructuralPlan {
-        embed_offsets,
+        token_edits,
         moves,
         target_entry,
-        embedded,
+        struck,
         moved,
     }
 }
@@ -956,16 +998,19 @@ fn apply_structural_plan(
     model: &PomodoroModel,
     plan: &StructuralPlan,
 ) -> String {
-    if plan.embed_offsets.is_empty() && plan.moves.is_empty() {
+    if plan.token_edits.is_empty() && plan.moves.is_empty() {
         return contents.to_string();
     }
     let mut lines = contents
         .split_inclusive('\n')
         .map(str::to_string)
         .collect::<Vec<_>>();
-    for (line_index, offsets) in &plan.embed_offsets {
-        for offset in offsets.iter().rev() {
-            lines[*line_index].insert(*offset, '!');
+    for (line_index, edits) in &plan.token_edits {
+        let mut edits = edits.iter().collect::<Vec<_>>();
+        edits.sort_by_key(|edit| edit.start);
+        for edit in edits.into_iter().rev() {
+            lines[*line_index]
+                .replace_range(edit.start..edit.end, &edit.replacement);
         }
     }
 
@@ -1010,7 +1055,7 @@ fn apply_structural_plan(
         "\n"
     };
     let mut output =
-        String::with_capacity(contents.len() + plan.embedded.len());
+        String::with_capacity(contents.len() + plan.struck.len() * 4);
     for index in 0..=lines.len() {
         if insertion_line == Some(index) && !moved_lines.is_empty() {
             if !output.is_empty() && !output.ends_with('\n') {
@@ -1560,7 +1605,7 @@ fn print_human_result(result: &SyncResult) {
     let styler = Styler::detect();
     let change_count = result.marked_next.len()
         + result.cleared.len()
-        + result.embedded_completed_references.len()
+        + result.struck_completed_references.len()
         + result.moved_completed_references.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
@@ -1617,29 +1662,36 @@ fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} cleared, {} embedded, {} moved",
+        "Summary: {} marked next, {} cleared, {} struck, {} moved",
         result.marked_next.len(),
         result.cleared.len(),
-        result.embedded_completed_references.len(),
+        result.struck_completed_references.len(),
         result.moved_completed_references.len()
     );
 }
 
 fn print_completed_reference_sections(result: &SyncResult) {
-    if !result.embedded_completed_references.is_empty() {
+    if !result.struck_completed_references.is_empty() {
         println!();
         println!(
             "  {} completed references",
             if result.dry_run {
-                "would embed"
+                "would retire"
             } else {
-                "embedded"
+                "retired"
             }
         );
-        for item in &result.embedded_completed_references {
+        for item in &result.struck_completed_references {
             println!(
-                "    ![[{}#^{}]]  {}",
-                item.target, item.block_id, item.pomodoro
+                "    ~~[[{}#^{}]]~~  {}{}",
+                item.target,
+                item.block_id,
+                item.pomodoro,
+                if item.removed_embed {
+                    " (removed embed)"
+                } else {
+                    ""
+                }
             );
         }
     }
@@ -1898,7 +1950,7 @@ mod tests {
     }
 
     #[test]
-    fn moves_completed_mixed_bullet_subtree_to_current_and_embeds_only_done() {
+    fn moves_completed_mixed_bullet_subtree_to_current_and_strikes_only_done() {
         let contents = concat!(
             "- [ ] Current (0900-0930)\n",
             "  - Existing child\n",
@@ -1926,7 +1978,7 @@ mod tests {
             concat!(
                 "- [ ] Current (0900-0930)\n",
                 "  - Existing child\n",
-                "  - ![[dev#^done|Done]] and [[dev#^todo]]\n",
+                "  - ~~[[dev#^done|Done]]~~ and [[dev#^todo]]\n",
                 "    - Nested detail\n",
                 "- [ ] Future\n",
                 "  ```\n",
@@ -1934,8 +1986,52 @@ mod tests {
                 "  ```\n",
             )
         );
-        assert_eq!(plan.embedded.len(), 1);
+        assert_eq!(plan.struck.len(), 1);
         assert_eq!(plan.moved.len(), 1);
+    }
+
+    #[test]
+    fn repairs_completed_pomodoro_links_in_place_and_is_idempotent() {
+        let contents = concat!(
+            "- [x] Historical (0800-0830)\r\n",
+            "  - ![[dev#^done|Embedded]] and [[dev#^done|Plain]]\r\n",
+            "  - ~~![[dev#^done|Stale]]~~ and ~~[[dev#^done|Canonical]]~~\r\n",
+            "- [ ] Current (0900-0930)\r\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        assert!(model.raw_references.is_empty());
+        assert_eq!(model.all_references.len(), 1);
+        let plan = plan_structural_changes(
+            &model,
+            &resolved(&[("dev", "done", vec!['x'])]),
+            &BTreeSet::from(['x', 'X']),
+        );
+        assert!(plan.moves.is_empty());
+        assert_eq!(plan.struck.len(), 3);
+        let updated = apply_structural_plan(contents, &model, &plan);
+        assert_eq!(
+            updated,
+            concat!(
+                "- [x] Historical (0800-0830)\r\n",
+                "  - ~~[[dev#^done|Embedded]]~~ and ~~[[dev#^done|Plain]]~~\r\n",
+                "  - ~~[[dev#^done|Stale]]~~ and ~~[[dev#^done|Canonical]]~~\r\n",
+                "- [ ] Current (0900-0930)\r\n",
+            )
+        );
+        let updated_lines = logical_lines(&updated);
+        let updated_model =
+            scan_pomodoros(&updated_lines, 0..updated_lines.len());
+        let second = plan_structural_changes(
+            &updated_model,
+            &resolved(&[("dev", "done", vec!['x'])]),
+            &BTreeSet::from(['x', 'X']),
+        );
+        assert!(second.token_edits.is_empty());
+        assert_eq!(
+            apply_structural_plan(&updated, &updated_model, &second),
+            updated
+        );
     }
 
     #[test]
@@ -1948,7 +2044,7 @@ mod tests {
             &resolved(&[("dev", "duplicate", vec!['x', ' '])]),
             &BTreeSet::from(['x', 'X']),
         );
-        assert!(plan.embed_offsets.is_empty());
+        assert!(plan.token_edits.is_empty());
         assert!(plan.moves.is_empty());
         assert_eq!(apply_structural_plan(contents, &model, &plan), contents);
     }
