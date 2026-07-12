@@ -3,8 +3,9 @@
 `bob mark-next-tasks` makes today's Pomodoro ledger the source of truth for
 which vault tasks have the Obsidian Tasks **Next** status (`[*]`) and keeps
 references to completed tasks retired as struck, non-embedded links beneath
-their Pomodoros. Links beneath completed Pomodoros carry the machine-owned
-Pomodoro marker (`🍅`), while links beneath open Pomodoros do not. It
+their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
+the machine-owned Pomodoro marker (`🍅`); embedded and provenance-unknown
+retired links do not. Links beneath open Pomodoros are unmarked. It
 also follows transcluded dependency bullets recursively, so the complete
 active dependency chain becomes Next.
 
@@ -96,22 +97,27 @@ complete are changed. Canonical struck links are unchanged.
 
 ## Pomodoro Marker
 
-Every block-link token in a sub-bullet beneath a completed (`[x]` or `[X]`)
-Pomodoro is prefixed with `🍅 ` outside any strike envelope. The marker belongs
-to the individual link, not the bullet:
+The marker records that a non-transcluded link participated in a completed
+Pomodoro. It belongs to the individual link, not the bullet, and is normalized
+from each occurrence's syntax before retirement:
 
 | Link state | Canonical grammar |
 | --- | --- |
-| live | `🍅 [[dev#^write-tests]]` |
-| retired | `🍅 ~~[[dev#^write-tests|alias]]~~` |
-| embedded anomaly | `🍅 ![[dev#^reference]]` |
-| mixed content | `Work on 🍅 [[a#^x]] and 🍅 ~~[[b#^y]]~~` |
+| completed, live non-transcluded | `🍅 [[dev#^write-tests]]` |
+| completed, embedded | `![[dev#^reference]]` |
+| retired with recorded participation | `🍅 ~~[[dev#^write-tests|alias]]~~` |
+| retired with unknown/embed provenance | `~~[[dev#^reference]]~~` |
+| mixed content | `Work on 🍅 [[a#^x]] and ~~[[b#^y]]~~` |
 
-The sync repairs historical and manually edited entries: it adds missing
-markers beneath completed Pomodoros, removes stray markers beneath open
-Pomodoros, and collapses duplicates. Cancelled (`[-]`) Pomodoros, fenced code,
-the top-level Pomodoro line, and links outside `## Pomodoros` are untouched.
-Marker repair is decoration-only and never changes Next/dependency selection.
+The sync adds or canonicalizes markers on live non-transcluded links beneath
+completed Pomodoros and removes markers from embedded links. For an already
+struck non-embedded link, it preserves whether a marker exists: an existing
+marker is canonicalized, but a missing marker is not backfilled because the
+strike may be the only surviving evidence that the link was retired from a
+transclusion. Open Pomodoros are unmarked. Cancelled (`[-]`) Pomodoros, fenced
+code, the top-level Pomodoro line, and links outside `## Pomodoros` are
+untouched. Marker repair is decoration-only and never changes Next/dependency
+selection.
 
 The containing bullet is relocated according to this order:
 
@@ -127,8 +133,10 @@ parent, multiple moved bullets retain their document order, and the root
 indentation is normalized to the destination's child indentation. When the
 current Pomodoro is already the owner, only retirement is needed. A repair
 found beneath a completed Pomodoro is always normalized in place and is never
-moved into a newer session. A bullet moved to the completed fallback gains
-markers; a bullet moved to the current open Pomodoro remains unmarked.
+moved into a newer session. On a bullet moved to the completed fallback, a
+completed embedded link becomes unmarked `~~[[...]]~~`, while a completed live
+non-transcluded link becomes `🍅 ~~[[...]]~~`. A bullet moved to the current
+open Pomodoro remains unmarked.
 
 For example, a completed task under a future Pomodoro is moved to the current
 timed entry:

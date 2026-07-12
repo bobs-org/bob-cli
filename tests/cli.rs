@@ -725,10 +725,10 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         json["moved_completed_references"].as_array().unwrap().len(),
         1
     );
-    assert_eq!(json["marker_added_references"].as_array().unwrap().len(), 3);
+    assert_eq!(json["marker_added_references"].as_array().unwrap().len(), 1);
     assert_eq!(
         json["marker_removed_references"].as_array().unwrap().len(),
-        1
+        2
     );
     assert_eq!(json["unresolved_references"].as_array().unwrap().len(), 1);
     assert!(json["unresolved_references"][0]["reason"]
@@ -803,8 +803,8 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     assert!(daily_contents.contains(concat!(
         "- [x] Closed session (0930-1000)\n",
         "  - 🍅 [[dev#^closed]]\n",
-        "  - 🍅 ~~[[dev#^done|historical completed work]]~~\n",
-        "  - 🍅 ~~[[dev#^done|historical embedded work]]~~\n",
+        "  - ~~[[dev#^done|historical completed work]]~~\n",
+        "  - ~~[[dev#^done|historical embedded work]]~~\n",
     )));
     let alpha_contents =
         fs::read_to_string(&alpha).expect("read updated alpha");

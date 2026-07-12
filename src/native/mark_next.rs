@@ -273,7 +273,6 @@ struct LinkOccurrence {
     embedded: bool,
     struck: bool,
     marker_count: usize,
-    marker_canonical: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -736,7 +735,7 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
                     exact_struck_span.map_or(token_start, |span| span.start);
                 let edit_end =
                     exact_struck_span.map_or(link_end, |span| span.end);
-                let (edit_start, marker_count, marker_canonical) =
+                let (edit_start, marker_count) =
                     pomodoro_marker_prefix(line, display_start);
                 let wikilink = &line[absolute_open..link_end];
                 let before = if !struck && line[..token_start].ends_with("~~") {
@@ -785,7 +784,6 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
                     embedded,
                     struck,
                     marker_count,
-                    marker_canonical,
                 });
             }
         }
@@ -795,10 +793,7 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
     links
 }
 
-fn pomodoro_marker_prefix(
-    line: &str,
-    token_start: usize,
-) -> (usize, usize, bool) {
+fn pomodoro_marker_prefix(line: &str, token_start: usize) -> (usize, usize) {
     let mut cursor = token_start;
     let mut count = 0;
     loop {
@@ -818,13 +813,9 @@ fn pomodoro_marker_prefix(
         count += 1;
     }
     if count == 0 {
-        return (token_start, 0, false);
+        return (token_start, 0);
     }
-    (
-        cursor,
-        count,
-        &line[cursor..token_start] == format!("{POMODORO_MARKER} "),
-    )
+    (cursor, count)
 }
 
 fn desired_link_token(
@@ -838,6 +829,23 @@ fn desired_link_token(
         (false, true) => &link.preserved_marked_token,
         (false, false) => &link.preserved_unmarked_token,
     }
+}
+
+fn completed_pomodoro_marker_expected(link: &LinkOccurrence) -> bool {
+    if link.embedded {
+        return false;
+    }
+    if link.struck {
+        return link.marker_count > 0;
+    }
+    true
+}
+
+fn marker_expected_for_occurrence(
+    entry: &PomodoroEntry,
+    link: &LinkOccurrence,
+) -> bool {
+    entry.completed && completed_pomodoro_marker_expected(link)
 }
 
 fn strikethrough_spans(line: &str) -> Vec<std::ops::Range<usize>> {
@@ -1025,12 +1033,14 @@ fn plan_structural_changes(
             None
         };
         let final_entry = move_target.unwrap_or(bullet.entry_index);
-        let marker_expected = model.entries[final_entry].completed;
-
         for link in &bullet.links {
             let retire = completed_links
                 .iter()
                 .any(|completed| std::ptr::eq(*completed, link));
+            let marker_expected = marker_expected_for_occurrence(
+                &model.entries[final_entry],
+                link,
+            );
             let replacement = desired_link_token(link, retire, marker_expected);
             if link.current_token != replacement {
                 token_edits.entry(bullet.line_index).or_default().push(
@@ -1050,18 +1060,14 @@ fn plan_structural_changes(
                 });
             }
 
-            let marker_is_canonical = if marker_expected {
-                link.marker_count == 1 && link.marker_canonical
-            } else {
-                link.marker_count == 0
-            };
-            if !marker_is_canonical {
+            let desired_marker_count = usize::from(marker_expected);
+            if link.marker_count != desired_marker_count {
                 let item = MarkerReference {
                     target: link.reference.target.clone(),
                     block_id: link.reference.block_id.clone(),
                     pomodoro: model.entries[final_entry].context.clone(),
                 };
-                if marker_expected {
+                if link.marker_count < desired_marker_count {
                     marker_added.push(item);
                 } else {
                     marker_removed.push(item);
@@ -2194,7 +2200,6 @@ mod tests {
         );
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].marker_count, 1);
-        assert!(!links[0].marker_canonical);
         assert_eq!(
             links[0].preserved_marked_token,
             "🍅 ![[dev#^embedded|Alias]]"
@@ -2265,8 +2270,8 @@ mod tests {
     fn repairs_completed_pomodoro_links_in_place_and_is_idempotent() {
         let contents = concat!(
             "- [x] Historical (0800-0830)\r\n",
-            "  - ![[dev#^done|Embedded]] and [[dev#^done|Plain]]\r\n",
-            "  - ~~![[dev#^done|Stale]]~~ and ~~[[dev#^done|Canonical]]~~\r\n",
+            "  - 🍅 ![[dev#^done|Embedded]] and [[dev#^done|Plain]]\r\n",
+            "  - 🍅 ~~![[dev#^done|Stale]]~~ and ~~[[dev#^done|Canonical]]~~\r\n",
             "- [ ] Current (0900-0930)\r\n",
         );
         let lines = logical_lines(contents);
@@ -2285,13 +2290,13 @@ mod tests {
             updated,
             concat!(
                 "- [x] Historical (0800-0830)\r\n",
-                "  - 🍅 ~~[[dev#^done|Embedded]]~~ and 🍅 ~~[[dev#^done|Plain]]~~\r\n",
-                "  - 🍅 ~~[[dev#^done|Stale]]~~ and 🍅 ~~[[dev#^done|Canonical]]~~\r\n",
+                "  - ~~[[dev#^done|Embedded]]~~ and 🍅 ~~[[dev#^done|Plain]]~~\r\n",
+                "  - ~~[[dev#^done|Stale]]~~ and ~~[[dev#^done|Canonical]]~~\r\n",
                 "- [ ] Current (0900-0930)\r\n",
             )
         );
-        assert_eq!(plan.marker_added.len(), 4);
-        assert!(plan.marker_removed.is_empty());
+        assert_eq!(plan.marker_added.len(), 1);
+        assert_eq!(plan.marker_removed.len(), 2);
         let updated_lines = logical_lines(&updated);
         let updated_model =
             scan_pomodoros(&updated_lines, 0..updated_lines.len());
@@ -2335,8 +2340,8 @@ mod tests {
             ]),
             &BTreeSet::from(['x', 'X']),
         );
-        assert_eq!(plan.marker_added.len(), 3);
-        assert_eq!(plan.marker_removed.len(), 1);
+        assert_eq!(plan.marker_added.len(), 2);
+        assert_eq!(plan.marker_removed.len(), 2);
         let updated = apply_structural_plan(contents, &model, &plan);
         assert_eq!(
             updated,

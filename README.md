@@ -208,9 +208,10 @@ Synchronizes the vault's `[*]` Next tasks from block links beneath open
 Pomodoros in today's daily note. A linked `[ ]` task becomes `[*]`; an
 unlinked `[*]` task becomes `[ ]`. It also retires links to completed Tasks
 tasks as `~~[[...]]~~` and moves bullets found beneath open Pomodoros to the current timed Pomodoro, or
-the last completed Pomodoro when there is no current one. It also maintains a
-`🍅 ` marker before every block link beneath a completed Pomodoro and removes
-stray markers beneath open Pomodoros. In-progress `[/]`,
+the last completed Pomodoro when there is no current one. It also marks live
+non-transcluded links beneath completed Pomodoros, keeps embedded links
+unmarked, preserves the marker provenance of already-struck history, and
+removes stray markers beneath open Pomodoros. In-progress `[/]`,
 completed, canceled, unknown, and non-Tasks checkbox statuses are not changed.
 
 For example, this open ledger entry makes the linked task Next:
