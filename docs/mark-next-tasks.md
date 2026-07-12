@@ -3,7 +3,8 @@
 `bob mark-next-tasks` makes today's Pomodoro ledger the source of truth for
 which vault tasks have the Obsidian Tasks **Next** status (`[*]`) and keeps
 references to completed tasks retired as struck, non-embedded links beneath
-their Pomodoros. It
+their Pomodoros. Links beneath completed Pomodoros carry the machine-owned
+Pomodoro marker (`🍅`), while links beneath open Pomodoros do not. It
 also follows transcluded dependency bullets recursively, so the complete
 active dependency chain becomes Next.
 
@@ -30,7 +31,7 @@ from indented bullets beneath open top-level Pomodoro entries:
   - [[dev#^write-design]]
   - Review [[Projects/Alpha#^parser-review]]
 - [x] Earlier session (0830-0900)
-  - [[dev#^closed-session-link-is-not-a-next-source]]
+  - 🍅 [[dev#^closed-session-link-is-not-a-next-source]]
 ```
 
 Only links with a block fragment (`[[note#^block-id]]`) count. Ordinary note
@@ -93,6 +94,25 @@ that link as `~~[[...]]~~`. Aliases and neighboring text are preserved, so
 `~~[[dev#^done|result]]~~`. On mixed-content bullets, only links proven
 complete are changed. Canonical struck links are unchanged.
 
+## Pomodoro Marker
+
+Every block-link token in a sub-bullet beneath a completed (`[x]` or `[X]`)
+Pomodoro is prefixed with `🍅 ` outside any strike envelope. The marker belongs
+to the individual link, not the bullet:
+
+| Link state | Canonical grammar |
+| --- | --- |
+| live | `🍅 [[dev#^write-tests]]` |
+| retired | `🍅 ~~[[dev#^write-tests|alias]]~~` |
+| embedded anomaly | `🍅 ![[dev#^reference]]` |
+| mixed content | `Work on 🍅 [[a#^x]] and 🍅 ~~[[b#^y]]~~` |
+
+The sync repairs historical and manually edited entries: it adds missing
+markers beneath completed Pomodoros, removes stray markers beneath open
+Pomodoros, and collapses duplicates. Cancelled (`[-]`) Pomodoros, fenced code,
+the top-level Pomodoro line, and links outside `## Pomodoros` are untouched.
+Marker repair is decoration-only and never changes Next/dependency selection.
+
 The containing bullet is relocated according to this order:
 
 1. The single open top-level Pomodoro with a valid time range is the current
@@ -107,7 +127,8 @@ parent, multiple moved bullets retain their document order, and the root
 indentation is normalized to the destination's child indentation. When the
 current Pomodoro is already the owner, only retirement is needed. A repair
 found beneath a completed Pomodoro is always normalized in place and is never
-moved into a newer session.
+moved into a newer session. A bullet moved to the completed fallback gains
+markers; a bullet moved to the current open Pomodoro remains unmarked.
 
 For example, a completed task under a future Pomodoro is moved to the current
 timed entry:
@@ -122,7 +143,7 @@ With no timed open entry, the last completed entry is the fallback:
 
 ```markdown
 - [x] Earlier work
-  - ~~[[dev#^finished]]~~
+  - 🍅 ~~[[dev#^finished]]~~
 - [ ] Future work
 ```
 
@@ -154,8 +175,10 @@ and left structurally unchanged.
 
 ## Output
 
-Human output lists every promotion, clear, retired reference, and move, followed by a
-summary. Dependency-derived promotions carry a `(dependency)` suffix. Dry-run
+Human output lists every promotion, clear, retired reference, move, and marker
+repair, followed by a summary. Marker additions and removals have their own
+`marked`/`unmarked` sections and summary counts. Dependency-derived promotions
+carry a `(dependency)` suffix. Dry-run
 uses the same planning path and reports what would happen
 without changing any file. Warnings go to stderr. A no-op prints a single
 `already in sync` line only when neither task statuses nor daily-note links
@@ -206,6 +229,14 @@ JSON mode prints one object on stdout with these stable fields:
       "destination_pomodoro": "- [ ] Current work (0900-0930)"
     }
   ],
+  "marker_added_references": [
+    {
+      "target": "dev",
+      "block_id": "finished",
+      "pomodoro": "- [x] Earlier work"
+    }
+  ],
+  "marker_removed_references": [],
   "kept_next": 0,
   "kept_in_progress": 1,
   "unresolved_references": []
@@ -215,7 +246,8 @@ JSON mode prints one object on stdout with these stable fields:
 `references` counts direct Pomodoro block links; `dependency_references` counts
 additional unique task blocks reached through dependency edges. Each change
 item's `dependency` boolean distinguishes the two sources. Each unresolved
-reference contains `target`, `block_id`, and `reason`. JSON
+reference contains `target`, `block_id`, and `reason`; marker-reference entries
+contain `target`, `block_id`, and the owning `pomodoro` line. JSON
 failures also remain machine-readable as `{ "ok": false, "error": "..." }`.
 `embedded_completed_references` is a deprecated, always-empty compatibility
 field for one contract cycle.

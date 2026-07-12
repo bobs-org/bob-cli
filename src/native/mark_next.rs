@@ -14,6 +14,8 @@ use clap::{
 use serde::Serialize;
 use serde_json::{json, Value};
 
+const POMODORO_MARKER: &str = "🍅";
+
 use super::{
     collect_done, env as bob_env, is_always_excluded_note_directory_name,
     pomodoro,
@@ -184,6 +186,13 @@ struct MovedCompletedReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct MarkerReference {
+    target: String,
+    block_id: String,
+    pomodoro: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct SyncResult {
     ok: bool,
     dry_run: bool,
@@ -197,6 +206,8 @@ struct SyncResult {
     struck_completed_references: Vec<StruckCompletedReference>,
     embedded_completed_references: Vec<StruckCompletedReference>,
     moved_completed_references: Vec<MovedCompletedReference>,
+    marker_added_references: Vec<MarkerReference>,
+    marker_removed_references: Vec<MarkerReference>,
     kept_next: usize,
     kept_in_progress: usize,
     unresolved_references: Vec<UnresolvedReference>,
@@ -254,10 +265,15 @@ struct LinkOccurrence {
     reference: RawReference,
     edit_start: usize,
     edit_end: usize,
-    canonical_token: String,
+    current_token: String,
+    preserved_marked_token: String,
+    preserved_unmarked_token: String,
+    retired_marked_token: String,
+    retired_unmarked_token: String,
     embedded: bool,
-    canonical: bool,
     struck: bool,
+    marker_count: usize,
+    marker_canonical: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -291,6 +307,8 @@ struct StructuralPlan {
     target_entry: Option<usize>,
     struck: Vec<StruckCompletedReference>,
     moved: Vec<MovedCompletedReference>,
+    marker_added: Vec<MarkerReference>,
+    marker_removed: Vec<MarkerReference>,
 }
 
 #[derive(Debug, Clone)]
@@ -543,6 +561,8 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
         struck_completed_references: structural_plan.struck,
         embedded_completed_references: Vec::new(),
         moved_completed_references: structural_plan.moved,
+        marker_added_references: structural_plan.marker_added,
+        marker_removed_references: structural_plan.marker_removed,
         kept_next,
         kept_in_progress,
         unresolved_references: unresolved,
@@ -712,17 +732,14 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
                 let exact_struck_span = struck_span.filter(|span| {
                     token_start == span.start + 2 && link_end == span.end - 2
                 });
-                let edit_start = exact_struck_span
-                    .filter(|_| embedded)
-                    .map_or(token_start, |span| span.start);
-                let edit_end = exact_struck_span
-                    .filter(|_| embedded)
-                    .map_or(link_end, |span| span.end);
+                let display_start =
+                    exact_struck_span.map_or(token_start, |span| span.start);
+                let edit_end =
+                    exact_struck_span.map_or(link_end, |span| span.end);
+                let (edit_start, marker_count, marker_canonical) =
+                    pomodoro_marker_prefix(line, display_start);
                 let wikilink = &line[absolute_open..link_end];
-                let before = if !struck
-                    && token_start >= 2
-                    && &line[token_start - 2..token_start] == "~~"
-                {
+                let before = if !struck && line[..token_start].ends_with("~~") {
                     " "
                 } else {
                     ""
@@ -732,8 +749,25 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
                 } else {
                     ""
                 };
-                let canonical_token = format!("{before}~~{wikilink}~~{after}");
-                let canonical = struck && !embedded;
+                let preserved = &line[display_start..edit_end];
+                let (retired_marked_token, retired_unmarked_token) = if struck {
+                    if exact_struck_span.is_some() {
+                        let token = format!("~~{wikilink}~~");
+                        (format!("{POMODORO_MARKER} {token}"), token)
+                    } else {
+                        (
+                            format!("{POMODORO_MARKER} {wikilink}"),
+                            wikilink.to_string(),
+                        )
+                    }
+                } else {
+                    (
+                        format!(
+                            "{before}{POMODORO_MARKER} ~~{wikilink}~~{after}"
+                        ),
+                        format!("{before}~~{wikilink}~~{after}"),
+                    )
+                };
                 links.push(LinkOccurrence {
                     reference: RawReference {
                         target: target.to_string(),
@@ -741,10 +775,17 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
                     },
                     edit_start,
                     edit_end,
-                    canonical_token,
+                    current_token: line[edit_start..edit_end].to_string(),
+                    preserved_marked_token: format!(
+                        "{POMODORO_MARKER} {preserved}"
+                    ),
+                    preserved_unmarked_token: preserved.to_string(),
+                    retired_marked_token,
+                    retired_unmarked_token,
                     embedded,
-                    canonical,
                     struck,
+                    marker_count,
+                    marker_canonical,
                 });
             }
         }
@@ -752,6 +793,51 @@ fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
         rest = &after_open[close + 2..];
     }
     links
+}
+
+fn pomodoro_marker_prefix(
+    line: &str,
+    token_start: usize,
+) -> (usize, usize, bool) {
+    let mut cursor = token_start;
+    let mut count = 0;
+    loop {
+        let whitespace_end = cursor;
+        let mut marker_end = cursor;
+        while marker_end > 0
+            && matches!(line.as_bytes()[marker_end - 1], b' ' | b'\t')
+        {
+            marker_end -= 1;
+        }
+        if marker_end == whitespace_end
+            || !line[..marker_end].ends_with(POMODORO_MARKER)
+        {
+            break;
+        }
+        cursor = marker_end - POMODORO_MARKER.len();
+        count += 1;
+    }
+    if count == 0 {
+        return (token_start, 0, false);
+    }
+    (
+        cursor,
+        count,
+        &line[cursor..token_start] == format!("{POMODORO_MARKER} "),
+    )
+}
+
+fn desired_link_token(
+    link: &LinkOccurrence,
+    retire: bool,
+    marked: bool,
+) -> &str {
+    match (retire, marked) {
+        (true, true) => &link.retired_marked_token,
+        (true, false) => &link.retired_unmarked_token,
+        (false, true) => &link.preserved_marked_token,
+        (false, false) => &link.preserved_unmarked_token,
+    }
 }
 
 fn strikethrough_spans(line: &str) -> Vec<std::ops::Range<usize>> {
@@ -904,6 +990,8 @@ fn plan_structural_changes(
     let mut move_candidates = Vec::new();
     let mut struck = Vec::new();
     let mut moved = Vec::new();
+    let mut marker_added = Vec::new();
+    let mut marker_removed = Vec::new();
 
     for bullet in &model.bullets {
         let completed_links = bullet
@@ -918,19 +1006,42 @@ fn plan_structural_changes(
                 })
             })
             .collect::<Vec<_>>();
-        if completed_links.is_empty() {
-            continue;
-        }
         let source = &model.entries[bullet.entry_index];
-        for link in &completed_links {
-            if !link.canonical {
+        let move_target = if !completed_links.is_empty() && source.open {
+            target_entry.filter(|target| {
+                if *target == bullet.entry_index {
+                    return false;
+                }
+                let has_live_reference = bullet.links.iter().any(|link| {
+                    resolved.get(&link.reference).is_some_and(|reference| {
+                        reference.statuses.iter().any(|status| {
+                            !is_done_status(*status, done_statuses)
+                        })
+                    })
+                });
+                model.entries[*target].open || !has_live_reference
+            })
+        } else {
+            None
+        };
+        let final_entry = move_target.unwrap_or(bullet.entry_index);
+        let marker_expected = model.entries[final_entry].completed;
+
+        for link in &bullet.links {
+            let retire = completed_links
+                .iter()
+                .any(|completed| std::ptr::eq(*completed, link));
+            let replacement = desired_link_token(link, retire, marker_expected);
+            if link.current_token != replacement {
                 token_edits.entry(bullet.line_index).or_default().push(
                     TokenEdit {
                         start: link.edit_start,
                         end: link.edit_end,
-                        replacement: link.canonical_token.clone(),
+                        replacement: replacement.to_string(),
                     },
                 );
+            }
+            if retire && (!link.struck || link.embedded) {
                 struck.push(StruckCompletedReference {
                     target: link.reference.target.clone(),
                     block_id: link.reference.block_id.clone(),
@@ -938,39 +1049,40 @@ fn plan_structural_changes(
                     removed_embed: link.embedded,
                 });
             }
+
+            let marker_is_canonical = if marker_expected {
+                link.marker_count == 1 && link.marker_canonical
+            } else {
+                link.marker_count == 0
+            };
+            if !marker_is_canonical {
+                let item = MarkerReference {
+                    target: link.reference.target.clone(),
+                    block_id: link.reference.block_id.clone(),
+                    pomodoro: model.entries[final_entry].context.clone(),
+                };
+                if marker_expected {
+                    marker_added.push(item);
+                } else {
+                    marker_removed.push(item);
+                }
+            }
         }
-        if !source.open {
-            continue;
-        }
-        let Some(target) = target_entry else {
-            continue;
-        };
-        if target == bullet.entry_index {
-            continue;
-        }
-        let has_live_reference = bullet.links.iter().any(|link| {
-            resolved.get(&link.reference).is_some_and(|reference| {
-                reference
-                    .statuses
-                    .iter()
-                    .any(|status| !is_done_status(*status, done_statuses))
-            })
-        });
-        if !model.entries[target].open && has_live_reference {
-            continue;
-        }
-        move_candidates.push(BulletMove {
-            start_line: bullet.line_index,
-            end_line: bullet.end_line,
-            source_indentation: bullet.indentation.clone(),
-        });
-        for link in completed_links {
-            moved.push(MovedCompletedReference {
-                target: link.reference.target.clone(),
-                block_id: link.reference.block_id.clone(),
-                source_pomodoro: source.context.clone(),
-                destination_pomodoro: model.entries[target].context.clone(),
+
+        if let Some(target) = move_target {
+            move_candidates.push(BulletMove {
+                start_line: bullet.line_index,
+                end_line: bullet.end_line,
+                source_indentation: bullet.indentation.clone(),
             });
+            for link in completed_links {
+                moved.push(MovedCompletedReference {
+                    target: link.reference.target.clone(),
+                    block_id: link.reference.block_id.clone(),
+                    source_pomodoro: source.context.clone(),
+                    destination_pomodoro: model.entries[target].context.clone(),
+                });
+            }
         }
     }
 
@@ -992,6 +1104,8 @@ fn plan_structural_changes(
         target_entry,
         struck,
         moved,
+        marker_added,
+        marker_removed,
     }
 }
 
@@ -1626,7 +1740,9 @@ fn print_human_result(result: &SyncResult) {
     let change_count = result.marked_next.len()
         + result.cleared.len()
         + result.struck_completed_references.len()
-        + result.moved_completed_references.len();
+        + result.moved_completed_references.len()
+        + result.marker_added_references.len()
+        + result.marker_removed_references.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
     } else {
@@ -1674,6 +1790,7 @@ fn print_human_result(result: &SyncResult) {
         false,
     );
     print_completed_reference_sections(result);
+    print_marker_reference_sections(result);
     if result.kept_next > 0 || result.kept_in_progress > 0 {
         println!();
         println!(
@@ -1682,12 +1799,49 @@ fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} cleared, {} struck, {} moved",
+        "Summary: {} marked next, {} cleared, {} struck, {} moved, {} marked, {} unmarked",
         result.marked_next.len(),
         result.cleared.len(),
         result.struck_completed_references.len(),
-        result.moved_completed_references.len()
+        result.moved_completed_references.len(),
+        result.marker_added_references.len(),
+        result.marker_removed_references.len()
     );
+}
+
+fn print_marker_reference_sections(result: &SyncResult) {
+    for (items, dry_heading, heading, marker) in [
+        (
+            &result.marker_added_references,
+            "would mark",
+            "marked",
+            "🍅",
+        ),
+        (
+            &result.marker_removed_references,
+            "would unmark",
+            "unmarked",
+            "",
+        ),
+    ] {
+        if items.is_empty() {
+            continue;
+        }
+        println!();
+        println!(
+            "  {} Pomodoro references",
+            if result.dry_run { dry_heading } else { heading }
+        );
+        for item in items {
+            println!(
+                "    {}[[{}#^{}]]  {}",
+                if marker.is_empty() { "" } else { "🍅 " },
+                item.target,
+                item.block_id,
+                item.pomodoro
+            );
+        }
+    }
 }
 
 fn print_completed_reference_sections(result: &SyncResult) {
@@ -1925,7 +2079,8 @@ mod tests {
         assert!(model.raw_references.contains(&reference("dev", "live")));
         let live = &model.bullets[1].links[0];
         assert!(!live.struck);
-        assert!(live.canonical_token.starts_with(" ~~"));
+        assert!(live.retired_unmarked_token.starts_with(" ~~"));
+        assert_eq!(live.retired_marked_token, " 🍅 ~~[[dev#^live]]~~ ");
     }
 
     #[test]
@@ -2033,6 +2188,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_and_normalizes_pomodoro_marker_prefixes_per_link() {
+        let links = block_link_occurrences(
+            "  - 🍅   ![[dev#^embedded|Alias]] and 🍅 🍅 ~~[[dev#^done]]~~",
+        );
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].marker_count, 1);
+        assert!(!links[0].marker_canonical);
+        assert_eq!(
+            links[0].preserved_marked_token,
+            "🍅 ![[dev#^embedded|Alias]]"
+        );
+        assert_eq!(links[1].marker_count, 2);
+        assert_eq!(links[1].retired_marked_token, "🍅 ~~[[dev#^done]]~~");
+    }
+
+    #[test]
     fn dependency_reference_requires_a_sole_transcluded_block_link() {
         assert_eq!(
             sole_transcluded_block_reference("  - ![[Projects/A#^dep]]"),
@@ -2114,11 +2285,13 @@ mod tests {
             updated,
             concat!(
                 "- [x] Historical (0800-0830)\r\n",
-                "  - ~~[[dev#^done|Embedded]]~~ and ~~[[dev#^done|Plain]]~~\r\n",
-                "  - ~~[[dev#^done|Stale]]~~ and ~~[[dev#^done|Canonical]]~~\r\n",
+                "  - 🍅 ~~[[dev#^done|Embedded]]~~ and 🍅 ~~[[dev#^done|Plain]]~~\r\n",
+                "  - 🍅 ~~[[dev#^done|Stale]]~~ and 🍅 ~~[[dev#^done|Canonical]]~~\r\n",
                 "- [ ] Current (0900-0930)\r\n",
             )
         );
+        assert_eq!(plan.marker_added.len(), 4);
+        assert!(plan.marker_removed.is_empty());
         let updated_lines = logical_lines(&updated);
         let updated_model =
             scan_pomodoros(&updated_lines, 0..updated_lines.len());
@@ -2127,10 +2300,55 @@ mod tests {
             &resolved(&[("dev", "done", vec!['x'])]),
             &BTreeSet::from(['x', 'X']),
         );
-        assert!(second.token_edits.is_empty());
+        assert!(
+            second.token_edits.is_empty(),
+            "unexpected second-pass edits: {:?}",
+            second.token_edits
+        );
+        assert!(second.marker_added.is_empty());
+        assert!(second.marker_removed.is_empty());
         assert_eq!(
             apply_structural_plan(&updated, &updated_model, &second),
             updated
+        );
+    }
+
+    #[test]
+    fn repairs_markers_by_owner_and_marks_completed_fallback_moves() {
+        let contents = concat!(
+            "- [x] Done\n",
+            "  - [[dev#^live]] and 🍅 🍅 ~~[[dev#^done]]~~\n",
+            "- [ ] Future\n",
+            "  - 🍅 [[dev#^open]]\n",
+            "  - [[dev#^done]]\n",
+            "- [-] Cancelled\n",
+            "  - 🍅 🍅 [[dev#^cancelled]]\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let plan = plan_structural_changes(
+            &model,
+            &resolved(&[
+                ("dev", "live", vec![' ']),
+                ("dev", "done", vec!['x']),
+                ("dev", "open", vec![' ']),
+            ]),
+            &BTreeSet::from(['x', 'X']),
+        );
+        assert_eq!(plan.marker_added.len(), 3);
+        assert_eq!(plan.marker_removed.len(), 1);
+        let updated = apply_structural_plan(contents, &model, &plan);
+        assert_eq!(
+            updated,
+            concat!(
+                "- [x] Done\n",
+                "  - 🍅 [[dev#^live]] and 🍅 ~~[[dev#^done]]~~\n",
+                "  - 🍅 ~~[[dev#^done]]~~\n",
+                "- [ ] Future\n",
+                "  - [[dev#^open]]\n",
+                "- [-] Cancelled\n",
+                "  - 🍅 🍅 [[dev#^cancelled]]\n",
+            )
         );
     }
 

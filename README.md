@@ -208,7 +208,9 @@ Synchronizes the vault's `[*]` Next tasks from block links beneath open
 Pomodoros in today's daily note. A linked `[ ]` task becomes `[*]`; an
 unlinked `[*]` task becomes `[ ]`. It also retires links to completed Tasks
 tasks as `~~[[...]]~~` and moves bullets found beneath open Pomodoros to the current timed Pomodoro, or
-the last completed Pomodoro when there is no current one. In-progress `[/]`,
+the last completed Pomodoro when there is no current one. It also maintains a
+`🍅 ` marker before every block link beneath a completed Pomodoro and removes
+stray markers beneath open Pomodoros. In-progress `[/]`,
 completed, canceled, unknown, and non-Tasks checkbox statuses are not changed.
 
 For example, this open ledger entry makes the linked task Next:
@@ -219,7 +221,7 @@ For example, this open ledger entry makes the linked task Next:
 ```
 
 Run `bob mark-next-tasks --dry-run` to preview every promotion, clear, retirement,
-and move. The command refuses to change files if the daily note is missing,
+move, and Pomodoro-marker repair. The command refuses to change files if the daily note is missing,
 lacks a `Pomodoros` section, or has multiple open timed Pomodoros. The full
 sync, link-resolution, exclusion, output, and JSON contract lives in
 [`docs/mark-next-tasks.md`](docs/mark-next-tasks.md).

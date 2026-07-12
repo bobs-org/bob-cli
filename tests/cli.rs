@@ -725,6 +725,11 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         json["moved_completed_references"].as_array().unwrap().len(),
         1
     );
+    assert_eq!(json["marker_added_references"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        json["marker_removed_references"].as_array().unwrap().len(),
+        1
+    );
     assert_eq!(json["unresolved_references"].as_array().unwrap().len(), 1);
     assert!(json["unresolved_references"][0]["reason"]
         .as_str()
@@ -757,6 +762,8 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     assert!(
         report.contains("marked next")
             && report.contains("cleared")
+            && report.contains("marked Pomodoro references")
+            && report.contains("unmarked Pomodoro references")
             && report.contains("(dependency)")
             && report.contains("Summary: 3 marked next, 2 cleared"),
         "unexpected mark-next report:\n{}",
@@ -786,6 +793,8 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     let daily_contents =
         fs::read_to_string(&daily).expect("read updated daily");
     assert!(daily_contents.contains(concat!(
+        "  - [[dev#^promote]]\n",
+        "  - Work on [[Projects/Alpha#^working]] and [[dev#^already]]\n",
         "  - ~~[[dev#^done|already embedded]]~~\n",
         "  - Finish ~~[[dev#^done|completed work]]~~ with [[dev#^promote]]\n",
         "    - Keep this nested detail with the moved bullet.\n",
@@ -793,8 +802,9 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     )));
     assert!(daily_contents.contains(concat!(
         "- [x] Closed session (0930-1000)\n",
-        "  - [[dev#^closed]]\n",
-        "  - ~~[[dev#^done|historical completed work]]~~\n",
+        "  - 🍅 [[dev#^closed]]\n",
+        "  - 🍅 ~~[[dev#^done|historical completed work]]~~\n",
+        "  - 🍅 ~~[[dev#^done|historical embedded work]]~~\n",
     )));
     let alpha_contents =
         fs::read_to_string(&alpha).expect("read updated alpha");
@@ -1000,12 +1010,17 @@ fn mark_next_tasks_uses_custom_done_status_and_completed_fallback() {
         json["moved_completed_references"].as_array().unwrap().len(),
         1
     );
+    assert_eq!(json["marker_added_references"].as_array().unwrap().len(), 1);
+    assert!(json["marker_removed_references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(
         fs::read_to_string(&daily).unwrap(),
         concat!(
             "## Pomodoros\n\n",
             "- [x] Last completed\n",
-            "    - Review ~~[[tasks#^custom|custom done]]~~\n",
+            "    - Review 🍅 ~~[[tasks#^custom|custom done]]~~\n",
             "- [ ] Future\n",
         )
     );

@@ -3058,6 +3058,7 @@ type: \"[[done]]\"
 [[obsidian#^abc123]]
 ![[obsidian#^abc123]]
 [[obsidian#^abc123|collect-done]]
+🍅 ~~[[obsidian#^abc123|Pomodoro]]~~
 [[obsidian#Heading]]
 [[obsidian#^other]]
 [[done/obsidian_done#^abc123]]
@@ -3067,13 +3068,14 @@ type: \"[[done]]\"
             &moved_targets,
         );
 
-        assert_eq!(repair.link_count, 3);
+        assert_eq!(repair.link_count, 4);
         assert_eq!(
             repair.contents,
             "\
 [[done/obsidian_done#^abc123]]
 ![[done/obsidian_done#^abc123]]
 [[done/obsidian_done#^abc123|collect-done]]
+🍅 ~~[[done/obsidian_done#^abc123|Pomodoro]]~~
 [[obsidian#Heading]]
 [[obsidian#^other]]
 [[done/obsidian_done#^abc123]]
