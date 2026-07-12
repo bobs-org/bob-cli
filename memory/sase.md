@@ -23,6 +23,7 @@ Configured linked repositories for this context:
   plugins sync`. You should NOT edit these plugins directly in the ~/bob/ directory, as they will be overwritten on the
   next sync. Instead, make changes to this linked repo and, when done, run the `bob plugins sync` command to deploy them
   to the ~/bob/ directory.
+- `bob-cli--research`: Durable SASE research reports and generated media.
 
 When you need to make changes to files in a numbered-workspace linked repo or need to review numbered-workspace linked
 repo code, agents MUST run:
