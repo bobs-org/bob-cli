@@ -40,9 +40,38 @@ links and heading links do not. Targets resolve by an exact vault-relative
 path first and then by a unique, case-insensitive note basename. Ambiguous or
 missing targets produce warnings and are not guessed.
 
-After resolving direct Pomodoro links, the command reads dependency edges from
-the linked tasks' child blocks. An edge must be a child bullet whose entire
-content is one transcluded block link:
+Before task statuses, completed-reference retirement, or relocation are
+planned, the command removes cross-Pomodoro duplicates. For each link that
+resolves to a scanned Tasks task, identity is the resolved vault-relative
+Markdown path plus block ID. Explicit paths, unique basenames, same-note
+targets, aliases, and embeds therefore compare equal when they name the same
+task; the same block ID in different notes remains distinct.
+
+Ownership follows file order. The first surviving line beneath an open
+Pomodoro owns each resolved task on that line. A line beneath a later open
+Pomodoro is removed when any task on it is already owned by a different open
+Pomodoro. Repeats within the same owning Pomodoro do not cause removal. Every
+later conflicting line is removed in one run, and a line selected for removal
+does not become the owner of its other links.
+
+Removal is deliberately physical-line based: authored text and unrelated links
+on a conflicting line are removed with it, while following nested lines remain
+unless independently selected. If several duplicate tasks identify one line,
+the line is removed and reported once with every canonical task identity. Links
+beneath completed or cancelled Pomodoros, top-level entry lines, fenced
+examples, and unresolved or non-task targets are not destructive cleanup
+candidates.
+
+The rewritten Pomodoro section is scanned again after duplicate removal and
+completed-reference structural rewrites. Only references that will actually be
+written contribute to the direct desired set and dependency closure. Thus an
+otherwise-live task mentioned only as unrelated content on a removed line, and
+its otherwise-unreachable dependency chain, are cleared from Next in that same
+run.
+
+After resolving the surviving direct Pomodoro links, the command reads
+dependency edges from the linked tasks' child blocks. An edge must be a child
+bullet whose entire content is one transcluded block link:
 
 ```markdown
 - [ ] #task Ship the feature ^ship
@@ -183,8 +212,10 @@ and left structurally unchanged.
 
 ## Output
 
-Human output lists every promotion, clear, retired reference, move, and marker
-repair, followed by a summary. Marker additions and removals have their own
+Human output lists every promotion, clear, duplicate line removal, retired
+reference, move, and marker repair, followed by a summary. Duplicate removals
+show the original daily-note line number, text, owning Pomodoro, and canonical
+task identities. Marker additions and removals have their own
 `marked`/`unmarked` sections and summary counts. Dependency-derived promotions
 carry a `(dependency)` suffix. Dry-run
 uses the same planning path and reports what would happen
@@ -245,17 +276,35 @@ JSON mode prints one object on stdout with these stable fields:
     }
   ],
   "marker_removed_references": [],
+  "removed_duplicate_lines": [
+    {
+      "line_number": 9,
+      "pomodoro": "- [ ] Later work",
+      "line": "  - [[Alpha#^ship|duplicate]] and [[Beta#^review]]",
+      "duplicate_tasks": [
+        {
+          "path": "Projects/Alpha.md",
+          "block_id": "ship"
+        }
+      ]
+    }
+  ],
   "kept_next": 0,
   "kept_in_progress": 1,
   "unresolved_references": []
 }
 ```
 
-`references` counts direct Pomodoro block links; `dependency_references` counts
-additional unique task blocks reached through dependency edges. Each change
-item's `dependency` boolean distinguishes the two sources. Each unresolved
-reference contains `target`, `block_id`, and `reason`; marker-reference entries
-contain `target`, `block_id`, and the owning `pomodoro` line. JSON
+`references` retains its input-count contract and counts unique raw direct
+Pomodoro block links before structural cleanup; consumers do not need to
+reinterpret that older field. `dependency_references` counts additional unique
+task blocks reached through dependency edges in the final rewritten ledger.
+Each change item's `dependency` boolean distinguishes the two sources. Each
+`removed_duplicate_lines` item represents one physical line and contains its
+one-based original `line_number`, original `line`, owning `pomodoro`, and one or
+more canonical path-plus-block `duplicate_tasks`. Each unresolved reference
+contains `target`, `block_id`, and `reason`; marker-reference entries contain
+`target`, `block_id`, and the owning `pomodoro` line. JSON
 failures also remain machine-readable as `{ "ok": false, "error": "..." }`.
 `embedded_completed_references` is a deprecated, always-empty compatibility
 field for one contract cycle.

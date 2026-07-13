@@ -71,6 +71,13 @@ Pomodoros keep the existing policy of moving their containing bullets beneath \
 the current timed Pomodoro, or the last completed Pomodoro when \
 there is no current one. In-progress [/] tasks and all other statuses are left \
 unchanged.\n\n\
+When the same resolved task is linked beneath multiple open Pomodoros, the \
+first open Pomodoro in file order keeps ownership and every conflicting \
+physical line beneath later open Pomodoros is removed in full. Aliases, \
+embeds, same-note links, and alternate note spellings compare by resolved \
+vault-relative path plus block ID. Repeats within one owning Pomodoro are \
+preserved, as are unresolved links and links beneath completed or cancelled \
+Pomodoros.\n\n\
 Only Markdown checkbox lines allowed by the Obsidian Tasks globalFilter are \
 considered. The scan skips hidden directories, templates, generated notes, \
 and done archives. Missing daily notes and daily notes without a Pomodoros \
@@ -192,6 +199,20 @@ struct MarkerReference {
     pomodoro: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+struct DuplicateTaskIdentity {
+    path: String,
+    block_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct RemovedDuplicateLine {
+    line_number: usize,
+    pomodoro: String,
+    line: String,
+    duplicate_tasks: Vec<DuplicateTaskIdentity>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct SyncResult {
     ok: bool,
@@ -208,6 +229,7 @@ struct SyncResult {
     moved_completed_references: Vec<MovedCompletedReference>,
     marker_added_references: Vec<MarkerReference>,
     marker_removed_references: Vec<MarkerReference>,
+    removed_duplicate_lines: Vec<RemovedDuplicateLine>,
     kept_next: usize,
     kept_in_progress: usize,
     unresolved_references: Vec<UnresolvedReference>,
@@ -303,6 +325,7 @@ struct ResolvedReference {
 struct StructuralPlan {
     token_edits: BTreeMap<usize, Vec<TokenEdit>>,
     moves: Vec<BulletMove>,
+    deleted_lines: BTreeSet<usize>,
     target_entry: Option<usize>,
     struck: Vec<StruckCompletedReference>,
     moved: Vec<MovedCompletedReference>,
@@ -462,10 +485,20 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
             .insert(reference.clone(), ResolvedReference { path, statuses });
     }
 
+    let removed_duplicate_lines = plan_duplicate_line_removals(
+        &daily_lines,
+        &pomodoro_model,
+        &resolved_references,
+    );
+    let deleted_lines = removed_duplicate_lines
+        .iter()
+        .map(|item| item.line_number - 1)
+        .collect::<BTreeSet<_>>();
     let structural_plan = plan_structural_changes(
         &pomodoro_model,
         &resolved_references,
         &settings.done_statuses,
+        &deleted_lines,
     );
     let structurally_updated_daily = apply_structural_plan(
         &daily_contents,
@@ -562,6 +595,7 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
         moved_completed_references: structural_plan.moved,
         marker_added_references: structural_plan.marker_added,
         marker_removed_references: structural_plan.marker_removed,
+        removed_duplicate_lines,
         kept_next,
         kept_in_progress,
         unresolved_references: unresolved,
@@ -983,10 +1017,67 @@ fn is_done_status(status: char, done_statuses: &BTreeSet<char>) -> bool {
     matches!(status, 'x' | 'X') || done_statuses.contains(&status)
 }
 
+fn plan_duplicate_line_removals(
+    lines: &[&str],
+    model: &PomodoroModel,
+    resolved: &BTreeMap<RawReference, ResolvedReference>,
+) -> Vec<RemovedDuplicateLine> {
+    let mut owners: BTreeMap<(PathBuf, String), usize> = BTreeMap::new();
+    let mut removed = Vec::new();
+
+    for bullet in &model.bullets {
+        let entry = &model.entries[bullet.entry_index];
+        if !entry.open {
+            continue;
+        }
+        let tasks = bullet
+            .links
+            .iter()
+            .filter_map(|link| {
+                resolved.get(&link.reference).map(|reference| {
+                    (reference.path.clone(), link.reference.block_id.clone())
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        if tasks.is_empty() {
+            continue;
+        }
+
+        let duplicate_tasks = tasks
+            .iter()
+            .filter(|task| {
+                owners
+                    .get(*task)
+                    .is_some_and(|owner| *owner != bullet.entry_index)
+            })
+            .map(|(path, block_id)| DuplicateTaskIdentity {
+                path: display_path(path),
+                block_id: block_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        if !duplicate_tasks.is_empty() {
+            removed.push(RemovedDuplicateLine {
+                line_number: bullet.line_index + 1,
+                pomodoro: entry.context.clone(),
+                line: lines[bullet.line_index].to_string(),
+                duplicate_tasks,
+            });
+            continue;
+        }
+
+        for task in tasks {
+            owners.entry(task).or_insert(bullet.entry_index);
+        }
+    }
+
+    removed
+}
+
 fn plan_structural_changes(
     model: &PomodoroModel,
     resolved: &BTreeMap<RawReference, ResolvedReference>,
     done_statuses: &BTreeSet<char>,
+    deleted_lines: &BTreeSet<usize>,
 ) -> StructuralPlan {
     let current = model
         .entries
@@ -1002,6 +1093,9 @@ fn plan_structural_changes(
     let mut marker_removed = Vec::new();
 
     for bullet in &model.bullets {
+        if deleted_lines.contains(&bullet.line_index) {
+            continue;
+        }
         let completed_links = bullet
             .links
             .iter()
@@ -1107,6 +1201,7 @@ fn plan_structural_changes(
     StructuralPlan {
         token_edits,
         moves,
+        deleted_lines: deleted_lines.clone(),
         target_entry,
         struck,
         moved,
@@ -1120,7 +1215,10 @@ fn apply_structural_plan(
     model: &PomodoroModel,
     plan: &StructuralPlan,
 ) -> String {
-    if plan.token_edits.is_empty() && plan.moves.is_empty() {
+    if plan.token_edits.is_empty()
+        && plan.moves.is_empty()
+        && plan.deleted_lines.is_empty()
+    {
         return contents.to_string();
     }
     let mut lines = contents
@@ -1148,7 +1246,7 @@ fn apply_structural_plan(
             })
             .unwrap_or_else(|| "  ".to_string())
     });
-    let mut removed = BTreeSet::new();
+    let mut removed = plan.deleted_lines.clone();
     let mut moved_lines = Vec::new();
     for item in &plan.moves {
         let target_indentation = target_indentation
@@ -1161,11 +1259,13 @@ fn apply_structural_plan(
             .skip(item.start_line)
         {
             removed.insert(index);
-            moved_lines.push(reindent_segment(
-                line,
-                &item.source_indentation,
-                target_indentation,
-            ));
+            if !plan.deleted_lines.contains(&index) {
+                moved_lines.push(reindent_segment(
+                    line,
+                    &item.source_indentation,
+                    target_indentation,
+                ));
+            }
         }
     }
     let insertion_line = plan
@@ -1748,7 +1848,8 @@ fn print_human_result(result: &SyncResult) {
         + result.struck_completed_references.len()
         + result.moved_completed_references.len()
         + result.marker_added_references.len()
-        + result.marker_removed_references.len();
+        + result.marker_removed_references.len()
+        + result.removed_duplicate_lines.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
     } else {
@@ -1797,6 +1898,7 @@ fn print_human_result(result: &SyncResult) {
     );
     print_completed_reference_sections(result);
     print_marker_reference_sections(result);
+    print_duplicate_line_section(result);
     if result.kept_next > 0 || result.kept_in_progress > 0 {
         println!();
         println!(
@@ -1805,14 +1907,45 @@ fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} cleared, {} struck, {} moved, {} marked, {} unmarked",
+        "Summary: {} marked next, {} cleared, {} struck, {} moved, {} marked, {} unmarked, {} duplicate-line removals",
         result.marked_next.len(),
         result.cleared.len(),
         result.struck_completed_references.len(),
         result.moved_completed_references.len(),
         result.marker_added_references.len(),
-        result.marker_removed_references.len()
+        result.marker_removed_references.len(),
+        result.removed_duplicate_lines.len()
     );
+}
+
+fn print_duplicate_line_section(result: &SyncResult) {
+    if result.removed_duplicate_lines.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "  {} duplicate task-link lines",
+        if result.dry_run {
+            "would remove"
+        } else {
+            "removed"
+        }
+    );
+    for item in &result.removed_duplicate_lines {
+        let identities = item
+            .duplicate_tasks
+            .iter()
+            .map(|task| format!("{}#^{}", task.path, task.block_id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "    line {}  {}  {}  {}",
+            item.line_number,
+            item.line.trim(),
+            item.pomodoro,
+            identities
+        );
+    }
 }
 
 fn print_marker_reference_sections(result: &SyncResult) {
@@ -2002,6 +2135,23 @@ mod tests {
             .collect()
     }
 
+    fn resolved_paths(
+        values: &[(&str, &str, &str, Vec<char>)],
+    ) -> BTreeMap<RawReference, ResolvedReference> {
+        values
+            .iter()
+            .map(|(target, block_id, path, statuses)| {
+                (
+                    reference(target, block_id),
+                    ResolvedReference {
+                        path: PathBuf::from(path),
+                        statuses: statuses.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn extracts_only_block_links_under_open_pomodoros() {
         let lines = [
@@ -2025,6 +2175,186 @@ mod tests {
                     block_id: "one".to_string(),
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn duplicate_lines_use_canonical_task_identity_and_first_open_owner() {
+        let contents = concat!(
+            "- [ ] First\n",
+            "  - [[Projects/Alpha#^ship]]\n",
+            "  - [[Alpha#^ship|same owner repeat]]\n",
+            "  - [[#^daily]]\n",
+            "- [ ] Second\n",
+            "  - ![[Alpha.md#^ship|embedded duplicate]]\n",
+            "  - [[2026/Today#^daily|same-note duplicate]]\n",
+            "- [ ] Third\n",
+            "  - ~~[[Projects/Alpha.md#^ship]]~~\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved_paths(&[
+            ("Projects/Alpha", "ship", "Projects/Alpha.md", vec![' ']),
+            ("Alpha", "ship", "Projects/Alpha.md", vec![' ']),
+            ("Alpha.md", "ship", "Projects/Alpha.md", vec![' ']),
+            ("Projects/Alpha.md", "ship", "Projects/Alpha.md", vec![' ']),
+            ("", "daily", "2026/Today.md", vec![' ']),
+            ("2026/Today", "daily", "2026/Today.md", vec![' ']),
+        ]);
+
+        let removals = plan_duplicate_line_removals(&lines, &model, &resolved);
+        assert_eq!(
+            removals
+                .iter()
+                .map(|item| item.line_number)
+                .collect::<Vec<_>>(),
+            vec![6, 7, 9]
+        );
+        assert!(removals.iter().all(|item| item.duplicate_tasks.len() == 1));
+        assert_eq!(
+            removals[0].duplicate_tasks[0],
+            DuplicateTaskIdentity {
+                path: "Projects/Alpha.md".to_string(),
+                block_id: "ship".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn deleted_conflict_line_cannot_claim_an_unrelated_task() {
+        let contents = concat!(
+            "- [ ] First\n",
+            "  - [[tasks#^alpha]]\n",
+            "- [ ] Second\n",
+            "  - [[tasks#^alpha]] and [[tasks#^beta]]\n",
+            "- [ ] Third\n",
+            "  - [[tasks#^beta]]\n",
+            "- [ ] Fourth\n",
+            "  - [[tasks#^beta]] and [[tasks#^alpha]]\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved(&[
+            ("tasks", "alpha", vec![' ']),
+            ("tasks", "beta", vec![' ']),
+        ]);
+
+        let removals = plan_duplicate_line_removals(&lines, &model, &resolved);
+        assert_eq!(
+            removals
+                .iter()
+                .map(|item| item.line_number)
+                .collect::<Vec<_>>(),
+            vec![4, 8]
+        );
+        assert_eq!(removals[1].duplicate_tasks.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_cleanup_ignores_distinct_unresolved_and_ineligible_links() {
+        let contents = concat!(
+            "- [ ] First with [[Alpha#^same]] on its top-level line\n",
+            "  - [[Alpha#^same]]\n",
+            "  - ~~[[Alpha#^same]]~~\n",
+            "- [ ] Second\n",
+            "  - [[Beta#^same]] and [[missing#^same]]\n",
+            "  ```md\n",
+            "  - [[Alpha#^same]]\n",
+            "  ```\n",
+            "- [x] Closed\n",
+            "  - [[Alpha#^same]]\n",
+            "- [-] Cancelled\n",
+            "  - [[Alpha#^same]]\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved_paths(&[
+            ("Alpha", "same", "Alpha.md", vec![' ']),
+            ("Beta", "same", "Beta.md", vec![' ']),
+        ]);
+
+        assert!(
+            plan_duplicate_line_removals(&lines, &model, &resolved).is_empty()
+        );
+    }
+
+    #[test]
+    fn full_line_deletion_preserves_children_crlf_and_final_line_ending() {
+        let contents = concat!(
+            "- [ ] First\r\n",
+            "  - [[tasks#^alpha]] and [[tasks#^beta]]\r\n",
+            "- [ ] Second\r\n",
+            "  - authored [[tasks#^alpha]] plus [[tasks#^beta]]\r\n",
+            "    - retained child\r\n",
+            "- [ ] Third\r\n",
+            "  - [[tasks#^gamma]]",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved(&[
+            ("tasks", "alpha", vec![' ']),
+            ("tasks", "beta", vec![' ']),
+            ("tasks", "gamma", vec![' ']),
+        ]);
+        let removals = plan_duplicate_line_removals(&lines, &model, &resolved);
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0].duplicate_tasks.len(), 2);
+        let deleted_lines = BTreeSet::from([removals[0].line_number - 1]);
+        let plan = plan_structural_changes(
+            &model,
+            &resolved,
+            &BTreeSet::from(['x', 'X']),
+            &deleted_lines,
+        );
+
+        assert_eq!(
+            apply_structural_plan(contents, &model, &plan),
+            concat!(
+                "- [ ] First\r\n",
+                "  - [[tasks#^alpha]] and [[tasks#^beta]]\r\n",
+                "- [ ] Second\r\n",
+                "    - retained child\r\n",
+                "- [ ] Third\r\n",
+                "  - [[tasks#^gamma]]",
+            )
+        );
+    }
+
+    #[test]
+    fn deleted_completed_duplicate_is_not_retired_moved_or_reinserted() {
+        let contents = concat!(
+            "- [ ] Current (0900-0930)\n",
+            "  - [[tasks#^done]]\n",
+            "- [ ] Later\n",
+            "  - ![[tasks#^done|duplicate]]\n",
+            "    - retained child\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved(&[("tasks", "done", vec!['x'])]);
+        let removals = plan_duplicate_line_removals(&lines, &model, &resolved);
+        let deleted_lines = removals
+            .iter()
+            .map(|item| item.line_number - 1)
+            .collect::<BTreeSet<_>>();
+        let plan = plan_structural_changes(
+            &model,
+            &resolved,
+            &BTreeSet::from(['x', 'X']),
+            &deleted_lines,
+        );
+
+        assert_eq!(plan.struck.len(), 1);
+        assert!(plan.moved.is_empty());
+        assert!(!plan.token_edits.contains_key(&3));
+        assert_eq!(
+            apply_structural_plan(contents, &model, &plan),
+            concat!(
+                "- [ ] Current (0900-0930)\n",
+                "  - ~~[[tasks#^done]]~~\n",
+                "- [ ] Later\n",
+                "    - retained child\n",
+            )
         );
     }
 
@@ -2133,6 +2463,7 @@ mod tests {
                 ("dev", "live", vec![' ']),
             ]),
             &BTreeSet::from(['x', 'X']),
+            &BTreeSet::new(),
         );
         assert!(plan.moves.is_empty());
         assert_eq!(plan.struck.len(), 1);
@@ -2247,6 +2578,7 @@ mod tests {
                 ("dev", "todo", vec![' ']),
             ]),
             &BTreeSet::from(['x', 'X']),
+            &BTreeSet::new(),
         );
         let updated = apply_structural_plan(contents, &model, &plan);
         assert_eq!(
@@ -2282,6 +2614,7 @@ mod tests {
             &model,
             &resolved(&[("dev", "done", vec!['x'])]),
             &BTreeSet::from(['x', 'X']),
+            &BTreeSet::new(),
         );
         assert!(plan.moves.is_empty());
         assert_eq!(plan.struck.len(), 3);
@@ -2304,6 +2637,7 @@ mod tests {
             &updated_model,
             &resolved(&[("dev", "done", vec!['x'])]),
             &BTreeSet::from(['x', 'X']),
+            &BTreeSet::new(),
         );
         assert!(
             second.token_edits.is_empty(),
@@ -2339,6 +2673,7 @@ mod tests {
                 ("dev", "open", vec![' ']),
             ]),
             &BTreeSet::from(['x', 'X']),
+            &BTreeSet::new(),
         );
         assert_eq!(plan.marker_added.len(), 2);
         assert_eq!(plan.marker_removed.len(), 2);
@@ -2366,6 +2701,7 @@ mod tests {
             &model,
             &resolved(&[("dev", "duplicate", vec!['x', ' '])]),
             &BTreeSet::from(['x', 'X']),
+            &BTreeSet::new(),
         );
         assert!(plan.token_edits.is_empty());
         assert!(plan.moves.is_empty());

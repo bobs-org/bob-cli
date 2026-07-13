@@ -213,6 +213,11 @@ non-transcluded links beneath completed Pomodoros, keeps embedded links
 unmarked, preserves the marker provenance of already-struck history, and
 removes stray markers beneath open Pomodoros. In-progress `[/]`,
 completed, canceled, unknown, and non-Tasks checkbox statuses are not changed.
+When multiple open Pomodoros link the same resolved task, the earliest open
+Pomodoro keeps it and matching physical lines beneath later open Pomodoros are
+removed in full. Identity is the resolved note path plus block ID, so aliases,
+embeds, and alternate note spellings are de-duplicated together; repeats within
+one Pomodoro are preserved.
 
 For example, this open ledger entry makes the linked task Next:
 
@@ -221,8 +226,9 @@ For example, this open ledger entry makes the linked task Next:
   - [[Projects/Alpha#^ship-design]]
 ```
 
-Run `bob mark-next-tasks --dry-run` to preview every promotion, clear, retirement,
-move, and Pomodoro-marker repair. The command refuses to change files if the daily note is missing,
+Run `bob mark-next-tasks --dry-run` to preview every promotion, clear,
+duplicate-line removal, retirement, move, and Pomodoro-marker repair. The
+command refuses to change files if the daily note is missing,
 lacks a `Pomodoros` section, or has multiple open timed Pomodoros. The full
 sync, link-resolution, exclusion, output, and JSON contract lives in
 [`docs/mark-next-tasks.md`](docs/mark-next-tasks.md).

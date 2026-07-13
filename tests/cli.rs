@@ -714,7 +714,7 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
             .as_array()
             .unwrap()
             .len(),
-        3
+        2
     );
     assert!(json["struck_completed_references"]
         .as_array()
@@ -723,12 +723,29 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         .any(|item| item["removed_embed"] == true));
     assert_eq!(
         json["moved_completed_references"].as_array().unwrap().len(),
-        1
+        0
     );
     assert_eq!(json["marker_added_references"].as_array().unwrap().len(), 1);
     assert_eq!(
         json["marker_removed_references"].as_array().unwrap().len(),
         2
+    );
+    assert_eq!(json["removed_duplicate_lines"].as_array().unwrap().len(), 1);
+    assert_eq!(json["removed_duplicate_lines"][0]["line_number"], 10);
+    assert_eq!(
+        json["removed_duplicate_lines"][0]["pomodoro"],
+        "- [ ] Future session"
+    );
+    assert_eq!(
+        json["removed_duplicate_lines"][0]["line"],
+        "    - Finish [[dev#^done|completed work]] with [[dev#^promote]]"
+    );
+    assert_eq!(
+        json["removed_duplicate_lines"][0]["duplicate_tasks"],
+        serde_json::json!([
+            {"path": "dev.md", "block_id": "done"},
+            {"path": "dev.md", "block_id": "promote"}
+        ])
     );
     assert_eq!(json["unresolved_references"].as_array().unwrap().len(), 1);
     assert!(json["unresolved_references"][0]["reason"]
@@ -764,6 +781,7 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
             && report.contains("cleared")
             && report.contains("marked Pomodoro references")
             && report.contains("unmarked Pomodoro references")
+            && report.contains("removed duplicate task-link lines")
             && report.contains("(dependency)")
             && report.contains("Summary: 3 marked next, 2 cleared"),
         "unexpected mark-next report:\n{}",
@@ -796,9 +814,8 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         "  - [[dev#^promote]]\n",
         "  - Work on [[Projects/Alpha#^working]] and [[dev#^already]]\n",
         "  - ~~[[dev#^done|already embedded]]~~\n",
-        "  - Finish ~~[[dev#^done|completed work]]~~ with [[dev#^promote]]\n",
-        "    - Keep this nested detail with the moved bullet.\n",
         "- [ ] Future session\n",
+        "      - Keep this nested detail with the moved bullet.\n",
     )));
     assert!(daily_contents.contains(concat!(
         "- [x] Closed session (0930-1000)\n",
@@ -844,6 +861,128 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         fs::read_to_string(&alpha).expect("read cleared alpha");
     assert!(alpha_contents
         .contains("- [ ] #task Cross-file recursive dependency ^dep-two"));
+}
+
+#[test]
+fn mark_next_tasks_prunes_duplicate_lines_before_dependency_sync() {
+    let temp = TempDir::new("bob-cli-mark-next-prune-duplicates");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260713.md");
+    let tasks = vault.join("tasks.md");
+    let daily_before = concat!(
+        "# Daily\n\n",
+        "## Pomodoros\n\n",
+        "- [ ] First owner (0900-0930)\n",
+        "  - [[tasks#^alpha]]\n",
+        "- [ ] Later owner\n",
+        "  - authored [[tasks#^alpha|duplicate]] and ![[tasks#^beta]]\n",
+        "    - retained child\n\n",
+        "## Tasks\n\n",
+        "- [*] #task Daily stale task ^daily-stale\n",
+    );
+    let tasks_before = concat!(
+        "- [ ] #task Alpha ^alpha\n",
+        "- [*] #task Beta ^beta\n",
+        "  - ![[#^beta-dep]]\n",
+        "- [*] #task Beta dependency ^beta-dep\n",
+    );
+    write_file(&daily, daily_before);
+    write_file(&tasks, tasks_before);
+
+    let dry_run = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run duplicate Pomodoro cleanup");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
+        .expect("duplicate cleanup dry-run JSON");
+    assert_eq!(json["references"], 2);
+    assert_eq!(json["dependency_references"], 0);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
+    assert_eq!(json["cleared"].as_array().unwrap().len(), 3);
+    assert_eq!(json["removed_duplicate_lines"].as_array().unwrap().len(), 1);
+    assert_eq!(json["removed_duplicate_lines"][0]["line_number"], 8);
+    assert_eq!(
+        json["removed_duplicate_lines"][0]["duplicate_tasks"][0],
+        serde_json::json!({"path": "tasks.md", "block_id": "alpha"})
+    );
+
+    let human_dry_run = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("human dry-run duplicate Pomodoro cleanup");
+    assert_success(&human_dry_run);
+    assert!(
+        stdout(&human_dry_run)
+            .contains("would remove duplicate task-link lines"),
+        "unexpected duplicate cleanup dry-run report:\n{}",
+        format_output(&human_dry_run)
+    );
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
+
+    let applied = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply duplicate Pomodoro cleanup");
+    assert_success(&applied);
+    assert!(
+        stdout(&applied).contains("removed duplicate task-link lines")
+            && stdout(&applied).contains("1 duplicate-line removals"),
+        "unexpected duplicate cleanup report:\n{}",
+        format_output(&applied)
+    );
+    assert_eq!(
+        fs::read_to_string(&daily).unwrap(),
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] First owner (0900-0930)\n",
+            "  - [[tasks#^alpha]]\n",
+            "- [ ] Later owner\n",
+            "    - retained child\n\n",
+            "## Tasks\n\n",
+            "- [ ] #task Daily stale task ^daily-stale\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        concat!(
+            "- [*] #task Alpha ^alpha\n",
+            "- [ ] #task Beta ^beta\n",
+            "  - ![[#^beta-dep]]\n",
+            "- [ ] #task Beta dependency ^beta-dep\n",
+        )
+    );
+
+    let second = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun duplicate Pomodoro cleanup");
+    assert_success(&second);
+    assert!(
+        stdout(&second).contains("already in sync, no changes"),
+        "expected duplicate cleanup rerun to be a no-op:\n{}",
+        format_output(&second)
+    );
 }
 
 #[test]
