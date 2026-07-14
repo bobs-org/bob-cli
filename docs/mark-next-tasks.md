@@ -76,14 +76,13 @@ bullet whose entire content is one transcluded block link:
 ```markdown
 - [ ] #task Ship the feature ^ship
   - ![[#^write-tests]]
-  - ![[Quality/Review#^review|Review checklist]]
+  - ![[Quality/Review#^review]]
 - [ ] #task Write tests ^write-tests
 ```
 
 Same-note and cross-note targets use the same resolver as Pomodoro links. The
-target block must belong to a scanned Tasks task, and a transclusion may use a
-display alias such as `![[note#^id|display text]]`. Plain `[[#^id]]` links,
-mixed-content bullets, fenced examples, non-task `#^ref` blocks, and
+target block must belong to a scanned Tasks task. Plain `[[#^id]]` links,
+aliases, mixed-content bullets, fenced examples, non-task `#^ref` blocks, and
 unresolvable targets are not dependency edges. Unresolvable candidates emit a
 warning naming the referencing task's file and line.
 
@@ -98,11 +97,6 @@ Traversal is breadth-first and cycle-safe. Dependencies of dependencies are
 included, while a task reached both directly and through a dependency is
 counted as direct. Removing a Pomodoro link removes that task's otherwise
 unreachable dependency chain from the desired set on the next run.
-
-The graph does not consult `#hide`, `[id::]`, or `[dependsOn::]`. In
-particular, `#hide` can keep a generated reference task out of dashboards and
-Tasks dependency metadata without preventing a sole transcluded child link
-from propagating Next to that task.
 
 The command scans Markdown task lines allowed by the Obsidian Tasks
 `globalFilter` setting. If that setting cannot be read, the filter defaults to
