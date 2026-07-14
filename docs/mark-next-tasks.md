@@ -110,6 +110,14 @@ The command scans Markdown task lines allowed by the Obsidian Tasks
 | `[/]` | either | unchanged |
 | done, canceled, or unknown | either | unchanged |
 
+The machine-managed `#task #ref ... ^ref` reading task in a generated reference
+note is an ordinary scanned task. Promoting it from `[ ]` to `[*]` therefore
+flows through the next highlights sync as reference `status: next`; clearing it
+back to `[ ]` flows through as `status: ready`. `[/]`, `[x]`/`[X]`, and `[-]`
+remain untouched by `mark-next-tasks`. Because the highlights lifecycle is also
+stored in the PDF marker, preview with `bob highlights scan --dry-run` and use a
+reviewed `bob highlights scan --write-pdfs` when marker write-back is needed.
+
 Completion is classified separately from Next synchronization. Conventional
 `[x]` and `[X]` tasks are complete. A custom checkbox symbol is also complete
 when its entry in `statusSettings.coreStatuses` or

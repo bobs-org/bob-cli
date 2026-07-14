@@ -39,14 +39,17 @@ const FIELD_PARENT: &str = "parent";
 const FIELD_NOTE_TYPE: &str = "type";
 const FIELD_REF_TYPE: &str = "ref_type";
 const NOTE_TYPE_VALUE: &str = "[[ref]]";
-const STATUS_UNREAD: &str = "unread";
+const STATUS_READY: &str = "ready";
+const STATUS_NEXT: &str = "next";
 const STATUS_WIP: &str = "wip";
 const STATUS_READ: &str = "read";
 const STATUS_ABANDONED: &str = "abandoned";
 const STATUS_LEGACY: &str = "legacy";
+const DEPRECATED_STATUS_UNREAD: &str = "unread";
 const DEPRECATED_STATUS_DONE: &str = "done";
 const ALLOWED_STATUS_VALUES: &[&str] = &[
-    STATUS_UNREAD,
+    STATUS_READY,
+    STATUS_NEXT,
     STATUS_WIP,
     STATUS_READ,
     STATUS_ABANDONED,
@@ -190,9 +193,12 @@ struct PdfTaskLine {
 impl PdfTaskLine {
     fn status(self) -> PdfTaskStatus {
         match self.mark {
+            ' ' => PdfTaskStatus::Ready,
+            '*' => PdfTaskStatus::Next,
+            '/' => PdfTaskStatus::Wip,
             'x' | 'X' => PdfTaskStatus::Read,
             '-' => PdfTaskStatus::Abandoned,
-            _ => PdfTaskStatus::Unchecked,
+            _ => unreachable!("parsed PDF task has an unsupported mark"),
         }
     }
 }
@@ -215,7 +221,9 @@ impl PdfTaskLineState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PdfTaskStatus {
     Missing,
-    Unchecked,
+    Ready,
+    Next,
+    Wip,
     Read,
     Abandoned,
 }
@@ -223,16 +231,21 @@ enum PdfTaskStatus {
 impl PdfTaskStatus {
     fn target_status(self) -> Option<&'static str> {
         match self {
+            PdfTaskStatus::Ready => Some(STATUS_READY),
+            PdfTaskStatus::Next => Some(STATUS_NEXT),
+            PdfTaskStatus::Wip => Some(STATUS_WIP),
             PdfTaskStatus::Read => Some(STATUS_READ),
             PdfTaskStatus::Abandoned => Some(STATUS_ABANDONED),
-            PdfTaskStatus::Missing | PdfTaskStatus::Unchecked => None,
+            PdfTaskStatus::Missing => None,
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             PdfTaskStatus::Missing => "missing",
-            PdfTaskStatus::Unchecked => "unchecked",
+            PdfTaskStatus::Ready => "ready",
+            PdfTaskStatus::Next => "next",
+            PdfTaskStatus::Wip => "in-progress",
             PdfTaskStatus::Read => "checked",
             PdfTaskStatus::Abandoned => "cancelled",
         }
@@ -240,12 +253,12 @@ impl PdfTaskStatus {
 
     fn contribution_reason(self) -> Option<&'static str> {
         match self {
+            PdfTaskStatus::Ready => Some("ready PDF task set status ready"),
+            PdfTaskStatus::Next => Some("next PDF task set status next"),
+            PdfTaskStatus::Wip => Some("in-progress PDF task set status wip"),
             PdfTaskStatus::Read => Some("checked PDF task set status read"),
             PdfTaskStatus::Abandoned => {
                 Some("cancelled PDF task set status abandoned")
-            }
-            PdfTaskStatus::Unchecked => {
-                Some("unchecked PDF task reopened status wip")
             }
             PdfTaskStatus::Missing => None,
         }
@@ -253,9 +266,11 @@ impl PdfTaskStatus {
 
     fn conflict_action(self) -> &'static str {
         match self {
+            PdfTaskStatus::Ready | PdfTaskStatus::Next | PdfTaskStatus::Wip => {
+                "change"
+            }
             PdfTaskStatus::Read => "uncheck",
             PdfTaskStatus::Abandoned => "uncancel",
-            PdfTaskStatus::Unchecked => "reclose",
             PdfTaskStatus::Missing => "clear",
         }
     }
@@ -475,15 +490,30 @@ struct ScanFailure {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct StatusNormalization {
-    marker: bool,
-    frontmatter: bool,
-    base: bool,
+    marker: Option<DeprecatedStatusNormalization>,
+    frontmatter: Option<DeprecatedStatusNormalization>,
+    base: Option<DeprecatedStatusNormalization>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeprecatedStatusNormalization {
+    UnreadToReady,
+    DoneToRead,
+}
+
+impl DeprecatedStatusNormalization {
+    fn label(self) -> &'static str {
+        match self {
+            DeprecatedStatusNormalization::UnreadToReady => "unread->ready",
+            DeprecatedStatusNormalization::DoneToRead => "done->read",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct NormalizedProjection {
     projection: Projection,
-    status_normalized: bool,
+    status_normalized: Option<DeprecatedStatusNormalization>,
 }
 
 #[derive(Debug, Clone)]
@@ -862,7 +892,6 @@ fn plan_pdf_sync(
         &mut resolution,
         &pdf_task_line,
         base_projection.as_ref(),
-        base_status_normalized,
         &marker_projection,
         &frontmatter_projection,
     )?;
@@ -877,7 +906,7 @@ fn plan_pdf_sync(
     let synced_hash = projection_hash(&synced_projection)?;
     let rendered_marker = render_marker(&synced_projection)?;
     let marker_write_needed = (decision.frontmatter_contributed
-        || status_normalization.marker)
+        || status_normalization.marker.is_some())
         && normalize_line_endings(&rendered_marker)
             != normalize_line_endings(&marker.contents);
 
@@ -1393,22 +1422,24 @@ fn planned_image_asset_write_count(plan: &PdfSyncPlan) -> usize {
 fn status_normalization_label(
     normalization: StatusNormalization,
 ) -> Option<String> {
-    let mut sources = Vec::new();
-    if normalization.marker {
-        sources.push("marker");
+    let mut labels = Vec::new();
+    for kind in [
+        DeprecatedStatusNormalization::UnreadToReady,
+        DeprecatedStatusNormalization::DoneToRead,
+    ] {
+        let sources = [
+            ("marker", normalization.marker),
+            ("frontmatter", normalization.frontmatter),
+            ("base", normalization.base),
+        ]
+        .into_iter()
+        .filter_map(|(source, value)| (value == Some(kind)).then_some(source))
+        .collect::<Vec<_>>();
+        if !sources.is_empty() {
+            labels.push(format!("{} ({})", kind.label(), sources.join(",")));
+        }
     }
-    if normalization.frontmatter {
-        sources.push("frontmatter");
-    }
-    if normalization.base {
-        sources.push("base");
-    }
-    (!sources.is_empty()).then(|| {
-        format!(
-            "{DEPRECATED_STATUS_DONE}->{STATUS_READ} ({})",
-            sources.join(",")
-        )
-    })
+    (!labels.is_empty()).then(|| labels.join("; "))
 }
 
 fn print_verbose_scan_plan_report(
@@ -4533,7 +4564,7 @@ fn parse_pdf_task_line(body: &str) -> Result<PdfTaskLineState> {
 
 fn malformed_pdf_task_line_error(line_index: usize) -> CommandError {
     CommandError::new(format!(
-        "generated PDF task line on line {} is malformed; expected a generated task such as '- [ ] #task #ref [[...pdf]] #hide ^ref', '- [x] #task #ref [[...pdf]] #hide ^ref', or '- [-] #task #ref [[...pdf]] #hide ^ref'; legacy generated lines without #ref, with [p::2], or without #hide are still accepted",
+        "generated PDF task line on line {} is malformed; expected a generated task with one of [ ], [*], [/], [x], [X], or [-], such as '- [ ] #task #ref [[...pdf]] #hide ^ref'; legacy generated lines without #ref, with [p::2], or without #hide are still accepted",
         line_index + 1
     ))
 }
@@ -4571,7 +4602,7 @@ fn parse_markdown_task_checkbox(line: &str) -> Option<(usize, bool, char)> {
     match mark {
         ' ' => Some((mark_index, false, mark)),
         'x' | 'X' => Some((mark_index, true, mark)),
-        '-' => Some((mark_index, false, mark)),
+        '*' | '/' | '-' => Some((mark_index, false, mark)),
         _ => None,
     }
 }
@@ -4599,43 +4630,15 @@ fn contains_pdf_wikilink(line: &str) -> bool {
     false
 }
 
-/// Resolves the synced status an `^ref` task targets given the stored `base`.
-///
-/// Checked and cancelled tasks always close the ref. An unchecked (open)
-/// generated task only reopens to `wip` when the stored marker base status is
-/// already a clean terminal value (`read` or `abandoned`) — that is, the ref was
-/// actually closed and the user reopened the task. Newly generated unchecked
-/// tasks on `unread`, `wip`, or `legacy` refs, refs whose marker/frontmatter
-/// independently moved to a terminal status from a non-terminal base, refs whose
-/// base is still the deprecated `done` value being migrated to `read`, and
-/// missing tasks all contribute nothing.
-fn pdf_task_target_status(
-    status: PdfTaskStatus,
-    base_projection: Option<&Projection>,
-    base_status_normalized: bool,
-) -> Option<&'static str> {
-    if let Some(target) = status.target_status() {
-        return Some(target);
-    }
-    if matches!(status, PdfTaskStatus::Unchecked)
-        && !base_status_normalized
-        && base_projection.is_some_and(projection_status_is_terminal)
-    {
-        return Some(STATUS_WIP);
-    }
-    None
-}
-
-fn projection_status_is_terminal(projection: &Projection) -> bool {
-    projection_status_is(projection, STATUS_READ)
-        || projection_status_is(projection, STATUS_ABANDONED)
+/// Resolves the synced status targeted by the visible `^ref` task state.
+fn pdf_task_target_status(status: PdfTaskStatus) -> Option<&'static str> {
+    status.target_status()
 }
 
 fn apply_pdf_task_status_signal(
     resolution: &mut SyncResolution,
     task_line: &PdfTaskLineState,
     base_projection: Option<&Projection>,
-    base_status_normalized: bool,
     marker_projection: &Projection,
     frontmatter_projection: &Projection,
 ) -> Result<PdfTaskStatusSignal> {
@@ -4644,9 +4647,7 @@ fn apply_pdf_task_status_signal(
         status,
         status_contributed: None,
     };
-    let Some(target_status) =
-        pdf_task_target_status(status, base_projection, base_status_normalized)
-    else {
+    let Some(target_status) = pdf_task_target_status(status) else {
         return Ok(signal);
     };
     if projection_status_is(&resolution.projection, target_status) {
@@ -4750,6 +4751,9 @@ fn projection_pdf_task_mark(projection: &Projection) -> char {
         .get(FIELD_STATUS)
         .and_then(MarkerValue::as_string)
     {
+        Some(STATUS_READY) => ' ',
+        Some(STATUS_NEXT) => '*',
+        Some(STATUS_WIP) => '/',
         Some(STATUS_READ) => 'x',
         Some(STATUS_ABANDONED) => '-',
         _ => ' ',
@@ -5316,13 +5320,14 @@ impl ParsedNote {
 
     fn marker_base_projection_with_normalization(
         &self,
-    ) -> Result<(Option<Projection>, bool)> {
+    ) -> Result<(Option<Projection>, Option<DeprecatedStatusNormalization>)>
+    {
         let Some(entry) = self
             .frontmatter
             .iter()
             .find(|entry| entry.key.as_deref() == Some(FIELD_MARKER_BASE))
         else {
-            return Ok((None, false));
+            return Ok((None, None));
         };
         let Some(value) = &entry.value else {
             return Err(CommandError::new(format!(
@@ -6213,16 +6218,23 @@ fn parse_marker_with_normalization(
     })
 }
 
-fn normalize_deprecated_status(projection: &mut Projection) -> bool {
+fn normalize_deprecated_status(
+    projection: &mut Projection,
+) -> Option<DeprecatedStatusNormalization> {
     let Some(MarkerValue::String(status)) = projection.get_mut(FIELD_STATUS)
     else {
-        return false;
+        return None;
     };
-    if status == DEPRECATED_STATUS_DONE {
-        *status = STATUS_READ.to_string();
-        true
-    } else {
-        false
+    match status.as_str() {
+        DEPRECATED_STATUS_UNREAD => {
+            *status = STATUS_READY.to_string();
+            Some(DeprecatedStatusNormalization::UnreadToReady)
+        }
+        DEPRECATED_STATUS_DONE => {
+            *status = STATUS_READ.to_string();
+            Some(DeprecatedStatusNormalization::DoneToRead)
+        }
+        _ => None,
     }
 }
 
@@ -7079,12 +7091,12 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_done_status_normalizes_to_read_for_synced_inputs() {
+    fn deprecated_statuses_normalize_for_synced_inputs() {
         let marker = super::parse_marker_with_normalization(
             "- status: done\n- parent: obsidian\n",
         )
         .expect("parse deprecated marker status");
-        assert!(marker.status_normalized);
+        assert!(marker.status_normalized.is_some());
         assert_eq!(
             marker.projection.get("status"),
             Some(&string_value("read"))
@@ -7104,7 +7116,7 @@ Body
         let frontmatter = note
             .synced_projection_with_normalization()
             .expect("normalize frontmatter status");
-        assert!(frontmatter.status_normalized);
+        assert!(frontmatter.status_normalized.is_some());
         assert_eq!(
             frontmatter.projection.get("status"),
             Some(&string_value("read"))
@@ -7113,10 +7125,20 @@ Body
         let (base, base_status_normalized) = note
             .marker_base_projection_with_normalization()
             .expect("normalize base status");
-        assert!(base_status_normalized);
+        assert!(base_status_normalized.is_some());
         assert_eq!(
             base.expect("base projection").get("status"),
             Some(&string_value("read"))
+        );
+
+        let unread = super::parse_marker_with_normalization(
+            "- status: unread\n- parent: obsidian\n",
+        )
+        .expect("parse deprecated unread marker status");
+        assert!(unread.status_normalized.is_some());
+        assert_eq!(
+            unread.projection.get("status"),
+            Some(&string_value("ready"))
         );
     }
 
@@ -7261,17 +7283,29 @@ Body
             super::PdfTaskLineState::Missing
         );
 
-        let unchecked = super::parse_pdf_task_line(
-            "# Example\n\n- [ ] #task [[lib/books/example.pdf]] #hide ^ref\n",
-        )
-        .expect("parse unchecked task");
-        match unchecked {
-            super::PdfTaskLineState::Present(task) => {
-                assert_eq!(task.line_index, 2);
-                assert!(!task.checked);
-                assert_eq!(task.status(), super::PdfTaskStatus::Unchecked);
+        for (mark, expected_status) in [
+            (' ', super::PdfTaskStatus::Ready),
+            ('*', super::PdfTaskStatus::Next),
+            ('/', super::PdfTaskStatus::Wip),
+            ('x', super::PdfTaskStatus::Read),
+            ('X', super::PdfTaskStatus::Read),
+            ('-', super::PdfTaskStatus::Abandoned),
+        ] {
+            let parsed = super::parse_pdf_task_line(&format!(
+                "# Example\n\n- [{mark}] #task [[lib/books/example.pdf]] #hide ^ref\n"
+            ))
+            .unwrap_or_else(|error| panic!("parse [{mark}] task: {error}"));
+            match parsed {
+                super::PdfTaskLineState::Present(task) => {
+                    assert_eq!(task.line_index, 2);
+                    assert_eq!(task.mark, mark);
+                    assert_eq!(task.checked, matches!(mark, 'x' | 'X'));
+                    assert_eq!(task.status(), expected_status);
+                }
+                super::PdfTaskLineState::Missing => {
+                    panic!("expected [{mark}] task line")
+                }
             }
-            super::PdfTaskLineState::Missing => panic!("expected task line"),
         }
 
         let checked = super::parse_pdf_task_line(
@@ -7324,7 +7358,7 @@ Body
         match typed {
             super::PdfTaskLineState::Present(task) => {
                 assert!(!task.checked);
-                assert_eq!(task.status(), super::PdfTaskStatus::Unchecked);
+                assert_eq!(task.status(), super::PdfTaskStatus::Ready);
             }
             super::PdfTaskLineState::Missing => panic!("expected task line"),
         }
@@ -7340,7 +7374,9 @@ Body
             missing_tag.to_string().contains("malformed"),
             "{missing_tag}"
         );
-        assert!(missing_tag.to_string().contains("[-]"), "{missing_tag}");
+        for mark in ["[ ]", "[*]", "[/]", "[x]", "[X]", "[-]"] {
+            assert!(missing_tag.to_string().contains(mark), "{missing_tag}");
+        }
 
         let non_pdf =
             super::parse_pdf_task_line("- [ ] #task [[ref/example.md]] ^ref\n")
@@ -8187,7 +8223,6 @@ Keep me here.
             &mut resolution,
             &task,
             Some(&base),
-            false,
             &base,
             &base,
         )
@@ -8222,7 +8257,7 @@ Keep me here.
     }
 
     #[test]
-    fn highlights_ref_pdf_task_status_signal_reopens_terminal_to_wip() {
+    fn highlights_ref_pdf_task_status_signal_ready_reopens_terminal_to_ready() {
         for terminal in [super::STATUS_READ, super::STATUS_ABANDONED] {
             let base = test_projection(vec![
                 ("status", string_value(terminal)),
@@ -8238,70 +8273,140 @@ Keep me here.
                 &mut resolution,
                 &task,
                 Some(&base),
-                false,
                 &base,
                 &base,
             )
-            .expect("apply unchecked task signal");
+            .expect("apply ready task signal");
 
-            assert_eq!(signal.status, super::PdfTaskStatus::Unchecked);
-            assert_eq!(signal.status_contributed, Some(super::STATUS_WIP));
+            assert_eq!(signal.status, super::PdfTaskStatus::Ready);
+            assert_eq!(signal.status_contributed, Some(super::STATUS_READY));
             assert_eq!(
                 resolution
                     .projection
                     .get(super::FIELD_STATUS)
                     .and_then(MarkerValue::as_string),
-                Some(super::STATUS_WIP),
-                "{terminal} should reopen to wip"
+                Some(super::STATUS_READY),
+                "{terminal} should reopen to ready"
             );
             assert!(resolution.decision.frontmatter_contributed);
             assert!(resolution
                 .decision
                 .reason
-                .contains("unchecked PDF task reopened status wip"));
+                .contains("ready PDF task set status ready"));
         }
     }
 
     #[test]
-    fn highlights_ref_pdf_task_status_signal_unchecked_keeps_non_terminal() {
-        for status in [
-            super::STATUS_UNREAD,
-            super::STATUS_WIP,
-            super::STATUS_LEGACY,
+    fn highlights_ref_pdf_task_status_signal_promotes_ready_and_back() {
+        for (base_status, mark, target_status) in [
+            (super::STATUS_READY, '*', super::STATUS_NEXT),
+            (super::STATUS_NEXT, ' ', super::STATUS_READY),
         ] {
             let base = test_projection(vec![
-                ("status", string_value(status)),
+                ("status", string_value(base_status)),
                 ("parent", string_value("[[obsidian]]")),
             ]);
             let mut resolution = signal_resolution(&base);
-            let task = super::parse_pdf_task_line(
-                "- [ ] #task [[lib/books/example.pdf]] #hide ^ref\n",
-            )
-            .expect("parse unchecked task");
+            let task = super::parse_pdf_task_line(&format!(
+                "- [{mark}] #task #ref [[lib/books/example.pdf]] #hide ^ref\n"
+            ))
+            .unwrap_or_else(|error| panic!("parse [{mark}] task: {error}"));
 
             let signal = super::apply_pdf_task_status_signal(
                 &mut resolution,
                 &task,
                 Some(&base),
-                false,
                 &base,
                 &base,
             )
-            .expect("apply unchecked task signal");
+            .unwrap_or_else(|error| {
+                panic!("apply {base_status}->{target_status}: {error}")
+            });
 
-            assert_eq!(signal.status_contributed, None);
+            assert_eq!(signal.status_contributed, Some(target_status));
+            assert!(resolution.decision.frontmatter_contributed);
             assert_eq!(
                 resolution
                     .projection
                     .get(super::FIELD_STATUS)
                     .and_then(MarkerValue::as_string),
-                Some(status),
-                "status {status} should be left untouched"
+                Some(target_status)
             );
-            assert!(!resolution.decision.frontmatter_contributed);
+        }
+    }
+
+    #[test]
+    fn highlights_ref_pdf_task_status_signal_maps_all_lifecycle_states() {
+        for (mark, expected_status, target) in [
+            (' ', super::PdfTaskStatus::Ready, super::STATUS_READY),
+            ('*', super::PdfTaskStatus::Next, super::STATUS_NEXT),
+            ('/', super::PdfTaskStatus::Wip, super::STATUS_WIP),
+            ('x', super::PdfTaskStatus::Read, super::STATUS_READ),
+            (
+                '-',
+                super::PdfTaskStatus::Abandoned,
+                super::STATUS_ABANDONED,
+            ),
+        ] {
+            let base = test_projection(vec![
+                ("status", string_value(super::STATUS_LEGACY)),
+                ("parent", string_value("[[obsidian]]")),
+            ]);
+            let mut resolution = signal_resolution(&base);
+            let task = super::parse_pdf_task_line(&format!(
+                "- [{mark}] #task [[lib/books/example.pdf]] #hide ^ref\n"
+            ))
+            .unwrap_or_else(|error| panic!("parse [{mark}] task: {error}"));
+
+            let signal = super::apply_pdf_task_status_signal(
+                &mut resolution,
+                &task,
+                Some(&base),
+                &base,
+                &base,
+            )
+            .unwrap_or_else(|error| {
+                panic!("apply [{mark}] task signal: {error}")
+            });
+
+            assert_eq!(signal.status, expected_status);
+            assert_eq!(signal.status_contributed, Some(target));
+            assert_eq!(
+                resolution
+                    .projection
+                    .get(super::FIELD_STATUS)
+                    .and_then(MarkerValue::as_string),
+                Some(target),
+                "[{mark}] should target {target}"
+            );
+            assert!(resolution.decision.frontmatter_contributed);
+
+            let projection = test_projection(vec![
+                ("status", string_value(target)),
+                ("parent", string_value("[[obsidian]]")),
+            ]);
+            assert_eq!(
+                super::projection_pdf_task_mark(&projection),
+                mark,
+                "{target} should render [{mark}]"
+            );
+
+            let mut matching_resolution = signal_resolution(&projection);
+            let matching_signal = super::apply_pdf_task_status_signal(
+                &mut matching_resolution,
+                &task,
+                Some(&projection),
+                &projection,
+                &projection,
+            )
+            .unwrap_or_else(|error| {
+                panic!("apply matching [{mark}] task signal: {error}")
+            });
+            assert_eq!(matching_signal.status_contributed, None);
+            assert!(!matching_resolution.decision.frontmatter_contributed);
         }
 
-        // A missing ^ref task contributes nothing even when terminal.
+        // A missing ^ref task contributes nothing.
         let base = test_projection(vec![
             ("status", string_value(super::STATUS_READ)),
             ("parent", string_value("[[obsidian]]")),
@@ -8311,7 +8416,6 @@ Keep me here.
             &mut resolution,
             &super::PdfTaskLineState::Missing,
             Some(&base),
-            false,
             &base,
             &base,
         )
@@ -8327,50 +8431,17 @@ Keep me here.
             Some(super::STATUS_READ)
         );
         assert!(!resolution.decision.frontmatter_contributed);
-
-        // A base whose terminal status came from migrating the deprecated `done`
-        // value is not a reopen: the unchecked task should be rewritten to match
-        // the migrated status, not flip the ref back to wip.
-        let base = test_projection(vec![
-            ("status", string_value(super::STATUS_READ)),
-            ("parent", string_value("[[obsidian]]")),
-        ]);
-        let mut resolution = signal_resolution(&base);
-        let task = super::parse_pdf_task_line(
-            "- [ ] #task [[lib/books/example.pdf]] #hide ^ref\n",
-        )
-        .expect("parse unchecked task");
-        let signal = super::apply_pdf_task_status_signal(
-            &mut resolution,
-            &task,
-            Some(&base),
-            true,
-            &base,
-            &base,
-        )
-        .expect("apply unchecked task signal over migrated base");
-
-        assert_eq!(signal.status_contributed, None);
-        assert_eq!(
-            resolution
-                .projection
-                .get(super::FIELD_STATUS)
-                .and_then(MarkerValue::as_string),
-            Some(super::STATUS_READ)
-        );
-        assert!(!resolution.decision.frontmatter_contributed);
     }
 
     #[test]
-    fn highlights_ref_pdf_task_status_signal_reopen_conflicts_with_competing_edit(
-    ) {
+    fn highlights_ref_pdf_task_status_signal_conflicts_with_competing_edit() {
         let base = test_projection(vec![
             ("status", string_value(super::STATUS_READ)),
             ("parent", string_value("[[obsidian]]")),
         ]);
         // The marker is unchanged from the stored base, but the frontmatter was
-        // edited to a different terminal status. Unchecking the ^ref task wants
-        // wip, which neither side selected, so the command must report it.
+        // edited to a different terminal status. Moving the ^ref task to Ready
+        // selects a third value, so the command must report the divergence.
         let marker = base.clone();
         let frontmatter = test_projection(vec![
             ("status", string_value(super::STATUS_ABANDONED)),
@@ -8394,7 +8465,6 @@ Keep me here.
             &mut resolution,
             &task,
             Some(&base),
-            false,
             &marker,
             &frontmatter,
         )
@@ -8406,8 +8476,8 @@ Keep me here.
             "unexpected conflict message: {message}"
         );
         assert!(
-            message.contains("reclose the PDF task")
-                && message.contains("status to wip"),
+            message.contains("change the PDF task")
+                && message.contains("status to ready"),
             "unexpected conflict resolution hint: {message}"
         );
     }
@@ -8426,6 +8496,10 @@ Keep me here.
             ("status", string_value("wip")),
             ("parent", string_value("[[obsidian]]")),
         ]);
+        let next_projection = test_projection(vec![
+            ("status", string_value("next")),
+            ("parent", string_value("[[obsidian]]")),
+        ]);
         let base_body = "\
 # Example
 
@@ -8438,9 +8512,18 @@ Keep me here.
 <!-- highlights:end -->
 ";
         let checked_body = base_body.replace("- [ ]", "- [X]");
+        let next_body = base_body.replace("- [ ]", "- [*]");
+        let in_progress_body = base_body.replace("- [ ]", "- [/]");
         assert!(super::bodies_differ_only_by_pdf_task_checkbox(
             base_body,
             &checked_body
+        ));
+        assert!(super::bodies_differ_only_by_pdf_task_checkbox(
+            base_body, &next_body
+        ));
+        assert!(super::bodies_differ_only_by_pdf_task_checkbox(
+            base_body,
+            &in_progress_body
         ));
         let cancelled_body_from_base = base_body.replace("- [ ]", "- [-]");
         assert!(super::bodies_differ_only_by_pdf_task_checkbox(
@@ -8507,9 +8590,17 @@ Keep me here.
                 cancelled_body,
                 &wip_projection,
             )
-            .expect("rewrite cancelled task checkbox to unchecked");
+            .expect("rewrite cancelled task checkbox to in-progress");
         assert!(cancelled_unchecked.contains(
-            "- [ ] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^ref\n"
+            "- [/] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^ref\n"
+        ));
+        let cancelled_next = super::rewrite_pdf_task_checkbox_for_projection(
+            cancelled_body,
+            &next_projection,
+        )
+        .expect("rewrite cancelled task checkbox to next");
+        assert!(cancelled_next.contains(
+            "- [*] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] [completion:: 2026-06-05] ^ref\n"
         ));
         let unchecked_cancelled =
             super::rewrite_pdf_task_checkbox_for_projection(

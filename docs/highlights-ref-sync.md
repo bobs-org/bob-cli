@@ -131,7 +131,7 @@ are not marker candidates.
 The marker note is an unordered list of `key: value` pairs:
 
 ```text
-- status: wip
+- status: ready
 - parent: obsidian
 - title: Systems Performance
 - aliases: ["Systems Performance", "Brendan Gregg systems performance"]
@@ -154,14 +154,16 @@ Obsidian wikilink, for example `parent: "[[obsidian]]"`.
 
 `status` must be a scalar string and must exactly match one of:
 
-- `unread`
+- `ready`
+- `next`
 - `wip`
 - `read`
 - `abandoned`
 - `legacy`
 
-Existing `status: done` marker/frontmatter/base inputs are accepted only as a
-deprecated alias and are normalized to `read` during sync.
+Existing `status: unread` and `status: done` marker/frontmatter/base inputs are
+accepted only as deprecated aliases and are normalized to `ready` and `read`,
+respectively, during sync.
 
 Values should be parsed as a YAML-compatible subset when possible:
 
@@ -232,11 +234,17 @@ marker explicitly opts into it as an unknown synced field.
 
 Implemented conflict policy:
 
-- If only the marker changed, update frontmatter.
+- If only the marker changed, update frontmatter when any status edit agrees
+  with the visible lifecycle task.
 - If only frontmatter changed, update the PDF marker note when PDF writes are
-  enabled.
-- If the generated PDF task line uses `[x]` or `[X]`, treat that as a
-  note-side `status: read` signal.
+  enabled and any status edit agrees with the visible lifecycle task.
+- Treat the generated PDF task line as the reference-reading status:
+  `[ ]` means `ready`, `[*]` means `next`, `[/]` means `wip`, `[x]`/`[X]`
+  means `read`, and `[-]` means `abandoned`.
+- If that task status differs from the selected marker/frontmatter projection,
+  apply it as a note-side status signal. If marker or frontmatter also changed
+  status to a different value from the stored base, report a conflict instead
+  of guessing.
 - If marker and frontmatter changed different fields from the stored base,
   auto-merge them. PDF marker writes are still opt-in with targeted
   `sync --write-pdf` or bulk `scan --write-pdfs`.
@@ -246,9 +254,10 @@ Implemented conflict policy:
 The last synced user-property projection is stored as `highlights_marker_hash`
 and as compact JSON in `highlights_marker_base`. The hash keeps old-note
 compatibility; the base snapshot lets the command prove safe field-level
-merges. `--prefer frontmatter`, checked-task completion, and any auto-merge
-that includes frontmatter changes require `--write-pdf` for targeted `sync`, or
-`--write-pdfs` for recursive `scan`, whenever the PDF marker must be updated.
+merges. `--prefer frontmatter`, any generated-task lifecycle change, and any
+auto-merge that includes frontmatter changes require `--write-pdf` for targeted
+`sync`, or `--write-pdfs` for recursive `scan`, whenever the PDF marker must be
+updated.
 
 PDF marker writes are performed by saving a temporary PDF next to the original
 and renaming it over the target. Before first PDF writes, commit or otherwise
@@ -419,7 +428,7 @@ Linked sidecar fragment:
 
 > Highlights Reference Note Sync
 
-- status: wip
+- status: ready
 - parent: obsidian
 
 ***
@@ -516,7 +525,7 @@ processed `[h:: ...]` markers continue to use the raw normalized sidecar text,
 so unchanged sidecar annotations keep their existing `^h-...` IDs when a note is
 regenerated with the callout format.
 
-The generated task line is a completion affordance:
+The generated task line is the reference-reading lifecycle:
 
 ```md
 - [ ] #task #ref [[lib/books/example.pdf]] #hide ^ref
@@ -525,34 +534,44 @@ The generated task line is a completion affordance:
 The `#ref` tag immediately after `#task` marks this as the machine-managed
 reference lifecycle task so Obsidian task views can tell it apart from ordinary
 annotation-derived follow-up tasks. It is additive: legacy generated lines
-without `#ref` are still recognized. Checking it with `[x]` or `[X]` means
-`status: read`. Cancelling it with `[-]`
-means `status: abandoned` and may keep metadata such as
-`[cancelled:: 2026-06-04]`. Unchecking an already `read` or `abandoned` ref
-reopens it to `status: wip`; unchecking a task on an `unread`, `wip`, or `legacy`
-ref, a freshly generated task, or a ref whose deprecated `done` base is being
-migrated to `read`, infers no status. If the marker or frontmatter also moved the
-status to another non-`wip` value since the stored base, the reopen is reported
-as a conflict instead of silently picking a side.
-When the final synced status is `read`, `sync` checks the generated task line;
-when it is `abandoned`, `sync` cancels the generated task line; when an unchecked
-task reopens the ref, `sync` leaves the generated task unchecked. Existing notes
-without that exact generated line are not bulk-migrated. If the checked,
-cancelled, or reopening task would update the PDF marker, `sync --dry-run`
-previews `pdf_marker_action: would-update`, plain `sync` refuses before writes,
-and targeted `sync --write-pdf` writes the marker. `scan --dry-run` previews this
+without `#ref` are still recognized.
+
+| Checkbox | Obsidian Tasks status | Reference `status` | Meaning |
+| --- | --- | --- | --- |
+| `[ ]` | Todo | `ready` | In the reading queue, not started |
+| `[*]` | Next | `next` | Queued for action |
+| `[/]` | In Progress | `wip` | Actively reading |
+| `[x]` / `[X]` | Done | `read` | Finished |
+| `[-]` | Cancelled | `abandoned` | Dropped |
+
+The mapping is bidirectional. On read, the checkbox is authoritative and moves
+frontmatter and the PDF marker to its status. On generation or write-back, the
+final status selects the matching checkbox. `legacy` has no lifecycle checkbox
+and falls back to `[ ]`; legacy notes without a generated `^ref` task remain
+untouched. `unread` is accepted only as a deprecated alias of `ready`, while
+`done` remains a deprecated alias of `read`.
+
+Changing `[x]` or `[-]` back to `[ ]` therefore reopens a reference to `ready`;
+use `[/]` to resume it directly as `wip`. Metadata such as
+`[cancelled:: 2026-06-04]` is preserved when only the checkbox mark changes. If
+the marker or frontmatter also moved status to a different value from the stored
+base, the task signal reports a conflict rather than silently choosing a side.
+When editing `status` directly, move the visible `^ref` task to the same state.
+
+If a lifecycle change would update the PDF marker, `sync --dry-run` previews
+`pdf_marker_action: would-update`, plain `sync` refuses before writes, and
+targeted `sync --write-pdf` writes the marker. `scan --dry-run` previews this
 work. A writing scan keeps the default note-only refusal unless `--write-pdfs`
 is supplied.
 
 Highlight comments and standalone non-marker notes can also create actionable
 Obsidian tasks when the marker/frontmatter-selected PDF status is `wip`, before
-the generated PDF `^ref` checkbox contributes a closing `read` or `abandoned`
-status. The final run that closes a `wip` PDF still imports newly added
-annotation tasks in that same run, and a run that reopens a `read` or `abandoned`
-ref back to `wip` imports them too; subsequent runs whose selected status is
-already non-`wip` skip task intake. Any unordered Markdown bullet line whose
-item text contains `#task` as a whitespace-delimited token is copied to an
-unchecked task:
+the generated PDF `^ref` checkbox contributes another lifecycle status. The
+final run that moves a `wip` PDF to `read` or `abandoned` still imports newly
+added annotation tasks in that same run, and moving a reference to `[/]` imports
+them too. Runs whose selected and final status are both non-`wip` skip task
+intake. Any unordered Markdown bullet line whose item text contains `#task` as a
+whitespace-delimited token is copied to an unchecked task:
 
 ```md
 - #task Compare this claim with the appendix.
@@ -693,7 +712,7 @@ In Highlights Pro on the MacBook:
 Use this marker as a starting point:
 
 ```text
-- status: wip
+- status: ready
 - parent: obsidian
 - title: Example Title
 - topics: [example]
@@ -728,7 +747,7 @@ MacBook validation checklist:
   `~/bob/ref/books/example.assets/h-<id>.<ext>` and embeds it from the generated
   callout with a vault-relative wikilink.
 - A second run with unchanged inputs reports `writes: none`.
-- If frontmatter edits or a checked generated task require PDF marker
+- If frontmatter edits or a generated lifecycle-task change require PDF marker
   write-back, a dry run reports `pdf_marker_action: would-update` before any
   targeted `--write-pdf` or bulk `--write-pdfs` run.
 - `git -C ~/bob status --short` is reviewed before and after each write pass.
@@ -964,9 +983,9 @@ PDF marker:
 bob highlights sync ~/bob/lib/books/example.pdf --prefer frontmatter --write-pdf
 ```
 
-If the only change is frontmatter, the generated task line uses `[x]`, `[X]`,
-or `[-]`, or a dry-run auto-merge reports `pdf_marker_action: would-update`,
-review the marker first, back up the PDF, then run the targeted write:
+If the only change is frontmatter or a generated lifecycle-task mark, or a
+dry-run auto-merge reports `pdf_marker_action: would-update`, review the marker
+first, back up the PDF, then run the targeted write:
 
 ```bash
 bob highlights sync ~/bob/lib/books/example.pdf --write-pdf
@@ -994,8 +1013,8 @@ preflight failures remain hard global failures before writes.
 | --- | --- | --- |
 | `library directory does not exist or is not a directory` | `~/bob/lib` is missing or `--lib-dir` points at the wrong path. | Create `~/bob/lib` or pass the intended `--lib-dir`. |
 | `no standalone /Text note annotations found on page 1` | The PDF has no page-1 standalone marker note. | Add the first standalone PDF note on page 1 in Highlights. |
-| `missing required marker key: status` | The marker list lacks `status`. | Add `- status: wip` to the marker. |
-| `unsupported status` | `status` is not one of `unread`, `wip`, `read`, `abandoned`, or `legacy`. | Change the marker or frontmatter status to a supported value. |
+| `missing required marker key: status` | The marker list lacks `status`. | Add `- status: ready` to the marker. |
+| `unsupported status` | `status` is not one of `ready`, `next`, `wip`, `read`, `abandoned`, or `legacy`. | Change the marker or frontmatter status to a supported value. `unread` is accepted only as a deprecated alias of `ready`. |
 | `missing required marker key: parent` | The marker/frontmatter projection lacks `parent`. | Add a bare marker parent such as `- parent: obsidian`, or add frontmatter parent such as `parent: "[[obsidian]]"`. |
 | `wikilinks are not supported` | The PDF marker `parent` uses Obsidian link syntax. | Remove the brackets in the PDF marker, e.g. use `- parent: obsidian`. |
 | `'type' is command-managed` | The marker tries to set the generated note `type`. | Remove `type` from the marker; generated notes get `type: "[[ref]]"` automatically. |
@@ -1006,9 +1025,10 @@ preflight failures remain hard global failures before writes.
 | `image asset not found` | The sidecar references an image file that is not present relative to the sidecar text file. This usually means the PDF was exported as plain Markdown, or Highlights failed to create the TextBundle for a PDF with image/area annotations. | Manually create/export the TextBundle once, beside the PDF and with the exact PDF basename, so `assets/...` files are included, then rerun. See [Known Highlights TextBundle Creation Bug](#known-highlights-textbundle-creation-bug). |
 | `image asset destination exists with different bytes` | A content-addressed `ref/.../*.assets/h-<id>.<ext>` destination already exists but its bytes do not match the source asset. | Inspect the existing asset, then remove or restore it before rerunning. |
 | `refusing to modify dirty vault files` | Git reports dirty touched paths outside the allowed frontmatter and generated-task checkbox write-back case. | Commit, stash, or clean those paths. |
-| `reference note changed but --write-pdf was not supplied` | Frontmatter or the generated task contributes `status: read` or `status: abandoned` to the selected projection, so the PDF marker needs an opt-in write. | Back up the PDF, then run targeted `sync --write-pdf` or reviewed bulk `scan --write-pdfs`. |
+| `reference note changed but --write-pdf was not supplied` | Frontmatter or the generated task contributes a lifecycle status to the selected projection, so the PDF marker needs an opt-in write. | Back up the PDF, then run targeted `sync --write-pdf` or reviewed bulk `scan --write-pdfs`. |
 | `checked PDF task conflicts` | The generated task says `status: read`, but marker or frontmatter changed `status` to another value from the stored base. | Uncheck the task or set the marker/frontmatter status to `read`. |
 | `cancelled PDF task conflicts` | The generated task says `status: abandoned`, but marker or frontmatter changed `status` to another value from the stored base. | Uncancel the task or set the marker/frontmatter status to `abandoned`. |
+| `ready`, `next`, or `in-progress PDF task conflicts` | The generated task selects `ready`, `next`, or `wip`, but marker or frontmatter changed `status` to a different value from the stored base. | Move the task to the intended state or set marker/frontmatter status to match it. |
 | `marker/frontmatter conflict` | Marker and frontmatter changed the same field differently, or the note has no stored base snapshot for a safe merge. | Inspect both sides, then rerun with `--prefer marker` or `--prefer frontmatter --write-pdf`. |
 | `changed during sync; rerun` | The note or PDF changed after planning and before writing. | Rerun after closing or pausing apps that may touch the file. |
 | `scan completed with ... per-PDF failure(s)` | A recursive scan finished reporting or writing valid PDFs, but at least one PDF had a `plan_error` or `write_failure`. | Fix the named PDFs and rerun; review successful writes before assuming the scan wrote nothing. |

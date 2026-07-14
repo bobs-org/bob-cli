@@ -6078,7 +6078,7 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     );
     assert!(
         contents.contains(
-            "- [ ] #task #ref [[lib/systems-performance.pdf]] #hide ^ref\n"
+            "- [/] #task #ref [[lib/systems-performance.pdf]] #hide ^ref\n"
         ),
         "{contents}"
     );
@@ -6553,7 +6553,7 @@ fn highlights_ref_scan_recurses_dry_runs_and_writes_multiple_pdfs() {
     );
     write_highlights_pdf(
         &second_pdf,
-        "- status: unread\n- parent: obsidian\n- title: Rust Book\n",
+        "- status: ready\n- parent: obsidian\n- title: Rust Book\n",
     );
     write_file(
         &first_pdf.with_extension("md"),
@@ -6846,7 +6846,7 @@ Note: marker note mirrored from the PDF
 
     let checked_update = fs::read_to_string(&update_note)
         .expect("read update note")
-        .replace("- [ ] #task", "- [x] #task");
+        .replace("- [/] #task", "- [x] #task");
     write_file(&update_note, &checked_update);
     write_file(
         &update_pdf.with_extension("md"),
@@ -7072,9 +7072,9 @@ fn highlights_ref_scan_jobs_flag_matches_sequential_output() {
     // parallel planning is unlikely to match the sorted reporting order.
     let specs = [
         ("lib/books/alpha.pdf", "wip", "Alpha", "Alpha quote."),
-        ("lib/books/beta.pdf", "unread", "Beta", "Beta quote."),
+        ("lib/books/beta.pdf", "ready", "Beta", "Beta quote."),
         ("lib/papers/gamma.pdf", "wip", "Gamma", "Gamma quote."),
-        ("lib/papers/delta.pdf", "unread", "Delta", "Delta quote."),
+        ("lib/papers/delta.pdf", "ready", "Delta", "Delta quote."),
         ("lib/notes/epsilon.pdf", "wip", "Epsilon", "Epsilon quote."),
     ];
     for (rel, status, title, quote) in specs {
@@ -7136,7 +7136,7 @@ fn highlights_ref_scan_allows_duplicate_basenames_in_different_ref_types() {
     let second_note = vault.join("ref/papers/example.md");
     let old_flat_note = vault.join("ref/example.md");
     write_highlights_pdf(&first_pdf, "- status: wip\n- parent: obsidian\n");
-    write_highlights_pdf(&second_pdf, "- status: unread\n- parent: obsidian\n");
+    write_highlights_pdf(&second_pdf, "- status: ready\n- parent: obsidian\n");
 
     let output = bob_command()
         .arg("highlights")
@@ -7172,7 +7172,7 @@ fn highlights_ref_scan_detects_same_target_collision_before_writing() {
     let second_pdf = vault.join("lib/books/example.PDF");
     let note = vault.join("ref/books/example.md");
     write_highlights_pdf(&first_pdf, "- status: wip\n- parent: obsidian\n");
-    write_highlights_pdf(&second_pdf, "- status: unread\n- parent: obsidian\n");
+    write_highlights_pdf(&second_pdf, "- status: ready\n- parent: obsidian\n");
 
     let output = bob_command()
         .arg("highlights")
@@ -7221,7 +7221,8 @@ fn highlights_ref_sync_refuses_dirty_target_note_before_writing() {
     git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
     let dirty_note = fs::read_to_string(&note)
         .expect("read note")
-        .replace("## Highlights\n\n", "Local edit.\n\n## Highlights\n\n");
+        .replace("## Highlights\n\n", "Local edit.\n\n## Highlights\n\n")
+        .replace("- [/] #task", "- [x] #task");
     write_file(&note, &dirty_note);
     set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
 
@@ -7274,7 +7275,8 @@ fn highlights_ref_sync_allows_dirty_tracked_frontmatter_writeback() {
     git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
     let edited = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("status: wip", "status: read");
+        .replace("status: wip", "status: read")
+        .replace("- [/] #task", "- [x] #task");
     write_file(&note, &edited);
 
     let output = bob_command()
@@ -7358,6 +7360,10 @@ fn highlights_ref_marker_edit_updates_frontmatter() {
     );
 
     set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
+    let checked_note = fs::read_to_string(&note)
+        .expect("read ref note")
+        .replace("- [/] #task", "- [x] #task");
+    write_file(&note, &checked_note);
     let output = bob_command()
         .arg("highlights")
         .arg("sync")
@@ -7396,7 +7402,8 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
     );
     let edited = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("status: wip", "status: read");
+        .replace("status: wip", "status: read")
+        .replace("- [/] #task", "- [x] #task");
     write_file(&note, &edited);
     let marker_before = pdf_marker_contents(&pdf);
 
@@ -7513,7 +7520,8 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     let old_done_note = fs::read_to_string(&note)
         .expect("read generated ref note")
         .replace("status: wip", "status: done")
-        .replace("\\\"status\\\":\\\"wip\\\"", "\\\"status\\\":\\\"done\\\"");
+        .replace("\\\"status\\\":\\\"wip\\\"", "\\\"status\\\":\\\"done\\\"")
+        .replace("- [/] #task", "- [x] #task");
     assert!(
         old_done_note.contains("\\\"status\\\":\\\"done\\\""),
         "test must simulate old stored base status:\n{old_done_note}"
@@ -7684,7 +7692,7 @@ fn highlights_ref_task_cancelled_dry_run_requires_and_writes_pdf_marker() {
 
     let generated_note = fs::read_to_string(&note).expect("read ref note");
     let cancelled_note = generated_note.replace(
-        "- [ ] #task #ref [[lib/example.pdf]] #hide ^ref",
+        "- [/] #task #ref [[lib/example.pdf]] #hide ^ref",
         "- [-] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] ^ref",
     );
     write_file(&note, &cancelled_note);
@@ -7856,7 +7864,7 @@ fn highlights_ref_task_cancelled_scan_write_pdfs_writes_pdf_marker() {
 
     let cancelled_note = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("- [ ] #task", "- [-] #task");
+        .replace("- [/] #task", "- [-] #task");
     write_file(&note, &cancelled_note);
 
     let output = bob_command()
@@ -7911,7 +7919,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     );
     let checked_note = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("- [ ] #task", "- [x] #task");
+        .replace("- [/] #task", "- [x] #task");
     write_file(&note, &checked_note);
     let marker_before = pdf_marker_contents(&pdf);
     let pdf_hash_before_write = sha256_file(&pdf);
@@ -8105,7 +8113,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
 }
 
 #[test]
-fn highlights_ref_task_unchecked_scan_reopens_read_ref_to_wip() {
+fn highlights_ref_task_ready_scan_reopens_read_ref_to_ready() {
     let temp = TempDir::new("bob-cli-highlights-ref-task-reopen");
     let vault = temp.path().join("vault");
     let pdf = vault.join("lib/example.pdf");
@@ -8130,7 +8138,7 @@ fn highlights_ref_task_unchecked_scan_reopens_read_ref_to_wip() {
                 .contains("- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
         "expected a read ref with a checked ^ref task:\n{read_note}"
     );
-    // The user unchecks the generated ^ref task to reopen the ref.
+    // The user moves the generated ^ref task to Ready to reopen the ref.
     let reopened_note = read_note.replace("- [x] #task", "- [ ] #task");
     write_file(&note, &reopened_note);
     let marker_before = pdf_marker_contents(&pdf);
@@ -8151,8 +8159,8 @@ fn highlights_ref_task_unchecked_scan_reopens_read_ref_to_wip() {
     let scan_dry_run = stdout(&output);
     assert!(
         scan_dry_run.contains("write_pdfs: true")
-            && scan_dry_run.contains("pdf_task: unchecked")
-            && scan_dry_run.contains("pdf_task_contribution: status=wip")
+            && scan_dry_run.contains("pdf_task: ready")
+            && scan_dry_run.contains("pdf_task_contribution: status=ready")
             && scan_dry_run.contains("pdf_marker_action: would-update")
             && scan_dry_run.contains("notes_update: 1")
             && scan_dry_run.contains("writes: none"),
@@ -8191,8 +8199,8 @@ fn highlights_ref_task_unchecked_scan_reopens_read_ref_to_wip() {
     assert_eq!(pdf_marker_contents(&pdf), marker_before);
     assert_eq!(fs::read_to_string(&note).expect("read note"), reopened_note);
 
-    // With --write-pdfs the ref note and PDF marker both move to wip while the
-    // generated ^ref task stays unchecked.
+    // With --write-pdfs the ref note, PDF marker, and generated ^ref task all
+    // move to Ready.
     let output = bob_command()
         .arg("highlights")
         .arg("scan")
@@ -8206,17 +8214,17 @@ fn highlights_ref_task_unchecked_scan_reopens_read_ref_to_wip() {
     let scan_write = stdout(&output);
     assert!(
         scan_write.contains("write_pdfs: true")
-            && scan_write.contains("pdf_task_contribution: status=wip")
+            && scan_write.contains("pdf_task_contribution: status=ready")
             && scan_write.contains("pdf_markers_updated: 1")
             && scan_write.contains("writes: note,pdf"),
         "expected reopen scan --write-pdfs to write note and PDF marker:\n{}",
         format_output(&output)
     );
     let marker = pdf_marker_contents(&pdf);
-    assert!(marker.contains("- status: wip\n"), "{marker}");
+    assert!(marker.contains("- status: ready\n"), "{marker}");
     let note_after_write = fs::read_to_string(&note).expect("read note");
     assert!(
-        note_after_write.contains("status: wip\n"),
+        note_after_write.contains("status: ready\n"),
         "{note_after_write}"
     );
     assert!(
@@ -8281,7 +8289,7 @@ Note: marker note mirrored from the PDF
     );
     let checked_note =
         fs::read_to_string(&note).expect("read ref note").replace(
-            "- [ ] #task #ref [[lib/books/closing-order.pdf]]",
+            "- [/] #task #ref [[lib/books/closing-order.pdf]]",
             "- [x] #task #ref [[lib/books/closing-order.pdf]]",
         );
     write_file(&note, &checked_note);
@@ -8423,7 +8431,7 @@ Note: marker note mirrored from the PDF
     let checked_note = fs::read_to_string(&note)
         .expect("read scan ref note")
         .replace(
-            "- [ ] #task #ref [[lib/books/scan-closing.pdf]]",
+            "- [/] #task #ref [[lib/books/scan-closing.pdf]]",
             "- [x] #task #ref [[lib/books/scan-closing.pdf]]",
         );
     write_file(&note, &checked_note);
@@ -8519,7 +8527,7 @@ fn highlights_ref_task_checked_dirty_tracked_note_is_allowed() {
     git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
     let checked_note = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("- [ ] #task", "- [x] #task");
+        .replace("- [/] #task", "- [x] #task");
     write_file(&note, &checked_note);
 
     let output = bob_command()
@@ -8564,7 +8572,7 @@ fn highlights_ref_task_checked_competing_status_edits_fail() {
 
         let mut edited = fs::read_to_string(&note)
             .expect("read ref note")
-            .replace("- [ ] #task", "- [x] #task");
+            .replace("- [/] #task", "- [x] #task");
         if source == "frontmatter" {
             edited = edited.replace("status: wip", "status: abandoned");
         } else {
@@ -8631,7 +8639,7 @@ fn highlights_ref_task_cancelled_competing_status_edits_fail() {
 
         let mut edited = fs::read_to_string(&note)
             .expect("read ref note")
-            .replace("- [ ] #task", "- [-] #task");
+            .replace("- [/] #task", "- [-] #task");
         if source == "frontmatter" {
             edited = edited.replace("status: wip", "status: read");
         } else {
@@ -8699,13 +8707,18 @@ fn highlights_ref_status_abandoned_rewrites_generated_task_to_cancelled() {
         if source == "frontmatter" {
             let edited = fs::read_to_string(&note)
                 .expect("read ref note")
-                .replace("status: wip", "status: abandoned");
+                .replace("status: wip", "status: abandoned")
+                .replace("- [/] #task", "- [-] #task");
             write_file(&note, &edited);
         } else {
             set_pdf_marker_contents(
                 &pdf,
                 "- status: abandoned\n- parent: obsidian\n",
             );
+            let cancelled_note = fs::read_to_string(&note)
+                .expect("read ref note")
+                .replace("- [/] #task", "- [-] #task");
+            write_file(&note, &cancelled_note);
         }
 
         let output = bob_command()
@@ -8750,10 +8763,13 @@ fn highlights_ref_non_overlapping_edits_auto_merge_and_settle() {
     );
 
     set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
-    let edited = fs::read_to_string(&note).expect("read ref note").replace(
-        "parent: \"[[obsidian]]\"\n",
-        "parent: \"[[obsidian]]\"\ntitle: \"Frontmatter Title\"\n",
-    );
+    let edited = fs::read_to_string(&note)
+        .expect("read ref note")
+        .replace(
+            "parent: \"[[obsidian]]\"\n",
+            "parent: \"[[obsidian]]\"\ntitle: \"Frontmatter Title\"\n",
+        )
+        .replace("- [/] #task", "- [x] #task");
     write_file(&note, &edited);
     let note_before = fs::read_to_string(&note).expect("read note before");
     let marker_before = pdf_marker_contents(&pdf);
@@ -8885,7 +8901,8 @@ fn highlights_ref_frontmatter_unsupported_status_fails_before_pdf_writeback() {
     );
     let edited = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("status: wip", "status: complete");
+        .replace("status: wip", "status: complete")
+        .replace("- [/] #task #ref [[lib/example.pdf]] #hide ^ref\n", "");
     write_file(&note, &edited);
     let marker_before = pdf_marker_contents(&pdf);
 
@@ -8933,7 +8950,8 @@ fn highlights_ref_conflicting_edits_fail_and_prefer_frontmatter_resolves() {
     set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
     let frontmatter_side = fs::read_to_string(&note)
         .expect("read ref note")
-        .replace("status: wip", "status: abandoned");
+        .replace("status: wip", "status: abandoned")
+        .replace("- [/] #task", "- [-] #task");
     write_file(&note, &frontmatter_side);
     let note_before = fs::read_to_string(&note).expect("read note before");
     let marker_before = pdf_marker_contents(&pdf);
@@ -9045,7 +9063,7 @@ Note: Keep a standalone observation after the marker.
     assert!(contents.contains("# Systems Performance\n"), "{contents}");
     assert!(
         contents.contains(
-            "- [ ] #task #ref [[lib/books/systems-performance.pdf]] #hide ^ref\n"
+            "- [/] #task #ref [[lib/books/systems-performance.pdf]] #hide ^ref\n"
         ),
         "{contents}"
     );
@@ -9435,7 +9453,7 @@ Note:
     // The generated PDF reading-status task line is unchanged.
     assert!(
         contents.contains(
-            "- [ ] #task #ref [[lib/books/task-notes.pdf]] #hide ^ref\n"
+            "- [/] #task #ref [[lib/books/task-notes.pdf]] #hide ^ref\n"
         ),
         "{contents}"
     );
@@ -9815,7 +9833,7 @@ Note: marker note mirrored from the PDF
 
 #[test]
 fn highlights_ref_sync_skips_annotation_tasks_for_non_wip_statuses() {
-    for status in ["unread", "read", "abandoned"] {
+    for status in ["ready", "next", "read", "abandoned", "legacy"] {
         let temp = TempDir::new(&format!(
             "bob-cli-highlights-ref-non-wip-task-{status}"
         ));
