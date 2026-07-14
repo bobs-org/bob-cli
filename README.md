@@ -218,6 +218,10 @@ Pomodoro keeps it and matching physical lines beneath later open Pomodoros are
 removed in full. Identity is the resolved note path plus block ID, so aliases,
 embeds, and alternate note spellings are de-duplicated together; repeats within
 one Pomodoro are preserved.
+Sole transcluded child links recursively promote dependency tasks and may use
+display aliases. A dependency task tagged `#hide` remains reachable for this
+sync even when it is omitted from Tasks `[id::]`/`[dependsOn::]` metadata;
+plain links and mixed-content bullets do not create dependency edges.
 
 For example, this open ledger entry makes the linked task Next:
 

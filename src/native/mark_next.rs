@@ -1699,12 +1699,11 @@ fn sole_transcluded_block_reference(line: &str) -> Option<RawReference> {
     let marker_end = after_list_marker(line, byte_indent)?;
     let body = line[marker_end..].trim();
     let inside = body.strip_prefix("![[")?.strip_suffix("]]")?;
-    if inside.contains('|') {
-        return None;
-    }
-    let fragment = inside.find("#^")?;
-    let target = inside[..fragment].trim();
-    let block_id = inside[fragment + 2..].trim();
+    let destination =
+        inside.split_once('|').map_or(inside, |(target, _)| target);
+    let fragment = destination.find("#^")?;
+    let target = destination[..fragment].trim();
+    let block_id = destination[fragment + 2..].trim();
     (!block_id.is_empty()
         && block_id.bytes().all(collect_done::is_block_id_byte))
     .then(|| RawReference {
@@ -2545,12 +2544,24 @@ mod tests {
             sole_transcluded_block_reference("  - ![[Projects/A#^dep]]"),
             Some(reference("Projects/A", "dep"))
         );
+        assert_eq!(
+            sole_transcluded_block_reference(
+                "  - ![[Projects/A#^dep|Cross-note dependency]]"
+            ),
+            Some(reference("Projects/A", "dep"))
+        );
+        assert_eq!(
+            sole_transcluded_block_reference("\t* ![[#^local|Same note]]"),
+            Some(reference("", "local"))
+        );
         for line in [
             "  - [[#^plain]]",
-            "  - ![[#^dep|alias]]",
             "  - text ![[#^dep]]",
             "  - ![[#^dep]] trailing",
             "  - ![[#heading]]",
+            "  - ![[#^|empty block ID]]",
+            "  - ![[#^invalid block|alias]]",
+            "  - ![[#^unterminated|alias]",
         ] {
             assert_eq!(sole_transcluded_block_reference(line), None, "{line}");
         }

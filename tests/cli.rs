@@ -864,6 +864,92 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
 }
 
 #[test]
+fn mark_next_tasks_propagates_through_aliased_hidden_transclusions() {
+    let temp = TempDir::new("bob-cli-mark-next-hidden-transclusion");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260714.md");
+    let parent = vault.join("sase.md");
+    let hidden =
+        vault.join("ref/chat/sase_beads_full_potential_consolidated.md");
+    let daily_before = concat!(
+        "# Daily note\n\n",
+        "## Pomodoros\n\n",
+        "- [ ] Plan the work (0900-0930)\n",
+        "  - [[sase#^plan]]\n",
+    );
+    let parent_before = concat!(
+        "- [ ] #task Plan the work ^plan\n",
+        "  - ![[ref/chat/sase_beads_full_potential_consolidated#^ref|Research notes]]\n",
+    );
+    let hidden_before = "- [ ] #task #ref [[lib/sase-beads.pdf]] #hide ^ref\n";
+    write_file(&daily, daily_before);
+    write_file(&parent, parent_before);
+    write_file(&hidden, hidden_before);
+
+    let dry_run = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run aliased hidden dependency");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    assert_eq!(fs::read_to_string(&parent).unwrap(), parent_before);
+    assert_eq!(fs::read_to_string(&hidden).unwrap(), hidden_before);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).expect("dry-run JSON");
+    assert_eq!(json["dependency_references"], 1);
+    assert!(json["marked_next"].as_array().unwrap().iter().any(|item| {
+        item["path"] == "ref/chat/sase_beads_full_potential_consolidated.md"
+            && item["block_id"] == "ref"
+            && item["dependency"] == true
+    }));
+
+    let applied = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply aliased hidden dependency");
+    assert_success(&applied);
+    assert_eq!(
+        fs::read_to_string(&hidden).unwrap(),
+        "- [*] #task #ref [[lib/sase-beads.pdf]] #hide ^ref\n"
+    );
+
+    let second = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun aliased hidden dependency");
+    assert_success(&second);
+    assert!(
+        stdout(&second).contains("already in sync, no changes"),
+        "expected idempotent no-op:\n{}",
+        format_output(&second)
+    );
+
+    write_file(&daily, &daily_before.replace("[[sase#^plan]]", "[[sase]]"));
+    let cleared = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("clear unreachable aliased hidden dependency");
+    assert_success(&cleared);
+    assert_eq!(fs::read_to_string(&parent).unwrap(), parent_before);
+    assert_eq!(fs::read_to_string(&hidden).unwrap(), hidden_before);
+}
+
+#[test]
 fn mark_next_tasks_prunes_duplicate_lines_before_dependency_sync() {
     let temp = TempDir::new("bob-cli-mark-next-prune-duplicates");
     let vault = temp.path().join("vault");
