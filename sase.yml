@@ -1,9 +1,13 @@
 is_sase_managed: true
-linked_repos:
-  - name: bob-plugins
-    path: ~/projects/github/bobs-org/bob-plugins
-    description: |
-      Source-of-truth monorepo for Bryan's custom Bob Obsidian plugins, deployed to the vault via `bob plugins sync`.
-      You should NOT edit these plugins directly in the ~/bob/ directory, as they will be overwritten on the next sync.
-      Instead, make changes to this linked repo and, when done, run the `bob plugins sync` command to deploy them to
-      the ~/bob/ directory.
+repos:
+  linked:
+    - name: bob-plugins
+      path: ~/projects/github/bobs-org/bob-plugins
+      description: |
+        Source-of-truth monorepo for Bryan's custom Bob Obsidian plugins, deployed to the vault via `bob plugins sync`.
+        You should NOT edit these plugins directly in the ~/bob/ directory, as they will be overwritten on the next
+        sync. Instead, make changes to this linked repo and, when done, run the `bob plugins sync` command to deploy them
+        to the ~/bob/ directory.
+  sidecar:
+    - name: plans
+      auto_clone: true
