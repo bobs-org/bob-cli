@@ -21,7 +21,6 @@ reference notes that agents read only when relevant.
 - `type`: `short` for always-loaded notes or `long` for read-on-demand reference notes.
 - `parent`: `AGENTS.md` for top-level notes, or `memory/<note>.md` when a long note belongs under another long note.
 - `description`: required for long notes and used in generated agent instructions and this README.
-- `keywords`: optional extra metadata preserved by memory tooling when present.
 
 ### Linking
 
@@ -37,7 +36,7 @@ reference notes that agents read only when relevant.
 - Description: No description set.
 - Parent: `AGENTS.md`
 - Lines: 39
-- Approx. tokens: 460
+- Approx. tokens: 575
 
 ### `memory/cli_rules.md`
 
@@ -53,7 +52,7 @@ reference notes that agents read only when relevant.
 - Short notes: 1
 - Long notes: 1
 - Total lines: 53
-- Total approx. tokens: 589
+- Total approx. tokens: 704
 
 ## Commands
 
