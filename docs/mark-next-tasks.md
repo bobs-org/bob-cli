@@ -1,13 +1,13 @@
 # Next Task Sync
 
 `bob mark-next-tasks` makes today's Pomodoro ledger the source of truth for
-which vault tasks have the Obsidian Tasks **Next** status (`[*]`) and keeps
+active Obsidian Tasks statuses and keeps
 references to completed tasks retired as struck, non-embedded links beneath
 their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
 the machine-owned Pomodoro marker (`🍅`); embedded and provenance-unknown
 retired links do not. Links beneath open Pomodoros are unmarked. It
-also follows transcluded dependency bullets recursively, so the complete
-active dependency chain becomes Next.
+also follows transcluded dependency bullets recursively, promoting each target
+to the strongest applicable Next (`[*]`) or In Progress (`[/]`) status.
 
 ## Usage
 
@@ -64,7 +64,7 @@ candidates.
 
 The rewritten Pomodoro section is scanned again after duplicate removal and
 completed-reference structural rewrites. Only references that will actually be
-written contribute to the direct desired set and dependency closure. Thus an
+written contribute to the direct desired-status map and dependency graph. Thus an
 otherwise-live task mentioned only as unrelated content on a removed line, and
 its otherwise-unreachable dependency chain, are cleared from Next in that same
 run.
@@ -93,28 +93,45 @@ links rather than `[id::]`/`[dependsOn::]` metadata. Tasks metadata represents
 the same target vault-wide with a path-qualified value such as
 `Alpha__review`.
 
-Traversal is breadth-first and cycle-safe. Dependencies of dependencies are
+Each surviving direct Pomodoro task has a minimum desired status of Next. A
+direct task already In Progress instead seeds In Progress. Every dependency
+inherits its source task's effective ranked status, using the order
+`[ ] < [*] < [/]`. The effective status is the stronger of the incoming request
+and the target's current supported status, so an already-In-Progress
+intermediate task promotes lower-status descendants to In Progress. Multiple
+parents merge by taking the strongest request.
+
+Traversal uses a monotonic work queue and is cycle-safe: a task is revisited
+only when its effective rank increases. Dependencies of dependencies are
 included, while a task reached both directly and through a dependency is
 counted as direct. Removing a Pomodoro link removes that task's otherwise
-unreachable dependency chain from the desired set on the next run.
+unreachable dependency chain from the desired map on the next run.
 
 The command scans Markdown task lines allowed by the Obsidian Tasks
 `globalFilter` setting. If that setting cannot be read, the filter defaults to
 `#task`. It then applies these transitions:
 
-| Existing status | Reachable from an open Pomodoro | Result |
+| Existing status | Desired/reachability state | Result |
 | --- | --- | --- |
-| `[ ]` | yes | `[*]` |
-| `[*]` | no | `[ ]` |
-| `[*]` | yes | unchanged |
-| `[/]` | either | unchanged |
-| done, canceled, or unknown | either | unchanged |
+| `[ ]` | desired Next | `[*]` |
+| `[ ]` or `[*]` | desired In Progress | `[/]` |
+| `[*]` | desired Next | unchanged |
+| `[/]` | desired Next or In Progress | unchanged |
+| `[*]` | unreachable | `[ ]` |
+| `[ ]` or `[/]` | unreachable | unchanged |
+| done, canceled, or unknown/custom | any | unchanged |
+
+Ranked propagation itself is monotonic and never lowers a dependency target.
+Removing a transclusion therefore does not perform a matching rollback. The
+separate vault-wide cleanup rule still resets any Next task that is no longer
+reachable from the final open-Pomodoro graph; it never resets In Progress or
+terminal/custom statuses.
 
 The machine-managed `#task #ref ... ^ref` reading task in a generated reference
-note is an ordinary scanned task. Promoting it from `[ ]` to `[*]` therefore
-flows through the next highlights sync as reference `status: next`; clearing it
-back to `[ ]` flows through as `status: ready`. `[/]`, `[x]`/`[X]`, and `[-]`
-remain untouched by `mark-next-tasks`. Because the highlights lifecycle is also
+note is an ordinary scanned task. Promoting it to `[*]` or `[/]` therefore
+flows through the next highlights sync as the corresponding reference status;
+clearing an unreachable `[*]` back to `[ ]` flows through as `status: ready`.
+Existing `[/]`, `[x]`/`[X]`, and `[-]` statuses are never lowered. Because the highlights lifecycle is also
 stored in the PDF marker, preview with `bob highlights scan --dry-run` and use a
 reviewed `bob highlights scan --write-pdfs` when marker write-back is needed.
 
@@ -220,12 +237,13 @@ and left structurally unchanged.
 
 ## Output
 
-Human output lists every promotion, clear, duplicate line removal, retired
+Human output lists every Next promotion, In-Progress promotion, clear, duplicate line removal, retired
 reference, move, and marker repair, followed by a summary. Duplicate removals
 show the original daily-note line number, text, owning Pomodoro, and canonical
 task identities. Marker additions and removals have their own
 `marked`/`unmarked` sections and summary counts. Dependency-derived promotions
-carry a `(dependency)` suffix. Dry-run
+carry a `(dependency)` suffix. Next and In-Progress promotions have separate
+sections and summary counts. Dry-run
 uses the same planning path and reports what would happen
 without changing any file. Warnings go to stderr. A no-op prints a single
 `already in sync` line only when neither task statuses nor daily-note links
@@ -255,6 +273,15 @@ JSON mode prints one object on stdout with these stable fields:
       "line_number": 18,
       "block_id": "write-tests",
       "description": "Write tests",
+      "dependency": true
+    }
+  ],
+  "marked_in_progress": [
+    {
+      "path": "dev.md",
+      "line_number": 24,
+      "block_id": "review-tests",
+      "description": "Review tests",
       "dependency": true
     }
   ],
@@ -307,7 +334,10 @@ JSON mode prints one object on stdout with these stable fields:
 Pomodoro block links before structural cleanup; consumers do not need to
 reinterpret that older field. `dependency_references` counts additional unique
 task blocks reached through dependency edges in the final rewritten ledger.
-Each change item's `dependency` boolean distinguishes the two sources. Each
+`marked_next` contains only `[ ] -> [*]` changes, while
+`marked_in_progress` contains both `[ ] -> [/]` and `[*] -> [/]` changes. Each
+change item's `dependency` boolean distinguishes direct references from
+dependency-only graph reachability. Each
 `removed_duplicate_lines` item represents one physical line and contains its
 one-based original `line_number`, original `line`, owning `pomodoro`, and one or
 more canonical path-plus-block `duplicate_tasks`. Each unresolved reference

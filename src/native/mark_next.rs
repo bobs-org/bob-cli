@@ -59,18 +59,20 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Sync Next tasks, including transcluded dependency chains")
+        .about("Sync active task statuses through dependency chains")
         .long_about(
-            "Make today's Pomodoro ledger the source of truth for Next tasks.\n\n\
-Tasks block-linked from child bullets of open Pomodoro entries are promoted \
-from [ ] to [*]. Their dependency tasks are discovered recursively from sole \
-transcluded block-link child bullets and promoted too. Existing [*] tasks not \
-reachable from an open entry are reset to [ ]. Completed linked-task references \
+            "Make today's Pomodoro ledger the source of truth for active task statuses.\n\n\
+Tasks block-linked from child bullets of open Pomodoro entries have a minimum \
+desired status of Next [*]; tasks already In Progress [/] keep that stronger \
+status. Dependency tasks are discovered recursively from sole transcluded \
+block-link child bullets and inherit the strongest effective parent status, \
+promoting Ready [ ] tasks to Next or In Progress and Next tasks to In Progress. \
+Status propagation never lowers a task. Existing [*] tasks not reachable from \
+an open entry are independently reset to [ ]. Completed linked-task references \
 are retired as struck, non-embedded links. References found under open \
 Pomodoros keep the existing policy of moving their containing bullets beneath \
 the current timed Pomodoro, or the last completed Pomodoro when \
-there is no current one. In-progress [/] tasks and all other statuses are left \
-unchanged.\n\n\
+there is no current one. Done, cancelled, and custom statuses are left unchanged.\n\n\
 When the same resolved task is linked beneath multiple open Pomodoros, the \
 first open Pomodoro in file order keeps ownership and every conflicting \
 physical line beneath later open Pomodoros is removed in full. Aliases, \
@@ -223,6 +225,7 @@ struct SyncResult {
     dependency_references: usize,
     scanned_files: usize,
     marked_next: Vec<ChangeItem>,
+    marked_in_progress: Vec<ChangeItem>,
     cleared: Vec<ChangeItem>,
     struck_completed_references: Vec<StruckCompletedReference>,
     embedded_completed_references: Vec<StruckCompletedReference>,
@@ -349,11 +352,30 @@ struct BulletMove {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Transition {
-    Promote,
+    MarkNext,
+    MarkInProgress,
     Clear,
     KeptNext,
     KeptInProgress,
     Unchanged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RankedStatus {
+    Ready,
+    Next,
+    InProgress,
+}
+
+impl RankedStatus {
+    fn from_checkbox(status: char) -> Option<Self> {
+        match status {
+            ' ' => Some(Self::Ready),
+            '*' => Some(Self::Next),
+            '/' => Some(Self::InProgress),
+            _ => None,
+        }
+    }
 }
 
 fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
@@ -518,25 +540,29 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
             })
         })
         .collect::<BTreeSet<_>>();
-    let desired = dependency_closure(&direct_desired, &dependency_edges);
+    let desired =
+        desired_statuses(&direct_desired, &dependency_edges, &task_blocks);
     let dependency_desired = desired
-        .difference(&direct_desired)
+        .keys()
+        .filter(|identity| !direct_desired.contains(*identity))
         .cloned()
         .collect::<BTreeSet<_>>();
 
     let mut marked_next = Vec::new();
+    let mut marked_in_progress = Vec::new();
     let mut cleared = Vec::new();
     let mut changes = Vec::new();
     let mut kept_next = 0;
     let mut kept_in_progress = 0;
     for (file_index, file) in files.iter().enumerate() {
         for task in &file.tasks {
-            let referenced = task.block_id.as_ref().is_some_and(|block_id| {
+            let desired_status = task.block_id.as_ref().and_then(|block_id| {
                 desired
-                    .contains(&(file.relative_path.clone(), block_id.clone()))
+                    .get(&(file.relative_path.clone(), block_id.clone()))
+                    .copied()
             });
-            match transition(task.status, referenced) {
-                Transition::Promote => {
+            match transition(task.status, desired_status) {
+                Transition::MarkNext => {
                     let dependency =
                         task.block_id.as_ref().is_some_and(|block_id| {
                             dependency_desired.contains(&(
@@ -549,6 +575,22 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
                         file_index,
                         status_byte_offset: task.status_byte_offset,
                         replacement: '*',
+                    });
+                }
+                Transition::MarkInProgress => {
+                    let dependency =
+                        task.block_id.as_ref().is_some_and(|block_id| {
+                            dependency_desired.contains(&(
+                                file.relative_path.clone(),
+                                block_id.clone(),
+                            ))
+                        });
+                    marked_in_progress
+                        .push(change_item(file, task, dependency));
+                    changes.push(PlannedChange {
+                        file_index,
+                        status_byte_offset: task.status_byte_offset,
+                        replacement: '/',
                     });
                 }
                 Transition::Clear => {
@@ -589,6 +631,7 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
         dependency_references: dependency_desired.len(),
         scanned_files: files.len(),
         marked_next,
+        marked_in_progress,
         cleared,
         struck_completed_references: structural_plan.struck,
         embedded_completed_references: Vec::new(),
@@ -602,13 +645,28 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
     })
 }
 
-fn transition(status: char, referenced: bool) -> Transition {
-    match (status, referenced) {
-        (' ', true) => Transition::Promote,
-        ('*', false) => Transition::Clear,
-        ('*', true) => Transition::KeptNext,
-        ('/', true) => Transition::KeptInProgress,
-        _ => Transition::Unchanged,
+fn transition(status: char, desired: Option<RankedStatus>) -> Transition {
+    let Some(desired) = desired else {
+        return if status == '*' {
+            Transition::Clear
+        } else {
+            Transition::Unchanged
+        };
+    };
+    let Some(current) = RankedStatus::from_checkbox(status) else {
+        return Transition::Unchanged;
+    };
+    if current < desired {
+        return match desired {
+            RankedStatus::Next => Transition::MarkNext,
+            RankedStatus::InProgress => Transition::MarkInProgress,
+            RankedStatus::Ready => Transition::Unchanged,
+        };
+    }
+    match current {
+        RankedStatus::Next => Transition::KeptNext,
+        RankedStatus::InProgress => Transition::KeptInProgress,
+        RankedStatus::Ready => Transition::Unchanged,
     }
 }
 
@@ -1637,23 +1695,52 @@ fn dependency_edges(
     edges
 }
 
-fn dependency_closure(
+fn desired_statuses(
     direct: &BTreeSet<(PathBuf, String)>,
     edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
-) -> BTreeSet<(PathBuf, String)> {
-    let mut closure = direct.clone();
+    task_blocks: &BTreeMap<(PathBuf, String), Vec<char>>,
+) -> BTreeMap<(PathBuf, String), RankedStatus> {
+    let mut desired = BTreeMap::new();
     let mut queue = direct.iter().cloned().collect::<VecDeque<_>>();
+    for identity in direct {
+        desired.insert(
+            identity.clone(),
+            strongest_current_status(
+                task_blocks.get(identity).map(Vec::as_slice),
+            )
+            .unwrap_or(RankedStatus::Next)
+            .max(RankedStatus::Next),
+        );
+    }
     while let Some(source) = queue.pop_front() {
+        let source_status = desired[&source];
         let Some(targets) = edges.get(&source) else {
             continue;
         };
         for target in targets {
-            if closure.insert(target.clone()) {
+            let target_status = strongest_current_status(
+                task_blocks.get(target).map(Vec::as_slice),
+            )
+            .unwrap_or(source_status)
+            .max(source_status);
+            let should_update = desired
+                .get(target)
+                .is_none_or(|current| *current < target_status);
+            if should_update {
+                desired.insert(target.clone(), target_status);
                 queue.push_back(target.clone());
             }
         }
     }
-    closure
+    desired
+}
+
+fn strongest_current_status(statuses: Option<&[char]>) -> Option<RankedStatus> {
+    statuses
+        .into_iter()
+        .flatten()
+        .filter_map(|status| RankedStatus::from_checkbox(*status))
+        .max()
 }
 
 fn leading_indentation_width(line: &str) -> usize {
@@ -1844,6 +1931,7 @@ fn print_result(result: &SyncResult, format: OutputFormat) {
 fn print_human_result(result: &SyncResult) {
     let styler = Styler::detect();
     let change_count = result.marked_next.len()
+        + result.marked_in_progress.len()
         + result.cleared.len()
         + result.struck_completed_references.len()
         + result.moved_completed_references.len()
@@ -1888,6 +1976,17 @@ fn print_human_result(result: &SyncResult) {
     print_change_section(
         &styler,
         if result.dry_run {
+            "would mark in progress"
+        } else {
+            "marked in progress"
+        },
+        "[ ] or [*] -> [/]",
+        &result.marked_in_progress,
+        true,
+    );
+    print_change_section(
+        &styler,
+        if result.dry_run {
             "would clear"
         } else {
             "cleared"
@@ -1907,8 +2006,9 @@ fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} cleared, {} struck, {} moved, {} marked, {} unmarked, {} duplicate-line removals",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} struck, {} moved, {} marked, {} unmarked, {} duplicate-line removals",
         result.marked_next.len(),
+        result.marked_in_progress.len(),
         result.cleared.len(),
         result.struck_completed_references.len(),
         result.moved_completed_references.len(),
@@ -2116,6 +2216,10 @@ mod tests {
             target: target.to_string(),
             block_id: block_id.to_string(),
         }
+    }
+
+    fn identity(block_id: &str) -> (PathBuf, String) {
+        (PathBuf::from("tasks.md"), block_id.to_string())
     }
 
     fn resolved(
@@ -2499,16 +2603,70 @@ mod tests {
     }
 
     #[test]
-    fn transition_matrix_only_promotes_todo_and_clears_unreferenced_next() {
-        assert_eq!(transition(' ', true), Transition::Promote);
-        assert_eq!(transition(' ', false), Transition::Unchanged);
-        assert_eq!(transition('*', false), Transition::Clear);
-        assert_eq!(transition('*', true), Transition::KeptNext);
-        assert_eq!(transition('/', true), Transition::KeptInProgress);
-        assert_eq!(transition('/', false), Transition::Unchanged);
+    fn transition_matrix_promotes_monotonically_and_clears_only_unreferenced_next(
+    ) {
+        assert_eq!(
+            transition(' ', Some(RankedStatus::Next)),
+            Transition::MarkNext
+        );
+        assert_eq!(
+            transition(' ', Some(RankedStatus::InProgress)),
+            Transition::MarkInProgress
+        );
+        assert_eq!(
+            transition('*', Some(RankedStatus::InProgress)),
+            Transition::MarkInProgress
+        );
+        assert_eq!(transition(' ', None), Transition::Unchanged);
+        assert_eq!(transition('*', None), Transition::Clear);
+        assert_eq!(
+            transition('*', Some(RankedStatus::Next)),
+            Transition::KeptNext
+        );
+        assert_eq!(
+            transition('/', Some(RankedStatus::Next)),
+            Transition::KeptInProgress
+        );
+        assert_eq!(transition('/', None), Transition::Unchanged);
         for status in ['x', 'X', '-', '?'] {
-            assert_eq!(transition(status, true), Transition::Unchanged);
-            assert_eq!(transition(status, false), Transition::Unchanged);
+            assert_eq!(
+                transition(status, Some(RankedStatus::InProgress)),
+                Transition::Unchanged
+            );
+            assert_eq!(transition(status, None), Transition::Unchanged);
+        }
+    }
+
+    #[test]
+    fn desired_statuses_merge_parents_and_propagate_stronger_intermediates_through_cycles(
+    ) {
+        let ready_root = identity("ready-root");
+        let working_root = identity("working-root");
+        let shared = identity("shared");
+        let stronger_mid = identity("stronger-mid");
+        let leaf = identity("leaf");
+        let direct = BTreeSet::from([ready_root.clone(), working_root.clone()]);
+        let edges = BTreeMap::from([
+            (ready_root.clone(), BTreeSet::from([shared.clone()])),
+            (working_root.clone(), BTreeSet::from([shared.clone()])),
+            (shared.clone(), BTreeSet::from([stronger_mid.clone()])),
+            (stronger_mid.clone(), BTreeSet::from([leaf.clone()])),
+            (leaf.clone(), BTreeSet::from([shared.clone()])),
+        ]);
+        let task_blocks = BTreeMap::from([
+            (ready_root.clone(), vec![' ']),
+            (working_root.clone(), vec!['*']),
+            (shared.clone(), vec![' ']),
+            (stronger_mid.clone(), vec!['/']),
+            (leaf.clone(), vec!['*']),
+        ]);
+
+        let desired = desired_statuses(&direct, &edges, &task_blocks);
+
+        assert_eq!(desired[&ready_root], RankedStatus::Next);
+        assert_eq!(desired[&working_root], RankedStatus::Next);
+        for identity in [&shared, &stronger_mid, &leaf] {
+            assert_eq!(desired[identity], RankedStatus::InProgress);
         }
     }
 

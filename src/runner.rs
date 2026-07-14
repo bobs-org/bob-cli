@@ -63,7 +63,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
         name: "mark-next-tasks",
         script_command: None,
-        about: "Sync Next tasks and retire completed Pomodoro links",
+        about: "Sync active task dependencies and Pomodoro links",
         native_command: NativeCommand::MarkNextTasks,
     },
     Subcommand {
@@ -262,7 +262,7 @@ Examples:
                                  Print matching note paths
   bob highlights scan --dry-run
                                  Preview Highlights reference note sync
-  bob mark-next-tasks --dry-run  Preview Next-status task synchronization
+  bob mark-next-tasks --dry-run  Preview dependency status synchronization
   bob move-done-tasks --threshold 10
                                  Move tasks and maintain done links
   bob nightly                    Run the nightly sync and maintenance steps

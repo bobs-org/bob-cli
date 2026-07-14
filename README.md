@@ -204,29 +204,37 @@ The full command contract and live smoke-test steps live in
 bob mark-next-tasks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
-Synchronizes the vault's `[*]` Next tasks from block links beneath open
-Pomodoros in today's daily note. A linked `[ ]` task becomes `[*]`; an
-unlinked `[*]` task becomes `[ ]`. It also retires links to completed Tasks
+Synchronizes active task statuses from block links beneath open Pomodoros in
+today's daily note. A directly linked `[ ]` task becomes Next (`[*]`), while a
+direct task already In Progress (`[/]`) keeps that stronger status. Sole
+transcluded task dependencies inherit their parent's effective status
+recursively: Next promotes Ready to Next, and In Progress promotes Ready or
+Next to In Progress. Multiple paths use the strongest request, stronger
+intermediate tasks pass their status to descendants, and propagation never
+lowers a task. Separately, an unreachable `[*]` task becomes `[ ]`, preserving
+the command's vault-wide Next clearing policy. It also retires links to completed Tasks
 tasks as `~~[[...]]~~` and moves bullets found beneath open Pomodoros to the current timed Pomodoro, or
 the last completed Pomodoro when there is no current one. It also marks live
 non-transcluded links beneath completed Pomodoros, keeps embedded links
 unmarked, preserves the marker provenance of already-struck history, and
-removes stray markers beneath open Pomodoros. In-progress `[/]`,
-completed, canceled, unknown, and non-Tasks checkbox statuses are not changed.
+removes stray markers beneath open Pomodoros. In-progress `[/]` tasks are never
+lowered; completed, canceled, unknown, and non-Tasks checkbox statuses are not
+changed.
 When multiple open Pomodoros link the same resolved task, the earliest open
 Pomodoro keeps it and matching physical lines beneath later open Pomodoros are
 removed in full. Identity is the resolved note path plus block ID, so aliases,
 embeds, and alternate note spellings are de-duplicated together; repeats within
 one Pomodoro are preserved.
 
-For example, this open ledger entry makes the linked task Next:
+For example, this open ledger entry gives the linked task and its eligible
+dependency chain a minimum desired status of Next:
 
 ```markdown
 - [ ] Work session (0900-0930)
   - [[Projects/Alpha#^ship-design]]
 ```
 
-Run `bob mark-next-tasks --dry-run` to preview every promotion, clear,
+Run `bob mark-next-tasks --dry-run` to preview every Next or In-Progress promotion, clear,
 duplicate-line removal, retirement, move, and Pomodoro-marker repair. The
 command refuses to change files if the daily note is missing,
 lacks a `Pomodoros` section, or has multiple open timed Pomodoros. The full

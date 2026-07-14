@@ -699,6 +699,7 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     assert_eq!(json["dependency_references"], 3);
     assert_eq!(json["scanned_files"], 3);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 3);
+    assert!(json["marked_in_progress"].as_array().unwrap().is_empty());
     assert_eq!(json["cleared"].as_array().unwrap().len(), 2);
     assert_eq!(json["kept_next"], 1);
     assert_eq!(json["kept_in_progress"], 1);
@@ -783,7 +784,9 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
             && report.contains("unmarked Pomodoro references")
             && report.contains("removed duplicate task-link lines")
             && report.contains("(dependency)")
-            && report.contains("Summary: 3 marked next, 2 cleared"),
+            && report.contains(
+                "Summary: 3 marked next, 0 marked in progress, 2 cleared"
+            ),
         "unexpected mark-next report:\n{}",
         format_output(&applied)
     );
@@ -861,6 +864,145 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
         fs::read_to_string(&alpha).expect("read cleared alpha");
     assert!(alpha_contents
         .contains("- [ ] #task Cross-file recursive dependency ^dep-two"));
+}
+
+#[test]
+fn mark_next_tasks_propagates_strongest_rank_and_reports_in_progress_promotions(
+) {
+    let temp = TempDir::new("bob-cli-mark-next-ranked-dependencies");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260714.md");
+    let tasks = vault.join("tasks.md");
+    let daily_before = concat!(
+        "# Daily\n\n",
+        "## Pomodoros\n\n",
+        "- [ ] Current (0900-0930)\n",
+        "  - [[tasks#^root-next]]\n",
+        "  - [[tasks#^root-working]]\n",
+    );
+    let tasks_before = concat!(
+        "- [ ] #task Next root ^root-next\n",
+        "  - ![[#^next-ready]]\n",
+        "  - ![[#^stronger]]\n",
+        "- [ ] #task Next child ^next-ready\n",
+        "- [/] #task Stronger intermediate ^stronger\n",
+        "  - ![[#^stronger-child]]\n",
+        "- [ ] #task Stronger descendant ^stronger-child\n",
+        "- [/] #task Working root ^root-working\n",
+        "  - ![[#^working-ready]]\n",
+        "  - ![[#^working-next]]\n",
+        "  - ![[#^done]]\n",
+        "  - ![[#^cancelled]]\n",
+        "  - ![[#^custom]]\n",
+        "- [ ] #task Working ready child ^working-ready\n",
+        "- [*] #task Working next child ^working-next\n",
+        "- [x] #task Done child ^done\n",
+        "- [-] #task Cancelled child ^cancelled\n",
+        "- [?] #task Custom child ^custom\n",
+        "- [*] #task Unreachable next ^orphan\n",
+    );
+    write_file(&daily, daily_before);
+    write_file(&tasks, tasks_before);
+
+    let dry_run = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run ranked dependency propagation");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
+        .expect("ranked propagation dry-run JSON");
+    assert_eq!(json["dependency_references"], 8);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 2);
+    assert_eq!(json["marked_in_progress"].as_array().unwrap().len(), 3);
+    assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
+    assert!(json["marked_in_progress"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["block_id"] == "stronger-child"
+            && item["dependency"] == true));
+    assert!(json["marked_in_progress"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["block_id"] == "working-next"
+            && item["dependency"] == true));
+
+    let applied = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply ranked dependency propagation");
+    assert_success(&applied);
+    let report = stdout(&applied);
+    assert!(
+        report.contains("marked in progress")
+            && report.contains("[ ] or [*] -> [/]")
+            && report.contains(
+                "Summary: 2 marked next, 3 marked in progress, 1 cleared"
+            ),
+        "unexpected ranked propagation report:\n{}",
+        format_output(&applied)
+    );
+    let contents = fs::read_to_string(&tasks).unwrap();
+    for expected in [
+        "- [*] #task Next root ^root-next",
+        "- [*] #task Next child ^next-ready",
+        "- [/] #task Stronger intermediate ^stronger",
+        "- [/] #task Stronger descendant ^stronger-child",
+        "- [/] #task Working root ^root-working",
+        "- [/] #task Working ready child ^working-ready",
+        "- [/] #task Working next child ^working-next",
+        "- [x] #task Done child ^done",
+        "- [-] #task Cancelled child ^cancelled",
+        "- [?] #task Custom child ^custom",
+        "- [ ] #task Unreachable next ^orphan",
+    ] {
+        assert!(
+            contents.contains(expected),
+            "missing {expected}:\n{contents}"
+        );
+    }
+
+    let second = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun ranked dependency propagation");
+    assert_success(&second);
+    assert!(stdout(&second).contains("already in sync, no changes"));
+
+    write_file(
+        &daily,
+        "# Daily\n\n## Pomodoros\n\n- [ ] Current (0900-0930)\n",
+    );
+    let without_active_path = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("clear unreachable next while preserving in-progress tasks");
+    assert_success(&without_active_path);
+    let contents = fs::read_to_string(&tasks).unwrap();
+    assert!(contents.contains("- [ ] #task Next root ^root-next"));
+    assert!(contents.contains("- [ ] #task Next child ^next-ready"));
+    assert!(
+        contents.contains("- [/] #task Stronger descendant ^stronger-child")
+    );
+    assert!(contents.contains("- [/] #task Working next child ^working-next"));
 }
 
 #[test]
