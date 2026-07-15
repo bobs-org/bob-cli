@@ -72,14 +72,15 @@ may appear before or after a trailing @route token and is recognized only at \
 the very end of the input.\n\n\
 Append a trailing '%' or '%<header>' token to capture the system clipboard as \
 an indented child bullet. Headers use letters, digits, '_' and '-'; '_' renders \
-as a space, and a bare '%' renders as '**CLIP:**'. The marker composes with \
+as a space, and a bare '%' captures without a header. The marker composes with \
 s:<N> and every route kind in either terminal order. Small text stays inline, \
-2-10 flat lines become nested bullets, copied file paths are saved under img/ \
-or file/, and long or Markdown-structured text is preserved in a timestamped \
+2-10 flat lines become child bullets, copied file paths are saved under img/ or \
+file/, and long or Markdown-structured text is preserved in a timestamped \
 file/clip-*.md snippet. Use --clip[=HEADER] to force capture while keeping '%' \
-tokens literal, or --no-clip to keep a genuine trailing '%...' token literal. \
-The accepted '%20' header quirk can be escaped with --no-clip. Clipboard \
-failures abort before the note or attachment files are changed.\n\n\
+tokens literal; bare --clip also captures without a header. Use --no-clip to \
+keep a genuine trailing '%...' token literal. The accepted '%20' header quirk \
+can be escaped with --no-clip. Clipboard failures abort before the note or \
+attachment files are changed.\n\n\
 Use '@<route>:<block-id>' in the same leading or trailing position to create \
 a next-status task and link it from today's Pomodoro ledger. The routed task \
 renders as '- [*] #task <body> [created::YYYY-MM-DD] ^<block-id>' (with any \
@@ -125,9 +126,8 @@ fn clip_arg() -> Arg {
         .value_name("HEADER")
         .num_args(0..=1)
         .require_equals(true)
-        .default_missing_value(capture_clip::DEFAULT_HEADER)
         .conflicts_with("no-clip")
-        .help("Capture the clipboard, optionally labeling it HEADER")
+        .help("Capture the clipboard, optionally with HEADER")
 }
 
 fn bob_dir_arg() -> Arg {
@@ -223,7 +223,7 @@ impl OutputFormat {
 struct CaptureRequest {
     bob_dir: PathBuf,
     dry_run: bool,
-    forced_clip_header: Option<String>,
+    forced_clip: Option<ClipRequest>,
     forced_route: Option<String>,
     forced_section: Option<String>,
     no_clip: bool,
@@ -232,8 +232,11 @@ struct CaptureRequest {
 
 impl CaptureRequest {
     fn from_matches(matches: &ArgMatches) -> Result<Self, CaptureError> {
-        let forced_clip_header = matches.get_one::<String>("clip").cloned();
-        if let Some(header) = forced_clip_header.as_deref()
+        let forced_clip = matches.contains_id("clip").then(|| ClipRequest {
+            header: matches.get_one::<String>("clip").cloned(),
+        });
+        if let Some(header) =
+            forced_clip.as_ref().and_then(|clip| clip.header.as_deref())
             && !capture_clip::is_valid_header(header)
         {
             return Err(CaptureError::usage(
@@ -249,7 +252,7 @@ impl CaptureRequest {
         Ok(Self {
             bob_dir: bob_dir_from_matches(matches),
             dry_run: matches.get_flag("dry-run"),
-            forced_clip_header,
+            forced_clip,
             forced_route,
             forced_section,
             no_clip: matches.get_flag("no-clip"),
@@ -299,16 +302,15 @@ fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, CaptureError> {
 }
 
 fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
-    let parse_clip_markers =
-        request.forced_clip_header.is_none() && !request.no_clip;
+    let parse_clip_markers = request.forced_clip.is_none() && !request.no_clip;
     let mut parsed = parse_capture_text_with_clip_control(
         &request.raw_text,
         request.forced_route.as_deref(),
         request.forced_section.as_deref(),
         parse_clip_markers,
     )?;
-    if let Some(header) = request.forced_clip_header.as_deref() {
-        parsed.clip_header = Some(header.to_string());
+    if let Some(clip) = request.forced_clip.as_ref() {
+        parsed.clip = Some(clip.clone());
     }
     let now = bob_env::current_datetime();
     let today = now.date();
@@ -333,13 +335,18 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     };
     let kind_label = capture_kind_label(&parsed.kind);
     let clip_plan = parsed
-        .clip_header
-        .as_deref()
-        .map(|header| {
+        .clip
+        .as_ref()
+        .map(|clip| {
             let clipboard =
                 capture_clip::read_clipboard().map_err(CaptureError::io)?;
-            capture_clip::plan(&request.bob_dir, header, &clipboard, now)
-                .map_err(CaptureError::io)
+            capture_clip::plan(
+                &request.bob_dir,
+                clip.header.as_deref(),
+                &clipboard,
+                now,
+            )
+            .map_err(CaptureError::io)
         })
         .transpose()?;
     let capture_block = match &clip_plan {
@@ -973,7 +980,7 @@ enum CaptureKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedCaptureText {
     body: String,
-    clip_header: Option<String>,
+    clip: Option<ClipRequest>,
     route: Option<String>,
     kind: CaptureKind,
     scheduled_offset: Option<u64>,
@@ -981,8 +988,13 @@ struct ParsedCaptureText {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct TerminalMarkers {
-    clip_header: Option<String>,
+    clip: Option<ClipRequest>,
     scheduled_offset: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClipRequest {
+    header: Option<String>,
 }
 
 struct RouteToken {
@@ -998,7 +1010,7 @@ impl RouteToken {
     ) -> ParsedCaptureText {
         ParsedCaptureText {
             body,
-            clip_header: markers.clip_header,
+            clip: markers.clip,
             route: Some(self.route),
             kind: self.kind,
             scheduled_offset: markers.scheduled_offset,
@@ -1049,7 +1061,7 @@ fn parse_capture_text_with_clip_control(
         reject_legacy_bullet_markers(&tokens, false)?;
         return Ok(ParsedCaptureText {
             body,
-            clip_header: markers.clip_header,
+            clip: markers.clip,
             route: Some(route),
             kind: CaptureKind::Bullet {
                 section_prefix: Some(section.to_string()),
@@ -1064,7 +1076,7 @@ fn parse_capture_text_with_clip_control(
         reject_legacy_bullet_markers(&tokens, false)?;
         return Ok(ParsedCaptureText {
             body,
-            clip_header: markers.clip_header,
+            clip: markers.clip,
             route: Some(route),
             kind: CaptureKind::Task,
             scheduled_offset: markers.scheduled_offset,
@@ -1099,7 +1111,7 @@ fn parse_capture_text_with_clip_control(
 
     Ok(ParsedCaptureText {
         body,
-        clip_header: markers.clip_header,
+        clip: markers.clip,
         route: None,
         kind: CaptureKind::Task,
         scheduled_offset: markers.scheduled_offset,
@@ -1236,12 +1248,14 @@ fn parse_schedule_token(token: &str) -> Option<u64> {
     digits.parse::<u64>().ok()
 }
 
-fn parse_clip_token(token: &str) -> Option<String> {
+fn parse_clip_token(token: &str) -> Option<ClipRequest> {
     let header = token.strip_prefix('%')?;
     if header.is_empty() {
-        return Some(capture_clip::DEFAULT_HEADER.to_string());
+        return Some(ClipRequest { header: None });
     }
-    capture_clip::is_valid_header(header).then(|| header.to_string())
+    capture_clip::is_valid_header(header).then(|| ClipRequest {
+        header: Some(header.to_string()),
+    })
 }
 
 /// Remove schedule and clipboard markers from the terminal marker region.
@@ -1322,10 +1336,10 @@ fn extract_terminal_marker(
         return true;
     }
     if parse_clip_markers
-        && let Some(header) = parse_clip_token(token)
-        && markers.clip_header.is_none()
+        && let Some(clip) = parse_clip_token(token)
+        && markers.clip.is_none()
     {
-        markers.clip_header = Some(header);
+        markers.clip = Some(clip);
         return true;
     }
     false
@@ -2175,53 +2189,65 @@ mod tests {
     #[test]
     fn extracts_clip_and_schedule_markers_from_terminal_region() {
         let cases = [
-            ("body %", "body", None, None, "clip"),
-            ("body %20", "body", None, None, "20"),
-            ("body %log @notes", "body", Some("notes"), None, "log"),
+            ("body %", "body", None, None, None),
+            ("body %20", "body", None, None, Some("20")),
+            ("body %log @notes", "body", Some("notes"), None, Some("log")),
             (
                 "body s:1 % @groceries",
                 "body",
                 Some("groceries"),
                 Some(1),
-                "clip",
+                None,
             ),
             (
                 "body % s:1 @groceries",
                 "body",
                 Some("groceries"),
                 Some(1),
-                "clip",
+                None,
             ),
             (
                 "body @groceries s:1 %log",
                 "body",
                 Some("groceries"),
                 Some(1),
-                "log",
+                Some("log"),
             ),
             (
                 "body %log @groceries s:1",
                 "body",
                 Some("groceries"),
                 Some(1),
-                "log",
+                Some("log"),
             ),
             (
                 "body s:1 @groceries %log",
                 "body",
                 Some("groceries"),
                 Some(1),
-                "log",
+                Some("log"),
             ),
             (
                 "@groceries body %foo_bar",
                 "body",
                 Some("groceries"),
                 None,
-                "foo_bar",
+                Some("foo_bar"),
             ),
-            ("body %log @dev:blockid", "body", Some("dev"), None, "log"),
-            ("body %log @notes#Ideas", "body", Some("notes"), None, "log"),
+            (
+                "body %log @dev:blockid",
+                "body",
+                Some("dev"),
+                None,
+                Some("log"),
+            ),
+            (
+                "body %log @notes#Ideas",
+                "body",
+                Some("notes"),
+                None,
+                Some("log"),
+            ),
         ];
 
         for (raw, body, route, scheduled, header) in cases {
@@ -2230,7 +2256,11 @@ mod tests {
             assert_eq!(parsed.body, body, "{raw}");
             assert_eq!(parsed.route.as_deref(), route, "{raw}");
             assert_eq!(parsed.scheduled_offset, scheduled, "{raw}");
-            assert_eq!(parsed.clip_header.as_deref(), Some(header), "{raw}");
+            assert_eq!(
+                parsed.clip.as_ref().map(|clip| clip.header.as_deref()),
+                Some(header),
+                "{raw}"
+            );
         }
     }
 
@@ -2239,7 +2269,7 @@ mod tests {
         for raw in ["save % now", "body %bad!", "body 50%", "body 100%"] {
             let parsed = parse_capture_text(raw, None).expect("literal text");
             assert_eq!(parsed.body, raw, "{raw}");
-            assert_eq!(parsed.clip_header, None, "{raw}");
+            assert_eq!(parsed.clip, None, "{raw}");
         }
 
         let parsed = super::parse_capture_text_with_clip_control(
@@ -2250,13 +2280,16 @@ mod tests {
         )
         .expect("disabled clip marker");
         assert_eq!(parsed.body, "body %log");
-        assert_eq!(parsed.clip_header, None);
+        assert_eq!(parsed.clip, None);
 
         let parsed = super::parse_capture_text("body %log", Some("work"), None)
             .expect("forced route still extracts marker");
         assert_eq!(parsed.body, "body");
         assert_eq!(parsed.route.as_deref(), Some("work"));
-        assert_eq!(parsed.clip_header.as_deref(), Some("log"));
+        assert_eq!(
+            parsed.clip.and_then(|clip| clip.header).as_deref(),
+            Some("log")
+        );
 
         let parsed = super::parse_capture_text(
             "body %section_clip",
@@ -2265,7 +2298,10 @@ mod tests {
         )
         .expect("forced section still extracts marker");
         assert_eq!(parsed.body, "body");
-        assert_eq!(parsed.clip_header.as_deref(), Some("section_clip"));
+        assert_eq!(
+            parsed.clip.as_ref().and_then(|clip| clip.header.as_deref()),
+            Some("section_clip")
+        );
         assert!(matches!(
             parsed.kind,
             CaptureKind::Bullet { exact: true, .. }
@@ -2274,7 +2310,10 @@ mod tests {
         let parsed = parse_capture_text("body %first %second", None)
             .expect("one marker extracted");
         assert_eq!(parsed.body, "body %first");
-        assert_eq!(parsed.clip_header.as_deref(), Some("second"));
+        assert_eq!(
+            parsed.clip.and_then(|clip| clip.header).as_deref(),
+            Some("second")
+        );
 
         let error = parse_capture_text("%", None)
             .expect_err("marker-only capture has no parent text");

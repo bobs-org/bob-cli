@@ -13,7 +13,6 @@ use sha2::{Digest, Sha256};
 
 use super::env as bob_env;
 
-pub(crate) const DEFAULT_HEADER: &str = "clip";
 const IMAGE_EMBED_WIDTH: usize = 400;
 const MAX_ATTACHMENT_COUNT: usize = 10;
 const MAX_INLINE_CHARACTERS: usize = 1000;
@@ -52,7 +51,7 @@ pub(crate) struct AttachmentOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ClipOutput {
-    pub(crate) header: String,
+    pub(crate) header: Option<String>,
     pub(crate) mode: ClipMode,
     pub(crate) lines: Vec<String>,
     pub(crate) attachments: Vec<AttachmentOutput>,
@@ -269,11 +268,11 @@ content"
 
 pub(crate) fn plan(
     bob_dir: &Path,
-    header: &str,
+    header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
 ) -> Result<ClipPlan, String> {
-    let header = rendered_header(header);
+    let header = header.map(rendered_header);
     let lines = clipboard.split('\n').collect::<Vec<_>>();
     let path_states = lines
         .iter()
@@ -292,12 +291,12 @@ pub(crate) fn plan(
     if lines.len() == 1 {
         return match &path_states[0] {
             PathState::File(path) => {
-                plan_attachments(bob_dir, &header, [path.as_path()])
+                plan_attachments(bob_dir, header.as_deref(), [path.as_path()])
             }
             _ if lines[0].chars().count() > MAX_INLINE_CHARACTERS => {
-                plan_snippet(bob_dir, &header, clipboard, now)
+                plan_snippet(bob_dir, header.as_deref(), clipboard, now)
             }
-            _ => Ok(inline_plan(&header, lines[0])),
+            _ => Ok(inline_plan(header.as_deref(), lines[0])),
         };
     }
 
@@ -314,7 +313,7 @@ pub(crate) fn plan(
         }
         return plan_attachments(
             bob_dir,
-            &header,
+            header.as_deref(),
             path_states.iter().filter_map(|state| match state {
                 PathState::File(path) => Some(path.as_path()),
                 _ => None,
@@ -326,10 +325,10 @@ pub(crate) fn plan(
         || lines.iter().any(|line| line.trim().is_empty())
         || lines.iter().any(|line| is_structural_line(line))
     {
-        return plan_snippet(bob_dir, &header, clipboard, now);
+        return plan_snippet(bob_dir, header.as_deref(), clipboard, now);
     }
 
-    Ok(lines_plan(&header, &lines))
+    Ok(lines_plan(header.as_deref(), &lines))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -448,12 +447,25 @@ fn is_structural_line(line: &str) -> bool {
     digit_count > 0 && trimmed[digit_count..].starts_with(". ")
 }
 
-fn inline_plan(header: &str, text: &str) -> ClipPlan {
+fn rendered_lines(header: Option<&str>, items: &[String]) -> Vec<String> {
+    if let Some(header) = header {
+        if items.len() == 1 {
+            return vec![format!("  - **{header}:** {}", items[0])];
+        }
+        let mut lines = vec![format!("  - **{header}:**")];
+        lines.extend(items.iter().map(|item| format!("    - {item}")));
+        return lines;
+    }
+
+    items.iter().map(|item| format!("  - {item}")).collect()
+}
+
+fn inline_plan(header: Option<&str>, text: &str) -> ClipPlan {
     ClipPlan {
         output: ClipOutput {
-            header: header.to_string(),
+            header: header.map(str::to_string),
             mode: ClipMode::Inline,
-            lines: vec![format!("  - **{header}:** {text}")],
+            lines: rendered_lines(header, &[text.to_string()]),
             attachments: Vec::new(),
             snippet: None,
         },
@@ -461,14 +473,16 @@ fn inline_plan(header: &str, text: &str) -> ClipPlan {
     }
 }
 
-fn lines_plan(header: &str, clipboard_lines: &[&str]) -> ClipPlan {
-    let mut lines = vec![format!("  - **{header}:**")];
-    lines.extend(clipboard_lines.iter().map(|line| format!("    - {line}")));
+fn lines_plan(header: Option<&str>, clipboard_lines: &[&str]) -> ClipPlan {
+    let items = clipboard_lines
+        .iter()
+        .map(|line| (*line).to_string())
+        .collect::<Vec<_>>();
     ClipPlan {
         output: ClipOutput {
-            header: header.to_string(),
+            header: header.map(str::to_string),
             mode: ClipMode::Lines,
-            lines,
+            lines: rendered_lines(header, &items),
             attachments: Vec::new(),
             snippet: None,
         },
@@ -478,7 +492,7 @@ fn lines_plan(header: &str, clipboard_lines: &[&str]) -> ClipPlan {
 
 fn plan_attachments<'a>(
     bob_dir: &Path,
-    header: &str,
+    header: Option<&str>,
     sources: impl IntoIterator<Item = &'a Path>,
 ) -> Result<ClipPlan, String> {
     let mut attachments = Vec::new();
@@ -532,21 +546,11 @@ fn plan_attachments<'a>(
         .iter()
         .map(attachment_reference)
         .collect::<Vec<_>>();
-    let lines = if references.len() == 1 {
-        vec![format!("  - **{header}:** {}", references[0])]
-    } else {
-        let mut lines = vec![format!("  - **{header}:**")];
-        lines.extend(
-            references
-                .iter()
-                .map(|reference| format!("    - {reference}")),
-        );
-        lines
-    };
+    let lines = rendered_lines(header, &references);
 
     Ok(ClipPlan {
         output: ClipOutput {
-            header: header.to_string(),
+            header: header.map(str::to_string),
             mode: ClipMode::Attachments,
             lines,
             attachments,
@@ -673,7 +677,7 @@ fn sanitize_file_name(name: &str) -> String {
 
 fn plan_snippet(
     bob_dir: &Path,
-    header: &str,
+    header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
 ) -> Result<ClipPlan, String> {
@@ -714,9 +718,9 @@ fn plan_snippet(
     }
     Ok(ClipPlan {
         output: ClipOutput {
-            header: header.to_string(),
+            header: header.map(str::to_string),
             mode: ClipMode::Snippet,
-            lines: vec![format!("  - **{header}:** [[{reference}]]")],
+            lines: rendered_lines(header, &[format!("[[{reference}]]")]),
             attachments: Vec::new(),
             snippet: Some(saved),
         },
@@ -853,7 +857,7 @@ mod tests {
 
     #[test]
     fn formats_headers() {
-        assert_eq!(rendered_header(DEFAULT_HEADER), "CLIP");
+        assert_eq!(rendered_header("clip"), "CLIP");
         assert_eq!(rendered_header("foo_bar_baz"), "FOO BAR BAZ");
         assert_eq!(rendered_header("foo-bar2"), "FOO-BAR2");
         assert!(is_valid_header("A_b-2"));
@@ -909,11 +913,26 @@ mod tests {
     fn renders_inline_lines_and_long_text_modes() {
         let root = Path::new("/tmp/unused-bob-clip-test");
         let now = test_now();
-        let inline = plan(root, "clip", "hello", now).expect("inline");
+        let headerless_inline =
+            plan(root, None, "hello", now).expect("headerless inline");
+        assert_eq!(headerless_inline.output.header, None);
+        assert_eq!(headerless_inline.output.mode, ClipMode::Inline);
+        assert_eq!(headerless_inline.output.lines, ["  - hello"]);
+
+        let inline =
+            plan(root, Some("clip"), "hello", now).expect("headed inline");
+        assert_eq!(inline.output.header.as_deref(), Some("CLIP"));
         assert_eq!(inline.output.mode, ClipMode::Inline);
         assert_eq!(inline.output.lines, ["  - **CLIP:** hello"]);
 
-        let lines = plan(root, "log", "one\ntwo", now).expect("lines");
+        let headerless_lines =
+            plan(root, None, "one\ntwo", now).expect("headerless lines");
+        assert_eq!(headerless_lines.output.header, None);
+        assert_eq!(headerless_lines.output.mode, ClipMode::Lines);
+        assert_eq!(headerless_lines.output.lines, ["  - one", "  - two"]);
+
+        let lines =
+            plan(root, Some("log"), "one\ntwo", now).expect("headed lines");
         assert_eq!(lines.output.mode, ClipMode::Lines);
         assert_eq!(
             lines.output.lines,
@@ -921,8 +940,22 @@ mod tests {
         );
 
         let long = "x".repeat(MAX_INLINE_CHARACTERS + 1);
-        let snippet = plan(root, "clip", &long, now).expect("snippet");
+        let headerless_snippet =
+            plan(root, None, &long, now).expect("headerless snippet");
+        assert_eq!(headerless_snippet.output.header, None);
+        assert_eq!(headerless_snippet.output.mode, ClipMode::Snippet);
+        assert_eq!(
+            headerless_snippet.output.lines,
+            ["  - [[file/clip-20260715-131415-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]]"]
+        );
+
+        let snippet =
+            plan(root, Some("clip"), &long, now).expect("headed snippet");
         assert_eq!(snippet.output.mode, ClipMode::Snippet);
+        assert_eq!(
+            snippet.output.lines,
+            ["  - **CLIP:** [[file/clip-20260715-131415-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]]"]
+        );
         assert_eq!(
             snippet.output.snippet.as_deref(),
             Some("file/clip-20260715-131415-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.md")
@@ -947,7 +980,7 @@ mod tests {
         fs::write(&source, b"image").expect("source");
 
         let uri = format!("file://{}", source.display()).replace(' ', "%20");
-        let attachment = plan(&vault, "photo", &uri, test_now())
+        let attachment = plan(&vault, Some("photo"), &uri, test_now())
             .expect("file URI attachment");
         assert_eq!(attachment.output.mode, ClipMode::Attachments);
         assert_eq!(
@@ -956,7 +989,7 @@ mod tests {
         );
         let quoted = plan(
             &vault,
-            "clip",
+            Some("clip"),
             &format!("\"{}\"", source.display()),
             test_now(),
         )
@@ -967,7 +1000,7 @@ mod tests {
         fs::write(&document, b"document").expect("document source");
         let multiple = plan(
             &vault,
-            "clip",
+            Some("clip"),
             &format!("{}\n{}", source.display(), document.display()),
             test_now(),
         )
@@ -981,9 +1014,31 @@ mod tests {
             ]
         );
 
+        let headerless_attachment = plan(&vault, None, &uri, test_now())
+            .expect("headerless attachment");
+        assert_eq!(headerless_attachment.output.header, None);
+        assert_eq!(
+            headerless_attachment.output.lines,
+            ["  - ![[img/hello world.png|400]]"]
+        );
+        let headerless_multiple = plan(
+            &vault,
+            None,
+            &format!("{}\n{}", source.display(), document.display()),
+            test_now(),
+        )
+        .expect("headerless multiple attachments");
+        assert_eq!(
+            headerless_multiple.output.lines,
+            [
+                "  - ![[img/hello world.png|400]]",
+                "  - [[file/document.pdf]]",
+            ]
+        );
+
         let directory = plan(
             &vault,
-            "clip",
+            Some("clip"),
             root.to_str().expect("utf8 root"),
             test_now(),
         )
@@ -992,7 +1047,7 @@ mod tests {
 
         for text in ["one\n\ntwo", "- one\n- two", " one\ntwo"] {
             assert_eq!(
-                plan(&vault, "clip", text, test_now())
+                plan(&vault, Some("clip"), text, test_now())
                     .expect("snippet")
                     .output
                     .mode,
@@ -1004,7 +1059,7 @@ mod tests {
         let missing = root.join("missing.txt");
         let error = plan(
             &vault,
-            "clip",
+            Some("clip"),
             missing.to_str().expect("utf8 path"),
             test_now(),
         )
@@ -1017,9 +1072,13 @@ mod tests {
             fs::write(&path, index.to_string()).expect("attachment source");
             attachment_paths.push(path.display().to_string());
         }
-        let error =
-            plan(&vault, "clip", &attachment_paths.join("\n"), test_now())
-                .expect_err("too many attachments");
+        let error = plan(
+            &vault,
+            Some("clip"),
+            &attachment_paths.join("\n"),
+            test_now(),
+        )
+        .expect_err("too many attachments");
         assert!(error.contains("11 attachments"), "{error}");
 
         let plain_lines = (0..=MAX_LINES)
@@ -1027,7 +1086,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(
-            plan(&vault, "clip", &plain_lines, test_now())
+            plan(&vault, Some("clip"), &plain_lines, test_now())
                 .expect("long multiline snippet")
                 .output
                 .mode,
@@ -1052,7 +1111,7 @@ mod tests {
 
         let initial = plan(
             &vault,
-            "clip",
+            Some("clip"),
             first.to_str().expect("utf8 path"),
             test_now(),
         )
@@ -1066,7 +1125,7 @@ mod tests {
 
         let reused = plan(
             &vault,
-            "clip",
+            Some("clip"),
             first.to_str().expect("utf8 path"),
             test_now(),
         )
@@ -1076,7 +1135,7 @@ mod tests {
 
         let differing = plan(
             &vault,
-            "clip",
+            Some("clip"),
             second.to_str().expect("utf8 path"),
             test_now(),
         )
@@ -1096,13 +1155,15 @@ mod tests {
         let vault = root.join("vault");
         fs::create_dir_all(&vault).expect("vault");
         let text = "# Structured title\nbody";
-        let first = plan(&vault, "clip", text, test_now()).expect("first");
+        let first =
+            plan(&vault, Some("clip"), text, test_now()).expect("first");
         assert_eq!(
             first.output.snippet.as_deref(),
             Some("file/clip-20260715-131415-structured-title.md")
         );
         first.save().expect("save first");
-        let second = plan(&vault, "clip", text, test_now()).expect("second");
+        let second =
+            plan(&vault, Some("clip"), text, test_now()).expect("second");
         assert_eq!(
             second.output.snippet.as_deref(),
             Some("file/clip-20260715-131415-structured-title-2.md")

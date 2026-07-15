@@ -87,21 +87,45 @@ side of a trailing route marker. The token is removed from the body and adds
 Append a whitespace-delimited `%` or `%<header>` terminal token to capture the
 system clipboard beneath the new task or bullet. The marker composes with
 `s:<N>`, ordinary routes, bullet routes, and Pomodoro routes in either terminal
-order. A bare `%` produces `**CLIP:**`; custom headers accept letters, digits,
-`_`, and `-`, render in uppercase, and replace underscores with spaces. For
-example, `%build_log` renders `**BUILD LOG:**`. Invalid `%...` tokens and `%`
-tokens in the middle of the body stay literal.
+order. A bare `%` captures without a header. Custom headers accept letters,
+digits, `_`, and `-`, render in uppercase, and replace underscores with spaces;
+for example, `%build_log` renders `**BUILD LOG:**`. Invalid `%...` tokens and
+`%` tokens in the middle of the body stay literal.
 
 Clipboard content is rendered according to its shape:
 
 - One text line up to 1,000 characters becomes an inline child bullet.
-- Two to ten flat text lines become nested child bullets.
+- Two to ten flat text lines become child bullets, nested beneath an explicit
+  header when one is present.
 - Absolute file paths (including quoted paths, `file://` URIs, and `~/...`)
   become attachments. Images are copied to `img/` and embedded at 400px;
   other files are copied to `file/` and linked.
 - Long, indented, blank-line-separated, or Markdown-structured text is saved
   verbatim as `file/clip-YYYYMMDD-HHMMSS[-slug].md` and linked without the
   `.md` suffix.
+
+Without a header, one item is written as a direct child and multiple items are
+written as direct sibling children:
+
+```markdown
+- [ ] #task Parent
+  - clipboard text
+- [ ] #task Another parent
+  - first line
+  - second line
+```
+
+An explicit header stays inline for one item and owns a nested list for
+multiple items:
+
+```markdown
+- [ ] #task Parent
+  - **BUILD LOG:** clipboard text
+- [ ] #task Another parent
+  - **BUILD LOG:**
+    - first line
+    - second line
+```
 
 Attachment names are sanitized for Obsidian links. An existing identical file
 is reused; differing content receives an eight-character SHA-256 suffix. Up to
@@ -111,11 +135,12 @@ copied file path. Clipboard and note edits are planned before anything is
 written, and newly created clipboard files are removed if the note write fails.
 `--dry-run` performs the same planning but creates no directories or files.
 
-Use `-c, --clip[=HEADER]` to force clipboard capture without a marker. It uses
-`CLIP` when no header is supplied and keeps `%` tokens in the captured text
-literal. Use `-n, --no-clip` when a genuine trailing `%...` token should remain
-literal; this is also the escape hatch for the accepted `%20`-style header
-quirk. `--clip` and `--no-clip` conflict.
+Use `-c, --clip[=HEADER]` to force clipboard capture without a marker. Bare
+`--clip` captures without a header, while `--clip=build_log` supplies an
+explicit header. Both forms keep `%` tokens in the captured text literal. Use
+`-n, --no-clip` when a genuine trailing `%...` token should remain literal;
+this is also the escape hatch for the accepted `%20`-style header quirk.
+`--clip` and `--no-clip` conflict.
 
 Use a leading or trailing `@<route>:<block-id>` marker to create a
 Pomodoro-linked next task. For example,
@@ -171,7 +196,7 @@ keep the prefix-matching behavior described above. Without `--section`,
 Useful options:
 
 - `-b, --bob-dir DIR`: Bob vault root; defaults to `BOB_DIR` or `~/bob`
-- `-c, --clip[=HEADER]`: force clipboard capture with an optional header
+- `-c, --clip[=HEADER]`: force clipboard capture, optionally with a header
 - `-d, --dry-run`: plan and report without writing notes or clipboard files
 - `-f, --format human|json`: human confirmation or stable JSON for callers
 - `-n, --no-clip`: keep trailing `%` clipboard markers literal
@@ -193,8 +218,9 @@ Clipboard captures additionally include a `clip` object. Its stable fields are
 `lines` (the exact rendered child lines), and `attachments`. Each attachment
 has `source`, vault-relative `saved`, `kind` (`"image"` or `"file"`), and
 `reused` fields. Snippet results also include the vault-relative `snippet`
-path. `task_line` remains the parent line only, and non-clipboard JSON omits
-`clip`.
+path. The `header` value is `null` when the capture omitted a header and is the
+rendered string (for example, `"BUILD LOG"`) when one was explicit. `task_line`
+remains the parent line only, and non-clipboard JSON omits `clip`.
 
 Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 `block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`. Ordinary

@@ -614,7 +614,10 @@ fn capture_help_lists_options_alphabetically() {
         help.contains("BOB_CLIPBOARD_CMD")
             && help.contains("%<header>")
             && help.contains("--clip")
-            && help.contains("--no-clip"),
+            && help.contains("--no-clip")
+            && help.contains("bare '%' captures without a header")
+            && help.contains("bare --clip also captures without a header")
+            && !help.contains("bare '%' renders as '**CLIP:**'"),
         "expected clipboard capture help:\n{help}"
     );
     assert_text_order(
@@ -2239,7 +2242,7 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
             "## Ideas\n",
             "\n",
             "- jot idea [created::2026-07-15]\n",
-            "  - **CLIP:** hello from clipboard\n",
+            "  - hello from clipboard\n",
         )
     );
 
@@ -2270,6 +2273,73 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
     assert_eq!(
         fs::read_to_string(day_file).expect("read day"),
         "## Pomodoros\n- [ ] Current\n  - [[dev#^ship-id]]\n"
+    );
+}
+
+#[test]
+fn capture_headerless_clip_marker_renders_under_tasks_and_pomodoros() {
+    let temp = TempDir::new("bob-cli-capture-headerless-clip-placement");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'clipboard child\n'\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .args(["task parent", "%"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("run headerless task clipboard capture");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("clipboard JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["clip"]["header"], serde_json::Value::Null);
+    assert_eq!(
+        json["clip"]["lines"],
+        serde_json::json!(["  - clipboard child"])
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        concat!(
+            "- [ ] #task task parent [created::2026-07-15]\n",
+            "  - clipboard child\n",
+        )
+    );
+
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("dev.md"), "# Dev\n## Tasks\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] Current\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["Pomodoro parent", "%", "@dev:clip-id"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("run headerless Pomodoro clipboard capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("dev.md")).expect("read dev"),
+        concat!(
+            "# Dev\n",
+            "## Tasks\n",
+            "\n",
+            "- [*] #task Pomodoro parent [created::2026-07-15] ^clip-id\n",
+            "  - clipboard child\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(day_file).expect("read day"),
+        "## Pomodoros\n- [ ] Current\n  - [[dev#^clip-id]]\n"
     );
 }
 
@@ -2305,16 +2375,33 @@ fn capture_clip_options_force_or_disable_marker_parsing() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
+        .arg("-f")
+        .arg("json")
         .arg("--clip")
-        .arg("default header")
+        .arg("--")
+        .arg("headerless %literal")
         .env("BOB_CLIPBOARD_CMD", &clipboard)
         .env("BOB_NOW", "2026-07-15")
         .output()
-        .expect("run default forced clipboard capture");
+        .expect("run headerless forced clipboard capture");
     assert_success(&output);
-    assert!(fs::read_to_string(vault.join("mac_inbox.md"))
-        .expect("read inbox")
-        .contains("  - **CLIP:** forced text"));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("clipboard JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["text"], "headerless %literal");
+    assert_eq!(json["clip"]["header"], serde_json::Value::Null);
+    assert_eq!(
+        json["clip"]["lines"],
+        serde_json::json!(["  - forced text"])
+    );
+    let inbox =
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
+    assert!(inbox.contains(concat!(
+        "- [ ] #task headerless %literal [created::2026-07-15]\n",
+        "  - forced text\n",
+    )));
+    assert!(!inbox.contains("**CLIP:**"));
 
     let output = bob_command()
         .arg("capture")
@@ -2354,6 +2441,14 @@ fn capture_clip_options_force_or_disable_marker_parsing() {
         .output()
         .expect("run invalid header");
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("--clip=")
+        .arg("text")
+        .output()
+        .expect("run empty header");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
 }
 
 #[test]
@@ -2386,6 +2481,7 @@ fn capture_clip_saves_attachments_snippets_and_reports_dry_run() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("attachment JSON");
+    assert_eq!(json["clip"]["header"], serde_json::Value::Null);
     assert_eq!(json["clip"]["mode"], "attachments");
     assert_eq!(json["clip"]["attachments"][0]["kind"], "image");
     assert_eq!(
@@ -2399,7 +2495,7 @@ fn capture_clip_saves_attachments_snippets_and_reports_dry_run() {
     );
     assert!(fs::read_to_string(vault.join("mac_inbox.md"))
         .expect("read inbox")
-        .contains("  - **CLIP:** ![[img/screen-shot.PNG|400]]"));
+        .contains("  - ![[img/screen-shot.PNG|400]]"));
 
     let output = bob_command()
         .arg("capture")
@@ -2435,7 +2531,12 @@ fn capture_clip_saves_attachments_snippets_and_reports_dry_run() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("snippet JSON");
+    assert_eq!(json["clip"]["header"], serde_json::Value::Null);
     assert_eq!(json["clip"]["mode"], "snippet");
+    assert_eq!(
+        json["clip"]["lines"],
+        serde_json::json!(["  - [[file/clip-20260715-131415-heading]]"])
+    );
     assert_eq!(
         json["clip"]["snippet"],
         "file/clip-20260715-131415-heading.md"
