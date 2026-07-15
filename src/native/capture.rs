@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{self, BufRead, IsTerminal, Write},
     iter,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -70,17 +71,21 @@ to schedule the capture N days from today. The token is removed from the task \
 text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It \
 may appear before or after a trailing @route token and is recognized only at \
 the very end of the input.\n\n\
-Append a trailing '%' or '%<header>' token to capture the system clipboard as \
-an indented child bullet. Headers use letters, digits, '_' and '-'; '_' renders \
-as a space, and a bare '%' captures without a header. The marker composes with \
-s:<N> and every route kind in either terminal order. Small text stays inline, \
-2-10 flat lines become child bullets, copied file paths are saved under img/ or \
-file/, and long or Markdown-structured text is preserved in a timestamped \
-file/clip-*.md snippet. Use --clip[=HEADER] to force capture while keeping '%' \
-tokens literal; bare --clip also captures without a header. Use --no-clip to \
-keep a genuine trailing '%...' token literal. The accepted '%20' header quirk \
-can be escaped with --no-clip. Clipboard failures abort before the note or \
-attachment files are changed.\n\n\
+Append a trailing clipboard marker: '%' captures one live value without a \
+header; '%<positive integer>' captures exactly that many values without \
+headers, starting with the live clipboard and then recent history newest first; \
+and '%<nonnumeric header>' captures one live value under an explicit header. \
+'%1' is equivalent to '%', while '%0' stays literal. Headers use letters, \
+digits, '_' and '-'; '_' renders as a space. The marker composes with s:<N> and \
+every route kind in either terminal order. Each value is classified separately: \
+small text stays inline, 2-10 flat lines become child bullets, copied file paths \
+are saved under img/ or file/, and long or Markdown-structured text is preserved \
+in a timestamped file/clip-*.md snippet. History captures fail without writing \
+unless the exact requested count succeeds. Use --clip[=HEADER] to force one live \
+capture while keeping '%' tokens literal; --clip=<digits> requests a numeric \
+header. Bare --clip also captures without a header. Use --no-clip to keep a \
+genuine trailing '%...' token literal. Clipboard failures abort before the note \
+or attachment files are changed.\n\n\
 Use '@<route>:<block-id>' in the same leading or trailing position to create \
 a next-status task and link it from today's Pomodoro ledger. The routed task \
 renders as '- [*] #task <body> [created::YYYY-MM-DD] ^<block-id>' (with any \
@@ -105,7 +110,7 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk %\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_CLIPBOARD_CMD  whitespace-split command that prints clipboard text; overrides platform tools\n  BOB_DAY_FILE       exact daily note used by Pomodoro-linked capture\n  BOB_DIR            Bob vault root when --bob-dir is omitted\n  BOB_NOW            current date/time override\n\nClipboard source order:\n  BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -171,7 +176,7 @@ fn no_clip_arg() -> Arg {
         .short('n')
         .action(ArgAction::SetTrue)
         .conflicts_with("clip")
-        .help("Keep trailing % clipboard markers literal")
+        .help("Keep trailing %... clipboard markers literal")
 }
 
 fn route_arg() -> Arg {
@@ -232,11 +237,13 @@ struct CaptureRequest {
 
 impl CaptureRequest {
     fn from_matches(matches: &ArgMatches) -> Result<Self, CaptureError> {
-        let forced_clip = matches.contains_id("clip").then(|| ClipRequest {
-            header: matches.get_one::<String>("clip").cloned(),
-        });
-        if let Some(header) =
-            forced_clip.as_ref().and_then(|clip| clip.header.as_deref())
+        let forced_clip =
+            matches.contains_id("clip").then(|| ClipRequest::Current {
+                header: matches.get_one::<String>("clip").cloned(),
+            });
+        if let Some(ClipRequest::Current {
+            header: Some(header),
+        }) = forced_clip.as_ref()
             && !capture_clip::is_valid_header(header)
         {
             return Err(CaptureError::usage(
@@ -334,21 +341,38 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         ),
     };
     let kind_label = capture_kind_label(&parsed.kind);
-    let clip_plan = parsed
-        .clip
-        .as_ref()
-        .map(|clip| {
+    let clip_plan = match parsed.clip.as_ref() {
+        Some(ClipRequest::Current { header }) => {
             let clipboard =
                 capture_clip::read_clipboard().map_err(CaptureError::io)?;
-            capture_clip::plan(
-                &request.bob_dir,
-                clip.header.as_deref(),
-                &clipboard,
-                now,
+            Some(
+                capture_clip::plan(
+                    &request.bob_dir,
+                    header.as_deref(),
+                    &clipboard,
+                    now,
+                )
+                .map_err(CaptureError::io)?,
             )
-            .map_err(CaptureError::io)
-        })
-        .transpose()?;
+        }
+        Some(ClipRequest::History { count }) if count.get() == 1 => {
+            let clipboard =
+                capture_clip::read_clipboard().map_err(CaptureError::io)?;
+            Some(
+                capture_clip::plan(&request.bob_dir, None, &clipboard, now)
+                    .map_err(CaptureError::io)?,
+            )
+        }
+        Some(ClipRequest::History { count }) => {
+            let clipboards = capture_clip::read_clipboard_history(count.get())
+                .map_err(CaptureError::io)?;
+            Some(
+                capture_clip::plan_history(&request.bob_dir, &clipboards, now)
+                    .map_err(CaptureError::io)?,
+            )
+        }
+        None => None,
+    };
     let capture_block = match &clip_plan {
         Some(plan) => {
             format!("{capture_line}\n{}", plan.output.lines.join("\n"))
@@ -993,8 +1017,9 @@ struct TerminalMarkers {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ClipRequest {
-    header: Option<String>,
+enum ClipRequest {
+    Current { header: Option<String> },
+    History { count: NonZeroUsize },
 }
 
 struct RouteToken {
@@ -1251,9 +1276,16 @@ fn parse_schedule_token(token: &str) -> Option<u64> {
 fn parse_clip_token(token: &str) -> Option<ClipRequest> {
     let header = token.strip_prefix('%')?;
     if header.is_empty() {
-        return Some(ClipRequest { header: None });
+        return Some(ClipRequest::Current { header: None });
     }
-    capture_clip::is_valid_header(header).then(|| ClipRequest {
+    if header.bytes().all(|byte| byte.is_ascii_digit()) {
+        return header
+            .parse::<usize>()
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .map(|count| ClipRequest::History { count });
+    }
+    capture_clip::is_valid_header(header).then(|| ClipRequest::Current {
         header: Some(header.to_string()),
     })
 }
@@ -2004,20 +2036,12 @@ fn print_human_success(result: &CaptureResult) {
         for line in &clip.lines {
             println!("  {}", styler.dim(line));
         }
-        for attachment in &clip.attachments {
+        for (saved, reused) in clip.file_confirmations() {
             print_clip_file_confirmation(
                 &styler,
                 result.dry_run,
-                &attachment.saved,
-                attachment.reused,
-            );
-        }
-        if let Some(snippet) = &clip.snippet {
-            print_clip_file_confirmation(
-                &styler,
-                result.dry_run,
-                snippet,
-                false,
+                &saved,
+                reused,
             );
         }
     }
@@ -2189,78 +2213,144 @@ mod tests {
     #[test]
     fn extracts_clip_and_schedule_markers_from_terminal_region() {
         let cases = [
-            ("body %", "body", None, None, None),
-            ("body %20", "body", None, None, Some("20")),
-            ("body %log @notes", "body", Some("notes"), None, Some("log")),
+            (
+                "body %",
+                "body",
+                None,
+                None,
+                ClipRequest::Current { header: None },
+            ),
+            (
+                "body %20",
+                "body",
+                None,
+                None,
+                ClipRequest::History {
+                    count: NonZeroUsize::new(20).expect("nonzero"),
+                },
+            ),
+            (
+                "body %log @notes",
+                "body",
+                Some("notes"),
+                None,
+                ClipRequest::Current {
+                    header: Some("log".to_string()),
+                },
+            ),
             (
                 "body s:1 % @groceries",
                 "body",
                 Some("groceries"),
                 Some(1),
-                None,
+                ClipRequest::Current { header: None },
             ),
             (
                 "body % s:1 @groceries",
                 "body",
                 Some("groceries"),
                 Some(1),
-                None,
+                ClipRequest::Current { header: None },
             ),
             (
                 "body @groceries s:1 %log",
                 "body",
                 Some("groceries"),
                 Some(1),
-                Some("log"),
+                ClipRequest::Current {
+                    header: Some("log".to_string()),
+                },
             ),
             (
                 "body %log @groceries s:1",
                 "body",
                 Some("groceries"),
                 Some(1),
-                Some("log"),
+                ClipRequest::Current {
+                    header: Some("log".to_string()),
+                },
             ),
             (
                 "body s:1 @groceries %log",
                 "body",
                 Some("groceries"),
                 Some(1),
-                Some("log"),
+                ClipRequest::Current {
+                    header: Some("log".to_string()),
+                },
             ),
             (
                 "@groceries body %foo_bar",
                 "body",
                 Some("groceries"),
                 None,
-                Some("foo_bar"),
+                ClipRequest::Current {
+                    header: Some("foo_bar".to_string()),
+                },
             ),
             (
                 "body %log @dev:blockid",
                 "body",
                 Some("dev"),
                 None,
-                Some("log"),
+                ClipRequest::Current {
+                    header: Some("log".to_string()),
+                },
             ),
             (
                 "body %log @notes#Ideas",
                 "body",
                 Some("notes"),
                 None,
-                Some("log"),
+                ClipRequest::Current {
+                    header: Some("log".to_string()),
+                },
+            ),
+            (
+                "body %3 s:2 @groceries",
+                "body",
+                Some("groceries"),
+                Some(2),
+                ClipRequest::History {
+                    count: NonZeroUsize::new(3).expect("nonzero"),
+                },
+            ),
+            (
+                "body @groceries %3 s:2",
+                "body",
+                Some("groceries"),
+                Some(2),
+                ClipRequest::History {
+                    count: NonZeroUsize::new(3).expect("nonzero"),
+                },
+            ),
+            (
+                "body %2 @notes#Ideas",
+                "body",
+                Some("notes"),
+                None,
+                ClipRequest::History {
+                    count: NonZeroUsize::new(2).expect("nonzero"),
+                },
+            ),
+            (
+                "body @dev:blockid %2",
+                "body",
+                Some("dev"),
+                None,
+                ClipRequest::History {
+                    count: NonZeroUsize::new(2).expect("nonzero"),
+                },
             ),
         ];
 
-        for (raw, body, route, scheduled, header) in cases {
+        for (raw, body, route, scheduled, clip) in cases {
             let parsed = parse_capture_text(raw, None)
                 .unwrap_or_else(|error| panic!("{raw}: {error:?}"));
             assert_eq!(parsed.body, body, "{raw}");
             assert_eq!(parsed.route.as_deref(), route, "{raw}");
             assert_eq!(parsed.scheduled_offset, scheduled, "{raw}");
-            assert_eq!(
-                parsed.clip.as_ref().map(|clip| clip.header.as_deref()),
-                Some(header),
-                "{raw}"
-            );
+            assert_eq!(parsed.clip, Some(clip), "{raw}");
         }
     }
 
@@ -2287,8 +2377,10 @@ mod tests {
         assert_eq!(parsed.body, "body");
         assert_eq!(parsed.route.as_deref(), Some("work"));
         assert_eq!(
-            parsed.clip.and_then(|clip| clip.header).as_deref(),
-            Some("log")
+            parsed.clip,
+            Some(ClipRequest::Current {
+                header: Some("log".to_string())
+            })
         );
 
         let parsed = super::parse_capture_text(
@@ -2299,8 +2391,10 @@ mod tests {
         .expect("forced section still extracts marker");
         assert_eq!(parsed.body, "body");
         assert_eq!(
-            parsed.clip.as_ref().and_then(|clip| clip.header.as_deref()),
-            Some("section_clip")
+            parsed.clip,
+            Some(ClipRequest::Current {
+                header: Some("section_clip".to_string())
+            })
         );
         assert!(matches!(
             parsed.kind,
@@ -2311,9 +2405,39 @@ mod tests {
             .expect("one marker extracted");
         assert_eq!(parsed.body, "body %first");
         assert_eq!(
-            parsed.clip.and_then(|clip| clip.header).as_deref(),
-            Some("second")
+            parsed.clip,
+            Some(ClipRequest::Current {
+                header: Some("second".to_string())
+            })
         );
+
+        let parsed = parse_capture_text("body %2 %3", None)
+            .expect("one numeric marker extracted");
+        assert_eq!(parsed.body, "body %2");
+        assert_eq!(
+            parsed.clip,
+            Some(ClipRequest::History {
+                count: NonZeroUsize::new(3).expect("nonzero")
+            })
+        );
+
+        for raw in ["body %0", "body %184467440737095516160"] {
+            let parsed =
+                parse_capture_text(raw, None).expect("literal numeric");
+            assert_eq!(parsed.body, raw, "{raw}");
+            assert_eq!(parsed.clip, None, "{raw}");
+        }
+        for (raw, count) in [("body %1", 1), ("body %01", 1), ("body %3", 3)] {
+            let parsed = parse_capture_text(raw, None).expect("history marker");
+            assert_eq!(parsed.body, "body", "{raw}");
+            assert_eq!(
+                parsed.clip,
+                Some(ClipRequest::History {
+                    count: NonZeroUsize::new(count).expect("nonzero")
+                }),
+                "{raw}"
+            );
+        }
 
         let error = parse_capture_text("%", None)
             .expect_err("marker-only capture has no parent text");

@@ -84,13 +84,24 @@ It is recognized only in the terminal token region and may appear on either
 side of a trailing route marker. The token is removed from the body and adds
 `[scheduled::YYYY-MM-DD]` after the created stamp.
 
-Append a whitespace-delimited `%` or `%<header>` terminal token to capture the
-system clipboard beneath the new task or bullet. The marker composes with
-`s:<N>`, ordinary routes, bullet routes, and Pomodoro routes in either terminal
-order. A bare `%` captures without a header. Custom headers accept letters,
-digits, `_`, and `-`, render in uppercase, and replace underscores with spaces;
-for example, `%build_log` renders `**BUILD LOG:**`. Invalid `%...` tokens and
-`%` tokens in the middle of the body stay literal.
+Append one of these whitespace-delimited terminal markers to capture clipboard
+content beneath the new task or bullet:
+
+- `%` captures the live clipboard once without a header.
+- `%<positive integer>` captures exactly that many values without headers: the
+  live clipboard first, followed by recent history newest first. For example,
+  `bob capture research links %3` captures three values. `%1` is equivalent to
+  `%`, leading zeroes are accepted, and `%0` stays literal.
+- `%<nonnumeric header>` captures the live clipboard once under an explicit
+  header. Headers accept letters, digits, `_`, and `-`, render in uppercase,
+  and replace underscores with spaces; for example, `%build_log` renders
+  `**BUILD LOG:**`.
+
+The marker composes with `s:<N>`, ordinary routes, bullet routes, and Pomodoro
+routes in either terminal order. Invalid `%...` tokens and `%` tokens in the
+middle of the body stay literal. A counted capture requires every requested
+entry to read, normalize, classify, and plan successfully; insufficient or
+invalid history aborts the capture instead of writing a partial result.
 
 Clipboard content is rendered according to its shape:
 
@@ -103,6 +114,11 @@ Clipboard content is rendered according to its shape:
 - Long, indented, blank-line-separated, or Markdown-structured text is saved
   verbatim as `file/clip-YYYYMMDD-HHMMSS[-slug].md` and linked without the
   `.md` suffix.
+
+Each value in a counted history capture is classified independently, so limits
+such as the ten-attachment maximum apply per entry. All resulting lines are
+flattened in source order as direct, headerless children; entries receive no
+index labels, container bullets, or separators.
 
 Without a header, one item is written as a direct child and multiple items are
 written as direct sibling children:
@@ -137,10 +153,10 @@ written, and newly created clipboard files are removed if the note write fails.
 
 Use `-c, --clip[=HEADER]` to force clipboard capture without a marker. Bare
 `--clip` captures without a header, while `--clip=build_log` supplies an
-explicit header. Both forms keep `%` tokens in the captured text literal. Use
-`-n, --no-clip` when a genuine trailing `%...` token should remain literal;
-this is also the escape hatch for the accepted `%20`-style header quirk.
-`--clip` and `--no-clip` conflict.
+explicit header. Both forms force a single live value and keep `%` tokens in
+the captured text literal. A numeric header can be requested unambiguously with
+`--clip=20`; use `-n, --no-clip` when a genuine trailing `%N` or other `%...`
+token should remain literal. `--clip` and `--no-clip` conflict.
 
 Use a leading or trailing `@<route>:<block-id>` marker to create a
 Pomodoro-linked next task. For example,
@@ -199,7 +215,7 @@ Useful options:
 - `-c, --clip[=HEADER]`: force clipboard capture, optionally with a header
 - `-d, --dry-run`: plan and report without writing notes or clipboard files
 - `-f, --format human|json`: human confirmation or stable JSON for callers
-- `-n, --no-clip`: keep trailing `%` clipboard markers literal
+- `-n, --no-clip`: keep trailing `%...` clipboard markers literal
 - `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
 - `-s, --section TITLE`: with `--route`, force a bullet into the exact section
 
@@ -213,14 +229,20 @@ fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 the rendered line for either kind. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
 
-Clipboard captures additionally include a `clip` object. Its stable fields are
-`header`, `mode` (`"inline"`, `"lines"`, `"attachments"`, or `"snippet"`),
-`lines` (the exact rendered child lines), and `attachments`. Each attachment
-has `source`, vault-relative `saved`, `kind` (`"image"` or `"file"`), and
-`reused` fields. Snippet results also include the vault-relative `snippet`
-path. The `header` value is `null` when the capture omitted a header and is the
-rendered string (for example, `"BUILD LOG"`) when one was explicit. `task_line`
-remains the parent line only, and non-clipboard JSON omits `clip`.
+Clipboard captures additionally include a `clip` object. Single captures keep
+the existing shape: `header`, `mode` (`"inline"`, `"lines"`, `"attachments"`,
+or `"snippet"`), `lines` (the exact rendered child lines), and `attachments`.
+Each attachment has `source`, vault-relative `saved`, `kind` (`"image"` or
+`"file"`), and `reused` fields. Snippet results also include the vault-relative
+`snippet` path. The `header` value is `null` when the capture omitted a header
+and is the rendered string (for example, `"BUILD LOG"`) when one was explicit.
+
+Counted histories above one use `mode: "history"`, `header: null`, flattened
+`lines`, and attachment records aggregated in entry order. Their `entries`
+array contains one ordinary headerless clip object per requested value, keeping
+entry boundaries and any owning `snippet` path explicit. The aggregate omits a
+singular `snippet` field. `%1` uses the unchanged single-capture shape.
+`task_line` remains the parent line only, and non-clipboard JSON omits `clip`.
 
 Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 `block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`. Ordinary
@@ -562,6 +584,22 @@ under Wayland or `xclip -selection clipboard -o` under X11, falling back to
 `xsel --clipboard --output` when `xclip` is unavailable. A tmux session without
 a display uses `tmux show-buffer`. Setting `BOB_CLIPBOARD_CMD` is also the
 recommended deterministic automation and test hook.
+
+`BOB_CLIPBOARD_HISTORY_CMD` is the portable clipboard-history provider for
+counted captures above one. It is whitespace-split like `BOB_CLIPBOARD_CMD`,
+receives the requested total count as its final argument, and must print a UTF-8
+JSON array of complete clipboard strings ordered newest first. JSON framing
+allows an entry to contain newlines. Bob reads the live clipboard separately,
+removes at most the first equal history candidate, and then requires enough
+older candidates to fulfill the exact count. A failed command, malformed JSON,
+invalid entry, or insufficient result aborts the capture without vault writes.
+
+Without that override, macOS reads Clipy's production `sqlite.db` history
+read-only, validates the required schema, and reconstructs stored UTF-8 text
+and file/URL assets rather than using Clipy's truncated display title. Other
+platforms have no automatic history provider and report how to configure
+`BOB_CLIPBOARD_HISTORY_CMD`; `%` and `%1` continue to use the portable live
+clipboard source alone.
 
 `BOB_DIR` sets the Bob vault directory. It defaults to `~/bob`.
 

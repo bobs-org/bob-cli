@@ -11,6 +11,11 @@ use chrono::{Datelike, NaiveDateTime, Timelike};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+#[cfg(any(target_os = "macos", test))]
+use rusqlite::{Connection, OpenFlags};
+#[cfg(any(target_os = "macos", test))]
+use std::io::Cursor;
+
 use super::env as bob_env;
 
 const IMAGE_EMBED_WIDTH: usize = 400;
@@ -32,6 +37,7 @@ pub(crate) enum ClipMode {
     Lines,
     Attachments,
     Snippet,
+    History,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -57,6 +63,34 @@ pub(crate) struct ClipOutput {
     pub(crate) attachments: Vec<AttachmentOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) snippet: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) entries: Vec<ClipOutput>,
+}
+
+impl ClipOutput {
+    pub(crate) fn file_confirmations(&self) -> Vec<(String, bool)> {
+        let outputs = if self.entries.is_empty() {
+            std::slice::from_ref(self)
+        } else {
+            self.entries.as_slice()
+        };
+        let mut seen = HashSet::new();
+        let mut confirmations = Vec::new();
+        for output in outputs {
+            for attachment in &output.attachments {
+                if seen.insert(attachment.saved.clone()) {
+                    confirmations
+                        .push((attachment.saved.clone(), attachment.reused));
+                }
+            }
+            if let Some(snippet) = &output.snippet
+                && seen.insert(snippet.clone())
+            {
+                confirmations.push((snippet.clone(), false));
+            }
+        }
+        confirmations
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -64,12 +98,54 @@ struct PlannedFile {
     destination: PathBuf,
     contents: Vec<u8>,
     reused: bool,
+    kind: PlannedFileKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlannedFileKind {
+    Attachment,
+    Snippet,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClipPlan {
     pub(crate) output: ClipOutput,
     files: Vec<PlannedFile>,
+}
+
+#[derive(Debug, Default)]
+struct FileReservations {
+    files: Vec<PlannedFile>,
+    by_destination: HashMap<PathBuf, usize>,
+}
+
+impl FileReservations {
+    fn contains(&self, destination: &Path) -> bool {
+        self.by_destination.contains_key(destination)
+    }
+
+    fn get(&self, destination: &Path) -> Option<&PlannedFile> {
+        self.by_destination
+            .get(destination)
+            .map(|index| &self.files[*index])
+    }
+
+    fn reserve(
+        &mut self,
+        destination: PathBuf,
+        contents: Vec<u8>,
+        reused: bool,
+        kind: PlannedFileKind,
+    ) {
+        let index = self.files.len();
+        self.by_destination.insert(destination.clone(), index);
+        self.files.push(PlannedFile {
+            destination,
+            contents,
+            reused,
+            kind,
+        });
+    }
 }
 
 impl ClipPlan {
@@ -136,6 +212,304 @@ pub(crate) fn rendered_header(value: &str) -> String {
 pub(crate) fn read_clipboard() -> Result<String, String> {
     let output = clipboard_command_output()?;
     normalize_clipboard_output(output.stdout)
+}
+
+pub(crate) fn read_clipboard_history(
+    count: usize,
+) -> Result<Vec<String>, String> {
+    let current = read_clipboard()?;
+    if count == 1 {
+        return Ok(vec![current]);
+    }
+
+    let candidates = read_history_candidates(count)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            normalize_clipboard_output(value.into_bytes()).map_err(|error| {
+                format!("clipboard history entry {}: {error}", index + 1)
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    merge_history_candidates(current, candidates, count)
+}
+
+fn merge_history_candidates(
+    current: String,
+    mut candidates: Vec<String>,
+    count: usize,
+) -> Result<Vec<String>, String> {
+    if let Some(index) = candidates.iter().position(|value| value == &current) {
+        candidates.remove(index);
+    }
+
+    let available = candidates.len() + 1;
+    if available < count {
+        return Err(format!(
+            "clipboard history requested {count} entries but only {available} are available"
+        ));
+    }
+
+    let mut values = Vec::with_capacity(count);
+    values.push(current);
+    values.extend(candidates.into_iter().take(count - 1));
+    Ok(values)
+}
+
+fn read_history_candidates(count: usize) -> Result<Vec<String>, String> {
+    if let Some(command) = env::var("BOB_CLIPBOARD_HISTORY_CMD")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return read_history_command(&command, count);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let database = bob_env::home_dir()
+            .join("Library/Application Support/com.clipy-app.Clipy/sqlite.db");
+        return read_clipy_history(&database, count);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    Err("clipboard history is unavailable on this platform; set \
+BOB_CLIPBOARD_HISTORY_CMD to a command that accepts the requested count and \
+prints a newest-first JSON array of clipboard strings"
+        .to_string())
+}
+
+fn read_history_command(
+    command: &str,
+    count: usize,
+) -> Result<Vec<String>, String> {
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    let (program, args) = parts.split_first().ok_or_else(|| {
+        "BOB_CLIPBOARD_HISTORY_CMD must name a command".to_string()
+    })?;
+    let output = Command::new(program)
+        .args(args)
+        .arg(count.to_string())
+        .output()
+        .map_err(|error| format!("run BOB_CLIPBOARD_HISTORY_CMD: {error}"))?;
+    let output = require_success(output, "BOB_CLIPBOARD_HISTORY_CMD")?;
+    serde_json::from_slice::<Vec<String>>(&output.stdout).map_err(|error| {
+        format!(
+            "BOB_CLIPBOARD_HISTORY_CMD must print a UTF-8 JSON array of strings ordered newest first: {error}"
+        )
+    })
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn read_clipy_history(
+    database: &Path,
+    count: usize,
+) -> Result<Vec<String>, String> {
+    if !database.is_file() {
+        return Err(format!(
+            "Clipy clipboard history database was not found at {}; install and run Clipy or set BOB_CLIPBOARD_HISTORY_CMD",
+            database.display()
+        ));
+    }
+    let connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| {
+        format!(
+            "open Clipy clipboard history database {} read-only: {error}",
+            database.display()
+        )
+    })?;
+    validate_clipy_schema(&connection)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT id FROM pasteboardHistories \
+             ORDER BY updateAt DESC, id DESC LIMIT ?1",
+        )
+        .map_err(|error| format!("query Clipy clipboard history: {error}"))?;
+    let ids = statement
+        .query_map([i64::try_from(count).unwrap_or(i64::MAX)], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| format!("query Clipy clipboard history: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            format!("decode Clipy clipboard history rows: {error}")
+        })?;
+
+    ids.iter()
+        .enumerate()
+        .map(|(index, id)| decode_clipy_entry(&connection, id, index + 1))
+        .collect()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn validate_clipy_schema(connection: &Connection) -> Result<(), String> {
+    validate_clipy_table(
+        connection,
+        "pasteboardHistories",
+        &[("id", "TEXT"), ("updateAt", "INTEGER")],
+    )?;
+    validate_clipy_table(
+        connection,
+        "pasteboardHistoryAssets",
+        &[
+            ("id", "TEXT"),
+            ("pasteboardHistoryID", "TEXT"),
+            ("index", "INTEGER"),
+            ("pasteboardType", "TEXT"),
+            ("data", "BLOB"),
+        ],
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn validate_clipy_table(
+    connection: &Connection,
+    table: &str,
+    required: &[(&str, &str)],
+) -> Result<(), String> {
+    let sql = format!("PRAGMA table_info(\"{table}\")");
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| format!("inspect Clipy table {table}: {error}"))?;
+    let columns = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?.to_ascii_uppercase(),
+            ))
+        })
+        .map_err(|error| format!("inspect Clipy table {table}: {error}"))?
+        .collect::<Result<HashMap<_, _>, _>>()
+        .map_err(|error| format!("inspect Clipy table {table}: {error}"))?;
+    let missing = required
+        .iter()
+        .filter(|(column, _)| !columns.contains_key(*column))
+        .map(|(column, _)| *column)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!(
+            "unsupported or unmigrated Clipy database: table {table} is missing required column(s): {}",
+            missing.join(", ")
+        ));
+    }
+    let wrong_types = required
+        .iter()
+        .filter_map(|(column, expected)| {
+            let actual = columns.get(*column)?;
+            (actual != expected)
+                .then(|| format!("{column} is {actual}, expected {expected}"))
+        })
+        .collect::<Vec<_>>();
+    if !wrong_types.is_empty() {
+        return Err(format!(
+            "unsupported or unmigrated Clipy database: table {table} has incompatible column type(s): {}",
+            wrong_types.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn decode_clipy_entry(
+    connection: &Connection,
+    history_id: &str,
+    entry_index: usize,
+) -> Result<String, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT pasteboardType, data FROM pasteboardHistoryAssets \
+             WHERE pasteboardHistoryID = ?1 ORDER BY \"index\" ASC, id ASC",
+        )
+        .map_err(|error| {
+            format!("query Clipy history entry {entry_index}: {error}")
+        })?;
+    let assets = statement
+        .query_map([history_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(|error| {
+            format!("query Clipy history entry {entry_index}: {error}")
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            format!("decode Clipy history entry {entry_index} assets: {error}")
+        })?;
+
+    let mut values = Vec::new();
+    let mut unsupported = Vec::new();
+    for (pasteboard_type, data) in assets {
+        match decode_clipy_asset(&pasteboard_type, &data).map_err(|error| {
+            format!(
+                "Clipy history entry {entry_index} has invalid {pasteboard_type} data: {error}"
+            )
+        })? {
+            Some(mut decoded) => values.append(&mut decoded),
+            None => unsupported.push(pasteboard_type),
+        }
+    }
+    if values.is_empty() {
+        unsupported.sort();
+        unsupported.dedup();
+        let types = if unsupported.is_empty() {
+            "no stored assets".to_string()
+        } else {
+            unsupported.join(", ")
+        };
+        return Err(format!(
+            "Clipy history entry {entry_index} has only unsupported binary representations ({types}); copy text or file/URL content instead"
+        ));
+    }
+    Ok(values.join("\n"))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn decode_clipy_asset(
+    pasteboard_type: &str,
+    data: &[u8],
+) -> Result<Option<Vec<String>>, String> {
+    match pasteboard_type {
+        "public.utf8-plain-text"
+        | "NSStringPboardType"
+        | "public.url"
+        | "NSURLPboardType"
+        | "public.file-url" => {
+            decode_utf8_asset(data).map(|value| Some(vec![value]))
+        }
+        "NSFilenamesPboardType" => decode_filenames_asset(data).map(Some),
+        _ => Ok(None),
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn decode_utf8_asset(data: &[u8]) -> Result<String, String> {
+    if let Ok(value) = String::from_utf8(data.to_vec()) {
+        return Ok(value);
+    }
+    plist::Value::from_reader(Cursor::new(data))
+        .ok()
+        .and_then(plist::Value::into_string)
+        .ok_or_else(|| "value is not valid UTF-8 text".to_string())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn decode_filenames_asset(data: &[u8]) -> Result<Vec<String>, String> {
+    let value = plist::Value::from_reader(Cursor::new(data))
+        .map_err(|error| format!("invalid filenames property list: {error}"))?;
+    let filenames = value
+        .into_array()
+        .ok_or_else(|| "filenames property list is not an array".to_string())?;
+    filenames
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value.into_string().ok_or_else(|| {
+                format!("filename {} is not a string", index + 1)
+            })
+        })
+        .collect()
 }
 
 fn clipboard_command_output() -> Result<Output, String> {
@@ -272,6 +646,59 @@ pub(crate) fn plan(
     clipboard: &str,
     now: NaiveDateTime,
 ) -> Result<ClipPlan, String> {
+    let mut reservations = FileReservations::default();
+    let output =
+        plan_entry(bob_dir, header, clipboard, now, &mut reservations)?;
+    Ok(ClipPlan {
+        output,
+        files: reservations.files,
+    })
+}
+
+pub(crate) fn plan_history(
+    bob_dir: &Path,
+    clipboards: &[String],
+    now: NaiveDateTime,
+) -> Result<ClipPlan, String> {
+    let mut reservations = FileReservations::default();
+    let entries = clipboards
+        .iter()
+        .enumerate()
+        .map(|(index, clipboard)| {
+            plan_entry(bob_dir, None, clipboard, now, &mut reservations)
+                .map_err(|error| {
+                    format!("clipboard history entry {}: {error}", index + 1)
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let lines = entries
+        .iter()
+        .flat_map(|entry| entry.lines.iter().cloned())
+        .collect();
+    let attachments = entries
+        .iter()
+        .flat_map(|entry| entry.attachments.iter().cloned())
+        .collect();
+    Ok(ClipPlan {
+        output: ClipOutput {
+            header: None,
+            mode: ClipMode::History,
+            lines,
+            attachments,
+            snippet: None,
+            entries,
+        },
+        files: reservations.files,
+    })
+}
+
+fn plan_entry(
+    bob_dir: &Path,
+    header: Option<&str>,
+    clipboard: &str,
+    now: NaiveDateTime,
+    reservations: &mut FileReservations,
+) -> Result<ClipOutput, String> {
     let header = header.map(rendered_header);
     let lines = clipboard.split('\n').collect::<Vec<_>>();
     let path_states = lines
@@ -290,13 +717,22 @@ pub(crate) fn plan(
 
     if lines.len() == 1 {
         return match &path_states[0] {
-            PathState::File(path) => {
-                plan_attachments(bob_dir, header.as_deref(), [path.as_path()])
-            }
+            PathState::File(path) => plan_attachments(
+                bob_dir,
+                header.as_deref(),
+                [path.as_path()],
+                reservations,
+            ),
             _ if lines[0].chars().count() > MAX_INLINE_CHARACTERS => {
-                plan_snippet(bob_dir, header.as_deref(), clipboard, now)
+                plan_snippet(
+                    bob_dir,
+                    header.as_deref(),
+                    clipboard,
+                    now,
+                    reservations,
+                )
             }
-            _ => Ok(inline_plan(header.as_deref(), lines[0])),
+            _ => Ok(inline_output(header.as_deref(), lines[0])),
         };
     }
 
@@ -318,6 +754,7 @@ pub(crate) fn plan(
                 PathState::File(path) => Some(path.as_path()),
                 _ => None,
             }),
+            reservations,
         );
     }
 
@@ -325,10 +762,16 @@ pub(crate) fn plan(
         || lines.iter().any(|line| line.trim().is_empty())
         || lines.iter().any(|line| is_structural_line(line))
     {
-        return plan_snippet(bob_dir, header.as_deref(), clipboard, now);
+        return plan_snippet(
+            bob_dir,
+            header.as_deref(),
+            clipboard,
+            now,
+            reservations,
+        );
     }
 
-    Ok(lines_plan(header.as_deref(), &lines))
+    Ok(lines_output(header.as_deref(), &lines))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -460,33 +903,29 @@ fn rendered_lines(header: Option<&str>, items: &[String]) -> Vec<String> {
     items.iter().map(|item| format!("  - {item}")).collect()
 }
 
-fn inline_plan(header: Option<&str>, text: &str) -> ClipPlan {
-    ClipPlan {
-        output: ClipOutput {
-            header: header.map(str::to_string),
-            mode: ClipMode::Inline,
-            lines: rendered_lines(header, &[text.to_string()]),
-            attachments: Vec::new(),
-            snippet: None,
-        },
-        files: Vec::new(),
+fn inline_output(header: Option<&str>, text: &str) -> ClipOutput {
+    ClipOutput {
+        header: header.map(str::to_string),
+        mode: ClipMode::Inline,
+        lines: rendered_lines(header, &[text.to_string()]),
+        attachments: Vec::new(),
+        snippet: None,
+        entries: Vec::new(),
     }
 }
 
-fn lines_plan(header: Option<&str>, clipboard_lines: &[&str]) -> ClipPlan {
+fn lines_output(header: Option<&str>, clipboard_lines: &[&str]) -> ClipOutput {
     let items = clipboard_lines
         .iter()
         .map(|line| (*line).to_string())
         .collect::<Vec<_>>();
-    ClipPlan {
-        output: ClipOutput {
-            header: header.map(str::to_string),
-            mode: ClipMode::Lines,
-            lines: rendered_lines(header, &items),
-            attachments: Vec::new(),
-            snippet: None,
-        },
-        files: Vec::new(),
+    ClipOutput {
+        header: header.map(str::to_string),
+        mode: ClipMode::Lines,
+        lines: rendered_lines(header, &items),
+        attachments: Vec::new(),
+        snippet: None,
+        entries: Vec::new(),
     }
 }
 
@@ -494,10 +933,9 @@ fn plan_attachments<'a>(
     bob_dir: &Path,
     header: Option<&str>,
     sources: impl IntoIterator<Item = &'a Path>,
-) -> Result<ClipPlan, String> {
+    reservations: &mut FileReservations,
+) -> Result<ClipOutput, String> {
     let mut attachments = Vec::new();
-    let mut files = Vec::new();
-    let mut planned_hashes = HashMap::<PathBuf, String>::new();
 
     for source in sources {
         let contents = fs::read(source).map_err(|error| {
@@ -519,9 +957,8 @@ fn plan_attachments<'a>(
             &base_destination,
             &hash,
             &contents,
-            &planned_hashes,
+            reservations,
         )?;
-        planned_hashes.insert(destination.clone(), hash);
         let saved = format!(
             "{directory}/{}",
             destination
@@ -535,11 +972,6 @@ fn plan_attachments<'a>(
             kind,
             reused,
         });
-        files.push(PlannedFile {
-            destination,
-            contents,
-            reused,
-        });
     }
 
     let references = attachments
@@ -548,15 +980,13 @@ fn plan_attachments<'a>(
         .collect::<Vec<_>>();
     let lines = rendered_lines(header, &references);
 
-    Ok(ClipPlan {
-        output: ClipOutput {
-            header: header.map(str::to_string),
-            mode: ClipMode::Attachments,
-            lines,
-            attachments,
-            snippet: None,
-        },
-        files,
+    Ok(ClipOutput {
+        header: header.map(str::to_string),
+        mode: ClipMode::Attachments,
+        lines,
+        attachments,
+        snippet: None,
+        entries: Vec::new(),
     })
 }
 
@@ -588,24 +1018,40 @@ fn choose_attachment_destination(
     base: &Path,
     hash: &str,
     contents: &[u8],
-    planned: &HashMap<PathBuf, String>,
+    reservations: &mut FileReservations,
 ) -> Result<(PathBuf, bool), String> {
-    if let Some(planned_hash) = planned.get(base) {
-        if planned_hash == hash {
-            return Ok((base.to_path_buf(), false));
+    if let Some(file) = reservations.get(base) {
+        if file.kind == PlannedFileKind::Attachment
+            && sha256_hex(&file.contents) == hash
+        {
+            return Ok((base.to_path_buf(), file.reused));
         }
     } else if base.exists() {
         if file_matches(base, contents)? {
+            reservations.reserve(
+                base.to_path_buf(),
+                contents.to_vec(),
+                true,
+                PlannedFileKind::Attachment,
+            );
             return Ok((base.to_path_buf(), true));
         }
     } else {
+        reservations.reserve(
+            base.to_path_buf(),
+            contents.to_vec(),
+            false,
+            PlannedFileKind::Attachment,
+        );
         return Ok((base.to_path_buf(), false));
     }
 
     let hashed = with_hash_suffix(base, &hash[..8]);
-    if let Some(planned_hash) = planned.get(&hashed) {
-        if planned_hash == hash {
-            return Ok((hashed, false));
+    if let Some(file) = reservations.get(&hashed) {
+        if file.kind == PlannedFileKind::Attachment
+            && sha256_hex(&file.contents) == hash
+        {
+            return Ok((hashed, file.reused));
         }
         return Err(format!(
             "clipboard attachment collision at {}",
@@ -614,6 +1060,12 @@ fn choose_attachment_destination(
     }
     if hashed.exists() {
         if file_matches(&hashed, contents)? {
+            reservations.reserve(
+                hashed.clone(),
+                contents.to_vec(),
+                true,
+                PlannedFileKind::Attachment,
+            );
             return Ok((hashed, true));
         }
         return Err(format!(
@@ -621,6 +1073,12 @@ fn choose_attachment_destination(
             hashed.display()
         ));
     }
+    reservations.reserve(
+        hashed.clone(),
+        contents.to_vec(),
+        false,
+        PlannedFileKind::Attachment,
+    );
     Ok((hashed, false))
 }
 
@@ -680,7 +1138,8 @@ fn plan_snippet(
     header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
-) -> Result<ClipPlan, String> {
+    reservations: &mut FileReservations,
+) -> Result<ClipOutput, String> {
     let slug = snippet_slug(clipboard);
     let timestamp = format!(
         "{:04}{:02}{:02}-{:02}{:02}{:02}",
@@ -705,7 +1164,7 @@ fn plan_snippet(
             format!("{base}-{counter}.md")
         };
         let destination = directory.join(&name);
-        if !destination.exists() {
+        if !destination.exists() && !reservations.contains(&destination) {
             break (destination, name);
         }
         counter += 1;
@@ -716,19 +1175,19 @@ fn plan_snippet(
     if !contents.ends_with(b"\n") {
         contents.push(b'\n');
     }
-    Ok(ClipPlan {
-        output: ClipOutput {
-            header: header.map(str::to_string),
-            mode: ClipMode::Snippet,
-            lines: rendered_lines(header, &[format!("[[{reference}]]")]),
-            attachments: Vec::new(),
-            snippet: Some(saved),
-        },
-        files: vec![PlannedFile {
-            destination,
-            contents,
-            reused: false,
-        }],
+    reservations.reserve(
+        destination,
+        contents,
+        false,
+        PlannedFileKind::Snippet,
+    );
+    Ok(ClipOutput {
+        header: header.map(str::to_string),
+        mode: ClipMode::Snippet,
+        lines: rendered_lines(header, &[format!("[[{reference}]]")]),
+        attachments: Vec::new(),
+        snippet: Some(saved),
+        entries: Vec::new(),
     })
 }
 
@@ -880,6 +1339,187 @@ mod tests {
     }
 
     #[test]
+    fn merges_live_clipboard_with_up_to_date_and_lagging_histories() {
+        assert_eq!(
+            merge_history_candidates(
+                "current".to_string(),
+                vec![
+                    "current".to_string(),
+                    "older".to_string(),
+                    "oldest".to_string(),
+                ],
+                3,
+            )
+            .expect("up-to-date history"),
+            ["current", "older", "oldest"]
+        );
+        assert_eq!(
+            merge_history_candidates(
+                "current".to_string(),
+                vec![
+                    "older".to_string(),
+                    "current".to_string(),
+                    "oldest".to_string(),
+                ],
+                3,
+            )
+            .expect("lagging history"),
+            ["current", "older", "oldest"]
+        );
+        assert_eq!(
+            merge_history_candidates(
+                "same".to_string(),
+                vec![
+                    "same".to_string(),
+                    "same".to_string(),
+                    "older".to_string(),
+                ],
+                3,
+            )
+            .expect("later duplicate"),
+            ["same", "same", "older"]
+        );
+        let error = merge_history_candidates(
+            "current".to_string(),
+            vec!["older".to_string()],
+            3,
+        )
+        .expect_err("insufficient history");
+        assert!(error.contains("requested 3") && error.contains("only 2"));
+    }
+
+    #[test]
+    fn reads_clipy_sqlite_assets_in_deterministic_order() {
+        let root = test_root("clipy-database");
+        let database = root.join("sqlite.db");
+        let connection = Connection::open(&database).expect("fixture database");
+        create_clipy_fixture_schema(&connection);
+        connection
+            .execute(
+                "INSERT INTO pasteboardHistories (id, updateAt) VALUES (?1, ?2)",
+                ("older", 1_i64),
+            )
+            .expect("older history");
+        connection
+            .execute(
+                "INSERT INTO pasteboardHistories (id, updateAt) VALUES (?1, ?2)",
+                ("same-a", 2_i64),
+            )
+            .expect("tie history a");
+        connection
+            .execute(
+                "INSERT INTO pasteboardHistories (id, updateAt) VALUES (?1, ?2)",
+                ("same-b", 2_i64),
+            )
+            .expect("tie history b");
+        insert_clipy_asset(
+            &connection,
+            "asset-1",
+            "same-b",
+            0,
+            "public.utf8-plain-text",
+            b"newest\r\ntext",
+        );
+        insert_clipy_asset(
+            &connection,
+            "asset-2",
+            "same-a",
+            0,
+            "public.file-url",
+            b"file:///tmp/first.txt",
+        );
+        insert_clipy_asset(
+            &connection,
+            "asset-3",
+            "same-a",
+            1,
+            "public.file-url",
+            b"file:///tmp/second.txt",
+        );
+        let mut filenames = Vec::new();
+        plist::Value::Array(vec![
+            plist::Value::String("/tmp/legacy one.txt".to_string()),
+            plist::Value::String("/tmp/legacy two.txt".to_string()),
+        ])
+        .to_writer_xml(&mut filenames)
+        .expect("filenames plist");
+        insert_clipy_asset(
+            &connection,
+            "asset-4",
+            "older",
+            0,
+            "NSFilenamesPboardType",
+            &filenames,
+        );
+        drop(connection);
+
+        let history =
+            read_clipy_history(&database, 4).expect("read Clipy fixture");
+        assert_eq!(
+            history,
+            [
+                "newest\r\ntext",
+                "file:///tmp/first.txt\nfile:///tmp/second.txt",
+                "/tmp/legacy one.txt\n/tmp/legacy two.txt",
+            ]
+        );
+        let normalized = history
+            .into_iter()
+            .map(|value| normalize_clipboard_output(value.into_bytes()))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("normalize fixture history");
+        let error =
+            merge_history_candidates("newest\ntext".to_string(), normalized, 4)
+                .expect_err("fixture is insufficient for four entries");
+        assert!(error.contains("requested 4") && error.contains("only 3"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_unsupported_and_unmigrated_clipy_databases() {
+        let root = test_root("clipy-errors");
+        let unsupported = root.join("unsupported.db");
+        let connection = Connection::open(&unsupported).expect("fixture");
+        create_clipy_fixture_schema(&connection);
+        connection
+            .execute(
+                "INSERT INTO pasteboardHistories (id, updateAt) VALUES ('image', 1)",
+                [],
+            )
+            .expect("history");
+        insert_clipy_asset(
+            &connection,
+            "asset",
+            "image",
+            0,
+            "public.png",
+            b"binary",
+        );
+        drop(connection);
+        let error = read_clipy_history(&unsupported, 1)
+            .expect_err("binary-only entry must fail");
+        assert!(
+            error.contains("entry 1") && error.contains("public.png"),
+            "{error}"
+        );
+
+        let unmigrated = root.join("unmigrated.db");
+        let connection = Connection::open(&unmigrated).expect("fixture");
+        connection
+            .execute("CREATE TABLE pasteboardHistories (id TEXT)", [])
+            .expect("partial schema");
+        drop(connection);
+        let error = read_clipy_history(&unmigrated, 1)
+            .expect_err("unmigrated database must fail");
+        assert!(
+            error.contains("unsupported or unmigrated")
+                && error.contains("updateAt"),
+            "{error}"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn detects_structural_lines() {
         for line in [
             "- item",
@@ -918,6 +1558,9 @@ mod tests {
         assert_eq!(headerless_inline.output.header, None);
         assert_eq!(headerless_inline.output.mode, ClipMode::Inline);
         assert_eq!(headerless_inline.output.lines, ["  - hello"]);
+        let single_json = serde_json::to_value(&headerless_inline.output)
+            .expect("single output JSON");
+        assert!(single_json.get("entries").is_none(), "{single_json}");
 
         let inline =
             plan(root, Some("clip"), "hello", now).expect("headed inline");
@@ -1169,5 +1812,156 @@ mod tests {
             Some("file/clip-20260715-131415-structured-title-2.md")
         );
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn aggregate_planner_flattens_entries_and_reserves_all_paths() {
+        let root = test_root("aggregate");
+        let vault = root.join("vault");
+        let first_dir = root.join("first");
+        let second_dir = root.join("second");
+        fs::create_dir_all(&vault).expect("vault");
+        fs::create_dir_all(&first_dir).expect("first dir");
+        fs::create_dir_all(&second_dir).expect("second dir");
+        let first = first_dir.join("report.txt");
+        let second = second_dir.join("report.txt");
+        fs::write(&first, b"same").expect("first source");
+        fs::write(&second, b"different").expect("second source");
+        let snippet = "# Heading\n\nbody".to_string();
+        let clipboards = vec![
+            "inline".to_string(),
+            "line one\nline two".to_string(),
+            first.display().to_string(),
+            second.display().to_string(),
+            first.display().to_string(),
+            snippet.clone(),
+            snippet,
+        ];
+        let plan =
+            plan_history(&vault, &clipboards, test_now()).expect("aggregate");
+
+        assert_eq!(plan.output.mode, ClipMode::History);
+        assert_eq!(plan.output.header, None);
+        assert_eq!(plan.output.entries.len(), clipboards.len());
+        assert_eq!(plan.output.lines[0], "  - inline");
+        assert_eq!(&plan.output.lines[1..3], ["  - line one", "  - line two"]);
+        assert!(plan
+            .output
+            .lines
+            .iter()
+            .all(|line| !line.contains("**CLIP:**")));
+        let expected_hash = &sha256_hex(b"different")[..8];
+        assert_eq!(
+            plan.output
+                .attachments
+                .iter()
+                .map(|attachment| attachment.saved.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "file/report.txt",
+                &format!("file/report-{expected_hash}.txt"),
+                "file/report.txt",
+            ]
+        );
+        assert_eq!(
+            plan.output.entries[5].snippet.as_deref(),
+            Some("file/clip-20260715-131415-heading.md")
+        );
+        assert_eq!(
+            plan.output.entries[6].snippet.as_deref(),
+            Some("file/clip-20260715-131415-heading-2.md")
+        );
+        assert_eq!(plan.files.len(), 4, "unique files only");
+        assert_eq!(plan.output.file_confirmations().len(), 4);
+        let aggregate_json =
+            serde_json::to_value(&plan.output).expect("aggregate JSON");
+        assert_eq!(aggregate_json["mode"], "history");
+        assert_eq!(aggregate_json["entries"].as_array().unwrap().len(), 7);
+        assert_eq!(aggregate_json["attachments"].as_array().unwrap().len(), 3);
+        assert!(aggregate_json.get("snippet").is_none(), "{aggregate_json}");
+        let created = plan.save().expect("save aggregate");
+        assert_eq!(created.len(), 4);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn aggregate_save_cleans_up_files_after_a_later_failure() {
+        let root = test_root("aggregate-cleanup");
+        let vault = root.join("vault");
+        fs::create_dir_all(&vault).expect("vault");
+        fs::write(vault.join("file"), b"blocks snippet directory")
+            .expect("blocking file");
+        let image = root.join("image.png");
+        fs::write(&image, b"image").expect("image source");
+        let clipboards = vec![
+            image.display().to_string(),
+            "# Structured\n\ncontent".to_string(),
+        ];
+        let plan = plan_history(&vault, &clipboards, test_now()).expect("plan");
+        let error = plan.save().expect_err("second save must fail");
+        assert!(error.contains("removed clipboard files"), "{error}");
+        assert!(!vault.join("img/image.png").exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn aggregate_planner_does_not_alias_snippets_and_attachments() {
+        let root = test_root("aggregate-cross-kind");
+        let vault = root.join("vault");
+        fs::create_dir_all(&vault).expect("vault");
+        let text = "# Heading\n\nbody";
+        let attachment = root.join("clip-20260715-131415-heading.md");
+        fs::write(&attachment, format!("{text}\n")).expect("attachment source");
+        let plan = plan_history(
+            &vault,
+            &[text.to_string(), attachment.display().to_string()],
+            test_now(),
+        )
+        .expect("cross-kind aggregate");
+        let hash = sha256_hex(format!("{text}\n").as_bytes());
+        assert_eq!(
+            plan.output.entries[0].snippet.as_deref(),
+            Some("file/clip-20260715-131415-heading.md")
+        );
+        assert_eq!(
+            plan.output.entries[1].attachments[0].saved,
+            format!("file/clip-20260715-131415-heading-{}.md", &hash[..8])
+        );
+        assert_eq!(plan.files.len(), 2);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    fn create_clipy_fixture_schema(connection: &Connection) {
+        connection
+            .execute_batch(
+                "CREATE TABLE pasteboardHistories (\
+                   id TEXT PRIMARY KEY NOT NULL, updateAt INTEGER NOT NULL\
+                 );\
+                 CREATE TABLE pasteboardHistoryAssets (\
+                   id TEXT PRIMARY KEY NOT NULL,\
+                   pasteboardHistoryID TEXT NOT NULL,\
+                   \"index\" INTEGER NOT NULL,\
+                   pasteboardType TEXT NOT NULL, data BLOB NOT NULL\
+                 );",
+            )
+            .expect("Clipy fixture schema");
+    }
+
+    fn insert_clipy_asset(
+        connection: &Connection,
+        id: &str,
+        history_id: &str,
+        index: i64,
+        pasteboard_type: &str,
+        data: &[u8],
+    ) {
+        connection
+            .execute(
+                "INSERT INTO pasteboardHistoryAssets \
+                 (id, pasteboardHistoryID, \"index\", pasteboardType, data) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                (id, history_id, index, pasteboard_type, data),
+            )
+            .expect("Clipy fixture asset");
     }
 }

@@ -30,6 +30,14 @@ serde_yaml = "0.9"
 sha2 = "0.11.0"
 similar = "2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+[dev-dependencies]
+plist = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+
 [[bin]]
 name = "bob"
 path = "src/main.rs"

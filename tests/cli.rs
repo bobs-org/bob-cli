@@ -612,11 +612,15 @@ fn capture_help_lists_options_alphabetically() {
     );
     assert!(
         help.contains("BOB_CLIPBOARD_CMD")
-            && help.contains("%<header>")
+            && help.contains("BOB_CLIPBOARD_HISTORY_CMD")
+            && help.contains("%<positive integer>")
+            && help.contains("%<nonnumeric header>")
             && help.contains("--clip")
             && help.contains("--no-clip")
-            && help.contains("bare '%' captures without a header")
-            && help.contains("bare --clip also captures without a header")
+            && help.contains("'%1' is equivalent to '%'")
+            && help.contains("'%0' stays literal")
+            && help.contains("bob capture research links %3")
+            && help.contains("Bare --clip also captures without a header")
             && !help.contains("bare '%' renders as '**CLIP:**'"),
         "expected clipboard capture help:\n{help}"
     );
@@ -2344,6 +2348,300 @@ fn capture_headerless_clip_marker_renders_under_tasks_and_pomodoros() {
 }
 
 #[test]
+fn capture_percent_one_is_an_exact_single_clip_alias() {
+    let temp = TempDir::new("bob-cli-capture-percent-one");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'live value\n'\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("single %1")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env_remove("BOB_CLIPBOARD_HISTORY_CMD")
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture %1");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("single JSON");
+    assert_eq!(json["clip"]["header"], serde_json::Value::Null);
+    assert_eq!(json["clip"]["mode"], "inline");
+    assert_eq!(json["clip"]["lines"], serde_json::json!(["  - live value"]));
+    assert!(json["clip"].get("entries").is_none(), "{json}");
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        concat!(
+            "- [ ] #task single [created::2026-07-15]\n",
+            "  - live value\n",
+        )
+    );
+}
+
+#[test]
+fn capture_history_is_headerless_structured_and_composes_with_routes() {
+    let temp = TempDir::new("bob-cli-capture-history-compose");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    let history = temp.path().join("history");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'live value\n'\n");
+    write_executable(
+        &history,
+        concat!(
+            "#!/bin/sh\n",
+            "[ \"$1\" = 3 ] || { echo wrong-count >&2; exit 42; }\n",
+            "printf '%s\\n' '[\"live value\",\"older one\\nolder two\",\"oldest\"]'\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .args(["research links", "s:1", "%3"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_CLIPBOARD_HISTORY_CMD", &history)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture task history");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("history JSON");
+    assert_eq!(json["clip"]["header"], serde_json::Value::Null);
+    assert_eq!(json["clip"]["mode"], "history");
+    assert_eq!(
+        json["clip"]["lines"],
+        serde_json::json!([
+            "  - live value",
+            "  - older one",
+            "  - older two",
+            "  - oldest",
+        ])
+    );
+    assert_eq!(json["clip"]["entries"].as_array().unwrap().len(), 3);
+    assert_eq!(json["clip"]["entries"][0]["mode"], "inline");
+    assert_eq!(json["clip"]["entries"][1]["mode"], "lines");
+    assert_eq!(json["clip"]["entries"][2]["mode"], "inline");
+    assert!(json["clip"].get("snippet").is_none(), "{json}");
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        concat!(
+            "- [ ] #task research links [created::2026-07-15] [scheduled::2026-07-16]\n",
+            "  - live value\n",
+            "  - older one\n",
+            "  - older two\n",
+            "  - oldest\n",
+        )
+    );
+
+    write_file(&vault.join("notes.md"), "# Notes\n## Ideas\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["history bullet", "@notes#Ideas", "%3"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_CLIPBOARD_HISTORY_CMD", &history)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture bullet history");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("  - live value")
+            && human.contains("  - older one")
+            && human.contains("  - oldest")
+            && !human.contains("entry 1")
+            && !human.contains("**CLIP:**"),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("notes.md")).expect("read notes"),
+        concat!(
+            "# Notes\n",
+            "## Ideas\n",
+            "\n",
+            "- history bullet [created::2026-07-15]\n",
+            "  - live value\n",
+            "  - older one\n",
+            "  - older two\n",
+            "  - oldest\n",
+        )
+    );
+
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("dev.md"), "# Dev\n## Tasks\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] Current\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["history pomodoro", "%3", "@dev:history-id"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_CLIPBOARD_HISTORY_CMD", &history)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture Pomodoro history");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("dev.md")).expect("read dev"),
+        concat!(
+            "# Dev\n",
+            "## Tasks\n",
+            "\n",
+            "- [*] #task history pomodoro [created::2026-07-15] ^history-id\n",
+            "  - live value\n",
+            "  - older one\n",
+            "  - older two\n",
+            "  - oldest\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(day_file).expect("read day"),
+        "## Pomodoros\n- [ ] Current\n  - [[dev#^history-id]]\n"
+    );
+}
+
+#[test]
+fn capture_history_provider_failures_leave_the_vault_untouched() {
+    let cases = [
+        (
+            "command-failed",
+            "#!/bin/sh\necho provider-failed >&2\nexit 7\n",
+            "exited with 7: provider-failed",
+        ),
+        (
+            "malformed",
+            "#!/bin/sh\nprintf 'not json\n'\n",
+            "JSON array of strings",
+        ),
+        (
+            "insufficient",
+            "#!/bin/sh\nprintf '%s\\n' '[\"live value\",\"older\"]'\n",
+            "requested 3 entries but only 2",
+        ),
+        (
+            "invalid-entry",
+            "#!/bin/sh\nprintf '%s\\n' '[\"live value\",\"older\",\"\"]'\n",
+            "history entry 3: clipboard is empty",
+        ),
+        (
+            "later-plan-failure",
+            "#!/bin/sh\nprintf '%s\\n' '[\"live value\",\"/definitely/missing/history-file\",\"older\"]'\n",
+            "history entry 2: clipboard attachment does not exist",
+        ),
+    ];
+
+    for (name, script, expected) in cases {
+        let temp = TempDir::new(&format!("bob-cli-history-failure-{name}"));
+        let vault = temp.path().join("vault");
+        let inbox = vault.join("mac_inbox.md");
+        let clipboard = temp.path().join("clipboard");
+        let history = temp.path().join("history");
+        write_file(&inbox, "sentinel\n");
+        write_executable(&clipboard, "#!/bin/sh\nprintf 'live value\n'\n");
+        write_executable(&history, script);
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("task %3")
+            .env("BOB_CLIPBOARD_CMD", &clipboard)
+            .env("BOB_CLIPBOARD_HISTORY_CMD", &history)
+            .env("BOB_NOW", "2026-07-15")
+            .output()
+            .expect("failing history capture");
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        assert!(
+            stderr(&output).contains(expected),
+            "{}",
+            format_output(&output)
+        );
+        assert_eq!(
+            fs::read_to_string(&inbox).expect("read inbox"),
+            "sentinel\n"
+        );
+        assert!(!vault.join("img").exists());
+        assert!(!vault.join("file").exists());
+    }
+}
+
+#[test]
+fn capture_history_dry_run_plans_colliding_files_without_writes() {
+    let temp = TempDir::new("bob-cli-capture-history-files-dry-run");
+    let vault = temp.path().join("vault");
+    let first_dir = temp.path().join("first");
+    let second_dir = temp.path().join("second");
+    let clipboard = temp.path().join("clipboard");
+    let history = temp.path().join("history");
+    fs::create_dir_all(&vault).expect("create vault");
+    fs::create_dir_all(&first_dir).expect("first dir");
+    fs::create_dir_all(&second_dir).expect("second dir");
+    let first = first_dir.join("report.txt");
+    let second = second_dir.join("report.txt");
+    fs::write(&first, b"first").expect("first attachment");
+    fs::write(&second, b"second").expect("second attachment");
+    write_executable(
+        &clipboard,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' {}\n",
+            shell_single_quote(first.to_str().expect("utf8 first"))
+        ),
+    );
+    let history_json = serde_json::json!([
+        first.display().to_string(),
+        second.display().to_string(),
+        "# Structured\n\nbody",
+    ])
+    .to_string();
+    write_executable(
+        &history,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' {}\n",
+            shell_single_quote(&history_json)
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("history files %3")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_CLIPBOARD_HISTORY_CMD", &history)
+        .env("BOB_NOW", "2026-07-15 13:14:15")
+        .output()
+        .expect("dry-run history files");
+    assert_success(&output);
+    let human = stdout(&output);
+    let second_hash = hex::encode(sha2::Sha256::digest(b"second"));
+    assert!(
+        human.contains("would save")
+            && human.contains("file/report.txt")
+            && human
+                .contains(&format!("file/report-{}.txt", &second_hash[..8]))
+            && human.contains("file/clip-20260715-131415-structured.md"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!vault.join("mac_inbox.md").exists());
+    assert!(!vault.join("img").exists());
+    assert!(!vault.join("file").exists());
+}
+
+#[test]
 fn capture_clip_options_force_or_disable_marker_parsing() {
     let temp = TempDir::new("bob-cli-capture-clip-options");
     let vault = temp.path().join("vault");
@@ -2407,6 +2705,46 @@ fn capture_clip_options_force_or_disable_marker_parsing() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
+        .arg("--clip=20")
+        .arg("--")
+        .arg("numeric header %3")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("run forced numeric header");
+    assert_success(&output);
+    assert!(
+        fs::read_to_string(vault.join("mac_inbox.md"))
+            .expect("read inbox")
+            .contains(concat!(
+                "#task numeric header %3 [created::2026-07-15]\n",
+                "  - **20:** forced text"
+            )),
+        "numeric forced header should remain available"
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("literal %0")
+        .env_remove("BOB_CLIPBOARD_CMD")
+        .env_remove("BOB_CLIPBOARD_HISTORY_CMD")
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("run literal zero marker");
+    assert_success(&output);
+    assert!(
+        fs::read_to_string(vault.join("mac_inbox.md"))
+            .expect("read inbox")
+            .contains("#task literal %0 [created::2026-07-15]"),
+        "zero marker should stay literal"
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
         .arg("--no-clip")
         .arg("--")
         .arg("literal %20")
@@ -2449,6 +2787,35 @@ fn capture_clip_options_force_or_disable_marker_parsing() {
         .output()
         .expect("run empty header");
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn capture_history_without_a_provider_has_actionable_guidance() {
+    let temp = TempDir::new("bob-cli-capture-history-no-provider");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'live value\n'\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("task %2")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env_remove("BOB_CLIPBOARD_HISTORY_CMD")
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture without history provider");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("BOB_CLIPBOARD_HISTORY_CMD")
+            && stderr(&output).contains("JSON array"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!vault.join("mac_inbox.md").exists());
 }
 
 #[test]
