@@ -10,6 +10,7 @@ fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
 }
 
 mod capture;
+mod capture_clip;
 mod capture_sections;
 mod capture_targets;
 mod collect_done;

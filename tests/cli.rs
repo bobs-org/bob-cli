@@ -610,13 +610,22 @@ fn capture_help_lists_options_alphabetically() {
             && help.contains("BOB_DAY_FILE"),
         "expected Pomodoro-linked capture help:\n{help}"
     );
+    assert!(
+        help.contains("BOB_CLIPBOARD_CMD")
+            && help.contains("%<header>")
+            && help.contains("--clip")
+            && help.contains("--no-clip"),
+        "expected clipboard capture help:\n{help}"
+    );
     assert_text_order(
         &help,
         &[
             "-b, --bob-dir",
+            "-c, --clip",
             "-d, --dry-run",
             "-f, --format",
             "-h, --help",
+            "-n, --no-clip",
             "-r, --route",
             "-s, --section",
         ],
@@ -2160,6 +2169,354 @@ fn capture_json_output_includes_scheduled_date() {
         json["task_line"],
         "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
     );
+}
+
+#[test]
+fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
+    let temp = TempDir::new("bob-cli-capture-clip-compose");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(
+        &clipboard,
+        "#!/bin/sh\nprintf 'hello from clipboard\n'\n",
+    );
+    write_file(
+        &vault.join("work.md"),
+        "# Work\n## Tasks\n- [ ] #task Existing\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .args(["do thing", "s:1", "%build_log", "@work"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15 13:14:15")
+        .output()
+        .expect("run task clipboard capture");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("clipboard JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["text"], "do thing");
+    assert_eq!(json["scheduled"], "2026-07-16");
+    assert_eq!(json["clip"]["header"], "BUILD LOG");
+    assert_eq!(json["clip"]["mode"], "inline");
+    assert_eq!(
+        json["clip"]["lines"],
+        serde_json::json!(["  - **BUILD LOG:** hello from clipboard"])
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("work.md")).expect("read work note"),
+        concat!(
+            "# Work\n",
+            "## Tasks\n",
+            "- [ ] #task Existing\n",
+            "- [ ] #task do thing [created::2026-07-15] [scheduled::2026-07-16]\n",
+            "  - **BUILD LOG:** hello from clipboard\n",
+        )
+    );
+
+    write_file(&vault.join("notes.md"), "# Notes\n## Ideas\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["jot idea", "%", "@notes#Ideas"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("run bullet clipboard capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("notes.md")).expect("read notes"),
+        concat!(
+            "# Notes\n",
+            "## Ideas\n",
+            "\n",
+            "- jot idea [created::2026-07-15]\n",
+            "  - **CLIP:** hello from clipboard\n",
+        )
+    );
+
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("dev.md"), "# Dev\n## Tasks\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] Current\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["ship it", "%log", "@dev:ship-id"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("run Pomodoro clipboard capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("dev.md")).expect("read dev"),
+        concat!(
+            "# Dev\n",
+            "## Tasks\n",
+            "\n",
+            "- [*] #task ship it [created::2026-07-15] ^ship-id\n",
+            "  - **LOG:** hello from clipboard\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(day_file).expect("read day"),
+        "## Pomodoros\n- [ ] Current\n  - [[dev#^ship-id]]\n"
+    );
+}
+
+#[test]
+fn capture_clip_options_force_or_disable_marker_parsing() {
+    let temp = TempDir::new("bob-cli-capture-clip-options");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'forced text'\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--clip=review_notes")
+        .arg("--")
+        .arg("keep %literal")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("run forced clipboard capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        concat!(
+            "- [ ] #task keep %literal [created::2026-07-15]\n",
+            "  - **REVIEW NOTES:** forced text\n",
+        )
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--clip")
+        .arg("default header")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("run default forced clipboard capture");
+    assert_success(&output);
+    assert!(fs::read_to_string(vault.join("mac_inbox.md"))
+        .expect("read inbox")
+        .contains("  - **CLIP:** forced text"));
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--no-clip")
+        .arg("--")
+        .arg("literal %20")
+        .env_remove("BOB_CLIPBOARD_CMD")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("TMUX")
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("run no-clip capture");
+    assert_success(&output);
+    assert!(
+        fs::read_to_string(vault.join("mac_inbox.md"))
+            .expect("read inbox")
+            .contains("#task literal %20 [created::2026-07-15]"),
+        "trailing marker should be literal"
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("--clip")
+        .arg("--no-clip")
+        .arg("text")
+        .output()
+        .expect("run conflicting options");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("--clip=bad!")
+        .arg("text")
+        .output()
+        .expect("run invalid header");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+}
+
+#[test]
+fn capture_clip_saves_attachments_snippets_and_reports_dry_run() {
+    let temp = TempDir::new("bob-cli-capture-clip-files");
+    let vault = temp.path().join("vault");
+    let source = temp.path().join("screen:shot.PNG");
+    let clipboard = temp.path().join("clipboard");
+    fs::create_dir_all(&vault).expect("create vault");
+    fs::write(&source, b"fake image bytes").expect("write source");
+    write_executable(
+        &clipboard,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' {}\n",
+            shell_single_quote(source.to_str().expect("utf8 source"))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("attach image %")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15 13:14:15")
+        .output()
+        .expect("capture image attachment");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("attachment JSON");
+    assert_eq!(json["clip"]["mode"], "attachments");
+    assert_eq!(json["clip"]["attachments"][0]["kind"], "image");
+    assert_eq!(
+        json["clip"]["attachments"][0]["saved"],
+        "img/screen-shot.PNG"
+    );
+    assert_eq!(json["clip"]["attachments"][0]["reused"], false);
+    assert_eq!(
+        fs::read(vault.join("img/screen-shot.PNG")).expect("saved image"),
+        b"fake image bytes"
+    );
+    assert!(fs::read_to_string(vault.join("mac_inbox.md"))
+        .expect("read inbox")
+        .contains("  - **CLIP:** ![[img/screen-shot.PNG|400]]"));
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("reuse image %")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15 13:14:15")
+        .output()
+        .expect("reuse image attachment");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("reuse JSON");
+    assert_eq!(json["clip"]["attachments"][0]["reused"], true);
+
+    write_executable(
+        &clipboard,
+        "#!/bin/sh\nprintf '# Heading\\n\\n- preserved list\\n'\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("save snippet %")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15 13:14:15")
+        .output()
+        .expect("capture snippet");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("snippet JSON");
+    assert_eq!(json["clip"]["mode"], "snippet");
+    assert_eq!(
+        json["clip"]["snippet"],
+        "file/clip-20260715-131415-heading.md"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("file/clip-20260715-131415-heading.md"))
+            .expect("snippet file"),
+        "# Heading\n\n- preserved list\n"
+    );
+
+    let dry_vault = temp.path().join("dry-vault");
+    fs::create_dir_all(&dry_vault).expect("dry vault");
+    write_executable(
+        &clipboard,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' {}\n",
+            shell_single_quote(source.to_str().expect("utf8 source"))
+        ),
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&dry_vault)
+        .arg("--dry-run")
+        .arg("dry attachment %")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15 13:14:15")
+        .output()
+        .expect("dry-run clipboard capture");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("would save"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!dry_vault.join("mac_inbox.md").exists());
+    assert!(!dry_vault.join("img").exists());
+    assert!(!dry_vault.join("file").exists());
+}
+
+#[test]
+fn capture_clip_failures_leave_vault_untouched() {
+    let cases = [
+        ("empty", "#!/bin/sh\nexit 0\n", "clipboard is empty"),
+        ("binary", "#!/bin/sh\nprintf 'a\\000b'\n", "binary data"),
+        (
+            "missing",
+            "#!/bin/sh\nprintf '/definitely/missing/bob-clip-file'\n",
+            "does not exist",
+        ),
+    ];
+
+    for (name, script, expected) in cases {
+        let temp = TempDir::new(&format!("bob-cli-capture-clip-fail-{name}"));
+        let vault = temp.path().join("vault");
+        let clipboard = temp.path().join("clipboard");
+        let inbox = vault.join("mac_inbox.md");
+        write_file(&inbox, "sentinel\n");
+        write_executable(&clipboard, script);
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("task %")
+            .env("BOB_CLIPBOARD_CMD", &clipboard)
+            .env("BOB_NOW", "2026-07-15")
+            .output()
+            .expect("run failing clipboard capture");
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        assert!(
+            stderr(&output).contains(expected),
+            "{}",
+            format_output(&output)
+        );
+        assert_eq!(
+            fs::read_to_string(&inbox).expect("read inbox"),
+            "sentinel\n"
+        );
+        assert!(!vault.join("img").exists());
+        assert!(!vault.join("file").exists());
+    }
 }
 
 #[test]

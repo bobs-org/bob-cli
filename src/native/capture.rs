@@ -15,7 +15,9 @@ use clap::{
 use serde::Serialize;
 use serde_json::json;
 
-use super::{collect_done, env as bob_env, pomodoro, style::Styler};
+use super::{
+    capture_clip, collect_done, env as bob_env, pomodoro, style::Styler,
+};
 
 const COMMAND_NAME: &str = "bob capture";
 pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
@@ -68,6 +70,16 @@ to schedule the capture N days from today. The token is removed from the task \
 text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It \
 may appear before or after a trailing @route token and is recognized only at \
 the very end of the input.\n\n\
+Append a trailing '%' or '%<header>' token to capture the system clipboard as \
+an indented child bullet. Headers use letters, digits, '_' and '-'; '_' renders \
+as a space, and a bare '%' renders as '**CLIP:**'. The marker composes with \
+s:<N> and every route kind in either terminal order. Small text stays inline, \
+2-10 flat lines become nested bullets, copied file paths are saved under img/ \
+or file/, and long or Markdown-structured text is preserved in a timestamped \
+file/clip-*.md snippet. Use --clip[=HEADER] to force capture while keeping '%' \
+tokens literal, or --no-clip to keep a genuine trailing '%...' token literal. \
+The accepted '%20' header quirk can be escaped with --no-clip. Clipboard \
+failures abort before the note or attachment files are changed.\n\n\
 Use '@<route>:<block-id>' in the same leading or trailing position to create \
 a next-status task and link it from today's Pomodoro ledger. The routed task \
 renders as '- [*] #task <body> [created::YYYY-MM-DD] ^<block-id>' (with any \
@@ -92,16 +104,30 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_DAY_FILE  exact daily note used by Pomodoro-linked capture\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time override",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk %\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_CLIPBOARD_CMD  whitespace-split command that prints clipboard text; overrides platform tools\n  BOB_DAY_FILE       exact daily note used by Pomodoro-linked capture\n  BOB_DIR            Bob vault root when --bob-dir is omitted\n  BOB_NOW            current date/time override\n\nClipboard source order:\n  BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
+        .arg(clip_arg())
         .arg(dry_run_arg())
         .arg(format_arg())
         .arg(help_arg())
+        .arg(no_clip_arg())
         .arg(route_arg())
         .arg(section_arg())
         .arg(text_arg())
+}
+
+fn clip_arg() -> Arg {
+    Arg::new("clip")
+        .long("clip")
+        .short('c')
+        .value_name("HEADER")
+        .num_args(0..=1)
+        .require_equals(true)
+        .default_missing_value(capture_clip::DEFAULT_HEADER)
+        .conflicts_with("no-clip")
+        .help("Capture the clipboard, optionally labeling it HEADER")
 }
 
 fn bob_dir_arg() -> Arg {
@@ -118,7 +144,7 @@ fn dry_run_arg() -> Arg {
         .long("dry-run")
         .short('d')
         .action(ArgAction::SetTrue)
-        .help("Parse, validate, format, and report without writing notes")
+        .help("Plan and report without writing notes or clipboard files")
 }
 
 fn format_arg() -> Arg {
@@ -137,6 +163,15 @@ fn help_arg() -> Arg {
         .short('h')
         .action(ArgAction::Help)
         .help("Show help")
+}
+
+fn no_clip_arg() -> Arg {
+    Arg::new("no-clip")
+        .long("no-clip")
+        .short('n')
+        .action(ArgAction::SetTrue)
+        .conflicts_with("clip")
+        .help("Keep trailing % clipboard markers literal")
 }
 
 fn route_arg() -> Arg {
@@ -188,13 +223,23 @@ impl OutputFormat {
 struct CaptureRequest {
     bob_dir: PathBuf,
     dry_run: bool,
+    forced_clip_header: Option<String>,
     forced_route: Option<String>,
     forced_section: Option<String>,
+    no_clip: bool,
     raw_text: String,
 }
 
 impl CaptureRequest {
     fn from_matches(matches: &ArgMatches) -> Result<Self, CaptureError> {
+        let forced_clip_header = matches.get_one::<String>("clip").cloned();
+        if let Some(header) = forced_clip_header.as_deref()
+            && !capture_clip::is_valid_header(header)
+        {
+            return Err(CaptureError::usage(
+                "--clip HEADER must contain only A-Z, a-z, 0-9, '_' or '-'",
+            ));
+        }
         let forced_route = matches.get_one::<String>("route").cloned();
         let forced_section = forced_section_from_matches(matches)?;
         if forced_section.is_some() && forced_route.is_none() {
@@ -204,8 +249,10 @@ impl CaptureRequest {
         Ok(Self {
             bob_dir: bob_dir_from_matches(matches),
             dry_run: matches.get_flag("dry-run"),
+            forced_clip_header,
             forced_route,
             forced_section,
+            no_clip: matches.get_flag("no-clip"),
             raw_text: raw_text_from_matches(matches)?,
         })
     }
@@ -252,12 +299,19 @@ fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, CaptureError> {
 }
 
 fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
-    let parsed = parse_capture_text(
+    let parse_clip_markers =
+        request.forced_clip_header.is_none() && !request.no_clip;
+    let mut parsed = parse_capture_text_with_clip_control(
         &request.raw_text,
         request.forced_route.as_deref(),
         request.forced_section.as_deref(),
+        parse_clip_markers,
     )?;
-    let today = bob_env::current_datetime().date();
+    if let Some(header) = request.forced_clip_header.as_deref() {
+        parsed.clip_header = Some(header.to_string());
+    }
+    let now = bob_env::current_datetime();
+    let today = now.date();
     let created = date_string(today);
     let scheduled = parsed
         .scheduled_offset
@@ -278,35 +332,59 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         ),
     };
     let kind_label = capture_kind_label(&parsed.kind);
+    let clip_plan = parsed
+        .clip_header
+        .as_deref()
+        .map(|header| {
+            let clipboard =
+                capture_clip::read_clipboard().map_err(CaptureError::io)?;
+            capture_clip::plan(&request.bob_dir, header, &clipboard, now)
+                .map_err(CaptureError::io)
+        })
+        .transpose()?;
+    let capture_block = match &clip_plan {
+        Some(plan) => {
+            format!("{capture_line}\n{}", plan.output.lines.join("\n"))
+        }
+        None => capture_line.clone(),
+    };
     let relative_target = relative_target(parsed.route.as_deref());
     let target = request.bob_dir.join(&relative_target);
-    let special = match &parsed.kind {
+    let note_plan = match &parsed.kind {
         CaptureKind::Pomodoro { block_id } => {
             let route = parsed.route.as_deref().ok_or_else(|| {
                 CaptureError::io(
                     "Pomodoro capture invariant failed: route is missing",
                 )
             })?;
-            Some(capture_with_pomodoro_link(
+            plan_capture_with_pomodoro_link(
                 &request.bob_dir,
                 &target,
                 route,
                 block_id,
-                &capture_line,
-                request.dry_run,
-            )?)
+                &capture_block,
+            )?
         }
-        _ => None,
+        _ => plan_capture_to_target(&target, &capture_block, &parsed.kind)?,
     };
-    let placement = match &special {
-        Some(details) => details.placement,
-        None => capture_to_target(
-            &target,
-            &capture_line,
-            &parsed.kind,
-            request.dry_run,
-        )?,
-    };
+    if !request.dry_run {
+        let created_clip_files = match &clip_plan {
+            Some(plan) => plan.save().map_err(CaptureError::io)?,
+            None => Vec::new(),
+        };
+        if let Err(mut error) = write_capture_plan(&note_plan) {
+            if !created_clip_files.is_empty() {
+                let cleanup =
+                    capture_clip::cleanup_created(&created_clip_files);
+                capture_clip::append_cleanup_message(
+                    &mut error.message,
+                    &cleanup,
+                );
+            }
+            return Err(error);
+        }
+    }
+    let special = note_plan.pomodoro.as_ref();
 
     Ok(CaptureResult {
         ok: true,
@@ -325,13 +403,16 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         kind: kind_label,
         created,
         scheduled,
-        placement,
-        block_id: special.as_ref().map(|details| details.block_id.clone()),
-        day_file: special.as_ref().map(|details| details.day_file.clone()),
-        block_link: special.as_ref().map(|details| details.block_link.clone()),
+        placement: note_plan.placement,
+        clip: clip_plan.map(|plan| plan.output),
+        block_id: special.as_ref().map(|edit| edit.details.block_id.clone()),
+        day_file: special.as_ref().map(|edit| edit.details.day_file.clone()),
+        block_link: special
+            .as_ref()
+            .map(|edit| edit.details.block_link.clone()),
         pomodoro_link_placement: special
             .as_ref()
-            .map(|details| details.pomodoro_link_placement),
+            .map(|edit| edit.details.pomodoro_link_placement),
     })
 }
 
@@ -412,58 +493,80 @@ fn append_scheduled_property(line: &mut String, scheduled: Option<&str>) {
     }
 }
 
-fn capture_to_target(
+fn plan_capture_to_target(
     target: &Path,
-    capture_line: &str,
+    capture_block: &str,
     kind: &CaptureKind,
-    dry_run: bool,
-) -> Result<Placement, CaptureError> {
+) -> Result<CaptureWritePlan, CaptureError> {
     if !target.exists() {
-        if !dry_run {
-            write_new_file(target, capture_line)?;
-        }
-        return Ok(Placement::Created);
+        validate_target_parent(target)?;
+        return Ok(CaptureWritePlan {
+            target: target.to_path_buf(),
+            target_existed: false,
+            original_target: String::new(),
+            updated_target: format!("{capture_block}\n"),
+            placement: Placement::Created,
+            pomodoro: None,
+        });
     }
 
     let contents = read_target(target)?;
     let (updated, placement) = match kind {
         CaptureKind::Task | CaptureKind::Pomodoro { .. } => {
-            insert_task_line(&contents, capture_line)
+            insert_task_line(&contents, capture_block)
         }
         CaptureKind::Bullet {
             section_prefix,
             exact,
         } => insert_bullet_line(
             &contents,
-            capture_line,
+            capture_block,
             section_prefix.as_deref(),
             *exact,
         ),
     };
-    if !dry_run {
-        fs::write(target, updated)
-            .map_err(|error| fs_error("write target", target, error))?;
-    }
-    Ok(placement)
+    Ok(CaptureWritePlan {
+        target: target.to_path_buf(),
+        target_existed: true,
+        original_target: contents,
+        updated_target: updated,
+        placement,
+        pomodoro: None,
+    })
+}
+
+#[derive(Debug)]
+struct CaptureWritePlan {
+    target: PathBuf,
+    target_existed: bool,
+    original_target: String,
+    updated_target: String,
+    placement: Placement,
+    pomodoro: Option<PlannedPomodoroEdit>,
+}
+
+#[derive(Debug)]
+struct PlannedPomodoroEdit {
+    details: PomodoroCaptureDetails,
+    day_file: PathBuf,
+    updated_day: String,
 }
 
 #[derive(Debug)]
 struct PomodoroCaptureDetails {
-    placement: Placement,
     block_id: String,
     day_file: String,
     block_link: String,
     pomodoro_link_placement: Placement,
 }
 
-fn capture_with_pomodoro_link(
+fn plan_capture_with_pomodoro_link(
     bob_dir: &Path,
     target: &Path,
     route: &str,
     block_id: &str,
-    capture_line: &str,
-    dry_run: bool,
-) -> Result<PomodoroCaptureDetails, CaptureError> {
+    capture_block: &str,
+) -> Result<CaptureWritePlan, CaptureError> {
     let target_existed = target.exists();
     let original_target = if target_existed {
         read_target(target)?
@@ -481,9 +584,10 @@ fn capture_with_pomodoro_link(
     }
 
     let (updated_target, placement) = if target_existed {
-        insert_task_line(&original_target, capture_line)
+        insert_task_line(&original_target, capture_block)
     } else {
-        (format!("{capture_line}\n"), Placement::Created)
+        validate_target_parent(target)?;
+        (format!("{capture_block}\n"), Placement::Created)
     };
 
     let day_file = pomodoro::day_file_for(bob_dir);
@@ -509,23 +613,69 @@ fn capture_with_pomodoro_link(
     let (updated_day, pomodoro_link_placement) =
         insert_pomodoro_block_link(&original_day, &block_link)?;
 
-    if !dry_run {
-        coordinated_replace(
-            target,
-            target_existed.then_some(original_target.as_str()),
-            &updated_target,
-            &day_file,
-            &updated_day,
-        )?;
+    Ok(CaptureWritePlan {
+        target: target.to_path_buf(),
+        target_existed,
+        original_target,
+        updated_target,
+        placement,
+        pomodoro: Some(PlannedPomodoroEdit {
+            details: PomodoroCaptureDetails {
+                block_id: block_id.to_string(),
+                day_file: day_file.display().to_string(),
+                block_link,
+                pomodoro_link_placement,
+            },
+            day_file,
+            updated_day,
+        }),
+    })
+}
+
+fn validate_target_parent(target: &Path) -> Result<(), CaptureError> {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    if parent.is_dir() {
+        Ok(())
+    } else {
+        Err(CaptureError::io(format!(
+            "create target {}: Bob vault root does not exist: {}",
+            target.display(),
+            parent.display(),
+        )))
+    }
+}
+
+fn write_capture_plan(plan: &CaptureWritePlan) -> Result<(), CaptureError> {
+    if let Some(pomodoro) = &plan.pomodoro {
+        return coordinated_replace(
+            &plan.target,
+            plan.target_existed.then_some(plan.original_target.as_str()),
+            &plan.updated_target,
+            &pomodoro.day_file,
+            &pomodoro.updated_day,
+        );
     }
 
-    Ok(PomodoroCaptureDetails {
-        placement,
-        block_id: block_id.to_string(),
-        day_file: day_file.display().to_string(),
-        block_link,
-        pomodoro_link_placement,
-    })
+    replace_single_file(&plan.target, plan.target_existed, &plan.updated_target)
+}
+
+fn replace_single_file(
+    target: &Path,
+    target_existed: bool,
+    updated: &str,
+) -> Result<(), CaptureError> {
+    let temporary = write_temporary_file(target, updated, "target")?;
+    if let Err(error) = fs::rename(&temporary, target) {
+        remove_temporary_file(&temporary);
+        return Err(fs_error("replace target", target, error));
+    }
+    if !target_existed && !target.is_file() {
+        return Err(CaptureError::io(format!(
+            "create target {} failed",
+            target.display()
+        )));
+    }
+    Ok(())
 }
 
 fn paths_refer_to_same_file(first: &Path, second: &Path) -> bool {
@@ -646,11 +796,8 @@ fn insertion_text_preserving_line_endings(
     index: usize,
     line: &str,
 ) -> String {
-    let ending = if contents.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
+    let ending = document_line_ending(contents);
+    let line = line.replace('\n', ending);
     let needs_leading_ending = index > 0 && !contents[..index].ends_with('\n');
     if needs_leading_ending {
         format!("{ending}{line}{ending}")
@@ -807,20 +954,6 @@ fn read_target(target: &Path) -> Result<String, CaptureError> {
         .map_err(|error| fs_error("read target", target, error))
 }
 
-fn write_new_file(
-    target: &Path,
-    capture_line: &str,
-) -> Result<(), CaptureError> {
-    let contents = format!("{capture_line}\n");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(target)
-        .map_err(|error| fs_error("create target", target, error))?;
-    file.write_all(contents.as_bytes())
-        .map_err(|error| fs_error("write target", target, error))
-}
-
 fn fs_error(action: &str, path: &Path, error: io::Error) -> CaptureError {
     CaptureError::io(format!("{action} {}: {error}", path.display()))
 }
@@ -840,8 +973,15 @@ enum CaptureKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedCaptureText {
     body: String,
+    clip_header: Option<String>,
     route: Option<String>,
     kind: CaptureKind,
+    scheduled_offset: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TerminalMarkers {
+    clip_header: Option<String>,
     scheduled_offset: Option<u64>,
 }
 
@@ -854,21 +994,37 @@ impl RouteToken {
     fn into_parsed(
         self,
         body: String,
-        scheduled_offset: Option<u64>,
+        markers: TerminalMarkers,
     ) -> ParsedCaptureText {
         ParsedCaptureText {
             body,
+            clip_header: markers.clip_header,
             route: Some(self.route),
             kind: self.kind,
-            scheduled_offset,
+            scheduled_offset: markers.scheduled_offset,
         }
     }
 }
 
+#[cfg(test)]
 fn parse_capture_text(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
+) -> Result<ParsedCaptureText, CaptureError> {
+    parse_capture_text_with_clip_control(
+        raw_text,
+        forced_route,
+        forced_section,
+        true,
+    )
+}
+
+fn parse_capture_text_with_clip_control(
+    raw_text: &str,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    parse_clip_markers: bool,
 ) -> Result<ParsedCaptureText, CaptureError> {
     let normalized = normalize_task_text(raw_text);
     if normalized.is_empty() {
@@ -876,7 +1032,7 @@ fn parse_capture_text(
     }
 
     let mut tokens: Vec<&str> = normalized.split(' ').collect();
-    let scheduled_offset = extract_trailing_schedule(&mut tokens);
+    let markers = extract_terminal_markers(&mut tokens, parse_clip_markers);
     if tokens.is_empty() {
         return Err(missing_text_error());
     }
@@ -893,12 +1049,13 @@ fn parse_capture_text(
         reject_legacy_bullet_markers(&tokens, false)?;
         return Ok(ParsedCaptureText {
             body,
+            clip_header: markers.clip_header,
             route: Some(route),
             kind: CaptureKind::Bullet {
                 section_prefix: Some(section.to_string()),
                 exact: true,
             },
-            scheduled_offset,
+            scheduled_offset: markers.scheduled_offset,
         });
     }
 
@@ -907,9 +1064,10 @@ fn parse_capture_text(
         reject_legacy_bullet_markers(&tokens, false)?;
         return Ok(ParsedCaptureText {
             body,
+            clip_header: markers.clip_header,
             route: Some(route),
             kind: CaptureKind::Task,
-            scheduled_offset,
+            scheduled_offset: markers.scheduled_offset,
         });
     }
 
@@ -925,7 +1083,7 @@ fn parse_capture_text(
             }
             // A bare `@foo` with no body stays literal task text.
         } else {
-            return Ok(token.into_parsed(body, scheduled_offset));
+            return Ok(token.into_parsed(body, markers));
         }
     }
 
@@ -936,14 +1094,15 @@ fn parse_capture_text(
         && !rest.is_empty()
         && let Some(token) = parse_terminal_route_token(last)?
     {
-        return Ok(token.into_parsed(rest.join(" "), scheduled_offset));
+        return Ok(token.into_parsed(rest.join(" "), markers));
     }
 
     Ok(ParsedCaptureText {
         body,
+        clip_header: markers.clip_header,
         route: None,
         kind: CaptureKind::Task,
-        scheduled_offset,
+        scheduled_offset: markers.scheduled_offset,
     })
 }
 
@@ -1077,28 +1236,104 @@ fn parse_schedule_token(token: &str) -> Option<u64> {
     digits.parse::<u64>().ok()
 }
 
-/// Remove one terminal schedule token from the input region. A schedule token
-/// may be the final token, or immediately before a final route token.
-fn extract_trailing_schedule(tokens: &mut Vec<&str>) -> Option<u64> {
-    if let Some(&last) = tokens.last()
-        && let Some(offset) = parse_schedule_token(last)
-    {
-        tokens.pop();
-        return Some(offset);
+fn parse_clip_token(token: &str) -> Option<String> {
+    let header = token.strip_prefix('%')?;
+    if header.is_empty() {
+        return Some(capture_clip::DEFAULT_HEADER.to_string());
+    }
+    capture_clip::is_valid_header(header).then(|| header.to_string())
+}
+
+/// Remove schedule and clipboard markers from the terminal marker region.
+/// Each marker kind is extracted at most once, in either order, on either
+/// side of a trailing route token. A duplicate or non-marker stops parsing.
+fn extract_terminal_markers(
+    tokens: &mut Vec<&str>,
+    parse_clip_markers: bool,
+) -> TerminalMarkers {
+    let marker_like = |token: &str| {
+        parse_schedule_token(token).is_some()
+            || (parse_clip_markers && parse_clip_token(token).is_some())
+    };
+    let route_index =
+        if tokens.last().is_some_and(|token| is_route_marker(token)) {
+            Some(tokens.len() - 1)
+        } else {
+            let mut index = tokens.len();
+            while index > 0 && marker_like(tokens[index - 1]) {
+                index -= 1;
+            }
+            if index > 0 && is_route_marker(tokens[index - 1]) {
+                Some(index - 1)
+            } else {
+                None
+            }
+        };
+    let mut cursor = match route_index {
+        Some(index) if index == tokens.len() - 1 => index,
+        _ => tokens.len(),
+    };
+    let route_before_trailing_markers =
+        route_index.is_some_and(|index| index < tokens.len() - 1);
+    let mut markers = TerminalMarkers::default();
+    let mut reached_route = false;
+
+    while cursor > 0 {
+        let index = cursor - 1;
+        if route_index == Some(index) {
+            reached_route = true;
+            break;
+        }
+        let token = tokens[index];
+        if !extract_terminal_marker(token, parse_clip_markers, &mut markers) {
+            break;
+        }
+        tokens.remove(index);
+        cursor -= 1;
     }
 
-    if tokens.len() >= 2 {
-        let route_index = tokens.len() - 1;
-        let schedule_index = tokens.len() - 2;
-        if is_route_marker(tokens[route_index])
-            && let Some(offset) = parse_schedule_token(tokens[schedule_index])
-        {
-            tokens.remove(schedule_index);
-            return Some(offset);
+    if reached_route && route_before_trailing_markers {
+        cursor = route_index.expect("reached route");
+        while cursor > 0 {
+            let index = cursor - 1;
+            let token = tokens[index];
+            if !extract_terminal_marker(token, parse_clip_markers, &mut markers)
+            {
+                break;
+            }
+            tokens.remove(index);
+            cursor -= 1;
         }
     }
 
-    None
+    markers
+}
+
+fn extract_terminal_marker(
+    token: &str,
+    parse_clip_markers: bool,
+    markers: &mut TerminalMarkers,
+) -> bool {
+    if let Some(offset) = parse_schedule_token(token) {
+        if markers.scheduled_offset.is_some() {
+            return false;
+        }
+        markers.scheduled_offset = Some(offset);
+        return true;
+    }
+    if parse_clip_markers
+        && let Some(header) = parse_clip_token(token)
+        && markers.clip_header.is_none()
+    {
+        markers.clip_header = Some(header);
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+fn extract_trailing_schedule(tokens: &mut Vec<&str>) -> Option<u64> {
+    extract_terminal_markers(tokens, false).scheduled_offset
 }
 
 fn is_route_marker(token: &str) -> bool {
@@ -1195,11 +1430,13 @@ fn insert_at(contents: &str, index: usize, addition: &str) -> String {
 }
 
 fn insertion_text(contents: &str, index: usize, line: &str) -> String {
+    let ending = document_line_ending(contents);
+    let line = line.replace('\n', ending);
     let needs_leading_newline = index > 0 && !contents[..index].ends_with('\n');
     if needs_leading_newline {
-        format!("\n{line}\n")
+        format!("{ending}{line}{ending}")
     } else {
-        format!("{line}\n")
+        format!("{line}{ending}")
     }
 }
 
@@ -1208,10 +1445,20 @@ fn empty_section_insertion_text(
     index: usize,
     line: &str,
 ) -> String {
+    let ending = document_line_ending(contents);
+    let line = line.replace('\n', ending);
     if index > 0 && contents[..index].ends_with('\n') {
-        format!("\n{line}\n")
+        format!("{ending}{line}{ending}")
     } else {
-        format!("\n\n{line}\n")
+        format!("{ending}{ending}{line}{ending}")
+    }
+}
+
+fn document_line_ending(contents: &str) -> &'static str {
+    if contents.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
     }
 }
 
@@ -1701,6 +1948,8 @@ struct CaptureResult {
     scheduled: Option<String>,
     placement: Placement,
     #[serde(skip_serializing_if = "Option::is_none")]
+    clip: Option<capture_clip::ClipOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     block_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     day_file: Option<String>,
@@ -1737,6 +1986,27 @@ fn print_human_success(result: &CaptureResult) {
     };
     println!("{prefix} {verb}  {target_label}");
     println!("  {}", styler.dim(&result.task_line));
+    if let Some(clip) = &result.clip {
+        for line in &clip.lines {
+            println!("  {}", styler.dim(line));
+        }
+        for attachment in &clip.attachments {
+            print_clip_file_confirmation(
+                &styler,
+                result.dry_run,
+                &attachment.saved,
+                attachment.reused,
+            );
+        }
+        if let Some(snippet) = &clip.snippet {
+            print_clip_file_confirmation(
+                &styler,
+                result.dry_run,
+                snippet,
+                false,
+            );
+        }
+    }
     if let (Some(day_file), Some(block_link)) =
         (&result.day_file, &result.block_link)
     {
@@ -1748,6 +2018,28 @@ fn print_human_success(result: &CaptureResult) {
         println!("{prefix} {link_verb}   {}", styler.cyan(day_file));
         println!("  {}", styler.dim(&format!("- {block_link}")));
     }
+}
+
+fn print_clip_file_confirmation(
+    styler: &Styler,
+    dry_run: bool,
+    saved: &str,
+    reused: bool,
+) {
+    let prefix = if dry_run {
+        styler.success_prefix(true)
+    } else {
+        styler.green("\u{2713}")
+    };
+    let verb = if dry_run {
+        "would save"
+    } else if reused {
+        "reused"
+    } else {
+        "saved"
+    };
+    let note = if reused && dry_run { " (reused)" } else { "" };
+    println!("{prefix} {verb:<10}{}{note}", styler.cyan(saved));
 }
 
 fn success_json(result: &CaptureResult) -> String {
@@ -1878,6 +2170,115 @@ mod tests {
         let mut tokens = vec!["buy", "s:abc"];
         assert_eq!(extract_trailing_schedule(&mut tokens), None);
         assert_eq!(tokens, vec!["buy", "s:abc"]);
+    }
+
+    #[test]
+    fn extracts_clip_and_schedule_markers_from_terminal_region() {
+        let cases = [
+            ("body %", "body", None, None, "clip"),
+            ("body %20", "body", None, None, "20"),
+            ("body %log @notes", "body", Some("notes"), None, "log"),
+            (
+                "body s:1 % @groceries",
+                "body",
+                Some("groceries"),
+                Some(1),
+                "clip",
+            ),
+            (
+                "body % s:1 @groceries",
+                "body",
+                Some("groceries"),
+                Some(1),
+                "clip",
+            ),
+            (
+                "body @groceries s:1 %log",
+                "body",
+                Some("groceries"),
+                Some(1),
+                "log",
+            ),
+            (
+                "body %log @groceries s:1",
+                "body",
+                Some("groceries"),
+                Some(1),
+                "log",
+            ),
+            (
+                "body s:1 @groceries %log",
+                "body",
+                Some("groceries"),
+                Some(1),
+                "log",
+            ),
+            (
+                "@groceries body %foo_bar",
+                "body",
+                Some("groceries"),
+                None,
+                "foo_bar",
+            ),
+            ("body %log @dev:blockid", "body", Some("dev"), None, "log"),
+            ("body %log @notes#Ideas", "body", Some("notes"), None, "log"),
+        ];
+
+        for (raw, body, route, scheduled, header) in cases {
+            let parsed = parse_capture_text(raw, None)
+                .unwrap_or_else(|error| panic!("{raw}: {error:?}"));
+            assert_eq!(parsed.body, body, "{raw}");
+            assert_eq!(parsed.route.as_deref(), route, "{raw}");
+            assert_eq!(parsed.scheduled_offset, scheduled, "{raw}");
+            assert_eq!(parsed.clip_header.as_deref(), Some(header), "{raw}");
+        }
+    }
+
+    #[test]
+    fn clip_markers_are_terminal_forgiving_and_can_be_disabled() {
+        for raw in ["save % now", "body %bad!", "body 50%", "body 100%"] {
+            let parsed = parse_capture_text(raw, None).expect("literal text");
+            assert_eq!(parsed.body, raw, "{raw}");
+            assert_eq!(parsed.clip_header, None, "{raw}");
+        }
+
+        let parsed = super::parse_capture_text_with_clip_control(
+            "body %log",
+            None,
+            None,
+            false,
+        )
+        .expect("disabled clip marker");
+        assert_eq!(parsed.body, "body %log");
+        assert_eq!(parsed.clip_header, None);
+
+        let parsed = super::parse_capture_text("body %log", Some("work"), None)
+            .expect("forced route still extracts marker");
+        assert_eq!(parsed.body, "body");
+        assert_eq!(parsed.route.as_deref(), Some("work"));
+        assert_eq!(parsed.clip_header.as_deref(), Some("log"));
+
+        let parsed = super::parse_capture_text(
+            "body %section_clip",
+            Some("notes"),
+            Some("Ideas"),
+        )
+        .expect("forced section still extracts marker");
+        assert_eq!(parsed.body, "body");
+        assert_eq!(parsed.clip_header.as_deref(), Some("section_clip"));
+        assert!(matches!(
+            parsed.kind,
+            CaptureKind::Bullet { exact: true, .. }
+        ));
+
+        let parsed = parse_capture_text("body %first %second", None)
+            .expect("one marker extracted");
+        assert_eq!(parsed.body, "body %first");
+        assert_eq!(parsed.clip_header.as_deref(), Some("second"));
+
+        let error = parse_capture_text("%", None)
+            .expect_err("marker-only capture has no parent text");
+        assert_eq!(error.kind, CaptureErrorKind::Usage);
     }
 
     #[test]
@@ -2314,6 +2715,28 @@ mod tests {
     }
 
     #[test]
+    fn inserts_multiline_capture_as_one_task_block() {
+        let block = format!("{TASK}\n  - **CLIP:** hello");
+        let contents = "- [ ] #task old\n  - old child\nTail\n";
+        assert_eq!(
+            insert_task_line(contents, &block),
+            (
+                format!("- [ ] #task old\n  - old child\n{block}\nTail\n"),
+                Placement::Inserted,
+            )
+        );
+
+        let crlf = "- [ ] #task old\r\nTail\r\n";
+        assert_eq!(
+            insert_task_line(crlf, &block).0,
+            format!(
+                "- [ ] #task old\r\n{}\r\nTail\r\n",
+                block.replace('\n', "\r\n")
+            )
+        );
+    }
+
+    #[test]
     fn inserts_after_final_continuation_running_to_eof() {
         let contents = "- [/] #task old\n  note";
         assert_eq!(
@@ -2471,6 +2894,7 @@ mod tests {
             created: "2026-06-15".to_string(),
             scheduled: None,
             placement: Placement::Inserted,
+            clip: None,
             block_id: None,
             day_file: None,
             block_link: None,
@@ -2495,6 +2919,7 @@ mod tests {
         assert_eq!(value["created"], "2026-06-15");
         assert!(value["scheduled"].is_null(), "{value}");
         assert_eq!(value["placement"], "inserted");
+        assert!(value.get("clip").is_none(), "{value}");
         for special_field in [
             "block_id",
             "day_file",

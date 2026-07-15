@@ -79,6 +79,44 @@ the `Tasks` heading when the section has no tasks yet. Files without a `Tasks`
 section keep the older fallback of inserting after the last top-level `#task`
 block and its indented continuation lines, or appending at EOF.
 
+Append a lowercase `s:<N>` token to schedule the capture `N` days from today.
+It is recognized only in the terminal token region and may appear on either
+side of a trailing route marker. The token is removed from the body and adds
+`[scheduled::YYYY-MM-DD]` after the created stamp.
+
+Append a whitespace-delimited `%` or `%<header>` terminal token to capture the
+system clipboard beneath the new task or bullet. The marker composes with
+`s:<N>`, ordinary routes, bullet routes, and Pomodoro routes in either terminal
+order. A bare `%` produces `**CLIP:**`; custom headers accept letters, digits,
+`_`, and `-`, render in uppercase, and replace underscores with spaces. For
+example, `%build_log` renders `**BUILD LOG:**`. Invalid `%...` tokens and `%`
+tokens in the middle of the body stay literal.
+
+Clipboard content is rendered according to its shape:
+
+- One text line up to 1,000 characters becomes an inline child bullet.
+- Two to ten flat text lines become nested child bullets.
+- Absolute file paths (including quoted paths, `file://` URIs, and `~/...`)
+  become attachments. Images are copied to `img/` and embedded at 400px;
+  other files are copied to `file/` and linked.
+- Long, indented, blank-line-separated, or Markdown-structured text is saved
+  verbatim as `file/clip-YYYYMMDD-HHMMSS[-slug].md` and linked without the
+  `.md` suffix.
+
+Attachment names are sanitized for Obsidian links. An existing identical file
+is reused; differing content receives an eight-character SHA-256 suffix. Up to
+ten attachment paths may be pasted at once. Clipboard text must be non-empty
+UTF-8 without NUL bytes; binary clipboard contents should be represented by a
+copied file path. Clipboard and note edits are planned before anything is
+written, and newly created clipboard files are removed if the note write fails.
+`--dry-run` performs the same planning but creates no directories or files.
+
+Use `-c, --clip[=HEADER]` to force clipboard capture without a marker. It uses
+`CLIP` when no header is supplied and keeps `%` tokens in the captured text
+literal. Use `-n, --no-clip` when a genuine trailing `%...` token should remain
+literal; this is also the escape hatch for the accepted `%20`-style header
+quirk. `--clip` and `--no-clip` conflict.
+
 Use a leading or trailing `@<route>:<block-id>` marker to create a
 Pomodoro-linked next task. For example,
 `bob capture '@dev:foobar' 'Some foobar task.'` writes:
@@ -133,8 +171,10 @@ keep the prefix-matching behavior described above. Without `--section`,
 Useful options:
 
 - `-b, --bob-dir DIR`: Bob vault root; defaults to `BOB_DIR` or `~/bob`
-- `-d, --dry-run`: parse, format, and report without writing
+- `-c, --clip[=HEADER]`: force clipboard capture with an optional header
+- `-d, --dry-run`: plan and report without writing notes or clipboard files
 - `-f, --format human|json`: human confirmation or stable JSON for callers
+- `-n, --no-clip`: keep trailing `%` clipboard markers literal
 - `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
 - `-s, --section TITLE`: with `--route`, force a bullet into the exact section
 
@@ -147,6 +187,14 @@ fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `placement`. The `kind` field is `"task"` or `"bullet"`, and `task_line` holds
 the rendered line for either kind. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
+
+Clipboard captures additionally include a `clip` object. Its stable fields are
+`header`, `mode` (`"inline"`, `"lines"`, `"attachments"`, or `"snippet"`),
+`lines` (the exact rendered child lines), and `attachments`. Each attachment
+has `source`, vault-relative `saved`, `kind` (`"image"` or `"file"`), and
+`reused` fields. Snippet results also include the vault-relative `snippet`
+path. `task_line` remains the parent line only, and non-clipboard JSON omits
+`clip`.
 
 Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 `block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`. Ordinary
@@ -480,6 +528,14 @@ No old chezmoi script files are required after installation. Cargo installs the
 Rust binaries, and the binaries carry the script assets they need.
 
 ## Environment
+
+`BOB_CLIPBOARD_CMD` is whitespace-split into a command and arguments and takes
+priority over platform clipboard tools for `bob capture`. Without it, capture
+uses `pbpaste` on macOS; on Linux it uses `wl-paste --no-newline --type text`
+under Wayland or `xclip -selection clipboard -o` under X11, falling back to
+`xsel --clipboard --output` when `xclip` is unavailable. A tmux session without
+a display uses `tmux show-buffer`. Setting `BOB_CLIPBOARD_CMD` is also the
+recommended deterministic automation and test hook.
 
 `BOB_DIR` sets the Bob vault directory. It defaults to `~/bob`.
 
