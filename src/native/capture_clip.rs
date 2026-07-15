@@ -153,7 +153,7 @@ fn clipboard_command_output() -> Result<Output, String> {
 
     #[cfg(target_os = "macos")]
     {
-        return run_required_command("pbpaste", &[], "pbpaste");
+        run_required_command("pbpaste", &[], "pbpaste")
     }
 
     #[cfg(target_os = "linux")]
@@ -183,6 +183,7 @@ fn clipboard_command_output() -> Result<Output, String> {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     if env::var_os("TMUX").is_some() {
         return run_required_command(
             "tmux",
@@ -191,6 +192,7 @@ fn clipboard_command_output() -> Result<Output, String> {
         );
     }
 
+    #[cfg(not(target_os = "macos"))]
     let tried = if cfg!(target_os = "macos") {
         "pbpaste and tmux"
     } else if cfg!(target_os = "linux") {
@@ -198,6 +200,7 @@ fn clipboard_command_output() -> Result<Output, String> {
     } else {
         "tmux"
     };
+    #[cfg(not(target_os = "macos"))]
     Err(format!(
         "no clipboard source is available (tried {tried}); set \
 BOB_CLIPBOARD_CMD to a command that prints clipboard text"
