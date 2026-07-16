@@ -825,7 +825,7 @@ fn mark_next_tasks_syncs_fixture_and_is_idempotent() {
     assert!(dev_contents.contains("- [x] #task Done stays done ^done"));
     assert!(dev_contents
         .contains("- [-] #task Cancelled stays cancelled ^cancelled"));
-    assert!(dev_contents.contains("- [?] #task Unknown stays unknown ^unknown"));
+    assert!(dev_contents.contains("- [!] #task Unknown stays unknown ^unknown"));
     assert!(dev_contents.contains("- [*] Not a Tasks task ^not-a-task"));
     let daily_contents =
         fs::read_to_string(&daily).expect("read updated daily");
@@ -914,7 +914,7 @@ fn mark_next_tasks_propagates_strongest_rank_and_reports_in_progress_promotions(
         "- [*] #task Working next child ^working-next\n",
         "- [x] #task Done child ^done\n",
         "- [-] #task Cancelled child ^cancelled\n",
-        "- [?] #task Custom child ^custom\n",
+        "- [!] #task Custom child ^custom\n",
         "- [*] #task Unreachable next ^orphan\n",
     );
     write_file(&daily, daily_before);
@@ -981,7 +981,7 @@ fn mark_next_tasks_propagates_strongest_rank_and_reports_in_progress_promotions(
         "- [/] #task Working next child ^working-next",
         "- [x] #task Done child ^done",
         "- [-] #task Cancelled child ^cancelled",
-        "- [?] #task Custom child ^custom",
+        "- [!] #task Custom child ^custom",
         "- [ ] #task Unreachable next ^orphan",
     ] {
         assert!(
@@ -1395,6 +1395,237 @@ fn mark_next_tasks_composes_daily_status_and_structural_edits() {
             "- [ ] #task Daily orphan ^daily-orphan\n",
         )
     );
+}
+
+#[test]
+fn mark_next_tasks_reconciles_blocked_status_from_dataview_dependencies() {
+    let temp = TempDir::new("bob-cli-mark-next-blocked");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let tasks = vault.join("tasks.md");
+    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task Open root [id:: root] ^root\n",
+            "- [ ] #task Ready parent [dependsOn:: root] ^ready\n",
+            "- [*] #task Next parent [dependsOn:: root] ^next\n",
+            "- [/] #task Working parent [dependsOn:: root] ^working\n",
+            "- [?] #task Already blocked [dependsOn:: root] ^already\n",
+            "- [x] #task Done parent [dependsOn:: root] ^done-parent\n",
+            "- [-] #task Canceled parent [dependsOn:: root] ^cancel-parent\n",
+            "- [ ] #task Missing dependency [dependsOn:: missing] ^missing\n",
+            "- [ ] #task Self dependency [id:: self] [dependsOn:: self] ^self\n",
+            "- [ ] #task Parenthesized metadata (id:: paren) (dependsOn:: root) ^paren\n",
+            "- [x] #task Duplicate done [id:: duplicate] ^duplicate-done\n",
+            "- [ ] #task Duplicate open [id:: duplicate] ^duplicate-open\n",
+            "- [ ] #task Duplicate dependent [dependsOn:: duplicate] ^duplicate-parent\n",
+            "- [x] #task Done target [id:: closed] ^closed\n",
+            "- [ ] #task Closed dependency [dependsOn:: closed] ^closed-parent\n",
+            "- [~] #task Non-task target [id:: non-task] ^non-task\n",
+            "- [ ] #task Non-task dependency [dependsOn:: non-task] ^non-task-parent\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    let before = fs::read_to_string(&tasks).unwrap();
+
+    let dry_run = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run dependency status reconciliation");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 6);
+    assert!(json["unblocked"].as_array().unwrap().is_empty());
+    assert!(json["marked_blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| {
+            item["block_id"] == "ready"
+                && item["from"] == " "
+                && item["to"] == "?"
+                && item["open_dependency_ids"] == serde_json::json!(["root"])
+        }));
+    assert!(json["marked_blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| {
+            item["block_id"] == "self"
+                && item["open_dependency_ids"] == serde_json::json!(["self"])
+        }));
+
+    let applied = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply dependency status reconciliation");
+    assert_success(&applied);
+    assert!(stdout(&applied).contains("6 blocked, 0 unblocked"));
+    let contents = fs::read_to_string(&tasks).unwrap();
+    for block_id in [
+        "ready",
+        "next",
+        "working",
+        "self",
+        "paren",
+        "duplicate-parent",
+    ] {
+        assert!(
+            contents.lines().any(|line| line.contains("- [?]")
+                && line.ends_with(&format!("^{block_id}"))),
+            "missing blocked {block_id}:\n{contents}"
+        );
+    }
+    for expected in [
+        "- [x] #task Done parent",
+        "- [-] #task Canceled parent",
+        "- [ ] #task Missing dependency",
+        "- [ ] #task Closed dependency",
+        "- [ ] #task Non-task dependency",
+    ] {
+        assert!(
+            contents.contains(expected),
+            "missing {expected}:\n{contents}"
+        );
+    }
+
+    let second = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun dependency status reconciliation");
+    assert_success(&second);
+    assert!(stdout(&second).contains("already in sync, no changes"));
+}
+
+#[test]
+fn mark_next_tasks_unblocks_to_final_pomodoro_rank_and_ready() {
+    let temp = TempDir::new("bob-cli-mark-next-unblocked-ranks");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\r\n\r\n",
+            "- [ ] Current (0900-0930)\r\n",
+            "  - [[tasks#^next]]\r\n",
+            "  - [[tasks#^seed]]\r\n",
+        ),
+    );
+    write_file(
+        &tasks,
+        concat!(
+            "- [?] #task Return next [dependsOn:: done] ^next\r\n",
+            "- [/] #task Working seed ^seed\r\n",
+            "  - ![[#^working]]\r\n",
+            "- [?] #task Return working (dependsOn:: missing) ^working\r\n",
+            "- [?] #task Return ready [dependsOn:: done] ^ready\r\n",
+            "- [x] #task Done dependency [id:: done] ^done\r\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let output = bob_command()
+        .arg("mark-next-tasks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("unblock dependency statuses");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap();
+    assert_eq!(json["unblocked"].as_array().unwrap().len(), 3);
+    assert!(json["unblocked"].as_array().unwrap().iter().any(|item| {
+        item["block_id"] == "working"
+            && item["from"] == "?"
+            && item["to"] == "/"
+            && item["unresolved_dependency_ids"]
+                == serde_json::json!(["missing"])
+    }));
+    assert!(json["marked_next"].as_array().unwrap().is_empty());
+    assert!(json["marked_in_progress"].as_array().unwrap().is_empty());
+    let contents = fs::read_to_string(&tasks).unwrap();
+    assert!(contents.contains("- [*] #task Return next"));
+    assert!(contents.contains("- [/] #task Return working"));
+    assert!(contents.contains("- [ ] #task Return ready"));
+    assert!(contents.contains("\r\n"));
+}
+
+#[test]
+fn mark_next_tasks_blocked_status_guard_writes_nothing() {
+    let scenarios = [
+        ("missing", None),
+        (
+            "duplicate",
+            Some(blocked_tasks_settings_json(concat!(
+                ", {\"symbol\":\"?\",\"name\":\"Blocked\",",
+                "\"nextStatusSymbol\":\" \",\"availableAsCommand\":true,",
+                "\"type\":\"ON_HOLD\"}",
+            ))),
+        ),
+        (
+            "incompatible",
+            Some(blocked_tasks_settings_json("").replace(
+                "\"nextStatusSymbol\":\" \"",
+                "\"nextStatusSymbol\":\"x\"",
+            )),
+        ),
+    ];
+    for (name, settings) in scenarios {
+        let temp = TempDir::new(&format!("bob-cli-blocked-guard-{name}"));
+        let vault = temp.path().join("vault");
+        let daily = vault.join("2026/20260716.md");
+        let tasks = vault.join("tasks.md");
+        let daily_before = "## Pomodoros\n\n- [ ] Current (0900-0930)\n";
+        let tasks_before = concat!(
+            "- [ ] #task Root [id:: root] ^root\n",
+            "- [ ] #task Parent [dependsOn:: root] ^parent\n",
+        );
+        write_file(&daily, daily_before);
+        write_file(&tasks, tasks_before);
+        if let Some(settings) = settings {
+            write_file(
+                &vault
+                    .join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+                &settings,
+            );
+        }
+
+        let output = bob_command()
+            .arg("mark-next-tasks")
+            .arg("--bob-dir")
+            .arg(&vault)
+            .env("BOB_DAY_FILE", &daily)
+            .output()
+            .expect("run Blocked status guard");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: {}",
+            format_output(&output)
+        );
+        assert!(stderr(&output).contains("cannot reconcile Blocked [?] tasks"));
+        assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+        assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
+    }
 }
 
 #[test]
@@ -13181,6 +13412,38 @@ fn write_file(path: &Path, contents: &str) {
     }
     fs::write(path, contents)
         .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+fn blocked_tasks_settings_json(extra_custom_status: &str) -> String {
+    format!(
+        concat!(
+            "{{\n",
+            "  \"globalFilter\": \"#task\",\n",
+            "  \"taskFormat\": \"dataview\",\n",
+            "  \"statusSettings\": {{\n",
+            "    \"coreStatuses\": [\n",
+            "      {{\"symbol\":\" \",\"name\":\"Todo\",\"nextStatusSymbol\":\"x\",\"availableAsCommand\":true,\"type\":\"TODO\"}},\n",
+            "      {{\"symbol\":\"x\",\"name\":\"Done\",\"nextStatusSymbol\":\" \",\"availableAsCommand\":true,\"type\":\"DONE\"}}\n",
+            "    ],\n",
+            "    \"customStatuses\": [\n",
+            "      {{\"symbol\":\"/\",\"name\":\"In Progress\",\"nextStatusSymbol\":\"x\",\"availableAsCommand\":true,\"type\":\"IN_PROGRESS\"}},\n",
+            "      {{\"symbol\":\"*\",\"name\":\"Next\",\"nextStatusSymbol\":\"x\",\"availableAsCommand\":true,\"type\":\"ON_HOLD\"}},\n",
+            "      {{\"symbol\":\"?\",\"name\":\"Blocked\",\"nextStatusSymbol\":\" \",\"availableAsCommand\":true,\"type\":\"ON_HOLD\"}},\n",
+            "      {{\"symbol\":\"-\",\"name\":\"Canceled\",\"nextStatusSymbol\":\" \",\"availableAsCommand\":true,\"type\":\"CANCELLED\"}},\n",
+            "      {{\"symbol\":\"~\",\"name\":\"Reference\",\"nextStatusSymbol\":\" \",\"availableAsCommand\":false,\"type\":\"NON_TASK\"}}{}\n",
+            "    ]\n",
+            "  }}\n",
+            "}}\n",
+        ),
+        extra_custom_status
+    )
+}
+
+fn write_blocked_tasks_settings(vault: &Path) {
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        &blocked_tasks_settings_json(""),
+    );
 }
 
 /// Writes a three-plugin repo and matching vault exercising every state:

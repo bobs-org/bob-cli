@@ -20,7 +20,7 @@
 - [ ] #task Closed reference stays todo ^closed
 - [x] #task Done stays done ^done
 - [-] #task Cancelled stays cancelled ^cancelled
-- [?] #task Unknown stays unknown ^unknown
+- [!] #task Unknown stays unknown ^unknown
 - [*] Not a Tasks task ^not-a-task
 
 Reference block only. ^ref

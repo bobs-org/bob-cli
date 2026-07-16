@@ -7,7 +7,9 @@ their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
 the machine-owned Pomodoro marker (`🍅`); embedded and provenance-unknown
 retired links do not. Links beneath open Pomodoros are unmarked. It
 also follows transcluded dependency bullets recursively, promoting each target
-to the strongest applicable Next (`[*]`) or In Progress (`[/]`) status.
+to the strongest applicable Next (`[*]`) or In Progress (`[/]`) status. It
+independently reconciles the derived Blocked (`[?]`) marker from Tasks
+`[id:: ...]` and `[dependsOn:: ...]` metadata.
 
 ## Usage
 
@@ -88,10 +90,9 @@ warning naming the referencing task's file and line.
 
 Block fragments are file-scoped: `Alpha.md#^review` and `Beta.md#^review` are
 distinct graph nodes, and an explicit transclusion path selects only its named
-note. The command deliberately traverses these resolved path-plus-fragment
-links rather than `[id::]`/`[dependsOn::]` metadata. Tasks metadata represents
-the same target vault-wide with a path-qualified value such as
-`Alpha__review`.
+note. The active-rank graph deliberately traverses these resolved
+path-plus-fragment links. Tasks metadata separately determines whether the
+displayed status is Blocked, using vault-wide IDs such as `Alpha__review`.
 
 Each surviving direct Pomodoro task has a minimum desired status of Next. A
 direct task already In Progress instead seeds In Progress. Every dependency
@@ -107,19 +108,69 @@ included, while a task reached both directly and through a dependency is
 counted as direct. Removing a Pomodoro link removes that task's otherwise
 unreachable dependency chain from the desired map on the next run.
 
+## Dependency Blocked Status
+
+After the full vault scan and the final post-rewrite Pomodoro graph are known,
+the command indexes Dataview task identities from both square-bracket and
+parenthesized fields:
+
+```markdown
+- [ ] #task Parent [dependsOn:: Tasks__child]
+- [ ] #task Child [id:: Tasks__child]
+- [ ] #task Equivalent parenthesized metadata (dependsOn:: Tasks__child)
+```
+
+A recognized non-terminal parent is blocked when any `dependsOn` value matches
+at least one open task with the same vault-wide `id`. `TODO`, `IN_PROGRESS`,
+and `ON_HOLD` targets are open. `DONE`, `CANCELLED`, and `NON_TASK` targets do
+not block. Missing IDs are ignored; if an ID is duplicated, any open instance
+is sufficient. Self-dependencies, chains, and cycles therefore remain blocked
+under the same direct Tasks 8 semantics. Only direct metadata decides a
+parent's marker; transitive blocking follows because Blocked is itself an open
+`ON_HOLD` status.
+
+Blocked is derived state. It overrides Ready (`[ ]`), Next (`[*]`), and In
+Progress (`[/]`) while an open dependency exists. Once all matching targets
+are terminal or missing, a Blocked task returns to the final active status
+computed by the Pomodoro graph (`[*]` or `[/]`), or Ready when unreachable. No
+hidden previous-status field is stored. Terminal parents and unknown/custom
+parent statuses remain untouched even if they retain dependency metadata.
+
+The installed Tasks registry must contain exactly one compatible status:
+
+```json
+{
+  "symbol": "?",
+  "name": "Blocked",
+  "nextStatusSymbol": " ",
+  "availableAsCommand": true,
+  "type": "ON_HOLD"
+}
+```
+
+If a planned Blocked or unblocked write needs this contract and the definition
+is missing, duplicated by symbol/name, or incompatible, the command exits with
+an actionable error before any note write.
+
 The command scans Markdown task lines allowed by the Obsidian Tasks
 `globalFilter` setting. If that setting cannot be read, the filter defaults to
-`#task`. It then applies these transitions:
+`#task`. The combined transition precedence is:
 
 | Existing status | Desired/reachability state | Result |
 | --- | --- | --- |
+| done, canceled, or non-task | open task dependency | unchanged |
+| `[ ]`, `[*]`, or `[/]` | open task dependency | `[?]` |
+| `[?]` | open task dependency | unchanged |
+| `[?]` | no open dependency; desired In Progress | `[/]` |
+| `[?]` | no open dependency; desired Next | `[*]` |
+| `[?]` | no open dependency; unreachable | `[ ]` |
 | `[ ]` | desired Next | `[*]` |
 | `[ ]` or `[*]` | desired In Progress | `[/]` |
 | `[*]` | desired Next | unchanged |
 | `[/]` | desired Next or In Progress | unchanged |
 | `[*]` | unreachable | `[ ]` |
 | `[ ]` or `[/]` | unreachable | unchanged |
-| done, canceled, or unknown/custom | any | unchanged |
+| done, canceled, non-task, or unknown/custom | any | unchanged |
 
 Ranked propagation itself is monotonic and never lowers a dependency target.
 Removing a transclusion therefore does not perform a matching rollback. The
@@ -229,6 +280,11 @@ Pomodoros. A valid but empty section is a valid source of truth: it clears
 every scanned `[*]` task. This distinction prevents a missing or malformed
 daily note from causing a mass clear.
 
+A planned Blocked/unblocked status edit also fails atomically when the Tasks
+registry is unreadable or its Blocked definition is missing, duplicated, or
+incompatible. Dry-run uses the same guard. This prevents both an unknown `[?]`
+marker and partial composition with daily-note structural edits.
+
 Unresolved direct or dependency links are warnings, not failures. If duplicate
 task block IDs occur in one resolved note, every matching task is synchronized
 and the ambiguity is reported. Completed-link normalization proceeds only when
@@ -237,8 +293,10 @@ and left structurally unchanged.
 
 ## Output
 
-Human output lists every Next promotion, In-Progress promotion, clear, duplicate line removal, retired
-reference, move, and marker repair, followed by a summary. Duplicate removals
+Human output lists every Next promotion, In-Progress promotion, clear, Blocked
+transition, unblock, duplicate line removal, retired reference, move, and
+marker repair, followed by a summary. Blocked rows include the open dependency
+IDs; unblocked rows include unresolved IDs when present. Duplicate removals
 show the original daily-note line number, text, owning Pomodoro, and canonical
 task identities. Marker additions and removals have their own
 `marked`/`unmarked` sections and summary counts. Dependency-derived promotions
@@ -286,6 +344,30 @@ JSON mode prints one object on stdout with these stable fields:
     }
   ],
   "cleared": [],
+  "marked_blocked": [
+    {
+      "path": "dev.md",
+      "line_number": 30,
+      "block_id": "ship",
+      "description": "Ship the feature",
+      "from": "/",
+      "to": "?",
+      "open_dependency_ids": ["dev__review"],
+      "unresolved_dependency_ids": []
+    }
+  ],
+  "unblocked": [
+    {
+      "path": "dev.md",
+      "line_number": 38,
+      "block_id": "released",
+      "description": "Release the feature",
+      "from": "?",
+      "to": "*",
+      "open_dependency_ids": [],
+      "unresolved_dependency_ids": ["deleted_task"]
+    }
+  ],
   "struck_completed_references": [
     {
       "target": "dev",
@@ -337,7 +419,10 @@ task blocks reached through dependency edges in the final rewritten ledger.
 `marked_next` contains only `[ ] -> [*]` changes, while
 `marked_in_progress` contains both `[ ] -> [/]` and `[*] -> [/]` changes. Each
 change item's `dependency` boolean distinguishes direct references from
-dependency-only graph reachability. Each
+dependency-only graph reachability. `marked_blocked` and `unblocked` are
+additive fields and do not duplicate changes into those older arrays. Their
+`from`/`to` values are the actual checkbox symbols, and their dependency-ID
+arrays explain the derived decision. Each
 `removed_duplicate_lines` item represents one physical line and contains its
 one-based original `line_number`, original `line`, owning `pomodoro`, and one or
 more canonical path-plus-block `duplicate_tasks`. Each unresolved reference

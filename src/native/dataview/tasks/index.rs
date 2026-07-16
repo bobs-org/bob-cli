@@ -405,7 +405,7 @@ mod tests {
             TaskIndex::read(&vault, &settings, bob_env::current_datetime())
                 .unwrap();
 
-        assert_eq!(index.tasks.len(), 33);
+        assert_eq!(index.tasks.len(), 34);
         assert!(
             index.tasks.iter().all(|task| !task.path.starts_with('.')),
             "dot directories must not be indexed"

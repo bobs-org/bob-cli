@@ -150,6 +150,23 @@ fn real_vault_dash_matches_independent_raw_ground_truth_and_all_blocks_execute()
         assert_task_sets_equal(heading, &note_tasks, &expected);
     }
 
+    let blocked_note = run_json_query(
+        &vault,
+        &now,
+        &["--format", "json", "--tasks-note", "blocked.md"],
+    );
+    let blocked_blocks = blocked_note["blocks"]
+        .as_array()
+        .expect("blocked.md blocks array");
+    assert_eq!(
+        blocked_blocks.len(),
+        1,
+        "blocked.md must contain one Tasks block",
+    );
+    let blocked_tasks = json_task_keys(&blocked_blocks[0]["result"]);
+    let expected_blocked = blocked_ground_truth(&tasks, today);
+    assert_task_sets_equal("BLOCKED Tasks", &blocked_tasks, &expected_blocked);
+
     let mut other_block_count = 0;
     let mut other_note_count = 0;
     for path in &markdown_paths {
@@ -222,6 +239,28 @@ fn dashboard_ground_truth(
                         panic!("unexpected dash.md Tasks heading {other:?}")
                     }
                 }
+        })
+        .map(|task| task.key.clone())
+        .collect()
+}
+
+fn blocked_ground_truth(
+    tasks: &[RawTask],
+    today: NaiveDate,
+) -> BTreeSet<TaskKey> {
+    tasks
+        .iter()
+        .filter(|task| {
+            let folder = task
+                .key
+                .path
+                .rsplit_once('/')
+                .map_or("/", |(folder, _)| folder);
+            task.key.path != "blocked.md"
+                && !folder.contains("_templates")
+                && !HIDE_TAG.is_match(&task.body)
+                && task.scheduled.is_none_or(|scheduled| scheduled <= today)
+                && is_blocked(task, tasks)
         })
         .map(|task| task.key.clone())
         .collect()

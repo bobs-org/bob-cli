@@ -59,7 +59,7 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Sync active task statuses through dependency chains")
+        .about("Sync active and dependency-blocked task statuses")
         .long_about(
             "Make today's Pomodoro ledger the source of truth for active task statuses.\n\n\
 Tasks block-linked from child bullets of open Pomodoro entries have a minimum \
@@ -68,11 +68,15 @@ status. Dependency tasks are discovered recursively from sole transcluded \
 block-link child bullets and inherit the strongest effective parent status, \
 promoting Ready [ ] tasks to Next or In Progress and Next tasks to In Progress. \
 Status propagation never lowers a task. Existing [*] tasks not reachable from \
-an open entry are independently reset to [ ]. Completed linked-task references \
+an open entry are independently reset to [ ]. Tasks whose Dataview \
+[dependsOn:: ...] metadata names an open vault-wide [id:: ...] task are marked \
+Blocked [?], overriding Ready, Next, and In Progress. When those dependencies \
+close, Blocked tasks recover to the final Pomodoro-derived status or Ready. \
+Completed linked-task references \
 are retired as struck, non-embedded links. References found under open \
 Pomodoros keep the existing policy of moving their containing bullets beneath \
 the current timed Pomodoro, or the last completed Pomodoro when \
-there is no current one. Done, cancelled, and custom statuses are left unchanged.\n\n\
+there is no current one. Done, cancelled, non-task, and unknown statuses are left unchanged.\n\n\
 When the same resolved task is linked beneath multiple open Pomodoros, the \
 first open Pomodoro in file order keeps ownership and every conflicting \
 physical line beneath later open Pomodoros is removed in full. Aliases, \
@@ -82,7 +86,9 @@ preserved, as are unresolved links and links beneath completed or cancelled \
 Pomodoros.\n\n\
 Only Markdown checkbox lines allowed by the Obsidian Tasks globalFilter are \
 considered. The scan skips hidden directories, templates, generated notes, \
-and done archives. Missing daily notes and daily notes without a Pomodoros \
+and done archives. Blocked writes require exactly one compatible Tasks status \
+named Blocked with symbol [?], type ON_HOLD, and next status Ready. Missing \
+daily notes and daily notes without a Pomodoros \
 section, as well as notes with multiple open timed Pomodoros, fail before any \
 file is changed.",
         )
@@ -172,6 +178,18 @@ struct ChangeItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct DependencyStatusChange {
+    path: String,
+    line_number: usize,
+    block_id: String,
+    description: String,
+    from: char,
+    to: char,
+    open_dependency_ids: Vec<String>,
+    unresolved_dependency_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct UnresolvedReference {
     target: String,
     block_id: String,
@@ -227,6 +245,8 @@ struct SyncResult {
     marked_next: Vec<ChangeItem>,
     marked_in_progress: Vec<ChangeItem>,
     cleared: Vec<ChangeItem>,
+    marked_blocked: Vec<DependencyStatusChange>,
+    unblocked: Vec<DependencyStatusChange>,
     struck_completed_references: Vec<StruckCompletedReference>,
     embedded_completed_references: Vec<StruckCompletedReference>,
     moved_completed_references: Vec<MovedCompletedReference>,
@@ -252,6 +272,10 @@ struct TaskLine {
     status: char,
     status_byte_offset: usize,
     block_id: Option<String>,
+    task_id: Option<String>,
+    depends_on: Vec<String>,
+    status_type: TaskStatusType,
+    status_recognized: bool,
     description: String,
 }
 
@@ -272,6 +296,51 @@ struct PlannedChange {
 struct TasksSettings {
     global_filter: String,
     done_statuses: BTreeSet<char>,
+    status_types: BTreeMap<char, TaskStatusType>,
+    status_definitions: Vec<TaskStatusDefinition>,
+    status_settings_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskStatusDefinition {
+    symbol: String,
+    name: String,
+    next_status_symbol: String,
+    available_as_command: bool,
+    status_type: TaskStatusType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskStatusType {
+    Todo,
+    Done,
+    InProgress,
+    OnHold,
+    Cancelled,
+    NonTask,
+    Empty,
+}
+
+impl TaskStatusType {
+    fn from_settings(value: &str) -> Self {
+        match value {
+            "DONE" => Self::Done,
+            "IN_PROGRESS" => Self::InProgress,
+            "ON_HOLD" => Self::OnHold,
+            "CANCELLED" => Self::Cancelled,
+            "NON_TASK" => Self::NonTask,
+            "EMPTY" => Self::Empty,
+            _ => Self::Todo,
+        }
+    }
+
+    fn is_open(self) -> bool {
+        matches!(self, Self::Todo | Self::InProgress | Self::OnHold)
+    }
+
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Done | Self::Cancelled | Self::NonTask)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -355,6 +424,8 @@ enum Transition {
     MarkNext,
     MarkInProgress,
     Clear,
+    MarkBlocked,
+    Unblock(RankedStatus),
     KeptNext,
     KeptInProgress,
     Unchanged,
@@ -374,6 +445,14 @@ impl RankedStatus {
             '*' => Some(Self::Next),
             '/' => Some(Self::InProgress),
             _ => None,
+        }
+    }
+
+    fn checkbox(self) -> char {
+        match self {
+            Self::Ready => ' ',
+            Self::Next => '*',
+            Self::InProgress => '/',
         }
     }
 }
@@ -435,7 +514,7 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
                     path.display()
                 ))
             })?;
-        let tasks = parse_tasks(&contents, &settings.global_filter);
+        let tasks = parse_tasks(&contents, &settings);
         files.push(FileScan {
             path,
             relative_path,
@@ -547,21 +626,32 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
         .filter(|identity| !direct_desired.contains(*identity))
         .cloned()
         .collect::<BTreeSet<_>>();
+    let task_dependency_states = task_dependency_states(&files);
 
     let mut marked_next = Vec::new();
     let mut marked_in_progress = Vec::new();
     let mut cleared = Vec::new();
+    let mut marked_blocked = Vec::new();
+    let mut unblocked = Vec::new();
     let mut changes = Vec::new();
     let mut kept_next = 0;
     let mut kept_in_progress = 0;
     for (file_index, file) in files.iter().enumerate() {
-        for task in &file.tasks {
+        for (task_index, task) in file.tasks.iter().enumerate() {
             let desired_status = task.block_id.as_ref().and_then(|block_id| {
                 desired
                     .get(&(file.relative_path.clone(), block_id.clone()))
                     .copied()
             });
-            match transition(task.status, desired_status) {
+            let dependency_state = task_dependency_states
+                .get(&(file_index, task_index))
+                .cloned()
+                .unwrap_or_default();
+            match task_transition(
+                task,
+                desired_status,
+                !dependency_state.open_dependency_ids.is_empty(),
+            ) {
                 Transition::MarkNext => {
                     let dependency =
                         task.block_id.as_ref().is_some_and(|block_id| {
@@ -601,11 +691,42 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
                         replacement: ' ',
                     });
                 }
+                Transition::MarkBlocked => {
+                    marked_blocked.push(dependency_status_change(
+                        file,
+                        task,
+                        '?',
+                        &dependency_state,
+                    ));
+                    changes.push(PlannedChange {
+                        file_index,
+                        status_byte_offset: task.status_byte_offset,
+                        replacement: '?',
+                    });
+                }
+                Transition::Unblock(status) => {
+                    let replacement = status.checkbox();
+                    unblocked.push(dependency_status_change(
+                        file,
+                        task,
+                        replacement,
+                        &dependency_state,
+                    ));
+                    changes.push(PlannedChange {
+                        file_index,
+                        status_byte_offset: task.status_byte_offset,
+                        replacement,
+                    });
+                }
                 Transition::KeptNext => kept_next += 1,
                 Transition::KeptInProgress => kept_in_progress += 1,
                 Transition::Unchanged => {}
             }
         }
+    }
+
+    if !marked_blocked.is_empty() || !unblocked.is_empty() {
+        validate_blocked_status(&settings)?;
     }
 
     let outputs = compose_outputs(
@@ -633,6 +754,8 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
         marked_next,
         marked_in_progress,
         cleared,
+        marked_blocked,
+        unblocked,
         struck_completed_references: structural_plan.struck,
         embedded_completed_references: Vec::new(),
         moved_completed_references: structural_plan.moved,
@@ -643,6 +766,75 @@ fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
         kept_in_progress,
         unresolved_references: unresolved,
     })
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TaskDependencyState {
+    open_dependency_ids: Vec<String>,
+    unresolved_dependency_ids: Vec<String>,
+}
+
+fn task_dependency_states(
+    files: &[FileScan],
+) -> BTreeMap<(usize, usize), TaskDependencyState> {
+    let mut identities = BTreeMap::<String, bool>::new();
+    for file in files {
+        for task in &file.tasks {
+            let Some(task_id) = &task.task_id else {
+                continue;
+            };
+            let is_open = identities.entry(task_id.clone()).or_default();
+            *is_open |= task.status_type.is_open();
+        }
+    }
+
+    let mut states = BTreeMap::new();
+    for (file_index, file) in files.iter().enumerate() {
+        for (task_index, task) in file.tasks.iter().enumerate() {
+            let mut state = TaskDependencyState::default();
+            for dependency in &task.depends_on {
+                match identities.get(dependency) {
+                    Some(true) => {
+                        state.open_dependency_ids.push(dependency.clone())
+                    }
+                    None => {
+                        state.unresolved_dependency_ids.push(dependency.clone())
+                    }
+                    Some(false) => {}
+                }
+            }
+            state.open_dependency_ids.sort();
+            state.open_dependency_ids.dedup();
+            state.unresolved_dependency_ids.sort();
+            state.unresolved_dependency_ids.dedup();
+            states.insert((file_index, task_index), state);
+        }
+    }
+    states
+}
+
+fn task_transition(
+    task: &TaskLine,
+    desired: Option<RankedStatus>,
+    has_open_dependency: bool,
+) -> Transition {
+    if task.status_type.is_terminal()
+        || !task.status_type.is_open()
+        || !task.status_recognized
+    {
+        return Transition::Unchanged;
+    }
+    if has_open_dependency {
+        return if task.status == '?' {
+            Transition::Unchanged
+        } else {
+            Transition::MarkBlocked
+        };
+    }
+    if task.status == '?' {
+        return Transition::Unblock(desired.unwrap_or(RankedStatus::Ready));
+    }
+    transition(task.status, desired)
 }
 
 fn transition(status: char, desired: Option<RankedStatus>) -> Transition {
@@ -958,11 +1150,28 @@ fn read_tasks_settings(vault: &Path) -> TasksSettings {
     let mut settings = TasksSettings {
         global_filter: DEFAULT_GLOBAL_FILTER.to_string(),
         done_statuses: BTreeSet::from(['x', 'X']),
+        status_types: BTreeMap::from([
+            (' ', TaskStatusType::Todo),
+            ('x', TaskStatusType::Done),
+            ('X', TaskStatusType::Done),
+            ('/', TaskStatusType::InProgress),
+            ('*', TaskStatusType::OnHold),
+            ('-', TaskStatusType::Cancelled),
+        ]),
+        status_definitions: Vec::new(),
+        status_settings_error: None,
     };
-    let Ok(contents) = fs::read_to_string(vault.join(TASKS_SETTINGS)) else {
+    let path = vault.join(TASKS_SETTINGS);
+    let Ok(contents) = fs::read_to_string(&path) else {
+        settings.status_settings_error =
+            Some(format!("Tasks settings are missing at {}", path.display()));
         return settings;
     };
     let Ok(value) = serde_json::from_str::<Value>(&contents) else {
+        settings.status_settings_error = Some(format!(
+            "Tasks settings are not valid JSON at {}",
+            path.display()
+        ));
         return settings;
     };
     settings.global_filter = value
@@ -970,6 +1179,7 @@ fn read_tasks_settings(vault: &Path) -> TasksSettings {
         .and_then(Value::as_str)
         .unwrap_or(DEFAULT_GLOBAL_FILTER)
         .to_string();
+    let mut configured_symbols = BTreeSet::new();
     for collection in ["coreStatuses", "customStatuses"] {
         let statuses = value
             .get("statusSettings")
@@ -978,22 +1188,91 @@ fn read_tasks_settings(vault: &Path) -> TasksSettings {
             .into_iter()
             .flatten();
         for status in statuses {
-            if status.get("type").and_then(Value::as_str) != Some("DONE") {
-                continue;
-            }
-            let Some(symbol) = status.get("symbol").and_then(Value::as_str)
-            else {
-                continue;
+            let symbol = status
+                .get("symbol")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let status_type = TaskStatusType::from_settings(
+                status.get("type").and_then(Value::as_str).unwrap_or("TODO"),
+            );
+            let definition = TaskStatusDefinition {
+                symbol: symbol.to_string(),
+                name: status
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                next_status_symbol: status
+                    .get("nextStatusSymbol")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                available_as_command: status
+                    .get("availableAsCommand")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                status_type,
             };
+            settings.status_definitions.push(definition);
+
             let mut chars = symbol.chars();
             if let Some(symbol) = chars.next()
                 && chars.next().is_none()
             {
-                settings.done_statuses.insert(symbol);
+                if configured_symbols.insert(symbol) {
+                    settings.status_types.insert(symbol, status_type);
+                }
+                if status_type == TaskStatusType::Done {
+                    settings.done_statuses.insert(symbol);
+                }
             }
         }
     }
     settings
+}
+
+fn validate_blocked_status(settings: &TasksSettings) -> Result<(), SyncError> {
+    if let Some(error) = &settings.status_settings_error {
+        return Err(SyncError::new(format!(
+            "cannot reconcile Blocked [?] tasks: {error}; configure one custom status named Blocked with symbol '?', type ON_HOLD, next status ' ', and availableAsCommand true"
+        )));
+    }
+    let candidates = settings
+        .status_definitions
+        .iter()
+        .filter(|definition| {
+            definition.symbol == "?"
+                || definition.name.eq_ignore_ascii_case("Blocked")
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err(SyncError::new(
+            "cannot reconcile Blocked [?] tasks: Tasks settings have no Blocked status; configure one custom status named Blocked with symbol '?', type ON_HOLD, next status ' ', and availableAsCommand true",
+        ));
+    }
+    if candidates.len() > 1 {
+        return Err(SyncError::new(format!(
+            "cannot reconcile Blocked [?] tasks: Tasks settings contain {} definitions using symbol '?' or name Blocked; keep exactly one compatible definition",
+            candidates.len()
+        )));
+    }
+    let definition = candidates[0];
+    if definition.symbol != "?"
+        || definition.name != "Blocked"
+        || definition.status_type != TaskStatusType::OnHold
+        || definition.next_status_symbol != " "
+        || !definition.available_as_command
+    {
+        return Err(SyncError::new(format!(
+            "cannot reconcile Blocked [?] tasks: the Tasks status is incompatible (symbol={:?}, name={:?}, type={:?}, next={:?}, availableAsCommand={}); expected symbol '?', name Blocked, type ON_HOLD, next status ' ', and availableAsCommand true",
+            definition.symbol,
+            definition.name,
+            definition.status_type,
+            definition.next_status_symbol,
+            definition.available_as_command
+        )));
+    }
+    Ok(())
 }
 
 fn fenced_lines(lines: &[&str], section: Range<usize>) -> BTreeSet<usize> {
@@ -1411,12 +1690,12 @@ fn should_skip_directory(name: &OsStr) -> bool {
         || is_always_excluded_note_directory_name(name)
 }
 
-fn parse_tasks(contents: &str, global_filter: &str) -> Vec<TaskLine> {
+fn parse_tasks(contents: &str, settings: &TasksSettings) -> Vec<TaskLine> {
     let mut tasks = Vec::new();
     let mut byte_start = 0;
     for (line_index, segment) in contents.split_inclusive('\n').enumerate() {
         let line = logical_line(segment);
-        if let Some(mut task) = parse_task_line(line, global_filter) {
+        if let Some(mut task) = parse_task_line(line, settings) {
             task.line_index = line_index;
             task.status_byte_offset += byte_start;
             tasks.push(task);
@@ -1426,7 +1705,7 @@ fn parse_tasks(contents: &str, global_filter: &str) -> Vec<TaskLine> {
     tasks
 }
 
-fn parse_task_line(line: &str, global_filter: &str) -> Option<TaskLine> {
+fn parse_task_line(line: &str, settings: &TasksSettings) -> Option<TaskLine> {
     let bytes = line.as_bytes();
     let mut index = bytes
         .iter()
@@ -1454,19 +1733,145 @@ fn parse_task_line(line: &str, global_filter: &str) -> Option<TaskLine> {
         return None;
     }
     let body = after_checkbox.trim_start();
-    if !body.contains(global_filter) {
+    if !body.contains(&settings.global_filter) {
         return None;
     }
     let block_id = trailing_block_id(body);
+    let metadata = task_metadata(body, block_id.as_deref());
     let description =
-        task_description(body, global_filter, block_id.as_deref());
+        task_description(body, &settings.global_filter, block_id.as_deref());
+    let configured_status = settings.status_types.get(&status).copied();
     Some(TaskLine {
         line_index: 0,
         status,
         status_byte_offset: index + 1,
         block_id,
+        task_id: metadata.task_id,
+        depends_on: metadata.depends_on,
+        status_type: configured_status.unwrap_or(TaskStatusType::Todo),
+        status_recognized: configured_status.is_some(),
         description,
     })
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TaskMetadata {
+    task_id: Option<String>,
+    depends_on: Vec<String>,
+}
+
+fn task_metadata(body: &str, block_id: Option<&str>) -> TaskMetadata {
+    let mut metadata = TaskMetadata::default();
+    let mut state = block_id
+        .and_then(|block_id| {
+            body.trim_end()
+                .strip_suffix(&format!("^{block_id}"))
+                .map(str::trim_end)
+        })
+        .unwrap_or(body);
+
+    for _ in 0..20 {
+        let Some((start, key, value)) = trailing_dataview_field(state) else {
+            if let Some(start) = trailing_task_tag_start(state) {
+                state = state[..start].trim_end();
+                continue;
+            }
+            break;
+        };
+        let recognized = match key {
+            "id" if valid_task_identity(value) => {
+                metadata.task_id = Some(value.to_string());
+                true
+            }
+            "dependsOn" => parse_task_dependencies(value)
+                .map(|dependencies| metadata.depends_on = dependencies)
+                .is_some(),
+            "priority" => matches!(
+                value,
+                "highest" | "high" | "medium" | "low" | "lowest"
+            ),
+            "start" | "created" | "scheduled" | "due" | "completion"
+            | "cancelled" => valid_task_date(value),
+            "repeat" => value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b',' | b' ' | b'!')
+            }),
+            "onCompletion" => {
+                !value.is_empty()
+                    && value.bytes().all(|byte| byte.is_ascii_alphabetic())
+            }
+            _ => false,
+        };
+        if !recognized {
+            break;
+        }
+        state = state[..start].trim_end();
+    }
+    metadata
+}
+
+fn trailing_task_tag_start(state: &str) -> Option<usize> {
+    let trimmed = state.trim_end();
+    let start = trimmed
+        .char_indices()
+        .rev()
+        .find(|(_, character)| character.is_whitespace())
+        .map_or(0, |(index, character)| index + character.len_utf8());
+    let tag = &trimmed[start..];
+    let value = tag.strip_prefix('#')?;
+    (!value.is_empty()
+        && !value.chars().any(|character| {
+            character.is_whitespace()
+                || "!@#$%^&*(),.?\":{}|<>".contains(character)
+        }))
+    .then_some(start)
+}
+
+fn trailing_dataview_field(state: &str) -> Option<(usize, &str, &str)> {
+    let mut end = state.trim_end().len();
+    if state[..end].ends_with(',') {
+        end -= 1;
+        end = state[..end].trim_end().len();
+    }
+    let close = state[..end].chars().next_back()?;
+    let open = match close {
+        ']' => '[',
+        ')' => '(',
+        _ => return None,
+    };
+    let without_close = &state[..end - close.len_utf8()];
+    let start = without_close.rfind(open)?;
+    let inner = without_close[start + open.len_utf8()..].trim();
+    let (key, value) = inner.split_once("::")?;
+    (key == key.trim()).then_some((start, key, value.trim()))
+}
+
+fn valid_task_identity(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+        })
+}
+
+fn parse_task_dependencies(value: &str) -> Option<Vec<String>> {
+    if value.is_empty() || value.bytes().any(|byte| byte == b'\t') {
+        return None;
+    }
+    value
+        .split(',')
+        .map(|part| part.trim_matches(' '))
+        .map(|part| valid_task_identity(part).then(|| part.to_string()))
+        .collect()
+}
+
+fn valid_task_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 4 | 7) || byte.is_ascii_digit()
+        })
 }
 
 fn after_list_marker(line: &str, index: usize) -> Option<usize> {
@@ -1814,6 +2219,24 @@ fn change_item(
     }
 }
 
+fn dependency_status_change(
+    file: &FileScan,
+    task: &TaskLine,
+    to: char,
+    state: &TaskDependencyState,
+) -> DependencyStatusChange {
+    DependencyStatusChange {
+        path: display_path(&file.relative_path),
+        line_number: task.line_index + 1,
+        block_id: task.block_id.clone().unwrap_or_default(),
+        description: task.description.clone(),
+        from: task.status,
+        to,
+        open_dependency_ids: state.open_dependency_ids.clone(),
+        unresolved_dependency_ids: state.unresolved_dependency_ids.clone(),
+    }
+}
+
 fn display_path(path: &Path) -> String {
     path.components()
         .filter_map(|component| match component {
@@ -1933,6 +2356,8 @@ fn print_human_result(result: &SyncResult) {
     let change_count = result.marked_next.len()
         + result.marked_in_progress.len()
         + result.cleared.len()
+        + result.marked_blocked.len()
+        + result.unblocked.len()
         + result.struck_completed_references.len()
         + result.moved_completed_references.len()
         + result.marker_added_references.len()
@@ -1995,6 +2420,26 @@ fn print_human_result(result: &SyncResult) {
         &result.cleared,
         false,
     );
+    print_dependency_status_section(
+        &styler,
+        true,
+        if result.dry_run {
+            "would mark blocked"
+        } else {
+            "marked blocked"
+        },
+        &result.marked_blocked,
+    );
+    print_dependency_status_section(
+        &styler,
+        false,
+        if result.dry_run {
+            "would unblock"
+        } else {
+            "unblocked"
+        },
+        &result.unblocked,
+    );
     print_completed_reference_sections(result);
     print_marker_reference_sections(result);
     print_duplicate_line_section(result);
@@ -2006,16 +2451,65 @@ fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} struck, {} moved, {} marked, {} unmarked, {} duplicate-line removals",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} duplicate-line removals",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
+        result.marked_blocked.len(),
+        result.unblocked.len(),
         result.struck_completed_references.len(),
         result.moved_completed_references.len(),
         result.marker_added_references.len(),
         result.marker_removed_references.len(),
         result.removed_duplicate_lines.len()
     );
+}
+
+fn print_dependency_status_section(
+    styler: &Styler,
+    blocking: bool,
+    heading: &str,
+    changes: &[DependencyStatusChange],
+) {
+    if changes.is_empty() {
+        return;
+    }
+    println!();
+    println!("  {heading}");
+    let description_width = changes
+        .iter()
+        .map(|change| display_width(&change.description))
+        .max()
+        .unwrap_or(0);
+    for change in changes {
+        let transition = format!("[{}] \u{2192} [{}]", change.from, change.to);
+        let transition = if blocking {
+            styler.yellow(&transition)
+        } else {
+            styler.green(&transition)
+        };
+        let description = pad_right(&change.description, description_width);
+        let dependencies = if blocking {
+            format!(" (open: {})", change.open_dependency_ids.join(", "))
+        } else if change.unresolved_dependency_ids.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (unresolved: {})",
+                change.unresolved_dependency_ids.join(", ")
+            )
+        };
+        println!(
+            "    {transition}  {description}  {}{}{}",
+            styler.cyan(&change.path),
+            if change.block_id.is_empty() {
+                String::new()
+            } else {
+                format!(" ^{}", change.block_id)
+            },
+            dependencies
+        );
+    }
 }
 
 fn print_duplicate_line_section(result: &SyncResult) {
@@ -2220,6 +2714,30 @@ mod tests {
 
     fn identity(block_id: &str) -> (PathBuf, String) {
         (PathBuf::from("tasks.md"), block_id.to_string())
+    }
+
+    fn test_settings() -> TasksSettings {
+        TasksSettings {
+            global_filter: "#task".to_string(),
+            done_statuses: BTreeSet::from(['x', 'X']),
+            status_types: BTreeMap::from([
+                (' ', TaskStatusType::Todo),
+                ('x', TaskStatusType::Done),
+                ('X', TaskStatusType::Done),
+                ('/', TaskStatusType::InProgress),
+                ('*', TaskStatusType::OnHold),
+                ('?', TaskStatusType::OnHold),
+                ('-', TaskStatusType::Cancelled),
+            ]),
+            status_definitions: vec![TaskStatusDefinition {
+                symbol: "?".to_string(),
+                name: "Blocked".to_string(),
+                next_status_symbol: " ".to_string(),
+                available_as_command: true,
+                status_type: TaskStatusType::OnHold,
+            }],
+            status_settings_error: None,
+        }
     }
 
     fn resolved(
@@ -2525,7 +3043,7 @@ mod tests {
 
     #[test]
     fn fenced_column_zero_content_does_not_end_dependency_scan() {
-        let settings = "#task";
+        let settings = test_settings();
         let a_contents =
             "- [ ] #task A ^a\n  ```\nnot a list item\n  ```\n  - ![[B#^b]]\n";
         let b_contents = "- [ ] #task B ^b\n";
@@ -2534,13 +3052,13 @@ mod tests {
                 path: PathBuf::from("A.md"),
                 relative_path: PathBuf::from("A.md"),
                 contents: a_contents.to_string(),
-                tasks: parse_tasks(a_contents, settings),
+                tasks: parse_tasks(a_contents, &settings),
             },
             FileScan {
                 path: PathBuf::from("B.md"),
                 relative_path: PathBuf::from("B.md"),
                 contents: b_contents.to_string(),
-                tasks: parse_tasks(b_contents, settings),
+                tasks: parse_tasks(b_contents, &settings),
             },
         ];
         let index = NoteIndex::from_paths(
@@ -2581,7 +3099,7 @@ mod tests {
             "+ [/] #task Working ^work\r\n",
             "- [*] not a task ^ignored\r\n",
         );
-        let tasks = parse_tasks(contents, "#task");
+        let tasks = parse_tasks(contents, &test_settings());
         assert_eq!(tasks.len(), 3);
         assert_eq!(tasks[0].status, ' ');
         assert_eq!(tasks[0].block_id.as_deref(), Some("todo"));
@@ -2591,9 +3109,56 @@ mod tests {
     }
 
     #[test]
+    fn parses_bracket_and_parenthesized_task_dependency_metadata() {
+        let contents = concat!(
+            "- [ ] #task Bracket [id:: alpha] [dependsOn:: root, other] ^a\n",
+            "- [?] #task Parenthesized (id:: beta) (dependsOn:: root) #tag ^b\n",
+            "- [ ] #task Invalid [id:: bad value] [dependsOn:: root, bad value] ^c\n",
+        );
+        let tasks = parse_tasks(contents, &test_settings());
+        assert_eq!(tasks[0].task_id.as_deref(), Some("alpha"));
+        assert_eq!(tasks[0].depends_on, ["root", "other"]);
+        assert_eq!(tasks[1].task_id.as_deref(), Some("beta"));
+        assert_eq!(tasks[1].depends_on, ["root"]);
+        assert_eq!(tasks[1].status_type, TaskStatusType::OnHold);
+        assert!(tasks[1].status_recognized);
+        assert!(tasks[2].task_id.is_none());
+        assert!(tasks[2].depends_on.is_empty());
+    }
+
+    #[test]
+    fn task_dependency_index_matches_tasks_duplicate_and_missing_id_semantics()
+    {
+        let mut settings = test_settings();
+        settings.status_types.insert('~', TaskStatusType::NonTask);
+        let contents = concat!(
+            "- [x] #task Duplicate done [id:: duplicate] ^done\n",
+            "- [ ] #task Duplicate open [id:: duplicate] ^open\n",
+            "- [x] #task Closed [id:: closed] ^closed\n",
+            "- [~] #task Non-task [id:: non-task] ^non-task\n",
+            "- [!] #task Unknown [id:: unknown] ^unknown\n",
+            "- [ ] #task Self [id:: self] [dependsOn:: self] ^self\n",
+            "- [ ] #task Parent [dependsOn:: duplicate, closed, non-task, unknown, missing] ^parent\n",
+        );
+        let files = vec![FileScan {
+            path: PathBuf::from("tasks.md"),
+            relative_path: PathBuf::from("tasks.md"),
+            contents: contents.to_string(),
+            tasks: parse_tasks(contents, &settings),
+        }];
+        let states = task_dependency_states(&files);
+        assert_eq!(states[&(0, 5)].open_dependency_ids, ["self"]);
+        assert_eq!(
+            states[&(0, 6)].open_dependency_ids,
+            ["duplicate", "unknown"]
+        );
+        assert_eq!(states[&(0, 6)].unresolved_dependency_ids, ["missing"]);
+    }
+
+    #[test]
     fn replacement_changes_only_status_and_preserves_crlf() {
         let contents = "  - [ ] #task Keep everything ^id\r\n";
-        let task = parse_tasks(contents, "#task").remove(0);
+        let task = parse_tasks(contents, &test_settings()).remove(0);
         let mut changed = contents.to_string();
         changed.replace_range(
             task.status_byte_offset..task.status_byte_offset + 1,
@@ -2628,13 +3193,41 @@ mod tests {
             Transition::KeptInProgress
         );
         assert_eq!(transition('/', None), Transition::Unchanged);
-        for status in ['x', 'X', '-', '?'] {
+        for status in ['x', 'X', '-', '!'] {
             assert_eq!(
                 transition(status, Some(RankedStatus::InProgress)),
                 Transition::Unchanged
             );
             assert_eq!(transition(status, None), Transition::Unchanged);
         }
+    }
+
+    #[test]
+    fn blocked_transition_precedence_and_recovery_are_explicit() {
+        let settings = test_settings();
+        let ready = parse_tasks("- [ ] #task Ready\n", &settings).remove(0);
+        let blocked = parse_tasks("- [?] #task Blocked\n", &settings).remove(0);
+        let done = parse_tasks("- [x] #task Done\n", &settings).remove(0);
+        assert_eq!(
+            task_transition(&ready, Some(RankedStatus::InProgress), true),
+            Transition::MarkBlocked
+        );
+        assert_eq!(
+            task_transition(&blocked, Some(RankedStatus::InProgress), true),
+            Transition::Unchanged
+        );
+        assert_eq!(
+            task_transition(&blocked, Some(RankedStatus::InProgress), false),
+            Transition::Unblock(RankedStatus::InProgress)
+        );
+        assert_eq!(
+            task_transition(&blocked, None, false),
+            Transition::Unblock(RankedStatus::Ready)
+        );
+        assert_eq!(
+            task_transition(&done, Some(RankedStatus::InProgress), true),
+            Transition::Unchanged
+        );
     }
 
     #[test]

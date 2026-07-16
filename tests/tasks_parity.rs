@@ -92,6 +92,13 @@ fn tasks_parity_fixture_vault_covers_phase1_contract() {
                 "type": "ON_HOLD"
             },
             {
+                "symbol": "?",
+                "name": "Blocked",
+                "nextStatusSymbol": " ",
+                "availableAsCommand": true,
+                "type": "ON_HOLD"
+            },
+            {
                 "symbol": "-",
                 "name": "Canceled",
                 "nextStatusSymbol": " ",
@@ -278,11 +285,11 @@ fn tasks_native_filterless_json_golden_reads_settings_and_tasks() {
         ])
     );
     assert_eq!(actual["result"]["type"], "tasks");
-    assert_eq!(actual["result"]["count"], 33);
+    assert_eq!(actual["result"]["count"], 34);
     let tasks = actual["result"]["tasks"]
         .as_array()
         .expect("Tasks result array");
-    assert_eq!(tasks.len(), 33);
+    assert_eq!(tasks.len(), 34);
     for task in tasks {
         for field in [
             "file",
@@ -346,6 +353,10 @@ fn tasks_native_filterless_json_golden_reads_settings_and_tasks() {
     let blocked = find_task(tasks, "#task Blocked child");
     assert_eq!(blocked["dependsOn"], json!(["root"]));
     assert_eq!(blocked["isBlocked"], true);
+    assert_eq!(blocked["status"]["symbol"], "?");
+    assert_eq!(blocked["status"]["name"], "Blocked");
+    assert_eq!(blocked["status"]["type"], "ON_HOLD");
+    assert_eq!(blocked["isDone"], false);
     assert_eq!(find_task(tasks, "#task Blocking root")["isBlocking"], true);
     assert_eq!(
         find_task(tasks, "#task Ready after done dependency")["isBlocked"],
@@ -391,11 +402,16 @@ fn tasks_native_filterless_json_golden_reads_settings_and_tasks() {
     assert!(non_task_child["parentTaskLineNumber"].is_null());
 
     let unknown = find_task(tasks, "#task Unknown status becomes TODO");
-    assert_eq!(unknown["status"]["symbol"], "?");
+    assert_eq!(unknown["status"]["symbol"], "!");
     assert_eq!(unknown["status"]["name"], "Unknown");
     assert_eq!(unknown["status"]["type"], "TODO");
     assert_eq!(unknown["status"]["nextSymbol"], "x");
     assert_eq!(unknown["status"]["availableAsCommand"], false);
+    let blocked = find_task(tasks, "#task Blocked status");
+    assert_eq!(blocked["status"]["symbol"], "?");
+    assert_eq!(blocked["status"]["name"], "Blocked");
+    assert_eq!(blocked["status"]["type"], "ON_HOLD");
+    assert_eq!(blocked["isDone"], false);
 
     // The configured task format is Dataview, so emoji signifiers remain
     // description text. The emoji parser itself is covered by unit tests.
@@ -419,7 +435,7 @@ fn tasks_native_filterless_json_golden_reads_settings_and_tasks() {
         settings["statusSettings"]["customStatuses"]
             .as_array()
             .map(Vec::len),
-        Some(3)
+        Some(4)
     );
     assert_eq!(
         settings["presets"].as_object().map(serde_json::Map::len),
@@ -822,7 +838,7 @@ fn tasks_by_function_exposes_tasks_query_context_and_real_moment_dates() {
         "filter by function task.due.moment.isSame(moment(\"2026-07-12\"), \"day\") && task.scheduled.formatAsDate() === \"2026-07-10\"\n",
         "filter by function task.file.path === \"Tasks/MetadataDataview.md\" && task.file.folder === \"Tasks/\" && task.heading === \"Dataview Task Metadata\" && task.lineNumber === 2\n",
         "filter by function task.isRecurring && task.id === \"dv-all\" && task.dependsOn.includes(\"done-root\") && !task.isBlocked(query.allTasks)\n",
-        "filter by function query.allTasks.length === 33 && query.file.path === \"Daily/2026-07-10.md\" && query.file.hasProperty(\"date\") && query.file.property(\"date\") === \"2026-07-10\"\n",
+        "filter by function query.allTasks.length === 34 && query.file.path === \"Daily/2026-07-10.md\" && query.file.hasProperty(\"date\") && query.file.property(\"date\") === \"2026-07-10\"\n",
         "filter by function moment().format(\"YYYY-MM-DD HH:mm\") === \"2026-07-10 12:00\"\n",
     );
     let output = run_fixture(&[
@@ -892,7 +908,7 @@ fn tasks_javascript_exposes_priority_digits_and_pins_all_moment_clocks() {
         ),
     ]);
     assert_success(&output);
-    assert_eq!(json_stdout(&output)["result"]["count"], 33);
+    assert_eq!(json_stdout(&output)["result"]["count"], 34);
 }
 
 #[test]
@@ -974,7 +990,7 @@ fn tasks_group_by_function_keeps_null_empty_array_and_empty_string_tasks() {
         ]);
         assert_success(&output);
         let actual = json_stdout(&output);
-        assert_eq!(actual["result"]["count"], 33, "{expression}");
+        assert_eq!(actual["result"]["count"], 34, "{expression}");
         assert_eq!(actual["result"]["groups"][0]["names"], json!([""]));
     }
 
@@ -1057,9 +1073,9 @@ fn tasks_result_pipeline_sorts_groups_and_limits_like_tasks_v8() {
     assert_success(&output);
     let actual = json_stdout(&output);
 
-    assert_eq!(actual["result"]["countBeforeLimit"], 27);
-    assert_eq!(actual["result"]["count"], 18);
-    assert_eq!(actual["result"]["countText"], "18 of 27 tasks");
+    assert_eq!(actual["result"]["countBeforeLimit"], 28);
+    assert_eq!(actual["result"]["count"], 20);
+    assert_eq!(actual["result"]["countText"], "20 of 28 tasks");
     assert_eq!(
         actual["paths"],
         json!([
@@ -1072,7 +1088,7 @@ fn tasks_result_pipeline_sorts_groups_and_limits_like_tasks_v8() {
     );
 
     let groups = actual["result"]["groups"].as_array().unwrap();
-    assert_eq!(groups.len(), 12);
+    assert_eq!(groups.len(), 13);
     assert_eq!(
         groups[0]["names"],
         json!(["%%1%%IN_PROGRESS", "Tasks/Statuses"])
@@ -1091,8 +1107,8 @@ fn tasks_result_pipeline_sorts_groups_and_limits_like_tasks_v8() {
         })
         .unwrap();
     assert_eq!(limited["count"], 2);
-    assert_eq!(limited["countBeforeLimit"], 9);
-    assert_eq!(limited["countText"], "2 of 9 tasks");
+    assert_eq!(limited["countBeforeLimit"], 8);
+    assert_eq!(limited["countText"], "2 of 8 tasks");
     assert_eq!(
         limited["tasks"]
             .as_array()
@@ -1100,7 +1116,18 @@ fn tasks_result_pipeline_sorts_groups_and_limits_like_tasks_v8() {
             .iter()
             .map(|task| task["description"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["#task Blocking root", "#task Blocked child"]
+        ["#task Blocking root", "#task Ready after done dependency"]
+    );
+    let blocked_group = groups
+        .iter()
+        .find(|group| {
+            group["names"] == json!(["%%3%%ON_HOLD", "Tasks/Dependencies"])
+        })
+        .unwrap();
+    assert_eq!(blocked_group["count"], 1);
+    assert_eq!(
+        blocked_group["tasks"][0]["description"],
+        "#task Blocked child"
     );
 }
 

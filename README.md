@@ -308,7 +308,13 @@ recursively: Next promotes Ready to Next, and In Progress promotes Ready or
 Next to In Progress. Multiple paths use the strongest request, stronger
 intermediate tasks pass their status to descendants, and propagation never
 lowers a task. Separately, an unreachable `[*]` task becomes `[ ]`, preserving
-the command's vault-wide Next clearing policy. It also retires links to completed Tasks
+the command's vault-wide Next clearing policy. Vault-wide Tasks
+`[id:: ...]`/`[dependsOn:: ...]` metadata is reconciled independently: any
+recognized open parent with an open dependency becomes Blocked (`[?]`), and a
+no-longer-blocked task returns to its final Pomodoro-derived rank or Ready.
+Done, canceled, and non-task parents remain terminal. Blocked writes require a
+single compatible `Blocked`/`?`/`ON_HOLD` Tasks registry entry and fail before
+any note write when that contract is absent or incompatible. It also retires links to completed Tasks
 tasks as `~~[[...]]~~` and moves bullets found beneath open Pomodoros to the current timed Pomodoro, or
 the last completed Pomodoro when there is no current one. It also marks live
 non-transcluded links beneath completed Pomodoros, keeps embedded links
@@ -330,7 +336,7 @@ dependency chain a minimum desired status of Next:
   - [[Projects/Alpha#^ship-design]]
 ```
 
-Run `bob mark-next-tasks --dry-run` to preview every Next or In-Progress promotion, clear,
+Run `bob mark-next-tasks --dry-run` to preview every Next or In-Progress promotion, clear, Blocked transition, unblock,
 duplicate-line removal, retirement, move, and Pomodoro-marker repair. The
 command refuses to change files if the daily note is missing,
 lacks a `Pomodoros` section, or has multiple open timed Pomodoros. The full
