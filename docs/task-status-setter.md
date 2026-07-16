@@ -5,9 +5,10 @@ active Obsidian Tasks statuses and keeps
 references to completed tasks retired as struck, non-embedded links beneath
 their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
 the machine-owned Pomodoro marker (`🍅`); embedded and provenance-unknown
-retired links do not. Links beneath open Pomodoros are unmarked, and links to
-unambiguously canceled Tasks tasks are removed from those open Pomodoros
-without changing the canceled task itself. It also follows transcluded
+retired links do not. Links beneath open Pomodoros are unmarked, and a link to
+an unambiguously canceled Tasks task removes its complete Markdown list-item
+subtree from an open Pomodoro without changing the canceled task itself. It
+also follows transcluded
 dependency bullets recursively, promoting each target to the strongest
 applicable Next (`[*]`) or In Progress (`[/]`) status. It independently
 reconciles the derived Blocked (`[?]`) marker from Tasks `[id:: ...]` and
@@ -74,20 +75,24 @@ candidates.
 
 After duplicate-line ownership is decided, every surviving block-link
 occurrence beneath an open Pomodoro is checked against the Tasks status
-registry. The occurrence is removed when its resolved task has a recognized
-`CANCELLED` status. This includes conventional `[-]` tasks and any configured
+registry. When an occurrence resolves only to tasks with a recognized
+`CANCELLED` status, its complete Markdown list item is removed: deletion starts
+on the containing bullet's line and continues through the end of its nested
+list-item subtree. This includes conventional `[-]` tasks and any configured
 single-character symbol whose `statusSettings.coreStatuses` or
-`statusSettings.customStatuses` entry has type `CANCELLED`. The task remains
-canceled; only its daily-ledger link token is removed.
+`statusSettings.customStatuses` entry has type `CANCELLED`. The task itself
+remains canceled.
 
-The removal applies independently to plain, embedded, aliased,
-Pomodoro-marked, and exactly struck forms. The complete managed token is
-removed, including `!`, `🍅`, or exact `~~...~~` decoration when present. The
-containing bullet, its indentation, other prose and links, nested content, and
-line ending are preserved. Multiple qualifying occurrences on one physical
-line are removed in occurrence order. Surviving live and completed links on
-that line continue through their existing status, retirement, relocation, and
-marker policies.
+Plain, embedded, aliased, Pomodoro-marked, and exactly struck forms all
+qualify. The list item is the mutation unit, so authored prose, live or
+completed sibling links, unresolved links, embeds, aliases, markers,
+strikethrough, and nested content on that item are removed with it. A canceled
+link in a nested bullet removes that nested item without removing its parent;
+a canceled link on the parent removes the parent and all descendants. Multiple
+qualifying occurrences on one bullet still produce separate compatibility
+records in occurrence order even though the subtree is deleted once. Covered
+descendant bullets do not produce redundant cancellation, token-edit, move, or
+marker reports.
 
 Cleanup is limited to indented bullets owned by open Pomodoros in the selected
 daily note. Links beneath completed or canceled Pomodoros, on top-level
@@ -96,18 +101,22 @@ untouched by this rule. Unresolved links and links that do not resolve to a
 scanned Tasks task also remain and keep their warning behavior.
 
 If one block ID matches several Tasks task lines, every match must have a
-recognized `CANCELLED` type before an occurrence is removed. All-canceled
+recognized `CANCELLED` type before the containing item qualifies. All-canceled
 duplicates qualify; canceled/open, canceled/done, and canceled/unknown mixes
 remain in place and produce an ambiguity warning. A physical line already
 selected by cross-Pomodoro duplicate cleanup is deleted once and does not also
-produce canceled-reference edits or reports.
+produce a canceled-reference report. Duplicate cleanup remains physical-line
+only; canceled-reference cleanup uses the full list-item subtree. When a
+completed parent bullet is relocated, any independently canceled descendant
+subtree is omitted from the moved content.
 
 The rewritten Pomodoro section is scanned again after duplicate removal and
 canceled/completed-reference structural rewrites. Only references that will
 actually be written contribute to the direct desired-status map and dependency
-graph. Thus an otherwise-live task mentioned only as unrelated content on a
-removed line, a removed canceled root, and any otherwise-unreachable dependency
-chain stop contributing desired Next or In-Progress state in that same run.
+graph. Thus an otherwise-live task mentioned only as sibling or nested content
+in a removed item, a removed canceled root, and any otherwise-unreachable
+dependency chain stop contributing desired Next or In-Progress state in that
+same run.
 
 After resolving the surviving direct Pomodoro links, the command reads
 dependency edges from the linked tasks' child blocks. An edge must be a child
@@ -344,17 +353,19 @@ Unresolved direct or dependency links are warnings, not failures. If duplicate
 task block IDs occur in one resolved note, every matching task is synchronized
 and the ambiguity is reported. Completed-link normalization proceeds only when
 all duplicate matches are complete; conflicting completion states are warned
-and left structurally unchanged. Canceled-link removal likewise proceeds only
-when every match has a recognized `CANCELLED` status; mixed cancellation states
-are warned and retained.
+and left structurally unchanged. Canceled-reference list-item removal likewise
+proceeds only when every match has a recognized `CANCELLED` status; mixed
+cancellation states are warned and retained.
 
 ## Output
 
 Human output lists every Next promotion, In-Progress promotion, clear, Blocked
 transition, unblock, duplicate line removal, retired reference, move, and
-marker repair, plus every canceled-reference removal, followed by a summary.
+marker repair, plus every canceled-reference list-item trigger, followed by a
+summary.
 Canceled-reference rows show the target, block ID, original one-based line
-number, and owning Pomodoro. Blocked rows include the open dependency IDs;
+number, and owning Pomodoro that triggered complete list-item deletion. Blocked
+rows include the open dependency IDs;
 unblocked rows include unresolved IDs when present. Duplicate removals show the
 original daily-note line number, text, owning Pomodoro, and canonical task
 identities. Marker additions and removals have their own
@@ -494,7 +505,10 @@ additive fields and do not duplicate changes into those older arrays. Their
 arrays explain the derived decision. Each
 `removed_canceled_references` item represents one removed occurrence and
 contains its link `target`, `block_id`, one-based original `line_number`, and
-owning `pomodoro`. The array follows deterministic file/occurrence order. Each
+owning `pomodoro`. This stable compatibility field reports the qualifying
+references that triggered list-item deletion; multiple qualifying occurrences
+on one deleted item remain separate entries. The array follows deterministic
+file/occurrence order. Each
 `removed_duplicate_lines` item represents one physical line and contains its
 one-based original `line_number`, original `line`, owning `pomodoro`, and one or
 more canonical path-plus-block `duplicate_tasks`. Each unresolved reference

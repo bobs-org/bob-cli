@@ -76,9 +76,10 @@ Completed linked-task references \
 are retired as struck, non-embedded links. References found under open \
 Pomodoros keep the existing policy of moving their containing bullets beneath \
 the current timed Pomodoro, or the last completed Pomodoro when \
-there is no current one. Links to unambiguously cancelled Tasks tasks are \
-removed from open Pomodoros, including custom single-character statuses whose \
-Tasks type is CANCELLED; the cancelled task status itself is left unchanged. \
+there is no current one. A link to an unambiguously cancelled Tasks task \
+removes its complete Markdown list-item subtree from an open Pomodoro, \
+including for custom single-character statuses whose Tasks type is CANCELLED; \
+the cancelled task status itself is left unchanged. \
 Done, cancelled, non-task, and unknown task statuses are never transitioned.\n\n\
 When the same resolved task is linked beneath multiple open Pomodoros, the \
 first open Pomodoro in file order keeps ownership and every conflicting \
@@ -86,8 +87,8 @@ physical line beneath later open Pomodoros is removed in full. Aliases, \
 embeds, same-note links, and alternate note spellings compare by resolved \
 vault-relative path plus block ID. Repeats within one owning Pomodoro are \
 preserved, as are unresolved links and links beneath completed or cancelled \
-Pomodoros. If a block ID matches multiple task lines, canceled-link removal \
-requires every match to have a recognized CANCELLED status.\n\n\
+Pomodoros. If a block ID matches multiple task lines, canceled-reference \
+list-item removal requires every match to have a recognized CANCELLED status.\n\n\
 Only Markdown checkbox lines allowed by the Obsidian Tasks globalFilter are \
 considered. The scan skips hidden directories, templates, generated notes, \
 and done archives. Blocked writes require exactly one compatible Tasks status \
@@ -585,7 +586,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
             });
             let reason = if has_done && has_not_done && has_canceled {
                 format!(
-                    "{} has {} tasks with conflicting statuses; completed-link normalization and canceled-link removal were skipped",
+                    "{} has {} tasks with conflicting statuses; completed-link normalization and canceled-reference list-item removal were skipped",
                     display_path(&path),
                     statuses.len()
                 )
@@ -597,7 +598,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
                 )
             } else if has_canceled && has_not_canceled {
                 format!(
-                    "{} has {} tasks with conflicting statuses; canceled-link removal was skipped",
+                    "{} has {} tasks with conflicting statuses; canceled-reference list-item removal was skipped",
                     display_path(&path),
                     statuses.len()
                 )
@@ -1456,7 +1457,7 @@ fn plan_structural_changes(
     resolved: &BTreeMap<RawReference, ResolvedReference>,
     done_statuses: &BTreeSet<char>,
     status_types: &BTreeMap<char, TaskStatusType>,
-    deleted_lines: &BTreeSet<usize>,
+    duplicate_deleted_lines: &BTreeSet<usize>,
 ) -> StructuralPlan {
     let current = model
         .entries
@@ -1471,7 +1472,11 @@ fn plan_structural_changes(
     let mut marker_added = Vec::new();
     let mut marker_removed = Vec::new();
     let mut removed_canceled = Vec::new();
+    let mut deleted_lines = duplicate_deleted_lines.clone();
 
+    // Cancellation owns the complete list-item subtree. Plan it before any
+    // token edits or moves so descendants and sibling links that will be
+    // deleted cannot produce additional structural work or reports.
     for bullet in &model.bullets {
         if deleted_lines.contains(&bullet.line_index) {
             continue;
@@ -1490,6 +1495,25 @@ fn plan_structural_changes(
                     })
             })
             .collect::<Vec<_>>();
+        if canceled_links.is_empty() {
+            continue;
+        }
+        for link in canceled_links {
+            removed_canceled.push(RemovedCanceledReference {
+                target: link.reference.target.clone(),
+                block_id: link.reference.block_id.clone(),
+                line_number: bullet.line_index + 1,
+                pomodoro: source.context.clone(),
+            });
+        }
+        deleted_lines.extend(bullet.line_index..bullet.end_line);
+    }
+
+    for bullet in &model.bullets {
+        if deleted_lines.contains(&bullet.line_index) {
+            continue;
+        }
+        let source = &model.entries[bullet.entry_index];
         let completed_links = bullet
             .links
             .iter()
@@ -1508,16 +1532,11 @@ fn plan_structural_changes(
                     return false;
                 }
                 let has_live_reference = bullet.links.iter().any(|link| {
-                    !canceled_links
-                        .iter()
-                        .any(|canceled| std::ptr::eq(*canceled, link))
-                        && resolved.get(&link.reference).is_some_and(
-                            |reference| {
-                                reference.statuses.iter().any(|status| {
-                                    !is_done_status(*status, done_statuses)
-                                })
-                            },
-                        )
+                    resolved.get(&link.reference).is_some_and(|reference| {
+                        reference.statuses.iter().any(|status| {
+                            !is_done_status(*status, done_statuses)
+                        })
+                    })
                 });
                 model.entries[*target].open || !has_live_reference
             })
@@ -1526,25 +1545,6 @@ fn plan_structural_changes(
         };
         let final_entry = move_target.unwrap_or(bullet.entry_index);
         for link in &bullet.links {
-            if canceled_links
-                .iter()
-                .any(|canceled| std::ptr::eq(*canceled, link))
-            {
-                token_edits.entry(bullet.line_index).or_default().push(
-                    TokenEdit {
-                        start: link.edit_start,
-                        end: link.edit_end,
-                        replacement: String::new(),
-                    },
-                );
-                removed_canceled.push(RemovedCanceledReference {
-                    target: link.reference.target.clone(),
-                    block_id: link.reference.block_id.clone(),
-                    line_number: bullet.line_index + 1,
-                    pomodoro: source.context.clone(),
-                });
-                continue;
-            }
             let retire = completed_links
                 .iter()
                 .any(|completed| std::ptr::eq(*completed, link));
@@ -1618,7 +1618,7 @@ fn plan_structural_changes(
     StructuralPlan {
         token_edits,
         moves,
-        deleted_lines: deleted_lines.clone(),
+        deleted_lines,
         target_entry,
         struck,
         moved,
@@ -2535,7 +2535,7 @@ fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference removals, {} duplicate-line removals",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -2633,7 +2633,7 @@ fn print_canceled_reference_section(result: &SyncResult) {
     }
     println!();
     println!(
-        "  {} canceled task references",
+        "  {} list items containing canceled task references",
         if result.dry_run {
             "would remove"
         } else {
@@ -3571,7 +3571,7 @@ mod tests {
     }
 
     #[test]
-    fn canceled_reference_removal_composes_with_other_structural_edits() {
+    fn canceled_reference_removal_deletes_complete_mixed_content_items() {
         let contents = concat!(
             "- [ ] Open (0900-0930) with [[tasks#^plain]]\r\n",
             "  - start [[tasks#^plain]] middle ![[tasks#^custom|Alias]] end\r\n",
@@ -3647,7 +3647,9 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(plan.struck.len(), 1);
+        assert!(plan.struck.is_empty());
+        assert!(plan.moved.is_empty());
+        assert!(plan.token_edits.is_empty());
         assert!(plan.marker_added.is_empty());
         assert!(plan.marker_removed.is_empty());
         let updated = apply_structural_plan(contents, &model, &plan);
@@ -3655,9 +3657,6 @@ mod tests {
             updated,
             concat!(
                 "- [ ] Open (0900-0930) with [[tasks#^plain]]\r\n",
-                "  - start  middle  end\r\n",
-                "  -  and  and ~~[[tasks#^done]]~~ and [[tasks#^live]]\r\n",
-                "  -  and [[tasks#^mixed]] and [[missing#^unknown]]\r\n",
                 "  ```md\r\n",
                 "  - [[tasks#^plain]]\r\n",
                 "  ```\r\n",
@@ -3673,10 +3672,10 @@ mod tests {
         assert!(!updated_model
             .raw_references
             .contains(&reference("tasks", "plain")));
-        assert!(updated_model
+        assert!(!updated_model
             .raw_references
             .contains(&reference("tasks", "live")));
-        assert!(updated_model
+        assert!(!updated_model
             .raw_references
             .contains(&reference("tasks", "mixed")));
         let second = plan_structural_changes(
@@ -3691,6 +3690,97 @@ mod tests {
         assert_eq!(
             apply_structural_plan(&updated, &updated_model, &second),
             updated
+        );
+    }
+
+    #[test]
+    fn canceled_subtrees_compose_with_nested_and_moving_bullets() {
+        let contents = concat!(
+            "- [x] Completed\r\n",
+            "- [ ] Future\r\n",
+            "  - surviving [[tasks#^live]]\r\n",
+            "    - canceled child [[tasks#^canceled]]\r\n",
+            "      - nested detail [[tasks#^done]]\r\n",
+            "    - surviving child [[tasks#^other]]\r\n",
+            "  - canceled parent [[tasks#^canceled]]\r\n",
+            "    - redundant [[tasks#^custom]]\r\n",
+            "  - moving parent [[tasks#^done]]\r\n",
+            "    - omitted [[tasks#^custom]]\r\n",
+            "      - omitted detail\r\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved(&[
+            ("tasks", "live", vec![' ']),
+            ("tasks", "other", vec![' ']),
+            ("tasks", "canceled", vec!['-']),
+            ("tasks", "custom", vec!['C']),
+            ("tasks", "done", vec!['x']),
+        ]);
+        let mut settings = test_settings();
+        settings.status_types.insert('C', TaskStatusType::Cancelled);
+
+        let plan = plan_structural_changes(
+            &model,
+            &resolved,
+            &settings.done_statuses,
+            &settings.status_types,
+            &BTreeSet::new(),
+        );
+
+        assert_eq!(
+            plan.removed_canceled
+                .iter()
+                .map(|item| (item.block_id.as_str(), item.line_number))
+                .collect::<Vec<_>>(),
+            vec![("canceled", 4), ("canceled", 7), ("custom", 10)]
+        );
+        assert_eq!(plan.struck.len(), 1);
+        assert_eq!(plan.moved.len(), 1);
+        assert_eq!(
+            apply_structural_plan(contents, &model, &plan),
+            concat!(
+                "- [x] Completed\r\n",
+                "  - moving parent 🍅 ~~[[tasks#^done]]~~\r\n",
+                "- [ ] Future\r\n",
+                "  - surviving [[tasks#^live]]\r\n",
+                "    - surviving child [[tasks#^other]]\r\n",
+            )
+        );
+    }
+
+    #[test]
+    fn canceled_subtree_deletion_preserves_crlf_and_no_final_newline() {
+        let contents = concat!(
+            "- [ ] Open\r\n",
+            "  - keep [[tasks#^live]]\r\n",
+            "  - remove [[tasks#^canceled]]\r\n",
+            "    - nested detail\r\n",
+            "  - final [[tasks#^other]]",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved(&[
+            ("tasks", "live", vec![' ']),
+            ("tasks", "canceled", vec!['-']),
+            ("tasks", "other", vec![' ']),
+        ]);
+        let settings = test_settings();
+        let plan = plan_structural_changes(
+            &model,
+            &resolved,
+            &settings.done_statuses,
+            &settings.status_types,
+            &BTreeSet::new(),
+        );
+
+        assert_eq!(
+            apply_structural_plan(contents, &model, &plan),
+            concat!(
+                "- [ ] Open\r\n",
+                "  - keep [[tasks#^live]]\r\n",
+                "  - final [[tasks#^other]]",
+            )
         );
     }
 
@@ -3722,10 +3812,10 @@ mod tests {
         assert_eq!(removals.len(), 1);
         assert_eq!(plan.removed_canceled.len(), 1);
         assert_eq!(plan.removed_canceled[0].line_number, 2);
-        assert!(!plan.token_edits.contains_key(&3));
+        assert!(plan.token_edits.is_empty());
         assert_eq!(
             apply_structural_plan(contents, &model, &plan),
-            "- [ ] First\n  - \n- [ ] Second\n"
+            "- [ ] First\n- [ ] Second\n"
         );
     }
 

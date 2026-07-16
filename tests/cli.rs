@@ -1438,7 +1438,7 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
         .expect("canceled cleanup dry-run JSON");
     assert_eq!(json["references"], 7);
     assert_eq!(json["dependency_references"], 0);
-    assert_eq!(json["marked_next"].as_array().unwrap().len(), 2);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
     assert_eq!(
         json["removed_canceled_references"],
@@ -1477,7 +1477,7 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
             && item["reason"]
                 .as_str()
                 .unwrap()
-                .contains("canceled-link removal was skipped")));
+                .contains("canceled-reference list-item removal was skipped")));
 
     let human_dry_run = bob_command()
         .arg("task-status-setter")
@@ -1489,9 +1489,9 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
         .expect("human dry-run canceled Pomodoro cleanup");
     assert_success(&human_dry_run);
     assert!(
-        stdout(&human_dry_run)
-            .contains("would remove canceled task references")
-            && stdout(&human_dry_run).contains("4 canceled-reference removals"),
+        stdout(&human_dry_run).contains(
+            "would remove list items containing canceled task references"
+        ) && stdout(&human_dry_run).contains("4 canceled-reference triggers"),
         "unexpected canceled cleanup dry-run report:\n{}",
         format_output(&human_dry_run)
     );
@@ -1507,8 +1507,9 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
         .expect("apply canceled Pomodoro cleanup");
     assert_success(&applied);
     assert!(
-        stdout(&applied).contains("removed canceled task references")
-            && stdout(&applied).contains("4 canceled-reference removals"),
+        stdout(&applied)
+            .contains("removed list items containing canceled task references")
+            && stdout(&applied).contains("4 canceled-reference triggers"),
         "unexpected canceled cleanup report:\n{}",
         format_output(&applied)
     );
@@ -1518,10 +1519,6 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
             "# Daily\n\n",
             "## Pomodoros\n\n",
             "- [ ] Current (0900-0930) [[tasks#^standard]]\n",
-            "  - standard \n",
-            "  - live [[tasks#^live]] custom  tail\n",
-            "  - history  and ~~[[tasks#^done]]~~\n",
-            "  - all \n",
             "  - mixed [[tasks#^mixed]]\n",
             "  - unresolved [[missing#^nope]]\n",
             "  ```md\n",
@@ -1537,7 +1534,7 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
     for expected in [
         "- [-] #task Standard canceled root ^standard",
         "- [C] #task Custom canceled root ^custom",
-        "- [*] #task Live root ^live",
+        "- [ ] #task Live root ^live",
         "- [x] #task Completed task ^done",
         "- [-] #task All canceled conventional ^all-canceled",
         "- [C] #task All canceled custom ^all-canceled",
