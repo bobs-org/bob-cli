@@ -46,5 +46,5 @@ IMPORTANT REMINDER: Do NOT locate, clone, or web-fetch another repo's contents a
 The below files contain detailed reference material. When working in their domain, you MUST use your `/sase_memory_read`
 skill to review their contents. Do not read canonical memory files directly.
 
-**`memory/cli_rules.md`**  
+**`sase/memory/cli_rules.md`**  
 Read anytime new CLI subcommands or options are added.
