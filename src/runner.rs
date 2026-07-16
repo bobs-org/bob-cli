@@ -61,12 +61,6 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Highlights,
     },
     Subcommand {
-        name: "mark-next-tasks",
-        script_command: None,
-        about: "Sync active task dependencies and Pomodoro links",
-        native_command: NativeCommand::MarkNextTasks,
-    },
-    Subcommand {
         name: "move-done-tasks",
         script_command: None,
         about: "Move done and canceled tasks and maintain done links",
@@ -109,12 +103,25 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Query,
     },
     Subcommand {
+        name: "task-status-setter",
+        script_command: None,
+        about: "Sync active task dependencies and Pomodoro links",
+        native_command: NativeCommand::TaskStatusSetter,
+    },
+    Subcommand {
         name: "tmux-pomodoro",
         script_command: Some("tmux_bob_pomodoro"),
         about: "Print Pomodoro status for tmux",
         native_command: NativeCommand::TmuxPomodoro,
     },
 ];
+
+const HIDDEN_SUBCOMMAND_ALIASES: &[Subcommand] = &[Subcommand {
+    name: "mark-next-tasks",
+    script_command: None,
+    about: "Compatibility alias for task-status-setter",
+    native_command: NativeCommand::TaskStatusSetter,
+}];
 
 #[derive(Debug, Clone)]
 pub struct RunnerError {
@@ -262,7 +269,8 @@ Examples:
                                  Print matching note paths
   bob highlights scan --dry-run
                                  Preview Highlights reference note sync
-  bob mark-next-tasks --dry-run  Preview dependency status synchronization
+  bob task-status-setter --dry-run
+                                 Preview dependency status synchronization
   bob move-done-tasks --threshold 10
                                  Move tasks and maintain done links
   bob nightly                    Run the nightly sync and maintenance steps
@@ -295,6 +303,11 @@ fn build_cli() -> ClapCommand {
         command = command
             .subcommand(delegate_subcommand(subcommand.name, subcommand.about));
     }
+    for alias in HIDDEN_SUBCOMMAND_ALIASES {
+        command = command.subcommand(
+            delegate_subcommand(alias.name, alias.about).hide(true),
+        );
+    }
 
     command
 }
@@ -315,10 +328,13 @@ fn delegate_subcommand(name: &'static str, about: &'static str) -> ClapCommand {
 fn command_for_subcommand(
     subcommand: &str,
 ) -> Option<(Option<&'static str>, NativeCommand)> {
-    SUBCOMMANDS.iter().find_map(|command| {
-        (command.name == subcommand)
-            .then_some((command.script_command, command.native_command))
-    })
+    SUBCOMMANDS
+        .iter()
+        .chain(HIDDEN_SUBCOMMAND_ALIASES)
+        .find_map(|command| {
+            (command.name == subcommand)
+                .then_some((command.script_command, command.native_command))
+        })
 }
 
 fn run_command_or_report(

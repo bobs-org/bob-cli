@@ -33,7 +33,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" capture --help
 "$root/bin/bob" query --help
 "$root/bin/bob" highlights --help
-"$root/bin/bob" mark-next-tasks --help
+"$root/bin/bob" task-status-setter --help
 "$root/bin/bob" move-done-tasks --help
 "$root/bin/bob" nightly --help
 "$root/bin/bob" notify --help
@@ -297,7 +297,7 @@ The full command contract and live smoke-test steps live in
 [`docs/dataview.md`](docs/dataview.md).
 
 ```bash
-bob mark-next-tasks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
+bob task-status-setter [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
 Synchronizes active task statuses from block links beneath open Pomodoros in
@@ -312,11 +312,13 @@ the command's vault-wide Next clearing policy. Vault-wide Tasks
 `[id:: ...]`/`[dependsOn:: ...]` metadata is reconciled independently: any
 recognized open parent with an open dependency becomes Blocked (`[?]`), and a
 no-longer-blocked task returns to its final Pomodoro-derived rank or Ready.
-Done, canceled, and non-task parents remain terminal. Blocked writes require a
-single compatible `Blocked`/`?`/`ON_HOLD` Tasks registry entry and fail before
-any note write when that contract is absent or incompatible. It also retires links to completed Tasks
-tasks as `~~[[...]]~~` and moves bullets found beneath open Pomodoros to the current timed Pomodoro, or
-the last completed Pomodoro when there is no current one. It also marks live
+Blocked tasks with no dependency metadata recover on this whole-vault pass;
+Done, canceled, non-task, and unknown parents remain untouched. Blocked writes
+require a single compatible `Blocked`/`?`/`ON_HOLD` Tasks registry entry and
+fail before any note write when that contract is absent or incompatible. It
+also retires links to completed Tasks tasks as `~~[[...]]~~` and moves bullets
+found beneath open Pomodoros to the current timed Pomodoro, or the last
+completed Pomodoro when there is no current one. It also marks live
 non-transcluded links beneath completed Pomodoros, keeps embedded links
 unmarked, preserves the marker provenance of already-struck history, and
 removes stray markers beneath open Pomodoros. In-progress `[/]` tasks are never
@@ -336,12 +338,20 @@ dependency chain a minimum desired status of Next:
   - [[Projects/Alpha#^ship-design]]
 ```
 
-Run `bob mark-next-tasks --dry-run` to preview every Next or In-Progress promotion, clear, Blocked transition, unblock,
-duplicate-line removal, retirement, move, and Pomodoro-marker repair. The
-command refuses to change files if the daily note is missing,
+Run `bob task-status-setter --dry-run` to preview every Next or In-Progress
+promotion, clear, Blocked transition, unblock, duplicate-line removal,
+retirement, move, and Pomodoro-marker repair. The command refuses to change
+files if the daily note is missing,
 lacks a `Pomodoros` section, or has multiple open timed Pomodoros. The full
 sync, link-resolution, exclusion, output, and JSON contract lives in
-[`docs/mark-next-tasks.md`](docs/mark-next-tasks.md).
+[`docs/task-status-setter.md`](docs/task-status-setter.md).
+
+Task Status Cycler's Ctrl+Enter path performs a narrower immediate recovery:
+when the keypress closes a dependency's final recognized open instance, an
+affected Blocked dependent becomes Ready. It preserves terminal and unrelated
+tasks and leaves Ready/Next/In-Progress ranking to the next authoritative
+`bob task-status-setter` pass. The hidden `mark-next-tasks` spelling remains a
+compatibility-only alias and is not listed in top-level help.
 
 ```bash
 bob move-done-tasks [-t|--threshold N]
@@ -616,11 +626,11 @@ clipboard source alone.
 `obsidian eval` by `bob query --engine obsidian`.
 
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`,
-Pomodoro-linked `bob capture` requests, and `bob mark-next-tasks`.
+Pomodoro-linked `bob capture` requests, and `bob task-status-setter`.
 
 `BOB_NOW` sets the current timestamp for Pomodoro status, the `bob capture`
 `[created::YYYY-MM-DD]` stamp, and default runtime note selection, including
-the daily note used by `bob mark-next-tasks`. It also controls the default
+the daily note used by `bob task-status-setter`. It also controls the default
 `bob move-done-tasks YYYY-MM-DD` commit message date.
 Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 `YYYY-MM-DD HH:MM:SS`.

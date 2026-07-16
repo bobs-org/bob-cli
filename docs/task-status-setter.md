@@ -1,6 +1,6 @@
-# Next Task Sync
+# Task Status Setter
 
-`bob mark-next-tasks` makes today's Pomodoro ledger the source of truth for
+`bob task-status-setter` makes today's Pomodoro ledger the source of truth for
 active Obsidian Tasks statuses and keeps
 references to completed tasks retired as struck, non-embedded links beneath
 their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
@@ -14,7 +14,7 @@ independently reconciles the derived Blocked (`[?]`) marker from Tasks
 ## Usage
 
 ```bash
-bob mark-next-tasks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
+bob task-status-setter [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
 The vault root comes from `--bob-dir`, then `BOB_DIR`, then `~/bob`. The daily
@@ -23,6 +23,10 @@ note comes from `BOB_DAY_FILE` when set; otherwise it is
 
 Use `--dry-run` to compute and print the complete sync without writing files.
 Repeated successful runs are idempotent.
+
+`task-status-setter` is the canonical and documented command name. The hidden
+`mark-next-tasks` spelling remains a compatibility-only dispatch alias and
+shows canonical usage when asked for help.
 
 ## Sync Rules
 
@@ -123,18 +127,35 @@ parenthesized fields:
 A recognized non-terminal parent is blocked when any `dependsOn` value matches
 at least one open task with the same vault-wide `id`. `TODO`, `IN_PROGRESS`,
 and `ON_HOLD` targets are open. `DONE`, `CANCELLED`, and `NON_TASK` targets do
-not block. Missing IDs are ignored; if an ID is duplicated, any open instance
-is sufficient. Self-dependencies, chains, and cycles therefore remain blocked
-under the same direct Tasks 8 semantics. Only direct metadata decides a
-parent's marker; transitive blocking follows because Blocked is itself an open
-`ON_HOLD` status.
+not block, and neither do unrecognized target statuses. Missing IDs are
+ignored; if an ID is duplicated, any recognized open instance is sufficient.
+Self-dependencies, chains, and cycles therefore remain blocked under the same
+direct Tasks 8 semantics. Only direct metadata decides a parent's marker;
+transitive blocking follows because Blocked is itself an open `ON_HOLD`
+status.
 
 Blocked is derived state. It overrides Ready (`[ ]`), Next (`[*]`), and In
 Progress (`[/]`) while an open dependency exists. Once all matching targets
 are terminal or missing, a Blocked task returns to the final active status
 computed by the Pomodoro graph (`[*]` or `[/]`), or Ready when unreachable. No
-hidden previous-status field is stored. Terminal parents and unknown/custom
-parent statuses remain untouched even if they retain dependency metadata.
+hidden previous-status field is stored. A Blocked task with no `dependsOn`
+metadata is likewise recovered to its final Pomodoro rank or Ready. Terminal
+parents and unknown/custom parent statuses remain untouched even if they retain
+dependency metadata.
+
+Ctrl+Enter recovery in the Task Status Cycler plugin is intentionally narrower
+and immediate. After that keypress actually changes one or more tasks to Done,
+the plugin reopens only Blocked dependents that directly name one of those
+tasks and have no other recognized open dependency in the post-close vault
+snapshot. The immediate target is always Ready (`[ ]`): the plugin does not
+guess the final Pomodoro rank. It reads unsaved open Markdown buffers, preserves
+the active cursor, skips stale or failed notes without rolling back completed
+tasks, and serializes recovery with closed-reference retirement. A later
+`bob task-status-setter` run remains authoritative across the whole vault and
+may promote the recovered task to Next or In Progress. Closing a dependency
+never reopens a Done, canceled, non-task, unknown, unrelated, or already-active
+dependent, and Ctrl+Enter does not clean unrelated Blocked tasks with no
+dependencies.
 
 The installed Tasks registry must contain exactly one compatible status:
 

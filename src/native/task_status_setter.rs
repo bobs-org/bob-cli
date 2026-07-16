@@ -22,7 +22,7 @@ use super::{
     style::{display_width, pad_right, Styler},
 };
 
-const COMMAND_NAME: &str = "bob mark-next-tasks";
+const COMMAND_NAME: &str = "bob task-status-setter";
 const DEFAULT_GLOBAL_FILTER: &str = "#task";
 const TASKS_SETTINGS: &str =
     ".obsidian/plugins/obsidian-tasks-plugin/data.json";
@@ -38,7 +38,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
     let format = OutputFormat::from_matches(&matches);
     let request = Request::from_matches(&matches);
-    match sync_next_tasks(&request) {
+    match sync_task_statuses(&request) {
         Ok(result) => {
             print_result(&result, format);
             0
@@ -93,7 +93,7 @@ section, as well as notes with multiple open timed Pomodoros, fail before any \
 file is changed.",
         )
         .after_help(
-            "Examples:\n  bob mark-next-tasks\n  bob mark-next-tasks --dry-run\n  bob mark-next-tasks --format json\n  bob mark-next-tasks --bob-dir /tmp/bob-vault\n\nEnvironment:\n  BOB_DAY_FILE  exact daily note used as the Pomodoro source\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time override for daily-note selection",
+            "Examples:\n  bob task-status-setter\n  bob task-status-setter --dry-run\n  bob task-status-setter --format json\n  bob task-status-setter --bob-dir /tmp/bob-vault\n\nEnvironment:\n  BOB_DAY_FILE  exact daily note used as the Pomodoro source\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time override for daily-note selection",
         )
         .disable_help_flag(true)
         .arg(
@@ -457,7 +457,7 @@ impl RankedStatus {
     }
 }
 
-fn sync_next_tasks(request: &Request) -> Result<SyncResult, SyncError> {
+fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
     let daily_path = pomodoro::day_file_for(&request.bob_dir);
     let daily_contents = fs::read_to_string(&daily_path).map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
@@ -784,7 +784,7 @@ fn task_dependency_states(
                 continue;
             };
             let is_open = identities.entry(task_id.clone()).or_default();
-            *is_open |= task.status_type.is_open();
+            *is_open |= task.status_recognized && task.status_type.is_open();
         }
     }
 
@@ -2344,7 +2344,8 @@ fn print_result(result: &SyncResult, format: OutputFormat) {
     match format {
         OutputFormat::Json => println!(
             "{}",
-            serde_json::to_string(result).expect("serialize mark-next result")
+            serde_json::to_string(result)
+                .expect("serialize task-status-setter result")
         ),
         OutputFormat::Human => print_human_result(result),
     }
@@ -2370,14 +2371,14 @@ fn print_human_result(result: &SyncResult) {
     };
     if change_count == 0 {
         println!(
-            "{prefix} mark-next-tasks  {} \u{2014} already in sync, no changes",
+            "{prefix} task-status-setter  {} \u{2014} already in sync, no changes",
             styler.cyan(&result.daily_file)
         );
         return;
     }
 
     println!(
-        "{prefix} mark-next-tasks  {}",
+        "{prefix} task-status-setter  {}",
         styler.cyan(&result.daily_file)
     );
     println!(
@@ -3148,10 +3149,7 @@ mod tests {
         }];
         let states = task_dependency_states(&files);
         assert_eq!(states[&(0, 5)].open_dependency_ids, ["self"]);
-        assert_eq!(
-            states[&(0, 6)].open_dependency_ids,
-            ["duplicate", "unknown"]
-        );
+        assert_eq!(states[&(0, 6)].open_dependency_ids, ["duplicate"]);
         assert_eq!(states[&(0, 6)].unresolved_dependency_ids, ["missing"]);
     }
 

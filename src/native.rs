@@ -17,7 +17,6 @@ mod collect_done;
 mod dataview;
 mod env;
 mod highlights_ref;
-mod mark_next;
 mod markdown;
 mod nightly;
 mod notify;
@@ -27,6 +26,7 @@ mod pomodoro;
 mod projects;
 mod style;
 mod sync;
+mod task_status_setter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {
@@ -36,13 +36,13 @@ pub(crate) enum NativeCommand {
     CaptureTargets,
     Query,
     Highlights,
-    MarkNextTasks,
     MoveDoneTasks,
     Nightly,
     Notify,
     Plugins,
     Pomodoro,
     Projects,
+    TaskStatusSetter,
     TmuxPomodoro,
 }
 
@@ -66,13 +66,13 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::CaptureTargets => capture_targets::run(args),
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),
-        NativeCommand::MarkNextTasks => mark_next::run(args),
         NativeCommand::MoveDoneTasks => collect_done::run(args),
         NativeCommand::Nightly => nightly::run(args),
         NativeCommand::Notify => notify::run(args),
         NativeCommand::Plugins => plugins::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),
         NativeCommand::Projects => projects::run(args),
+        NativeCommand::TaskStatusSetter => task_status_setter::run(args),
         NativeCommand::TmuxPomodoro => pomodoro::run_tmux(args),
     }
 }
