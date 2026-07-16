@@ -5,11 +5,13 @@ active Obsidian Tasks statuses and keeps
 references to completed tasks retired as struck, non-embedded links beneath
 their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
 the machine-owned Pomodoro marker (`🍅`); embedded and provenance-unknown
-retired links do not. Links beneath open Pomodoros are unmarked. It
-also follows transcluded dependency bullets recursively, promoting each target
-to the strongest applicable Next (`[*]`) or In Progress (`[/]`) status. It
-independently reconciles the derived Blocked (`[?]`) marker from Tasks
-`[id:: ...]` and `[dependsOn:: ...]` metadata.
+retired links do not. Links beneath open Pomodoros are unmarked, and links to
+unambiguously canceled Tasks tasks are removed from those open Pomodoros
+without changing the canceled task itself. It also follows transcluded
+dependency bullets recursively, promoting each target to the strongest
+applicable Next (`[*]`) or In Progress (`[/]`) status. It independently
+reconciles the derived Blocked (`[?]`) marker from Tasks `[id:: ...]` and
+`[dependsOn:: ...]` metadata.
 
 ## Usage
 
@@ -68,12 +70,44 @@ beneath completed or cancelled Pomodoros, top-level entry lines, fenced
 examples, and unresolved or non-task targets are not destructive cleanup
 candidates.
 
+### Canceled Task References
+
+After duplicate-line ownership is decided, every surviving block-link
+occurrence beneath an open Pomodoro is checked against the Tasks status
+registry. The occurrence is removed when its resolved task has a recognized
+`CANCELLED` status. This includes conventional `[-]` tasks and any configured
+single-character symbol whose `statusSettings.coreStatuses` or
+`statusSettings.customStatuses` entry has type `CANCELLED`. The task remains
+canceled; only its daily-ledger link token is removed.
+
+The removal applies independently to plain, embedded, aliased,
+Pomodoro-marked, and exactly struck forms. The complete managed token is
+removed, including `!`, `🍅`, or exact `~~...~~` decoration when present. The
+containing bullet, its indentation, other prose and links, nested content, and
+line ending are preserved. Multiple qualifying occurrences on one physical
+line are removed in occurrence order. Surviving live and completed links on
+that line continue through their existing status, retirement, relocation, and
+marker policies.
+
+Cleanup is limited to indented bullets owned by open Pomodoros in the selected
+daily note. Links beneath completed or canceled Pomodoros, on top-level
+Pomodoro lines, outside `## Pomodoros`, or inside fenced examples remain
+untouched by this rule. Unresolved links and links that do not resolve to a
+scanned Tasks task also remain and keep their warning behavior.
+
+If one block ID matches several Tasks task lines, every match must have a
+recognized `CANCELLED` type before an occurrence is removed. All-canceled
+duplicates qualify; canceled/open, canceled/done, and canceled/unknown mixes
+remain in place and produce an ambiguity warning. A physical line already
+selected by cross-Pomodoro duplicate cleanup is deleted once and does not also
+produce canceled-reference edits or reports.
+
 The rewritten Pomodoro section is scanned again after duplicate removal and
-completed-reference structural rewrites. Only references that will actually be
-written contribute to the direct desired-status map and dependency graph. Thus an
-otherwise-live task mentioned only as unrelated content on a removed line, and
-its otherwise-unreachable dependency chain, are cleared from Next in that same
-run.
+canceled/completed-reference structural rewrites. Only references that will
+actually be written contribute to the direct desired-status map and dependency
+graph. Thus an otherwise-live task mentioned only as unrelated content on a
+removed line, a removed canceled root, and any otherwise-unreachable dependency
+chain stop contributing desired Next or In-Progress state in that same run.
 
 After resolving the surviving direct Pomodoro links, the command reads
 dependency edges from the linked tasks' child blocks. An edge must be a child
@@ -310,16 +344,20 @@ Unresolved direct or dependency links are warnings, not failures. If duplicate
 task block IDs occur in one resolved note, every matching task is synchronized
 and the ambiguity is reported. Completed-link normalization proceeds only when
 all duplicate matches are complete; conflicting completion states are warned
-and left structurally unchanged.
+and left structurally unchanged. Canceled-link removal likewise proceeds only
+when every match has a recognized `CANCELLED` status; mixed cancellation states
+are warned and retained.
 
 ## Output
 
 Human output lists every Next promotion, In-Progress promotion, clear, Blocked
 transition, unblock, duplicate line removal, retired reference, move, and
-marker repair, followed by a summary. Blocked rows include the open dependency
-IDs; unblocked rows include unresolved IDs when present. Duplicate removals
-show the original daily-note line number, text, owning Pomodoro, and canonical
-task identities. Marker additions and removals have their own
+marker repair, plus every canceled-reference removal, followed by a summary.
+Canceled-reference rows show the target, block ID, original one-based line
+number, and owning Pomodoro. Blocked rows include the open dependency IDs;
+unblocked rows include unresolved IDs when present. Duplicate removals show the
+original daily-note line number, text, owning Pomodoro, and canonical task
+identities. Marker additions and removals have their own
 `marked`/`unmarked` sections and summary counts. Dependency-derived promotions
 carry a `(dependency)` suffix. Next and In-Progress promotions have separate
 sections and summary counts. Dry-run
@@ -414,6 +452,14 @@ JSON mode prints one object on stdout with these stable fields:
     }
   ],
   "marker_removed_references": [],
+  "removed_canceled_references": [
+    {
+      "target": "dev",
+      "block_id": "canceled-work",
+      "line_number": 8,
+      "pomodoro": "- [ ] Current work (0900-0930)"
+    }
+  ],
   "removed_duplicate_lines": [
     {
       "line_number": 9,
@@ -435,8 +481,10 @@ JSON mode prints one object on stdout with these stable fields:
 
 `references` retains its input-count contract and counts unique raw direct
 Pomodoro block links before structural cleanup; consumers do not need to
-reinterpret that older field. `dependency_references` counts additional unique
-task blocks reached through dependency edges in the final rewritten ledger.
+reinterpret that older field. A canceled reference removed during this run
+therefore remains part of `references`, while the post-rewrite graph excludes
+it. `dependency_references` counts additional unique task blocks reached
+through dependency edges in the final rewritten ledger.
 `marked_next` contains only `[ ] -> [*]` changes, while
 `marked_in_progress` contains both `[ ] -> [/]` and `[*] -> [/]` changes. Each
 change item's `dependency` boolean distinguishes direct references from
@@ -444,6 +492,9 @@ dependency-only graph reachability. `marked_blocked` and `unblocked` are
 additive fields and do not duplicate changes into those older arrays. Their
 `from`/`to` values are the actual checkbox symbols, and their dependency-ID
 arrays explain the derived decision. Each
+`removed_canceled_references` item represents one removed occurrence and
+contains its link `target`, `block_id`, one-based original `line_number`, and
+owning `pomodoro`. The array follows deterministic file/occurrence order. Each
 `removed_duplicate_lines` item represents one physical line and contains its
 one-based original `line_number`, original `line`, owning `pomodoro`, and one or
 more canonical path-plus-block `duplicate_tasks`. Each unresolved reference

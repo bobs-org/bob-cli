@@ -76,14 +76,18 @@ Completed linked-task references \
 are retired as struck, non-embedded links. References found under open \
 Pomodoros keep the existing policy of moving their containing bullets beneath \
 the current timed Pomodoro, or the last completed Pomodoro when \
-there is no current one. Done, cancelled, non-task, and unknown statuses are left unchanged.\n\n\
+there is no current one. Links to unambiguously cancelled Tasks tasks are \
+removed from open Pomodoros, including custom single-character statuses whose \
+Tasks type is CANCELLED; the cancelled task status itself is left unchanged. \
+Done, cancelled, non-task, and unknown task statuses are never transitioned.\n\n\
 When the same resolved task is linked beneath multiple open Pomodoros, the \
 first open Pomodoro in file order keeps ownership and every conflicting \
 physical line beneath later open Pomodoros is removed in full. Aliases, \
 embeds, same-note links, and alternate note spellings compare by resolved \
 vault-relative path plus block ID. Repeats within one owning Pomodoro are \
 preserved, as are unresolved links and links beneath completed or cancelled \
-Pomodoros.\n\n\
+Pomodoros. If a block ID matches multiple task lines, canceled-link removal \
+requires every match to have a recognized CANCELLED status.\n\n\
 Only Markdown checkbox lines allowed by the Obsidian Tasks globalFilter are \
 considered. The scan skips hidden directories, templates, generated notes, \
 and done archives. Blocked writes require exactly one compatible Tasks status \
@@ -219,6 +223,14 @@ struct MarkerReference {
     pomodoro: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct RemovedCanceledReference {
+    target: String,
+    block_id: String,
+    line_number: usize,
+    pomodoro: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 struct DuplicateTaskIdentity {
     path: String,
@@ -252,6 +264,7 @@ struct SyncResult {
     moved_completed_references: Vec<MovedCompletedReference>,
     marker_added_references: Vec<MarkerReference>,
     marker_removed_references: Vec<MarkerReference>,
+    removed_canceled_references: Vec<RemovedCanceledReference>,
     removed_duplicate_lines: Vec<RemovedDuplicateLine>,
     kept_next: usize,
     kept_in_progress: usize,
@@ -403,6 +416,7 @@ struct StructuralPlan {
     moved: Vec<MovedCompletedReference>,
     marker_added: Vec<MarkerReference>,
     marker_removed: Vec<MarkerReference>,
+    removed_canceled: Vec<RemovedCanceledReference>,
 }
 
 #[derive(Debug, Clone)]
@@ -563,9 +577,27 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
             let has_not_done = statuses.iter().any(|status| {
                 !is_done_status(*status, &settings.done_statuses)
             });
-            let reason = if has_done && has_not_done {
+            let has_canceled = statuses.iter().any(|status| {
+                is_canceled_status(*status, &settings.status_types)
+            });
+            let has_not_canceled = statuses.iter().any(|status| {
+                !is_canceled_status(*status, &settings.status_types)
+            });
+            let reason = if has_done && has_not_done && has_canceled {
+                format!(
+                    "{} has {} tasks with conflicting statuses; completed-link normalization and canceled-link removal were skipped",
+                    display_path(&path),
+                    statuses.len()
+                )
+            } else if has_done && has_not_done {
                 format!(
                     "{} has {} tasks with conflicting statuses; completed-link normalization was skipped",
+                    display_path(&path),
+                    statuses.len()
+                )
+            } else if has_canceled && has_not_canceled {
+                format!(
+                    "{} has {} tasks with conflicting statuses; canceled-link removal was skipped",
                     display_path(&path),
                     statuses.len()
                 )
@@ -599,6 +631,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         &pomodoro_model,
         &resolved_references,
         &settings.done_statuses,
+        &settings.status_types,
         &deleted_lines,
     );
     let structurally_updated_daily = apply_structural_plan(
@@ -761,6 +794,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         moved_completed_references: structural_plan.moved,
         marker_added_references: structural_plan.marker_added,
         marker_removed_references: structural_plan.marker_removed,
+        removed_canceled_references: structural_plan.removed_canceled,
         removed_duplicate_lines,
         kept_next,
         kept_in_progress,
@@ -1354,6 +1388,13 @@ fn is_done_status(status: char, done_statuses: &BTreeSet<char>) -> bool {
     matches!(status, 'x' | 'X') || done_statuses.contains(&status)
 }
 
+fn is_canceled_status(
+    status: char,
+    status_types: &BTreeMap<char, TaskStatusType>,
+) -> bool {
+    status_types.get(&status) == Some(&TaskStatusType::Cancelled)
+}
+
 fn plan_duplicate_line_removals(
     lines: &[&str],
     model: &PomodoroModel,
@@ -1414,6 +1455,7 @@ fn plan_structural_changes(
     model: &PomodoroModel,
     resolved: &BTreeMap<RawReference, ResolvedReference>,
     done_statuses: &BTreeSet<char>,
+    status_types: &BTreeMap<char, TaskStatusType>,
     deleted_lines: &BTreeSet<usize>,
 ) -> StructuralPlan {
     let current = model
@@ -1428,11 +1470,26 @@ fn plan_structural_changes(
     let mut moved = Vec::new();
     let mut marker_added = Vec::new();
     let mut marker_removed = Vec::new();
+    let mut removed_canceled = Vec::new();
 
     for bullet in &model.bullets {
         if deleted_lines.contains(&bullet.line_index) {
             continue;
         }
+        let source = &model.entries[bullet.entry_index];
+        let canceled_links = bullet
+            .links
+            .iter()
+            .filter(|link| {
+                source.open
+                    && resolved.get(&link.reference).is_some_and(|reference| {
+                        !reference.statuses.is_empty()
+                            && reference.statuses.iter().all(|status| {
+                                is_canceled_status(*status, status_types)
+                            })
+                    })
+            })
+            .collect::<Vec<_>>();
         let completed_links = bullet
             .links
             .iter()
@@ -1445,18 +1502,22 @@ fn plan_structural_changes(
                 })
             })
             .collect::<Vec<_>>();
-        let source = &model.entries[bullet.entry_index];
         let move_target = if !completed_links.is_empty() && source.open {
             target_entry.filter(|target| {
                 if *target == bullet.entry_index {
                     return false;
                 }
                 let has_live_reference = bullet.links.iter().any(|link| {
-                    resolved.get(&link.reference).is_some_and(|reference| {
-                        reference.statuses.iter().any(|status| {
-                            !is_done_status(*status, done_statuses)
-                        })
-                    })
+                    !canceled_links
+                        .iter()
+                        .any(|canceled| std::ptr::eq(*canceled, link))
+                        && resolved.get(&link.reference).is_some_and(
+                            |reference| {
+                                reference.statuses.iter().any(|status| {
+                                    !is_done_status(*status, done_statuses)
+                                })
+                            },
+                        )
                 });
                 model.entries[*target].open || !has_live_reference
             })
@@ -1465,6 +1526,25 @@ fn plan_structural_changes(
         };
         let final_entry = move_target.unwrap_or(bullet.entry_index);
         for link in &bullet.links {
+            if canceled_links
+                .iter()
+                .any(|canceled| std::ptr::eq(*canceled, link))
+            {
+                token_edits.entry(bullet.line_index).or_default().push(
+                    TokenEdit {
+                        start: link.edit_start,
+                        end: link.edit_end,
+                        replacement: String::new(),
+                    },
+                );
+                removed_canceled.push(RemovedCanceledReference {
+                    target: link.reference.target.clone(),
+                    block_id: link.reference.block_id.clone(),
+                    line_number: bullet.line_index + 1,
+                    pomodoro: source.context.clone(),
+                });
+                continue;
+            }
             let retire = completed_links
                 .iter()
                 .any(|completed| std::ptr::eq(*completed, link));
@@ -1544,6 +1624,7 @@ fn plan_structural_changes(
         moved,
         marker_added,
         marker_removed,
+        removed_canceled,
     }
 }
 
@@ -2363,6 +2444,7 @@ fn print_human_result(result: &SyncResult) {
         + result.moved_completed_references.len()
         + result.marker_added_references.len()
         + result.marker_removed_references.len()
+        + result.removed_canceled_references.len()
         + result.removed_duplicate_lines.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
@@ -2443,6 +2525,7 @@ fn print_human_result(result: &SyncResult) {
     );
     print_completed_reference_sections(result);
     print_marker_reference_sections(result);
+    print_canceled_reference_section(result);
     print_duplicate_line_section(result);
     if result.kept_next > 0 || result.kept_in_progress > 0 {
         println!();
@@ -2452,7 +2535,7 @@ fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} duplicate-line removals",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference removals, {} duplicate-line removals",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -2462,6 +2545,7 @@ fn print_human_result(result: &SyncResult) {
         result.moved_completed_references.len(),
         result.marker_added_references.len(),
         result.marker_removed_references.len(),
+        result.removed_canceled_references.len(),
         result.removed_duplicate_lines.len()
     );
 }
@@ -2539,6 +2623,27 @@ fn print_duplicate_line_section(result: &SyncResult) {
             item.line.trim(),
             item.pomodoro,
             identities
+        );
+    }
+}
+
+fn print_canceled_reference_section(result: &SyncResult) {
+    if result.removed_canceled_references.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "  {} canceled task references",
+        if result.dry_run {
+            "would remove"
+        } else {
+            "removed"
+        }
+    );
+    for item in &result.removed_canceled_references {
+        println!(
+            "    [[{}#^{}]]  line {}  {}",
+            item.target, item.block_id, item.line_number, item.pomodoro
         );
     }
 }
@@ -2927,6 +3032,7 @@ mod tests {
             &model,
             &resolved,
             &BTreeSet::from(['x', 'X']),
+            &test_settings().status_types,
             &deleted_lines,
         );
 
@@ -2964,6 +3070,7 @@ mod tests {
             &model,
             &resolved,
             &BTreeSet::from(['x', 'X']),
+            &test_settings().status_types,
             &deleted_lines,
         );
 
@@ -3086,6 +3193,7 @@ mod tests {
                 ("dev", "live", vec![' ']),
             ]),
             &BTreeSet::from(['x', 'X']),
+            &test_settings().status_types,
             &BTreeSet::new(),
         );
         assert!(plan.moves.is_empty());
@@ -3327,6 +3435,7 @@ mod tests {
                 ("dev", "todo", vec![' ']),
             ]),
             &BTreeSet::from(['x', 'X']),
+            &test_settings().status_types,
             &BTreeSet::new(),
         );
         let updated = apply_structural_plan(contents, &model, &plan);
@@ -3363,6 +3472,7 @@ mod tests {
             &model,
             &resolved(&[("dev", "done", vec!['x'])]),
             &BTreeSet::from(['x', 'X']),
+            &test_settings().status_types,
             &BTreeSet::new(),
         );
         assert!(plan.moves.is_empty());
@@ -3386,6 +3496,7 @@ mod tests {
             &updated_model,
             &resolved(&[("dev", "done", vec!['x'])]),
             &BTreeSet::from(['x', 'X']),
+            &test_settings().status_types,
             &BTreeSet::new(),
         );
         assert!(
@@ -3422,6 +3533,7 @@ mod tests {
                 ("dev", "open", vec![' ']),
             ]),
             &BTreeSet::from(['x', 'X']),
+            &test_settings().status_types,
             &BTreeSet::new(),
         );
         assert_eq!(plan.marker_added.len(), 2);
@@ -3450,11 +3562,171 @@ mod tests {
             &model,
             &resolved(&[("dev", "duplicate", vec!['x', ' '])]),
             &BTreeSet::from(['x', 'X']),
+            &test_settings().status_types,
             &BTreeSet::new(),
         );
         assert!(plan.token_edits.is_empty());
         assert!(plan.moves.is_empty());
         assert_eq!(apply_structural_plan(contents, &model, &plan), contents);
+    }
+
+    #[test]
+    fn canceled_reference_removal_composes_with_other_structural_edits() {
+        let contents = concat!(
+            "- [ ] Open (0900-0930) with [[tasks#^plain]]\r\n",
+            "  - start [[tasks#^plain]] middle ![[tasks#^custom|Alias]] end\r\n",
+            "  - 🍅 [[tasks#^marked]] and ~~[[tasks#^struck]]~~ and [[tasks#^done]] and [[tasks#^live]]\r\n",
+            "  - [[tasks#^all-canceled]] and [[tasks#^mixed]] and [[missing#^unknown]]\r\n",
+            "  ```md\r\n",
+            "  - [[tasks#^plain]]\r\n",
+            "  ```\r\n",
+            "- [x] Completed\r\n",
+            "  - 🍅 [[tasks#^plain]]\r\n",
+            "- [-] Canceled\r\n",
+            "  - [[tasks#^custom]]",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved(&[
+            ("tasks", "plain", vec!['-']),
+            ("tasks", "custom", vec!['C']),
+            ("tasks", "marked", vec!['-']),
+            ("tasks", "struck", vec!['-']),
+            ("tasks", "done", vec!['x']),
+            ("tasks", "live", vec![' ']),
+            ("tasks", "all-canceled", vec!['-', 'C']),
+            ("tasks", "mixed", vec!['-', ' ']),
+        ]);
+        let mut settings = test_settings();
+        settings.status_types.insert('C', TaskStatusType::Cancelled);
+        let plan = plan_structural_changes(
+            &model,
+            &resolved,
+            &settings.done_statuses,
+            &settings.status_types,
+            &BTreeSet::new(),
+        );
+
+        assert_eq!(
+            plan.removed_canceled,
+            vec![
+                RemovedCanceledReference {
+                    target: "tasks".to_string(),
+                    block_id: "plain".to_string(),
+                    line_number: 2,
+                    pomodoro: "- [ ] Open (0900-0930) with [[tasks#^plain]]"
+                        .to_string(),
+                },
+                RemovedCanceledReference {
+                    target: "tasks".to_string(),
+                    block_id: "custom".to_string(),
+                    line_number: 2,
+                    pomodoro: "- [ ] Open (0900-0930) with [[tasks#^plain]]"
+                        .to_string(),
+                },
+                RemovedCanceledReference {
+                    target: "tasks".to_string(),
+                    block_id: "marked".to_string(),
+                    line_number: 3,
+                    pomodoro: "- [ ] Open (0900-0930) with [[tasks#^plain]]"
+                        .to_string(),
+                },
+                RemovedCanceledReference {
+                    target: "tasks".to_string(),
+                    block_id: "struck".to_string(),
+                    line_number: 3,
+                    pomodoro: "- [ ] Open (0900-0930) with [[tasks#^plain]]"
+                        .to_string(),
+                },
+                RemovedCanceledReference {
+                    target: "tasks".to_string(),
+                    block_id: "all-canceled".to_string(),
+                    line_number: 4,
+                    pomodoro: "- [ ] Open (0900-0930) with [[tasks#^plain]]"
+                        .to_string(),
+                },
+            ]
+        );
+        assert_eq!(plan.struck.len(), 1);
+        assert!(plan.marker_added.is_empty());
+        assert!(plan.marker_removed.is_empty());
+        let updated = apply_structural_plan(contents, &model, &plan);
+        assert_eq!(
+            updated,
+            concat!(
+                "- [ ] Open (0900-0930) with [[tasks#^plain]]\r\n",
+                "  - start  middle  end\r\n",
+                "  -  and  and ~~[[tasks#^done]]~~ and [[tasks#^live]]\r\n",
+                "  -  and [[tasks#^mixed]] and [[missing#^unknown]]\r\n",
+                "  ```md\r\n",
+                "  - [[tasks#^plain]]\r\n",
+                "  ```\r\n",
+                "- [x] Completed\r\n",
+                "  - 🍅 [[tasks#^plain]]\r\n",
+                "- [-] Canceled\r\n",
+                "  - [[tasks#^custom]]",
+            )
+        );
+        let updated_lines = logical_lines(&updated);
+        let updated_model =
+            scan_pomodoros(&updated_lines, 0..updated_lines.len());
+        assert!(!updated_model
+            .raw_references
+            .contains(&reference("tasks", "plain")));
+        assert!(updated_model
+            .raw_references
+            .contains(&reference("tasks", "live")));
+        assert!(updated_model
+            .raw_references
+            .contains(&reference("tasks", "mixed")));
+        let second = plan_structural_changes(
+            &updated_model,
+            &resolved,
+            &settings.done_statuses,
+            &settings.status_types,
+            &BTreeSet::new(),
+        );
+        assert!(second.removed_canceled.is_empty());
+        assert!(second.token_edits.is_empty());
+        assert_eq!(
+            apply_structural_plan(&updated, &updated_model, &second),
+            updated
+        );
+    }
+
+    #[test]
+    fn duplicate_deleted_lines_do_not_report_canceled_reference_edits() {
+        let contents = concat!(
+            "- [ ] First\n",
+            "  - [[tasks#^canceled]]\n",
+            "- [ ] Second\n",
+            "  - duplicate [[tasks#^canceled]]\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved(&[("tasks", "canceled", vec!['-'])]);
+        let removals = plan_duplicate_line_removals(&lines, &model, &resolved);
+        let deleted_lines = removals
+            .iter()
+            .map(|item| item.line_number - 1)
+            .collect::<BTreeSet<_>>();
+        let settings = test_settings();
+        let plan = plan_structural_changes(
+            &model,
+            &resolved,
+            &settings.done_statuses,
+            &settings.status_types,
+            &deleted_lines,
+        );
+
+        assert_eq!(removals.len(), 1);
+        assert_eq!(plan.removed_canceled.len(), 1);
+        assert_eq!(plan.removed_canceled[0].line_number, 2);
+        assert!(!plan.token_edits.contains_key(&3));
+        assert_eq!(
+            apply_structural_plan(contents, &model, &plan),
+            "- [ ] First\n  - \n- [ ] Second\n"
+        );
     }
 
     #[test]
@@ -3465,6 +3737,20 @@ mod tests {
         }
         for status in [' ', '*', '/', '-', '?'] {
             assert!(!is_done_status(status, &done));
+        }
+    }
+
+    #[test]
+    fn cancellation_classification_uses_recognized_tasks_status_types() {
+        let mut status_types = test_settings().status_types;
+        status_types.insert('C', TaskStatusType::Cancelled);
+        status_types.insert('Q', TaskStatusType::Todo);
+
+        for status in ['-', 'C'] {
+            assert!(is_canceled_status(status, &status_types));
+        }
+        for status in [' ', 'x', '*', '/', '?', 'Q', '!'] {
+            assert!(!is_canceled_status(status, &status_types));
         }
     }
 }

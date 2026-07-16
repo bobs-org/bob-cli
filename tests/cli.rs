@@ -1362,6 +1362,220 @@ fn task_status_setter_uses_custom_done_status_and_completed_fallback() {
 }
 
 #[test]
+fn task_status_setter_removes_canceled_open_pomodoro_references() {
+    let temp = TempDir::new("bob-cli-task-status-setter-canceled-links");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let tasks = vault.join("tasks.md");
+    let daily_before = concat!(
+        "# Daily\n\n",
+        "## Pomodoros\n\n",
+        "- [ ] Current (0900-0930) [[tasks#^standard]]\n",
+        "  - standard [[tasks#^standard]]\n",
+        "  - live [[tasks#^live]] custom ![[tasks#^custom|alias]] tail\n",
+        "  - history 🍅 ~~[[tasks#^standard|old]]~~ and [[tasks#^done]]\n",
+        "  - all [[tasks#^all-canceled]]\n",
+        "  - mixed [[tasks#^mixed]]\n",
+        "  - unresolved [[missing#^nope]]\n",
+        "  ```md\n",
+        "  - [[tasks#^standard]]\n",
+        "  ```\n",
+        "- [x] Completed\n",
+        "  - 🍅 [[tasks#^standard]]\n",
+        "- [-] Canceled\n",
+        "  - [[tasks#^custom]]\n",
+    );
+    let tasks_before = concat!(
+        "- [-] #task Standard canceled root ^standard\n",
+        "  - ![[#^dependency-only]]\n",
+        "- [C] #task Custom canceled root ^custom\n",
+        "- [ ] #task Live root ^live\n",
+        "- [x] #task Completed task ^done\n",
+        "- [-] #task All canceled conventional ^all-canceled\n",
+        "- [C] #task All canceled custom ^all-canceled\n",
+        "- [-] #task Mixed duplicate canceled ^mixed\n",
+        "- [ ] #task Mixed duplicate live ^mixed\n",
+        "- [*] #task Reachable only through canceled root ^dependency-only\n",
+    );
+    write_file(&daily, daily_before);
+    write_file(&tasks, tasks_before);
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        &blocked_tasks_settings_json(concat!(
+            ",\n      {\"symbol\":\"C\",\"name\":\"Custom canceled\",",
+            "\"nextStatusSymbol\":\" \",\"availableAsCommand\":true,",
+            "\"type\":\"CANCELLED\"}",
+        )),
+    );
+
+    let dry_run = bob_command()
+        .arg("task-status-setter")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run canceled Pomodoro cleanup");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
+    let repeated_dry_run = bob_command()
+        .arg("task-status-setter")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("repeat dry-run canceled Pomodoro cleanup");
+    assert_success(&repeated_dry_run);
+    assert_eq!(stdout(&repeated_dry_run), stdout(&dry_run));
+
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
+        .expect("canceled cleanup dry-run JSON");
+    assert_eq!(json["references"], 7);
+    assert_eq!(json["dependency_references"], 0);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 2);
+    assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["removed_canceled_references"],
+        serde_json::json!([
+            {
+                "target": "tasks",
+                "block_id": "standard",
+                "line_number": 6,
+                "pomodoro": "- [ ] Current (0900-0930) [[tasks#^standard]]"
+            },
+            {
+                "target": "tasks",
+                "block_id": "custom",
+                "line_number": 7,
+                "pomodoro": "- [ ] Current (0900-0930) [[tasks#^standard]]"
+            },
+            {
+                "target": "tasks",
+                "block_id": "standard",
+                "line_number": 8,
+                "pomodoro": "- [ ] Current (0900-0930) [[tasks#^standard]]"
+            },
+            {
+                "target": "tasks",
+                "block_id": "all-canceled",
+                "line_number": 9,
+                "pomodoro": "- [ ] Current (0900-0930) [[tasks#^standard]]"
+            }
+        ])
+    );
+    assert!(json["unresolved_references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["block_id"] == "mixed"
+            && item["reason"]
+                .as_str()
+                .unwrap()
+                .contains("canceled-link removal was skipped")));
+
+    let human_dry_run = bob_command()
+        .arg("task-status-setter")
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("human dry-run canceled Pomodoro cleanup");
+    assert_success(&human_dry_run);
+    assert!(
+        stdout(&human_dry_run)
+            .contains("would remove canceled task references")
+            && stdout(&human_dry_run).contains("4 canceled-reference removals"),
+        "unexpected canceled cleanup dry-run report:\n{}",
+        format_output(&human_dry_run)
+    );
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
+
+    let applied = bob_command()
+        .arg("task-status-setter")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply canceled Pomodoro cleanup");
+    assert_success(&applied);
+    assert!(
+        stdout(&applied).contains("removed canceled task references")
+            && stdout(&applied).contains("4 canceled-reference removals"),
+        "unexpected canceled cleanup report:\n{}",
+        format_output(&applied)
+    );
+    assert_eq!(
+        fs::read_to_string(&daily).unwrap(),
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930) [[tasks#^standard]]\n",
+            "  - standard \n",
+            "  - live [[tasks#^live]] custom  tail\n",
+            "  - history  and ~~[[tasks#^done]]~~\n",
+            "  - all \n",
+            "  - mixed [[tasks#^mixed]]\n",
+            "  - unresolved [[missing#^nope]]\n",
+            "  ```md\n",
+            "  - [[tasks#^standard]]\n",
+            "  ```\n",
+            "- [x] Completed\n",
+            "  - 🍅 [[tasks#^standard]]\n",
+            "- [-] Canceled\n",
+            "  - [[tasks#^custom]]\n",
+        )
+    );
+    let task_contents = fs::read_to_string(&tasks).unwrap();
+    for expected in [
+        "- [-] #task Standard canceled root ^standard",
+        "- [C] #task Custom canceled root ^custom",
+        "- [*] #task Live root ^live",
+        "- [x] #task Completed task ^done",
+        "- [-] #task All canceled conventional ^all-canceled",
+        "- [C] #task All canceled custom ^all-canceled",
+        "- [-] #task Mixed duplicate canceled ^mixed",
+        "- [*] #task Mixed duplicate live ^mixed",
+        "- [ ] #task Reachable only through canceled root ^dependency-only",
+    ] {
+        assert!(
+            task_contents.contains(expected),
+            "missing {expected}:\n{task_contents}"
+        );
+    }
+
+    let daily_after = fs::read_to_string(&daily).unwrap();
+    let tasks_after = fs::read_to_string(&tasks).unwrap();
+    let second = bob_command()
+        .arg("task-status-setter")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun canceled Pomodoro cleanup");
+    assert_success(&second);
+    let second_json: serde_json::Value =
+        serde_json::from_str(stdout(&second).trim()).unwrap();
+    assert!(second_json["removed_canceled_references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(second_json["marked_next"].as_array().unwrap().is_empty());
+    assert!(second_json["cleared"].as_array().unwrap().is_empty());
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_after);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_after);
+}
+
+#[test]
 fn task_status_setter_strikes_in_place_when_no_relocation_target_exists() {
     let temp = TempDir::new("bob-cli-task-status-setter-no-target");
     let vault = temp.path().join("vault");
