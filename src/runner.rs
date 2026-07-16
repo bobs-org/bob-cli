@@ -103,10 +103,10 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Query,
     },
     Subcommand {
-        name: "task-status-setter",
+        name: "task-status-hooks",
         script_command: None,
         about: "Sync active task dependencies and Pomodoro links",
-        native_command: NativeCommand::TaskStatusSetter,
+        native_command: NativeCommand::TaskStatusHooks,
     },
     Subcommand {
         name: "tmux-pomodoro",
@@ -116,12 +116,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
 ];
 
-const HIDDEN_SUBCOMMAND_ALIASES: &[Subcommand] = &[Subcommand {
-    name: "mark-next-tasks",
-    script_command: None,
-    about: "Compatibility alias for task-status-setter",
-    native_command: NativeCommand::TaskStatusSetter,
-}];
+const HIDDEN_SUBCOMMAND_ALIASES: &[Subcommand] = &[
+    Subcommand {
+        name: "mark-next-tasks",
+        script_command: None,
+        about: "Compatibility alias for task-status-hooks",
+        native_command: NativeCommand::TaskStatusHooks,
+    },
+    Subcommand {
+        name: "task-status-setter",
+        script_command: None,
+        about: "Compatibility alias for task-status-hooks",
+        native_command: NativeCommand::TaskStatusHooks,
+    },
+];
 
 #[derive(Debug, Clone)]
 pub struct RunnerError {
@@ -269,7 +277,7 @@ Examples:
                                  Print matching note paths
   bob highlights scan --dry-run
                                  Preview Highlights reference note sync
-  bob task-status-setter --dry-run
+  bob task-status-hooks --dry-run
                                  Preview dependency status synchronization
   bob move-done-tasks --threshold 10
                                  Move tasks and maintain done links

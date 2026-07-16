@@ -26,7 +26,7 @@ mod pomodoro;
 mod projects;
 mod style;
 mod sync;
-mod task_status_setter;
+mod task_status_hooks;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {
@@ -42,7 +42,7 @@ pub(crate) enum NativeCommand {
     Plugins,
     Pomodoro,
     Projects,
-    TaskStatusSetter,
+    TaskStatusHooks,
     TmuxPomodoro,
 }
 
@@ -72,7 +72,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Plugins => plugins::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),
         NativeCommand::Projects => projects::run(args),
-        NativeCommand::TaskStatusSetter => task_status_setter::run(args),
+        NativeCommand::TaskStatusHooks => task_status_hooks::run(args),
         NativeCommand::TmuxPomodoro => pomodoro::run_tmux(args),
     }
 }

@@ -1,6 +1,6 @@
-# Task Status Setter
+# Task Status Hooks
 
-`bob task-status-setter` makes today's Pomodoro ledger the source of truth for
+`bob task-status-hooks` makes today's Pomodoro ledger the source of truth for
 active Obsidian Tasks statuses and keeps
 references to completed tasks retired as struck, non-embedded links beneath
 their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
@@ -17,7 +17,7 @@ reconciles the derived Blocked (`[?]`) marker from Tasks `[id:: ...]` and
 ## Usage
 
 ```bash
-bob task-status-setter [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
+bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
 The vault root comes from `--bob-dir`, then `BOB_DIR`, then `~/bob`. The daily
@@ -27,9 +27,9 @@ note comes from `BOB_DAY_FILE` when set; otherwise it is
 Use `--dry-run` to compute and print the complete sync without writing files.
 Repeated successful runs are idempotent.
 
-`task-status-setter` is the canonical and documented command name. The hidden
-`mark-next-tasks` spelling remains a compatibility-only dispatch alias and
-shows canonical usage when asked for help.
+`task-status-hooks` is the canonical and documented command name. The hidden
+`task-status-setter` and `mark-next-tasks` spellings remain compatibility-only
+dispatch aliases and show canonical usage when asked for help.
 
 ## Sync Rules
 
@@ -194,7 +194,7 @@ snapshot. The immediate target is always Ready (`[ ]`): the plugin does not
 guess the final Pomodoro rank. It reads unsaved open Markdown buffers, preserves
 the active cursor, skips stale or failed notes without rolling back completed
 tasks, and serializes recovery with closed-reference retirement. A later
-`bob task-status-setter` run remains authoritative across the whole vault and
+`bob task-status-hooks` run remains authoritative across the whole vault and
 may promote the recovered task to Next or In Progress. Closing a dependency
 never reopens a Done, canceled, non-task, unknown, unrelated, or already-active
 dependent, and Ctrl+Enter does not clean unrelated Blocked tasks with no

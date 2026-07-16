@@ -33,7 +33,7 @@ cargo install --path . --locked --root "$root"
 "$root/bin/bob" capture --help
 "$root/bin/bob" query --help
 "$root/bin/bob" highlights --help
-"$root/bin/bob" task-status-setter --help
+"$root/bin/bob" task-status-hooks --help
 "$root/bin/bob" move-done-tasks --help
 "$root/bin/bob" nightly --help
 "$root/bin/bob" notify --help
@@ -297,7 +297,7 @@ The full command contract and live smoke-test steps live in
 [`docs/dataview.md`](docs/dataview.md).
 
 ```bash
-bob task-status-setter [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
+bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
 Synchronizes active task statuses from block links beneath open Pomodoros in
@@ -348,20 +348,21 @@ dependency chain a minimum desired status of Next:
   - [[Projects/Alpha#^ship-design]]
 ```
 
-Run `bob task-status-setter --dry-run` to preview every Next or In-Progress
+Run `bob task-status-hooks --dry-run` to preview every Next or In-Progress
 promotion, clear, Blocked transition, unblock, duplicate-line removal,
 canceled-reference list-item removal, retirement, move, and Pomodoro-marker
 repair. The command refuses to change files if the daily note is missing,
 lacks a `Pomodoros` section, or has multiple open timed Pomodoros. The full
 sync, link-resolution, exclusion, output, and JSON contract lives in
-[`docs/task-status-setter.md`](docs/task-status-setter.md).
+[`docs/task-status-hooks.md`](docs/task-status-hooks.md).
 
 Task Status Cycler's Ctrl+Enter path performs a narrower immediate recovery:
 when the keypress closes a dependency's final recognized open instance, an
 affected Blocked dependent becomes Ready. It preserves terminal and unrelated
 tasks and leaves Ready/Next/In-Progress ranking to the next authoritative
-`bob task-status-setter` pass. The hidden `mark-next-tasks` spelling remains a
-compatibility-only alias and is not listed in top-level help.
+`bob task-status-hooks` pass. The hidden `task-status-setter` and
+`mark-next-tasks` spellings remain compatibility-only aliases and are not
+listed in top-level help.
 
 ```bash
 bob move-done-tasks [-t|--threshold N]
@@ -636,11 +637,11 @@ clipboard source alone.
 `obsidian eval` by `bob query --engine obsidian`.
 
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`,
-Pomodoro-linked `bob capture` requests, and `bob task-status-setter`.
+Pomodoro-linked `bob capture` requests, and `bob task-status-hooks`.
 
 `BOB_NOW` sets the current timestamp for Pomodoro status, the `bob capture`
 `[created::YYYY-MM-DD]` stamp, and default runtime note selection, including
-the daily note used by `bob task-status-setter`. It also controls the default
+the daily note used by `bob task-status-hooks`. It also controls the default
 `bob move-done-tasks YYYY-MM-DD` commit message date.
 Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 `YYYY-MM-DD HH:MM:SS`.

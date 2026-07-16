@@ -91,9 +91,11 @@ fn move_done_tasks_help_is_native_only() {
 }
 
 #[test]
-fn task_status_setter_help_is_native_only() {
-    let temp = TempDir::new("bob-cli-task-status-setter-native-help");
-    for spelling in ["task-status-setter", "mark-next-tasks"] {
+fn task_status_hooks_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-native-help");
+    for spelling in
+        ["task-status-hooks", "task-status-setter", "mark-next-tasks"]
+    {
         let output = bob_command()
             .arg(spelling)
             .arg("--help")
@@ -106,15 +108,31 @@ fn task_status_setter_help_is_native_only() {
 
         assert_success(&output);
         assert!(
-            stdout(&output).contains("Usage: bob task-status-setter"),
-            "expected canonical task-status-setter help for {spelling}:\n{}",
+            stdout(&output).contains("Usage: bob task-status-hooks"),
+            "expected canonical task-status-hooks help for {spelling}:\n{}",
             format_output(&output)
         );
         assert_stdout_has_no_ansi(&output);
+
+        let diagnostic = bob_command()
+            .arg(spelling)
+            .arg("--unknown-option")
+            .env("BOB_CLI_USE_SCRIPT", "1")
+            .env("XDG_CACHE_HOME", temp.path())
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("run native-only bob {spelling} diagnostic: {error}")
+            });
+        assert_eq!(diagnostic.status.code(), Some(2));
+        assert!(
+            stderr(&diagnostic).contains("Usage: bob task-status-hooks"),
+            "expected canonical task-status-hooks diagnostic for {spelling}:\n{}",
+            format_output(&diagnostic)
+        );
     }
     assert!(
         !temp.path().join("bob-cli/scripts").exists(),
-        "task-status-setter and its compatibility alias must stay native-only"
+        "task-status-hooks and its compatibility aliases must stay native-only"
     );
 }
 
@@ -324,8 +342,8 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob highlights"),
         (
-            &["task-status-setter", "--help"],
-            "Usage: bob task-status-setter",
+            &["task-status-hooks", "--help"],
+            "Usage: bob task-status-hooks",
         ),
         (&["move-done-tasks", "--help"], "usage: bob move-done-tasks"),
         (&["nightly", "--help"], "usage: bob nightly"),
@@ -367,8 +385,8 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["query", "--help"], "bob query --help"),
         (&["highlights", "--help"], "bob highlights --help"),
         (
-            &["task-status-setter", "--help"],
-            "bob task-status-setter --help",
+            &["task-status-hooks", "--help"],
+            "bob task-status-hooks --help",
         ),
         (
             &["highlights", "doctor", "--help"],
@@ -651,20 +669,20 @@ fn capture_help_lists_options_alphabetically() {
 }
 
 #[test]
-fn task_status_setter_help_lists_options_alphabetically() {
+fn task_status_hooks_help_lists_options_alphabetically() {
     let output = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--help")
         .output()
-        .expect("run bob task-status-setter --help");
+        .expect("run bob task-status-hooks --help");
 
     assert_success(&output);
     let help = stdout(&output);
     assert!(
         help.contains("Make today's Pomodoro ledger the source of truth")
             && help.contains("BOB_DAY_FILE")
-            && help.contains("bob task-status-setter --dry-run"),
-        "expected task-status-setter long help:\n{help}"
+            && help.contains("bob task-status-hooks --dry-run"),
+        "expected task-status-hooks long help:\n{help}"
     );
     assert_text_order(
         &help,
@@ -679,27 +697,27 @@ fn task_status_setter_help_lists_options_alphabetically() {
 }
 
 #[test]
-fn task_status_setter_syncs_fixture_and_is_idempotent() {
-    let temp = TempDir::new("bob-cli-task-status-setter-sync");
+fn task_status_hooks_syncs_fixture_and_is_idempotent() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-sync");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260710.md");
     let dev = vault.join("dev.md");
     let alpha = vault.join("Projects/Alpha.md");
     write_file(
         &daily,
-        include_str!("fixtures/task_status_setter/2026/20260710.md"),
+        include_str!("fixtures/task_status_hooks/2026/20260710.md"),
     );
-    write_file(&dev, include_str!("fixtures/task_status_setter/dev.md"));
+    write_file(&dev, include_str!("fixtures/task_status_hooks/dev.md"));
     write_file(
         &alpha,
-        include_str!("fixtures/task_status_setter/Projects/Alpha.md"),
+        include_str!("fixtures/task_status_hooks/Projects/Alpha.md"),
     );
     let original_dev = fs::read(&dev).expect("read fixture before dry-run");
     let original_alpha = fs::read(&alpha).expect("read fixture before dry-run");
     let original_daily = fs::read(&daily).expect("read daily before dry-run");
 
     let dry_run = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -707,7 +725,7 @@ fn task_status_setter_syncs_fixture_and_is_idempotent() {
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("dry-run task-status-setter fixture");
+        .expect("dry-run task-status-hooks fixture");
     assert_success(&dry_run);
     assert_eq!(
         fs::read(&dev).expect("read dev after dry-run"),
@@ -801,12 +819,12 @@ fn task_status_setter_syncs_fixture_and_is_idempotent() {
     }));
 
     let applied = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("apply task-status-setter fixture");
+        .expect("apply task-status-hooks fixture");
     assert_success(&applied);
     let report = stdout(&applied);
     assert!(
@@ -819,7 +837,7 @@ fn task_status_setter_syncs_fixture_and_is_idempotent() {
             && report.contains(
                 "Summary: 3 marked next, 0 marked in progress, 2 cleared"
             ),
-        "unexpected mark-next report:\n{}",
+        "unexpected task-status-hooks report:\n{}",
         format_output(&applied)
     );
     let dev_contents = fs::read_to_string(&dev).expect("read updated dev");
@@ -864,12 +882,12 @@ fn task_status_setter_syncs_fixture_and_is_idempotent() {
         .contains("- [*] #task Cross-file recursive dependency ^dep-two"));
 
     let second = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("rerun task-status-setter fixture");
+        .expect("rerun task-status-hooks fixture");
     assert_success(&second);
     assert!(
         stdout(&second).contains("already in sync, no changes"),
@@ -878,33 +896,45 @@ fn task_status_setter_syncs_fixture_and_is_idempotent() {
     );
 
     let canonical_json = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path().join("alias-cache"))
         .output()
-        .expect("run canonical task-status-setter JSON no-op");
-    let alias_json = bob_command()
-        .arg("mark-next-tasks")
-        .arg("--format")
-        .arg("json")
-        .arg("--bob-dir")
-        .arg(&vault)
-        .env("BOB_DAY_FILE", &daily)
-        .output()
-        .expect("run compatibility alias JSON no-op");
+        .expect("run canonical task-status-hooks JSON no-op");
     assert_success(&canonical_json);
-    assert_success(&alias_json);
-    assert_eq!(stdout(&alias_json), stdout(&canonical_json));
+    for alias in ["task-status-setter", "mark-next-tasks"] {
+        let alias_json = bob_command()
+            .arg(alias)
+            .arg("--format")
+            .arg("json")
+            .arg("--bob-dir")
+            .arg(&vault)
+            .env("BOB_DAY_FILE", &daily)
+            .env("BOB_CLI_USE_SCRIPT", "1")
+            .env("XDG_CACHE_HOME", temp.path().join("alias-cache"))
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("run compatibility alias {alias} JSON no-op: {error}")
+            });
+        assert_success(&alias_json);
+        assert_eq!(stdout(&alias_json), stdout(&canonical_json));
+    }
+    assert!(
+        !temp.path().join("alias-cache/bob-cli/scripts").exists(),
+        "task-status compatibility aliases must remain native-only"
+    );
 
     let without_root = fs::read_to_string(&daily)
         .expect("read daily before removing root link")
         .replace("[[dev#^promote]]", "[[dev]]");
     write_file(&daily, &without_root);
     let stale_chain = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -921,9 +951,9 @@ fn task_status_setter_syncs_fixture_and_is_idempotent() {
 }
 
 #[test]
-fn task_status_setter_propagates_strongest_rank_and_reports_in_progress_promotions(
+fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotions(
 ) {
-    let temp = TempDir::new("bob-cli-task-status-setter-ranked-dependencies");
+    let temp = TempDir::new("bob-cli-task-status-hooks-ranked-dependencies");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260714.md");
     let tasks = vault.join("tasks.md");
@@ -959,7 +989,7 @@ fn task_status_setter_propagates_strongest_rank_and_reports_in_progress_promotio
     write_file(&tasks, tasks_before);
 
     let dry_run = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -991,7 +1021,7 @@ fn task_status_setter_propagates_strongest_rank_and_reports_in_progress_promotio
             && item["dependency"] == true));
 
     let applied = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1029,7 +1059,7 @@ fn task_status_setter_propagates_strongest_rank_and_reports_in_progress_promotio
     }
 
     let second = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1043,7 +1073,7 @@ fn task_status_setter_propagates_strongest_rank_and_reports_in_progress_promotio
         "# Daily\n\n## Pomodoros\n\n- [ ] Current (0900-0930)\n",
     );
     let without_active_path = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1060,8 +1090,8 @@ fn task_status_setter_propagates_strongest_rank_and_reports_in_progress_promotio
 }
 
 #[test]
-fn task_status_setter_prunes_duplicate_lines_before_dependency_sync() {
-    let temp = TempDir::new("bob-cli-task-status-setter-prune-duplicates");
+fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-prune-duplicates");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260713.md");
     let tasks = vault.join("tasks.md");
@@ -1086,7 +1116,7 @@ fn task_status_setter_prunes_duplicate_lines_before_dependency_sync() {
     write_file(&tasks, tasks_before);
 
     let dry_run = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -1112,7 +1142,7 @@ fn task_status_setter_prunes_duplicate_lines_before_dependency_sync() {
     );
 
     let human_dry_run = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -1130,7 +1160,7 @@ fn task_status_setter_prunes_duplicate_lines_before_dependency_sync() {
     assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
 
     let applied = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1167,7 +1197,7 @@ fn task_status_setter_prunes_duplicate_lines_before_dependency_sync() {
     );
 
     let second = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1182,8 +1212,8 @@ fn task_status_setter_prunes_duplicate_lines_before_dependency_sync() {
 }
 
 #[test]
-fn task_status_setter_resolves_duplicate_fragments_by_explicit_note_path() {
-    let temp = TempDir::new("bob-cli-task-status-setter-duplicate-fragments");
+fn task_status_hooks_resolves_duplicate_fragments_by_explicit_note_path() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-duplicate-fragments");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260711.md");
     write_file(
@@ -1198,7 +1228,7 @@ fn task_status_setter_resolves_duplicate_fragments_by_explicit_note_path() {
     write_file(&vault.join("Beta.md"), "- [ ] #task Beta ^dep\n");
 
     let output = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1217,15 +1247,15 @@ fn task_status_setter_resolves_duplicate_fragments_by_explicit_note_path() {
 }
 
 #[test]
-fn task_status_setter_guard_rails_leave_tasks_unchanged() {
-    let temp = TempDir::new("bob-cli-task-status-setter-guards");
+fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-guards");
     let vault = temp.path().join("vault");
     let task_file = vault.join("tasks.md");
     let missing_daily = vault.join("missing.md");
     write_file(&task_file, "- [*] #task Must remain next ^keep\n");
 
     let missing = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &missing_daily)
@@ -1241,7 +1271,7 @@ fn task_status_setter_guard_rails_leave_tasks_unchanged() {
     let malformed_daily = vault.join("malformed.md");
     write_file(&malformed_daily, "# Daily note\n\nNo ledger here.\n");
     let malformed = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -1273,7 +1303,7 @@ fn task_status_setter_guard_rails_leave_tasks_unchanged() {
         ),
     );
     let multiple = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &multiple_current)
@@ -1288,8 +1318,8 @@ fn task_status_setter_guard_rails_leave_tasks_unchanged() {
 }
 
 #[test]
-fn task_status_setter_uses_custom_done_status_and_completed_fallback() {
-    let temp = TempDir::new("bob-cli-task-status-setter-custom-done");
+fn task_status_hooks_uses_custom_done_status_and_completed_fallback() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-custom-done");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260710.md");
     let tasks = vault.join("tasks.md");
@@ -1316,7 +1346,7 @@ fn task_status_setter_uses_custom_done_status_and_completed_fallback() {
     );
 
     let output = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -1362,8 +1392,8 @@ fn task_status_setter_uses_custom_done_status_and_completed_fallback() {
 }
 
 #[test]
-fn task_status_setter_removes_canceled_open_pomodoro_references() {
-    let temp = TempDir::new("bob-cli-task-status-setter-canceled-links");
+fn task_status_hooks_removes_canceled_open_pomodoro_references() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-canceled-links");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260716.md");
     let tasks = vault.join("tasks.md");
@@ -1409,7 +1439,7 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
     );
 
     let dry_run = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -1422,7 +1452,7 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
     assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
     let repeated_dry_run = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -1480,7 +1510,7 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
                 .contains("canceled-reference list-item removal was skipped")));
 
     let human_dry_run = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -1499,7 +1529,7 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
     assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
 
     let applied = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1551,7 +1581,7 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
     let daily_after = fs::read_to_string(&daily).unwrap();
     let tasks_after = fs::read_to_string(&tasks).unwrap();
     let second = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -1573,8 +1603,8 @@ fn task_status_setter_removes_canceled_open_pomodoro_references() {
 }
 
 #[test]
-fn task_status_setter_strikes_in_place_when_no_relocation_target_exists() {
-    let temp = TempDir::new("bob-cli-task-status-setter-no-target");
+fn task_status_hooks_strikes_in_place_when_no_relocation_target_exists() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-no-target");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260710.md");
     let tasks = vault.join("tasks.md");
@@ -1589,7 +1619,7 @@ fn task_status_setter_strikes_in_place_when_no_relocation_target_exists() {
     write_file(&tasks, "- [X] #task Finished ^done\n");
 
     let output = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1607,8 +1637,8 @@ fn task_status_setter_strikes_in_place_when_no_relocation_target_exists() {
 }
 
 #[test]
-fn task_status_setter_composes_daily_status_and_structural_edits() {
-    let temp = TempDir::new("bob-cli-task-status-setter-daily-composition");
+fn task_status_hooks_composes_daily_status_and_structural_edits() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-daily-composition");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260710.md");
     let tasks = vault.join("tasks.md");
@@ -1626,7 +1656,7 @@ fn task_status_setter_composes_daily_status_and_structural_edits() {
     write_file(&tasks, "- [x] #task Finished ^done\n");
 
     let output = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1647,8 +1677,8 @@ fn task_status_setter_composes_daily_status_and_structural_edits() {
 }
 
 #[test]
-fn task_status_setter_reconciles_blocked_status_from_dataview_dependencies() {
-    let temp = TempDir::new("bob-cli-task-status-setter-blocked");
+fn task_status_hooks_reconciles_blocked_status_from_dataview_dependencies() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-blocked");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260716.md");
     let tasks = vault.join("tasks.md");
@@ -1679,7 +1709,7 @@ fn task_status_setter_reconciles_blocked_status_from_dataview_dependencies() {
     let before = fs::read_to_string(&tasks).unwrap();
 
     let dry_run = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -1714,7 +1744,7 @@ fn task_status_setter_reconciles_blocked_status_from_dataview_dependencies() {
         }));
 
     let applied = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1751,7 +1781,7 @@ fn task_status_setter_reconciles_blocked_status_from_dataview_dependencies() {
     }
 
     let second = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1762,8 +1792,8 @@ fn task_status_setter_reconciles_blocked_status_from_dataview_dependencies() {
 }
 
 #[test]
-fn task_status_setter_unblocks_to_final_pomodoro_rank_and_ready() {
-    let temp = TempDir::new("bob-cli-task-status-setter-unblocked-ranks");
+fn task_status_hooks_unblocks_to_final_pomodoro_rank_and_ready() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-unblocked-ranks");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260716.md");
     let tasks = vault.join("tasks.md");
@@ -1795,7 +1825,7 @@ fn task_status_setter_unblocks_to_final_pomodoro_rank_and_ready() {
     write_blocked_tasks_settings(&vault);
 
     let output = bob_command()
-        .arg("task-status-setter")
+        .arg("task-status-hooks")
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -1829,7 +1859,7 @@ fn task_status_setter_unblocks_to_final_pomodoro_rank_and_ready() {
 }
 
 #[test]
-fn task_status_setter_blocked_status_guard_writes_nothing() {
+fn task_status_hooks_blocked_status_guard_writes_nothing() {
     let scenarios = [
         ("missing", None),
         (
@@ -1869,7 +1899,7 @@ fn task_status_setter_blocked_status_guard_writes_nothing() {
         }
 
         let output = bob_command()
-            .arg("task-status-setter")
+            .arg("task-status-hooks")
             .arg("--bob-dir")
             .arg(&vault)
             .env("BOB_DAY_FILE", &daily)
@@ -12990,10 +13020,11 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "move-done-tasks",
         "nightly",
         "notify",
+        "plugins",
         "pomodoro",
         "projects",
         "query",
-        "task-status-setter",
+        "task-status-hooks",
         "tmux-pomodoro",
     ];
     let mut last = 0;
@@ -13016,7 +13047,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
             && help.contains("bob capture-targets --format json")
             && help.contains("bob query --source '#project'")
             && help.contains("bob highlights scan --dry-run")
-            && help.contains("bob task-status-setter --dry-run")
+            && help.contains("bob task-status-hooks --dry-run")
             && help.contains("bob move-done-tasks --threshold 10")
             && help.contains("bob nightly")
             && help.contains("bob pomodoro"),
@@ -13037,6 +13068,10 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
     assert!(
         !help.contains("mark-next-tasks"),
         "top-level help should hide the compatibility alias:\n{help}"
+    );
+    assert!(
+        !help.contains("task-status-setter"),
+        "top-level help should hide the former canonical spelling:\n{help}"
     );
     assert!(
         help.contains("Run 'bob <command> --help' for more information"),

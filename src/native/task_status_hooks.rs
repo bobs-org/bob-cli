@@ -22,7 +22,7 @@ use super::{
     style::{display_width, pad_right, Styler},
 };
 
-const COMMAND_NAME: &str = "bob task-status-setter";
+const COMMAND_NAME: &str = "bob task-status-hooks";
 const DEFAULT_GLOBAL_FILTER: &str = "#task";
 const TASKS_SETTINGS: &str =
     ".obsidian/plugins/obsidian-tasks-plugin/data.json";
@@ -97,9 +97,9 @@ daily notes and daily notes without a Pomodoros \
 section, as well as notes with multiple open timed Pomodoros, fail before any \
 file is changed.",
         )
-        .after_help(
-            "Examples:\n  bob task-status-setter\n  bob task-status-setter --dry-run\n  bob task-status-setter --format json\n  bob task-status-setter --bob-dir /tmp/bob-vault\n\nEnvironment:\n  BOB_DAY_FILE  exact daily note used as the Pomodoro source\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time override for daily-note selection",
-        )
+        .after_help(format!(
+            "Examples:\n  {COMMAND_NAME}\n  {COMMAND_NAME} --dry-run\n  {COMMAND_NAME} --format json\n  {COMMAND_NAME} --bob-dir /tmp/bob-vault\n\nEnvironment:\n  BOB_DAY_FILE  exact daily note used as the Pomodoro source\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time override for daily-note selection"
+        ))
         .disable_help_flag(true)
         .arg(
             Arg::new("bob-dir")
@@ -2425,8 +2425,9 @@ fn print_result(result: &SyncResult, format: OutputFormat) {
     match format {
         OutputFormat::Json => println!(
             "{}",
-            serde_json::to_string(result)
-                .expect("serialize task-status-setter result")
+            serde_json::to_string(result).unwrap_or_else(|error| {
+                panic!("serialize {COMMAND_NAME} result: {error}")
+            })
         ),
         OutputFormat::Human => print_human_result(result),
     }
@@ -2453,14 +2454,14 @@ fn print_human_result(result: &SyncResult) {
     };
     if change_count == 0 {
         println!(
-            "{prefix} task-status-setter  {} \u{2014} already in sync, no changes",
+            "{prefix} {COMMAND_NAME}  {} \u{2014} already in sync, no changes",
             styler.cyan(&result.daily_file)
         );
         return;
     }
 
     println!(
-        "{prefix} task-status-setter  {}",
+        "{prefix} {COMMAND_NAME}  {}",
         styler.cyan(&result.daily_file)
     );
     println!(
