@@ -78,9 +78,10 @@ and '%<nonnumeric header>' captures one live value under an explicit header. \
 '%1' is equivalent to '%', while '%0' stays literal. Headers use letters, \
 digits, '_' and '-'; '_' renders as a space. The marker composes with s:<N> and \
 every route kind in either terminal order. Each value is classified separately: \
-small text stays inline, 2-10 flat lines become child bullets, copied file paths \
-are saved under img/ or file/, and long or Markdown-structured text is preserved \
-in a timestamped file/clip-*.md snippet. History captures fail without writing \
+small text stays inline; 2-10 flat text lines and 1-10 flat unordered Markdown \
+list items become child bullets, with source list markers removed; copied file \
+paths are saved under img/ or file/; and long or other Markdown-structured text \
+is preserved in a timestamped file/clip-*.md snippet. History captures fail without writing \
 unless the exact requested count succeeds. Use --clip[=HEADER] to force one live \
 capture while keeping '%' tokens literal; --clip=<digits> requests a numeric \
 header. Bare --clip also captures without a header. Use --no-clip to keep a \

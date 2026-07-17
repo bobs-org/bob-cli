@@ -715,27 +715,6 @@ fn plan_entry(
         }
     }
 
-    if lines.len() == 1 {
-        return match &path_states[0] {
-            PathState::File(path) => plan_attachments(
-                bob_dir,
-                header.as_deref(),
-                [path.as_path()],
-                reservations,
-            ),
-            _ if lines[0].chars().count() > MAX_INLINE_CHARACTERS => {
-                plan_snippet(
-                    bob_dir,
-                    header.as_deref(),
-                    clipboard,
-                    now,
-                    reservations,
-                )
-            }
-            _ => Ok(inline_output(header.as_deref(), lines[0])),
-        };
-    }
-
     let all_nonempty_attachments =
         lines.iter().zip(&path_states).all(|(line, state)| {
             !line.trim().is_empty() && matches!(state, PathState::File(_))
@@ -758,6 +737,24 @@ fn plan_entry(
         );
     }
 
+    if let Some(items) = flat_unordered_list_items(&lines) {
+        return Ok(lines_output(header.as_deref(), &items));
+    }
+
+    if lines.len() == 1 {
+        return if lines[0].chars().count() > MAX_INLINE_CHARACTERS {
+            plan_snippet(
+                bob_dir,
+                header.as_deref(),
+                clipboard,
+                now,
+                reservations,
+            )
+        } else {
+            Ok(inline_output(header.as_deref(), lines[0]))
+        };
+    }
+
     if lines.len() > MAX_LINES
         || lines.iter().any(|line| line.trim().is_empty())
         || lines.iter().any(|line| is_structural_line(line))
@@ -772,6 +769,31 @@ fn plan_entry(
     }
 
     Ok(lines_output(header.as_deref(), &lines))
+}
+
+fn flat_unordered_list_items<'a>(lines: &[&'a str]) -> Option<Vec<&'a str>> {
+    if lines.is_empty()
+        || lines.len() > MAX_LINES
+        || (lines.len() == 1
+            && lines[0].chars().count() > MAX_INLINE_CHARACTERS)
+    {
+        return None;
+    }
+
+    lines
+        .iter()
+        .map(|line| {
+            let rest = line
+                .strip_prefix('-')
+                .or_else(|| line.strip_prefix('*'))
+                .or_else(|| line.strip_prefix('+'))?;
+            if !rest.starts_with([' ', '\t']) {
+                return None;
+            }
+            let item = rest.trim_start_matches([' ', '\t']);
+            (!item.trim().is_empty()).then_some(item)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1540,6 +1562,114 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_and_renders_flat_unordered_lists() {
+        let root = Path::new("/tmp/unused-bob-clip-list-test");
+        let now = test_now();
+        let requested = concat!(
+            "- Use `@` symbol instead of `#` for tribe prefix.\n",
+            "- Support expansion of families within clan.\n",
+            "- Family members must be launched sequentially.",
+        );
+        let output =
+            plan(root, None, requested, now).expect("dash list").output;
+        assert_eq!(output.mode, ClipMode::Lines);
+        assert_eq!(
+            output.lines,
+            [
+                "  - Use `@` symbol instead of `#` for tribe prefix.",
+                "  - Support expansion of families within clan.",
+                "  - Family members must be launched sequentially.",
+            ]
+        );
+
+        let mixed_markers = plan(
+            root,
+            None,
+            "*\tfirst with **bold**\n+   second with [link](target)\n- [ ] checkbox",
+            now,
+        )
+        .expect("mixed unordered markers")
+        .output;
+        assert_eq!(mixed_markers.mode, ClipMode::Lines);
+        assert_eq!(
+            mixed_markers.lines,
+            [
+                "  - first with **bold**",
+                "  - second with [link](target)",
+                "  - [ ] checkbox",
+            ]
+        );
+
+        let single = plan(root, None, "+ one item", now)
+            .expect("single item")
+            .output;
+        assert_eq!(single.mode, ClipMode::Lines);
+        assert_eq!(single.lines, ["  - one item"]);
+
+        let headed = plan(root, Some("build_log"), "- first\n* second", now)
+            .expect("headed list")
+            .output;
+        assert_eq!(headed.mode, ClipMode::Lines);
+        assert_eq!(
+            headed.lines,
+            ["  - **BUILD LOG:**", "    - first", "    - second"]
+        );
+    }
+
+    #[test]
+    fn flat_unordered_lists_keep_the_inline_line_boundary() {
+        let root = Path::new("/tmp/unused-bob-clip-list-boundary-test");
+        let ten_items = (1..=MAX_LINES)
+            .map(|index| format!("- item {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let ten = plan(root, None, &ten_items, test_now())
+            .expect("ten-item list")
+            .output;
+        assert_eq!(ten.mode, ClipMode::Lines);
+        assert_eq!(ten.lines.len(), MAX_LINES);
+        assert_eq!(ten.lines[0], "  - item 1");
+        assert_eq!(ten.lines[MAX_LINES - 1], "  - item 10");
+
+        let eleven_items = format!("{ten_items}\n- item 11");
+        assert_eq!(
+            plan(root, None, &eleven_items, test_now())
+                .expect("over-limit list")
+                .output
+                .mode,
+            ClipMode::Snippet
+        );
+    }
+
+    #[test]
+    fn unsafe_or_incomplete_unordered_lists_remain_snippets() {
+        let root = test_root("unsafe-lists");
+        let vault = root.join("vault");
+        fs::create_dir_all(&vault).expect("vault");
+        for text in [
+            "- first\n- ",
+            "- first\nplain prose",
+            "1. first\n2. second",
+            "- parent\n  - nested",
+            "- wrapped item\ncontinuation",
+            "- first\n\n- second",
+            "- first\n> quote",
+            "- first\n# heading",
+            "- first\n```\n- second",
+        ] {
+            assert_eq!(
+                plan(&vault, None, text, test_now())
+                    .expect("unsafe list snippet")
+                    .output
+                    .mode,
+                ClipMode::Snippet,
+                "{text:?}"
+            );
+        }
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn sanitizes_attachment_names_and_builds_slugs() {
         assert_eq!(sanitize_file_name(" .a::b[#]文.md. "), "a-b-文.md");
         assert_eq!(sanitize_file_name("..."), "attachment");
@@ -1688,7 +1818,7 @@ mod tests {
         .expect("directories fall through");
         assert_eq!(directory.output.mode, ClipMode::Inline);
 
-        for text in ["one\n\ntwo", "- one\n- two", " one\ntwo"] {
+        for text in ["one\n\ntwo", " one\ntwo"] {
             assert_eq!(
                 plan(&vault, Some("clip"), text, test_now())
                     .expect("snippet")

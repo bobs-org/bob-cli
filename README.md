@@ -108,12 +108,16 @@ Clipboard content is rendered according to its shape:
 - One text line up to 1,000 characters becomes an inline child bullet.
 - Two to ten flat text lines become child bullets, nested beneath an explicit
   header when one is present.
+- One to ten top-level unordered Markdown list items using `-`, `*`, or `+`
+  become child bullets. Their source list markers and separating whitespace are
+  removed while inline Markdown, including checkbox text, is preserved.
 - Absolute file paths (including quoted paths, `file://` URIs, and `~/...`)
   become attachments. Images are copied to `img/` and embedded at 400px;
   other files are copied to `file/` and linked.
-- Long, indented, blank-line-separated, or Markdown-structured text is saved
-  verbatim as `file/clip-YYYYMMDD-HHMMSS[-slug].md` and linked without the
-  `.md` suffix.
+- Long, indented, blank-line-separated, or other Markdown-structured text is
+  saved verbatim as `file/clip-YYYYMMDD-HHMMSS[-slug].md` and linked without
+  the `.md` suffix. Ordered, nested, wrapped, mixed, or empty-item lists use
+  this snippet fallback instead of being partially normalized.
 
 Each value in a counted history capture is classified independently, so limits
 such as the ten-attachment maximum apply per entry. All resulting lines are
@@ -129,6 +133,23 @@ written as direct sibling children:
 - [ ] #task Another parent
   - first line
   - second line
+```
+
+For example, a clipboard containing this flat Markdown list:
+
+```markdown
+- first copied item
+* second item with **inline Markdown**
++ [ ] third checkbox item
+```
+
+is normalized beneath the captured parent without doubling the source markers:
+
+```markdown
+- [ ] #task Parent
+  - first copied item
+  - second item with **inline Markdown**
+  - [ ] third checkbox item
 ```
 
 An explicit header stays inline for one item and owns a nested list for

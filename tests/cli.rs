@@ -649,6 +649,8 @@ fn capture_help_lists_options_alphabetically() {
             && help.contains("'%0' stays literal")
             && help.contains("bob capture research links %3")
             && help.contains("Bare --clip also captures without a header")
+            && help.contains("flat unordered Markdown")
+            && help.contains("source list markers removed")
             && !help.contains("bare '%' renders as '**CLIP:**'"),
         "expected clipboard capture help:\n{help}"
     );
@@ -2864,6 +2866,62 @@ fn capture_headerless_clip_marker_renders_under_tasks_and_pomodoros() {
     assert_eq!(
         fs::read_to_string(day_file).expect("read day"),
         "## Pomodoros\n- [ ] Current\n  - [[dev#^clip-id]]\n"
+    );
+}
+
+#[test]
+fn capture_flat_clipboard_list_routes_normalized_children() {
+    let temp = TempDir::new("bob-cli-capture-flat-clipboard-list");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(
+        &clipboard,
+        concat!(
+            "#!/bin/sh\n",
+            "printf '%s\\n' '- Use `@` symbol instead of `#` for tribe prefix.'\n",
+            "printf '%s\\n' '- Support expansion of families within clan.'\n",
+            "printf '%s\\n' '- Family members must be launched sequentially.'\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("foo bar baz @foo %")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-17")
+        .output()
+        .expect("capture routed clipboard list");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("clipboard JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["clip"]["mode"], "lines");
+    assert_eq!(
+        json["clip"]["lines"],
+        serde_json::json!([
+            "  - Use `@` symbol instead of `#` for tribe prefix.",
+            "  - Support expansion of families within clan.",
+            "  - Family members must be launched sequentially.",
+        ])
+    );
+    assert_eq!(
+        json["task_line"],
+        "- [ ] #task foo bar baz [created::2026-07-17]"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("foo.md")).expect("read routed note"),
+        concat!(
+            "- [ ] #task foo bar baz [created::2026-07-17]\n",
+            "  - Use `@` symbol instead of `#` for tribe prefix.\n",
+            "  - Support expansion of families within clan.\n",
+            "  - Family members must be launched sequentially.\n",
+        )
     );
 }
 
