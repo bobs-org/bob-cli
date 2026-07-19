@@ -42,6 +42,7 @@ install-smoke:
     "${root}/bin/bob" --help >/dev/null
     "${root}/bin/bob" bulk-git-commit --help >/dev/null
     "${root}/bin/bob" capture --help >/dev/null
+    "${root}/bin/bob" capture-sections --help >/dev/null
     "${root}/bin/bob" capture-targets --help >/dev/null
     "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null

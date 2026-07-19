@@ -3,7 +3,7 @@
 `bob projects` manages Bob project notes through one completion-criteria task
 anchored with `^prj`.
 
-This mirrors the `bob highlights` `^task` convention for `[[ref]]` notes: the
+This mirrors the `bob highlights` `^ref` convention for `[[ref]]` notes: the
 task line is the interaction point, and the command reconciles frontmatter from
 that task instead of asking users to edit machine-facing metadata directly.
 

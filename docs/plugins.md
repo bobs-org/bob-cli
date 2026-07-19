@@ -2,9 +2,9 @@
 
 `bob plugins` manages Bryan's custom Bob Obsidian plugins from the
 [`bobs-org/bob-plugins`](https://github.com/bobs-org/bob-plugins) repo, which
-is the source of truth for the six plain-JavaScript community plugins. The repo
-holds one folder per plugin under `plugins/<id>/`, each with a `manifest.json`,
-a `main.js`, and an optional `styles.css`.
+is the source of truth for the custom plain-JavaScript community plugins. The
+repo holds one folder per plugin under `plugins/<id>/`, each with a
+`manifest.json`, a `main.js`, and an optional `styles.css`.
 
 ## Commands
 

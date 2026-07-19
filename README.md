@@ -26,28 +26,32 @@ cargo install --git git@github.com:bobs-org/bob-cli.git --locked --force bob-cli
 To smoke-test an install without replacing an existing user install:
 
 ```bash
-root="$(mktemp -d)"
-cargo install --path . --locked --root "$root"
-"$root/bin/bob" --help
-"$root/bin/bob" bulk-git-commit --help
-"$root/bin/bob" capture --help
-"$root/bin/bob" query --help
-"$root/bin/bob" highlights --help
-"$root/bin/bob" task-status-hooks --help
-"$root/bin/bob" move-done-tasks --help
-"$root/bin/bob" nightly --help
-"$root/bin/bob" notify --help
-"$root/bin/bob" pomodoro --help
-"$root/bin/bob" projects --help
-"$root/bin/bob" projects sync --help
-"$root/bin/bob" tmux-pomodoro --help
-"$root/bin/bob_notify" --help
-"$root/bin/bob_pomodoro" --help
-"$root/bin/bob_sync" --help
-"$root/bin/tmux_bob_pomodoro" --help
+just install-smoke
 ```
 
 ## Commands
+
+`bob --help` is the authoritative command index. The public commands are:
+
+| Command | Purpose |
+| --- | --- |
+| `bulk-git-commit` | Stage, commit, and push all Bob vault changes |
+| `capture` | Capture a task or section bullet, optionally with clipboard content |
+| `capture-sections` | List the non-Tasks headings available for bullet capture |
+| `capture-targets` | List inbox, area, and active-project capture routes |
+| `highlights` | Synchronize Highlights PDF annotations with reference notes |
+| `move-done-tasks` | Archive done and canceled task blocks and repair their links |
+| `nightly` | Run the Obsidian sync and maintenance workflow |
+| `notify` | Notify when the current Pomodoro finishes |
+| `plugins` | List and deploy Bob's custom Obsidian plugins |
+| `pomodoro` | Print the current Pomodoro status |
+| `projects` | Inspect and synchronize project lifecycle tasks |
+| `query` | Run headless Dataview or Tasks queries, or live Dataview queries |
+| `task-status-hooks` | Reconcile Pomodoro links, task ranks, and dependency state |
+| `tmux-pomodoro` | Print Pomodoro status for a tmux status line |
+
+Use `bob <command> --help` for concise usage. The sections below explain the
+workflow and link to the detailed command contracts where one exists.
 
 ```bash
 bob bulk-git-commit
@@ -56,15 +60,15 @@ bob bulk-git-commit
 Stages all Bob vault changes, commits them when anything changed, and pushes via
 Git. This command does not run `ob sync`; use `bob nightly` for the nightly path
 that syncs Obsidian before maintenance steps. `bob bulk-git-commit` mutates the
-vault repository and should only be run when Git remotes and SSH credentials are
-ready.
+vault repository and should only be run when its Git remote and required
+credentials are ready.
 
 ```bash
 bob capture [OPTIONS] [--] [TEXT]...
 ```
 
-Captures one task into the Bob vault without requiring desktop Obsidian to be
-open. Text is normalized to one line, written as
+Captures one task or section bullet into the Bob vault without requiring
+desktop Obsidian to be open. Task text is normalized to one line and written as
 `- [ ] #task <text> [created::YYYY-MM-DD]`, and routed to `mac_inbox.md` by
 default. The created date uses the local date from `BOB_NOW`, `DATE`, or the
 system clock.
@@ -279,6 +283,27 @@ and retains staged values when validation or capture fails. Existing `@`,
 `@#`, and `@route#` picker flows are unchanged.
 
 ```bash
+bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
+bob capture-targets [-b|--bob-dir DIR] [-f|--format human|json] [-v|--verbose]
+```
+
+These read-only commands support interactive capture pickers and are also
+useful for inspecting what can be routed. `capture-targets` always returns
+`mac_inbox` first, followed by top-level area notes and non-terminal project
+notes whose filenames are valid lowercase routes. It ignores nested notes and
+terminal projects. Human output groups the routes by kind; JSON output returns
+`ok`, `bob_dir`, `count`, and ordered `targets` with route, label, kind,
+default, project status, and relative-path fields. Use `--verbose` to explain
+why otherwise eligible-looking top-level notes were skipped.
+
+`capture-sections` lists every non-`Tasks` ATX heading (H1-H6) in one routed
+note, in document order. Route input is normalized to lowercase, and a missing
+note successfully returns an empty list. JSON output returns `ok`, the
+normalized `route`, `count`, and ordered `sections`, each with `title` and
+`level`. The selected route and section can then be passed to
+`bob capture --route NAME --section TITLE -- <text>`.
+
+```bash
 bob nightly
 ```
 
@@ -443,20 +468,26 @@ bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
 
 Scans the Bob vault for notes whose frontmatter declares
 `type: "[[project]]"` and prints a read-only overview of each project note. The
-table includes frontmatter status, open `#task` count, open P0 task count, and
-the state of the project completion task anchored with `^prj`. `sync` makes
-that `^prj` task the lifecycle control: checking it sets `status: done`,
-canceling it sets `status: canceled`, reopening it on a `done` or `canceled`
-project sets `status: wip`, and active projects with no open P0 tasks
-get `[scheduled::YYYY-mm-dd]` appended to the open `^prj` task. Use
-`--dry-run` to preview the exact actions without writing.
+table includes frontmatter status, open `#task` count, open non-hidden task
+count, and the state of the project completion task anchored with `^prj`.
+`sync` makes that task the lifecycle control: checking or canceling it sets the
+matching terminal frontmatter status, while reopening it restores `status:
+wip`. For active projects, `sync` uses the `#hide` tag to surface `^prj` only
+when no ordinary non-hidden task or open sub-project is available, and it
+maintains the generated Sub-projects ledger beneath `^prj`.
+
+An optional frontmatter `scheduled: YYYY-MM-DD` overrides normal task
+visibility. Future projects hide every task; due projects unhide ordinary
+tasks while preserving the lifecycle task's existing visibility when other
+tasks exist. Stale inline `[scheduled:: ...]` fields are removed from active
+`^prj` tasks. Use `--dry-run` to preview the exact actions without writing.
 
 The full project task contract lives in [`docs/projects.md`](docs/projects.md).
 
 ```bash
 bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
 bob plugins list [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
-bob plugins sync [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-n|--no-pull] [-p|--plugin ID] [-r|--repo DIR]
+bob plugins sync [-B|--backup-dir DIR] [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-n|--no-pull] [-p|--plugin ID] [-r|--repo DIR]
 ```
 
 Lists Bryan's custom Bob Obsidian plugins from the
@@ -609,14 +640,17 @@ Normal command execution no longer requires Bash or Perl. These tools are still
 useful for validating or forcing the embedded script fallback with
 `BOB_CLI_USE_SCRIPT=1`.
 
-The remaining runtime dependencies are:
+Depending on the command, Bob integrates with these external tools:
 
-- `ob` from obsidian-headless for the shared `bob nightly` Obsidian sync gate
+- `ob` from obsidian-headless for the shared `bob nightly` Obsidian sync gate;
+  the gate is skipped when `ob` is unavailable
 - `obsidian` CLI plus a running desktop Obsidian vault with the Dataview plugin
   only when using `bob query --engine obsidian`
-- `git` and `ssh` for `bob bulk-git-commit` and for `bob move-done-tasks`
-  commit/push behavior when the vault is a Git worktree
-- `notify-send` for desktop notifications from `bob notify`
+- `git` for `bob bulk-git-commit`, Git-backed `bob move-done-tasks`, plugin
+  dirty-file checks, and the default `bob plugins` repository refresh; remote
+  operations also need the credentials required by the configured remote
+- `notify-send` for desktop notifications from `bob notify`; the terminal bell
+  remains available when it is missing
 - `bash` only when loading `ob` through the NVM fallback or sourcing
   `~/.ssh-agent-thing`
 
@@ -663,7 +697,8 @@ Pomodoro-linked `bob capture` requests, and `bob task-status-hooks`.
 `BOB_NOW` sets the current timestamp for Pomodoro status, the `bob capture`
 `[created::YYYY-MM-DD]` stamp, and default runtime note selection, including
 the daily note used by `bob task-status-hooks`. It also controls the default
-`bob move-done-tasks YYYY-MM-DD` commit message date.
+`bob move-done-tasks YYYY-MM-DD` commit message date and the local-date boundary
+used by `bob projects sync` for scheduled project visibility.
 Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
 `YYYY-MM-DD HH:MM:SS`.
 
@@ -674,6 +709,13 @@ configured.
 
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
 `bob highlights`. It defaults to `ref` under `BOB_DIR`.
+
+`BOB_PLUGINS_DIR` sets the source repository used by `bob plugins`. It defaults
+to `~/projects/github/bobs-org/bob-plugins`.
+
+`BOB_PLUGIN_BACKUPS_DIR` sets the base directory for backups created before
+`bob plugins sync` overwrites a vault plugin file. It defaults to
+`~/.local/state/bob-cli/plugin-backups`.
 
 `DATE` preserves the legacy date override behavior, including the date used by
 `bob capture` when `BOB_NOW` is unset. It can be a date command prefix such as
@@ -716,34 +758,15 @@ New integrations should rely on the native Rust command behavior.
 Run the package checks from a clean worktree:
 
 ```bash
-cargo fmt --check
-cargo clippy --all-targets --all-features
-cargo test
+just all
 just check-scripts
-cargo package --list
+just package-list
 ```
 
 Run a local install smoke test:
 
 ```bash
-root="$(mktemp -d)"
-cargo install --path . --locked --root "$root"
-"$root/bin/bob" --help
-"$root/bin/bob" bulk-git-commit --help
-"$root/bin/bob" capture --help
-"$root/bin/bob" query --help
-"$root/bin/bob" highlights --help
-"$root/bin/bob" move-done-tasks --help
-"$root/bin/bob" nightly --help
-"$root/bin/bob" notify --help
-"$root/bin/bob" pomodoro --help
-"$root/bin/bob" projects --help
-"$root/bin/bob" projects sync --help
-"$root/bin/bob" tmux-pomodoro --help
-"$root/bin/bob_notify" --help
-"$root/bin/bob_pomodoro" --help
-"$root/bin/bob_sync" --help
-"$root/bin/tmux_bob_pomodoro" --help
+just install-smoke
 ```
 
 Run a tmux status smoke test after installing locally:
