@@ -1,6 +1,10 @@
 # bob-cli - Agent Instructions
 
-IMPORTANT: You should not modify any of these memory files without approval from the user.
+IMPORTANT: You should not modify any of these memory files without approval from the user. However, when the user
+explicitly asks you to update a SASE memory file, that request already carries the required approval for the full
+workflow: make the requested edit to the canonical note under `sase/memory/`, then you MUST run `sase memory init` to
+regenerate `AGENTS.md`, the provider instruction shims, and the memory README. Do NOT ask for separate permission to
+initialize sase memory in that case.
 
 ## Tier 1 (short-term) Memory
 
@@ -22,10 +26,10 @@ directory as you!
 
 Configured linked and sidecar repositories for this context:
 
-- `bob-plugins`: Source-of-truth monorepo for Bryan's custom Bob Obsidian plugins, deployed to the vault via `bob
-  plugins sync`. You should NOT edit these plugins directly in the ~/bob/ directory, as they will be overwritten on the
-  next sync. Instead, make changes to this linked repo and, when done, run the `bob plugins sync` command to deploy them
-  to the ~/bob/ directory.
+- `bob-plugins`: Source-of-truth monorepo for Bryan's custom Bob Obsidian plugins, deployed to the vault via
+  `bob plugins sync`. You should NOT edit these plugins directly in the ~/bob/ directory, as they will be overwritten on
+  the next sync. Instead, make changes to this linked repo and, when done, run the `bob plugins sync` command to deploy
+  them to the ~/bob/ directory.
 - `bob-cli--research`: Durable SASE research reports and generated media.
 
 When you need to read or modify files in any repository other than your own workspace checkout, agents MUST use your
