@@ -1,15 +1,18 @@
 # Bob CLI
 
 `bob-cli` installs the `bob` command and compatibility shims for the Bob Obsidian
-vault and Pomodoro workflow. The command implementations are native Rust by
-default. The earlier shell implementations remain embedded as a rollback path:
-set `BOB_CLI_USE_SCRIPT=1` to extract those scripts into `XDG_CACHE_HOME` and
-delegate to them.
+vault and Pomodoro workflow. Command implementations are native Rust by default.
+The Pomodoro, notification, and legacy `bob_sync` shell implementations remain
+embedded as a targeted rollback path; see [Compatibility shims](#compatibility-shims)
+for the exact mappings and fallback behavior.
 
 The preferred interface is `bob <subcommand>`. Legacy command names still exist
 as installed binaries for existing tmux, shell, and automation callers.
 
 ## Installation
+
+Installation requires a current stable Rust toolchain with `cargo`. The default
+vault location is `~/bob`; set `BOB_DIR` when the vault lives elsewhere.
 
 For local development from this checkout:
 
@@ -28,6 +31,16 @@ user install:
 
 ```bash
 just install-smoke
+```
+
+After installation, verify the vault selection with read-only commands before
+running a command that writes or pushes changes:
+
+```bash
+export BOB_DIR=/path/to/bob-vault
+bob --help
+bob capture-targets
+bob projects list
 ```
 
 ## Commands
@@ -573,19 +586,21 @@ checks vault paths, sidecars, marker readability, Git state, and optional `ob`
 availability without writing files.
 Marker notes must include `status` and `parent`; marker `parent` must be a bare
 note target such as `obsidian`, while generated reference-note frontmatter
-renders it as an Obsidian wikilink. `status` must be one of `unread`, `wip`,
-`read`, `abandoned`, or `legacy`. Existing `status: done` marker/frontmatter
-inputs are treated as a deprecated alias and normalized to `read` during sync.
-Existing migrated notes may also carry `legacy_status` frontmatter to preserve
-the previous value; it is not a standard marker-synced field. Generated
-reference notes always include `type: "[[ref]]"` and include command-managed
-`ref_type` when it can be derived from the first library path component.
-The generated PDF task line is a status affordance: `[x]`/`[X]` contributes
-`status: read`, `[-]` contributes `status: abandoned`, and unchecking it on an
-already `read` or `abandoned` ref reopens it to `status: wip` (a freshly
-generated `[ ]` task contributes no replacement status). PDF marker write-back
-for task-derived status still requires targeted `--write-pdf` or reviewed bulk
-`scan --write-pdfs`.
+renders it as an Obsidian wikilink. `status` must be one of `ready`, `next`,
+`wip`, `read`, `abandoned`, or `legacy`. Existing `status: unread` and
+`status: done` marker/frontmatter inputs are deprecated aliases and normalize to
+`ready` and `read`, respectively, during sync. Existing migrated notes may also
+carry `legacy_status` frontmatter to preserve the previous value; it is not a
+standard marker-synced field. Generated reference notes always include
+`type: "[[ref]]"` and include command-managed `ref_type` when it can be derived
+from the first library path component.
+
+The generated PDF `^ref` task is the visible lifecycle control: `[ ]` maps to
+`ready`, `[*]` to `next`, `[/]` to `wip`, `[x]`/`[X]` to `read`, and `[-]` to
+`abandoned`. Moving a terminal task back to `[ ]` therefore reopens it to
+`ready`; a missing `^ref` task contributes no lifecycle status. PDF marker
+write-back for task-derived status still requires targeted `--write-pdf` or
+reviewed bulk `scan --write-pdfs`.
 
 For `lib/books/foo.pdf`, `sync` discovers `lib/books/foo.md` first and can
 parse simple `foo.textbundle/text.md` or `text.markdown` sidecars. Image and
@@ -646,16 +661,24 @@ bob tmux-pomodoro
 
 Prints Pomodoro status in the tmux status-line format.
 
-The installed compatibility shims are:
+### Compatibility shims
 
-```text
-bob_pomodoro
-bob_notify
-bob_sync
-tmux_bob_pomodoro
-```
+The installed legacy binaries map to the preferred interface as follows:
 
-They call the same native Rust command implementations as `bob <subcommand>`.
+| Compatibility binary | Preferred command |
+| --- | --- |
+| `bob_notify` | `bob notify` |
+| `bob_pomodoro` | `bob pomodoro` |
+| `bob_sync` | `bob bulk-git-commit` |
+| `tmux_bob_pomodoro` | `bob tmux-pomodoro` |
+
+By default they call the same native Rust implementations as the preferred
+commands. With `BOB_CLI_USE_SCRIPT=1`, the notification and Pomodoro commands
+and their shims delegate to their embedded shell assets. The `bob_sync` shim
+also delegates to its embedded script, but `bob bulk-git-commit` remains native.
+Native-only commands ignore the fallback setting. Extracted assets are cached
+under `$XDG_CACHE_HOME/bob-cli/scripts`, or `~/.cache/bob-cli/scripts` when
+`XDG_CACHE_HOME` is unset.
 
 ## Runtime Dependencies
 
@@ -725,8 +748,9 @@ Pomodoro-linked `bob capture` requests, and `bob task-status-hooks`.
 the daily note used by `bob task-status-hooks`. It also controls the default
 `bob move-done-tasks YYYY-MM-DD` commit message date and the local-date boundary
 used by `bob projects sync` for scheduled project visibility.
-Supported formats include `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
-`YYYY-MM-DD HH:MM:SS`.
+Supported formats are `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
+`YYYY-MM-DD HH:MM:SS`; `T` may replace the space. Timezone names and UTC-offset
+suffixes are not accepted.
 
 `BOB_HIGHLIGHTS_LIB_DIR` sets the Highlights PDF library directory used by
 `bob highlights`. It defaults to `lib` under `BOB_DIR`. Relative values are
@@ -750,6 +774,9 @@ to `~/projects/github/bobs-org/bob-plugins`.
 `OB_COMMAND` overrides the `ob` executable used by the shared `bob nightly`
 Obsidian sync gate.
 
+`NO_COLOR` disables ANSI color in native human-readable output that would
+otherwise be styled when stdout is a terminal.
+
 `BOB_BULK_GIT_COMMIT_LOCK_FILE` overrides the lock path used by
 `bob bulk-git-commit` and `bob nightly`.
 
@@ -762,7 +789,9 @@ Obsidian sync gate.
 `BOB_SYNC_COMMIT_MESSAGE` is a deprecated compatibility alias for
 `BOB_BULK_GIT_COMMIT_MESSAGE`.
 
-`BOB_CLI_USE_SCRIPT=1` forces the embedded shell fallback implementation.
+`BOB_CLI_USE_SCRIPT=1` selects an embedded shell implementation where one is
+available. See [Compatibility shims](#compatibility-shims) for the exact command
+coverage and cache location.
 
 ## Migration Notes
 

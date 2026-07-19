@@ -227,7 +227,7 @@ Pin `BOB_NOW` so scheduled-date behavior remains reproducible:
 ```bash
 BOB_TASKS_REAL_VAULT_PARITY=1 \
 BOB_DIR="$HOME/bob" \
-BOB_NOW=2026-07-10T12:00:00-04:00 \
+BOB_NOW=2026-07-10T12:00:00 \
 cargo test --test tasks_real_vault_parity -- --nocapture
 ```
 
