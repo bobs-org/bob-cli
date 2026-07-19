@@ -81,11 +81,12 @@ credentials are ready.
 bob capture [OPTIONS] [--] [TEXT]...
 ```
 
-Captures one task or section bullet into the Bob vault without requiring
-desktop Obsidian to be open. Task text is normalized to one line and written as
-`- [ ] #task <text> [created::YYYY-MM-DD]`, and routed to `mac_inbox.md` by
-default. The created date uses the local date from `BOB_NOW`, `DATE`, or the
-system clock.
+Captures one task or ordinary Markdown bullet into the Bob vault without
+requiring desktop Obsidian to be open. Input whitespace is normalized to one
+line. Task mode writes `- [ ] #task <text> [created::YYYY-MM-DD]` and routes to
+`mac_inbox.md` by default; bullet mode writes into a selected non-`Tasks`
+section as described below. The created date uses the local date from
+`BOB_NOW`, `DATE`, or the system clock.
 
 Automatic routing matches the Hammerspoon capture keymap: a leading
 `@route text` prefix wins, otherwise a trailing `text @route` suffix is used.
@@ -302,9 +303,10 @@ bob capture-targets [-b|--bob-dir DIR] [-f|--format human|json] [-v|--verbose]
 ```
 
 These read-only discovery commands support interactive capture pickers. A
-*route* is the lowercase name used to select `<route>.md` at the vault root;
-for example, route `cash` selects `cash.md`. A picker normally uses them in
-this order:
+*route* is the canonical lowercase name for a `<route>.md` note at the vault
+root; for example, route `cash` selects `cash.md`. The command-line route
+options accept ASCII uppercase too and normalize it to lowercase. A picker
+normally uses the commands in this order:
 
 1. Run `capture-targets` and let the user choose a route.
 2. For a bullet capture, run `capture-sections` for that route and let the user
@@ -314,15 +316,17 @@ this order:
 
 On a successful scan, `capture-targets` returns `mac_inbox` first even when
 `mac_inbox.md` does not exist, followed by top-level area notes and
-non-terminal project notes. Eligible note filenames must already be lowercase
-and may contain only letters, digits, `_`, and `-`. Area and project
-classification comes from `type: "[[area]]"` or `type: "[[project]]"` in YAML
-frontmatter. Nested notes, projects with `status: done` or `status: canceled`,
-and other note types are omitted. Human output groups routes by kind. JSON
-output has `ok`, `bob_dir`, `count`, and an ordered `targets` array; each target
-has `route`, `name`, `label`, `kind`, `is_default`, `status`, and
-`relative_path`. `--verbose` reports top-level Markdown files omitted because
-their filename is not a valid route; other omissions remain silent.
+non-terminal project notes, with each group sorted by route. Eligible note
+filenames must already be lowercase and may contain only ASCII letters,
+digits, `_`, and `-`. Area and project classification comes from YAML
+frontmatter `type: "[[area]]"` or `type: "[[project]]"`; the equivalent bare
+values are also accepted. Nested notes, projects whose status is `done`,
+`canceled`, or `cancelled` (case-insensitively), and other note types are
+omitted. Human output groups routes by kind. JSON output has `ok`, `bob_dir`,
+`count`, and an ordered `targets` array; each target has `route`, `name`,
+`label`, `kind`, `is_default`, `status`, and `relative_path`. `--verbose`
+reports top-level Markdown files omitted because their filename is not a valid
+route; other omissions remain silent.
 
 `capture-sections` lists each parsed ATX heading (H1-H6) except a heading
 titled exactly `Tasks`, in document order. It ignores headings in YAML
@@ -505,7 +509,7 @@ already non-terminal leaves its existing status unchanged.
 
 For a non-terminal project, `sync` uses `#hide` to show `^prj` in `dash.md`'s
 Tasks query only when no other open, non-hidden `#task` and no open sub-project
-is available. It also maintains the machine-owned Sub-projects ledger beneath
+exists. It also maintains the machine-owned Sub-projects ledger beneath
 `^prj`. Run `projects list` to inspect the current state, `projects sync
 --dry-run` to preview reconciliation, and `projects sync` to apply it.
 
@@ -677,14 +681,16 @@ commands. With `BOB_CLI_USE_SCRIPT=1`, the notification and Pomodoro commands
 and their shims delegate to their embedded shell assets. The `bob_sync` shim
 also delegates to its embedded script, but `bob bulk-git-commit` remains native.
 Native-only commands ignore the fallback setting. Extracted assets are cached
-under `$XDG_CACHE_HOME/bob-cli/scripts`, or `~/.cache/bob-cli/scripts` when
-`XDG_CACHE_HOME` is unset.
+in a version-and-content-specific subdirectory of
+`$XDG_CACHE_HOME/bob-cli/scripts/`. If `XDG_CACHE_HOME` is unset or empty, the
+base is `$HOME/.cache`; if neither variable is available, Bob uses the system
+temporary directory.
 
 ## Runtime Dependencies
 
-Normal command execution no longer requires Bash or Perl. These tools are still
-useful for validating or forcing the embedded script fallback with
-`BOB_CLI_USE_SCRIPT=1`.
+Native command execution does not require Bash or Perl. Forced shell fallback
+with `BOB_CLI_USE_SCRIPT=1` requires Bash, and the Pomodoro-based fallback
+scripts also require Perl.
 
 The documented workflows use these external-tool integrations:
 
@@ -695,13 +701,14 @@ The documented workflows use these external-tool integrations:
 - `git` for `bob bulk-git-commit`, Git-backed `bob move-done-tasks`, plugin
   dirty-file checks, and the default `bob plugins` repository refresh; remote
   operations also need the credentials required by the configured remote
-- `notify-send` for desktop notifications from `bob notify`; the terminal bell
-  remains available when it is missing
+- `notify-send` for desktop notifications from `bob notify`; Bob also rings the
+  terminal bell whether or not `notify-send` is available
 - platform clipboard tools for `bob capture` clipboard input: `pbpaste` on
   macOS; `wl-paste`, `xclip`, or `xsel` on Linux; or `tmux show-buffer` in a
   display-less tmux session (the next section gives the exact fallback order)
-- `bash` only when loading `ob` through the NVM fallback or sourcing
-  `~/.ssh-agent-thing`
+- `bash` for the embedded shell fallback, for loading `ob` through the NVM
+  fallback, or for sourcing `~/.ssh-agent-thing`; the Pomodoro shell fallback
+  additionally uses `perl`
 
 No old chezmoi script files are required after installation. Cargo installs the
 Rust binaries, and the binaries carry the script assets they need.
@@ -743,14 +750,16 @@ clipboard source alone.
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`,
 Pomodoro-linked `bob capture` requests, and `bob task-status-hooks`.
 
-`BOB_NOW` sets the current timestamp for Pomodoro status, the `bob capture`
-`[created::YYYY-MM-DD]` stamp, and default runtime note selection, including
-the daily note used by `bob task-status-hooks`. It also controls the default
-`bob move-done-tasks YYYY-MM-DD` commit message date and the local-date boundary
-used by `bob projects sync` for scheduled project visibility.
-Supported formats are `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and
-`YYYY-MM-DD HH:MM:SS`; `T` may replace the space. Timezone names and UTC-offset
-suffixes are not accepted.
+`BOB_NOW` overrides the local date and time used for Pomodoro status and default
+daily-note selection by `bob pomodoro`, Pomodoro-linked capture, and
+`bob task-status-hooks`. It also controls capture created/scheduled dates and
+clipboard-snippet names, native Tasks-query date calculations, the default
+`bob move-done-tasks YYYY-MM-DD` commit-message date, scheduled-project
+visibility, and the timestamped directory name for plugin backups. Supported
+formats are `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and `YYYY-MM-DD HH:MM:SS`; `T`
+may replace the space. Timezone names and UTC-offset suffixes are not accepted.
+An unsupported value is ignored, after which Bob tries `DATE` and then the
+system clock.
 
 `BOB_HIGHLIGHTS_LIB_DIR` sets the Highlights PDF library directory used by
 `bob highlights`. It defaults to `lib` under `BOB_DIR`. Relative values are
