@@ -23,7 +23,8 @@ For installation from the Git remote:
 cargo install --git git@github.com:bobs-org/bob-cli.git --locked --force bob-cli
 ```
 
-To smoke-test an install without replacing an existing user install:
+With `just` installed, smoke-test an install without replacing an existing
+user install:
 
 ```bash
 just install-smoke
@@ -31,14 +32,14 @@ just install-smoke
 
 ## Commands
 
-`bob --help` is the authoritative command index. The public commands are:
+`bob --help` is the authoritative command index. Bob's workflow commands are:
 
 | Command | Purpose |
 | --- | --- |
 | `bulk-git-commit` | Stage, commit, and push all Bob vault changes |
 | `capture` | Capture a task or section bullet, optionally with clipboard content |
-| `capture-sections` | List the non-Tasks headings available for bullet capture |
-| `capture-targets` | List inbox, area, and active-project capture routes |
+| `capture-sections` | List the non-`Tasks` headings in a routed note |
+| `capture-targets` | List inbox, area, and non-terminal project capture routes |
 | `highlights` | Synchronize Highlights PDF annotations with reference notes |
 | `move-done-tasks` | Archive done and canceled task blocks and repair their links |
 | `nightly` | Run the Obsidian sync and maintenance workflow |
@@ -287,21 +288,35 @@ bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-targets [-b|--bob-dir DIR] [-f|--format human|json] [-v|--verbose]
 ```
 
-These read-only commands support interactive capture pickers and are also
-useful for inspecting what can be routed. `capture-targets` always returns
-`mac_inbox` first, followed by top-level area notes and non-terminal project
-notes whose filenames are valid lowercase routes. It ignores nested notes and
-terminal projects. Human output groups the routes by kind; JSON output returns
-`ok`, `bob_dir`, `count`, and ordered `targets` with route, label, kind,
-default, project status, and relative-path fields. Use `--verbose` to explain
-why otherwise eligible-looking top-level notes were skipped.
+These read-only discovery commands support interactive capture pickers. A
+*route* is the lowercase name used to select `<route>.md` at the vault root;
+for example, route `cash` selects `cash.md`. A picker normally uses them in
+this order:
 
-`capture-sections` lists every non-`Tasks` ATX heading (H1-H6) in one routed
-note, in document order. Route input is normalized to lowercase, and a missing
-note successfully returns an empty list. JSON output returns `ok`, the
-normalized `route`, `count`, and ordered `sections`, each with `title` and
-`level`. The selected route and section can then be passed to
-`bob capture --route NAME --section TITLE -- <text>`.
+1. Run `capture-targets` and let the user choose a route.
+2. For a bullet capture, run `capture-sections` for that route and let the user
+   choose a heading. A task capture skips this step.
+3. Run `bob capture --route NAME --section TITLE -- <text>` for a bullet, or
+   omit `--section` for a task.
+
+On a successful scan, `capture-targets` returns `mac_inbox` first even when
+`mac_inbox.md` does not exist, followed by top-level area notes and
+non-terminal project notes. Eligible note filenames must already be lowercase
+and may contain only letters, digits, `_`, and `-`. Area and project
+classification comes from `type: "[[area]]"` or `type: "[[project]]"` in YAML
+frontmatter. Nested notes, projects with `status: done` or `status: canceled`,
+and other note types are omitted. Human output groups routes by kind. JSON
+output has `ok`, `bob_dir`, `count`, and an ordered `targets` array; each target
+has `route`, `name`, `label`, `kind`, `is_default`, `status`, and
+`relative_path`. `--verbose` reports top-level Markdown files omitted because
+their filename is not a valid route; other omissions remain silent.
+
+`capture-sections` lists each parsed ATX heading (H1-H6) except a heading
+titled exactly `Tasks`, in document order. It ignores headings in YAML
+frontmatter and fenced code blocks. Route input is normalized to lowercase,
+and a missing note successfully returns an empty list. JSON output has `ok`,
+the normalized `route`, `count`, and an ordered `sections` array whose entries
+each have `title` and `level`.
 
 ```bash
 bob nightly
@@ -468,21 +483,26 @@ bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
 
 Scans the Bob vault for notes whose frontmatter declares
 `type: "[[project]]"` and prints a read-only overview of each project note. The
-table includes frontmatter status, open `#task` count, open non-hidden task
-count, and the state of the project completion task anchored with `^prj`.
-`sync` makes that task the lifecycle control: checking or canceling it sets the
-matching terminal frontmatter status, while reopening it restores `status:
-wip`. For active projects, `sync` uses the `#hide` tag to surface `^prj` only
-when no ordinary non-hidden task or open sub-project is available, and it
-maintains the generated Sub-projects ledger beneath `^prj`.
+table includes frontmatter status, open `#task` count, open non-hidden ordinary
+`#task` count, and the state of the project completion task anchored with
+`^prj`. The `^prj` task is the lifecycle control: checking it sets `status:
+done`, canceling it sets `status: canceled`, and reopening it changes either
+terminal status back to `status: wip`. An open `^prj` on a project that is
+already non-terminal leaves its existing status unchanged.
+
+For a non-terminal project, `sync` uses `#hide` to show `^prj` in `dash.md`'s
+Tasks query only when no other open, non-hidden `#task` and no open sub-project
+is available. It also maintains the machine-owned Sub-projects ledger beneath
+`^prj`. Run `projects list` to inspect the current state, `projects sync
+--dry-run` to preview reconciliation, and `projects sync` to apply it.
 
 An optional frontmatter `scheduled: YYYY-MM-DD` overrides normal task
-visibility. Future projects hide every task; due projects unhide ordinary
-tasks while preserving the lifecycle task's existing visibility when other
-tasks exist. Stale inline `[scheduled:: ...]` fields are removed from active
-`^prj` tasks. Use `--dry-run` to preview the exact actions without writing.
-
-The full project task contract lives in [`docs/projects.md`](docs/projects.md).
+visibility for a non-terminal project. A future date adds `#hide` to every
+Markdown task. On the scheduled date and afterward, `sync` removes `#hide`
+from every task except `^prj`; `^prj` keeps its existing visibility when the
+note contains another task, and is unhidden when it is the only task. A stale
+inline `[scheduled:: ...]` field is removed from an open `^prj` task. The full
+project task contract lives in [`docs/projects.md`](docs/projects.md).
 
 ```bash
 bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
@@ -519,7 +539,10 @@ drift and not-installed plugins are reported, not failures. Pass
 `data.json`. It reports each file as copied, unchanged, or skipped. A vault file
 with uncommitted changes in the vault Git repo is skipped with a warning so
 local edits are never clobbered silently; pass `-F, --force` to overwrite it.
-Use `-d, --dry-run` to preview and `-p, --plugin <ID>` to sync a single plugin.
+Before overwriting an existing file, `sync` copies it into a timestamped backup
+directory; `-B, --backup-dir` selects the backup base directory. Use `-d,
+--dry-run` to preview diffs, skip decisions, and backup paths before writing,
+and `-p, --plugin <ID>` to sync a single plugin.
 
 The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 
@@ -640,7 +663,7 @@ Normal command execution no longer requires Bash or Perl. These tools are still
 useful for validating or forcing the embedded script fallback with
 `BOB_CLI_USE_SCRIPT=1`.
 
-Depending on the command, Bob integrates with these external tools:
+The documented workflows use these external-tool integrations:
 
 - `ob` from obsidian-headless for the shared `bob nightly` Obsidian sync gate;
   the gate is skipped when `ob` is unavailable
@@ -651,6 +674,9 @@ Depending on the command, Bob integrates with these external tools:
   operations also need the credentials required by the configured remote
 - `notify-send` for desktop notifications from `bob notify`; the terminal bell
   remains available when it is missing
+- platform clipboard tools for `bob capture` clipboard input: `pbpaste` on
+  macOS; `wl-paste`, `xclip`, or `xsel` on Linux; or `tmux show-buffer` in a
+  display-less tmux session (the next section gives the exact fallback order)
 - `bash` only when loading `ob` through the NVM fallback or sourcing
   `~/.ssh-agent-thing`
 
