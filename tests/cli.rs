@@ -681,7 +681,7 @@ fn task_status_hooks_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("Make today's Pomodoro ledger the source of truth")
+        help.contains("Make the current Pomodoro ledger the source of truth")
             && help.contains("BOB_DAY_FILE")
             && help.contains("bob task-status-hooks --dry-run"),
         "expected task-status-hooks long help:\n{help}"
@@ -950,6 +950,204 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         fs::read_to_string(&alpha).expect("read cleared alpha");
     assert!(alpha_contents
         .contains("- [ ] #task Cross-file recursive dependency ^dep-two"));
+}
+
+#[test]
+fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-previous-daily");
+    let vault = temp.path().join("vault");
+    let current = vault.join("2026/20260721.md");
+    let previous = vault.join("2026/20260710.md");
+    let older = vault.join("2026/20260701.md");
+    let area = vault.join("Areas/Home.md");
+    let project = vault.join("Projects/Alpha.md");
+    let ordinary = vault.join("notes.md");
+    let tasks = vault.join("Tasks.md");
+    let current_before = concat!(
+        "# Current\n\n",
+        "## Pomodoros\n\n",
+        "- [ ] Current work (0900-0930)\n",
+        "  - [[Projects/Alpha#^today]]\n",
+        "  - [[Tasks#^current-root]]\n",
+        "  - ![[Tasks#^done|finished]]\n",
+    );
+    let previous_before = concat!(
+        "# Previous\n\n",
+        "## Pomodoros\n\n",
+        "- [x] Previous work (0900-0930)\n",
+        "  - ![[Areas/Home#^previous|area alias]]\n",
+        "  - [[Tasks#^previous-root]]\n",
+        "  - [[Projects/Alpha#^historical-ready]]\n",
+        "  - ~~[[Projects/Alpha#^retired]]~~\n",
+        "  - 🍅 🍅 ![[Tasks#^done|historical bytes stay exact]]\n",
+        "\n",
+        "- [*] #task Historical daily task stays untouched ^daily-task\n",
+    );
+    let older_before = concat!(
+        "# Older\n\n",
+        "## Pomodoros\n\n",
+        "- [ ] Old work\n",
+        "  - [[Projects/Alpha#^older-only]]\n",
+    );
+    let area_before = concat!(
+        "---\r\n",
+        "type: \"[[area]]\"\r\n",
+        "---\r\n",
+        "- [/] #task Previous direct ^previous\r\n",
+        "- [/] #task Previous dependency ^previous-dependency\r\n",
+        "- [/] #task Current dependency ^current-dependency\r\n",
+        "- [/] #task Stale area task ^stale\r\n",
+        "- [/] #task Missing block id\r\n",
+    );
+    let area_after = concat!(
+        "---\r\n",
+        "type: \"[[area]]\"\r\n",
+        "---\r\n",
+        "- [/] #task Previous direct ^previous\r\n",
+        "- [/] #task Previous dependency ^previous-dependency\r\n",
+        "- [/] #task Current dependency ^current-dependency\r\n",
+        "- [ ] #task Stale area task ^stale\r\n",
+        "- [ ] #task Missing block id\r\n",
+    );
+    let project_before = concat!(
+        "---\n",
+        "type: [[project]]\n",
+        "---\n",
+        "- [/] #task Current direct ^today\n",
+        "- [/] #task Older daily only ^older-only\n",
+        "- [/] #task Retired historical link ^retired\n",
+        "- [ ] #task Historical links do not promote ^historical-ready\n",
+    );
+    let project_after = concat!(
+        "---\n",
+        "type: [[project]]\n",
+        "---\n",
+        "- [/] #task Current direct ^today\n",
+        "- [ ] #task Older daily only ^older-only\n",
+        "- [ ] #task Retired historical link ^retired\n",
+        "- [ ] #task Historical links do not promote ^historical-ready\n",
+    );
+    let ordinary_before = "- [/] #task Ordinary note stays active ^ordinary\n";
+    let tasks_before = concat!(
+        "- [ ] #task Current root ^current-root\n",
+        "  - ![[Areas/Home#^current-dependency]]\n",
+        "- [/] #task Previous root ^previous-root\n",
+        "  - ![[Areas/Home#^previous-dependency]]\n",
+        "- [x] #task Finished ^done\n",
+    );
+    write_file(&current, current_before);
+    write_file(&previous, previous_before);
+    write_file(&older, older_before);
+    write_file(&area, area_before);
+    write_file(&project, project_before);
+    write_file(&ordinary, ordinary_before);
+    write_file(&tasks, tasks_before);
+
+    let human_dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &current)
+        .output()
+        .expect("human dry-run rolling daily reconciliation");
+    assert_success(&human_dry_run);
+    assert!(stdout(&human_dry_run).contains("would clear in progress"));
+    assert!(stdout(&human_dry_run).contains("previous 2026/20260710.md"));
+
+    let dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &current)
+        .env("BOB_NOW", "2030-01-01 12:00:00")
+        .output()
+        .expect("dry-run rolling daily reconciliation");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&current).unwrap(), current_before);
+    assert_eq!(fs::read_to_string(&previous).unwrap(), previous_before);
+    assert_eq!(fs::read_to_string(&older).unwrap(), older_before);
+    assert_eq!(fs::read_to_string(&area).unwrap(), area_before);
+    assert_eq!(fs::read_to_string(&project).unwrap(), project_before);
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
+        .expect("rolling daily dry-run JSON");
+    assert_eq!(json["daily_file"], "2026/20260721.md");
+    assert_eq!(json["previous_daily_file"], "2026/20260710.md");
+    assert_eq!(json["previous_daily_references"], 4);
+    assert_eq!(json["recent_activity_references"], 6);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
+    assert!(json["cleared"].as_array().unwrap().is_empty());
+    assert_eq!(json["cleared_in_progress"].as_array().unwrap().len(), 4);
+    assert!(json["cleared_in_progress"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["path"] == "Areas/Home.md" && item["block_id"] == ""));
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &current)
+        .env("BOB_NOW", "2030-01-01 12:00:00")
+        .output()
+        .expect("apply rolling daily reconciliation");
+    assert_success(&applied);
+    assert!(stdout(&applied).contains("cleared in progress"));
+    assert!(stdout(&applied).contains("previous 2026/20260710.md"));
+    assert_eq!(fs::read_to_string(&previous).unwrap(), previous_before);
+    assert_eq!(fs::read_to_string(&older).unwrap(), older_before);
+    assert_eq!(fs::read_to_string(&area).unwrap(), area_after);
+    assert_eq!(fs::read_to_string(&project).unwrap(), project_after);
+    assert_eq!(fs::read_to_string(&ordinary).unwrap(), ordinary_before);
+    assert!(fs::read_to_string(&current)
+        .unwrap()
+        .contains("  - ~~[[Tasks#^done|finished]]~~\n"));
+    assert!(fs::read_to_string(&tasks)
+        .unwrap()
+        .contains("- [*] #task Current root ^current-root\n"));
+
+    let second = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &current)
+        .output()
+        .expect("rerun rolling daily reconciliation");
+    assert_success(&second);
+    assert!(stdout(&second).contains("already in sync, no changes"));
+
+    let sectionless = vault.join("2026/20260720.md");
+    let sectionless_before = "# A real daily note with no Pomodoros section\n";
+    write_file(&sectionless, sectionless_before);
+    let empty_previous = bob_command()
+        .arg("task-status-hooks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &current)
+        .output()
+        .expect("run with sectionless previous daily");
+    assert_success(&empty_previous);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&empty_previous).trim())
+            .expect("sectionless previous JSON");
+    assert_eq!(json["previous_daily_file"], "2026/20260720.md");
+    assert_eq!(json["previous_daily_references"], 0);
+    assert_eq!(
+        fs::read_to_string(&sectionless).unwrap(),
+        sectionless_before
+    );
+    let area_contents = fs::read_to_string(&area).unwrap();
+    assert!(area_contents.contains("- [ ] #task Previous direct ^previous"));
+    assert!(area_contents
+        .contains("- [ ] #task Previous dependency ^previous-dependency"));
+    assert!(area_contents
+        .contains("- [/] #task Current dependency ^current-dependency"));
 }
 
 #[test]

@@ -1,9 +1,11 @@
 # Task Status Hooks
 
-`bob task-status-hooks` makes today's Pomodoro ledger the source of truth for
-active Obsidian Tasks statuses and keeps
-references to completed tasks retired as struck, non-embedded links beneath
-their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
+`bob task-status-hooks` makes the current Pomodoro ledger the source of truth
+for active Obsidian Tasks promotions and structural cleanup. It also uses the
+latest existing earlier daily note as a read-only recent-activity source for
+deciding whether In Progress tasks in area and project notes remain active. It
+keeps references to completed tasks retired as struck, non-embedded links
+beneath their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
 the machine-owned Pomodoro marker (`🍅`); embedded and provenance-unknown
 retired links do not. Links beneath open Pomodoros are unmarked, and a link to
 an unambiguously canceled Tasks task removes its complete Markdown list-item
@@ -20,9 +22,18 @@ reconciles the derived Blocked (`[?]`) marker from Tasks `[id:: ...]` and
 bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
-The vault root comes from `--bob-dir`, then `BOB_DIR`, then `~/bob`. The daily
-note comes from `BOB_DAY_FILE` when set; otherwise it is
-`<vault>/YYYY/YYYYMMDD.md` for the local date or `BOB_NOW` override.
+The vault root comes from `--bob-dir`, then `BOB_DIR`, then `~/bob`. The current
+daily ledger comes from `BOB_DAY_FILE` when set; otherwise it is
+`<vault>/YYYY/YYYYMMDD.md` for the local date or `BOB_NOW` override. When the
+selected filename has a valid daily date, that date anchors the historical
+lookup even for a fixture or manual override. Otherwise the effective current
+date is the anchor.
+
+Starting strictly before the anchor, the command selects the newest existing
+canonical `<vault>/YYYY/YYYYMMDD.md` file. Missing intervening days or weeks
+and year boundaries need no special handling. Malformed names, mismatched year
+directories, the anchor date, and future dates are ignored. No earlier daily
+note is a valid result.
 
 Use `--dry-run` to compute and print the complete sync without writing files.
 Repeated successful runs are idempotent.
@@ -33,8 +44,8 @@ dispatch aliases and show canonical usage when asked for help.
 
 ## Sync Rules
 
-Within the daily note's `## Pomodoros` section, the command reads block links
-from indented bullets beneath open top-level Pomodoro entries:
+Within the current daily note's `## Pomodoros` section, the command reads block
+links from indented bullets beneath open top-level Pomodoro entries:
 
 ```markdown
 - [ ] Write and review (0900-0930)
@@ -155,6 +166,44 @@ included, while a task reached both directly and through a dependency is
 counted as direct. Removing a Pomodoro link removes that task's otherwise
 unreachable dependency chain from the desired map on the next run.
 
+### Rolling Recent Activity
+
+Status promotion still uses only the structurally normalized current ledger.
+Separately, the command builds a recent-activity identity set from every
+non-retired block link beneath a recognized Pomodoro in the normalized current
+ledger and the selected previous daily note. A struck link is retired and does
+not count; aliases, embeds, markers, alternate note spellings, and same-note
+links normalize through the usual resolved vault-relative path plus block ID.
+Each daily retains its own resolution context, so `[[#^local]]` resolves
+against the daily where it appears even when both notes contain identical raw
+link text.
+
+The previous daily note is read-only. It never receives duplicate cleanup,
+link retirement, marker repair, canceled-reference removal, Pomodoro
+relocation, or task-status writes. If it has no `## Pomodoros` section, it is
+the selected source with zero references; the command does not fail or fall
+through to an older note. Non-retired historical links may preserve an
+already-In-Progress task, but they never promote a Ready task to Next or In
+Progress.
+
+Recent roots traverse the same eligible transcluded-task dependency graph as
+current promotion roots. This protects an area/project In-Progress dependency
+reachable from either daily and keeps cycles stable across repeated runs.
+
+After this traversal, a recognized `[/]` Tasks task is reset to `[ ]` only
+when all of the following are true:
+
+- its note has frontmatter `type: [[area]]` or `type: [[project]]`, including
+  the shared parser's single- and double-quoted scalar forms;
+- the note is not a canonical daily note or the selected current ledger;
+- the task's canonical path-plus-block identity is absent from recent
+  activity, or the task has no usable trailing block ID; and
+- it has no open Dataview dependency that requires Blocked status.
+
+Directory names and tags do not establish area/project scope. Ordinary notes,
+daily notes, generated references, terminal statuses, unknown/custom
+statuses, and other checkbox states are not subject to this rollback.
+
 ## Dependency Blocked Status
 
 After the full vault scan and the final post-rewrite Pomodoro graph are known,
@@ -233,20 +282,26 @@ The command scans Markdown task lines allowed by the Obsidian Tasks
 | `[*]` | desired Next | unchanged |
 | `[/]` | desired Next or In Progress | unchanged |
 | `[*]` | unreachable | `[ ]` |
-| `[ ]` or `[/]` | unreachable | unchanged |
+| `[/]` in an area/project note | no rolling recent activity | `[ ]` |
+| `[/]` in an area/project note | rolling recent activity from either daily or an eligible dependency path | unchanged |
+| `[ ]` or out-of-scope `[/]` | unreachable | unchanged |
 | done, canceled, non-task, or unknown/custom | any | unchanged |
 
 Ranked propagation itself is monotonic and never lowers a dependency target.
 Removing a transclusion therefore does not perform a matching rollback. The
 separate vault-wide cleanup rule still resets any Next task that is no longer
-reachable from the final open-Pomodoro graph; it never resets In Progress or
-terminal/custom statuses.
+reachable from the final open-Pomodoro graph. The distinct scoped rollback
+resets stale In Progress only under the rolling-activity rules above and never
+resets terminal/custom statuses. Open Dataview dependency derivation takes
+precedence over both cleanup rules, producing one stable final state.
 
 The machine-managed `#task #ref ... ^ref` reading task in a generated reference
 note is an ordinary scanned task. Promoting it to `[*]` or `[/]` therefore
 flows through the next highlights sync as the corresponding reference status;
 clearing an unreachable `[*]` back to `[ ]` flows through as `status: ready`.
-Existing `[/]`, `[x]`/`[X]`, and `[-]` statuses are never lowered. Because the highlights lifecycle is also
+Existing `[/]`, `[x]`/`[X]`, and `[-]` statuses in generated reference notes
+are never lowered because those notes are outside the area/project rollback
+scope. Because the highlights lifecycle is also
 stored in the PDF marker, preview with `bob highlights scan --dry-run` and use a
 reviewed `bob highlights scan --write-pdfs` when marker write-back is needed.
 
@@ -338,11 +393,17 @@ archived task itself remains untouched.
 
 ## Guard Rails
 
-The command exits with status 1 and writes nothing when today's daily note is
-missing, has no `## Pomodoros` section, or contains multiple open timed
-Pomodoros. A valid but empty section is a valid source of truth: it clears
-every scanned `[*]` task. This distinction prevents a missing or malformed
-daily note from causing a mass clear.
+The command exits with status 1 and writes nothing when the current daily note
+is missing, has no `## Pomodoros` section, or contains multiple open timed
+Pomodoros. A valid but empty current section is a valid source of truth: it
+clears every scanned `[*]` task and applies scoped stale-In-Progress rollback
+using the optional previous source. This distinction prevents a missing or
+malformed current ledger from causing a mass clear.
+
+The previous daily is optional and never weakens those current-ledger guards.
+No previous note is valid, while a selected previous note with no Pomodoros
+section is a successful empty historical source. The selected file remains
+byte-for-byte read-only even when the current ledger and task notes change.
 
 A planned Blocked/unblocked status edit also fails atomically when the Tasks
 registry is unreadable or its Blocked definition is missing, duplicated, or
@@ -359,10 +420,11 @@ cancellation states are warned and retained.
 
 ## Output
 
-Human output lists every Next promotion, In-Progress promotion, clear, Blocked
-transition, unblock, duplicate line removal, retired reference, move, and
-marker repair, plus every canceled-reference list-item trigger, followed by a
-summary.
+Human output lists every Next promotion, In-Progress promotion, Next clear,
+scoped In-Progress clear, Blocked transition, unblock, duplicate line removal,
+retired reference, move, and marker repair, plus every canceled-reference
+list-item trigger, followed by a summary. The selected previous daily path and
+its reference count appear in changed and no-op reports.
 Canceled-reference rows show the target, block ID, original one-based line
 number, and owning Pomodoro that triggered complete list-item deletion. Blocked
 rows include the open dependency IDs;
@@ -384,8 +446,11 @@ JSON mode prints one object on stdout with these stable fields:
   "ok": true,
   "dry_run": true,
   "daily_file": "2026/20260710.md",
+  "previous_daily_file": "2026/20260703.md",
   "open_pomodoros": 1,
   "references": 2,
+  "previous_daily_references": 3,
+  "recent_activity_references": 4,
   "dependency_references": 1,
   "scanned_files": 128,
   "marked_next": [
@@ -414,6 +479,15 @@ JSON mode prints one object on stdout with these stable fields:
     }
   ],
   "cleared": [],
+  "cleared_in_progress": [
+    {
+      "path": "Projects/Alpha.md",
+      "line_number": 29,
+      "block_id": "stale-work",
+      "description": "Stale project work",
+      "dependency": false
+    }
+  ],
   "marked_blocked": [
     {
       "path": "dev.md",
@@ -496,11 +570,20 @@ reinterpret that older field. A canceled reference removed during this run
 therefore remains part of `references`, while the post-rewrite graph excludes
 it. `dependency_references` counts additional unique task blocks reached
 through dependency edges in the final rewritten ledger.
+`previous_daily_file` is the optional vault-relative selected historical path;
+it is `null` when no earlier canonical daily exists.
+`previous_daily_references` counts unique eligible non-retired raw links in
+that note, or zero for no note or a note without a Pomodoros section.
+`recent_activity_references` counts unique resolved path-plus-block roots from
+the normalized current and previous sources before dependency traversal.
 `marked_next` contains only `[ ] -> [*]` changes, while
 `marked_in_progress` contains both `[ ] -> [/]` and `[*] -> [/]` changes. Each
 change item's `dependency` boolean distinguishes direct references from
 dependency-only graph reachability. `marked_blocked` and `unblocked` are
-additive fields and do not duplicate changes into those older arrays. Their
+additive fields and do not duplicate changes into those older arrays.
+`cleared` remains the compatibility list for `[*] -> [ ]`, while
+`cleared_in_progress` separately reports scoped `[/] -> [ ]` changes with the
+same path, line, block ID, description, and dependency shape. Their
 `from`/`to` values are the actual checkbox symbols, and their dependency-ID
 arrays explain the derived decision. Each
 `removed_canceled_references` item represents one removed occurrence and

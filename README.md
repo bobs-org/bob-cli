@@ -379,14 +379,23 @@ bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
 Synchronizes active task statuses from block links beneath open Pomodoros in
-today's daily note. A directly linked `[ ]` task becomes Next (`[*]`), while a
-direct task already In Progress (`[/]`) keeps that stronger status. Sole
+the current daily ledger. It also reads the latest existing earlier canonical
+daily note, searching across missing days, weeks, and year boundaries, as a
+read-only recent-activity source. A directly linked `[ ]` task becomes Next
+(`[*]`), while a direct task already In Progress (`[/]`) keeps that stronger
+status. Sole
 transcluded task dependencies inherit their parent's effective status
 recursively: Next promotes Ready to Next, and In Progress promotes Ready or
 Next to In Progress. Multiple paths use the strongest request, stronger
 intermediate tasks pass their status to descendants, and propagation never
 lowers a task. Separately, an unreachable `[*]` task becomes `[ ]`, preserving
-the command's vault-wide Next clearing policy. Vault-wide Tasks
+the command's vault-wide Next clearing policy. An In-Progress `[/]` task in a
+note whose frontmatter type is exactly `[[area]]` or `[[project]]` becomes
+Ready when neither daily source nor their eligible dependency closure reaches
+it; a missing block ID is stale by definition. Historical links protect
+existing In-Progress state but never promote Ready tasks, and the historical
+daily is never written. Ordinary notes, daily notes, terminal/custom statuses,
+and other checkbox states remain outside this rollback. Vault-wide Tasks
 `[id:: ...]`/`[dependsOn:: ...]` metadata is reconciled independently: any
 recognized open parent with an open dependency becomes Blocked (`[?]`), and a
 no-longer-blocked task returns to its final Pomodoro-derived rank or Ready.
@@ -407,11 +416,10 @@ and exactly struck occurrences qualify, including custom single-character
 cancellation symbols, without changing the canceled task. Links on top-level
 Pomodoro lines, beneath completed or canceled Pomodoros, in fenced examples,
 unresolved links, and mixed-status duplicate block IDs are retained. Duplicate
-physical-line cleanup takes precedence, and the rewritten ledger drives status
-and dependency propagation in the same run so collateral references removed
-with the item no longer contribute.
-In-progress `[/]` tasks are never lowered; completed, canceled, unknown, and
-non-Tasks checkbox statuses are not changed.
+physical-line cleanup takes precedence, and the rewritten current ledger
+drives status and dependency propagation in the same run so collateral
+references removed with the item no longer contribute.
+Completed, canceled, unknown, and non-Tasks checkbox statuses are not changed.
 When multiple open Pomodoros link the same resolved task, the earliest open
 Pomodoro keeps it and matching physical lines beneath later open Pomodoros are
 removed in full. Identity is the resolved note path plus block ID, so aliases,
@@ -427,10 +435,11 @@ dependency chain a minimum desired status of Next:
 ```
 
 Run `bob task-status-hooks --dry-run` to preview every Next or In-Progress
-promotion, clear, Blocked transition, unblock, duplicate-line removal,
-canceled-reference list-item removal, retirement, move, and Pomodoro-marker
-repair. The command refuses to change files if the daily note is missing,
-lacks a `Pomodoros` section, or has multiple open timed Pomodoros. The full
+promotion, Next clear, scoped In-Progress clear, Blocked transition, unblock,
+duplicate-line removal, canceled-reference list-item removal, retirement,
+move, and Pomodoro-marker repair. The command refuses to change files if the
+current daily note is missing, lacks a `Pomodoros` section, or has multiple
+open timed Pomodoros. The full
 sync, link-resolution, exclusion, output, and JSON contract lives in
 [`docs/task-status-hooks.md`](docs/task-status-hooks.md).
 

@@ -221,7 +221,7 @@ fn day_date(day_file: &Path) -> NaiveDate {
     bob_env::current_datetime().date()
 }
 
-fn parse_day_file_date(file_name: &str) -> Option<NaiveDate> {
+pub(crate) fn parse_day_file_date(file_name: &str) -> Option<NaiveDate> {
     let date_text = file_name.strip_suffix(".md")?;
     let date_text = date_text.strip_suffix("_day").unwrap_or(date_text);
     if date_text.len() != 8

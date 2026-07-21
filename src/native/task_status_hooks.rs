@@ -7,6 +7,7 @@ use std::{
     process,
 };
 
+use chrono::{Datelike, NaiveDate};
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
     Command as ClapCommand,
@@ -18,7 +19,7 @@ const POMODORO_MARKER: &str = "🍅";
 
 use super::{
     collect_done, env as bob_env, is_always_excluded_note_directory_name,
-    pomodoro,
+    pomodoro, projects,
     style::{display_width, pad_right, Styler},
 };
 
@@ -61,14 +62,19 @@ fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Sync active and dependency-blocked task statuses")
         .long_about(
-            "Make today's Pomodoro ledger the source of truth for active task statuses.\n\n\
+            "Make the current Pomodoro ledger the source of truth for active task statuses and use the latest existing earlier daily note as a read-only recent-activity source.\n\n\
 Tasks block-linked from child bullets of open Pomodoro entries have a minimum \
 desired status of Next [*]; tasks already In Progress [/] keep that stronger \
 status. Dependency tasks are discovered recursively from sole transcluded \
 block-link child bullets and inherit the strongest effective parent status, \
 promoting Ready [ ] tasks to Next or In Progress and Next tasks to In Progress. \
 Status propagation never lowers a task. Existing [*] tasks not reachable from \
-an open entry are independently reset to [ ]. Tasks whose Dataview \
+an open entry are independently reset to [ ]. In Progress [/] tasks in notes \
+whose frontmatter type is [[area]] or [[project]] are reset to Ready [ ] when \
+they are not reachable from a non-retired link in either the current ledger or \
+the latest existing earlier daily note. Historical links protect existing \
+In-Progress state but never promote Ready tasks, and the historical note is \
+never modified. Tasks whose Dataview \
 [dependsOn:: ...] metadata names an open vault-wide [id:: ...] task are marked \
 Blocked [?], overriding Ready, Next, and In Progress. When those dependencies \
 close, Blocked tasks recover to the final Pomodoro-derived status or Ready. \
@@ -93,12 +99,13 @@ Only Markdown checkbox lines allowed by the Obsidian Tasks globalFilter are \
 considered. The scan skips hidden directories, templates, generated notes, \
 and done archives. Blocked writes require exactly one compatible Tasks status \
 named Blocked with symbol [?], type ON_HOLD, and next status Ready. Missing \
-daily notes and daily notes without a Pomodoros \
-section, as well as notes with multiple open timed Pomodoros, fail before any \
-file is changed.",
+current daily notes and current daily notes without a Pomodoros section, as \
+well as current notes with multiple open timed Pomodoros, fail before any file \
+is changed. No earlier daily note is valid; an earlier note without a \
+Pomodoros section contributes no historical references.",
         )
         .after_help(format!(
-            "Examples:\n  {COMMAND_NAME}\n  {COMMAND_NAME} --dry-run\n  {COMMAND_NAME} --format json\n  {COMMAND_NAME} --bob-dir /tmp/bob-vault\n\nEnvironment:\n  BOB_DAY_FILE  exact daily note used as the Pomodoro source\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time override for daily-note selection"
+            "Examples:\n  {COMMAND_NAME}\n  {COMMAND_NAME} --dry-run\n  {COMMAND_NAME} --format json\n  {COMMAND_NAME} --bob-dir /tmp/bob-vault\n\nEnvironment:\n  BOB_DAY_FILE  exact current daily ledger; its dated filename anchors the earlier-note lookup\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time fallback for current and earlier-note selection"
         ))
         .disable_help_flag(true)
         .arg(
@@ -251,13 +258,17 @@ struct SyncResult {
     ok: bool,
     dry_run: bool,
     daily_file: String,
+    previous_daily_file: Option<String>,
     open_pomodoros: usize,
     references: usize,
+    previous_daily_references: usize,
+    recent_activity_references: usize,
     dependency_references: usize,
     scanned_files: usize,
     marked_next: Vec<ChangeItem>,
     marked_in_progress: Vec<ChangeItem>,
     cleared: Vec<ChangeItem>,
+    cleared_in_progress: Vec<ChangeItem>,
     marked_blocked: Vec<DependencyStatusChange>,
     unblocked: Vec<DependencyStatusChange>,
     struck_completed_references: Vec<StruckCompletedReference>,
@@ -278,6 +289,20 @@ struct FileScan {
     relative_path: PathBuf,
     contents: String,
     tasks: Vec<TaskLine>,
+    note_kind: NoteKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoteKind {
+    Area,
+    Project,
+    Other,
+}
+
+impl NoteKind {
+    fn is_area_or_project(self) -> bool {
+        matches!(self, Self::Area | Self::Project)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,6 +423,7 @@ struct PomodoroModel {
     bullets: Vec<LinkBullet>,
     open_pomodoros: usize,
     raw_references: BTreeSet<RawReference>,
+    recent_references: BTreeSet<RawReference>,
     all_references: BTreeSet<RawReference>,
 }
 
@@ -439,6 +465,7 @@ enum Transition {
     MarkNext,
     MarkInProgress,
     Clear,
+    ClearInProgress,
     MarkBlocked,
     Unblock(RankedStatus),
     KeptNext,
@@ -469,6 +496,70 @@ impl RankedStatus {
             Self::Next => '*',
             Self::InProgress => '/',
         }
+    }
+}
+
+fn daily_anchor_date(
+    daily_path: &Path,
+    effective_date: NaiveDate,
+) -> NaiveDate {
+    daily_path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .and_then(pomodoro::parse_day_file_date)
+        .unwrap_or(effective_date)
+}
+
+fn canonical_daily_date(relative_path: &Path) -> Option<NaiveDate> {
+    let mut components = relative_path.components();
+    let Component::Normal(year_component) = components.next()? else {
+        return None;
+    };
+    let Component::Normal(file_component) = components.next()? else {
+        return None;
+    };
+    if components.next().is_some() {
+        return None;
+    }
+    let year_text = year_component.to_str()?;
+    let file_name = file_component.to_str()?;
+    if year_text.len() != 4
+        || !year_text.bytes().all(|byte| byte.is_ascii_digit())
+        || file_name.len() != 11
+        || !file_name.ends_with(".md")
+    {
+        return None;
+    }
+    let date = pomodoro::parse_day_file_date(file_name)?;
+    (year_text.parse::<i32>().ok()? == date.year()).then_some(date)
+}
+
+fn previous_daily_path(
+    vault: &Path,
+    markdown_files: &[PathBuf],
+    anchor: NaiveDate,
+) -> Option<PathBuf> {
+    markdown_files
+        .iter()
+        .filter_map(|path| {
+            let relative_path = path.strip_prefix(vault).ok()?;
+            let date = canonical_daily_date(relative_path)?;
+            (date < anchor).then_some((date, path))
+        })
+        .max_by_key(|(date, _)| *date)
+        .map(|(_, path)| path.clone())
+}
+
+fn note_kind(contents: &str) -> NoteKind {
+    let Some(frontmatter) = projects::parse_frontmatter(contents) else {
+        return NoteKind::Other;
+    };
+    if projects::frontmatter_is_area(&frontmatter) {
+        NoteKind::Area
+    } else if projects::frontmatter_is_project(&frontmatter) {
+        NoteKind::Project
+    } else {
+        NoteKind::Other
     }
 }
 
@@ -508,6 +599,10 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
     let markdown_files = markdown_files(&request.bob_dir).map_err(|error| {
         SyncError::io("scan vault", &request.bob_dir, error)
     })?;
+    let anchor =
+        daily_anchor_date(&daily_path, bob_env::current_datetime().date());
+    let previous_daily_path =
+        previous_daily_path(&request.bob_dir, &markdown_files, anchor);
     let canonical_daily_path = daily_path.canonicalize().ok();
     let mut files = Vec::with_capacity(markdown_files.len());
     for path in markdown_files {
@@ -530,11 +625,13 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
                 ))
             })?;
         let tasks = parse_tasks(&contents, &settings);
+        let note_kind = note_kind(&contents);
         files.push(FileScan {
             path,
             relative_path,
             contents,
             tasks,
+            note_kind,
         });
     }
 
@@ -543,6 +640,21 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
     );
     let task_blocks = task_blocks(&files);
     let daily_relative = daily_path.strip_prefix(&request.bob_dir).ok();
+    let previous_daily_relative =
+        previous_daily_path.as_ref().and_then(|path| {
+            path.strip_prefix(&request.bob_dir)
+                .ok()
+                .map(Path::to_path_buf)
+        });
+    let previous_daily_references = previous_daily_path
+        .as_ref()
+        .and_then(|path| files.iter().find(|file| &file.path == path))
+        .and_then(|file| {
+            let lines = logical_lines(&file.contents);
+            let section = pomodoro::pomodoros_section_range(&lines)?;
+            Some(scan_pomodoros(&lines, section).recent_references)
+        })
+        .unwrap_or_default();
     let mut unresolved = Vec::new();
     let dependency_edges =
         dependency_edges(&files, &note_index, &task_blocks, &mut unresolved);
@@ -643,9 +755,10 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
     let updated_lines = logical_lines(&structurally_updated_daily);
     let updated_section = pomodoro::pomodoros_section_range(&updated_lines)
         .expect("the structural rewrite preserves the Pomodoros section");
-    let final_references =
-        scan_pomodoros(&updated_lines, updated_section).raw_references;
-    let direct_desired = final_references
+    let updated_pomodoro_model =
+        scan_pomodoros(&updated_lines, updated_section);
+    let direct_desired = updated_pomodoro_model
+        .raw_references
         .iter()
         .filter_map(|reference| {
             resolved_references.get(reference).map(|resolved| {
@@ -660,17 +773,45 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         .filter(|identity| !direct_desired.contains(*identity))
         .cloned()
         .collect::<BTreeSet<_>>();
+    let mut recent_activity_roots = updated_pomodoro_model
+        .recent_references
+        .iter()
+        .filter_map(|reference| {
+            resolved_references.get(reference).map(|resolved| {
+                (resolved.path.clone(), reference.block_id.clone())
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    recent_activity_roots.extend(resolve_recent_references(
+        &previous_daily_references,
+        previous_daily_relative.as_deref(),
+        &note_index,
+        &task_blocks,
+        &mut unresolved,
+    ));
+    let recent_activity_references = recent_activity_roots.len();
+    let recent_activity =
+        reachable_identities(&recent_activity_roots, &dependency_edges);
     let task_dependency_states = task_dependency_states(&files);
 
     let mut marked_next = Vec::new();
     let mut marked_in_progress = Vec::new();
     let mut cleared = Vec::new();
+    let mut cleared_in_progress = Vec::new();
     let mut marked_blocked = Vec::new();
     let mut unblocked = Vec::new();
     let mut changes = Vec::new();
     let mut kept_next = 0;
     let mut kept_in_progress = 0;
     for (file_index, file) in files.iter().enumerate() {
+        if previous_daily_path
+            .as_ref()
+            .is_some_and(|path| file.path == *path)
+        {
+            continue;
+        }
+        let is_daily_note = canonical_daily_date(&file.relative_path).is_some()
+            || file.path == daily_path;
         for (task_index, task) in file.tasks.iter().enumerate() {
             let desired_status = task.block_id.as_ref().and_then(|block_id| {
                 desired
@@ -681,10 +822,19 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
                 .get(&(file_index, task_index))
                 .cloned()
                 .unwrap_or_default();
+            let is_recent = task.block_id.as_ref().is_some_and(|block_id| {
+                recent_activity
+                    .contains(&(file.relative_path.clone(), block_id.clone()))
+            });
+            let clear_stale_in_progress = file.note_kind.is_area_or_project()
+                && !is_daily_note
+                && task.status == '/'
+                && !is_recent;
             match task_transition(
                 task,
                 desired_status,
                 !dependency_state.open_dependency_ids.is_empty(),
+                clear_stale_in_progress,
             ) {
                 Transition::MarkNext => {
                     let dependency =
@@ -719,6 +869,14 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
                 }
                 Transition::Clear => {
                     cleared.push(change_item(file, task, false));
+                    changes.push(PlannedChange {
+                        file_index,
+                        status_byte_offset: task.status_byte_offset,
+                        replacement: ' ',
+                    });
+                }
+                Transition::ClearInProgress => {
+                    cleared_in_progress.push(change_item(file, task, false));
                     changes.push(PlannedChange {
                         file_index,
                         status_byte_offset: task.status_byte_offset,
@@ -781,13 +939,19 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         daily_file: daily_relative
             .map(display_path)
             .unwrap_or_else(|| daily_path.to_string_lossy().into_owned()),
+        previous_daily_file: previous_daily_relative
+            .as_deref()
+            .map(display_path),
         open_pomodoros: pomodoro_model.open_pomodoros,
         references: pomodoro_model.raw_references.len(),
+        previous_daily_references: previous_daily_references.len(),
+        recent_activity_references,
         dependency_references: dependency_desired.len(),
         scanned_files: files.len(),
         marked_next,
         marked_in_progress,
         cleared,
+        cleared_in_progress,
         marked_blocked,
         unblocked,
         struck_completed_references: structural_plan.struck,
@@ -852,6 +1016,7 @@ fn task_transition(
     task: &TaskLine,
     desired: Option<RankedStatus>,
     has_open_dependency: bool,
+    clear_stale_in_progress: bool,
 ) -> Transition {
     if task.status_type.is_terminal()
         || !task.status_type.is_open()
@@ -868,6 +1033,9 @@ fn task_transition(
     }
     if task.status == '?' {
         return Transition::Unblock(desired.unwrap_or(RankedStatus::Ready));
+    }
+    if clear_stale_in_progress {
+        return Transition::ClearInProgress;
     }
     transition(task.status, desired)
 }
@@ -941,6 +1109,7 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
 
     let mut bullets = Vec::new();
     let mut raw_references = BTreeSet::new();
+    let mut recent_references = BTreeSet::new();
     let mut all_references = BTreeSet::new();
     for (entry_index, entry) in entries.iter().enumerate() {
         for line_index in entry.line_index + 1..entry.end_line {
@@ -957,6 +1126,12 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
             }
             all_references
                 .extend(links.iter().map(|link| link.reference.clone()));
+            recent_references.extend(
+                links
+                    .iter()
+                    .filter(|link| !link.struck)
+                    .map(|link| link.reference.clone()),
+            );
             if entry.open {
                 raw_references.extend(
                     links
@@ -985,6 +1160,7 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
         entries,
         bullets,
         raw_references,
+        recent_references,
         all_references,
     }
 }
@@ -2181,6 +2357,73 @@ fn dependency_edges(
     edges
 }
 
+fn resolve_recent_references(
+    references: &BTreeSet<RawReference>,
+    source_path: Option<&Path>,
+    note_index: &NoteIndex,
+    task_blocks: &BTreeMap<(PathBuf, String), Vec<char>>,
+    unresolved: &mut Vec<UnresolvedReference>,
+) -> BTreeSet<(PathBuf, String)> {
+    let mut resolved_identities = BTreeSet::new();
+    for reference in references {
+        let Some(path) =
+            note_index.resolve(source_path, reference.target.trim())
+        else {
+            unresolved.push(UnresolvedReference {
+                target: reference.target.clone(),
+                block_id: reference.block_id.clone(),
+                reason: "previous daily note target did not resolve uniquely"
+                    .to_string(),
+            });
+            continue;
+        };
+        let identity = (path.clone(), reference.block_id.clone());
+        let Some(statuses) = task_blocks.get(&identity) else {
+            unresolved.push(UnresolvedReference {
+                target: reference.target.clone(),
+                block_id: reference.block_id.clone(),
+                reason: format!(
+                    "previous daily note target {} has no matching task block",
+                    display_path(&path)
+                ),
+            });
+            continue;
+        };
+        if statuses.len() > 1 {
+            unresolved.push(UnresolvedReference {
+                target: reference.target.clone(),
+                block_id: reference.block_id.clone(),
+                reason: format!(
+                    "previous daily note target {} has {} tasks with this block id; all were matched",
+                    display_path(&path),
+                    statuses.len()
+                ),
+            });
+        }
+        resolved_identities.insert(identity);
+    }
+    resolved_identities
+}
+
+fn reachable_identities(
+    roots: &BTreeSet<(PathBuf, String)>,
+    edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
+) -> BTreeSet<(PathBuf, String)> {
+    let mut reachable = roots.clone();
+    let mut queue = roots.iter().cloned().collect::<VecDeque<_>>();
+    while let Some(source) = queue.pop_front() {
+        let Some(targets) = edges.get(&source) else {
+            continue;
+        };
+        for target in targets {
+            if reachable.insert(target.clone()) {
+                queue.push_back(target.clone());
+            }
+        }
+    }
+    reachable
+}
+
 fn desired_statuses(
     direct: &BTreeSet<(PathBuf, String)>,
     edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
@@ -2439,6 +2682,7 @@ fn print_human_result(result: &SyncResult) {
     let change_count = result.marked_next.len()
         + result.marked_in_progress.len()
         + result.cleared.len()
+        + result.cleared_in_progress.len()
         + result.marked_blocked.len()
         + result.unblocked.len()
         + result.struck_completed_references.len()
@@ -2452,10 +2696,19 @@ fn print_human_result(result: &SyncResult) {
     } else {
         styler.green("\u{2713}")
     };
+    let previous_context = result.previous_daily_file.as_ref().map_or_else(
+        || "no previous daily".to_string(),
+        |path| {
+            format!(
+                "previous {} ({} references)",
+                path, result.previous_daily_references
+            )
+        },
+    );
     if change_count == 0 {
         println!(
-            "{prefix} {COMMAND_NAME}  {} \u{2014} already in sync, no changes",
-            styler.cyan(&result.daily_file)
+            "{prefix} {COMMAND_NAME}  {} \u{2014} already in sync, no changes \u{b7} {previous_context}",
+            styler.cyan(&result.daily_file),
         );
         return;
     }
@@ -2465,9 +2718,10 @@ fn print_human_result(result: &SyncResult) {
         styler.cyan(&result.daily_file)
     );
     println!(
-        "  {} open pomodoros \u{b7} {} direct references \u{b7} {} dependency references \u{b7} {} files scanned",
+        "  {} open pomodoros \u{b7} {} direct references \u{b7} {} recent activity references \u{b7} {} dependency references \u{b7} {} files scanned \u{b7} {previous_context}",
         result.open_pomodoros,
         result.references,
+        result.recent_activity_references,
         result.dependency_references,
         result.scanned_files
     );
@@ -2504,6 +2758,17 @@ fn print_human_result(result: &SyncResult) {
         &result.cleared,
         false,
     );
+    print_change_section(
+        &styler,
+        if result.dry_run {
+            "would clear in progress"
+        } else {
+            "cleared in progress"
+        },
+        "[/] \u{2192} [ ]",
+        &result.cleared_in_progress,
+        false,
+    );
     print_dependency_status_section(
         &styler,
         true,
@@ -2536,10 +2801,11 @@ fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
+        result.cleared_in_progress.len(),
         result.marked_blocked.len(),
         result.unblocked.len(),
         result.struck_completed_references.len(),
@@ -2755,10 +3021,14 @@ fn print_change_section(
             styler.yellow(transition)
         };
         let description = pad_right(&change.description, description_width);
+        let block = if change.block_id.is_empty() {
+            String::new()
+        } else {
+            format!(" ^{}", change.block_id)
+        };
         println!(
-            "    {transition}  {description}  {} ^{}{}",
+            "    {transition}  {description}  {}{block}{}",
             styler.cyan(&change.path),
-            change.block_id,
             if change.dependency {
                 " (dependency)"
             } else {
@@ -2879,6 +3149,177 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).unwrap()
+    }
+
+    #[test]
+    fn previous_daily_selection_uses_latest_canonical_earlier_date() {
+        let vault = Path::new("/vault");
+        let paths = [
+            "/vault/2025/20251231.md",
+            "/vault/2026/20260101.md",
+            "/vault/2026/20260102.md",
+            "/vault/2026/20261301.md",
+            "/vault/2026/20260101_day.md",
+            "/vault/Other/20260101.md",
+            "/vault/2027/20270101.md",
+        ]
+        .map(PathBuf::from);
+
+        assert_eq!(
+            previous_daily_path(vault, &paths, date(2026, 1, 2)),
+            Some(PathBuf::from("/vault/2026/20260101.md"))
+        );
+        assert_eq!(
+            previous_daily_path(vault, &paths, date(2026, 1, 1),),
+            Some(PathBuf::from("/vault/2025/20251231.md"))
+        );
+        assert_eq!(
+            previous_daily_path(
+                vault,
+                &[PathBuf::from("/vault/2026/20260701.md")],
+                date(2026, 7, 21),
+            ),
+            Some(PathBuf::from("/vault/2026/20260701.md"))
+        );
+        assert_eq!(
+            previous_daily_path(
+                vault,
+                &[PathBuf::from("/vault/2026/20260721.md")],
+                date(2026, 7, 21),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn dated_day_file_overrides_effective_anchor_and_malformed_name_falls_back()
+    {
+        assert_eq!(
+            daily_anchor_date(
+                Path::new("/fixtures/20251231.md"),
+                date(2026, 7, 21),
+            ),
+            date(2025, 12, 31)
+        );
+        assert_eq!(
+            daily_anchor_date(
+                Path::new("/fixtures/20251230_day.md"),
+                date(2026, 7, 21),
+            ),
+            date(2025, 12, 30)
+        );
+        assert_eq!(
+            daily_anchor_date(
+                Path::new("/fixtures/not-a-day.md"),
+                date(2026, 7, 21),
+            ),
+            date(2026, 7, 21)
+        );
+    }
+
+    #[test]
+    fn recent_links_include_completed_live_links_but_exclude_retired_links() {
+        let lines = [
+            "- [ ] Open",
+            "  - [[tasks#^open]]",
+            "  - ~~[[tasks#^retired-open]]~~",
+            "- [x] Completed",
+            "  - 🍅 [[tasks#^completed-live|alias]]",
+            "  - ~~![[tasks#^retired-completed]]~~",
+            "  ```md",
+            "  - [[tasks#^fenced]]",
+            "  ```",
+        ];
+        let model = scan_pomodoros(&lines, 0..lines.len());
+
+        assert_eq!(
+            model.recent_references,
+            BTreeSet::from([
+                reference("tasks", "completed-live"),
+                reference("tasks", "open"),
+            ])
+        );
+    }
+
+    #[test]
+    fn same_note_recent_links_resolve_in_each_daily_context() {
+        let references = BTreeSet::from([reference("", "local")]);
+        let index = NoteIndex::from_paths([
+            PathBuf::from("2026/20260710.md"),
+            PathBuf::from("2026/20260721.md"),
+        ]);
+        let blocks = BTreeMap::from([
+            (
+                (PathBuf::from("2026/20260710.md"), "local".to_string()),
+                vec!['/'],
+            ),
+            (
+                (PathBuf::from("2026/20260721.md"), "local".to_string()),
+                vec!['/'],
+            ),
+        ]);
+
+        let previous = resolve_recent_references(
+            &references,
+            Some(Path::new("2026/20260710.md")),
+            &index,
+            &blocks,
+            &mut Vec::new(),
+        );
+        let current = resolve_recent_references(
+            &references,
+            Some(Path::new("2026/20260721.md")),
+            &index,
+            &blocks,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(
+            previous,
+            BTreeSet::from([(
+                PathBuf::from("2026/20260710.md"),
+                "local".to_string(),
+            )])
+        );
+        assert_eq!(
+            current,
+            BTreeSet::from([(
+                PathBuf::from("2026/20260721.md"),
+                "local".to_string(),
+            )])
+        );
+    }
+
+    #[test]
+    fn note_kind_uses_shared_area_and_project_frontmatter_predicates() {
+        assert_eq!(note_kind("---\ntype: [[area]]\n---\n"), NoteKind::Area);
+        assert_eq!(
+            note_kind("---\ntype: \"[[project]]\"\n---\n"),
+            NoteKind::Project
+        );
+        assert_eq!(note_kind("---\ntype: '[[area]]'\n---\n"), NoteKind::Area);
+        assert_eq!(note_kind("---\ntype: [[Area]]\n---\n"), NoteKind::Other);
+    }
+
+    #[test]
+    fn rolling_reachability_is_cycle_safe_and_includes_dependencies() {
+        let root = identity("root");
+        let child = identity("child");
+        let leaf = identity("leaf");
+        let edges = BTreeMap::from([
+            (root.clone(), BTreeSet::from([child.clone()])),
+            (child.clone(), BTreeSet::from([leaf.clone()])),
+            (leaf.clone(), BTreeSet::from([root.clone()])),
+        ]);
+
+        assert_eq!(
+            reachable_identities(&BTreeSet::from([root.clone()]), &edges),
+            BTreeSet::from([root, child, leaf])
+        );
     }
 
     #[test]
@@ -3162,12 +3603,14 @@ mod tests {
                 relative_path: PathBuf::from("A.md"),
                 contents: a_contents.to_string(),
                 tasks: parse_tasks(a_contents, &settings),
+                note_kind: NoteKind::Other,
             },
             FileScan {
                 path: PathBuf::from("B.md"),
                 relative_path: PathBuf::from("B.md"),
                 contents: b_contents.to_string(),
                 tasks: parse_tasks(b_contents, &settings),
+                note_kind: NoteKind::Other,
             },
         ];
         let index = NoteIndex::from_paths(
@@ -3255,6 +3698,7 @@ mod tests {
             relative_path: PathBuf::from("tasks.md"),
             contents: contents.to_string(),
             tasks: parse_tasks(contents, &settings),
+            note_kind: NoteKind::Other,
         }];
         let states = task_dependency_states(&files);
         assert_eq!(states[&(0, 5)].open_dependency_ids, ["self"]);
@@ -3313,27 +3757,51 @@ mod tests {
     fn blocked_transition_precedence_and_recovery_are_explicit() {
         let settings = test_settings();
         let ready = parse_tasks("- [ ] #task Ready\n", &settings).remove(0);
+        let working = parse_tasks("- [/] #task Working\n", &settings).remove(0);
         let blocked = parse_tasks("- [?] #task Blocked\n", &settings).remove(0);
         let done = parse_tasks("- [x] #task Done\n", &settings).remove(0);
         assert_eq!(
-            task_transition(&ready, Some(RankedStatus::InProgress), true),
+            task_transition(
+                &ready,
+                Some(RankedStatus::InProgress),
+                true,
+                false,
+            ),
             Transition::MarkBlocked
         );
         assert_eq!(
-            task_transition(&blocked, Some(RankedStatus::InProgress), true),
+            task_transition(
+                &blocked,
+                Some(RankedStatus::InProgress),
+                true,
+                false,
+            ),
             Transition::Unchanged
         );
         assert_eq!(
-            task_transition(&blocked, Some(RankedStatus::InProgress), false),
+            task_transition(
+                &blocked,
+                Some(RankedStatus::InProgress),
+                false,
+                false,
+            ),
             Transition::Unblock(RankedStatus::InProgress)
         );
         assert_eq!(
-            task_transition(&blocked, None, false),
+            task_transition(&blocked, None, false, false),
             Transition::Unblock(RankedStatus::Ready)
         );
         assert_eq!(
-            task_transition(&done, Some(RankedStatus::InProgress), true),
+            task_transition(&done, Some(RankedStatus::InProgress), true, false,),
             Transition::Unchanged
+        );
+        assert_eq!(
+            task_transition(&working, None, false, true),
+            Transition::ClearInProgress
+        );
+        assert_eq!(
+            task_transition(&working, None, true, true),
+            Transition::MarkBlocked
         );
     }
 
