@@ -389,21 +389,26 @@ recursively: Next promotes Ready to Next, and In Progress promotes Ready or
 Next to In Progress. Multiple paths use the strongest request, stronger
 intermediate tasks pass their status to descendants, and propagation never
 lowers a task. Separately, an unreachable `[*]` task becomes `[ ]`, preserving
-the command's vault-wide Next clearing policy. An In-Progress `[/]` task in a
+the command's vault-wide Next clearing policy unless it is directly referenced
+by recent activity. An In-Progress `[/]` task in a
 note whose frontmatter type is exactly `[[area]]` or `[[project]]` becomes
 Ready when neither daily source nor their eligible dependency closure reaches
 it; a missing block ID is stale by definition. Historical links protect
-existing In-Progress state but never promote Ready tasks, and the historical
-daily is never written. Ordinary notes, daily notes, terminal/custom statuses,
+existing In-Progress state, provide recovery-only rank for Blocked tasks, and
+retain a directly referenced recovered Next without promoting ordinary Ready
+tasks; the historical daily is never written. Ordinary notes, daily notes,
+terminal/custom statuses,
 and other checkbox states remain outside this rollback. Vault-wide Tasks
 `[id:: ...]`/`[dependsOn:: ...]` metadata and valid inline task
 `[scheduled:: YYYY-MM-DD]` dates are reconciled independently: any recognized
 open parent with an open dependency or a schedule later than the effective
 daily anchor becomes Blocked (`[?]`). Today and earlier do not block, and
 project `scheduled:` frontmatter remains outside this task-level rule. A
-Blocked task returns to its final Pomodoro-derived rank or Ready only after
-every dependency and future-schedule reason is gone. Done, canceled, non-task,
-and unknown parents remain untouched. Blocked writes
+Blocked task returns to Next when directly reached from either recent ledger,
+In Progress only when a stronger eligible transclusion path requests it, or
+Ready when unreachable, and only after every dependency and future-schedule
+reason is gone. No pre-Blocked status is stored. Done, canceled, non-task, and
+unknown parents remain untouched. Blocked writes
 require a single compatible `Blocked`/`?`/`ON_HOLD` Tasks registry entry and
 fail before any note write when that contract is absent or incompatible. It
 also retires links to completed Tasks tasks as `~~[[...]]~~` and moves bullets

@@ -2200,6 +2200,101 @@ fn task_status_hooks_unblocks_to_final_pomodoro_rank_and_ready() {
 }
 
 #[test]
+fn task_status_hooks_uses_recent_ledgers_only_for_blocked_recovery() {
+    let temp =
+        TempDir::new("bob-cli-task-status-hooks-recovery-only-recent-rank");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let previous = vault.join("2026/20260710.md");
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [x] Completed (0900-0930)\n",
+            "  - [[tasks#^current|alias]]\n",
+            "  - ![[tasks#^root]]\n",
+        ),
+    );
+    let previous_before = concat!(
+        "## Pomodoros\r\n\r\n",
+        "- [x] Previous (0800-0830)\r\n",
+        "  - ![[tasks#^previous]]\r\n",
+        "  - [[tasks#^ordinary]]\r\n",
+        "  - [[tasks#^future]]\r\n",
+        "  - [[tasks#^dependent]]\r\n",
+    );
+    write_file(&previous, previous_before);
+    write_file(
+        &tasks,
+        concat!(
+            "- [?] #task Current completed reference [scheduled:: 2026-07-16] ^current\n",
+            "- [?] #task Previous direct reference [scheduled:: 2026-07-15] ^previous\n",
+            "- [?] #task No recent reference ^ready\n",
+            "- [?] #task Root [scheduled:: 2026-07-16] ^root\n",
+            "  - ![[#^working]]\n",
+            "- [/] #task Stronger intermediate ^working\n",
+            "  - ![[#^graph]]\n",
+            "- [?] #task Graph-derived recovery ^graph\n",
+            "- [ ] #task Ordinary previous reference ^ordinary\n",
+            "- [?] #task Future still blocks [scheduled:: 2026-07-17] ^future\n",
+            "- [ ] #task Open dependency [id:: open] ^open\n",
+            "- [?] #task Dependency still blocks [dependsOn:: open] ^dependent\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    let before = fs::read_to_string(&tasks).unwrap();
+
+    let dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("preview recovery-only recent ranks");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    assert_eq!(json["previous_daily_file"], "2026/20260710.md");
+    assert_eq!(json["unblocked"].as_array().unwrap().len(), 5);
+    assert!(json["marked_next"].as_array().unwrap().is_empty());
+    assert!(json["marked_in_progress"].as_array().unwrap().is_empty());
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply recovery-only recent ranks");
+    assert_success(&applied);
+    assert_eq!(fs::read_to_string(&previous).unwrap(), previous_before);
+    let contents = fs::read_to_string(&tasks).unwrap();
+    assert!(contents.contains("- [*] #task Current completed reference"));
+    assert!(contents.contains("- [*] #task Previous direct reference"));
+    assert!(contents.contains("- [ ] #task No recent reference"));
+    assert!(contents.contains("- [*] #task Root"));
+    assert!(contents.contains("- [/] #task Graph-derived recovery"));
+    assert!(contents.contains("- [ ] #task Ordinary previous reference"));
+    assert!(contents.contains("- [?] #task Future still blocks"));
+    assert!(contents.contains("- [?] #task Dependency still blocks"));
+
+    let second = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun recovery-only recent ranks");
+    assert_success(&second);
+    assert!(stdout(&second).contains("already in sync, no changes"));
+}
+
+#[test]
 fn task_status_hooks_blocked_status_guard_writes_nothing() {
     let scenarios = [
         ("missing", None),

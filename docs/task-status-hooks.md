@@ -3,7 +3,8 @@
 `bob task-status-hooks` makes the current Pomodoro ledger the source of truth
 for active Obsidian Tasks promotions and structural cleanup. It also uses the
 latest existing earlier daily note as a read-only recent-activity source for
-deciding whether In Progress tasks in area and project notes remain active. It
+deciding whether In Progress tasks in area and project notes remain active and
+which rank an otherwise-unblocked Blocked task should recover to. It
 keeps references to completed tasks retired as struck, non-embedded links
 beneath their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
 the machine-owned Pomodoro marker (`🍅`); embedded and provenance-unknown
@@ -185,12 +186,19 @@ link retirement, marker repair, canceled-reference removal, Pomodoro
 relocation, or task-status writes. If it has no `## Pomodoros` section, it is
 the selected source with zero references; the command does not fail or fall
 through to an older note. Non-retired historical links may preserve an
-already-In-Progress task, but they never promote a Ready task to Next or In
-Progress.
+already-In-Progress task or an existing directly referenced recovery-ranked
+Next task, but they never promote a Ready task to Next or In Progress.
 
 Recent roots traverse the same eligible transcluded-task dependency graph as
-current promotion roots. This protects an area/project In-Progress dependency
-reachable from either daily and keeps cycles stable across repeated runs.
+current promotion roots with the same strongest-rank merge and cycle rules.
+This produces a recovery-only rank in addition to protecting an area/project
+In-Progress dependency. A Blocked task reached directly defaults to Next
+because Blocked has no active rank. An already-In-Progress task on the
+transclusion path can strengthen downstream recovery to In Progress. A task
+absent from this graph recovers to Ready. The recovery rank does not promote an
+ordinary Ready task; a directly recent task can retain an existing Next so a
+recovered task remains stable on repeated runs. Dependency-only recovery still
+follows the vault-wide Next clearing policy after its Blocked status is gone.
 
 After this traversal, a recognized `[/]` Tasks task is reset to `[ ]` only
 when all of the following are true:
@@ -249,10 +257,13 @@ Blocked is derived state: a recognized open task is blocked when it has at
 least one open dependency, a valid future schedule, or both. This combined
 state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`). A task
 already `[?]` remains Blocked until every reason is gone. Only then does it
-return to the final active status computed by the Pomodoro graph (`[*]` or
-`[/]`), or Ready when unreachable. No hidden previous-status field is stored.
-Terminal parents and unknown/custom parent statuses remain untouched even when
-they retain dependency or scheduled metadata.
+return to the stronger of the active and recovery-only ranks: Next when
+directly recent, In Progress only when a stronger eligible transclusion path
+requests it, or Ready when unreachable. A directly referenced Blocked task
+does not recover to its status from before blocking because no hidden
+previous-status field is stored. Terminal parents and unknown/custom parent
+statuses remain untouched even when they retain dependency or scheduled
+metadata.
 
 Ctrl+Enter recovery in the Task Status Cycler plugin is intentionally narrower
 and immediate. After that keypress actually changes one or more tasks to Done,

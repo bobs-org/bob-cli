@@ -69,18 +69,23 @@ status. Dependency tasks are discovered recursively from sole transcluded \
 block-link child bullets and inherit the strongest effective parent status, \
 promoting Ready [ ] tasks to Next or In Progress and Next tasks to In Progress. \
 Status propagation never lowers a task. Existing [*] tasks not reachable from \
-an open entry are independently reset to [ ]. In Progress [/] tasks in notes \
+an open entry or directly referenced by recent activity are independently reset to [ ]. \
+In Progress [/] tasks in notes \
 whose frontmatter type is [[area]] or [[project]] are reset to Ready [ ] when \
 they are not reachable from a non-retired link in either the current ledger or \
 the latest existing earlier daily note. Historical links protect existing \
-In-Progress state but never promote Ready tasks, and the historical note is \
-never modified. Tasks whose Dataview [dependsOn:: ...] metadata names an open \
+In-Progress state and supply recovery-only rank for Blocked tasks without \
+promoting Ready tasks; a recovered directly referenced Next task stays Next \
+while it remains recent, and the historical note is never modified. Tasks whose Dataview \
+[dependsOn:: ...] metadata names an open \
 vault-wide [id:: ...] task, or whose task-level [scheduled:: YYYY-MM-DD] date \
 is later than the effective daily anchor, are marked Blocked [?], overriding \
 Ready, Next, and In Progress. A schedule on the anchor date or earlier is not \
 future. When every derived blocking reason clears, Blocked tasks recover to \
-the final Pomodoro-derived status or Ready. Project scheduled frontmatter is \
-not task-level metadata and is ignored by this rule. \
+Next when directly recent, In Progress only through a stronger eligible \
+transclusion path, or Ready when unreachable. No pre-Blocked status is stored. \
+Project scheduled frontmatter is not task-level metadata and is ignored by \
+this rule. \
 Completed linked-task references \
 are retired as struck, non-embedded links. References found under open \
 Pomodoros keep the existing policy of moving their containing bullets beneath \
@@ -795,6 +800,11 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         &mut unresolved,
     ));
     let recent_activity_references = recent_activity_roots.len();
+    let recovery_desired = desired_statuses(
+        &recent_activity_roots,
+        &dependency_edges,
+        &task_blocks,
+    );
     let recent_activity =
         reachable_identities(&recent_activity_roots, &dependency_edges);
     let task_dependency_states = task_dependency_states(&files);
@@ -823,6 +833,22 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
                     .get(&(file.relative_path.clone(), block_id.clone()))
                     .copied()
             });
+            let recovery_status = task.block_id.as_ref().and_then(|block_id| {
+                let identity = (file.relative_path.clone(), block_id.clone());
+                desired
+                    .get(&identity)
+                    .copied()
+                    .into_iter()
+                    .chain(recovery_desired.get(&identity).copied())
+                    .max()
+            });
+            let directly_recent =
+                task.block_id.as_ref().is_some_and(|block_id| {
+                    recent_activity_roots.contains(&(
+                        file.relative_path.clone(),
+                        block_id.clone(),
+                    ))
+                });
             let dependency_state = task_dependency_states
                 .get(&(file_index, task_index))
                 .cloned()
@@ -843,6 +869,8 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
             match task_transition(
                 task,
                 desired_status,
+                recovery_status,
+                directly_recent,
                 has_derived_block,
                 clear_stale_in_progress,
             ) {
@@ -1027,6 +1055,8 @@ fn task_dependency_states(
 fn task_transition(
     task: &TaskLine,
     desired: Option<RankedStatus>,
+    recovery_desired: Option<RankedStatus>,
+    directly_recent: bool,
     has_derived_block: bool,
     clear_stale_in_progress: bool,
 ) -> Transition {
@@ -1044,7 +1074,12 @@ fn task_transition(
         };
     }
     if task.status == '?' {
-        return Transition::Unblock(desired.unwrap_or(RankedStatus::Ready));
+        return Transition::Unblock(
+            recovery_desired.unwrap_or(RankedStatus::Ready),
+        );
+    }
+    if task.status == '*' && desired.is_none() && directly_recent {
+        return Transition::KeptNext;
     }
     if clear_stale_in_progress {
         return Transition::ClearInProgress;
@@ -3845,19 +3880,23 @@ mod tests {
             task_transition(
                 &ready,
                 Some(RankedStatus::InProgress),
+                None,
+                false,
                 true,
                 false,
             ),
             Transition::MarkBlocked
         );
         assert_eq!(
-            task_transition(&next, None, true, false),
+            task_transition(&next, None, None, false, true, false),
             Transition::MarkBlocked
         );
         assert_eq!(
             task_transition(
                 &blocked,
                 Some(RankedStatus::InProgress),
+                Some(RankedStatus::InProgress),
+                true,
                 true,
                 false,
             ),
@@ -3866,27 +3905,58 @@ mod tests {
         assert_eq!(
             task_transition(
                 &blocked,
+                None,
                 Some(RankedStatus::InProgress),
+                true,
                 false,
                 false,
             ),
             Transition::Unblock(RankedStatus::InProgress)
         );
         assert_eq!(
-            task_transition(&blocked, None, false, false),
+            task_transition(&blocked, None, None, false, false, false),
             Transition::Unblock(RankedStatus::Ready)
         );
         assert_eq!(
-            task_transition(&done, Some(RankedStatus::InProgress), true, false,),
+            task_transition(
+                &done,
+                Some(RankedStatus::InProgress),
+                Some(RankedStatus::InProgress),
+                true,
+                true,
+                false,
+            ),
             Transition::Unchanged
         );
         assert_eq!(
-            task_transition(&working, None, false, true),
+            task_transition(&working, None, None, false, false, true),
             Transition::ClearInProgress
         );
         assert_eq!(
-            task_transition(&working, None, true, true),
+            task_transition(&working, None, None, false, true, true),
             Transition::MarkBlocked
+        );
+        assert_eq!(
+            task_transition(
+                &next,
+                None,
+                Some(RankedStatus::Next),
+                true,
+                false,
+                false,
+            ),
+            Transition::KeptNext
+        );
+        assert_eq!(
+            task_transition(
+                &ready,
+                None,
+                Some(RankedStatus::InProgress),
+                true,
+                false,
+                false,
+            ),
+            Transition::Unchanged
         );
     }
 
@@ -3921,6 +3991,39 @@ mod tests {
         for identity in [&shared, &stronger_mid, &leaf] {
             assert_eq!(desired[identity], RankedStatus::InProgress);
         }
+    }
+
+    #[test]
+    fn recovery_rank_defaults_blocked_roots_to_next_and_propagates_in_progress()
+    {
+        let blocked_root = identity("blocked-root");
+        let working_child = identity("working-child");
+        let blocked_leaf = identity("blocked-leaf");
+        let edges = BTreeMap::from([
+            (
+                blocked_root.clone(),
+                BTreeSet::from([working_child.clone()]),
+            ),
+            (
+                working_child.clone(),
+                BTreeSet::from([blocked_leaf.clone()]),
+            ),
+        ]);
+        let task_blocks = BTreeMap::from([
+            (blocked_root.clone(), vec!['?']),
+            (working_child.clone(), vec!['/']),
+            (blocked_leaf.clone(), vec!['?']),
+        ]);
+
+        let recovery = desired_statuses(
+            &BTreeSet::from([blocked_root.clone()]),
+            &edges,
+            &task_blocks,
+        );
+
+        assert_eq!(recovery[&blocked_root], RankedStatus::Next);
+        assert_eq!(recovery[&working_child], RankedStatus::InProgress);
+        assert_eq!(recovery[&blocked_leaf], RankedStatus::InProgress);
     }
 
     #[test]
