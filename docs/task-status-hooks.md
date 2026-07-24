@@ -13,8 +13,9 @@ subtree from an open Pomodoro without changing the canceled task itself. It
 also follows transcluded
 dependency bullets recursively, promoting each target to the strongest
 applicable Next (`[*]`) or In Progress (`[/]`) status. It independently
-reconciles the derived Blocked (`[?]`) marker from Tasks `[id:: ...]` and
-`[dependsOn:: ...]` metadata.
+reconciles the derived Blocked (`[?]`) marker from Tasks `[id:: ...]` /
+`[dependsOn:: ...]` metadata and valid task-level
+`[scheduled:: YYYY-MM-DD]` dates in the future.
 
 ## Usage
 
@@ -26,8 +27,9 @@ The vault root comes from `--bob-dir`, then `BOB_DIR`, then `~/bob`. The current
 daily ledger comes from `BOB_DAY_FILE` when set; otherwise it is
 `<vault>/YYYY/YYYYMMDD.md` for the local date or `BOB_NOW` override. When the
 selected filename has a valid daily date, that date anchors the historical
-lookup even for a fixture or manual override. Otherwise the effective current
-date is the anchor.
+lookup and future-schedule boundary even for a fixture or manual override.
+Otherwise the effective current date is the anchor. A task scheduled after
+the anchor is future; the anchor date itself and earlier dates are not.
 
 Starting strictly before the anchor, the command selects the newest existing
 canonical `<vault>/YYYY/YYYYMMDD.md` file. Missing intervening days or weeks
@@ -198,13 +200,14 @@ when all of the following are true:
 - the note is not a canonical daily note or the selected current ledger;
 - the task's canonical path-plus-block identity is absent from recent
   activity, or the task has no usable trailing block ID; and
-- it has no open Dataview dependency that requires Blocked status.
+- it has no derived blocking reason from either an open Dataview dependency or
+  a future task-level schedule.
 
 Directory names and tags do not establish area/project scope. Ordinary notes,
 daily notes, generated references, terminal statuses, unknown/custom
 statuses, and other checkbox states are not subject to this rollback.
 
-## Dependency Blocked Status
+## Derived Blocked Status
 
 After the full vault scan and the final post-rewrite Pomodoro graph are known,
 the command indexes Dataview task identities from both square-bracket and
@@ -226,14 +229,30 @@ direct Tasks 8 semantics. Only direct metadata decides a parent's marker;
 transitive blocking follows because Blocked is itself an open `ON_HOLD`
 status.
 
-Blocked is derived state. It overrides Ready (`[ ]`), Next (`[*]`), and In
-Progress (`[/]`) while an open dependency exists. Once all matching targets
-are terminal or missing, a Blocked task returns to the final active status
-computed by the Pomodoro graph (`[*]` or `[/]`), or Ready when unreachable. No
-hidden previous-status field is stored. A Blocked task with no `dependsOn`
-metadata is likewise recovered to its final Pomodoro rank or Ready. Terminal
-parents and unknown/custom parent statuses remain untouched even if they retain
-dependency metadata.
+The same scan retains a calendar-valid `scheduled` value from trailing
+square-bracket or parenthesized task metadata:
+
+```markdown
+- [ ] #task Tomorrow [scheduled:: 2026-07-17]
+- [/] #task Later (scheduled:: 2026-07-20)
+```
+
+Whitespace and other supported trailing Tasks metadata may appear in either
+order. The value must have the exact `YYYY-MM-DD` shape and name a real
+calendar date. It blocks only when it is strictly later than the effective
+daily anchor, so yesterday and today do not block while tomorrow and later do.
+YAML `scheduled: YYYY-MM-DD` project frontmatter is not inline task metadata
+and does not participate; the project lifecycle synchronization contract
+continues to own that field and its `#hide` behavior.
+
+Blocked is derived state: a recognized open task is blocked when it has at
+least one open dependency, a valid future schedule, or both. This combined
+state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`). A task
+already `[?]` remains Blocked until every reason is gone. Only then does it
+return to the final active status computed by the Pomodoro graph (`[*]` or
+`[/]`), or Ready when unreachable. No hidden previous-status field is stored.
+Terminal parents and unknown/custom parent statuses remain untouched even when
+they retain dependency or scheduled metadata.
 
 Ctrl+Enter recovery in the Task Status Cycler plugin is intentionally narrower
 and immediate. After that keypress actually changes one or more tasks to Done,
@@ -271,12 +290,12 @@ The command scans Markdown task lines allowed by the Obsidian Tasks
 
 | Existing status | Desired/reachability state | Result |
 | --- | --- | --- |
-| done, canceled, or non-task | open task dependency | unchanged |
-| `[ ]`, `[*]`, or `[/]` | open task dependency | `[?]` |
-| `[?]` | open task dependency | unchanged |
-| `[?]` | no open dependency; desired In Progress | `[/]` |
-| `[?]` | no open dependency; desired Next | `[*]` |
-| `[?]` | no open dependency; unreachable | `[ ]` |
+| done, canceled, non-task, or unknown | any derived blocking reason | unchanged |
+| `[ ]`, `[*]`, or `[/]` | open dependency and/or future schedule | `[?]` |
+| `[?]` | open dependency and/or future schedule | unchanged |
+| `[?]` | no blocking reason; desired In Progress | `[/]` |
+| `[?]` | no blocking reason; desired Next | `[*]` |
+| `[?]` | no blocking reason; unreachable | `[ ]` |
 | `[ ]` | desired Next | `[*]` |
 | `[ ]` or `[*]` | desired In Progress | `[/]` |
 | `[*]` | desired Next | unchanged |
@@ -427,7 +446,7 @@ list-item trigger, followed by a summary. The selected previous daily path and
 its reference count appear in changed and no-op reports.
 Canceled-reference rows show the target, block ID, original one-based line
 number, and owning Pomodoro that triggered complete list-item deletion. Blocked
-rows include the open dependency IDs;
+rows identify the future scheduled date, open dependency IDs, or both;
 unblocked rows include unresolved IDs when present. Duplicate removals show the
 original daily-note line number, text, owning Pomodoro, and canonical task
 identities. Marker additions and removals have their own
@@ -497,7 +516,8 @@ JSON mode prints one object on stdout with these stable fields:
       "from": "/",
       "to": "?",
       "open_dependency_ids": ["dev__review"],
-      "unresolved_dependency_ids": []
+      "unresolved_dependency_ids": [],
+      "future_scheduled_date": "2026-07-12"
     }
   ],
   "unblocked": [
@@ -509,7 +529,8 @@ JSON mode prints one object on stdout with these stable fields:
       "from": "?",
       "to": "*",
       "open_dependency_ids": [],
-      "unresolved_dependency_ids": ["deleted_task"]
+      "unresolved_dependency_ids": ["deleted_task"],
+      "future_scheduled_date": null
     }
   ],
   "struck_completed_references": [
@@ -585,7 +606,9 @@ additive fields and do not duplicate changes into those older arrays.
 `cleared_in_progress` separately reports scoped `[/] -> [ ]` changes with the
 same path, line, block ID, description, and dependency shape. Their
 `from`/`to` values are the actual checkbox symbols, and their dependency-ID
-arrays explain the derived decision. Each
+arrays and nullable `future_scheduled_date` explain the derived decision. The
+date is present only when the task-level schedule is later than the effective
+anchor. Each
 `removed_canceled_references` item represents one removed occurrence and
 contains its link `target`, `block_id`, one-based original `line_number`, and
 owning `pomodoro`. This stable compatibility field reports the qualifying

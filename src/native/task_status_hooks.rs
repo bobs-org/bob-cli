@@ -60,7 +60,7 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Sync active and dependency-blocked task statuses")
+        .about("Sync active and derived-Blocked task statuses")
         .long_about(
             "Make the current Pomodoro ledger the source of truth for active task statuses and use the latest existing earlier daily note as a read-only recent-activity source.\n\n\
 Tasks block-linked from child bullets of open Pomodoro entries have a minimum \
@@ -74,10 +74,13 @@ whose frontmatter type is [[area]] or [[project]] are reset to Ready [ ] when \
 they are not reachable from a non-retired link in either the current ledger or \
 the latest existing earlier daily note. Historical links protect existing \
 In-Progress state but never promote Ready tasks, and the historical note is \
-never modified. Tasks whose Dataview \
-[dependsOn:: ...] metadata names an open vault-wide [id:: ...] task are marked \
-Blocked [?], overriding Ready, Next, and In Progress. When those dependencies \
-close, Blocked tasks recover to the final Pomodoro-derived status or Ready. \
+never modified. Tasks whose Dataview [dependsOn:: ...] metadata names an open \
+vault-wide [id:: ...] task, or whose task-level [scheduled:: YYYY-MM-DD] date \
+is later than the effective daily anchor, are marked Blocked [?], overriding \
+Ready, Next, and In Progress. A schedule on the anchor date or earlier is not \
+future. When every derived blocking reason clears, Blocked tasks recover to \
+the final Pomodoro-derived status or Ready. Project scheduled frontmatter is \
+not task-level metadata and is ignored by this rule. \
 Completed linked-task references \
 are retired as struck, non-embedded links. References found under open \
 Pomodoros keep the existing policy of moving their containing bullets beneath \
@@ -105,7 +108,7 @@ is changed. No earlier daily note is valid; an earlier note without a \
 Pomodoros section contributes no historical references.",
         )
         .after_help(format!(
-            "Examples:\n  {COMMAND_NAME}\n  {COMMAND_NAME} --dry-run\n  {COMMAND_NAME} --format json\n  {COMMAND_NAME} --bob-dir /tmp/bob-vault\n\nEnvironment:\n  BOB_DAY_FILE  exact current daily ledger; its dated filename anchors the earlier-note lookup\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time fallback for current and earlier-note selection"
+            "Examples:\n  {COMMAND_NAME}\n  {COMMAND_NAME} --dry-run\n  {COMMAND_NAME} --format json\n  {COMMAND_NAME} --bob-dir /tmp/bob-vault\n\nEnvironment:\n  BOB_DAY_FILE  exact current daily ledger; its dated filename anchors earlier-note lookup and future schedules\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time fallback for current and earlier-note selection"
         ))
         .disable_help_flag(true)
         .arg(
@@ -199,6 +202,7 @@ struct DependencyStatusChange {
     to: char,
     open_dependency_ids: Vec<String>,
     unresolved_dependency_ids: Vec<String>,
+    future_scheduled_date: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -313,6 +317,7 @@ struct TaskLine {
     block_id: Option<String>,
     task_id: Option<String>,
     depends_on: Vec<String>,
+    scheduled: Option<NaiveDate>,
     status_type: TaskStatusType,
     status_recognized: bool,
     description: String,
@@ -830,10 +835,15 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
                 && !is_daily_note
                 && task.status == '/'
                 && !is_recent;
+            let future_scheduled_date =
+                task.scheduled.filter(|scheduled| *scheduled > anchor);
+            let has_derived_block =
+                !dependency_state.open_dependency_ids.is_empty()
+                    || future_scheduled_date.is_some();
             match task_transition(
                 task,
                 desired_status,
-                !dependency_state.open_dependency_ids.is_empty(),
+                has_derived_block,
                 clear_stale_in_progress,
             ) {
                 Transition::MarkNext => {
@@ -889,6 +899,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
                         task,
                         '?',
                         &dependency_state,
+                        future_scheduled_date,
                     ));
                     changes.push(PlannedChange {
                         file_index,
@@ -903,6 +914,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
                         task,
                         replacement,
                         &dependency_state,
+                        future_scheduled_date,
                     ));
                     changes.push(PlannedChange {
                         file_index,
@@ -1015,7 +1027,7 @@ fn task_dependency_states(
 fn task_transition(
     task: &TaskLine,
     desired: Option<RankedStatus>,
-    has_open_dependency: bool,
+    has_derived_block: bool,
     clear_stale_in_progress: bool,
 ) -> Transition {
     if task.status_type.is_terminal()
@@ -1024,7 +1036,7 @@ fn task_transition(
     {
         return Transition::Unchanged;
     }
-    if has_open_dependency {
+    if has_derived_block {
         return if task.status == '?' {
             Transition::Unchanged
         } else {
@@ -2005,6 +2017,7 @@ fn parse_task_line(line: &str, settings: &TasksSettings) -> Option<TaskLine> {
         block_id,
         task_id: metadata.task_id,
         depends_on: metadata.depends_on,
+        scheduled: metadata.scheduled,
         status_type: configured_status.unwrap_or(TaskStatusType::Todo),
         status_recognized: configured_status.is_some(),
         description,
@@ -2015,6 +2028,7 @@ fn parse_task_line(line: &str, settings: &TasksSettings) -> Option<TaskLine> {
 struct TaskMetadata {
     task_id: Option<String>,
     depends_on: Vec<String>,
+    scheduled: Option<NaiveDate>,
 }
 
 fn task_metadata(body: &str, block_id: Option<&str>) -> TaskMetadata {
@@ -2047,8 +2061,12 @@ fn task_metadata(body: &str, block_id: Option<&str>) -> TaskMetadata {
                 value,
                 "highest" | "high" | "medium" | "low" | "lowest"
             ),
-            "start" | "created" | "scheduled" | "due" | "completion"
-            | "cancelled" => valid_task_date(value),
+            "scheduled" => parse_task_date(value)
+                .map(|scheduled| metadata.scheduled = Some(scheduled))
+                .is_some(),
+            "start" | "created" | "due" | "completion" | "cancelled" => {
+                valid_task_date(value)
+            }
             "repeat" => value.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric()
                     || matches!(byte, b',' | b' ' | b'!')
@@ -2129,6 +2147,12 @@ fn valid_task_date(value: &str) -> bool {
         && bytes.iter().enumerate().all(|(index, byte)| {
             matches!(index, 4 | 7) || byte.is_ascii_digit()
         })
+}
+
+fn parse_task_date(value: &str) -> Option<NaiveDate> {
+    valid_task_date(value)
+        .then(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+        .flatten()
 }
 
 fn after_list_marker(line: &str, index: usize) -> Option<usize> {
@@ -2548,6 +2572,7 @@ fn dependency_status_change(
     task: &TaskLine,
     to: char,
     state: &TaskDependencyState,
+    future_scheduled_date: Option<NaiveDate>,
 ) -> DependencyStatusChange {
     DependencyStatusChange {
         path: display_path(&file.relative_path),
@@ -2558,6 +2583,8 @@ fn dependency_status_change(
         to,
         open_dependency_ids: state.open_dependency_ids.clone(),
         unresolved_dependency_ids: state.unresolved_dependency_ids.clone(),
+        future_scheduled_date: future_scheduled_date
+            .map(|scheduled| scheduled.to_string()),
     }
 }
 
@@ -2841,8 +2868,22 @@ fn print_dependency_status_section(
             styler.green(&transition)
         };
         let description = pad_right(&change.description, description_width);
-        let dependencies = if blocking {
-            format!(" (open: {})", change.open_dependency_ids.join(", "))
+        let reasons = if blocking {
+            let mut reasons = Vec::new();
+            if let Some(scheduled) = &change.future_scheduled_date {
+                reasons.push(format!("scheduled: {scheduled}"));
+            }
+            if !change.open_dependency_ids.is_empty() {
+                reasons.push(format!(
+                    "open: {}",
+                    change.open_dependency_ids.join(", ")
+                ));
+            }
+            if reasons.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", reasons.join("; "))
+            }
         } else if change.unresolved_dependency_ids.is_empty() {
             String::new()
         } else {
@@ -2859,7 +2900,7 @@ fn print_dependency_status_section(
             } else {
                 format!(" ^{}", change.block_id)
             },
-            dependencies
+            reasons
         );
     }
 }
@@ -3680,6 +3721,45 @@ mod tests {
     }
 
     #[test]
+    fn parses_only_calendar_valid_scheduled_metadata_in_supported_forms() {
+        let contents = concat!(
+            "- [ ] #task Bracket [scheduled:: 2026-07-17] [id:: alpha] ^a\n",
+            "- [ ] #task Parenthesized (dependsOn:: root) (scheduled::   2026-07-18  ) #tag ^b\n",
+            "- [ ] #task Flexible order [created:: 2026-07-01] [scheduled:: 2026-07-19] [due:: 2026-07-20] ^c\n",
+            "- [ ] #task Impossible [scheduled:: 2026-02-30] ^d\n",
+            "- [ ] #task Bad shape [scheduled:: 2026-7-20] ^e\n",
+            "- [ ] #task Bad delimiter [scheduled :: 2026-07-20] ^f\n",
+        );
+        let tasks = parse_tasks(contents, &test_settings());
+        assert_eq!(tasks[0].scheduled, NaiveDate::from_ymd_opt(2026, 7, 17));
+        assert_eq!(tasks[1].scheduled, NaiveDate::from_ymd_opt(2026, 7, 18));
+        assert_eq!(tasks[2].scheduled, NaiveDate::from_ymd_opt(2026, 7, 19));
+        assert!(tasks[3..].iter().all(|task| task.scheduled.is_none()));
+    }
+
+    #[test]
+    fn future_schedule_uses_the_calendar_day_after_the_anchor() {
+        let anchor = NaiveDate::from_ymd_opt(2026, 7, 16).unwrap();
+        for (value, future) in [
+            ("2026-07-15", false),
+            ("2026-07-16", false),
+            ("2026-07-17", true),
+            ("2027-01-01", true),
+        ] {
+            let task = parse_tasks(
+                &format!("- [ ] #task Boundary [scheduled:: {value}]\n"),
+                &test_settings(),
+            )
+            .remove(0);
+            assert_eq!(
+                task.scheduled.is_some_and(|scheduled| scheduled > anchor),
+                future,
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
     fn task_dependency_index_matches_tasks_duplicate_and_missing_id_semantics()
     {
         let mut settings = test_settings();
@@ -3757,6 +3837,7 @@ mod tests {
     fn blocked_transition_precedence_and_recovery_are_explicit() {
         let settings = test_settings();
         let ready = parse_tasks("- [ ] #task Ready\n", &settings).remove(0);
+        let next = parse_tasks("- [*] #task Next\n", &settings).remove(0);
         let working = parse_tasks("- [/] #task Working\n", &settings).remove(0);
         let blocked = parse_tasks("- [?] #task Blocked\n", &settings).remove(0);
         let done = parse_tasks("- [x] #task Done\n", &settings).remove(0);
@@ -3767,6 +3848,10 @@ mod tests {
                 true,
                 false,
             ),
+            Transition::MarkBlocked
+        );
+        assert_eq!(
+            task_transition(&next, None, true, false),
             Transition::MarkBlocked
         );
         assert_eq!(

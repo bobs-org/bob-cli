@@ -164,7 +164,7 @@ fn real_vault_dash_matches_independent_raw_ground_truth_and_all_blocks_execute()
         "blocked.md must contain one Tasks block",
     );
     let blocked_tasks = json_task_keys(&blocked_blocks[0]["result"]);
-    let expected_blocked = blocked_ground_truth(&tasks, today);
+    let expected_blocked = blocked_ground_truth(&tasks);
     assert_task_sets_equal("BLOCKED Tasks", &blocked_tasks, &expected_blocked);
 
     let mut other_block_count = 0;
@@ -244,10 +244,7 @@ fn dashboard_ground_truth(
         .collect()
 }
 
-fn blocked_ground_truth(
-    tasks: &[RawTask],
-    today: NaiveDate,
-) -> BTreeSet<TaskKey> {
+fn blocked_ground_truth(tasks: &[RawTask]) -> BTreeSet<TaskKey> {
     tasks
         .iter()
         .filter(|task| {
@@ -259,8 +256,8 @@ fn blocked_ground_truth(
             task.key.path != "blocked.md"
                 && !folder.contains("_templates")
                 && !HIDE_TAG.is_match(&task.body)
-                && task.scheduled.is_none_or(|scheduled| scheduled <= today)
-                && is_blocked(task, tasks)
+                && (is_blocked(task, tasks)
+                    || task.status_name.contains("Blocked"))
         })
         .map(|task| task.key.clone())
         .collect()

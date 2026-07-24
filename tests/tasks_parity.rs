@@ -60,6 +60,7 @@ fn tasks_parity_fixture_vault_covers_phase1_contract() {
         "Tasks/Statuses.md",
         "_generated/Generated.md",
         "_templates/Task.md",
+        "blocked.md",
         "dash.md",
     ] {
         assert!(
@@ -190,6 +191,50 @@ fn tasks_parity_fixture_vault_covers_phase1_contract() {
             "missing daily-note instruction {instruction}"
         );
     }
+}
+
+#[test]
+fn blocked_note_includes_dependency_and_future_scheduled_status_reasons() {
+    let output =
+        run_fixture(&["--format", "json", "--tasks-note", "blocked.md"]);
+    assert_success(&output);
+    let actual = json_stdout(&output);
+    let blocks = actual["blocks"].as_array().expect("blocked note blocks");
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(
+        blocks[0]["query"],
+        "(is blocked) OR (status.name includes Blocked)"
+    );
+    let tasks = blocks[0]["result"]["tasks"].as_array().unwrap();
+    let descriptions = tasks
+        .iter()
+        .map(|task| task["description"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(
+        descriptions
+            .iter()
+            .any(|description| description.starts_with("#task Blocked status")),
+        "{descriptions:?}"
+    );
+    let scheduled_only = tasks
+        .iter()
+        .find(|task| {
+            task["description"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("#task Blocked status"))
+        })
+        .expect("future-scheduled Blocked status task");
+    assert_eq!(scheduled_only["scheduled"]["value"], "2026-07-11");
+    assert_eq!(scheduled_only["dependsOn"], json!([]));
+    assert_eq!(scheduled_only["isBlocked"], false);
+    assert!(
+        tasks.iter().any(|task| task["isBlocked"] == true),
+        "dependency-blocked branch missing: {tasks:?}"
+    );
+    assert!(
+        tasks.iter().all(|task| task["path"] != "blocked.md"),
+        "query note must exclude itself: {tasks:?}"
+    );
 }
 
 #[test]

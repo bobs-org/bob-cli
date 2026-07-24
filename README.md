@@ -61,7 +61,7 @@ bob projects list
 | `pomodoro` | Print the current Pomodoro status |
 | `projects` | Inspect and synchronize project lifecycle tasks |
 | `query` | Run headless Dataview or Tasks queries, or live Dataview queries |
-| `task-status-hooks` | Reconcile Pomodoro links, task ranks, and dependency state |
+| `task-status-hooks` | Reconcile Pomodoro links, task ranks, and derived Blocked state |
 | `tmux-pomodoro` | Print Pomodoro status for a tmux status line |
 
 Use `bob <command> --help` for concise usage. The sections below explain the
@@ -396,11 +396,14 @@ it; a missing block ID is stale by definition. Historical links protect
 existing In-Progress state but never promote Ready tasks, and the historical
 daily is never written. Ordinary notes, daily notes, terminal/custom statuses,
 and other checkbox states remain outside this rollback. Vault-wide Tasks
-`[id:: ...]`/`[dependsOn:: ...]` metadata is reconciled independently: any
-recognized open parent with an open dependency becomes Blocked (`[?]`), and a
-no-longer-blocked task returns to its final Pomodoro-derived rank or Ready.
-Blocked tasks with no dependency metadata recover on this whole-vault pass;
-Done, canceled, non-task, and unknown parents remain untouched. Blocked writes
+`[id:: ...]`/`[dependsOn:: ...]` metadata and valid inline task
+`[scheduled:: YYYY-MM-DD]` dates are reconciled independently: any recognized
+open parent with an open dependency or a schedule later than the effective
+daily anchor becomes Blocked (`[?]`). Today and earlier do not block, and
+project `scheduled:` frontmatter remains outside this task-level rule. A
+Blocked task returns to its final Pomodoro-derived rank or Ready only after
+every dependency and future-schedule reason is gone. Done, canceled, non-task,
+and unknown parents remain untouched. Blocked writes
 require a single compatible `Blocked`/`?`/`ON_HOLD` Tasks registry entry and
 fail before any note write when that contract is absent or incompatible. It
 also retires links to completed Tasks tasks as `~~[[...]]~~` and moves bullets
