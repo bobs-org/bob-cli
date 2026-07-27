@@ -403,7 +403,9 @@ and other checkbox states remain outside this rollback. Vault-wide Tasks
 `[scheduled:: YYYY-MM-DD]` dates are reconciled independently: any recognized
 open parent with an open dependency or a schedule later than the effective
 daily anchor becomes Blocked (`[?]`). Today and earlier do not block, and
-project `scheduled:` frontmatter remains outside this task-level rule. A
+project `scheduled:` frontmatter enters this task-level rule after
+`bob projects sync` or the project property picker propagates it to ordinary
+tasks. Derived Blocked status outranks Pomodoro promotion. A
 Blocked task returns to Next when directly reached from either recent ledger,
 In Progress only when a stronger eligible transclusion path requests it, or
 Ready when unreachable, and only after every dependency and future-schedule
@@ -530,13 +532,16 @@ exists. It also maintains the machine-owned Sub-projects ledger beneath
 `^prj`. Run `projects list` to inspect the current state, `projects sync
 --dry-run` to preview reconciliation, and `projects sync` to apply it.
 
-An optional frontmatter `scheduled: YYYY-MM-DD` overrides normal task
-visibility for a non-terminal project. A future date adds `#hide` to every
-Markdown task. On the scheduled date and afterward, `sync` removes `#hide`
-from every task except `^prj`; `^prj` keeps its existing visibility when the
-note contains another task, and is unhidden when it is the only task. A stale
-inline `[scheduled:: ...]` field is removed from an open `^prj` task. The full
-project task contract lives in [`docs/projects.md`](docs/projects.md).
+An optional frontmatter `scheduled: YYYY-MM-DD` propagates to open ordinary
+tasks as `[scheduled:: YYYY-MM-DD]`, replacing an absent, malformed, or earlier
+value while preserving a valid equal or later task-owned schedule. Ordinary
+tasks lose legacy whole-token `#hide` tags; `^prj` alone keeps `#hide` as its
+lifecycle visibility mechanism and never receives an inline schedule. Run
+`bob task-status-hooks` after `projects sync` to derive or recover `[?]`
+Blocked markers. The property picker performs propagation and status
+reconciliation immediately, and its `Ctrl+D` path removes exactly matching
+propagated fields. The full project task contract lives in
+[`docs/projects.md`](docs/projects.md).
 
 ```bash
 bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]

@@ -249,13 +249,17 @@ Whitespace and other supported trailing Tasks metadata may appear in either
 order. The value must have the exact `YYYY-MM-DD` shape and name a real
 calendar date. It blocks only when it is strictly later than the effective
 daily anchor, so yesterday and today do not block while tomorrow and later do.
-YAML `scheduled: YYYY-MM-DD` project frontmatter is not inline task metadata
-and does not participate; the project lifecycle synchronization contract
-continues to own that field and its `#hide` behavior.
+YAML `scheduled: YYYY-MM-DD` project frontmatter participates indirectly:
+`bob projects sync` and Bob Navigation Hotkeys' project property picker
+propagate it into ordinary task-level `scheduled` fields. From that point this
+command treats the fields exactly like any other inline task schedule. The
+`^prj` lifecycle task remains excluded from propagation and keeps its separate
+`#hide` surfacing contract.
 
 Blocked is derived state: a recognized open task is blocked when it has at
 least one open dependency, a valid future schedule, or both. This combined
-state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`). A task
+state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`), including
+Pomodoro promotion for a task inherited from a scheduled project. A task
 already `[?]` remains Blocked until every reason is gone. Only then does it
 return to the stronger of the active and recovery-only ranks: Next when
 directly recent, In Progress only when a stronger eligible transclusion path

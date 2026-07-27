@@ -68,7 +68,7 @@ anchored with ^prj.\n\n\
 The list subcommand is read-only: it scans project notes, validates optional \
 scheduled: YYYY-MM-DD frontmatter, counts open #task items, counts open \
 non-hidden tasks, and shows the current ^prj state. The sync subcommand \
-updates project status, reconciles task visibility, and manages the single \
+updates project status, propagates task schedules, and manages the single \
 Sub-projects line from the ^prj task.",
         )
         .after_help(
@@ -91,7 +91,7 @@ fn list_command() -> ClapCommand {
 
 fn sync_command() -> ClapCommand {
     ClapCommand::new("sync")
-        .about("Sync project status, task visibility, and sub-projects")
+        .about("Sync project status, task schedules, and sub-projects")
         .long_about(
             "Sync Bob project notes from the completion-criteria task anchored \
 with ^prj.\n\n\
@@ -101,10 +101,13 @@ open sub-projects have the #hide tag removed from their open ^prj task so \
 it surfaces in dash.md's Tasks section; projects with non-hidden open tasks \
 or open sub-projects get #hide added back. Sync also maintains a single \
 Sub-projects line nested directly under open ^prj tasks. When valid scheduled \
-frontmatter is present, it overrides the normal surfacing rule: future dates \
-add #hide to every task. Today and past dates remove #hide from ordinary tasks, \
-but preserve it on ^prj unless ^prj is the note's only task. Invalid dates are \
-reported and that file is left untouched.",
+frontmatter is present, it overrides the normal surfacing rule: every open \
+ordinary task receives a matching [scheduled:: YYYY-MM-DD] field unless it \
+already has a valid equal or later schedule, and ordinary-task #hide tags are \
+removed. Future dates keep exactly one #hide on ^prj; today and past dates \
+preserve ^prj visibility unless it is the note's only task. Run \
+`bob task-status-hooks` afterward to reconcile derived [?] Blocked markers. \
+Invalid dates are reported and that file is left untouched.",
         )
         .after_help(
             "Examples:\n  bob projects sync --dry-run\n  bob projects sync -d -b ~/bob\n  bob projects sync --bob-dir /tmp/bob-vault",
@@ -234,6 +237,7 @@ struct Project {
     status: ProjectStatus,
     open_task_count: usize,
     open_unhidden_count: usize,
+    dash_visible_count: usize,
     task_lines: Vec<ProjectTaskLine>,
     prj_task: PrjTask,
 }
@@ -246,26 +250,57 @@ struct ProjectSchedule {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProjectTaskLine {
+    line_number: usize,
+    mark: char,
     hide_tag_count: usize,
     is_prj: bool,
+    scheduled_field_count: usize,
+    scheduled_date: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TaskVisibilityPolicy {
-    hide: bool,
+struct TaskSchedulePolicy {
+    scheduled: NaiveDate,
+    future: bool,
     include_prj: bool,
 }
 
-impl TaskVisibilityPolicy {
-    fn for_schedule(hide: bool, task_count: usize) -> Self {
+impl TaskSchedulePolicy {
+    fn for_schedule(
+        scheduled: NaiveDate,
+        today: NaiveDate,
+        task_count: usize,
+    ) -> Self {
+        let future = scheduled > today;
         Self {
-            hide,
-            include_prj: hide || task_count == 1,
+            scheduled,
+            future,
+            include_prj: future || task_count == 1,
         }
     }
 
-    fn includes(self, task: ProjectTaskLine) -> bool {
-        self.include_prj || !task.is_prj
+    fn prj_hide_needs_change(self, task: ProjectTaskLine) -> bool {
+        if !task.is_prj || !self.include_prj {
+            return false;
+        }
+        if self.future {
+            task.hide_tag_count != 1
+        } else {
+            task.hide_tag_count > 0
+        }
+    }
+
+    fn ordinary_schedule_needs_change(self, task: ProjectTaskLine) -> bool {
+        !task.is_prj
+            && is_propagated_schedule_mark(task.mark)
+            && task.scheduled_field_count < 2
+            && task.scheduled_date.is_none_or(|date| date < self.scheduled)
+    }
+
+    fn ordinary_hide_needs_removal(self, task: ProjectTaskLine) -> bool {
+        !task.is_prj
+            && task.scheduled_field_count < 2
+            && task.hide_tag_count > 0
     }
 }
 
@@ -572,6 +607,7 @@ impl TaskStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ParsedTaskLine<'a> {
+    mark: char,
     status: TaskStatus,
     text: &'a str,
 }
@@ -700,13 +736,14 @@ impl SyncReport {
             .count()
     }
 
-    fn task_visibility_count(&self) -> usize {
+    fn task_schedule_count(&self) -> usize {
         self.events
             .iter()
             .filter_map(|event| match event {
-                SyncEvent::TaskVisibility { task_count, .. } => {
-                    Some(*task_count)
-                }
+                SyncEvent::TaskSchedules {
+                    scheduled_task_count,
+                    ..
+                } => Some(*scheduled_task_count),
                 _ => None,
             })
             .sum()
@@ -749,11 +786,13 @@ enum SyncEvent {
         field: String,
         reason: String,
     },
-    TaskVisibility {
+    TaskSchedules {
         project_name: String,
         scheduled: String,
-        hide: bool,
-        task_count: usize,
+        future: bool,
+        scheduled_task_count: usize,
+        removed_hide_count: usize,
+        prj_hide_changed: bool,
     },
     Warning {
         project_name: String,
@@ -786,10 +825,12 @@ enum ProjectChange {
     AddHideTag {
         reason: AddHideReason,
     },
-    ReconcileTaskVisibility {
+    ReconcileTaskSchedules {
         scheduled: String,
-        policy: TaskVisibilityPolicy,
-        task_count: usize,
+        policy: TaskSchedulePolicy,
+        scheduled_task_count: usize,
+        removed_hide_count: usize,
+        prj_hide_changed: bool,
     },
     RemoveScheduled {
         scheduled: String,
@@ -851,15 +892,19 @@ impl ProjectChange {
                 field: HIDE_TAG.to_string(),
                 reason: reason.label().to_string(),
             },
-            Self::ReconcileTaskVisibility {
+            Self::ReconcileTaskSchedules {
                 scheduled,
                 policy,
-                task_count,
-            } => SyncEvent::TaskVisibility {
+                scheduled_task_count,
+                removed_hide_count,
+                prj_hide_changed,
+            } => SyncEvent::TaskSchedules {
                 project_name: project_name.to_string(),
                 scheduled: scheduled.clone(),
-                hide: policy.hide,
-                task_count: *task_count,
+                future: policy.future,
+                scheduled_task_count: *scheduled_task_count,
+                removed_hide_count: *removed_hide_count,
+                prj_hide_changed: *prj_hide_changed,
             },
             Self::RemoveScheduled { scheduled } => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
@@ -1194,26 +1239,50 @@ fn plan_project_sync_at(
     if !effective_status.is_terminal()
         && let Some(scheduled) = &project.scheduled
     {
-        let hide = scheduled.date > today;
-        let policy =
-            TaskVisibilityPolicy::for_schedule(hide, project.task_lines.len());
-        let task_count = project
+        let policy = TaskSchedulePolicy::for_schedule(
+            scheduled.date,
+            today,
+            project.task_lines.len(),
+        );
+        let scheduled_task_count = project
             .task_lines
             .iter()
-            .filter(|task| {
-                policy.includes(**task)
-                    && if hide {
-                        task.hide_tag_count != 1
-                    } else {
-                        task.hide_tag_count > 0
-                    }
-            })
+            .filter(|task| policy.ordinary_schedule_needs_change(**task))
             .count();
-        if task_count > 0 {
-            plan.changes.push(ProjectChange::ReconcileTaskVisibility {
+        let removed_hide_count = project
+            .task_lines
+            .iter()
+            .filter(|task| policy.ordinary_hide_needs_removal(**task))
+            .count();
+        let prj_hide_changed = project
+            .task_lines
+            .iter()
+            .copied()
+            .any(|task| policy.prj_hide_needs_change(task));
+        for task in project
+            .task_lines
+            .iter()
+            .filter(|task| !task.is_prj && task.scheduled_field_count > 1)
+        {
+            plan.warnings.push(SyncEvent::Warning {
+                project_name: project.name.clone(),
+                message: "task has multiple scheduled fields".to_string(),
+                detail: format!(
+                    "line {} left unchanged; keep exactly one",
+                    task.line_number
+                ),
+            });
+        }
+        if scheduled_task_count > 0
+            || removed_hide_count > 0
+            || prj_hide_changed
+        {
+            plan.changes.push(ProjectChange::ReconcileTaskSchedules {
                 scheduled: scheduled.raw.clone(),
                 policy,
-                task_count,
+                scheduled_task_count,
+                removed_hide_count,
+                prj_hide_changed,
             });
         }
     }
@@ -1428,23 +1497,50 @@ fn apply_project_changes(
 ) -> Result<String, String> {
     let mut edits = Vec::new();
     let mut sync_subprojects = false;
+    let reconcile_task_schedules = changes.iter().any(|change| {
+        matches!(change, ProjectChange::ReconcileTaskSchedules { .. })
+    });
+    let remove_prj_scheduled = changes
+        .iter()
+        .any(|change| matches!(change, ProjectChange::RemoveScheduled { .. }));
+    let prj_hide_action = changes.iter().find_map(|change| match change {
+        ProjectChange::RemoveHideTag => Some(false),
+        ProjectChange::AddHideTag { .. } => Some(true),
+        _ => None,
+    });
     for change in changes {
         match change {
             ProjectChange::Status { to, .. } => {
                 edits.push(status_edit(contents, to.label())?);
             }
             ProjectChange::RemoveHideTag => {
-                edits.push(remove_prj_hide_tag_edit(contents)?);
+                if !remove_prj_scheduled {
+                    edits.push(remove_prj_hide_tag_edit(contents)?);
+                }
             }
             ProjectChange::AddHideTag { .. } => {
-                edits.push(add_hide_tag_edit(contents)?);
+                if !remove_prj_scheduled {
+                    edits.push(add_hide_tag_edit(contents)?);
+                }
             }
-            ProjectChange::ReconcileTaskVisibility { policy, .. } => {
-                edits.extend(task_visibility_edits(contents, *policy)?);
+            ProjectChange::ReconcileTaskSchedules {
+                scheduled, policy, ..
+            } => {
+                edits.extend(task_schedule_edits(
+                    contents,
+                    scheduled,
+                    *policy,
+                    remove_prj_scheduled,
+                )?);
             }
             ProjectChange::RemoveScheduled { .. } => {
-                edits
-                    .push(remove_prj_inline_field_edit(contents, "scheduled")?);
+                if !reconcile_task_schedules {
+                    edits.push(prj_metadata_edit(
+                        contents,
+                        true,
+                        prj_hide_action,
+                    )?);
+                }
             }
             ProjectChange::AddSubprojectLink { .. }
             | ProjectChange::RemoveSubprojectLink { .. }
@@ -1491,9 +1587,11 @@ fn apply_project_changes(
     Ok(output)
 }
 
-fn task_visibility_edits(
+fn task_schedule_edits(
     contents: &str,
-    policy: TaskVisibilityPolicy,
+    scheduled: &str,
+    policy: TaskSchedulePolicy,
+    remove_prj_scheduled: bool,
 ) -> Result<Vec<TextEdit>, String> {
     let frontmatter = parse_frontmatter(contents)
         .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
@@ -1512,62 +1610,131 @@ fn task_visibility_edits(
         let Some(task) = parse_task_line(line_text) else {
             continue;
         };
-        let task_line = ProjectTaskLine {
-            hide_tag_count: tag_spans(task.text, HIDE_TAG).len(),
-            is_prj: is_valid_prj_task_line(line_text, task),
-        };
-        if !policy.includes(task_line) {
+        let is_prj = is_valid_prj_task_line(line_text, task);
+        let scheduled_fields = inline_field_spans(task.text, "scheduled");
+        if !is_prj && scheduled_fields.len() > 1 {
             continue;
         }
-        let tag_spans = tag_spans(task.text, HIDE_TAG);
-        let task_text_offset =
-            task.text.as_ptr() as usize - line_text.as_ptr() as usize;
-
-        if policy.hide {
-            if tag_spans.is_empty() {
-                let insertion = task_hide_tag_insertion_offset(line_text);
-                edits.push(TextEdit {
-                    start: line.start + insertion,
-                    end: line.start + insertion,
-                    replacement: format!(" {HIDE_TAG}"),
-                });
-            } else {
-                if tag_spans.len() > 1 {
-                    let mut replacement = remove_tag_spans_from_line(
-                        line_text,
-                        task_text_offset,
-                        &tag_spans[1..],
-                    );
-                    if contents[line.start..line.end].ends_with('\r') {
-                        replacement.push('\r');
-                    }
-                    edits.push(TextEdit {
-                        start: line.start,
-                        end: line.end,
-                        replacement,
-                    });
-                }
+        let mut replacement = line_text.to_string();
+        if is_prj {
+            replacement = normalize_task_hide_tag(
+                &replacement,
+                policy.future,
+                policy.include_prj,
+            );
+            if remove_prj_scheduled {
+                replacement =
+                    remove_all_inline_fields(&replacement, "scheduled");
             }
         } else {
-            if !tag_spans.is_empty() {
-                let mut replacement = remove_tag_spans_from_line(
-                    line_text,
-                    task_text_offset,
-                    &tag_spans,
+            replacement = remove_all_task_tags(&replacement, HIDE_TAG);
+            if is_propagated_schedule_mark(task.mark) {
+                replacement = upsert_task_scheduled(
+                    &replacement,
+                    scheduled,
+                    policy.scheduled,
                 );
-                if contents[line.start..line.end].ends_with('\r') {
-                    replacement.push('\r');
-                }
-                edits.push(TextEdit {
-                    start: line.start,
-                    end: line.end,
-                    replacement,
-                });
             }
+        }
+        if replacement != line_text {
+            if contents[line.start..line.end].ends_with('\r') {
+                replacement.push('\r');
+            }
+            edits.push(TextEdit {
+                start: line.start,
+                end: line.end,
+                replacement,
+            });
         }
     }
 
     Ok(edits)
+}
+
+fn normalize_task_hide_tag(
+    line: &str,
+    future: bool,
+    include_prj: bool,
+) -> String {
+    if !include_prj {
+        return line.to_string();
+    }
+    let Some(task) = parse_task_line(line) else {
+        return line.to_string();
+    };
+    let task_text_offset = task.text.as_ptr() as usize - line.as_ptr() as usize;
+    let spans = tag_spans(task.text, HIDE_TAG);
+    if !future {
+        return remove_tag_spans_from_line(line, task_text_offset, &spans);
+    }
+    if spans.is_empty() {
+        let insertion = task_metadata_insertion_offset(line);
+        let mut output = line.to_string();
+        output.insert_str(insertion, &format!(" {HIDE_TAG}"));
+        return output;
+    }
+    remove_tag_spans_from_line(line, task_text_offset, &spans[1..])
+}
+
+fn remove_all_task_tags(line: &str, tag: &str) -> String {
+    let Some(task) = parse_task_line(line) else {
+        return line.to_string();
+    };
+    let task_text_offset = task.text.as_ptr() as usize - line.as_ptr() as usize;
+    let spans = tag_spans(task.text, tag);
+    let removed_trailing_tag = spans
+        .last()
+        .is_some_and(|(_, end)| *end == task.text.trim_end().len());
+    let output = remove_tag_spans_from_line(line, task_text_offset, &spans);
+    if removed_trailing_tag {
+        output.trim_end().to_string()
+    } else {
+        output
+    }
+}
+
+fn upsert_task_scheduled(
+    line: &str,
+    scheduled: &str,
+    scheduled_date: NaiveDate,
+) -> String {
+    let Some(task) = parse_task_line(line) else {
+        return line.to_string();
+    };
+    let fields = inline_field_spans(task.text, "scheduled");
+    if fields.len() > 1 {
+        return line.to_string();
+    }
+    let task_text_offset = task.text.as_ptr() as usize - line.as_ptr() as usize;
+    let field_text = format!("[scheduled:: {scheduled}]");
+    if let Some(field) = fields.first().copied() {
+        let value = task.text[field.value_start..field.value_end].trim();
+        if parse_inline_schedule_date(value)
+            .is_some_and(|existing| existing >= scheduled_date)
+        {
+            return line.to_string();
+        }
+        let mut output = line.to_string();
+        output.replace_range(
+            task_text_offset + field.start..task_text_offset + field.end,
+            &field_text,
+        );
+        return output;
+    }
+
+    let insertion = task_metadata_insertion_offset(line);
+    let before = line[..insertion].trim_end();
+    let after = &line[insertion..];
+    format!("{before} {field_text}{after}")
+}
+
+fn remove_all_inline_fields(line: &str, key: &str) -> String {
+    let spans = inline_field_spans(line, key);
+    let raw_spans = spans
+        .iter()
+        .map(|field| (field.start, field.end))
+        .collect::<Vec<_>>();
+    remove_tag_spans_from_line(line, 0, &raw_spans)
 }
 
 fn remove_tag_spans_from_line(
@@ -1606,7 +1773,7 @@ fn remove_tag_spans_from_line(
     output
 }
 
-fn task_hide_tag_insertion_offset(line: &str) -> usize {
+fn task_metadata_insertion_offset(line: &str) -> usize {
     let trimmed = line.trim_end();
     let without_block_id = strip_trailing_block_id(trimmed);
     if without_block_id.len() < trimmed.len() {
@@ -1714,9 +1881,10 @@ fn remove_prj_hide_tag_edit(contents: &str) -> Result<TextEdit, String> {
     Err("failed to locate #hide tag on ^prj task".to_string())
 }
 
-fn remove_prj_inline_field_edit(
+fn prj_metadata_edit(
     contents: &str,
-    key: &str,
+    remove_scheduled: bool,
+    hide: Option<bool>,
 ) -> Result<TextEdit, String> {
     let frontmatter = parse_frontmatter(contents)
         .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
@@ -1728,19 +1896,24 @@ fn remove_prj_inline_field_edit(
         if !has_trailing_prj_anchor(line_text) {
             continue;
         }
-        let Some(field) = inline_field_span(line_text, key) else {
-            continue;
-        };
-        let (start, end) =
-            inline_field_removal_range(line_text, field.start, field.end);
+        let mut replacement = line_text.to_string();
+        if remove_scheduled {
+            replacement = remove_all_inline_fields(&replacement, "scheduled");
+        }
+        if let Some(hide) = hide {
+            replacement = normalize_task_hide_tag(&replacement, hide, true);
+        }
+        if contents[line.start..line.end].ends_with('\r') {
+            replacement.push('\r');
+        }
         return Ok(TextEdit {
-            start: line.start + start,
-            end: line.start + end,
-            replacement: String::new(),
+            start: line.start,
+            end: line.end,
+            replacement,
         });
     }
 
-    Err(format!("failed to locate [{key}::...] field on ^prj task"))
+    Err("failed to locate ^prj task".to_string())
 }
 
 fn sync_subprojects_line_edits(
@@ -2019,10 +2192,12 @@ fn parse_project(
     let scheduled = parse_project_schedule(relative_path, &frontmatter, issues);
     let mut open_task_count = 0;
     let mut open_unhidden_count = 0;
+    let mut dash_visible_count = 0;
     let mut task_lines = Vec::new();
     let mut prj_candidates = Vec::new();
     let lines = line_spans(contents);
     let mut fence = None;
+    let today = bob_env::current_datetime().date();
 
     for (line_index, line_span) in lines.iter().enumerate() {
         if line_span.line_number <= frontmatter.body_start_line {
@@ -2044,9 +2219,22 @@ fn parse_project(
         let Some(task) = parse_task_line(line) else {
             continue;
         };
+        let scheduled_fields = inline_field_spans(task.text, "scheduled");
+        let scheduled_date = (scheduled_fields.len() == 1)
+            .then(|| {
+                let field = scheduled_fields[0];
+                parse_inline_schedule_date(
+                    task.text[field.value_start..field.value_end].trim(),
+                )
+            })
+            .flatten();
         task_lines.push(ProjectTaskLine {
+            line_number: line_span.line_number,
+            mark: task.mark,
             hide_tag_count: tag_spans(task.text, HIDE_TAG).len(),
             is_prj: is_valid_prj_task_line(line, task),
+            scheduled_field_count: scheduled_fields.len(),
+            scheduled_date,
         });
         if !contains_task_tag(task.text) || !task.status.is_open() {
             continue;
@@ -2055,6 +2243,15 @@ fn parse_project(
         open_task_count += 1;
         if !has_prj_anchor && !contains_hide_tag(task.text) {
             open_unhidden_count += 1;
+            let future_scheduled = scheduled_fields.iter().any(|field| {
+                parse_inline_schedule_date(
+                    task.text[field.value_start..field.value_end].trim(),
+                )
+                .is_some_and(|date| date > today)
+            });
+            if task.mark != '?' && !future_scheduled {
+                dash_visible_count += 1;
+            }
         }
     }
 
@@ -2076,6 +2273,7 @@ fn parse_project(
         status,
         open_task_count,
         open_unhidden_count,
+        dash_visible_count,
         task_lines,
         prj_task,
     })
@@ -2407,9 +2605,14 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine<'_>> {
     }
 
     Some(ParsedTaskLine {
+        mark,
         status: TaskStatus::from_mark(mark),
         text: after_close_bracket.trim_start(),
     })
+}
+
+fn is_propagated_schedule_mark(mark: char) -> bool {
+    matches!(mark, ' ' | '*' | '/' | '?')
 }
 
 fn markdown_list_marker_end(line: &str) -> Option<usize> {
@@ -2538,11 +2741,29 @@ fn inline_field_value(text: &str, key: &str) -> Option<String> {
 }
 
 fn inline_field_span(text: &str, key: &str) -> Option<InlineFieldSpan> {
+    inline_field_spans(text, key).into_iter().next()
+}
+
+fn inline_field_spans(text: &str, key: &str) -> Vec<InlineFieldSpan> {
+    let mut fields = Vec::new();
     let mut offset = 0;
-    while let Some(open_relative) = text[offset..].find('[') {
-        let open = offset + open_relative;
-        let Some(close_relative) = text[open + 1..].find(']') else {
+    while offset < text.len() {
+        let square = text[offset..].find('[');
+        let parenthesis = text[offset..].find('(');
+        let Some(open_relative) = (match (square, parenthesis) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        }) else {
             break;
+        };
+        let open = offset + open_relative;
+        let opening = text.as_bytes()[open];
+        let closing = if opening == b'[' { ']' } else { ')' };
+        let Some(close_relative) = text[open + 1..].find(closing) else {
+            offset = open + 1;
+            continue;
         };
         let close = open + 1 + close_relative;
         let inner = &text[open + 1..close];
@@ -2550,7 +2771,7 @@ fn inline_field_span(text: &str, key: &str) -> Option<InlineFieldSpan> {
             && field_key.trim() == key
         {
             let value_start = open + 1 + field_key.len() + "::".len();
-            return Some(InlineFieldSpan {
+            fields.push(InlineFieldSpan {
                 start: open,
                 end: close + 1,
                 value_start,
@@ -2559,7 +2780,13 @@ fn inline_field_span(text: &str, key: &str) -> Option<InlineFieldSpan> {
         }
         offset = close + 1;
     }
-    None
+    fields
+}
+
+fn parse_inline_schedule_date(value: &str) -> Option<NaiveDate> {
+    is_exact_date_shape(value)
+        .then(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+        .flatten()
 }
 
 fn task_description(text: &str) -> String {
@@ -2601,10 +2828,24 @@ fn strip_trailing_block_id(text: &str) -> &str {
 fn remove_inline_fields(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut offset = 0;
-    while let Some(open_relative) = text[offset..].find('[') {
-        let open = offset + open_relative;
-        let Some(close_relative) = text[open + 1..].find(']') else {
+    while offset < text.len() {
+        let square = text[offset..].find('[');
+        let parenthesis = text[offset..].find('(');
+        let Some(open_relative) = (match (square, parenthesis) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        }) else {
             break;
+        };
+        let open = offset + open_relative;
+        let opening = text.as_bytes()[open];
+        let closing = if opening == b'[' { ']' } else { ')' };
+        let Some(close_relative) = text[open + 1..].find(closing) else {
+            output.push_str(&text[offset..=open]);
+            offset = open + 1;
+            continue;
         };
         let close = open + 1 + close_relative;
         let inner = &text[open + 1..close];
@@ -2651,7 +2892,7 @@ fn print_project_list(projects: &[Project], styler: &Styler) {
             project_name,
             status,
             project.open_task_count,
-            project.open_unhidden_count,
+            project.dash_visible_count,
             project.prj_task.column(styler)
         );
     }
@@ -2671,12 +2912,17 @@ fn print_sync_report(report: &SyncReport, dry_run: bool, styler: &Styler) {
     }
 
     let separator = styler.separator();
+    if report.task_schedule_count() > 0 {
+        println!(
+            "  hint: run `bob task-status-hooks` to reconcile derived [?] Blocked markers"
+        );
+    }
     let mut summary = format!(
-        "{} projects {separator} {} status updated {separator} {} ^prj edited {separator} {} task visibility updated {separator} {} warnings",
+        "{} projects {separator} {} status updated {separator} {} ^prj edited {separator} {} task schedules updated {separator} {} warnings",
         report.project_count,
         report.status_update_count(),
         report.prj_edit_count(),
-        report.task_visibility_count(),
+        report.task_schedule_count(),
         report.warning_count()
     );
     if !report.issues.is_empty() {
@@ -2691,7 +2937,7 @@ impl SyncEvent {
         match self {
             Self::Status { project_name, .. }
             | Self::PrjEdit { project_name, .. }
-            | Self::TaskVisibility { project_name, .. }
+            | Self::TaskSchedules { project_name, .. }
             | Self::Warning { project_name, .. } => project_name,
         }
     }
@@ -2737,24 +2983,65 @@ impl SyncEvent {
                     "  {prefix} {project_name}  {verb} {field} {preposition} ^prj  {reason}"
                 )
             }
-            Self::TaskVisibility {
+            Self::TaskSchedules {
                 scheduled,
-                hide,
-                task_count,
+                future,
+                scheduled_task_count,
+                removed_hide_count,
+                prj_hide_changed,
                 ..
             } => {
                 let prefix = styler.success_prefix(dry_run);
-                let verb = match (dry_run, hide) {
-                    (true, true) => "would hide",
-                    (true, false) => "would show",
-                    (false, true) => "hid",
-                    (false, false) => "showed",
-                };
-                let noun = if *task_count == 1 { "task" } else { "tasks" };
-                let direction = if *hide { "future" } else { "due" };
-                format!(
-                    "  {prefix} {project_name}  {verb} {task_count} {noun}  scheduled {scheduled} is {direction}"
-                )
+                let mut lines = Vec::new();
+                if *scheduled_task_count > 0 {
+                    let verb = if dry_run {
+                        "would schedule"
+                    } else {
+                        "scheduled"
+                    };
+                    let noun = if *scheduled_task_count == 1 {
+                        "task"
+                    } else {
+                        "tasks"
+                    };
+                    let direction = if *future { "future" } else { "due" };
+                    lines.push(format!(
+                        "  {prefix} {project_name}  {verb} {scheduled_task_count} {noun} {scheduled}  frontmatter scheduled is {direction}"
+                    ));
+                }
+                if *removed_hide_count > 0 {
+                    let verb = if dry_run { "would remove" } else { "removed" };
+                    let noun = if *removed_hide_count == 1 {
+                        "task"
+                    } else {
+                        "tasks"
+                    };
+                    lines.push(format!(
+                        "  {prefix} {project_name}  {verb} #hide from {removed_hide_count} {noun}  task schedules replace #hide"
+                    ));
+                }
+                if *prj_hide_changed {
+                    let verb = if *future {
+                        if dry_run {
+                            "would normalize"
+                        } else {
+                            "normalized"
+                        }
+                    } else if dry_run {
+                        "would remove"
+                    } else {
+                        "removed"
+                    };
+                    let detail = if *future {
+                        "#hide on ^prj"
+                    } else {
+                        "#hide from sole ^prj"
+                    };
+                    lines.push(format!(
+                        "  {prefix} {project_name}  {verb} {detail}  scheduled {scheduled}"
+                    ));
+                }
+                lines.join("\n")
             }
             Self::Warning {
                 message, detail, ..
@@ -4157,7 +4444,7 @@ status: wip
     }
 
     #[test]
-    fn terminal_projects_do_not_reconcile_schedule_visibility() {
+    fn terminal_projects_do_not_reconcile_task_schedules() {
         let project = parse_clean_project(
             "Done.md",
             "---\ntype: [[project]]\nstatus: done\nscheduled: 2026-07-10\n---\n- [x] #task Finished #hide ^prj\n",
@@ -4169,7 +4456,7 @@ status: wip
         );
         assert!(!plan.changes.iter().any(|change| matches!(
             change,
-            ProjectChange::ReconcileTaskVisibility { .. }
+            ProjectChange::ReconcileTaskSchedules { .. }
         )));
     }
 
@@ -4188,7 +4475,7 @@ status: wip
     }
 
     #[test]
-    fn scheduled_visibility_precedes_prj_surfacing_at_local_date_boundary() {
+    fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
         let future = parse_clean_project(
             "Future.md",
             "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n- [ ] #task Work\n",
@@ -4196,14 +4483,20 @@ status: wip
         let today = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
         assert_eq!(
             plan_project_sync_at(&future, &[], today).changes,
-            vec![ProjectChange::ReconcileTaskVisibility {
+            vec![ProjectChange::ReconcileTaskSchedules {
                 scheduled: "2026-07-11".to_string(),
-                policy: TaskVisibilityPolicy::for_schedule(true, 2),
-                task_count: 2,
+                policy: TaskSchedulePolicy::for_schedule(
+                    NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                    today,
+                    2,
+                ),
+                scheduled_task_count: 1,
+                removed_hide_count: 0,
+                prj_hide_changed: true,
             }]
         );
 
-        for scheduled_today in [
+        for due_today in [
             NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
             NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
         ] {
@@ -4212,11 +4505,17 @@ status: wip
                 "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n- [x] #task Done #hide\n",
             );
             assert_eq!(
-                plan_project_sync_at(&due, &[], scheduled_today).changes,
-                vec![ProjectChange::ReconcileTaskVisibility {
+                plan_project_sync_at(&due, &[], due_today).changes,
+                vec![ProjectChange::ReconcileTaskSchedules {
                     scheduled: "2026-07-11".to_string(),
-                    policy: TaskVisibilityPolicy::for_schedule(false, 2),
-                    task_count: 1,
+                    policy: TaskSchedulePolicy::for_schedule(
+                        NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                        due_today,
+                        2,
+                    ),
+                    scheduled_task_count: 0,
+                    removed_hide_count: 1,
+                    prj_hide_changed: false,
                 }]
             );
         }
@@ -4232,16 +4531,22 @@ status: wip
                 NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
             )
             .changes,
-            vec![ProjectChange::ReconcileTaskVisibility {
+            vec![ProjectChange::ReconcileTaskSchedules {
                 scheduled: "2026-07-11".to_string(),
-                policy: TaskVisibilityPolicy::for_schedule(false, 1),
-                task_count: 1,
+                policy: TaskSchedulePolicy::for_schedule(
+                    NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                    NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                    1,
+                ),
+                scheduled_task_count: 0,
+                removed_hide_count: 0,
+                prj_hide_changed: true,
             }]
         );
     }
 
     #[test]
-    fn scheduled_visibility_keeps_subproject_ledger_planning() {
+    fn scheduled_tasks_keep_subproject_ledger_planning() {
         let project = parse_clean_project(
             "Parent.md",
             "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n",
@@ -4254,9 +4559,9 @@ status: wip
 
         assert!(plan.changes.iter().any(|change| matches!(
             change,
-            ProjectChange::ReconcileTaskVisibility {
-                policy: TaskVisibilityPolicy { hide: true, .. },
-                task_count: 1,
+            ProjectChange::ReconcileTaskSchedules {
+                policy: TaskSchedulePolicy { future: true, .. },
+                prj_hide_changed: true,
                 ..
             }
         )));
@@ -4271,50 +4576,77 @@ status: wip
     }
 
     #[test]
-    fn task_visibility_edits_every_real_task_and_preserves_other_text() {
-        let contents = "---\r\ntype: [[project]]\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] ^prj\r\n  1. [x] Nested done ^nested\r\n> - [ ] Quoted task\r\n- [-] Canceled #hidden\r\n- [/] Active #hide #hide\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
-        let hidden = apply_changes(
+    fn task_schedule_edits_cover_contract_and_preserve_markdown() {
+        let contents = "---\r\ntype: [[project]]\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: stale] ^prj\r\n  1. [ ] Nested missing #hide ^nested\r\n> - [*] Equal (scheduled:: 2026-07-11) #hide\r\n- [/] Later [scheduled:: 2026-07-12] #hideaway #hide\r\n- [?] Earlier [scheduled:: 2026-07-10] #hide #hide\r\n- [x] Done #hide\r\n- [X] Done upper #hide\r\n- [-] Canceled #hidden #hide\r\n- [!] Custom #hide\r\n- [ ] Duplicate [scheduled:: 2026-07-09] (scheduled:: 2026-07-12) #hide\r\n```md\r\n- [ ] fenced example #hide\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
+        let future = apply_changes(
             contents,
-            &[ProjectChange::ReconcileTaskVisibility {
-                scheduled: "2026-07-11".to_string(),
-                policy: TaskVisibilityPolicy::for_schedule(true, 5),
-                task_count: 5,
-            }],
+            &[
+                ProjectChange::ReconcileTaskSchedules {
+                    scheduled: "2026-07-11".to_string(),
+                    policy: TaskSchedulePolicy::for_schedule(
+                        NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                        NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+                        10,
+                    ),
+                    scheduled_task_count: 2,
+                    removed_hide_count: 8,
+                    prj_hide_changed: true,
+                },
+                ProjectChange::RemoveScheduled {
+                    scheduled: "stale".to_string(),
+                },
+            ],
         );
         assert_eq!(
-            hidden,
-            "---\r\ntype: [[project]]\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] #hide ^prj\r\n  1. [x] Nested done #hide ^nested\r\n> - [ ] Quoted task #hide\r\n- [-] Canceled #hidden #hide\r\n- [/] Active #hide\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
+            future,
+            "---\r\ntype: [[project]]\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] #hide ^prj\r\n  1. [ ] Nested missing [scheduled:: 2026-07-11] ^nested\r\n> - [*] Equal (scheduled:: 2026-07-11)\r\n- [/] Later [scheduled:: 2026-07-12] #hideaway\r\n- [?] Earlier [scheduled:: 2026-07-11]\r\n- [x] Done\r\n- [X] Done upper\r\n- [-] Canceled #hidden\r\n- [!] Custom\r\n- [ ] Duplicate [scheduled:: 2026-07-09] (scheduled:: 2026-07-12) #hide\r\n```md\r\n- [ ] fenced example #hide\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
         );
 
-        let shown = apply_changes(
-            &hidden,
-            &[ProjectChange::ReconcileTaskVisibility {
-                scheduled: "2026-07-11".to_string(),
-                policy: TaskVisibilityPolicy::for_schedule(false, 5),
-                task_count: 4,
-            }],
-        );
         assert_eq!(
-            shown,
-            contents
-                .replace(
-                    "- [ ] #task Ship [p:: 1] ^prj\r\n",
-                    "- [ ] #task Ship [p:: 1] #hide ^prj\r\n",
-                )
-                .replace("- [/] Active #hide #hide\r\n", "- [/] Active\r\n")
+            apply_changes(
+                &future,
+                &[ProjectChange::ReconcileTaskSchedules {
+                    scheduled: "2026-07-11".to_string(),
+                    policy: TaskSchedulePolicy::for_schedule(
+                        NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                        NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                        10,
+                    ),
+                    scheduled_task_count: 0,
+                    removed_hide_count: 0,
+                    prj_hide_changed: false,
+                }],
+            ),
+            future
         );
 
         let sole_prj = "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n";
         assert_eq!(
             apply_changes(
                 sole_prj,
-                &[ProjectChange::ReconcileTaskVisibility {
+                &[ProjectChange::ReconcileTaskSchedules {
                     scheduled: "2026-07-11".to_string(),
-                    policy: TaskVisibilityPolicy::for_schedule(false, 1),
-                    task_count: 1,
+                    policy: TaskSchedulePolicy::for_schedule(
+                        NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                        NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                        1,
+                    ),
+                    scheduled_task_count: 0,
+                    removed_hide_count: 0,
+                    prj_hide_changed: true,
                 }],
             ),
             "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n"
         );
+    }
+
+    #[test]
+    fn project_parser_splits_surfacing_and_dash_visibility_counts() {
+        let project = parse_clean_project(
+            "Counts.md",
+            "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n- [ ] #task Ready\n- [?] #task Dependency blocked\n- [ ] #task Future [scheduled:: 2999-01-01]\n- [ ] #task Parenthesized future (scheduled:: 2999-01-02)\n- [ ] #task Hidden #hide\n",
+        );
+        assert_eq!(project.open_unhidden_count, 4);
+        assert_eq!(project.dash_visible_count, 1);
     }
 }
