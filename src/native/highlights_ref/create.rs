@@ -22,6 +22,45 @@ const DEFAULT_PARENT: &str = "obsidian_ref";
 const DEFAULT_REF_TYPE: &str = "chat";
 const DEFAULT_STATUS: &str = "ready";
 const ENV_PANDOC_COMMAND: &str = "BOB_PANDOC_COMMAND";
+/// LaTeX preamble that wraps long code blocks instead of overflowing the page.
+///
+/// Pandoc emits every fenced block as a `Highlighting` environment, which does
+/// not wrap by default, so a single long log or command line silently runs off
+/// the right margin.
+const PANDOC_HEADER_INCLUDES: &str = concat!(
+    r"\usepackage{fvextra}",
+    r"\DefineVerbatimEnvironment{Highlighting}{Verbatim}",
+    r"{breaklines,breakanywhere,commandchars=\\\{\}}",
+);
+/// Pandoc Lua filter that gives long inline code somewhere to break.
+///
+/// Inline code is typeset as an unbreakable `\texttt` box, so paths and
+/// identifiers such as `src/sase/ace/tui/modals/plans_detail.py` overflow the
+/// text block. Splitting the span after each separator lets pandoc escape every
+/// piece normally while LaTeX gains a legal break point between the pieces.
+const PANDOC_CODE_BREAK_FILTER: &str = r#"local SEPARATORS = "[/_%-%.:,]"
+
+function Code(code)
+  local pieces = {}
+  local buffer = ""
+  for index = 1, #code.text do
+    local char = code.text:sub(index, index)
+    buffer = buffer .. char
+    if char:match(SEPARATORS) and index < #code.text then
+      table.insert(pieces, pandoc.Code(buffer, code.attr))
+      table.insert(pieces, pandoc.RawInline("latex", "\\allowbreak{}"))
+      buffer = ""
+    end
+  end
+  if #pieces == 0 then
+    return nil
+  end
+  if buffer ~= "" then
+    table.insert(pieces, pandoc.Code(buffer, code.attr))
+  end
+  return pieces
+end
+"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CreateOptions {
@@ -180,9 +219,17 @@ fn create_pdf(
     })?;
 
     let render_path = render_temp_path(&plan.target)?;
+    let filter_path = code_break_filter_path();
+    fs::write(&filter_path, PANDOC_CODE_BREAK_FILTER).map_err(|error| {
+        CommandError::new(format!(
+            "write pandoc filter {}: {error}",
+            filter_path.display()
+        ))
+    })?;
     let _ = fs::remove_file(&render_path);
-    let result = render_and_install(&pandoc, &plan, &render_path);
+    let result = render_and_install(&pandoc, &plan, &render_path, &filter_path);
     let _ = fs::remove_file(&render_path);
+    let _ = fs::remove_file(&filter_path);
     let page_count = result?;
 
     println!(
@@ -388,10 +435,15 @@ fn render_temp_path(target: &Path) -> Result<PathBuf> {
     Ok(target.with_file_name(name))
 }
 
+fn code_break_filter_path() -> PathBuf {
+    env::temp_dir().join(format!("bob-highlights-create.{}.lua", process::id()))
+}
+
 fn render_and_install(
     pandoc: &OsStr,
     plan: &CreatePlan,
     render_path: &Path,
+    filter_path: &Path,
 ) -> Result<usize> {
     let resource_path = plan.source.parent().unwrap_or_else(|| Path::new("."));
     let output = Command::new(pandoc)
@@ -405,6 +457,8 @@ fn render_and_install(
         .arg("--pdf-engine=xelatex")
         .arg(format!("--resource-path={}", resource_path.display()))
         .arg("--highlight-style=tango")
+        .arg("--lua-filter")
+        .arg(filter_path)
         .arg("-V")
         .arg("colorlinks=true")
         .arg("-V")
@@ -419,6 +473,8 @@ fn render_and_install(
         .arg("sansfont=DejaVu Sans")
         .arg("-V")
         .arg("monofont=DejaVu Sans Mono")
+        .arg("-V")
+        .arg(format!("header-includes={PANDOC_HEADER_INCLUDES}"))
         .arg("--metadata")
         .arg(format!("title={}", plan.title))
         .stdout(Stdio::piped())
@@ -660,6 +716,39 @@ mod tests {
         let error = plan_create(&config(&temp.path), &source, &forced)
             .expect_err("must refuse sidecar collision");
         assert!(error.to_string().contains("sidecar"), "{error}");
+    }
+
+    #[test]
+    fn code_break_filter_splits_long_inline_code_paths() {
+        let Some(pandoc) = pandoc_command() else {
+            eprintln!("skipping code break filter test: pandoc is required");
+            return;
+        };
+        let temp = TempDir::new("code-break");
+        let filter = temp.path.join("code-break.lua");
+        fs::write(&filter, PANDOC_CODE_BREAK_FILTER).expect("write filter");
+        let source = temp.path.join("report.md");
+        fs::write(&source, "Path `src/sase/ace/tui.py` and `bead`.\n")
+            .expect("write source");
+
+        let output = Command::new(&pandoc)
+            .arg(&source)
+            .arg("--to=latex")
+            .arg("--lua-filter")
+            .arg(&filter)
+            .output()
+            .expect("run pandoc");
+        assert!(output.status.success(), "{output:?}");
+        let latex = String::from_utf8_lossy(&output.stdout);
+
+        assert!(
+            latex.contains(r"\texttt{src/}\allowbreak{}"),
+            "long inline code must gain break points: {latex}"
+        );
+        assert!(
+            latex.contains(r"\texttt{bead}"),
+            "code without separators must stay a single span: {latex}"
+        );
     }
 
     #[test]
