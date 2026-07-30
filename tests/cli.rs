@@ -306,6 +306,7 @@ fn highlights_ref_help_is_native_only() {
 fn highlights_ref_subcommand_help_works() {
     let cases: &[&[&str]] = &[
         &["highlights", "--help"],
+        &["highlights", "create", "--help"],
         &["highlights", "scan", "--help"],
         &["highlights", "sync", "--help"],
         &["highlights", "doctor", "--help"],
@@ -387,6 +388,10 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (
             &["task-status-hooks", "--help"],
             "bob task-status-hooks --help",
+        ),
+        (
+            &["highlights", "create", "--help"],
+            "bob highlights create --help",
         ),
         (
             &["highlights", "doctor", "--help"],
@@ -8085,9 +8090,212 @@ fn highlights_ref_help_lists_subcommands_alphabetically() {
     let help = stdout(&output);
     assert_text_order(
         &help,
-        &["\n  doctor ", "\n  marker ", "\n  scan ", "\n  sync "],
+        &[
+            "\n  create ",
+            "\n  doctor ",
+            "\n  marker ",
+            "\n  scan ",
+            "\n  sync ",
+        ],
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn highlights_create_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("--help")
+        .output()
+        .expect("run bob highlights create --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Arguments:") && help.contains("<MD_FILE>"),
+        "expected Markdown positional argument in Arguments section:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --force",
+            "-l, --lib-dir",
+            "-P, --parent",
+            "-r, --ref-dir",
+            "-s, --status",
+            "-t, --ref-type",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn highlights_create_dry_run_prints_plan_without_writes() {
+    let temp = TempDir::new("bob-cli-highlights-create-dry-run");
+    let source = temp.path().join("research.md");
+    let vault = temp.path().join("vault");
+    write_file(
+        &source,
+        "---\ntitle: A Useful Report\n---\n\n# Ignored H1\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-P")
+        .arg("sase_ref")
+        .arg("-s")
+        .arg("next")
+        .arg("-t")
+        .arg("papers")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run bob highlights create --dry-run");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("A Useful Report")
+            && report.contains("status: next")
+            && report.contains("parent: sase_ref")
+            && report.contains("lib/papers/research.pdf")
+            && report.contains("writes: none"),
+        "{report}"
+    );
+    assert!(!vault.exists(), "dry-run must not create the vault");
+}
+
+#[test]
+fn highlights_create_reports_pandoc_failure_diagnostics() {
+    let temp = TempDir::new("bob-cli-highlights-create-failure");
+    let source = temp.path().join("research.md");
+    let vault = temp.path().join("vault");
+    let pandoc = temp.path().join("pandoc");
+    write_file(&source, "# Render Failure\n");
+    write_executable(
+        &pandoc,
+        "#!/bin/sh\necho 'xelatex package exploded' >&2\nexit 17\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .output()
+        .expect("run failing bob highlights create");
+
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("pandoc failed")
+            && diagnostic.contains("exit 17")
+            && diagnostic.contains("xelatex package exploded"),
+        "{diagnostic}"
+    );
+    assert!(
+        !vault.join("lib/chat/research.pdf").exists(),
+        "failed render must not install a target PDF"
+    );
+}
+
+#[test]
+fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
+    let pandoc_available = Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let xelatex_available = Command::new("xelatex")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !pandoc_available || !xelatex_available {
+        eprintln!(
+            "skipping highlights create render test: pandoc and xelatex are required"
+        );
+        return;
+    }
+
+    let temp = TempDir::new("bob-cli-highlights-create-render");
+    let source = temp.path().join("render-report.md");
+    let vault = temp.path().join("vault");
+    write_file(
+        &source,
+        concat!(
+            "---\n",
+            "title: Rendered Research Report\n",
+            "---\n\n",
+            "# Overview\n\n",
+            "Introductory text.\n\n",
+            "## Findings\n\n",
+            "| Item | Result |\n",
+            "| --- | --- |\n",
+            "| PDF | Ready |\n\n",
+            "```rust\n",
+            "fn main() { println!(\"hello\"); }\n",
+            "```\n\n",
+            "### Detail\n\n",
+            "A third-level heading.\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob highlights create");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    let pdf = vault.join("lib/chat/render-report.pdf");
+    assert!(
+        report.contains("created Highlights-ready PDF")
+            && report.contains("next: bob highlights scan"),
+        "{report}"
+    );
+    assert!(pdf.is_file(), "missing rendered PDF: {}", pdf.display());
+
+    let document = lopdf::Document::load(&pdf)
+        .unwrap_or_else(|error| panic!("load {}: {error}", pdf.display()));
+    assert!(!document.get_pages().is_empty(), "PDF must contain pages");
+    let root_id = document
+        .trailer
+        .get(b"Root")
+        .and_then(lopdf::Object::as_reference)
+        .expect("PDF catalog reference");
+    let catalog = document.get_dictionary(root_id).expect("PDF catalog");
+    assert!(
+        catalog.get(b"Outlines").is_ok(),
+        "pandoc PDF must contain outline bookmarks"
+    );
+    let marker_output = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&pdf)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect created PDF marker");
+    assert_success(&marker_output);
+    let marker = stdout(&marker_output);
+    assert!(marker.contains("- status: ready\n"), "{marker}");
+    assert!(marker.contains("- parent: obsidian_ref\n"), "{marker}");
+    assert!(
+        marker.contains("- title: Rendered Research Report\n"),
+        "{marker}"
+    );
 }
 
 #[test]
@@ -9487,6 +9695,7 @@ Note: marker note
         .arg("highlights")
         .arg("doctor")
         .env("BOB_DIR", &vault)
+        .env("BOB_PANDOC_COMMAND", &ob_stub)
         .env("OB_COMMAND", &ob_stub)
         .output()
         .expect("run highlights doctor");
@@ -9500,6 +9709,7 @@ Note: marker note
     assert!(report.contains("pdf_markers_readable: 1"), "{report}");
     assert!(report.contains("git: ok (clean worktree)"), "{report}");
     assert!(report.contains("ob: available"), "{report}");
+    assert!(report.contains("pandoc: available"), "{report}");
     assert!(report.contains("writes: none"), "{report}");
     assert!(report.contains("result: ok"), "{report}");
 }
@@ -13721,6 +13931,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
             && help.contains("bob capture-sections --route cash --format json")
             && help.contains("bob capture-targets --format json")
             && help.contains("bob query --source '#project'")
+            && help.contains("bob highlights create report.md")
             && help.contains("bob highlights scan --dry-run")
             && help.contains("bob task-status-hooks --dry-run")
             && help.contains("bob move-done-tasks --threshold 10")

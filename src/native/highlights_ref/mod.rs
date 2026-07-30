@@ -27,6 +27,8 @@ use super::{
     style::{display_width, pad_right, Styler},
 };
 
+mod create;
+
 const COMMAND_NAME: &str = "bob highlights";
 const DEFAULT_LIB_DIR: &str = "lib";
 const DEFAULT_REF_DIR: &str = "ref";
@@ -560,6 +562,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
 
     match matches.subcommand() {
+        Some(("create", sub_matches)) => create::run(sub_matches),
         Some(("scan", sub_matches)) => run_scan(sub_matches),
         Some(("sync", sub_matches)) => run_sync(sub_matches),
         Some(("doctor", sub_matches)) => run_doctor(sub_matches),
@@ -2260,6 +2263,19 @@ fn doctor_vault(config: &Config) -> Result<()> {
         }
     }
     println!("ob_sync: not-run");
+
+    match create::pandoc_command() {
+        Some(command) => {
+            println!("pandoc: available ({})", command.to_string_lossy());
+        }
+        None => {
+            println!("pandoc: warn (command not found)");
+            warnings.push(
+                "pandoc command not found; Markdown PDF creation is unavailable"
+                    .to_string(),
+            );
+        }
+    }
 
     if !warnings.is_empty() {
         println!("warnings:");
@@ -5013,6 +5029,7 @@ fn build_cli() -> ClapCommand {
         .about("Sync Highlights PDF annotations into Bob reference notes")
         .subcommand_required(true)
         .arg_required_else_help(true)
+        .subcommand(create::command())
         .subcommand(
             with_config_args(
                 ClapCommand::new("doctor")

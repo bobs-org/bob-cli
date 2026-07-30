@@ -275,6 +275,8 @@ Examples:
                                  List picker targets for task capture
   bob query --source '#project'
                                  Print matching note paths
+  bob highlights create report.md
+                                 Render a Highlights-ready PDF
   bob highlights scan --dry-run
                                  Preview Highlights reference note sync
   bob task-status-hooks --dry-run

@@ -1,7 +1,7 @@
 # Highlights Reference Note Sync
 
-`bob highlights` turns Highlights app PDF annotations into Obsidian
-reference notes in the Bob vault.
+`bob highlights` creates Highlights-ready PDFs from Markdown and turns
+Highlights app PDF annotations into Obsidian reference notes in the Bob vault.
 
 Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 `~/projects/bob-cli`; do not install from ad hoc scripts outside that checkout.
@@ -34,11 +34,33 @@ writes files.
 Available commands:
 
 ```bash
+bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-l|--lib-dir PATH] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
 bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-w|--write-pdfs]
 bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf]
 ```
+
+`create` accepts an existing `.md` file and writes
+`<lib-dir>/<ref-type>/<basename>.pdf` (by default
+`~/bob/lib/chat/<basename>.pdf`). It uses the frontmatter `title`, first H1, or
+file stem in that order, asks pandoc/xelatex for a hyperlinked three-level
+table of contents and PDF outline bookmarks, and embeds a page-1 `/Text`
+annotation containing:
+
+```text
+- status: ready
+- parent: obsidian_ref
+- title: <document title>
+```
+
+The marker parent is deliberately bare; generated Obsidian frontmatter turns
+it into a wikilink later. `-P, --parent`, `-s, --status`, and `-t, --ref-type`
+override those defaults. `-d, --dry-run` prints the resolved paths and marker
+with `writes: none`. An existing target requires `-f, --force`; a same-stem
+Markdown file beside the target PDF is always refused because the scanner
+would interpret it as a Highlights sidecar. `BOB_PANDOC_COMMAND` overrides the
+pandoc executable, and a render failure includes pandoc's diagnostic output.
 
 Path configuration options are `-b, --bob-dir <PATH>`, `-l, --lib-dir <PATH>`,
 and `-r, --ref-dir <PATH>`. `scan` also accepts `-j, --jobs <N>`.
