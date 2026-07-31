@@ -100,9 +100,10 @@ Both notes are fully validated before either is replaced; duplicate block IDs, \
 missing ledger structure, no open entry, and multiple open timed entries fail \
 without a partial capture.\n\n\
 Use '@<route>^<block-id>' in the same leading or trailing position to append \
-an ordinary child bullet beneath an existing task. The note and task must \
-already exist. Existing child indentation and line endings are preserved; \
-run 'bob capture-tasks -r <route>' to list eligible task block IDs.\n\n\
+an ordinary child bullet beneath an existing task without a [created::] stamp. It \
+renders as '- <body>' and appends only the optional scheduled property. The note \
+and task must already exist. Existing child indentation and line endings are \
+preserved; run 'bob capture-tasks -r <route>' to list eligible task block IDs.\n\n\
 Append '#<section-prefix>' or a bare '#' to an @route token (such as \
 '@notes#Ideas' or '@notes#') to capture an ordinary bullet instead. It renders \
 as '- <body> [created::YYYY-MM-DD]' and is placed in a non-Tasks section whose \
@@ -416,7 +417,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             format_bullet_line(&parsed.body, &created, scheduled.as_deref())
         }
         CaptureKind::SubBullet { .. } => {
-            format_bullet_line(&parsed.body, &created, scheduled.as_deref())
+            format_sub_bullet_line(&parsed.body, scheduled.as_deref())
         }
         CaptureKind::Pomodoro { block_id } => format_pomodoro_task_line(
             &parsed.body,
@@ -613,6 +614,12 @@ fn format_bullet_line(
     scheduled: Option<&str>,
 ) -> String {
     let mut line = format!("- {body} [created::{created}]");
+    append_scheduled_property(&mut line, scheduled);
+    line
+}
+
+fn format_sub_bullet_line(body: &str, scheduled: Option<&str>) -> String {
+    let mut line = format!("- {body}");
     append_scheduled_property(&mut line, scheduled);
     line
 }
@@ -3702,6 +3709,15 @@ mod tests {
         assert_eq!(
             format_bullet_line("some idea", "2026-06-15", Some("2026-06-16")),
             "- some idea [created::2026-06-15] [scheduled::2026-06-16]"
+        );
+    }
+
+    #[test]
+    fn formats_sub_bullet_line() {
+        assert_eq!(format_sub_bullet_line("some idea", None), "- some idea");
+        assert_eq!(
+            format_sub_bullet_line("some idea", Some("2026-06-16")),
+            "- some idea [scheduled::2026-06-16]"
         );
     }
 

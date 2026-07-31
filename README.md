@@ -235,14 +235,15 @@ parent task. For example,
 
 ```markdown
 - [*] #task Finish Google Exit Packet! [created::2026-07-31] ^goog-exit
-  - Called Morgan Stanley today. [created::2026-07-31]
+  - Called Morgan Stanley today.
 ```
 
 The marker composes with terminal `s:<N>` and clipboard markers in either
-order. A scheduled property is rendered for consistency even though Obsidian
-Tasks does not read it from an ordinary bullet. Existing child indentation is
-copied; otherwise capture uses the note's dominant tab-or-two-space indentation
-and falls back to a tab. Line endings are preserved. The note and task must
+order. Scheduled properties are still rendered for consistency even though
+Obsidian Tasks does not read them from an ordinary bullet. Existing child
+indentation is copied; otherwise capture uses the note's dominant tab-or-two-space
+indentation and falls back to a tab. Line endings are preserved. The note and
+task must
 already exist, block IDs must be unique, and non-task block IDs are rejected.
 Missing IDs include a close-match suggestion when possible and direct callers
 to `bob capture-tasks -r <route>`.

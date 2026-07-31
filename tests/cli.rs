@@ -4553,7 +4553,7 @@ fn capture_sub_bullet_inserts_with_parent_indentation_and_reports_json() {
                 "- [*] #task Parent [created::2026-07-01] ^parent\n",
                 "\t- first child\n",
                 "\t\t- grandchild\n",
-                "\t- new note [created::2026-07-31]\n",
+                "\t- new note\n",
                 "Tail\n",
             ),
         ),
@@ -4569,7 +4569,7 @@ fn capture_sub_bullet_inserts_with_parent_indentation_and_reports_json() {
                 "## Tasks\n",
                 "- [/] #task Parent ^parent\n",
                 "  - first child\n",
-                "  - new note [created::2026-07-31]\n",
+                "  - new note\n",
                 "Tail\n",
             ),
         ),
@@ -4585,7 +4585,7 @@ fn capture_sub_bullet_inserts_with_parent_indentation_and_reports_json() {
                 "- [ ] #task Root\n",
                 "  - [ ] #task Nested ^parent\n",
                 "    - existing\n",
-                "    - new note [created::2026-07-31]\n",
+                "    - new note\n",
                 "Tail\n",
             ),
         ),
@@ -4626,7 +4626,8 @@ fn capture_sub_bullet_inserts_with_parent_indentation_and_reports_json() {
             }
         );
         assert!(json["parent_line"].as_u64().is_some(), "{name}: {json}");
-        assert_eq!(json["task_line"], "- new note [created::2026-07-31]");
+        assert_eq!(json["created"], "2026-07-31");
+        assert_eq!(json["task_line"], "- new note");
     }
 }
 
@@ -4670,7 +4671,7 @@ fn capture_sub_bullet_uses_dominant_indent_preserves_crlf_and_dry_run() {
         concat!(
             "## Tasks\r\n",
             "- [ ] #task Parent ^parent\r\n",
-            "\t- new note [created::2026-07-31]\r\n",
+            "\t- new note\r\n",
             "- ordinary\r\n",
             "\t- tabbed elsewhere\r\n",
         )
@@ -4713,13 +4714,14 @@ fn capture_sub_bullet_task_ref_recovers_shift_and_nests_clipboard() {
     assert_eq!(json["parent_status_symbol"], "?");
     assert_eq!(json["parent_status_name"], "Unknown");
     assert!(json.get("block_id").is_none(), "{json}");
+    assert_eq!(json["created"], "2026-07-31");
     assert_eq!(
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "shifted line\n",
             "## Tasks\n",
             "- [?] #task Parent without ID\n",
-            "\t- new note [created::2026-07-31]\n",
+            "\t- new note\n",
             "\t  - first\n",
             "\t  - second\n",
             "Tail\n",
@@ -4751,7 +4753,7 @@ fn capture_sub_bullet_task_option_keeps_at_tokens_literal() {
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(
             "- [ ] #task Parent ^parent\n",
-            "\t- mention @other literally [created::2026-07-31]\n",
+            "\t- mention @other literally\n",
         )
     );
 }
