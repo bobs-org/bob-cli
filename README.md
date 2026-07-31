@@ -327,6 +327,13 @@ each supplied or prompted component, emits only the canonical colon marker,
 and retains staged values when validation or capture fails. Existing `@`,
 `@#`, and `@route#` picker flows are unchanged.
 
+Sub-bullet capture has the matching four-way `^` family. Use `<text> @^` to
+choose a destination and then one of its open tasks, `<text> @route^` to choose
+only the task, or `<text> @^block-id` to choose only the destination. A complete
+`<text> @route^block-id` request captures immediately. The task chooser shows
+each task's literal checkbox with status color and searchable status, block ID,
+section, and child-note details; picker selections use stale-safe task refs.
+
 ```bash
 bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-targets [-b|--bob-dir DIR] [-f|--format human|json] [-v|--verbose]
