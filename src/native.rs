@@ -13,6 +13,7 @@ mod capture;
 mod capture_clip;
 mod capture_sections;
 mod capture_targets;
+mod capture_tasks;
 mod collect_done;
 mod dataview;
 mod env;
@@ -35,6 +36,7 @@ pub(crate) enum NativeCommand {
     Capture,
     CaptureSections,
     CaptureTargets,
+    CaptureTasks,
     Query,
     Highlights,
     MoveDoneTasks,
@@ -65,6 +67,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Capture => capture::run(args),
         NativeCommand::CaptureSections => capture_sections::run(args),
         NativeCommand::CaptureTargets => capture_targets::run(args),
+        NativeCommand::CaptureTasks => capture_tasks::run(args),
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),
         NativeCommand::MoveDoneTasks => collect_done::run(args),

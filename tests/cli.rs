@@ -208,6 +208,30 @@ fn capture_sections_help_is_native_only() {
 }
 
 #[test]
+fn capture_tasks_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-capture-tasks-native-help");
+    let output = bob_command()
+        .arg("capture-tasks")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob capture-tasks --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob capture-tasks"),
+        "expected capture-tasks help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only capture-tasks should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_targets_help_is_native_only() {
     let temp = TempDir::new("bob-cli-capture-targets-native-help");
     let output = bob_command()
@@ -340,6 +364,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture", "--help"], "bob capture"),
         (&["capture-sections", "--help"], "bob capture-sections"),
         (&["capture-targets", "--help"], "bob capture-targets"),
+        (&["capture-tasks", "--help"], "bob capture-tasks"),
         (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob highlights"),
         (
@@ -383,6 +408,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             "bob capture-sections --help",
         ),
         (&["capture-targets", "--help"], "bob capture-targets --help"),
+        (&["capture-tasks", "--help"], "bob capture-tasks --help"),
         (&["query", "--help"], "bob query --help"),
         (&["highlights", "--help"], "bob highlights --help"),
         (
@@ -2378,6 +2404,27 @@ fn capture_sections_help_lists_options_alphabetically() {
     assert!(
         help.contains("Missing notes are not errors"),
         "expected capture-sections long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &["-b, --bob-dir", "-f, --format", "-h, --help", "-r, --route"],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_tasks_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture-tasks")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-tasks --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Missing notes are not errors"),
+        "expected capture-tasks long help:\n{help}"
     );
     assert_text_order(
         &help,
@@ -5014,6 +5061,114 @@ fn capture_sections_invalid_or_missing_route_errors_cleanly() {
             .is_some_and(|error| error.contains("must contain only")),
         "unexpected invalid-route json: {json}"
     );
+}
+
+#[test]
+fn capture_tasks_json_lists_open_tasks_with_stable_picker_shape() {
+    let temp = TempDir::new("bob-cli-capture-tasks-json");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        r##"{
+          "globalFilter": "#task",
+          "statusSettings": {
+            "coreStatuses": [
+              {"symbol":" ","name":"Todo","type":"TODO"},
+              {"symbol":"x","name":"Done","type":"DONE"},
+              {"symbol":"/","name":"In Progress","type":"IN_PROGRESS"},
+              {"symbol":"*","name":"Next","type":"ON_HOLD"},
+              {"symbol":"-","name":"Canceled","type":"CANCELLED"}
+            ],
+            "customStatuses": [
+              {"symbol":"?","name":"Blocked","type":"ON_HOLD"}
+            ]
+          }
+        }"##,
+    );
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "# Cash\n",
+            "## Tasks\n",
+            "- [ ] #task Call bank ^bank\n",
+            "\t- existing note\n",
+            "- [x] #task Finished\n",
+            "  - [/] #task Nested active [created:: 2026-07-31]\n",
+            "- [-] #task Canceled\n",
+            "- [?] #task Waiting ^waiting\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture-tasks")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("Cash")
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run bob capture-tasks json");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "capture-tasks json should keep stderr clean:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["route"], "cash");
+    assert_eq!(json["relative_target"], "cash.md");
+    assert_eq!(json["count"], 3);
+    assert_eq!(json["tasks"][0]["line"], 3);
+    assert_eq!(json["tasks"][0]["block_id"], "bank");
+    assert_eq!(json["tasks"][0]["status_type"], "TODO");
+    assert_eq!(json["tasks"][0]["text"], "Call bank");
+    assert_eq!(json["tasks"][0]["section"], "Tasks");
+    assert_eq!(json["tasks"][0]["depth"], 0);
+    assert_eq!(json["tasks"][0]["child_count"], 1);
+    let task_ref = json["tasks"][0]["ref"].as_str().expect("task ref");
+    let (line, digest) = task_ref.split_once(':').expect("ref separator");
+    assert_eq!(line, "3");
+    assert_eq!(digest.len(), 8);
+    assert!(digest
+        .chars()
+        .all(|character| character.is_ascii_hexdigit()));
+    assert_eq!(json["tasks"][1]["line"], 6);
+    assert_eq!(json["tasks"][1]["status_name"], "In Progress");
+    assert_eq!(json["tasks"][1]["depth"], 1);
+    assert_eq!(json["tasks"][2]["status_name"], "Blocked");
+}
+
+#[test]
+fn capture_tasks_human_output_is_plain_when_piped() {
+    let temp = TempDir::new("bob-cli-capture-tasks-human");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        "# Cash\n## Tasks\n- [ ] #task Call bank ^bank\n",
+    );
+
+    let output = bob_command()
+        .arg("capture-tasks")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("cash")
+        .output()
+        .expect("run bob capture-tasks human");
+
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let human = stdout(&output);
+    assert!(human.contains("Capture tasks - cash.md"), "{human}");
+    assert!(human.contains("[ ] Call bank"), "{human}");
+    assert!(human.contains("^bank"), "{human}");
+    assert!(human.contains("1 task - 1 unknown"), "{human}");
 }
 
 #[test]
@@ -14285,6 +14440,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "capture",
         "capture-sections",
         "capture-targets",
+        "capture-tasks",
         "highlights",
         "move-done-tasks",
         "nightly",
@@ -14314,6 +14470,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
             && help.contains("bob bulk-git-commit")
             && help.contains("bob capture-sections --route cash --format json")
             && help.contains("bob capture-targets --format json")
+            && help.contains("bob capture-tasks --route cash --format json")
             && help.contains("bob query --source '#project'")
             && help.contains("bob highlights create report.md")
             && help.contains("bob highlights scan --dry-run")

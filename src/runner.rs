@@ -55,6 +55,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::CaptureTargets,
     },
     Subcommand {
+        name: "capture-tasks",
+        script_command: None,
+        about: "List the open tasks of a capture note",
+        native_command: NativeCommand::CaptureTasks,
+    },
+    Subcommand {
         name: "highlights",
         script_command: None,
         about: "Sync Highlights PDF annotations into reference notes",
@@ -273,6 +279,8 @@ Examples:
                                  List picker sections for one capture target
   bob capture-targets --format json
                                  List picker targets for task capture
+  bob capture-tasks --route cash --format json
+                                 List picker tasks for one capture target
   bob query --source '#project'
                                  Print matching note paths
   bob highlights create report.md

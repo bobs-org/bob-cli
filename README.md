@@ -53,6 +53,7 @@ bob projects list
 | `capture` | Capture a task or section bullet, optionally with clipboard content |
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
 | `capture-targets` | List inbox, area, and non-terminal project capture routes |
+| `capture-tasks` | List the open tasks in a routed note |
 | `highlights` | Synchronize Highlights PDF annotations with reference notes |
 | `move-done-tasks` | Archive done and canceled task blocks and repair their links |
 | `nightly` | Run the Obsidian sync and maintenance workflow |
@@ -329,6 +330,7 @@ and retains staged values when validation or capture fails. Existing `@`,
 ```bash
 bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-targets [-b|--bob-dir DIR] [-f|--format human|json] [-v|--verbose]
+bob capture-tasks --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 ```
 
 These read-only discovery commands support interactive capture pickers. A
@@ -339,9 +341,12 @@ normally uses the commands in this order:
 
 1. Run `capture-targets` and let the user choose a route.
 2. For a bullet capture, run `capture-sections` for that route and let the user
-   choose a heading. A task capture skips this step.
-3. Run `bob capture --route NAME --section TITLE -- <text>` for a bullet, or
-   omit `--section` for a task.
+   choose a heading. Task and sub-bullet captures skip this step.
+3. For a sub-bullet capture, run `capture-tasks` for the route and let the user
+   choose an open task. Other capture modes skip this step.
+4. Run `bob capture --route NAME --section TITLE -- <text>` for a bullet, omit
+   `--section` for a task, or run
+   `bob capture --route NAME --task-ref REF -- <text>` for a sub-bullet.
 
 On a successful scan, `capture-targets` returns `mac_inbox` first even when
 `mac_inbox.md` does not exist, followed by top-level area notes and
@@ -363,6 +368,19 @@ frontmatter and fenced code blocks. Route input is normalized to lowercase,
 and a missing note successfully returns an empty list. JSON output has `ok`,
 the normalized `route`, `count`, and an ordered `sections` array whose entries
 each have `title` and `level`.
+
+`capture-tasks` lists open Obsidian Tasks entries in document order, including
+indented sub-tasks. Done and canceled tasks are omitted; Todo, In Progress, and
+On Hold statuses are included, and an unknown status symbol is treated as an
+open Todo. Route input is normalized to lowercase, and a missing note
+successfully returns an empty list. Human output groups tasks beneath their
+nearest ATX heading and shows status, block ID, and status name without emitting
+color escapes when piped. JSON output has `ok`, `route`, `relative_target`,
+`count`, and an ordered `tasks` array. Each task has `ref` (`<line>:<digest>`),
+`line`, nullable `block_id`, `status_symbol`, `status_name`, `status_type`,
+`text`, nullable `section`, indentation `depth`, and `child_count`. The ref is
+the picker-safe value accepted by `bob capture --task-ref` and can recover when
+unrelated edits shift the task's line.
 
 ```bash
 bob nightly
