@@ -670,7 +670,14 @@ fn capture_help_lists_options_alphabetically() {
             "-n, --no-clip",
             "-r, --route",
             "-s, --section",
+            "-t, --task",
         ],
+    );
+    assert!(
+        help.contains("@<route>^<block-id>")
+            && help.contains("bob capture '@cash^goog-exit'")
+            && !help.contains("--task-ref"),
+        "expected public sub-bullet help without hidden task ref:\n{help}"
     );
     assert_stdout_has_no_ansi(&output);
 }
@@ -4480,6 +4487,383 @@ fn capture_forced_section_requires_route() {
         "expected section route usage error:\n{}",
         format_output(&output)
     );
+}
+
+#[test]
+fn capture_sub_bullet_inserts_with_parent_indentation_and_reports_json() {
+    let cases = [
+        (
+            "tab",
+            concat!(
+                "## Tasks\n",
+                "- [*] #task Parent [created::2026-07-01] ^parent\n",
+                "\t- first child\n",
+                "\t\t- grandchild\n",
+                "Tail\n",
+            ),
+            concat!(
+                "## Tasks\n",
+                "- [*] #task Parent [created::2026-07-01] ^parent\n",
+                "\t- first child\n",
+                "\t\t- grandchild\n",
+                "\t- new note [created::2026-07-31]\n",
+                "Tail\n",
+            ),
+        ),
+        (
+            "spaces",
+            concat!(
+                "## Tasks\n",
+                "- [/] #task Parent ^parent\n",
+                "  - first child\n",
+                "Tail\n",
+            ),
+            concat!(
+                "## Tasks\n",
+                "- [/] #task Parent ^parent\n",
+                "  - first child\n",
+                "  - new note [created::2026-07-31]\n",
+                "Tail\n",
+            ),
+        ),
+        (
+            "indented-parent",
+            concat!(
+                "- [ ] #task Root\n",
+                "  - [ ] #task Nested ^parent\n",
+                "    - existing\n",
+                "Tail\n",
+            ),
+            concat!(
+                "- [ ] #task Root\n",
+                "  - [ ] #task Nested ^parent\n",
+                "    - existing\n",
+                "    - new note [created::2026-07-31]\n",
+                "Tail\n",
+            ),
+        ),
+    ];
+
+    for (name, original, expected) in cases {
+        let temp = TempDir::new(&format!("bob-cli-sub-bullet-{name}"));
+        let vault = temp.path().join("vault");
+        write_file(&vault.join("cash.md"), original);
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("@cash^parent")
+            .arg("new note")
+            .env("BOB_NOW", "2026-07-31")
+            .output()
+            .expect("run sub-bullet capture");
+        assert_success(&output);
+        assert_eq!(
+            fs::read_to_string(vault.join("cash.md")).expect("read note"),
+            expected,
+            "{name}: {}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+        assert_eq!(json["kind"], "sub_bullet", "{name}");
+        assert_eq!(json["block_id"], "parent", "{name}");
+        assert_eq!(
+            json["parent_text"],
+            if name == "indented-parent" {
+                "Nested"
+            } else {
+                "Parent"
+            }
+        );
+        assert!(json["parent_line"].as_u64().is_some(), "{name}: {json}");
+        assert_eq!(json["task_line"], "- new note [created::2026-07-31]");
+    }
+}
+
+#[test]
+fn capture_sub_bullet_uses_dominant_indent_preserves_crlf_and_dry_run() {
+    let temp = TempDir::new("bob-cli-sub-bullet-indent-crlf");
+    let vault = temp.path().join("vault");
+    let note = vault.join("cash.md");
+    let original = concat!(
+        "## Tasks\r\n",
+        "- [ ] #task Parent ^parent\r\n",
+        "- ordinary\r\n",
+        "\t- tabbed elsewhere\r\n",
+    );
+    write_file(&note, original);
+
+    let dry_run = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("new note @cash^parent")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("dry-run sub-bullet");
+    assert_success(&dry_run);
+    assert!(stdout(&dry_run).contains("would capture"));
+    assert_eq!(fs::read_to_string(&note).expect("read dry note"), original);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("new note @cash^parent")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("CRLF sub-bullet");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note"),
+        concat!(
+            "## Tasks\r\n",
+            "- [ ] #task Parent ^parent\r\n",
+            "\t- new note [created::2026-07-31]\r\n",
+            "- ordinary\r\n",
+            "\t- tabbed elsewhere\r\n",
+        )
+    );
+}
+
+#[test]
+fn capture_sub_bullet_task_ref_recovers_shift_and_nests_clipboard() {
+    let temp = TempDir::new("bob-cli-sub-bullet-ref-clip");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    let parent = "- [?] #task Parent without ID";
+    let digest = hex::encode(Sha256::digest(parent.as_bytes()));
+    write_file(
+        &vault.join("cash.md"),
+        &format!("shifted line\n## Tasks\n{parent}\nTail\n"),
+    );
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'first\\nsecond\\n'\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--route")
+        .arg("cash")
+        .arg("--task-ref")
+        .arg(format!("1:{}", &digest[..8]))
+        .arg("--")
+        .arg("new note %")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("task-ref clipboard sub-bullet");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["parent_line"], 3);
+    assert_eq!(json["parent_status_symbol"], "?");
+    assert_eq!(json["parent_status_name"], "Unknown");
+    assert!(json.get("block_id").is_none(), "{json}");
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "shifted line\n",
+            "## Tasks\n",
+            "- [?] #task Parent without ID\n",
+            "\t- new note [created::2026-07-31]\n",
+            "\t  - first\n",
+            "\t  - second\n",
+            "Tail\n",
+        )
+    );
+}
+
+#[test]
+fn capture_sub_bullet_task_option_keeps_at_tokens_literal() {
+    let temp = TempDir::new("bob-cli-sub-bullet-task-option");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), "- [ ] #task Parent ^parent\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--route")
+        .arg("cash")
+        .arg("--task")
+        .arg("parent")
+        .arg("--")
+        .arg("mention @other literally")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("--task sub-bullet capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- mention @other literally [created::2026-07-31]\n",
+        )
+    );
+}
+
+#[test]
+fn capture_sub_bullet_errors_are_actionable_in_human_and_json_modes() {
+    struct ErrorCase<'a> {
+        name: &'a str,
+        note: Option<&'a str>,
+        args: Vec<String>,
+        exit: i32,
+        expected: &'a str,
+    }
+
+    let duplicate = "- [ ] #task One ^dup\n- [x] #task Two ^dup\n";
+    let repeated = "- [ ] #task Same\n- [ ] #task Same\n";
+    let repeated_digest = hex::encode(Sha256::digest(b"- [ ] #task Same"));
+    let cases = vec![
+        ErrorCase {
+            name: "missing-id",
+            note: Some("- [ ] #task Parent ^parent\n"),
+            args: vec!["body".into(), "@cash^missing".into()],
+            exit: 1,
+            expected: "no task with block ID ^missing in cash.md",
+        },
+        ErrorCase {
+            name: "suggestion",
+            note: Some("- [ ] #task Parent ^parent\n"),
+            args: vec!["body".into(), "@cash^paren".into()],
+            exit: 1,
+            expected: "did you mean ^parent?",
+        },
+        ErrorCase {
+            name: "not-task",
+            note: Some("ordinary paragraph ^parent\n"),
+            args: vec!["body".into(), "@cash^parent".into()],
+            exit: 1,
+            expected: "^parent in cash.md is not a task (line 1:",
+        },
+        ErrorCase {
+            name: "duplicate",
+            note: Some(duplicate),
+            args: vec!["body".into(), "@cash^dup".into()],
+            exit: 1,
+            expected: "block ID ^dup appears 2 times",
+        },
+        ErrorCase {
+            name: "stale-ref",
+            note: Some("- [ ] #task Parent\n"),
+            args: vec![
+                "--route".into(),
+                "cash".into(),
+                "--task-ref".into(),
+                "1:deadbeef".into(),
+                "body".into(),
+            ],
+            exit: 1,
+            expected: "selected task is no longer in cash.md",
+        },
+        ErrorCase {
+            name: "ambiguous-ref",
+            note: Some(repeated),
+            args: vec![
+                "--route".into(),
+                "cash".into(),
+                "--task-ref".into(),
+                format!("99:{}", &repeated_digest[..8]),
+                "body".into(),
+            ],
+            exit: 1,
+            expected: "selected task matches more than one line in cash.md",
+        },
+        ErrorCase {
+            name: "missing-note",
+            note: None,
+            args: vec!["body".into(), "@cash^parent".into()],
+            exit: 1,
+            expected: "note does not exist:",
+        },
+        ErrorCase {
+            name: "empty-marker-id",
+            note: Some("- [ ] #task Parent ^parent\n"),
+            args: vec!["body".into(), "@cash^".into()],
+            exit: 2,
+            expected: "sub-bullet capture requires a block ID",
+        },
+        ErrorCase {
+            name: "marker-no-route",
+            note: Some("- [ ] #task Parent ^parent\n"),
+            args: vec!["body".into(), "@^parent".into()],
+            exit: 2,
+            expected: "markers must use @<route>^<block-id>",
+        },
+        ErrorCase {
+            name: "task-no-route",
+            note: Some("- [ ] #task Parent ^parent\n"),
+            args: vec!["--task".into(), "parent".into(), "body".into()],
+            exit: 2,
+            expected: "--task requires --route",
+        },
+        ErrorCase {
+            name: "malformed-ref",
+            note: Some("- [ ] #task Parent\n"),
+            args: vec![
+                "--route".into(),
+                "cash".into(),
+                "--task-ref".into(),
+                "bad".into(),
+                "body".into(),
+            ],
+            exit: 2,
+            expected: "--task-ref must use <line>:<digest>",
+        },
+    ];
+
+    for case in cases {
+        for json in [false, true] {
+            let temp = TempDir::new(&format!(
+                "bob-cli-sub-bullet-error-{}-{}",
+                case.name,
+                if json { "json" } else { "human" }
+            ));
+            let vault = temp.path().join("vault");
+            fs::create_dir_all(&vault).expect("create vault");
+            if let Some(note) = case.note {
+                write_file(&vault.join("cash.md"), note);
+            }
+            let mut command = bob_command();
+            command.arg("capture").arg("-b").arg(&vault);
+            if json {
+                command.arg("-f").arg("json");
+            }
+            command.args(&case.args);
+            let output = command.output().expect("run failing capture");
+            assert_eq!(
+                output.status.code(),
+                Some(case.exit),
+                "{} / {json}: {}",
+                case.name,
+                format_output(&output)
+            );
+            let error_text = if json {
+                let value: serde_json::Value =
+                    serde_json::from_str(stdout(&output).trim())
+                        .expect("JSON error object");
+                assert_eq!(value["ok"], false);
+                value["error"].as_str().unwrap_or_default().to_string()
+            } else {
+                stderr(&output)
+            };
+            assert!(
+                error_text.contains(case.expected),
+                "{} / {json}: expected {:?} in {:?}",
+                case.name,
+                case.expected,
+                error_text
+            );
+        }
+    }
 }
 
 #[test]

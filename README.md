@@ -81,7 +81,7 @@ credentials are ready.
 bob capture [OPTIONS] [--] [TEXT]...
 ```
 
-Captures one task or ordinary Markdown bullet into the Bob vault without
+Captures one task, ordinary Markdown bullet, or task sub-bullet into the Bob vault without
 requiring desktop Obsidian to be open. Input whitespace is normalized to one
 line. Task mode writes `- [ ] #task <text> [created::YYYY-MM-DD]` and routes to
 `mac_inbox.md` by default; bullet mode writes into a selected non-`Tasks`
@@ -227,6 +227,25 @@ ambiguity, malformed marker, or duplicate block ID leaves both notes unchanged.
 `--dry-run` performs the same validation and reports both planned edits without
 writing either file.
 
+Use a leading or trailing `@<route>^<block-id>` marker to append an ordinary
+child bullet beneath an existing task, without creating a note or changing the
+parent task. For example,
+`bob capture '@cash^goog-exit' 'Called Morgan Stanley today.'` writes:
+
+```markdown
+- [*] #task Finish Google Exit Packet! [created::2026-07-31] ^goog-exit
+  - Called Morgan Stanley today. [created::2026-07-31]
+```
+
+The marker composes with terminal `s:<N>` and clipboard markers in either
+order. A scheduled property is rendered for consistency even though Obsidian
+Tasks does not read it from an ordinary bullet. Existing child indentation is
+copied; otherwise capture uses the note's dominant tab-or-two-space indentation
+and falls back to a tab. Line endings are preserved. The note and task must
+already exist, block IDs must be unique, and non-task block IDs are rejected.
+Missing IDs include a close-match suggestion when possible and direct callers
+to `bob capture-tasks -r <route>`.
+
 Append `#<section-prefix>` or a bare `#` to an `@route` token, as in
 `@notes#Ideas` or `@notes#`, to capture an ordinary Markdown bullet instead of
 a task. It renders as `- <text> [created::YYYY-MM-DD]` and is placed in a
@@ -249,6 +268,11 @@ section path is intended for picker integrations; typed `@route#prefix` tokens
 keep the prefix-matching behavior described above. Without `--section`,
 `--route` captures a task.
 
+With `--route`, `-t, --task BLOCK-ID` selects sub-bullet mode while keeping
+every `@token` in the text literal. Picker integrations may instead use the
+hidden `--task-ref <line>:<digest>` option, which also reaches parents without
+block IDs and recovers when unrelated edits shift the selected task's line.
+
 Useful options:
 
 - `-b, --bob-dir DIR`: Bob vault root; defaults to `BOB_DIR` or `~/bob`
@@ -258,6 +282,7 @@ Useful options:
 - `-n, --no-clip`: keep trailing `%...` clipboard markers literal
 - `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
 - `-s, --section TITLE`: with `--route`, force a bullet into the exact section
+- `-t, --task BLOCK-ID`: with `--route`, append beneath the identified task
 
 If `TEXT` is omitted and stdin is piped, `bob capture` reads one line from
 stdin. Put options before text, or use `--` when the task itself starts with a
@@ -265,7 +290,7 @@ hyphen. Hammerspoon integrations should call
 `bob capture --format json -- <text>` and parse the JSON object, whose stable
 fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`, and
-`placement`. The `kind` field is `"task"` or `"bullet"`, and `task_line` holds
+`placement`. The `kind` field is `"task"`, `"bullet"`, or `"sub_bullet"`, and `task_line` holds
 the rendered line for either kind. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
 
@@ -287,6 +312,10 @@ singular `snippet` field. `%1` uses the unchanged single-capture shape.
 Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 `block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`. Ordinary
 capture JSON remains unchanged.
+
+Sub-bullet results additionally include `parent_line`, `parent_text`,
+`parent_status_symbol`, and `parent_status_name`. They reuse `block_id` for the
+parent's ID, omitting it when a task-ref selected a parent without one.
 
 The Hammerspoon panel opened by `cmd+shift+ctrl+i` also supports incomplete
 trailing markers. Use `<task> @:` to choose an area or project and then enter a
