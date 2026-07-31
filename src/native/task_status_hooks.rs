@@ -342,25 +342,25 @@ struct PlannedChange {
 }
 
 #[derive(Debug, Clone)]
-struct TasksSettings {
-    global_filter: String,
+pub(crate) struct TasksSettings {
+    pub(crate) global_filter: String,
     done_statuses: BTreeSet<char>,
-    status_types: BTreeMap<char, TaskStatusType>,
-    status_definitions: Vec<TaskStatusDefinition>,
+    pub(crate) status_types: BTreeMap<char, TaskStatusType>,
+    pub(crate) status_definitions: Vec<TaskStatusDefinition>,
     status_settings_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TaskStatusDefinition {
-    symbol: String,
-    name: String,
+pub(crate) struct TaskStatusDefinition {
+    pub(crate) symbol: String,
+    pub(crate) name: String,
     next_status_symbol: String,
     available_as_command: bool,
     status_type: TaskStatusType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TaskStatusType {
+pub(crate) enum TaskStatusType {
     Todo,
     Done,
     InProgress,
@@ -383,7 +383,7 @@ impl TaskStatusType {
         }
     }
 
-    fn is_open(self) -> bool {
+    pub(crate) fn is_open(self) -> bool {
         matches!(self, Self::Todo | Self::InProgress | Self::OnHold)
     }
 
@@ -1404,7 +1404,7 @@ fn strikethrough_spans(line: &str) -> Vec<std::ops::Range<usize>> {
         .collect()
 }
 
-fn read_tasks_settings(vault: &Path) -> TasksSettings {
+pub(crate) fn read_tasks_settings(vault: &Path) -> TasksSettings {
     let mut settings = TasksSettings {
         global_filter: DEFAULT_GLOBAL_FILTER.to_string(),
         done_statuses: BTreeSet::from(['x', 'X']),

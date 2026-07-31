@@ -19,6 +19,7 @@ mod env;
 mod highlights_ref;
 mod markdown;
 mod nightly;
+mod note_tasks;
 mod notify;
 mod ob;
 mod plugins;

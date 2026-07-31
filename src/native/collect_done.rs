@@ -2309,10 +2309,14 @@ pub(crate) fn block_ids_in_markdown(contents: &str) -> Vec<String> {
 }
 
 fn block_ids_in_text(text: &str) -> Vec<String> {
+    trailing_block_id_in_line(text).into_iter().collect()
+}
+
+pub(crate) fn trailing_block_id_in_line(text: &str) -> Option<String> {
     block_id_occurrences_in_text(text)
         .into_iter()
+        .next()
         .map(|occurrence| occurrence.id)
-        .collect()
 }
 
 fn block_id_occurrences_in_text(text: &str) -> Vec<BlockIdOccurrence> {

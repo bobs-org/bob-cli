@@ -17,7 +17,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture_clip, collect_done, env as bob_env, pomodoro, style::Styler,
+    capture_clip, collect_done, env as bob_env, markdown, pomodoro,
+    style::Styler,
 };
 
 const COMMAND_NAME: &str = "bob capture";
@@ -1754,7 +1755,7 @@ fn markdown_headings<'a>(lines: &[LineSpan<'a>]) -> Vec<MarkdownHeading<'a>> {
             continue;
         }
 
-        if let Some((level, title)) = atx_heading(line.text) {
+        if let Some((level, title)) = markdown::atx_heading(line.text) {
             headings.push(MarkdownHeading {
                 line_index: index,
                 level,
@@ -1840,48 +1841,6 @@ fn fence_sequence(line: &str) -> Option<(FenceMarker, &str)> {
     }
 
     Some((FenceMarker { character, length }, &line[length..]))
-}
-
-/// Parse an ATX heading into its `(level, title)`, where `level` is the number
-/// of leading `#` characters.
-fn atx_heading(line: &str) -> Option<(usize, &str)> {
-    let line = markdown_indented_line(line)?;
-    let hashes = line
-        .as_bytes()
-        .iter()
-        .take_while(|byte| **byte == b'#')
-        .count();
-    if !(1..=6).contains(&hashes) {
-        return None;
-    }
-
-    if line
-        .as_bytes()
-        .get(hashes)
-        .is_some_and(|byte| !byte.is_ascii_whitespace())
-    {
-        return None;
-    }
-
-    Some((hashes, strip_closing_atx_hashes(line[hashes..].trim())))
-}
-
-fn strip_closing_atx_hashes(title: &str) -> &str {
-    let trimmed = title.trim_end();
-    let without_hashes = trimmed.trim_end_matches('#');
-    if without_hashes.len() == trimmed.len() {
-        return trimmed;
-    }
-
-    if without_hashes
-        .chars()
-        .next_back()
-        .map_or(true, char::is_whitespace)
-    {
-        without_hashes.trim_end()
-    } else {
-        trimmed
-    }
 }
 
 fn markdown_indented_line(line: &str) -> Option<&str> {

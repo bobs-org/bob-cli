@@ -62,3 +62,57 @@ pub(crate) fn strictly_closed_frontmatter_end(lines: &[&str]) -> Option<usize> {
         .skip(1)
         .find_map(|(index, line)| (line.trim_end() == "---").then_some(index))
 }
+
+/// Parse an ATX heading into its `(level, title)`, where `level` is the number
+/// of leading `#` characters.
+pub(crate) fn atx_heading(line: &str) -> Option<(usize, &str)> {
+    let line = markdown_indented_line(line)?;
+    let hashes = line
+        .as_bytes()
+        .iter()
+        .take_while(|byte| **byte == b'#')
+        .count();
+    if !(1..=6).contains(&hashes) {
+        return None;
+    }
+
+    if line
+        .as_bytes()
+        .get(hashes)
+        .is_some_and(|byte| !byte.is_ascii_whitespace())
+    {
+        return None;
+    }
+
+    Some((hashes, strip_closing_atx_hashes(line[hashes..].trim())))
+}
+
+fn strip_closing_atx_hashes(title: &str) -> &str {
+    let trimmed = title.trim_end();
+    let without_hashes = trimmed.trim_end_matches('#');
+    if without_hashes.len() == trimmed.len() {
+        return trimmed;
+    }
+
+    if without_hashes
+        .chars()
+        .next_back()
+        .is_none_or(char::is_whitespace)
+    {
+        without_hashes.trim_end()
+    } else {
+        trimmed
+    }
+}
+
+fn markdown_indented_line(line: &str) -> Option<&str> {
+    let spaces = line
+        .as_bytes()
+        .iter()
+        .take_while(|byte| **byte == b' ')
+        .count();
+    if spaces > 3 {
+        return None;
+    }
+    Some(&line[spaces..])
+}
