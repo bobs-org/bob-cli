@@ -4846,6 +4846,21 @@ fn capture_sub_bullet_errors_are_actionable_in_human_and_json_modes() {
             expected: "markers must use @<route>^<block-id>",
         },
         ErrorCase {
+            name: "invalid-route-char",
+            note: Some("- [ ] #task Parent ^parent\n"),
+            args: vec!["body".into(), "@bad.route^parent".into()],
+            exit: 2,
+            expected: "sub-bullet capture route must contain only A-Z, a-z, 0-9, '_' or '-'",
+        },
+        ErrorCase {
+            name: "invalid-block-id-char",
+            note: Some("- [ ] #task Parent ^parent\n"),
+            args: vec!["body".into(), "@cash^bad.id".into()],
+            exit: 2,
+            expected:
+                "sub-bullet capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'",
+        },
+        ErrorCase {
             name: "task-no-route",
             note: Some("- [ ] #task Parent ^parent\n"),
             args: vec!["--task".into(), "parent".into(), "body".into()],
