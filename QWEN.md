@@ -67,3 +67,8 @@ skill to review their contents. Do not read canonical memory files directly.
 
 **`sase/memory/cli_rules.md`**  
 Read anytime new CLI subcommands or options are added.
+
+**`sase/memory/sase_beads.md`**  
+Read before creating, updating, closing, or querying sase beads — bead types and tiers, the status lifecycle agents must
+never hand-edit, task-bead triage, phase-bead description prefixes, and non-cascading close, resolution, and note
+semantics.
