@@ -320,13 +320,19 @@ Sub-bullet results additionally include `parent_line`, `parent_text`,
 parent's ID, omitting it when a task-ref selected a parent without one.
 
 The Hammerspoon panel opened by `cmd+shift+ctrl+i` also supports incomplete
-trailing markers. Use `<task> @:` to choose an area or project and then enter a
-block ID, `<task> @route:` to prompt only for the block ID, or
+interactive markers. Use `<task> @:` to choose an area or project and then enter
+a block ID, `<task> @route:` to prompt only for the block ID, or
 `<task> @:block-id` to prompt only for the destination. A complete
 `<task> @route:block-id` request captures immediately. The panel validates
 each supplied or prompted component, emits only the canonical colon marker,
 and retains staged values when validation or capture fails. Existing `@`,
 `@#`, and `@route#` picker flows are unchanged.
+
+Supported terminal `%`, `%N`, `%header`, and `s:<N>` markers may appear on
+either side of these interactive `@...` tokens and survive the target, section,
+block-ID, or task picker. For example, `<task> @sase# %` opens the section
+picker for `sase.md`; the panel consumes only `@sase#`, and `bob capture` still
+owns clipboard and schedule interpretation after the section is chosen.
 
 Sub-bullet capture has the matching four-way `^` family. Use `<text> @^` to
 choose a destination and then one of its open tasks, `<text> @route^` to choose
