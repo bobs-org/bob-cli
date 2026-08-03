@@ -253,6 +253,14 @@ an independent scheduled date per task. On a `^prj` lifecycle task, priority
 stays inline and the rolled date goes to project frontmatter, matching ordinary
 `scheduled` picker behavior for project notes.
 
+After a priority write, the Obsidian notice shows the chosen P-level, the
+`[priority:: ...]` field that landed, the rolled ISO date with weekday, and the
+date's distance from today. Counted sessions show the rolled scheduled span and
+relative span instead of a single date. The notice also includes chips for
+status side effects such as Blocked marking, propagated project schedules,
+removed `#hide` tags, recovered tasks, unchanged tasks, and ambiguous scheduled
+fields.
+
 When the `scheduled` date picker opens on a task that already has a configured
 priority, it pins a priority roll suggestion above the normal date presets.
 Press `Ctrl+R` in that date picker stage to re-roll the suggestion before
