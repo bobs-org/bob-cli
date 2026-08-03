@@ -645,10 +645,11 @@ pub(crate) fn plan(
     header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
+    indent: &str,
 ) -> Result<ClipPlan, String> {
     let mut reservations = FileReservations::default();
     let output =
-        plan_entry(bob_dir, header, clipboard, now, &mut reservations)?;
+        plan_entry(bob_dir, header, clipboard, now, indent, &mut reservations)?;
     Ok(ClipPlan {
         output,
         files: reservations.files,
@@ -659,13 +660,14 @@ pub(crate) fn plan_history(
     bob_dir: &Path,
     clipboards: &[String],
     now: NaiveDateTime,
+    indent: &str,
 ) -> Result<ClipPlan, String> {
     let mut reservations = FileReservations::default();
     let entries = clipboards
         .iter()
         .enumerate()
         .map(|(index, clipboard)| {
-            plan_entry(bob_dir, None, clipboard, now, &mut reservations)
+            plan_entry(bob_dir, None, clipboard, now, indent, &mut reservations)
                 .map_err(|error| {
                     format!("clipboard history entry {}: {error}", index + 1)
                 })
@@ -697,6 +699,7 @@ fn plan_entry(
     header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
+    indent: &str,
     reservations: &mut FileReservations,
 ) -> Result<ClipOutput, String> {
     let header = header.map(rendered_header);
@@ -733,12 +736,13 @@ fn plan_entry(
                 PathState::File(path) => Some(path.as_path()),
                 _ => None,
             }),
+            indent,
             reservations,
         );
     }
 
     if let Some(items) = flat_unordered_list_items(&lines) {
-        return Ok(lines_output(header.as_deref(), &items));
+        return Ok(lines_output(header.as_deref(), &items, indent));
     }
 
     if lines.len() == 1 {
@@ -748,10 +752,11 @@ fn plan_entry(
                 header.as_deref(),
                 clipboard,
                 now,
+                indent,
                 reservations,
             )
         } else {
-            Ok(inline_output(header.as_deref(), lines[0]))
+            Ok(inline_output(header.as_deref(), lines[0], indent))
         };
     }
 
@@ -764,11 +769,12 @@ fn plan_entry(
             header.as_deref(),
             clipboard,
             now,
+            indent,
             reservations,
         );
     }
 
-    Ok(lines_output(header.as_deref(), &lines))
+    Ok(lines_output(header.as_deref(), &lines, indent))
 }
 
 fn flat_unordered_list_items<'a>(lines: &[&'a str]) -> Option<Vec<&'a str>> {
@@ -912,31 +918,44 @@ fn is_structural_line(line: &str) -> bool {
     digit_count > 0 && trimmed[digit_count..].starts_with(". ")
 }
 
-fn rendered_lines(header: Option<&str>, items: &[String]) -> Vec<String> {
+fn rendered_lines(
+    header: Option<&str>,
+    items: &[String],
+    indent: &str,
+) -> Vec<String> {
     if let Some(header) = header {
         if items.len() == 1 {
-            return vec![format!("  - **{header}:** {}", items[0])];
+            return vec![format!("{indent}- **{header}:** {}", items[0])];
         }
-        let mut lines = vec![format!("  - **{header}:**")];
-        lines.extend(items.iter().map(|item| format!("    - {item}")));
+        let mut lines = vec![format!("{indent}- **{header}:**")];
+        lines.extend(
+            items.iter().map(|item| format!("{indent}{indent}- {item}")),
+        );
         return lines;
     }
 
-    items.iter().map(|item| format!("  - {item}")).collect()
+    items
+        .iter()
+        .map(|item| format!("{indent}- {item}"))
+        .collect()
 }
 
-fn inline_output(header: Option<&str>, text: &str) -> ClipOutput {
+fn inline_output(header: Option<&str>, text: &str, indent: &str) -> ClipOutput {
     ClipOutput {
         header: header.map(str::to_string),
         mode: ClipMode::Inline,
-        lines: rendered_lines(header, &[text.to_string()]),
+        lines: rendered_lines(header, &[text.to_string()], indent),
         attachments: Vec::new(),
         snippet: None,
         entries: Vec::new(),
     }
 }
 
-fn lines_output(header: Option<&str>, clipboard_lines: &[&str]) -> ClipOutput {
+fn lines_output(
+    header: Option<&str>,
+    clipboard_lines: &[&str],
+    indent: &str,
+) -> ClipOutput {
     let items = clipboard_lines
         .iter()
         .map(|line| (*line).to_string())
@@ -944,7 +963,7 @@ fn lines_output(header: Option<&str>, clipboard_lines: &[&str]) -> ClipOutput {
     ClipOutput {
         header: header.map(str::to_string),
         mode: ClipMode::Lines,
-        lines: rendered_lines(header, &items),
+        lines: rendered_lines(header, &items, indent),
         attachments: Vec::new(),
         snippet: None,
         entries: Vec::new(),
@@ -955,6 +974,7 @@ fn plan_attachments<'a>(
     bob_dir: &Path,
     header: Option<&str>,
     sources: impl IntoIterator<Item = &'a Path>,
+    indent: &str,
     reservations: &mut FileReservations,
 ) -> Result<ClipOutput, String> {
     let mut attachments = Vec::new();
@@ -1000,7 +1020,7 @@ fn plan_attachments<'a>(
         .iter()
         .map(attachment_reference)
         .collect::<Vec<_>>();
-    let lines = rendered_lines(header, &references);
+    let lines = rendered_lines(header, &references, indent);
 
     Ok(ClipOutput {
         header: header.map(str::to_string),
@@ -1160,6 +1180,7 @@ fn plan_snippet(
     header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
+    indent: &str,
     reservations: &mut FileReservations,
 ) -> Result<ClipOutput, String> {
     let slug = snippet_slug(clipboard);
@@ -1206,7 +1227,7 @@ fn plan_snippet(
     Ok(ClipOutput {
         header: header.map(str::to_string),
         mode: ClipMode::Snippet,
-        lines: rendered_lines(header, &[format!("[[{reference}]]")]),
+        lines: rendered_lines(header, &[format!("[[{reference}]]")], indent),
         attachments: Vec::new(),
         snippet: Some(saved),
         entries: Vec::new(),
@@ -1317,6 +1338,23 @@ fn write_new_file_atomically(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plan(
+        bob_dir: &Path,
+        header: Option<&str>,
+        clipboard: &str,
+        now: NaiveDateTime,
+    ) -> Result<ClipPlan, String> {
+        super::plan(bob_dir, header, clipboard, now, "  ")
+    }
+
+    fn plan_history(
+        bob_dir: &Path,
+        clipboards: &[String],
+        now: NaiveDateTime,
+    ) -> Result<ClipPlan, String> {
+        super::plan_history(bob_dir, clipboards, now, "  ")
+    }
 
     fn test_root(label: &str) -> PathBuf {
         let sequence = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -1733,6 +1771,53 @@ mod tests {
             snippet.output.snippet.as_deref(),
             Some("file/clip-20260715-131415-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.md")
         );
+    }
+
+    #[test]
+    fn tab_indent_renders_every_clipboard_shape() {
+        assert_eq!(
+            rendered_lines(None, &["one".to_string(), "two".to_string()], "\t"),
+            ["\t- one", "\t- two"]
+        );
+        assert_eq!(
+            rendered_lines(Some("CLIP"), &["one".to_string()], "\t"),
+            ["\t- **CLIP:** one"]
+        );
+        assert_eq!(
+            rendered_lines(
+                Some("CLIP"),
+                &["one".to_string(), "two".to_string()],
+                "\t",
+            ),
+            ["\t- **CLIP:**", "\t\t- one", "\t\t- two"]
+        );
+
+        let root = test_root("tab-indent-shapes");
+        let vault = root.join("vault");
+        let attachment = root.join("image.png");
+        fs::create_dir_all(&vault).expect("vault");
+        fs::write(&attachment, b"image").expect("attachment");
+        let attachment_plan = super::plan(
+            &vault,
+            Some("photo"),
+            attachment.to_str().expect("UTF-8 attachment path"),
+            test_now(),
+            "\t",
+        )
+        .expect("tab-indented attachment");
+        assert_eq!(
+            attachment_plan.output.lines,
+            ["\t- **PHOTO:** ![[img/image.png|400]]"]
+        );
+
+        let snippet_plan =
+            super::plan(&vault, None, "# Structured\n\nbody", test_now(), "\t")
+                .expect("tab-indented snippet");
+        assert_eq!(
+            snippet_plan.output.lines,
+            ["\t- [[file/clip-20260715-131415-structured]]"]
+        );
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

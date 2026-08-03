@@ -144,15 +144,18 @@ such as the ten-attachment maximum apply per entry. All resulting lines are
 flattened in source order as direct, headerless children; entries receive no
 index labels, container bullets, or separators.
 
+Clipboard children use the target note's dominant tab-or-two-space indentation
+and fall back to a tab, matching the sub-bullet capture rule.
+
 Without a header, one item is written as a direct child and multiple items are
 written as direct sibling children:
 
 ```markdown
 - [ ] #task Parent
-  - clipboard text
+	- clipboard text
 - [ ] #task Another parent
-  - first line
-  - second line
+	- first line
+	- second line
 ```
 
 For example, a clipboard containing this flat Markdown list:
@@ -167,9 +170,9 @@ is normalized beneath the captured parent without doubling the source markers:
 
 ```markdown
 - [ ] #task Parent
-  - first copied item
-  - second item with **inline Markdown**
-  - [ ] third checkbox item
+	- first copied item
+	- second item with **inline Markdown**
+	- [ ] third checkbox item
 ```
 
 An explicit header stays inline for one item and owns a nested list for
@@ -177,11 +180,11 @@ multiple items:
 
 ```markdown
 - [ ] #task Parent
-  - **BUILD LOG:** clipboard text
+	- **BUILD LOG:** clipboard text
 - [ ] #task Another parent
-  - **BUILD LOG:**
-    - first line
-    - second line
+	- **BUILD LOG:**
+		- first line
+		- second line
 ```
 
 Attachment names are sanitized for Obsidian links. An existing identical file

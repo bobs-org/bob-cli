@@ -84,7 +84,9 @@ every route kind in either terminal order. Each value is classified separately: 
 small text stays inline; 2-10 flat text lines and 1-10 flat unordered Markdown \
 list items become child bullets, with source list markers removed; copied file \
 paths are saved under img/ or file/; and long or other Markdown-structured text \
-is preserved in a timestamped file/clip-*.md snippet. History captures fail without writing \
+is preserved in a timestamped file/clip-*.md snippet. Clipboard children use \
+the target note's dominant tab-or-two-space indentation and fall back to a tab. \
+History captures fail without writing \
 unless the exact requested count succeeds. Use --clip[=HEADER] to force one live \
 capture while keeping '%' tokens literal; --clip=<digits> requests a numeric \
 header. Bare --clip also captures without a header. Use --no-clip to keep a \
@@ -427,6 +429,9 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         ),
     };
     let kind_label = capture_kind_label(&parsed.kind);
+    let relative_target = relative_target(parsed.route.as_deref());
+    let target = request.bob_dir.join(&relative_target);
+    let clip_indent = parsed.clip.as_ref().map(|_| clip_indent_unit(&target));
     let clip_plan = match parsed.clip.as_ref() {
         Some(ClipRequest::Current { header }) => {
             let clipboard =
@@ -437,6 +442,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
                     header.as_deref(),
                     &clipboard,
                     now,
+                    clip_indent.as_deref().unwrap_or("\t"),
                 )
                 .map_err(CaptureError::io)?,
             )
@@ -445,16 +451,27 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             let clipboard =
                 capture_clip::read_clipboard().map_err(CaptureError::io)?;
             Some(
-                capture_clip::plan(&request.bob_dir, None, &clipboard, now)
-                    .map_err(CaptureError::io)?,
+                capture_clip::plan(
+                    &request.bob_dir,
+                    None,
+                    &clipboard,
+                    now,
+                    clip_indent.as_deref().unwrap_or("\t"),
+                )
+                .map_err(CaptureError::io)?,
             )
         }
         Some(ClipRequest::History { count }) => {
             let clipboards = capture_clip::read_clipboard_history(count.get())
                 .map_err(CaptureError::io)?;
             Some(
-                capture_clip::plan_history(&request.bob_dir, &clipboards, now)
-                    .map_err(CaptureError::io)?,
+                capture_clip::plan_history(
+                    &request.bob_dir,
+                    &clipboards,
+                    now,
+                    clip_indent.as_deref().unwrap_or("\t"),
+                )
+                .map_err(CaptureError::io)?,
             )
         }
         None => None,
@@ -465,8 +482,6 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         }
         None => capture_line.clone(),
     };
-    let relative_target = relative_target(parsed.route.as_deref());
-    let target = request.bob_dir.join(&relative_target);
     let note_plan = match &parsed.kind {
         CaptureKind::SubBullet {
             target: sub_bullet_target,
@@ -943,6 +958,15 @@ fn dominant_indent_unit(lines: &[LineSpan<'_>]) -> Option<&'static str> {
     } else {
         Some("  ")
     }
+}
+
+fn clip_indent_unit(target: &Path) -> String {
+    let Ok(contents) = fs::read_to_string(target) else {
+        return "\t".to_string();
+    };
+    dominant_indent_unit(&line_spans(&contents))
+        .unwrap_or("\t")
+        .to_string()
 }
 
 fn leading_whitespace(line: &str) -> &str {

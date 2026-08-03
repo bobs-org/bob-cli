@@ -3230,7 +3230,7 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
     assert_eq!(json["clip"]["mode"], "inline");
     assert_eq!(
         json["clip"]["lines"],
-        serde_json::json!(["  - **BUILD LOG:** hello from clipboard"])
+        serde_json::json!(["\t- **BUILD LOG:** hello from clipboard"])
     );
     assert_eq!(
         fs::read_to_string(vault.join("work.md")).expect("read work note"),
@@ -3239,7 +3239,7 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
             "## Tasks\n",
             "- [ ] #task Existing\n",
             "- [ ] #task do thing [created::2026-07-15] [scheduled::2026-07-16]\n",
-            "  - **BUILD LOG:** hello from clipboard\n",
+            "\t- **BUILD LOG:** hello from clipboard\n",
         )
     );
 
@@ -3261,7 +3261,7 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
             "## Ideas\n",
             "\n",
             "- jot idea [created::2026-07-15]\n",
-            "  - hello from clipboard\n",
+            "\t- hello from clipboard\n",
         )
     );
 
@@ -3286,7 +3286,7 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
             "## Tasks\n",
             "\n",
             "- [*] #task ship it [created::2026-07-15] ^ship-id\n",
-            "  - **LOG:** hello from clipboard\n",
+            "\t- **LOG:** hello from clipboard\n",
         )
     );
     assert_eq!(
@@ -3322,13 +3322,13 @@ fn capture_headerless_clip_marker_renders_under_tasks_and_pomodoros() {
     assert_eq!(json["clip"]["header"], serde_json::Value::Null);
     assert_eq!(
         json["clip"]["lines"],
-        serde_json::json!(["  - clipboard child"])
+        serde_json::json!(["\t- clipboard child"])
     );
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
         concat!(
             "- [ ] #task task parent [created::2026-07-15]\n",
-            "  - clipboard child\n",
+            "\t- clipboard child\n",
         )
     );
 
@@ -3353,12 +3353,81 @@ fn capture_headerless_clip_marker_renders_under_tasks_and_pomodoros() {
             "## Tasks\n",
             "\n",
             "- [*] #task Pomodoro parent [created::2026-07-15] ^clip-id\n",
-            "  - clipboard child\n",
+            "\t- clipboard child\n",
         )
     );
     assert_eq!(
         fs::read_to_string(day_file).expect("read day"),
         "## Pomodoros\n- [ ] Current\n  - [[dev#^clip-id]]\n"
+    );
+}
+
+#[test]
+fn capture_clip_uses_each_target_notes_indent_and_tabs_for_a_fresh_note() {
+    let temp = TempDir::new("bob-cli-capture-clip-target-indent");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    write_file(
+        &vault.join("tabbed.md"),
+        "# Tabbed\n- [ ] #task Existing\n\t- existing child\n",
+    );
+    write_file(
+        &vault.join("spaced.md"),
+        "# Spaced\n- [ ] #task Existing\n  - existing child\n",
+    );
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'shared clipboard\n'\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["tab parent", "%", "@tabbed"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture into tab-indented note");
+    assert_success(&output);
+    assert!(fs::read_to_string(vault.join("tabbed.md"))
+        .expect("read tab-indented note")
+        .contains(concat!(
+            "- [ ] #task tab parent [created::2026-07-15]\n",
+            "\t- shared clipboard\n",
+        )));
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["space parent", "%", "@spaced"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture into two-space-indented note");
+    assert_success(&output);
+    assert!(fs::read_to_string(vault.join("spaced.md"))
+        .expect("read two-space-indented note")
+        .contains(concat!(
+            "- [ ] #task space parent [created::2026-07-15]\n",
+            "  - shared clipboard\n",
+        )));
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["fresh parent", "%"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture into fresh inbox note");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md"))
+            .expect("read fresh inbox note"),
+        concat!(
+            "- [ ] #task fresh parent [created::2026-07-15]\n",
+            "\t- shared clipboard\n",
+        )
     );
 }
 
@@ -3398,9 +3467,9 @@ fn capture_flat_clipboard_list_routes_normalized_children() {
     assert_eq!(
         json["clip"]["lines"],
         serde_json::json!([
-            "  - Use `@` symbol instead of `#` for tribe prefix.",
-            "  - Support expansion of families within clan.",
-            "  - Family members must be launched sequentially.",
+            "\t- Use `@` symbol instead of `#` for tribe prefix.",
+            "\t- Support expansion of families within clan.",
+            "\t- Family members must be launched sequentially.",
         ])
     );
     assert_eq!(
@@ -3411,9 +3480,9 @@ fn capture_flat_clipboard_list_routes_normalized_children() {
         fs::read_to_string(vault.join("foo.md")).expect("read routed note"),
         concat!(
             "- [ ] #task foo bar baz [created::2026-07-17]\n",
-            "  - Use `@` symbol instead of `#` for tribe prefix.\n",
-            "  - Support expansion of families within clan.\n",
-            "  - Family members must be launched sequentially.\n",
+            "\t- Use `@` symbol instead of `#` for tribe prefix.\n",
+            "\t- Support expansion of families within clan.\n",
+            "\t- Family members must be launched sequentially.\n",
         )
     );
 }
@@ -3443,13 +3512,13 @@ fn capture_percent_one_is_an_exact_single_clip_alias() {
         serde_json::from_str(stdout(&output).trim()).expect("single JSON");
     assert_eq!(json["clip"]["header"], serde_json::Value::Null);
     assert_eq!(json["clip"]["mode"], "inline");
-    assert_eq!(json["clip"]["lines"], serde_json::json!(["  - live value"]));
+    assert_eq!(json["clip"]["lines"], serde_json::json!(["\t- live value"]));
     assert!(json["clip"].get("entries").is_none(), "{json}");
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
         concat!(
             "- [ ] #task single [created::2026-07-15]\n",
-            "  - live value\n",
+            "\t- live value\n",
         )
     );
 }
@@ -3491,10 +3560,10 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
     assert_eq!(
         json["clip"]["lines"],
         serde_json::json!([
-            "  - live value",
-            "  - older one",
-            "  - older two",
-            "  - oldest",
+            "\t- live value",
+            "\t- older one",
+            "\t- older two",
+            "\t- oldest",
         ])
     );
     assert_eq!(json["clip"]["entries"].as_array().unwrap().len(), 3);
@@ -3506,10 +3575,10 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
         concat!(
             "- [ ] #task research links [created::2026-07-15] [scheduled::2026-07-16]\n",
-            "  - live value\n",
-            "  - older one\n",
-            "  - older two\n",
-            "  - oldest\n",
+            "\t- live value\n",
+            "\t- older one\n",
+            "\t- older two\n",
+            "\t- oldest\n",
         )
     );
 
@@ -3527,9 +3596,9 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
     assert_success(&output);
     let human = stdout(&output);
     assert!(
-        human.contains("  - live value")
-            && human.contains("  - older one")
-            && human.contains("  - oldest")
+        human.contains("\t- live value")
+            && human.contains("\t- older one")
+            && human.contains("\t- oldest")
             && !human.contains("entry 1")
             && !human.contains("**CLIP:**"),
         "{}",
@@ -3542,10 +3611,10 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
             "## Ideas\n",
             "\n",
             "- history bullet [created::2026-07-15]\n",
-            "  - live value\n",
-            "  - older one\n",
-            "  - older two\n",
-            "  - oldest\n",
+            "\t- live value\n",
+            "\t- older one\n",
+            "\t- older two\n",
+            "\t- oldest\n",
         )
     );
 
@@ -3571,10 +3640,10 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
             "## Tasks\n",
             "\n",
             "- [*] #task history pomodoro [created::2026-07-15] ^history-id\n",
-            "  - live value\n",
-            "  - older one\n",
-            "  - older two\n",
-            "  - oldest\n",
+            "\t- live value\n",
+            "\t- older one\n",
+            "\t- older two\n",
+            "\t- oldest\n",
         )
     );
     assert_eq!(
@@ -3736,7 +3805,7 @@ fn capture_clip_options_force_or_disable_marker_parsing() {
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
         concat!(
             "- [ ] #task keep %literal [created::2026-07-15]\n",
-            "  - **REVIEW NOTES:** forced text\n",
+            "\t- **REVIEW NOTES:** forced text\n",
         )
     );
 
@@ -3762,13 +3831,13 @@ fn capture_clip_options_force_or_disable_marker_parsing() {
     assert_eq!(json["clip"]["header"], serde_json::Value::Null);
     assert_eq!(
         json["clip"]["lines"],
-        serde_json::json!(["  - forced text"])
+        serde_json::json!(["\t- forced text"])
     );
     let inbox =
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
     assert!(inbox.contains(concat!(
         "- [ ] #task headerless %literal [created::2026-07-15]\n",
-        "  - forced text\n",
+        "\t- forced text\n",
     )));
     assert!(!inbox.contains("**CLIP:**"));
 
@@ -3789,7 +3858,7 @@ fn capture_clip_options_force_or_disable_marker_parsing() {
             .expect("read inbox")
             .contains(concat!(
                 "#task numeric header %3 [created::2026-07-15]\n",
-                "  - **20:** forced text"
+                "\t- **20:** forced text"
             )),
         "numeric forced header should remain available"
     );
@@ -3933,7 +4002,7 @@ fn capture_clip_saves_attachments_snippets_and_reports_dry_run() {
     );
     assert!(fs::read_to_string(vault.join("mac_inbox.md"))
         .expect("read inbox")
-        .contains("  - ![[img/screen-shot.PNG|400]]"));
+        .contains("\t- ![[img/screen-shot.PNG|400]]"));
 
     let output = bob_command()
         .arg("capture")
@@ -3973,7 +4042,7 @@ fn capture_clip_saves_attachments_snippets_and_reports_dry_run() {
     assert_eq!(json["clip"]["mode"], "snippet");
     assert_eq!(
         json["clip"]["lines"],
-        serde_json::json!(["  - [[file/clip-20260715-131415-heading]]"])
+        serde_json::json!(["\t- [[file/clip-20260715-131415-heading]]"])
     );
     assert_eq!(
         json["clip"]["snippet"],
@@ -4722,8 +4791,8 @@ fn capture_sub_bullet_task_ref_recovers_shift_and_nests_clipboard() {
             "## Tasks\n",
             "- [?] #task Parent without ID\n",
             "\t- new note\n",
-            "\t  - first\n",
-            "\t  - second\n",
+            "\t\t- first\n",
+            "\t\t- second\n",
             "Tail\n",
         )
     );
