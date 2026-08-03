@@ -222,6 +222,43 @@ Removing or editing project frontmatter outside `Ctrl+D` cannot identify which
 task fields were propagated, so those fields remain. Prefer `Ctrl+D` when
 unscheduling a project.
 
+### Priority property and scheduled rolls
+
+The same `Ctrl+Shift+P` picker offers a `priority` property for ordinary tasks
+and `^prj` lifecycle tasks. The picker shows P-level labels, but the Markdown
+stores Obsidian Tasks' native priority names:
+
+| Picker label | Written field        | Random `scheduled` window |
+| ------------ | -------------------- | ------------------------- |
+| `P2`         | `[priority:: high]`  | 2-7 days from today       |
+| `P3`         | `[priority:: medium]` | 8-30 days from today     |
+| `P4`         | `[priority:: low]`   | 31-90 days from today     |
+
+The split is deliberate. With the vault's Dataview task format, `priority` is a
+reserved Tasks key whose accepted values are `highest`, `high`, `medium`,
+`low`, and `lowest`. Tasks parsers read trailing inline fields right-to-left and
+stop at the first unrecognized field, so a literal `[priority:: P2]` at the end
+of a task would also hide earlier `[scheduled:: ...]`, `[id:: ...]`, or
+`[dependsOn:: ...]` fields from task queries and dependency handling.
+
+A task with no priority field is implicit P1. The picker therefore has no P1
+row; press `Ctrl+D` on the `priority` row to clear the field. Clearing priority
+does not remove or re-roll `scheduled`, because the rolled date is treated as an
+explicit commitment once written.
+
+Choosing P2, P3, or P4 writes the priority and rolls a `scheduled` date inside
+that level's configured window in one guarded edit. Counted sessions
+(`N<Ctrl+Shift+P>`) apply the same priority to each selected task while rolling
+an independent scheduled date per task. On a `^prj` lifecycle task, priority
+stays inline and the rolled date goes to project frontmatter, matching ordinary
+`scheduled` picker behavior for project notes.
+
+When the `scheduled` date picker opens on a task that already has a configured
+priority, it pins a priority roll suggestion above the normal date presets.
+Press `Ctrl+R` in that date picker stage to re-roll the suggestion before
+choosing it. In counted sessions, the suggestion appears only when every counted
+task has the same configured priority.
+
 ## Warnings
 
 Warnings do not make the command fail and are not auto-fixed:
