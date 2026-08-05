@@ -104,6 +104,29 @@ It is recognized only in the terminal token region and may appear on either
 side of a trailing route marker. The token is removed from the body and adds
 `[scheduled::YYYY-MM-DD]` after the created stamp.
 
+Append a lowercase `p:<N>` token to write a priority level, where `N` selects
+the Nth level configured in `~/.config/bob/config.yml`, `bob capture` looks
+for `BOB_CONFIG_FILE`, then `$XDG_CONFIG_HOME/bob/config.yml`, then
+`~/.config/bob/config.yml` — the same file the Obsidian picker reads. Today
+that file configures four levels:
+
+| N | Label | Value    | Day window |
+| - | ----- | -------- | ---------- |
+| 1 | `P1`  | `high`   | 2-7        |
+| 2 | `P2`  | `medium` | 8-30       |
+| 3 | `P3`  | `low`    | 31-90      |
+| 4 | `P4`  | `lowest` | 91-365     |
+
+The token writes `[priority::<value>]` and rolls a random
+`[scheduled::YYYY-MM-DD]` date inside that level's day window. Each capture
+rolls independently, so a `--dry-run` preview differs from the real capture
+unless `BOB_PRIORITY_ROLL_SEED` is set. A task with no priority field is
+implicitly P0 (do it now, no roll), so there is no `p:0`. An explicit `s:<N>`
+wins the scheduled date; `p:<N>` still writes the priority. An out-of-range
+`p:<N>` fails with a usage error naming the configured levels instead of
+staying literal. Capture always writes `[ ]`; `bob task-status-hooks` is what
+later marks a future-scheduled task Blocked.
+
 Append one of these whitespace-delimited terminal markers to capture clipboard
 content beneath the new task or bullet:
 
@@ -117,11 +140,12 @@ content beneath the new task or bullet:
   and replace underscores with spaces; for example, `%build_log` renders
   `**BUILD LOG:**`.
 
-The marker composes with `s:<N>`, ordinary routes, bullet routes, and Pomodoro
-routes in either terminal order. Invalid `%...` tokens and `%` tokens in the
-middle of the body stay literal. A counted capture requires every requested
-entry to read, normalize, classify, and plan successfully; insufficient or
-invalid history aborts the capture instead of writing a partial result.
+The marker composes with `s:<N>`, `p:<N>`, ordinary routes, bullet routes, and
+Pomodoro routes in either terminal order. Invalid `%...` tokens and `%` tokens
+in the middle of the body stay literal. A counted capture requires every
+requested entry to read, normalize, classify, and plan successfully;
+insufficient or invalid history aborts the capture instead of writing a
+partial result.
 
 Clipboard content is rendered according to its shape:
 
@@ -241,9 +265,9 @@ parent task. For example,
   - Called Morgan Stanley today.
 ```
 
-The marker composes with terminal `s:<N>` and clipboard markers in either
-order. Scheduled properties are still rendered for consistency even though
-Obsidian Tasks does not read them from an ordinary bullet. Existing child
+The marker composes with terminal `s:<N>`, `p:<N>`, and clipboard markers in
+either order. Scheduled properties are still rendered for consistency even
+though Obsidian Tasks does not read them from an ordinary bullet. Existing child
 indentation is copied; otherwise capture uses the note's dominant tab-or-two-space
 indentation and falls back to a tab. Line endings are preserved. The note and
 task must
@@ -299,6 +323,10 @@ fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 the rendered line for either kind. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
 
+A `p:<N>` capture additionally includes `priority` (the written value, such as
+`"high"`) and `priority_label` (the configured label, such as `"P1"`); a
+capture without `p:<N>` omits both fields.
+
 Clipboard captures additionally include a `clip` object. Single captures keep
 the existing shape: `header`, `mode` (`"inline"`, `"lines"`, `"attachments"`,
 or `"snippet"`), `lines` (the exact rendered child lines), and `attachments`.
@@ -331,11 +359,12 @@ each supplied or prompted component, emits only the canonical colon marker,
 and retains staged values when validation or capture fails. Existing `@`,
 `@#`, and `@route#` picker flows are unchanged.
 
-Supported terminal `%`, `%N`, `%header`, and `s:<N>` markers may appear on
-either side of these interactive `@...` tokens and survive the target, section,
-block-ID, or task picker. For example, `<task> @sase# %` opens the section
-picker for `sase.md`; the panel consumes only `@sase#`, and `bob capture` still
-owns clipboard and schedule interpretation after the section is chosen.
+Supported terminal `%`, `%N`, `%header`, `s:<N>`, and `p:<N>` markers may
+appear on either side of these interactive `@...` tokens and survive the
+target, section, block-ID, or task picker. For example, `<task> @sase# %`
+opens the section picker for `sase.md`; the panel consumes only `@sase#`, and
+`bob capture` still owns clipboard, schedule, and priority interpretation
+after the section is chosen.
 
 Sub-bullet capture has the matching four-way `^` family. Use `<text> @^` to
 choose a destination and then one of its open tasks, `<text> @route^` to choose

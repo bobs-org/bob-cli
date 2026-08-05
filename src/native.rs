@@ -15,6 +15,7 @@ mod capture_sections;
 mod capture_targets;
 mod capture_tasks;
 mod collect_done;
+mod config;
 mod dataview;
 mod env;
 mod highlights_ref;

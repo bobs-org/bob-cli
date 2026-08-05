@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture_clip, collect_done, env as bob_env, markdown, note_tasks,
+    capture_clip, collect_done, config, env as bob_env, markdown, note_tasks,
     note_tasks::{BlockIdLookup, RefLookup},
     pomodoro,
     style::Styler,
@@ -74,13 +74,20 @@ to schedule the capture N days from today. The token is removed from the task \
 text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It \
 may appear before or after a trailing @route token and is recognized only at \
 the very end of the input.\n\n\
+Append a trailing lowercase 'p:<N>' token, where N selects the Nth priority \
+level configured in ~/.config/bob/config.yml (1-4 today: P1-P4), to write \
+[priority::<value>] and roll a random [scheduled::YYYY-MM-DD] inside that \
+level's day window. A task with no priority field is implicitly P0, so there \
+is no p:0. An explicit s:<N> wins the scheduled date and p:<N> still writes \
+the priority. Like s:<N> it is recognized only in the terminal token region \
+and may appear on either side of a trailing @route token.\n\n\
 Append a trailing clipboard marker: '%' captures one live value without a \
 header; '%<positive integer>' captures exactly that many values without \
 headers, starting with the live clipboard and then recent history newest first; \
 and '%<nonnumeric header>' captures one live value under an explicit header. \
 '%1' is equivalent to '%', while '%0' stays literal. Headers use letters, \
-digits, '_' and '-'; '_' renders as a space. The marker composes with s:<N> and \
-every route kind in either terminal order. Each value is classified separately: \
+digits, '_' and '-'; '_' renders as a space. The marker composes with s:<N>, \
+p:<N>, and every route kind in either terminal order. Each value is classified separately: \
 small text stays inline; 2-10 flat text lines and 1-10 flat unordered Markdown \
 list items become child bullets, with source list markers removed; copied file \
 paths are saved under img/ or file/; and long or other Markdown-structured text \
@@ -121,7 +128,7 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash^goog-exit' 'Called Morgan Stanley today.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash^goog-exit' 'Called Morgan Stanley today.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -407,23 +414,43 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let now = bob_env::current_datetime();
     let today = now.date();
     let created = date_string(today);
-    let scheduled = parsed
+    let priority = match parsed.priority_level {
+        Some(number) => {
+            Some(resolve_priority(number, parsed.scheduled_offset)?)
+        }
+        None => None,
+    };
+    let priority_field = priority
+        .as_ref()
+        .map(|(name, value, _, _)| (name.as_str(), value.as_str()));
+    let scheduled_offset = parsed
         .scheduled_offset
+        .or_else(|| priority.as_ref().and_then(|(_, _, _, rolled)| *rolled));
+    let scheduled = scheduled_offset
         .map(|offset| scheduled_date_string(today, offset))
         .transpose()?;
     let capture_line = match &parsed.kind {
-        CaptureKind::Task => {
-            format_task_line(&parsed.body, &created, scheduled.as_deref())
-        }
-        CaptureKind::Bullet { .. } => {
-            format_bullet_line(&parsed.body, &created, scheduled.as_deref())
-        }
-        CaptureKind::SubBullet { .. } => {
-            format_sub_bullet_line(&parsed.body, scheduled.as_deref())
-        }
+        CaptureKind::Task => format_task_line(
+            &parsed.body,
+            &created,
+            priority_field,
+            scheduled.as_deref(),
+        ),
+        CaptureKind::Bullet { .. } => format_bullet_line(
+            &parsed.body,
+            &created,
+            priority_field,
+            scheduled.as_deref(),
+        ),
+        CaptureKind::SubBullet { .. } => format_sub_bullet_line(
+            &parsed.body,
+            priority_field,
+            scheduled.as_deref(),
+        ),
         CaptureKind::Pomodoro { block_id } => format_pomodoro_task_line(
             &parsed.body,
             &created,
+            priority_field,
             scheduled.as_deref(),
             block_id,
         ),
@@ -552,6 +579,8 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         kind: kind_label,
         created,
         scheduled,
+        priority: priority.as_ref().map(|(_, value, _, _)| value.clone()),
+        priority_label: priority.as_ref().map(|(_, _, label, _)| label.clone()),
         placement: note_plan.placement,
         clip: clip_plan.map(|plan| plan.output),
         block_id: special
@@ -599,6 +628,38 @@ fn scheduled_date_string(
     Ok(date_string(scheduled))
 }
 
+/// Resolve a `p:<N>` level to its `(field name, value, label, rolled offset)`.
+/// The rolled offset is only computed when no explicit `s:<N>` offset is
+/// present, since an explicit offset always wins the scheduled date.
+fn resolve_priority(
+    number: u64,
+    explicit_scheduled_offset: Option<u64>,
+) -> Result<(String, String, String, Option<u64>), CaptureError> {
+    let property = config::load_priority_property(&config::config_path())
+        .map_err(|error| match error {
+            config::ConfigError::Read(message) => CaptureError::io(message),
+            config::ConfigError::Invalid(message) => {
+                CaptureError::usage(message)
+            }
+        })?;
+    let level = property.level(number).ok_or_else(|| {
+        CaptureError::usage(format!(
+            "p:{number} is not a configured priority level; use p:1 through p:{} ({})",
+            property.level_count(),
+            property.labels()
+        ))
+    })?;
+    let rolled_offset = explicit_scheduled_offset
+        .is_none()
+        .then(|| level.roll_offset(config::roll_seed()));
+    Ok((
+        property.name().to_string(),
+        level.value().to_string(),
+        level.label().to_string(),
+        rolled_offset,
+    ))
+}
+
 fn relative_target(route: Option<&str>) -> PathBuf {
     route
         .map(|route| PathBuf::from(route_label(route)))
@@ -616,9 +677,11 @@ pub(crate) fn route_label(route: &str) -> String {
 fn format_task_line(
     body: &str,
     created: &str,
+    priority: Option<(&str, &str)>,
     scheduled: Option<&str>,
 ) -> String {
     let mut line = format!("- [ ] #task {body} [created::{created}]");
+    append_priority_property(&mut line, priority);
     append_scheduled_property(&mut line, scheduled);
     line
 }
@@ -626,15 +689,22 @@ fn format_task_line(
 fn format_bullet_line(
     body: &str,
     created: &str,
+    priority: Option<(&str, &str)>,
     scheduled: Option<&str>,
 ) -> String {
     let mut line = format!("- {body} [created::{created}]");
+    append_priority_property(&mut line, priority);
     append_scheduled_property(&mut line, scheduled);
     line
 }
 
-fn format_sub_bullet_line(body: &str, scheduled: Option<&str>) -> String {
+fn format_sub_bullet_line(
+    body: &str,
+    priority: Option<(&str, &str)>,
+    scheduled: Option<&str>,
+) -> String {
     let mut line = format!("- {body}");
+    append_priority_property(&mut line, priority);
     append_scheduled_property(&mut line, scheduled);
     line
 }
@@ -642,13 +712,21 @@ fn format_sub_bullet_line(body: &str, scheduled: Option<&str>) -> String {
 fn format_pomodoro_task_line(
     body: &str,
     created: &str,
+    priority: Option<(&str, &str)>,
     scheduled: Option<&str>,
     block_id: &str,
 ) -> String {
     let mut line = format!("- [*] #task {body} [created::{created}]");
+    append_priority_property(&mut line, priority);
     append_scheduled_property(&mut line, scheduled);
     line.push_str(&format!(" ^{block_id}"));
     line
+}
+
+fn append_priority_property(line: &mut String, priority: Option<(&str, &str)>) {
+    if let Some((property, value)) = priority {
+        line.push_str(&format!(" [{property}::{value}]"));
+    }
 }
 
 fn append_scheduled_property(line: &mut String, scheduled: Option<&str>) {
@@ -1330,12 +1408,14 @@ struct ParsedCaptureText {
     route: Option<String>,
     kind: CaptureKind,
     scheduled_offset: Option<u64>,
+    priority_level: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct TerminalMarkers {
     clip: Option<ClipRequest>,
     scheduled_offset: Option<u64>,
+    priority_level: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1361,6 +1441,7 @@ impl RouteToken {
             route: Some(self.route),
             kind: self.kind,
             scheduled_offset: markers.scheduled_offset,
+            priority_level: markers.priority_level,
         }
     }
 }
@@ -1415,6 +1496,7 @@ fn parse_capture_text_with_clip_control(
                 exact: true,
             },
             scheduled_offset: markers.scheduled_offset,
+            priority_level: markers.priority_level,
         });
     }
 
@@ -1427,6 +1509,7 @@ fn parse_capture_text_with_clip_control(
             route: Some(route),
             kind: CaptureKind::Task,
             scheduled_offset: markers.scheduled_offset,
+            priority_level: markers.priority_level,
         });
     }
 
@@ -1462,6 +1545,7 @@ fn parse_capture_text_with_clip_control(
         route: None,
         kind: CaptureKind::Task,
         scheduled_offset: markers.scheduled_offset,
+        priority_level: markers.priority_level,
     })
 }
 
@@ -1662,6 +1746,16 @@ fn parse_schedule_token(token: &str) -> Option<u64> {
     digits.parse::<u64>().ok()
 }
 
+/// Parse one whitespace-free token as a priority level (`p:<N>`), returning the
+/// 1-based level number. Non-digit or overflowing tokens stay literal.
+fn parse_priority_token(token: &str) -> Option<u64> {
+    let digits = token.strip_prefix("p:")?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok()
+}
+
 fn parse_clip_token(token: &str) -> Option<ClipRequest> {
     let header = token.strip_prefix('%')?;
     if header.is_empty() {
@@ -1688,6 +1782,7 @@ fn extract_terminal_markers(
 ) -> TerminalMarkers {
     let marker_like = |token: &str| {
         parse_schedule_token(token).is_some()
+            || parse_priority_token(token).is_some()
             || (parse_clip_markers && parse_clip_token(token).is_some())
     };
     let route_index =
@@ -1754,6 +1849,13 @@ fn extract_terminal_marker(
             return false;
         }
         markers.scheduled_offset = Some(offset);
+        return true;
+    }
+    if let Some(number) = parse_priority_token(token) {
+        if markers.priority_level.is_some() {
+            return false;
+        }
+        markers.priority_level = Some(number);
         return true;
     }
     if parse_clip_markers
@@ -2341,6 +2443,10 @@ struct CaptureResult {
     kind: &'static str,
     created: String,
     scheduled: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority_label: Option<String>,
     placement: Placement,
     #[serde(skip_serializing_if = "Option::is_none")]
     clip: Option<capture_clip::ClipOutput>,
@@ -2562,6 +2668,63 @@ mod tests {
     }
 
     #[test]
+    fn parses_priority_tokens() {
+        assert_eq!(parse_priority_token("p:1"), Some(1));
+        assert_eq!(parse_priority_token("p:4"), Some(4));
+        assert_eq!(parse_priority_token("p:12"), Some(12));
+
+        for token in [
+            "p:",
+            "p:abc",
+            "p:-1",
+            "p:1.5",
+            "P:1",
+            "px:1",
+            "p:18446744073709551616",
+        ] {
+            assert_eq!(parse_priority_token(token), None, "{token}");
+        }
+    }
+
+    #[test]
+    fn extracts_priority_markers_from_terminal_region() {
+        let mut tokens = vec!["buy", "milk", "p:2"];
+        assert_eq!(
+            extract_terminal_markers(&mut tokens, false).priority_level,
+            Some(2)
+        );
+        assert_eq!(tokens, vec!["buy", "milk"]);
+
+        let mut tokens = vec!["buy", "milk", "p:2", "@groceries"];
+        assert_eq!(
+            extract_terminal_markers(&mut tokens, false).priority_level,
+            Some(2)
+        );
+        assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
+
+        let mut tokens = vec!["buy", "milk", "@groceries", "p:3"];
+        assert_eq!(
+            extract_terminal_markers(&mut tokens, false).priority_level,
+            Some(3)
+        );
+        assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
+
+        let mut tokens = vec!["set", "p:2", "priority"];
+        assert_eq!(
+            extract_terminal_markers(&mut tokens, false).priority_level,
+            None
+        );
+        assert_eq!(tokens, vec!["set", "p:2", "priority"]);
+
+        let mut tokens = vec!["buy", "p:1", "p:2"];
+        assert_eq!(
+            extract_terminal_markers(&mut tokens, false).priority_level,
+            Some(2)
+        );
+        assert_eq!(tokens, vec!["buy", "p:1"]);
+    }
+
+    #[test]
     fn extracts_trailing_schedule_from_terminal_region() {
         let mut tokens = vec!["buy", "milk", "s:1"];
         assert_eq!(extract_trailing_schedule(&mut tokens), Some(1));
@@ -2597,6 +2760,7 @@ mod tests {
                 None,
                 None,
                 ClipRequest::Current { header: None },
+                None,
             ),
             (
                 "body %20",
@@ -2606,6 +2770,7 @@ mod tests {
                 ClipRequest::History {
                     count: NonZeroUsize::new(20).expect("nonzero"),
                 },
+                None,
             ),
             (
                 "body %log @notes",
@@ -2615,6 +2780,7 @@ mod tests {
                 ClipRequest::Current {
                     header: Some("log".to_string()),
                 },
+                None,
             ),
             (
                 "body s:1 % @groceries",
@@ -2622,6 +2788,7 @@ mod tests {
                 Some("groceries"),
                 Some(1),
                 ClipRequest::Current { header: None },
+                None,
             ),
             (
                 "body % s:1 @groceries",
@@ -2629,6 +2796,7 @@ mod tests {
                 Some("groceries"),
                 Some(1),
                 ClipRequest::Current { header: None },
+                None,
             ),
             (
                 "body @groceries s:1 %log",
@@ -2638,6 +2806,7 @@ mod tests {
                 ClipRequest::Current {
                     header: Some("log".to_string()),
                 },
+                None,
             ),
             (
                 "body %log @groceries s:1",
@@ -2647,6 +2816,7 @@ mod tests {
                 ClipRequest::Current {
                     header: Some("log".to_string()),
                 },
+                None,
             ),
             (
                 "body s:1 @groceries %log",
@@ -2656,6 +2826,7 @@ mod tests {
                 ClipRequest::Current {
                     header: Some("log".to_string()),
                 },
+                None,
             ),
             (
                 "@groceries body %foo_bar",
@@ -2665,6 +2836,7 @@ mod tests {
                 ClipRequest::Current {
                     header: Some("foo_bar".to_string()),
                 },
+                None,
             ),
             (
                 "body %log @dev:blockid",
@@ -2674,6 +2846,7 @@ mod tests {
                 ClipRequest::Current {
                     header: Some("log".to_string()),
                 },
+                None,
             ),
             (
                 "body %log @notes#Ideas",
@@ -2683,6 +2856,7 @@ mod tests {
                 ClipRequest::Current {
                     header: Some("log".to_string()),
                 },
+                None,
             ),
             (
                 "body %3 s:2 @groceries",
@@ -2692,6 +2866,7 @@ mod tests {
                 ClipRequest::History {
                     count: NonZeroUsize::new(3).expect("nonzero"),
                 },
+                None,
             ),
             (
                 "body @groceries %3 s:2",
@@ -2701,6 +2876,7 @@ mod tests {
                 ClipRequest::History {
                     count: NonZeroUsize::new(3).expect("nonzero"),
                 },
+                None,
             ),
             (
                 "body %2 @notes#Ideas",
@@ -2710,6 +2886,7 @@ mod tests {
                 ClipRequest::History {
                     count: NonZeroUsize::new(2).expect("nonzero"),
                 },
+                None,
             ),
             (
                 "body @dev:blockid %2",
@@ -2719,16 +2896,36 @@ mod tests {
                 ClipRequest::History {
                     count: NonZeroUsize::new(2).expect("nonzero"),
                 },
+                None,
+            ),
+            (
+                "body p:2 s:1 % @groceries",
+                "body",
+                Some("groceries"),
+                Some(1),
+                ClipRequest::Current { header: None },
+                Some(2),
+            ),
+            (
+                "body @groceries %log p:3 s:4",
+                "body",
+                Some("groceries"),
+                Some(4),
+                ClipRequest::Current {
+                    header: Some("log".to_string()),
+                },
+                Some(3),
             ),
         ];
 
-        for (raw, body, route, scheduled, clip) in cases {
+        for (raw, body, route, scheduled, clip, priority) in cases {
             let parsed = parse_capture_text(raw, None)
                 .unwrap_or_else(|error| panic!("{raw}: {error:?}"));
             assert_eq!(parsed.body, body, "{raw}");
             assert_eq!(parsed.route.as_deref(), route, "{raw}");
             assert_eq!(parsed.scheduled_offset, scheduled, "{raw}");
             assert_eq!(parsed.clip, Some(clip), "{raw}");
+            assert_eq!(parsed.priority_level, priority, "{raw}");
         }
     }
 
@@ -3134,12 +3331,35 @@ mod tests {
     #[test]
     fn formats_task_line() {
         assert_eq!(
-            format_task_line("buy milk", "2026-06-15", None),
+            format_task_line("buy milk", "2026-06-15", None, None),
             "- [ ] #task buy milk [created::2026-06-15]"
         );
         assert_eq!(
-            format_task_line("buy milk", "2026-06-15", Some("2026-06-16")),
+            format_task_line(
+                "buy milk",
+                "2026-06-15",
+                None,
+                Some("2026-06-16")
+            ),
             "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
+        );
+        assert_eq!(
+            format_task_line(
+                "buy milk",
+                "2026-06-15",
+                Some(("priority", "high")),
+                None,
+            ),
+            "- [ ] #task buy milk [created::2026-06-15] [priority::high]"
+        );
+        assert_eq!(
+            format_task_line(
+                "buy milk",
+                "2026-06-15",
+                Some(("priority", "high")),
+                Some("2026-06-16"),
+            ),
+            "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-16]"
         );
     }
 
@@ -3150,6 +3370,7 @@ mod tests {
                 "Some foobar task.",
                 "2026-07-10",
                 None,
+                None,
                 "foobar",
             ),
             "- [*] #task Some foobar task. [created::2026-07-10] ^foobar"
@@ -3158,10 +3379,21 @@ mod tests {
             format_pomodoro_task_line(
                 "Some foobar task.",
                 "2026-07-10",
+                None,
                 Some("2026-07-12"),
                 "foobar",
             ),
             "- [*] #task Some foobar task. [created::2026-07-10] [scheduled::2026-07-12] ^foobar"
+        );
+        assert_eq!(
+            format_pomodoro_task_line(
+                "Some foobar task.",
+                "2026-07-10",
+                Some(("priority", "lowest")),
+                Some("2026-07-12"),
+                "foobar",
+            ),
+            "- [*] #task Some foobar task. [created::2026-07-10] [priority::lowest] [scheduled::2026-07-12] ^foobar"
         );
     }
 
@@ -3537,6 +3769,8 @@ mod tests {
             kind: "task",
             created: "2026-06-15".to_string(),
             scheduled: None,
+            priority: None,
+            priority_label: None,
             placement: Placement::Inserted,
             clip: None,
             block_id: None,
@@ -3569,6 +3803,8 @@ mod tests {
         assert_eq!(value["placement"], "inserted");
         assert!(value.get("clip").is_none(), "{value}");
         for special_field in [
+            "priority",
+            "priority_label",
             "block_id",
             "day_file",
             "block_link",
@@ -3727,21 +3963,46 @@ mod tests {
     #[test]
     fn formats_bullet_line() {
         assert_eq!(
-            format_bullet_line("some idea", "2026-06-15", None),
+            format_bullet_line("some idea", "2026-06-15", None, None),
             "- some idea [created::2026-06-15]"
         );
         assert_eq!(
-            format_bullet_line("some idea", "2026-06-15", Some("2026-06-16")),
+            format_bullet_line(
+                "some idea",
+                "2026-06-15",
+                None,
+                Some("2026-06-16")
+            ),
             "- some idea [created::2026-06-15] [scheduled::2026-06-16]"
+        );
+        assert_eq!(
+            format_bullet_line(
+                "some idea",
+                "2026-06-15",
+                Some(("priority", "medium")),
+                Some("2026-06-16"),
+            ),
+            "- some idea [created::2026-06-15] [priority::medium] [scheduled::2026-06-16]"
         );
     }
 
     #[test]
     fn formats_sub_bullet_line() {
-        assert_eq!(format_sub_bullet_line("some idea", None), "- some idea");
         assert_eq!(
-            format_sub_bullet_line("some idea", Some("2026-06-16")),
+            format_sub_bullet_line("some idea", None, None),
+            "- some idea"
+        );
+        assert_eq!(
+            format_sub_bullet_line("some idea", None, Some("2026-06-16")),
             "- some idea [scheduled::2026-06-16]"
+        );
+        assert_eq!(
+            format_sub_bullet_line(
+                "some idea",
+                Some(("priority", "low")),
+                Some("2026-06-16"),
+            ),
+            "- some idea [priority::low] [scheduled::2026-06-16]"
         );
     }
 

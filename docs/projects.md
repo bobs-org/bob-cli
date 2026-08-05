@@ -255,6 +255,13 @@ an independent scheduled date per task. On a `^prj` lifecycle task, priority
 stays inline and the rolled date goes to project frontmatter, matching ordinary
 `scheduled` picker behavior for project notes.
 
+`bob capture <text> p:<N>` writes the same `[priority:: ...]` field and rolls
+a date from the same configured window from the command line, reading the
+same `~/.config/bob/config.yml` levels as the picker. `N` is the picker row
+(1-4 today), so `p:2` matches pressing `Ctrl+Shift+P` and choosing the `P2`
+row. Capture leaves the task's `[ ]` marker as written; `bob task-status-hooks`
+is what later marks a future-scheduled task Blocked, not capture itself.
+
 After a priority write, the Obsidian notice shows the chosen P-level, the
 `[priority:: ...]` field that landed, the rolled ISO date with weekday, and the
 date's distance from today. Counted sessions show the rolled scheduled span and
