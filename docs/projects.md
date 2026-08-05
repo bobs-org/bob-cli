@@ -228,11 +228,12 @@ The same `Ctrl+Shift+P` picker offers a `priority` property for ordinary tasks
 and `^prj` lifecycle tasks. The picker shows P-level labels, but the Markdown
 stores Obsidian Tasks' native priority names:
 
-| Picker label | Written field        | Random `scheduled` window |
-| ------------ | -------------------- | ------------------------- |
-| `P2`         | `[priority:: high]`  | 2-7 days from today       |
-| `P3`         | `[priority:: medium]` | 8-30 days from today     |
-| `P4`         | `[priority:: low]`   | 31-90 days from today     |
+| Picker label | Written field         | Random `scheduled` window |
+| ------------ | --------------------- | ------------------------- |
+| `P1`         | `[priority:: high]`   | 2-7 days from today       |
+| `P2`         | `[priority:: medium]` | 8-30 days from today      |
+| `P3`         | `[priority:: low]`    | 31-90 days from today     |
+| `P4`         | `[priority:: lowest]` | 91-365 days from today    |
 
 The split is deliberate. With the vault's Dataview task format, `priority` is a
 reserved Tasks key whose accepted values are `highest`, `high`, `medium`,
@@ -241,13 +242,14 @@ stop at the first unrecognized field, so a literal `[priority:: P2]` at the end
 of a task would also hide earlier `[scheduled:: ...]`, `[id:: ...]`, or
 `[dependsOn:: ...]` fields from task queries and dependency handling.
 
-A task with no priority field is implicit P1. The picker therefore has no P1
-row; press `Ctrl+D` on the `priority` row to clear the field. Clearing priority
-does not remove or re-roll `scheduled`, because the rolled date is treated as an
-explicit commitment once written.
+A task with no priority field is implicit P0, the highest priority: do it now,
+with no rolled date. The picker therefore has no P0 row; press `Ctrl+D` on the
+`priority` row to clear the field. Clearing priority does not remove or re-roll
+`scheduled`, because the rolled date is treated as an explicit commitment once
+written.
 
-Choosing P2, P3, or P4 writes the priority and rolls a `scheduled` date inside
-that level's configured window in one guarded edit. Counted sessions
+Choosing P1, P2, P3, or P4 writes the priority and rolls a `scheduled` date
+inside that level's configured window in one guarded edit. Counted sessions
 (`N<Ctrl+Shift+P>`) apply the same priority to each selected task while rolling
 an independent scheduled date per task. On a `^prj` lifecycle task, priority
 stays inline and the rolled date goes to project frontmatter, matching ordinary
