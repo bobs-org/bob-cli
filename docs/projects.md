@@ -286,7 +286,7 @@ task has the same configured priority.
 After choosing a `scheduled` date in the `Ctrl+Shift+P` picker — a typed date, a
 preset, or the pinned priority-roll suggestion — Bob Navigation Hotkeys prompts
 for an optional reason before writing anything. Pressing `↵` with text logs the
-reason as a dated entry under a managed `🗓️ **Schedule log:**` child bullet on
+reason as a dated entry under a managed `🗓️ **SCHEDULE LOG**` child bullet on
 the task; pressing `↵` on an empty input writes the date only, with no entry and
 no marker created. Pressing `Esc` in the reason prompt cancels the whole
 picker, including the date itself, so nothing is written.
@@ -295,18 +295,19 @@ picker, including the date itself, so nothing is written.
 - [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-08-20] ^ship
   - ![[#^blocked-by-this]]
   - Some freeform note I wrote by hand
-  - 🗓️ **Schedule log:**
-    - **2026-08-13 → 2026-08-20** — waiting on the API review to land
-    - **2026-08-06 → 2026-08-13** — was out sick
+  - 🗓️ **SCHEDULE LOG**
+    - _2026-08-13 → 2026-08-20_ — waiting on the API review to land
+    - _2026-08-06 → 2026-08-13_ — was out sick
 ```
 
-Entries read newest first, immediately under the marker: the top entry always
-answers why the task is scheduled where it is now. The bolded date span shows
-the previous value on the left and the date just chosen on the right; a task's
-first entry has no previous value and reads `**<date>** — <reason>`. The marker
-itself is appended as the last direct child of the task the first time a reason
-is logged, after any hand-written notes or dependency links; once it exists, it
-is reused in place and never moved or duplicated.
+Entries are nested one level under the marker bullet and read newest first: the
+top entry always answers why the task is scheduled where it is now. The
+italicized date span shows the previous value on the left and the date just
+chosen on the right; a task's first entry has no previous value and reads
+`*<date>* — <reason>`. The marker itself is appended as the last direct child
+of the task the first time a reason is logged, after any hand-written notes or
+dependency links; once it exists, it is reused in place and never moved or
+duplicated.
 
 Choosing a priority level (which rolls a `scheduled` date as a side effect) and
 pressing `Ctrl+D` to remove `scheduled` do not prompt for a reason — only an
