@@ -302,10 +302,15 @@ prompt appears only when the reason is not already known. After choosing a
 `scheduled` date from a typed date or a preset in the `scheduled` value stage,
 Bob Navigation Hotkeys prompts for an optional reason before writing anything.
 Pressing `↵` with text logs the reason as a dated entry under a managed
-`🗓️ **SCHEDULE LOG**` child bullet on the task; pressing `↵` on an empty input
-writes the date only, with no entry and no marker created. Pressing `Esc` in
-the reason prompt cancels the whole picker, including the date itself, so
-nothing is written.
+`🗓️ **SCHEDULE LOG**` child bullet on the task. Pressing `↵` on an empty input
+depends on whether the task already has that marker: on a task with no log yet
+it still writes the date only, with no entry and no marker created; on a task
+that already has a `🗓️ **SCHEDULE LOG**` it records `🤷 no reason given` as a
+dated entry, so the history the task is already keeping has no gaps. The
+marker is the opt-in — once a task has one, its log is complete, and a task
+without one is never given one by a skipped prompt. Pressing `Esc` in the
+reason prompt cancels the whole picker, including the date itself, so nothing
+is written.
 
 ```markdown
 - [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-08-20] ^ship
@@ -327,18 +332,22 @@ duplicated.
 
 Choosing a priority level, or the pinned priority-roll suggestion in the
 `scheduled` stage, never prompts: the software chose the date, so it writes its
-own deterministic reason immediately. These entries are marked with a 🎲 so
-they read as machine-written months later:
+own deterministic reason immediately. These entries, and a skipped reason
+prompt on a task that already keeps a log, are marked with a leading emoji so
+they read as machine-written months later — 🎲 for a date the software rolled,
+🤷 for a date the user chose but declined to explain:
 
-| Gesture                                                  | Reason text                                 |
-| --------------------------------------------------------- | ------------------------------------------- |
-| Priority level picked, previous level differs              | `🎲 priority <from> → <to> · random in <window>` |
-| Priority level picked, task had no priority field           | `🎲 priority P0 → <to> · random in <window>` |
-| Priority level re-picked unchanged                          | `🎲 priority <level> · random in <window>` |
-| Pinned roll suggestion chosen in the `scheduled` stage       | `🎲 <level> roll · random in <window>` |
+| Gesture                                                     | Reason text                                      |
+| ------------------------------------------------------------ | ------------------------------------------------- |
+| Priority level picked, previous level differs                 | `🎲 priority <from> → <to> · random in <window>` |
+| Priority level picked, task had no priority field              | `🎲 priority P0 → <to> · random in <window>` |
+| Priority level re-picked unchanged                             | `🎲 priority <level> · random in <window>` |
+| Pinned roll suggestion chosen in the `scheduled` stage          | `🎲 <level> roll · random in <window>` |
+| Reason prompt skipped on a task that already has a log          | `🤷 no reason given` |
 
-An automatic entry is skipped when the roll lands on the date the task already
-has — writing a change that did not happen would be noise. A typed reason is a
+An automatic entry — a roll, or a skipped prompt on a task with a log — is
+skipped when the resulting date equals the date the task already has, because
+writing a change that did not happen would be noise. A typed reason is a
 human decision and is written even when the chosen date equals the current
 one. Pressing `Ctrl+D` to remove `scheduled` still writes nothing; removal is
 not a reschedule. In a counted priority session (`N<Ctrl+Shift+P>` →
@@ -346,7 +355,10 @@ not a reschedule. In a counted priority session (`N<Ctrl+Shift+P>` →
 counted tasks can start from different levels. The counted `scheduled` session
 (pinned roll suggestion) still applies one shared reason, because the
 suggestion is only pinned when every counted task shares one configured
-priority.
+priority. A counted session's skipped-prompt fallback is likewise applied per
+task: only the counted tasks that already keep a log get an unexplained entry,
+and a task without one is left untouched exactly as it would be outside a
+counted session.
 
 ## Warnings
 
