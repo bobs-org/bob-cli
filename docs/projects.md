@@ -260,6 +260,18 @@ an independent scheduled date per task. On a `^prj` lifecycle task, priority
 stays inline and the rolled date goes to project frontmatter, matching ordinary
 `scheduled` picker behavior for project notes.
 
+The write also records a `🗓️ **SCHEDULE LOG**` entry naming the priority
+transition and the roll window, without prompting:
+
+```markdown
+- [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-09-02] ^ship
+  - 🗓️ **SCHEDULE LOG**
+    - _2026-08-13 → 2026-09-02_ — 🎲 priority P1 → P2 · random in 8–30 days
+```
+
+See [Schedule-log reason prompt](#schedule-log-reason-prompt) for the full
+deterministic-reason rules.
+
 `bob capture <text> p:<N>` writes the same `[priority:: ...]` field and rolls
 a date from the same configured window from the command line, reading the
 same `~/.config/bob/config.yml` levels as the picker. `N` is the picker row
@@ -279,17 +291,21 @@ When the `scheduled` date picker opens on a task that already has a configured
 priority, it pins a priority roll suggestion above the normal date presets.
 Press `Ctrl+R` in that date picker stage to re-roll the suggestion before
 choosing it. In counted sessions, the suggestion appears only when every counted
-task has the same configured priority.
+task has the same configured priority. Choosing the suggestion writes
+immediately with its own deterministic reason instead of prompting; see
+[Schedule-log reason prompt](#schedule-log-reason-prompt).
 
 ### Schedule-log reason prompt
 
-After choosing a `scheduled` date in the `Ctrl+Shift+P` picker — a typed date, a
-preset, or the pinned priority-roll suggestion — Bob Navigation Hotkeys prompts
-for an optional reason before writing anything. Pressing `↵` with text logs the
-reason as a dated entry under a managed `🗓️ **SCHEDULE LOG**` child bullet on
-the task; pressing `↵` on an empty input writes the date only, with no entry and
-no marker created. Pressing `Esc` in the reason prompt cancels the whole
-picker, including the date itself, so nothing is written.
+The log records every scheduled change the `Ctrl+Shift+P` picker makes; the
+prompt appears only when the reason is not already known. After choosing a
+`scheduled` date from a typed date or a preset in the `scheduled` value stage,
+Bob Navigation Hotkeys prompts for an optional reason before writing anything.
+Pressing `↵` with text logs the reason as a dated entry under a managed
+`🗓️ **SCHEDULE LOG**` child bullet on the task; pressing `↵` on an empty input
+writes the date only, with no entry and no marker created. Pressing `Esc` in
+the reason prompt cancels the whole picker, including the date itself, so
+nothing is written.
 
 ```markdown
 - [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-08-20] ^ship
@@ -309,12 +325,28 @@ of the task the first time a reason is logged, after any hand-written notes or
 dependency links; once it exists, it is reused in place and never moved or
 duplicated.
 
-Choosing a priority level (which rolls a `scheduled` date as a side effect) and
-pressing `Ctrl+D` to remove `scheduled` do not prompt for a reason — only an
-explicit date pick in the `scheduled` value stage does. In a counted session
-(`N<Ctrl+Shift+P>`), one reason prompt applies to every selected task: each
-task's log entry uses its own previous value, and a task whose scheduled date
-does not change gets no entry.
+Choosing a priority level, or the pinned priority-roll suggestion in the
+`scheduled` stage, never prompts: the software chose the date, so it writes its
+own deterministic reason immediately. These entries are marked with a 🎲 so
+they read as machine-written months later:
+
+| Gesture                                                  | Reason text                                 |
+| --------------------------------------------------------- | ------------------------------------------- |
+| Priority level picked, previous level differs              | `🎲 priority <from> → <to> · random in <window>` |
+| Priority level picked, task had no priority field           | `🎲 priority P0 → <to> · random in <window>` |
+| Priority level re-picked unchanged                          | `🎲 priority <level> · random in <window>` |
+| Pinned roll suggestion chosen in the `scheduled` stage       | `🎲 <level> roll · random in <window>` |
+
+An automatic entry is skipped when the roll lands on the date the task already
+has — writing a change that did not happen would be noise. A typed reason is a
+human decision and is written even when the chosen date equals the current
+one. Pressing `Ctrl+D` to remove `scheduled` still writes nothing; removal is
+not a reschedule. In a counted priority session (`N<Ctrl+Shift+P>` →
+`priority`), each task's entry uses its own previous priority level, since
+counted tasks can start from different levels. The counted `scheduled` session
+(pinned roll suggestion) still applies one shared reason, because the
+suggestion is only pinned when every counted task shares one configured
+priority.
 
 ## Warnings
 
