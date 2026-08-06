@@ -222,6 +222,11 @@ Removing or editing project frontmatter outside `Ctrl+D` cannot identify which
 task fields were propagated, so those fields remain. Prefer `Ctrl+D` when
 unscheduling a project.
 
+On a `^prj` lifecycle task, a schedule-log reason (see below) is written under
+the `^prj` task's own bullet, alongside the project's other child content. It
+is plain Markdown, not a Dataview field, so `bob projects sync` never reads or
+touches it.
+
 ### Priority property and scheduled rolls
 
 The same `Ctrl+Shift+P` picker offers a `priority` property for ordinary tasks
@@ -275,6 +280,40 @@ priority, it pins a priority roll suggestion above the normal date presets.
 Press `Ctrl+R` in that date picker stage to re-roll the suggestion before
 choosing it. In counted sessions, the suggestion appears only when every counted
 task has the same configured priority.
+
+### Schedule-log reason prompt
+
+After choosing a `scheduled` date in the `Ctrl+Shift+P` picker — a typed date, a
+preset, or the pinned priority-roll suggestion — Bob Navigation Hotkeys prompts
+for an optional reason before writing anything. Pressing `↵` with text logs the
+reason as a dated entry under a managed `🗓️ **Schedule log:**` child bullet on
+the task; pressing `↵` on an empty input writes the date only, with no entry and
+no marker created. Pressing `Esc` in the reason prompt cancels the whole
+picker, including the date itself, so nothing is written.
+
+```markdown
+- [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-08-20] ^ship
+  - ![[#^blocked-by-this]]
+  - Some freeform note I wrote by hand
+  - 🗓️ **Schedule log:**
+    - **2026-08-13 → 2026-08-20** — waiting on the API review to land
+    - **2026-08-06 → 2026-08-13** — was out sick
+```
+
+Entries read newest first, immediately under the marker: the top entry always
+answers why the task is scheduled where it is now. The bolded date span shows
+the previous value on the left and the date just chosen on the right; a task's
+first entry has no previous value and reads `**<date>** — <reason>`. The marker
+itself is appended as the last direct child of the task the first time a reason
+is logged, after any hand-written notes or dependency links; once it exists, it
+is reused in place and never moved or duplicated.
+
+Choosing a priority level (which rolls a `scheduled` date as a side effect) and
+pressing `Ctrl+D` to remove `scheduled` do not prompt for a reason — only an
+explicit date pick in the `scheduled` value stage does. In a counted session
+(`N<Ctrl+Shift+P>`), one reason prompt applies to every selected task: each
+task's log entry uses its own previous value, and a task whose scheduled date
+does not change gets no entry.
 
 ## Warnings
 
