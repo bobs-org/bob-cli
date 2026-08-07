@@ -9,11 +9,13 @@ repos:
         sync. Instead, make changes to this linked repo and, when done, run the `bob plugins sync` command to deploy them
         to the ~/bob/ directory.
   sidecar:
-    - name: plans
-      auto_clone: true
-    - name: research
-      description: Durable SASE research reports and generated media.
-    - name: agents
-      description: Hidden sidecar that stores commit-associated sase agent data for this project.
-    - name: beads
-      auto_clone: true
+    builtin:
+      plans:
+        auto_clone: true
+      beads:
+        auto_clone: true
+      agents:
+        description: Hidden sidecar that stores commit-associated sase agent data for this project.
+    custom:
+      research:
+        description: Durable SASE research reports and generated media.
