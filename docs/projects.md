@@ -371,6 +371,64 @@ task: only the counted tasks that already keep a log get an unexplained entry,
 and a task without one is left untouched exactly as it would be outside a
 counted session.
 
+### Deferring a task prunes it from today's open Pomodoros
+
+When one of these `Ctrl+Shift+P` gestures leaves a task carrying a strictly
+future `scheduled` date, Bob Navigation Hotkeys also removes every live link
+to that task from today's daily note that sits under an **open** top-level
+Pomodoro entry:
+
+| Gesture                                                   | Pruned targets                                                                                              |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `scheduled` → future date (typed, preset, or pinned roll) | the one task                                                                                                 |
+| `priority` → P1–P4 (rolls a future date)                  | the one task                                                                                                 |
+| `N<Ctrl+Shift+P>` → either of the above                   | every counted target whose own resulting date is future                                                      |
+| `^prj` project `scheduled` → future date                  | every ordinary task that got a future schedule from the project, **plus the `^prj` task itself**             |
+
+An "open" Pomodoro entry is a top-level (`- [c] ...`) checkbox line in the
+daily note's `## Pomodoros` section whose status is anything other than `x`,
+`X`, or `-` — the same rule
+[`bob task-status-hooks`](task-status-hooks.md) uses to decide which entries
+seed its promotion graph (see `pomodoro::open_ledger_task` in `bob-cli`).
+Leaving a deferred task's link under one of these entries would otherwise
+keep promoting its whole dependency chain and keep it registering as recent
+activity, even though it is no longer part of today's work.
+
+A struck link (`~~[[Tasks#^x]]~~`) is a retired record of work already done
+and is never touched, and entries that are already closed or cancelled
+(`[x]`, `[X]`, `[-]`) are skipped entirely — nothing under them is ever
+pruned. When the link is a bullet's entire body (aside from an optional
+leading `🍅 ` marker), the whole bullet — and anything nested under it — is
+removed; otherwise only the matched link token is removed and the bullet's
+remaining text survives. Only **today's** daily note is touched; a link in a
+previous day's ledger is left alone. Pruning is one-way: pressing `Ctrl+D` to
+remove a task's `scheduled` value never restores a link that a prior deferral
+removed, and re-adding one is the same manual `Ctrl+Shift+O`/`^^` gesture used
+to link it the first time.
+
+```markdown
+## Pomodoros
+
+- [ ] Current (0900-0930)
+  - [[Tasks#^ship]]
+  - [[Tasks#^stay]]
+```
+
+Deferring `^ship` to a future date leaves only the task that is still part of
+today's work:
+
+```markdown
+## Pomodoros
+
+- [ ] Current (0900-0930)
+  - [[Tasks#^stay]]
+```
+
+The picker's notice reports what happened with a `removed N Pomodoro link`
+chip; if the daily note changed underneath the picker between the snapshot
+and the write, the schedule itself is still kept and the notice instead shows
+a `not removed` chip — the write is never retried automatically.
+
 ## Warnings
 
 Warnings do not make the command fail and are not auto-fixed:

@@ -63,6 +63,14 @@ links and heading links do not. Targets resolve by an exact vault-relative
 path first and then by a unique, case-insensitive note basename. Ambiguous or
 missing targets produce warnings and are not guessed.
 
+The Bob Navigation Hotkeys `Ctrl+Shift+P` picker already removes a task's live
+links from today's open Pomodoros the moment that task is given a future
+`scheduled` date (see
+[projects.md](projects.md#deferring-a-task-prunes-it-from-todays-open-pomodoros)),
+so by the time this command runs it typically sees a smaller root set — a
+deferred task's dependency chain never got the chance to seed a promotion
+here in the first place.
+
 Before task statuses, completed-reference retirement, or relocation are
 planned, the command removes cross-Pomodoro duplicates. For each link that
 resolves to a scanned Tasks task, identity is the resolved vault-relative
