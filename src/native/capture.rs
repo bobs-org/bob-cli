@@ -17,7 +17,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture_clip, collect_done, config, env as bob_env, markdown, note_tasks,
+    capture_clip, capture_schedule_log, collect_done, config, env as bob_env,
+    markdown, note_tasks,
     note_tasks::{BlockIdLookup, RefLookup},
     pomodoro,
     style::Styler,
@@ -422,10 +423,22 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     };
     let priority_field = priority
         .as_ref()
-        .map(|(name, value, _, _)| (name.as_str(), value.as_str()));
-    let scheduled_offset = parsed
-        .scheduled_offset
-        .or_else(|| priority.as_ref().and_then(|(_, _, _, rolled)| *rolled));
+        .map(|resolved| (resolved.name.as_str(), resolved.value.as_str()));
+    let schedule_log_reason = priority.as_ref().and_then(|resolved| {
+        resolved.rolled_offset.map(|_| {
+            capture_schedule_log::priority_roll_reason(
+                capture_schedule_log::IMPLICIT_LEVEL_LABEL,
+                &resolved.label,
+                resolved.min_days,
+                resolved.max_days,
+            )
+        })
+    });
+    let scheduled_offset = parsed.scheduled_offset.or_else(|| {
+        priority
+            .as_ref()
+            .and_then(|resolved| resolved.rolled_offset)
+    });
     let scheduled = scheduled_offset
         .map(|offset| scheduled_date_string(today, offset))
         .transpose()?;
@@ -458,7 +471,8 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let kind_label = capture_kind_label(&parsed.kind);
     let relative_target = relative_target(parsed.route.as_deref());
     let target = request.bob_dir.join(&relative_target);
-    let clip_indent = parsed.clip.as_ref().map(|_| clip_indent_unit(&target));
+    let child_indent = (parsed.clip.is_some() || schedule_log_reason.is_some())
+        .then(|| child_indent_unit(&target));
     let clip_plan = match parsed.clip.as_ref() {
         Some(ClipRequest::Current { header }) => {
             let clipboard =
@@ -469,7 +483,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
                     header.as_deref(),
                     &clipboard,
                     now,
-                    clip_indent.as_deref().unwrap_or("\t"),
+                    child_indent.as_deref().unwrap_or("\t"),
                 )
                 .map_err(CaptureError::io)?,
             )
@@ -483,7 +497,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
                     None,
                     &clipboard,
                     now,
-                    clip_indent.as_deref().unwrap_or("\t"),
+                    child_indent.as_deref().unwrap_or("\t"),
                 )
                 .map_err(CaptureError::io)?,
             )
@@ -496,19 +510,27 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
                     &request.bob_dir,
                     &clipboards,
                     now,
-                    clip_indent.as_deref().unwrap_or("\t"),
+                    child_indent.as_deref().unwrap_or("\t"),
                 )
                 .map_err(CaptureError::io)?,
             )
         }
         None => None,
     };
-    let capture_block = match &clip_plan {
-        Some(plan) => {
-            format!("{capture_line}\n{}", plan.output.lines.join("\n"))
-        }
-        None => capture_line.clone(),
-    };
+    let schedule_log = schedule_log_reason.and_then(|reason| {
+        scheduled.as_deref().map(|scheduled| {
+            capture_schedule_log::plan(
+                child_indent.as_deref().unwrap_or("\t"),
+                scheduled,
+                reason,
+            )
+        })
+    });
+    let capture_block = assemble_capture_block(
+        &capture_line,
+        clip_plan.as_ref().map(|plan| plan.output.lines.as_slice()),
+        schedule_log.as_ref().map(|log| log.lines.as_slice()),
+    );
     let note_plan = match &parsed.kind {
         CaptureKind::SubBullet {
             target: sub_bullet_target,
@@ -579,10 +601,13 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         kind: kind_label,
         created,
         scheduled,
-        priority: priority.as_ref().map(|(_, value, _, _)| value.clone()),
-        priority_label: priority.as_ref().map(|(_, _, label, _)| label.clone()),
+        priority: priority.as_ref().map(|resolved| resolved.value.clone()),
+        priority_label: priority
+            .as_ref()
+            .map(|resolved| resolved.label.clone()),
         placement: note_plan.placement,
         clip: clip_plan.map(|plan| plan.output),
+        schedule_log,
         block_id: special
             .as_ref()
             .map(|edit| edit.details.block_id.clone())
@@ -600,6 +625,25 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         parent_status_name: sub_bullet
             .map(|edit| edit.parent_status_name.clone()),
     })
+}
+
+/// Join the capture line with its clip children (if any) and its schedule
+/// log lines (if any), in note order: the captured line first, any
+/// clipboard children next, and the schedule log last since it documents
+/// the whole block above it.
+fn assemble_capture_block(
+    capture_line: &str,
+    clip_lines: Option<&[String]>,
+    schedule_log_lines: Option<&[String]>,
+) -> String {
+    let mut lines = vec![capture_line];
+    if let Some(clip_lines) = clip_lines {
+        lines.extend(clip_lines.iter().map(String::as_str));
+    }
+    if let Some(schedule_log_lines) = schedule_log_lines {
+        lines.extend(schedule_log_lines.iter().map(String::as_str));
+    }
+    lines.join("\n")
 }
 
 fn capture_kind_label(kind: &CaptureKind) -> &'static str {
@@ -628,13 +672,24 @@ fn scheduled_date_string(
     Ok(date_string(scheduled))
 }
 
-/// Resolve a `p:<N>` level to its `(field name, value, label, rolled offset)`.
-/// The rolled offset is only computed when no explicit `s:<N>` offset is
-/// present, since an explicit offset always wins the scheduled date.
+/// A resolved `p:<N>` level: its field name/value/label plus the level's
+/// roll window and, when the date was actually rolled, the chosen offset.
+struct ResolvedPriority {
+    name: String,
+    value: String,
+    label: String,
+    min_days: u64,
+    max_days: u64,
+    rolled_offset: Option<u64>,
+}
+
+/// Resolve a `p:<N>` level. The rolled offset is only computed when no
+/// explicit `s:<N>` offset is present, since an explicit offset always wins
+/// the scheduled date.
 fn resolve_priority(
     number: u64,
     explicit_scheduled_offset: Option<u64>,
-) -> Result<(String, String, String, Option<u64>), CaptureError> {
+) -> Result<ResolvedPriority, CaptureError> {
     let property = config::load_priority_property(&config::config_path())
         .map_err(|error| match error {
             config::ConfigError::Read(message) => CaptureError::io(message),
@@ -652,12 +707,14 @@ fn resolve_priority(
     let rolled_offset = explicit_scheduled_offset
         .is_none()
         .then(|| level.roll_offset(config::roll_seed()));
-    Ok((
-        property.name().to_string(),
-        level.value().to_string(),
-        level.label().to_string(),
+    Ok(ResolvedPriority {
+        name: property.name().to_string(),
+        value: level.value().to_string(),
+        label: level.label().to_string(),
+        min_days: level.min_days(),
+        max_days: level.max_days(),
         rolled_offset,
-    ))
+    })
 }
 
 fn relative_target(route: Option<&str>) -> PathBuf {
@@ -1038,7 +1095,7 @@ fn dominant_indent_unit(lines: &[LineSpan<'_>]) -> Option<&'static str> {
     }
 }
 
-fn clip_indent_unit(target: &Path) -> String {
+fn child_indent_unit(target: &Path) -> String {
     let Ok(contents) = fs::read_to_string(target) else {
         return "\t".to_string();
     };
@@ -2451,6 +2508,8 @@ struct CaptureResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     clip: Option<capture_clip::ClipOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    schedule_log: Option<capture_schedule_log::ScheduleLog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     block_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     day_file: Option<String>,
@@ -2517,6 +2576,11 @@ fn print_human_success(result: &CaptureResult) {
                 &saved,
                 reused,
             );
+        }
+    }
+    if let Some(schedule_log) = &result.schedule_log {
+        for line in &schedule_log.lines {
+            println!("  {}", styler.dim(line));
         }
     }
     if let (Some(day_file), Some(block_link)) =
@@ -3329,6 +3393,38 @@ mod tests {
     }
 
     #[test]
+    fn assembles_capture_block_with_clip_children_then_schedule_log() {
+        let capture_line = "- [ ] #task someday idea [created::2026-08-07] [priority::lowest] [scheduled::2026-11-02]";
+        let clip_lines = vec![
+            "\t- clip child one".to_string(),
+            "\t- clip child two".to_string(),
+        ];
+        let schedule_log_lines = vec![
+            "\t- 🗓️ **SCHEDULE LOG**".to_string(),
+            "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in 91–365 days"
+                .to_string(),
+        ];
+
+        let block = assemble_capture_block(
+            capture_line,
+            Some(&clip_lines),
+            Some(&schedule_log_lines),
+        );
+
+        assert_eq!(
+            block,
+            [
+                capture_line,
+                "\t- clip child one",
+                "\t- clip child two",
+                "\t- 🗓️ **SCHEDULE LOG**",
+                "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in 91–365 days",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
     fn formats_task_line() {
         assert_eq!(
             format_task_line("buy milk", "2026-06-15", None, None),
@@ -3773,6 +3869,7 @@ mod tests {
             priority_label: None,
             placement: Placement::Inserted,
             clip: None,
+            schedule_log: None,
             block_id: None,
             day_file: None,
             block_link: None,
@@ -3805,6 +3902,7 @@ mod tests {
         for special_field in [
             "priority",
             "priority_label",
+            "schedule_log",
             "block_id",
             "day_file",
             "block_link",

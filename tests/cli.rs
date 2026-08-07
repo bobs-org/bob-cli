@@ -2726,16 +2726,21 @@ fn capture_priority_level_one_rolls_scheduled_date_in_window() {
         .expect("run p:1 capture");
 
     assert_success(&output);
-    let expected =
+    let task_line =
         "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]";
+    let expected = concat!(
+        "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]\n",
+        "\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t- *2026-06-22* — 🎲 priority P0 → P1 · random in 2–7 days\n",
+    );
     assert!(
-        stdout(&output).contains(expected),
+        stdout(&output).contains(task_line),
         "unexpected capture output:\n{}",
         format_output(&output)
     );
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
-        format!("{expected}\n")
+        expected
     );
 
     let scheduled = priority_scheduled_offset_days(&output, "2026-06-15");
@@ -2777,6 +2782,16 @@ fn capture_priority_level_four_rolls_scheduled_date_in_window() {
         (91..=365).contains(&scheduled),
         "expected P4 offset within [91, 365], got {scheduled}"
     );
+
+    let expected = concat!(
+        "- [ ] #task someday idea [created::2026-06-15] [priority::lowest] [scheduled::2027-05-12]\n",
+        "\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t- *2027-05-12* — 🎲 priority P0 → P4 · random in 91–365 days\n",
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        expected
+    );
 }
 
 #[test]
@@ -2807,9 +2822,12 @@ fn capture_priority_with_explicit_schedule_skips_roll() {
         "unexpected capture output:\n{}",
         format_output(&output)
     );
-    assert_eq!(
-        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
-        format!("{expected}\n")
+    let inbox =
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
+    assert_eq!(inbox, format!("{expected}\n"));
+    assert!(
+        !inbox.contains("SCHEDULE LOG") && !inbox.contains('\u{1F3B2}'),
+        "explicit s:<N> must not roll a date, so no schedule log entry: {inbox}"
     );
 }
 
@@ -2911,6 +2929,17 @@ fn capture_priority_json_includes_priority_fields_only_when_set() {
     assert_eq!(json["priority"], "low");
     assert_eq!(json["priority_label"], "P3");
     assert_eq!(json["scheduled"], "2026-07-21");
+    assert_eq!(
+        json["schedule_log"]["reason"],
+        "🎲 priority P0 → P3 · random in 31–90 days"
+    );
+    assert_eq!(
+        json["schedule_log"]["lines"],
+        serde_json::json!([
+            "\t- 🗓️ **SCHEDULE LOG**",
+            "\t\t- *2026-07-21* — 🎲 priority P0 → P3 · random in 31–90 days",
+        ])
+    );
 
     let unset_output = bob_command()
         .arg("capture")
@@ -2937,6 +2966,7 @@ fn capture_priority_json_includes_priority_fields_only_when_set() {
     });
     assert!(unset_json.get("priority").is_none(), "{unset_json}");
     assert!(unset_json.get("priority_label").is_none(), "{unset_json}");
+    assert!(unset_json.get("schedule_log").is_none(), "{unset_json}");
 }
 
 #[test]
@@ -2982,7 +3012,151 @@ fn capture_priority_renders_before_scheduled_and_before_pomodoro_block_id() {
             "## Tasks\n",
             "- [ ] #task Existing\n",
             "- [*] #task Some foobar task. [created::2026-07-10] [priority::medium] [scheduled::2026-07-21] ^foobar\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-07-21* — 🎲 priority P0 → P2 · random in 8–30 days\n",
         )
+    );
+}
+
+#[test]
+fn capture_priority_schedule_log_uses_the_target_notes_indent_unit() {
+    let temp = TempDir::new("bob-cli-capture-priority-two-space-indent");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("spaced.md"),
+        "# Spaced\n- [ ] #task Existing\n  - existing child\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_priority_config(&config);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["buy", "milk", "p:2", "@spaced"])
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_PRIORITY_ROLL_SEED", "1")
+        .output()
+        .expect("run p:2 capture routed into a two-space-indented note");
+
+    assert_success(&output);
+    assert!(
+        fs::read_to_string(vault.join("spaced.md"))
+            .expect("read spaced note")
+            .contains(concat!(
+                "- [ ] #task buy milk [created::2026-07-10] [priority::medium] [scheduled::2026-07-21]\n",
+                "  - 🗓️ **SCHEDULE LOG**\n",
+                "    - *2026-07-21* — 🎲 priority P0 → P2 · random in 8–30 days\n",
+            )),
+        "expected the SCHEDULE LOG block indented with the note's two-space unit"
+    );
+}
+
+#[test]
+fn capture_priority_with_clip_orders_clip_children_before_schedule_log() {
+    let temp = TempDir::new("bob-cli-capture-priority-clip-order");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let clipboard = temp.path().join("clipboard");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'clipped note\n'\n");
+    let config = temp.path().join("config.yml");
+    write_priority_config(&config);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["buy", "milk", "p:1", "%"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-06-15 10:11:12")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_PRIORITY_ROLL_SEED", "1")
+        .output()
+        .expect("run p:1 capture with a clipboard child");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        concat!(
+            "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]\n",
+            "\t- clipped note\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-06-22* — 🎲 priority P0 → P1 · random in 2–7 days\n",
+        ),
+        "clip children must come before the schedule log"
+    );
+}
+
+#[test]
+fn capture_priority_sub_bullet_nests_schedule_log_under_the_child() {
+    let temp = TempDir::new("bob-cli-capture-priority-sub-bullet");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), "- [ ] #task Parent ^parent\n");
+    let config = temp.path().join("config.yml");
+    write_priority_config(&config);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--route")
+        .arg("cash")
+        .arg("--task")
+        .arg("parent")
+        .arg("--")
+        .arg("buy milk p:2")
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_PRIORITY_ROLL_SEED", "1")
+        .output()
+        .expect("run sub-bullet capture with p:2");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- buy milk [priority::medium] [scheduled::2026-07-21]\n",
+            "\t\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t\t- *2026-07-21* — 🎲 priority P0 → P2 · random in 8–30 days\n",
+        ),
+        "the schedule log must nest under the captured child, and the parent line stays untouched"
+    );
+}
+
+#[test]
+fn capture_priority_dry_run_prints_schedule_log_without_writing() {
+    let temp = TempDir::new("bob-cli-capture-priority-dry-run");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let config = temp.path().join("config.yml");
+    write_priority_config(&config);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("buy")
+        .arg("milk")
+        .arg("p:2")
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_PRIORITY_ROLL_SEED", "1")
+        .output()
+        .expect("run p:2 --dry-run capture");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("🗓️ **SCHEDULE LOG**")
+            && out.contains("🎲 priority P0 → P2 · random in 8–30 days"),
+        "unexpected dry-run output:\n{out}"
+    );
+    assert!(
+        !vault.join("mac_inbox.md").exists(),
+        "dry-run must not create the inbox"
     );
 }
 

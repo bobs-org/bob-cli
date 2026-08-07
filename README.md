@@ -122,10 +122,22 @@ The token writes `[priority::<value>]` and rolls a random
 rolls independently, so a `--dry-run` preview differs from the real capture
 unless `BOB_PRIORITY_ROLL_SEED` is set. A task with no priority field is
 implicitly P0 (do it now, no roll), so there is no `p:0`. An explicit `s:<N>`
-wins the scheduled date; `p:<N>` still writes the priority. An out-of-range
-`p:<N>` fails with a usage error naming the configured levels instead of
-staying literal. Capture always writes `[ ]`; `bob task-status-hooks` is what
-later marks a future-scheduled task Blocked.
+wins the scheduled date; `p:<N>` still writes the priority. A rolled `p:<N>`
+date also writes a `🗓️ **SCHEDULE LOG**` child bullet with one dated `🎲 …`
+entry recording why, byte-for-byte matching what the Obsidian
+`Ctrl+Shift+P` picker writes for the same level with no reason prompt:
+
+```markdown
+- [ ] #task someday idea [created::2026-08-07] [priority::lowest] [scheduled::2026-11-02]
+	- 🗓️ **SCHEDULE LOG**
+		- *2026-11-02* — 🎲 priority P0 → P4 · random in 91–365 days
+```
+
+A `p:<N> s:<N>` capture writes no entry, since `s:<N>` wins the scheduled date
+and no roll happened. An out-of-range `p:<N>` fails with a usage error naming
+the configured levels instead of staying literal. Capture always writes
+`[ ]`; `bob task-status-hooks` is what later marks a future-scheduled task
+Blocked.
 
 Append one of these whitespace-delimited terminal markers to capture clipboard
 content beneath the new task or bullet:
@@ -326,6 +338,12 @@ single object with `ok: false` and an `error` string.
 A `p:<N>` capture additionally includes `priority` (the written value, such as
 `"high"`) and `priority_label` (the configured label, such as `"P1"`); a
 capture without `p:<N>` omits both fields.
+
+A `p:<N>` capture that actually rolled the scheduled date additionally
+includes a `schedule_log` object: `reason` (the `🎲 …` text) and `lines` (the
+exact rendered `🗓️ **SCHEDULE LOG**` marker and entry lines, in note order).
+`schedule_log` is omitted when `p:<N>` was not given, or when `s:<N>` won the
+scheduled date and no roll happened.
 
 Clipboard captures additionally include a `clip` object. Single captures keep
 the existing shape: `header`, `mode` (`"inline"`, `"lines"`, `"attachments"`,

@@ -277,7 +277,12 @@ a date from the same configured window from the command line, reading the
 same `~/.config/bob/config.yml` levels as the picker. `N` is the picker row
 (1-4 today), so `p:2` matches pressing `Ctrl+Shift+P` and choosing the `P2`
 row. Capture leaves the task's `[ ]` marker as written; `bob task-status-hooks`
-is what later marks a future-scheduled task Blocked, not capture itself.
+is what later marks a future-scheduled task Blocked, not capture itself. A
+rolled `p:<N>` also writes the same `🗓️ **SCHEDULE LOG**` entry the picker
+would, always as a `priority P0 → <to>` transition since a brand-new capture
+never has a previous priority field. `p:<N> s:<N>` writes no entry, because
+the explicit `s:<N>` wins the scheduled date and the roll never happens; see
+[Schedule-log reason prompt](#schedule-log-reason-prompt).
 
 After a priority write, the Obsidian notice shows the chosen P-level, the
 `[priority:: ...]` field that landed, the rolled ISO date with weekday, and the
@@ -344,6 +349,12 @@ they read as machine-written months later — 🎲 for a date the software rolle
 | Priority level re-picked unchanged                             | `🎲 priority <level> · random in <window>` |
 | Pinned roll suggestion chosen in the `scheduled` stage          | `🎲 <level> roll · random in <window>` |
 | Reason prompt skipped on a task that already has a log          | `🤷 no reason given` |
+| `bob capture <text> p:<N>` rolls the scheduled date             | `🎲 priority P0 → <to> · random in <window>` |
+
+`bob capture` has no interactive stage, so it never prompts for a reason and
+never writes the `🤷 no reason given` fallback: a captured task is always a
+brand-new line, so it can never already keep a log for that fallback to
+append to.
 
 An automatic entry — a roll, or a skipped prompt on a task with a log — is
 skipped when the resulting date equals the date the task already has, because

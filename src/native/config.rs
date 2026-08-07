@@ -116,6 +116,14 @@ impl PriorityLevel {
         &self.value
     }
 
+    pub(crate) fn min_days(&self) -> u64 {
+        self.min_days
+    }
+
+    pub(crate) fn max_days(&self) -> u64 {
+        self.max_days
+    }
+
     /// Roll a day offset inclusively within `[min_days, max_days]` from `seed`.
     pub(crate) fn roll_offset(&self, seed: u64) -> u64 {
         let span = self.max_days - self.min_days + 1;
