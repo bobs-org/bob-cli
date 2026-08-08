@@ -14,7 +14,7 @@ use super::{
     parse_marker_with_normalization, pdf_text_string, ref_dir_arg,
     render_marker, validate_marker_parent_value, validate_required_marker_keys,
     CommandError, Config, MarkerValue, Projection, Result, FIELD_PARENT,
-    FIELD_STATUS,
+    FIELD_RESEARCH, FIELD_STATUS,
 };
 use crate::native::style::Styler;
 
@@ -68,6 +68,7 @@ struct CreateOptions {
     force: bool,
     parent: String,
     ref_type: String,
+    research_root: Option<PathBuf>,
     status: String,
 }
 
@@ -77,6 +78,7 @@ struct CreatePlan {
     target: PathBuf,
     sidecar: PathBuf,
     title: String,
+    research: Option<String>,
     marker: String,
 }
 
@@ -109,6 +111,14 @@ pub(super) fn command() -> ClapCommand {
                 .help("Bare Obsidian note target for the marker parent"),
         )
         .arg(ref_dir_arg())
+        .arg(
+            Arg::new("research-root")
+                .long("research-root")
+                .short('R')
+                .value_name("PATH")
+                .value_parser(clap::builder::OsStringValueParser::new())
+                .help("Embed the Markdown source path relative to this research root"),
+        )
         .arg(
             Arg::new("status")
                 .long("status")
@@ -156,6 +166,9 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
             .get_one::<String>("ref-type")
             .expect("defaulted by clap")
             .clone(),
+        research_root: matches
+            .get_one::<OsString>("research-root")
+            .map(|value| PathBuf::from(value.as_os_str())),
         status: matches
             .get_one::<String>("status")
             .expect("defaulted by clap")
@@ -240,6 +253,9 @@ fn create_pdf(
     println!("title: {}", plan.title);
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
+    if let Some(research) = &plan.research {
+        println!("research: {research}");
+    }
     println!("pages: {page_count}");
     println!("next: bob highlights scan");
     Ok(())
@@ -257,6 +273,11 @@ fn plan_create(
             source.display()
         ))
     })?;
+    let research = options
+        .research_root
+        .as_deref()
+        .map(|root| derive_research_path(&source, root))
+        .transpose()?;
     let markdown = fs::read_to_string(&source).map_err(|error| {
         CommandError::new(format!(
             "read Markdown file {} as UTF-8: {error}",
@@ -265,7 +286,12 @@ fn plan_create(
     })?;
     let title = extract_title(&markdown, &source)?;
     validate_ref_type(&options.ref_type)?;
-    let marker = compose_marker(&options.status, &options.parent, &title)?;
+    let marker = compose_marker(
+        &options.status,
+        &options.parent,
+        &title,
+        research.as_deref(),
+    )?;
     let stem = source.file_stem().ok_or_else(|| {
         CommandError::new(format!(
             "Markdown file has no file stem: {}",
@@ -298,8 +324,64 @@ fn plan_create(
         target,
         sidecar,
         title,
+        research,
         marker,
     })
+}
+
+fn derive_research_path(source: &Path, root: &Path) -> Result<String> {
+    let root = fs::canonicalize(root).map_err(|error| {
+        CommandError::new(format!(
+            "resolve research root {} for Markdown source {}: {error}",
+            root.display(),
+            source.display()
+        ))
+    })?;
+    if !root.is_dir() {
+        return Err(CommandError::new(format!(
+            "research root {} for Markdown source {} is not a directory",
+            root.display(),
+            source.display()
+        )));
+    }
+
+    let relative = source.strip_prefix(&root).map_err(|_| {
+        CommandError::new(format!(
+            "Markdown source {} is not contained by research root {}",
+            source.display(),
+            root.display()
+        ))
+    })?;
+
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        let Component::Normal(part) = component else {
+            return Err(CommandError::new(format!(
+                "research path for Markdown source {} under research root {} is not a normal relative path: {}",
+                source.display(),
+                root.display(),
+                relative.display()
+            )));
+        };
+        let Some(part) = part.to_str().filter(|part| !part.is_empty()) else {
+            return Err(CommandError::new(format!(
+                "research path for Markdown source {} under research root {} is not valid UTF-8: {}",
+                source.display(),
+                root.display(),
+                relative.display()
+            )));
+        };
+        parts.push(part.to_string());
+    }
+
+    if parts.is_empty() {
+        return Err(CommandError::new(format!(
+            "research path for Markdown source {} under research root {} is empty",
+            source.display(),
+            root.display()
+        )));
+    }
+    Ok(parts.join("/"))
 }
 
 fn validate_markdown_path(source: &Path) -> Result<()> {
@@ -398,7 +480,12 @@ fn frontmatter_title(markdown: &str) -> Result<Option<String>> {
     Ok(Some(title.to_string()))
 }
 
-fn compose_marker(status: &str, parent: &str, title: &str) -> Result<String> {
+fn compose_marker(
+    status: &str,
+    parent: &str,
+    title: &str,
+    research: Option<&str>,
+) -> Result<String> {
     validate_marker_parent_value(
         parent,
         2,
@@ -415,6 +502,12 @@ fn compose_marker(status: &str, parent: &str, title: &str) -> Result<String> {
     );
     projection
         .insert("title".to_string(), MarkerValue::String(title.to_string()));
+    if let Some(research) = research {
+        projection.insert(
+            FIELD_RESEARCH.to_string(),
+            MarkerValue::String(research.to_string()),
+        );
+    }
     validate_required_marker_keys(&projection, "create marker")?;
     let marker = render_marker(&projection)?;
     let normalized = parse_marker_with_normalization(&marker)?;
@@ -591,6 +684,9 @@ fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
     println!("title: {}", plan.title);
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
+    if let Some(research) = &plan.research {
+        println!("research: {research}");
+    }
     println!("marker:");
     print!("{}", plan.marker);
 }
@@ -627,6 +723,7 @@ mod tests {
             force: false,
             parent: DEFAULT_PARENT.to_string(),
             ref_type: DEFAULT_REF_TYPE.to_string(),
+            research_root: None,
             status: DEFAULT_STATUS.to_string(),
         }
     }
@@ -679,6 +776,37 @@ mod tests {
         assert_eq!(
             marker.projection.get(FIELD_STATUS),
             Some(&MarkerValue::String(DEFAULT_STATUS.to_string()))
+        );
+        assert!(!marker.projection.contains_key(FIELD_RESEARCH));
+    }
+
+    #[test]
+    fn plan_embeds_research_path_relative_to_root() {
+        let temp = TempDir::new("research-root");
+        let research_root = temp.path.join("research");
+        let source =
+            research_root.join("202608/artifact_reference_rendering.md");
+        fs::create_dir_all(source.parent().expect("source parent"))
+            .expect("create source parent");
+        fs::write(&source, "# Artifact Reference Rendering\n")
+            .expect("write source");
+        let mut options = options();
+        options.research_root = Some(research_root);
+
+        let plan =
+            plan_create(&config(&temp.path), &source, &options).expect("plan");
+
+        assert_eq!(
+            plan.research.as_deref(),
+            Some("202608/artifact_reference_rendering.md")
+        );
+        let marker =
+            parse_marker_with_normalization(&plan.marker).expect("marker");
+        assert_eq!(
+            marker.projection.get(FIELD_RESEARCH),
+            Some(&MarkerValue::String(
+                "202608/artifact_reference_rendering.md".to_string()
+            ))
         );
     }
 
@@ -753,7 +881,10 @@ mod tests {
 
     #[test]
     fn marker_rejects_wikilink_parent_and_unknown_status() {
-        assert!(compose_marker("ready", "[[obsidian_ref]]", "Report").is_err());
-        assert!(compose_marker("unknown", "obsidian_ref", "Report").is_err());
+        assert!(compose_marker("ready", "[[obsidian_ref]]", "Report", None)
+            .is_err());
+        assert!(
+            compose_marker("unknown", "obsidian_ref", "Report", None).is_err()
+        );
     }
 }

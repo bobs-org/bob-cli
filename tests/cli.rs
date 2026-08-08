@@ -9282,6 +9282,7 @@ fn highlights_create_help_lists_options_alphabetically() {
             "-l, --lib-dir",
             "-P, --parent",
             "-r, --ref-dir",
+            "-R, --research-root",
             "-s, --status",
             "-t, --ref-type",
         ],
@@ -9292,7 +9293,8 @@ fn highlights_create_help_lists_options_alphabetically() {
 #[test]
 fn highlights_create_dry_run_prints_plan_without_writes() {
     let temp = TempDir::new("bob-cli-highlights-create-dry-run");
-    let source = temp.path().join("research.md");
+    let research_root = temp.path().join("research");
+    let source = research_root.join("202608/artifact_reference_rendering.md");
     let vault = temp.path().join("vault");
     write_file(
         &source,
@@ -9308,6 +9310,8 @@ fn highlights_create_dry_run_prints_plan_without_writes() {
         .arg("-d")
         .arg("-P")
         .arg("sase_ref")
+        .arg("-R")
+        .arg(&research_root)
         .arg("-s")
         .arg("next")
         .arg("-t")
@@ -9322,11 +9326,62 @@ fn highlights_create_dry_run_prints_plan_without_writes() {
         report.contains("A Useful Report")
             && report.contains("status: next")
             && report.contains("parent: sase_ref")
-            && report.contains("lib/papers/research.pdf")
+            && report
+                .contains("research: 202608/artifact_reference_rendering.md")
+            && report.contains("lib/papers/artifact_reference_rendering.pdf")
+            && report
+                .contains("- research: 202608/artifact_reference_rendering.md")
             && report.contains("writes: none"),
         "{report}"
     );
     assert!(!vault.exists(), "dry-run must not create the vault");
+}
+
+#[test]
+fn highlights_create_rejects_source_outside_research_root_before_writes() {
+    let temp = TempDir::new("bob-cli-highlights-create-research-root-outside");
+    let source = temp.path().join("outside/artifact_reference_rendering.md");
+    let research_root = temp.path().join("research");
+    let vault = temp.path().join("vault");
+    let pandoc = temp.path().join("pandoc");
+    let sentinel = temp.path().join("pandoc-invoked");
+    write_file(&source, "# Outside Research\n");
+    fs::create_dir_all(&research_root).expect("create research root");
+    write_executable(
+        &pandoc,
+        &format!(
+            "#!/bin/sh\n: > {}\nexit 0\n",
+            shell_single_quote(path_str(&sentinel))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("--research-root")
+        .arg(&research_root)
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .output()
+        .expect("run bob highlights create outside research root");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "outside research root should fail:\n{}",
+        format_output(&output)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("not contained by research root")
+            && diagnostic.contains(path_str(&source))
+            && diagnostic.contains(path_str(&research_root)),
+        "{diagnostic}"
+    );
+    assert!(!vault.exists(), "failure must happen before vault writes");
+    assert!(!sentinel.exists(), "pandoc must not be invoked");
 }
 
 #[test]
@@ -9383,7 +9438,8 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
     }
 
     let temp = TempDir::new("bob-cli-highlights-create-render");
-    let source = temp.path().join("render-report.md");
+    let research_root = temp.path().join("research");
+    let source = research_root.join("202608/artifact_reference_rendering.md");
     let vault = temp.path().join("vault");
     write_file(
         &source,
@@ -9411,14 +9467,18 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
         .arg(&source)
         .arg("-b")
         .arg(&vault)
+        .arg("--research-root")
+        .arg(&research_root)
         .output()
         .expect("run bob highlights create");
 
     assert_success(&output);
     let report = stdout(&output);
-    let pdf = vault.join("lib/chat/render-report.pdf");
+    let pdf = vault.join("lib/chat/artifact_reference_rendering.pdf");
     assert!(
         report.contains("created Highlights-ready PDF")
+            && report
+                .contains("research: 202608/artifact_reference_rendering.md")
             && report.contains("next: bob highlights scan"),
         "{report}"
     );
@@ -9451,6 +9511,10 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
     assert!(marker.contains("- parent: obsidian_ref\n"), "{marker}");
     assert!(
         marker.contains("- title: Rendered Research Report\n"),
+        "{marker}"
+    );
+    assert!(
+        marker.contains("- research: 202608/artifact_reference_rendering.md\n"),
         "{marker}"
     );
 }
@@ -9572,7 +9636,7 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     let note = vault.join("ref/systems-performance.md");
     write_highlights_pdf(
         &pdf,
-        "- status: wip\n- parent: obsidian\n- title: Systems Performance\n- topics: [linux, performance]\n",
+        "- status: wip\n- parent: obsidian\n- title: Systems Performance\n- research: 202608/artifact_reference_rendering.md\n- topics: [linux, performance]\n",
     );
 
     let output = bob_command()
@@ -9598,6 +9662,14 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     assert!(
         contents.contains("topics: [linux, performance]\n"),
         "{contents}"
+    );
+    assert!(
+        contents.contains("research: 202608/artifact_reference_rendering.md\n"),
+        "{contents}"
+    );
+    assert!(
+        !contents.contains("highlights_marker_fields"),
+        "research should not require an unknown-field opt-in:\n{contents}"
     );
     assert!(
         contents.contains("source_pdf: lib/systems-performance.pdf\n"),
@@ -9630,6 +9702,17 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
             && stdout(&output).contains("writes: none"),
         "bare marker parent should be idempotent:\n{}",
         format_output(&output)
+    );
+    let repeat_contents =
+        fs::read_to_string(&note).expect("read repeat-synced ref note");
+    assert!(
+        repeat_contents
+            .contains("research: 202608/artifact_reference_rendering.md\n"),
+        "{repeat_contents}"
+    );
+    assert!(
+        !repeat_contents.contains("highlights_marker_fields"),
+        "research should remain standard after repeat sync:\n{repeat_contents}"
     );
 
     let edited = fs::read_to_string(&note)

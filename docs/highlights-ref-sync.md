@@ -34,7 +34,7 @@ writes files.
 Available commands:
 
 ```bash
-bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-l|--lib-dir PATH] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR]
+bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-l|--lib-dir PATH] [-P|--parent NOTE] [-r|--ref-dir PATH] [-R|--research-root PATH] [-s|--status STATUS] [-t|--ref-type DIR]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
 bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-w|--write-pdfs]
@@ -61,6 +61,28 @@ with `writes: none`. An existing target requires `-f, --force`; a same-stem
 Markdown file beside the target PDF is always refused because the scanner
 would interpret it as a Highlights sidecar. `BOB_PANDOC_COMMAND` overrides the
 pandoc executable, and a render failure includes pandoc's diagnostic output.
+`-R, --research-root <PATH>` opts into source provenance. Bob canonicalizes the
+root and Markdown source, requires the root to be a directory and the source to
+be contained by it, rejects empty, non-UTF-8, or non-normal relative results,
+and embeds the path with `/` separators:
+
+```text
+- status: ready
+- parent: obsidian_ref
+- title: <document title>
+- research: 202608/artifact_reference_rendering.md
+```
+
+The option is intended for repository-root hook execution, for example:
+
+```bash
+bob highlights create --research-root . 202608/artifact_reference_rendering.md
+```
+
+If the root is invalid or the source is outside it, the command fails before
+running pandoc or creating output directories. Without `--research-root`,
+manual `create` calls keep the previous marker shape and do not add
+`research`.
 
 Path configuration options are `-b, --bob-dir <PATH>`, `-l, --lib-dir <PATH>`,
 and `-r, --ref-dir <PATH>`. `scan` also accepts `-j, --jobs <N>`.
@@ -156,6 +178,7 @@ The marker note is an unordered list of `key: value` pairs:
 - status: ready
 - parent: obsidian
 - title: Systems Performance
+- research: 202608/artifact_reference_rendering.md
 - aliases: ["Systems Performance", "Brendan Gregg systems performance"]
 - topics: [linux, performance]
 - source_url: https://example.com/book
@@ -244,6 +267,11 @@ pipeline_version
 The command-managed `type` and `ref_type` fields are also excluded from marker
 sync. `type` is always rendered as `[[ref]]`; `ref_type` is rendered only when
 the PDF path is under `lib/<ref_type>/`.
+
+Standard synced user fields are `status`, `parent`, `title`, `research`,
+`aliases`, `topics`, `source_url`, `author`, and `published`. `research` is
+ordinary user frontmatter for the repository-relative Markdown source path and
+does not require `highlights_marker_fields`.
 
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or
