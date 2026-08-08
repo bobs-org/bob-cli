@@ -566,6 +566,62 @@ fn script_fallback_help_is_safe_and_plain() {
 }
 
 #[test]
+fn pomodoro_help_documents_show_stale_option() {
+    let temp = TempDir::new("bob-cli-pomodoro-show-stale-help");
+    let mut cases = vec![
+        (
+            bob_command()
+                .arg("pomodoro")
+                .arg("--help")
+                .output()
+                .expect("run bob pomodoro --help"),
+            "bob pomodoro --help",
+        ),
+        (
+            bob_pomodoro_command()
+                .arg("--help")
+                .output()
+                .expect("run bob_pomodoro --help"),
+            "bob_pomodoro --help",
+        ),
+    ];
+
+    cases.push((
+        bob_command()
+            .arg("pomodoro")
+            .arg("--help")
+            .env("BOB_CLI_USE_SCRIPT", "1")
+            .env("XDG_CACHE_HOME", temp.path().join("cache"))
+            .output()
+            .expect("run script fallback bob pomodoro --help"),
+        "script fallback bob pomodoro --help",
+    ));
+
+    for (output, label) in cases {
+        assert_success(&output);
+        let help = stdout(&output);
+        assert!(
+            help.contains("[-s|--show-stale]")
+                && help.contains("-s, --show-stale")
+                && help.contains("distinguish an old")
+                && help.contains("open Pomodoro from no open Pomodoro"),
+            "expected show-stale help in {label}:\n{help}"
+        );
+        assert_text_order(
+            &help,
+            &[
+                "-d, --debug",
+                "-h, --help",
+                "-s, --show-stale",
+                "-v, --verbose",
+            ],
+        );
+        assert_no_long_only_option_lines(label, &help);
+        assert_stdout_has_no_ansi(&output);
+    }
+}
+
+#[test]
 fn script_fallback_bob_sync_help_exits_before_work() {
     let temp = TempDir::new("bob-cli-script-bob-sync-help");
     let stub_bin = temp.path().join("bin");
@@ -15041,6 +15097,68 @@ fn script_pomodoro_accepts_legacy_unbolded_time_range() {
 }
 
 #[test]
+fn pomodoro_stale_cutoff_is_empty_unless_requested() {
+    for script_fallback in [false, true] {
+        let output = run_pomodoro_fixture(
+            &[],
+            "pomodoro/day_with_open_pomodoro.md",
+            "2026-06-01 10:25:00",
+            script_fallback,
+        );
+        assert_success(&output);
+        assert!(
+            stdout(&output).is_empty(),
+            "default stale Pomodoro output should be empty with script_fallback={script_fallback}:\n{}",
+            format_output(&output)
+        );
+
+        let output = run_pomodoro_fixture(
+            &["--show-stale"],
+            "pomodoro/day_with_open_pomodoro.md",
+            "2026-06-01 10:25:00",
+            script_fallback,
+        );
+        assert_success(&output);
+        assert_eq!(
+            stdout(&output),
+            "[OVERDUE by 10m] 0945-1015 Review crate skeleton\n",
+            "show-stale should report exact cutoff with script_fallback={script_fallback}"
+        );
+
+        let output = run_pomodoro_fixture(
+            &["-s"],
+            "pomodoro/day_with_open_pomodoro.md",
+            "2026-06-01 10:31:01",
+            script_fallback,
+        );
+        assert_success(&output);
+        assert_eq!(
+            stdout(&output),
+            "[OVERDUE by 16m] 0945-1015 Review crate skeleton\n",
+            "short show-stale alias should report beyond cutoff with script_fallback={script_fallback}"
+        );
+    }
+}
+
+#[test]
+fn pomodoro_show_stale_keeps_no_open_day_empty() {
+    for script_fallback in [false, true] {
+        let output = run_pomodoro_fixture(
+            &["--show-stale"],
+            "pomodoro/day_without_open_pomodoro.md",
+            "2026-06-01 10:25:00",
+            script_fallback,
+        );
+        assert_success(&output);
+        assert!(
+            stdout(&output).is_empty(),
+            "show-stale should not invent an open Pomodoro with script_fallback={script_fallback}:\n{}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
 fn pomodoro_missing_day_file_is_a_successful_noop() {
     let temp = TempDir::new("bob-cli-pomodoro-missing");
     let output = bob_command()
@@ -15613,6 +15731,30 @@ fn bob_sync_command() -> Command {
 
 fn tmux_bob_pomodoro_command() -> Command {
     Command::new(TMUX_BOB_POMODORO_BIN)
+}
+
+fn run_pomodoro_fixture(
+    args: &[&str],
+    fixture_relative: &str,
+    now: &str,
+    script_fallback: bool,
+) -> Output {
+    let temp = TempDir::new("bob-cli-pomodoro-fixture");
+    let mut command = bob_command();
+    command
+        .arg("pomodoro")
+        .args(args)
+        .env("BOB_DAY_FILE", fixture(fixture_relative))
+        .env("BOB_NOW", now)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"));
+
+    if script_fallback {
+        command.env("BOB_CLI_USE_SCRIPT", "1");
+    }
+
+    command.output().unwrap_or_else(|error| {
+        panic!("run bob pomodoro {args:?} with {fixture_relative}: {error}")
+    })
 }
 
 fn fixture(relative: &str) -> PathBuf {

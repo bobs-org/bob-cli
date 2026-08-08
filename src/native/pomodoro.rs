@@ -27,6 +27,7 @@ impl Error {
 
 #[derive(Debug, Default)]
 struct Options {
+    show_stale: bool,
     verbose: bool,
 }
 
@@ -51,7 +52,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
     };
 
-    match status(options.verbose) {
+    match status(options.verbose, options.show_stale) {
         Ok(Some(output)) => {
             println!("{output}");
             0
@@ -87,10 +88,10 @@ pub(crate) fn run_tmux(args: Vec<OsString>) -> i32 {
 }
 
 pub(crate) fn status_from_env() -> Result<Option<String>, Error> {
-    status(false)
+    status(false, false)
 }
 
-fn status(verbose: bool) -> Result<Option<String>, Error> {
+fn status(verbose: bool, show_stale: bool) -> Result<Option<String>, Error> {
     let day_file = day_file();
     if !day_file.is_file() {
         debug(
@@ -139,7 +140,7 @@ fn status(verbose: bool) -> Result<Option<String>, Error> {
     let output = format_pomodoro(&ledger_pomodoro.range, &ledger_pomodoro.task);
 
     if now_minus_end > 0 {
-        if now_minus_end < 600 {
+        if show_stale || now_minus_end < 600 {
             let overdue_minutes = now_minus_end / 60;
             return Ok(Some(format!(
                 "[OVERDUE by {overdue_minutes}m] {output}"
@@ -163,6 +164,9 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
             "-h" | "--help" => return ParseResult::Help,
             "-d" | "--debug" | "-v" | "--verbose" => {
                 options.verbose = true;
+            }
+            "-s" | "--show-stale" => {
+                options.show_stale = true;
             }
             _ => {
                 return ParseResult::Error(Error::new(
@@ -511,7 +515,7 @@ fn print_tmux_error(error: &Error) {
 fn print_help() {
     println!(
         "\
-usage: bob pomodoro [-d|--debug] [-v|--verbose]
+usage: bob pomodoro [-d|--debug] [-s|--show-stale] [-v|--verbose]
        bob pomodoro -h
 
 Show the current Pomodoro status from today's Bob daily note.
@@ -519,7 +523,8 @@ Show the current Pomodoro status from today's Bob daily note.
 The command prints the latest open Pomodoro ledger entry with the remaining
 time or recent overdue status. It exits successfully with no output when the
 daily note is missing, has no open Pomodoro, or the Pomodoro is more than nine
-minutes overdue.
+minutes overdue. Pass --show-stale when a consumer needs to distinguish an old
+open Pomodoro from no open Pomodoro.
 
 environment:
   BOB_DAY_FILE  exact daily note path to read
@@ -527,9 +532,10 @@ environment:
   BOB_NOW       override the current timestamp for status calculations
 
 options:
-  -d, --debug    enable debug tracing
-  -h, --help     show this help message and exit
-  -v, --verbose  enable verbose debug output"
+  -d, --debug       enable debug tracing
+  -h, --help        show this help message and exit
+  -s, --show-stale  show open Pomodoros after the stale cutoff
+  -v, --verbose     enable verbose debug output"
     );
 }
 

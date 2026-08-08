@@ -811,6 +811,12 @@ Ledger entries may use bold Markdown ranges such as
 `(**0945-1015** [t:: 30m])`; command output remains plain, for example
 `0945-1015 Review crate skeleton`.
 
+By default, an open Pomodoro that is more than nine minutes overdue produces no
+output. Consumers that need to distinguish an old open entry from no open entry
+can pass `-s` or `--show-stale`; stale open Pomodoros keep the same normalized
+`[OVERDUE by <minutes>m] HHMM-HHMM <task>` output shape as recent overdue
+Pomodoros.
+
 ```bash
 bob notify PRE_CHECK_SLEEP POST_NOTIFY_SLEEP
 ```

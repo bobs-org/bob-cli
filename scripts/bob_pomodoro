@@ -55,7 +55,7 @@ function get_day_file() {
 
 function print_help() {
   cat <<EOF
-usage: ${SCRIPTNAME} [-d|--debug] [-v|--verbose]
+usage: ${SCRIPTNAME} [-d|--debug] [-s|--show-stale] [-v|--verbose]
        ${SCRIPTNAME} -h
 
 Show the current Pomodoro status from today's Bob daily note.
@@ -63,7 +63,8 @@ Show the current Pomodoro status from today's Bob daily note.
 The command prints the latest open Pomodoro ledger entry with the remaining
 time or recent overdue status. It exits successfully with no output when the
 daily note is missing, has no open Pomodoro, or the Pomodoro is more than nine
-minutes overdue.
+minutes overdue. Pass --show-stale when a consumer needs to distinguish an old
+open Pomodoro from no open Pomodoro.
 
 environment:
   BOB_DIR       Bob vault path for the default daily note path
@@ -72,9 +73,10 @@ environment:
   HOME          used when BOB_DIR is unset or starts with ~
 
 options:
-  -d, --debug    enable debug tracing
-  -h, --help     show this help message and exit
-  -v, --verbose  enable verbose debug output
+  -d, --debug       enable debug tracing
+  -h, --help        show this help message and exit
+  -s, --show-stale  show open Pomodoros after the stale cutoff
+  -v, --verbose     enable verbose debug output
 EOF
 }
 
@@ -165,6 +167,7 @@ function format_pomodoro() {
 }
 
 function run() {
+  local show_stale=0
   local arg
   for arg in "$@"; do
     if [[ "${arg}" == "-h" || "${arg}" == "--help" ]]; then
@@ -178,6 +181,9 @@ function run() {
     -d | --debug)
       PS4='$LINENO: '
       set -x
+      ;;
+    -s | --show-stale)
+      show_stale=1
       ;;
     -v | --verbose)
       export VERBOSE=1
@@ -220,7 +226,7 @@ function run() {
     local overdue_minutes
     overdue_minutes=$((now_minus_end / 60))
 
-    if [[ ${now_minus_end} -lt 600 ]]; then
+    if [[ ${show_stale} -eq 1 || ${now_minus_end} -lt 600 ]]; then
       output="[OVERDUE by ${overdue_minutes}m] ${output}"
     else
       output=""
