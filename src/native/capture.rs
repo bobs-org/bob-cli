@@ -425,10 +425,11 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         .as_ref()
         .map(|resolved| (resolved.name.as_str(), resolved.value.as_str()));
     let schedule_log_reason = priority.as_ref().and_then(|resolved| {
-        resolved.rolled_offset.map(|_| {
+        resolved.rolled_offset.map(|rolled_days| {
             capture_schedule_log::priority_roll_reason(
                 capture_schedule_log::IMPLICIT_LEVEL_LABEL,
                 &resolved.label,
+                rolled_days,
                 resolved.min_days,
                 resolved.max_days,
             )
@@ -3401,7 +3402,7 @@ mod tests {
         ];
         let schedule_log_lines = vec![
             "\t- 🗓️ **SCHEDULE LOG**".to_string(),
-            "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in 91–365 days"
+            "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in **91** (91–365) days"
                 .to_string(),
         ];
 
@@ -3418,7 +3419,7 @@ mod tests {
                 "\t- clip child one",
                 "\t- clip child two",
                 "\t- 🗓️ **SCHEDULE LOG**",
-                "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in 91–365 days",
+                "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in **91** (91–365) days",
             ]
             .join("\n")
         );

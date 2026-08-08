@@ -256,18 +256,24 @@ written.
 Choosing P1, P2, P3, or P4 writes the priority and rolls a `scheduled` date
 inside that level's configured window in one guarded edit. Counted sessions
 (`N<Ctrl+Shift+P>`) apply the same priority to each selected task while rolling
-an independent scheduled date per task. On a `^prj` lifecycle task, priority
+an independent scheduled date per task, and each generated schedule-log reason
+records that task's own selected offset. On a `^prj` lifecycle task, priority
 stays inline and the rolled date goes to project frontmatter, matching ordinary
 `scheduled` picker behavior for project notes.
 
 The write also records a `🗓️ **SCHEDULE LOG**` entry naming the priority
-transition and the roll window, without prompting:
+transition, the exact selected relative day, and the configured roll window,
+without prompting:
 
 ```markdown
 - [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-09-02] ^ship
   - 🗓️ **SCHEDULE LOG**
-    - _2026-08-13 → 2026-09-02_ — 🎲 priority P1 → P2 · random in 8–30 days
+    - _2026-08-13 → 2026-09-02_ — 🎲 priority P1 → P2 · random in **20** (8–30) days
 ```
+
+The bold number is the actual day offset selected for the scheduled date. The
+parenthesized range is the configured priority window, and both endpoints are
+shown even when they are equal.
 
 See [Schedule-log reason prompt](#schedule-log-reason-prompt) for the full
 deterministic-reason rules.
@@ -280,8 +286,10 @@ row. Capture leaves the task's `[ ]` marker as written; `bob task-status-hooks`
 is what later marks a future-scheduled task Blocked, not capture itself. A
 rolled `p:<N>` also writes the same `🗓️ **SCHEDULE LOG**` entry the picker
 would, always as a `priority P0 → <to>` transition since a brand-new capture
-never has a previous priority field. `p:<N> s:<N>` writes no entry, because
-the explicit `s:<N>` wins the scheduled date and the roll never happens; see
+never has a previous priority field. Its JSON output keeps the same
+`schedule_log` shape; only the rendered reason string and rendered line text
+carry the bold exact offset. `p:<N> s:<N>` writes no entry, because the
+explicit `s:<N>` wins the scheduled date and the roll never happens; see
 [Schedule-log reason prompt](#schedule-log-reason-prompt).
 
 After a priority write, the Obsidian notice shows the chosen P-level, the
@@ -342,14 +350,14 @@ prompt on a task that already keeps a log, are marked with a leading emoji so
 they read as machine-written months later — 🎲 for a date the software rolled,
 🤷 for a date the user chose but declined to explain:
 
-| Gesture                                                     | Reason text                                      |
-| ------------------------------------------------------------ | ------------------------------------------------- |
-| Priority level picked, previous level differs                 | `🎲 priority <from> → <to> · random in <window>` |
-| Priority level picked, task had no priority field              | `🎲 priority P0 → <to> · random in <window>` |
-| Priority level re-picked unchanged                             | `🎲 priority <level> · random in <window>` |
-| Pinned roll suggestion chosen in the `scheduled` stage          | `🎲 <level> roll · random in <window>` |
-| Reason prompt skipped on a task that already has a log          | `🤷 no reason given` |
-| `bob capture <text> p:<N>` rolls the scheduled date             | `🎲 priority P0 → <to> · random in <window>` |
+| Gesture                                                       | Reason text                                                             |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Priority level picked, previous level differs                 | `🎲 priority <from> → <to> · random in **<chosen>** (<min>–<max>) days` |
+| Priority level picked, task had no priority field             | `🎲 priority P0 → <to> · random in **<chosen>** (<min>–<max>) days` |
+| Priority level re-picked unchanged                            | `🎲 priority <level> · random in **<chosen>** (<min>–<max>) days` |
+| Pinned roll suggestion chosen in the `scheduled` stage         | `🎲 <level> roll · random in **<chosen>** (<min>–<max>) days` |
+| Reason prompt skipped on a task that already has a log         | `🤷 no reason given` |
+| `bob capture <text> p:<N>` rolls the scheduled date            | `🎲 priority P0 → <to> · random in **<chosen>** (<min>–<max>) days` |
 
 `bob capture` has no interactive stage, so it never prompts for a reason and
 never writes the `🤷 no reason given` fallback: a captured task is always a

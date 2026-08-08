@@ -1,8 +1,8 @@
 //! Byte-for-byte parity with the Obsidian `Ctrl+Shift+P` picker's
 //! `🗓️ **SCHEDULE LOG**` marker and roll-reason text. Mirrors the constants
-//! near `plugins/bob-navigation-hotkeys/main.js:250-274` and the formatters
-//! near `:1470-1763`; `scripts/test-navigation-hotkeys.cjs:4365-4367` is the
-//! picker's own fixture of the exact bytes reproduced here.
+//! near `plugins/bob-navigation-hotkeys/main.js:250-274` and the plugin's
+//! schedule-log/priority-roll formatters; `scripts/test-navigation-hotkeys.cjs`
+//! keeps the picker's own fixture of the exact bytes reproduced here.
 
 use serde::Serialize;
 
@@ -33,6 +33,7 @@ pub(crate) const IMPLICIT_LEVEL_LABEL: &str = "P0";
 pub(crate) fn priority_roll_reason(
     from_label: &str,
     to_label: &str,
+    rolled_days: u64,
     min_days: u64,
     max_days: u64,
 ) -> String {
@@ -42,7 +43,7 @@ pub(crate) fn priority_roll_reason(
         format!("{from_label} {TRANSITION} {to_label}")
     };
     format!(
-        "{AUTO_REASON_EMOJI} priority {head} {AUTO_REASON_SEPARATOR} random in {min_days}\u{2013}{max_days} days"
+        "{AUTO_REASON_EMOJI} priority {head} {AUTO_REASON_SEPARATOR} random in **{rolled_days}** ({min_days}\u{2013}{max_days}) days"
     )
 }
 
@@ -93,13 +94,13 @@ mod tests {
     // with it.
     #[test]
     fn plan_matches_the_picker_fixture() {
-        let reason = priority_roll_reason("P0", "P4", 91, 365);
+        let reason = priority_roll_reason("P0", "P4", 91, 91, 365);
         let log = plan("\t", "2026-11-02", reason);
         assert_eq!(
             log.lines,
             vec![
                 "\t- 🗓️ **SCHEDULE LOG**",
-                "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in 91–365 days",
+                "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in **91** (91–365) days",
             ]
         );
     }
@@ -113,7 +114,7 @@ mod tests {
 
     #[test]
     fn entry_line_uses_the_exact_codepoints() {
-        let reason = priority_roll_reason("P0", "P4", 91, 365);
+        let reason = priority_roll_reason("P0", "P4", 91, 91, 365);
         let entry = entry_text(None, "2026-11-02", &reason);
         assert!(entry.contains('\u{2014}'), "missing em dash separator");
         assert!(entry.contains('\u{1F3B2}'), "missing die emoji");
@@ -124,7 +125,7 @@ mod tests {
 
     #[test]
     fn plan_uses_a_two_space_indent_unit() {
-        let reason = priority_roll_reason("P0", "P1", 2, 7);
+        let reason = priority_roll_reason("P0", "P1", 2, 2, 7);
         let log = plan("  ", "2026-08-05", reason);
         assert_eq!(log.lines[0], "  - 🗓️ **SCHEDULE LOG**");
         assert!(log.lines[1].starts_with("    - "));
@@ -147,8 +148,16 @@ mod tests {
     #[test]
     fn priority_roll_reason_collapses_when_the_level_is_unchanged() {
         assert_eq!(
-            priority_roll_reason("P2", "P2", 8, 30),
-            "🎲 priority P2 · random in 8–30 days"
+            priority_roll_reason("P2", "P2", 17, 8, 30),
+            "🎲 priority P2 · random in **17** (8–30) days"
+        );
+    }
+
+    #[test]
+    fn priority_roll_reason_keeps_fixed_window_endpoints() {
+        assert_eq!(
+            priority_roll_reason("P0", "P1", 4, 4, 4),
+            "🎲 priority P0 → P1 · random in **4** (4–4) days"
         );
     }
 }

@@ -128,10 +128,13 @@ entry recording why, byte-for-byte matching what the Obsidian
 `Ctrl+Shift+P` picker writes for the same level with no reason prompt:
 
 ```markdown
-- [ ] #task someday idea [created::2026-08-07] [priority::lowest] [scheduled::2026-11-02]
+- [ ] #task someday idea [created::2026-08-07] [priority::lowest] [scheduled::2026-11-06]
 	- 🗓️ **SCHEDULE LOG**
-		- *2026-11-02* — 🎲 priority P0 → P4 · random in 91–365 days
+		- *2026-11-06* — 🎲 priority P0 → P4 · random in **91** (91–365) days
 ```
+
+The bold number is the exact relative day offset selected for that scheduled
+date. The parenthesized range is the configured priority window.
 
 A `p:<N> s:<N>` capture writes no entry, since `s:<N>` wins the scheduled date
 and no roll happened. An out-of-range `p:<N>` fails with a usage error naming
@@ -342,8 +345,10 @@ capture without `p:<N>` omits both fields.
 A `p:<N>` capture that actually rolled the scheduled date additionally
 includes a `schedule_log` object: `reason` (the `🎲 …` text) and `lines` (the
 exact rendered `🗓️ **SCHEDULE LOG**` marker and entry lines, in note order).
-`schedule_log` is omitted when `p:<N>` was not given, or when `s:<N>` won the
-scheduled date and no roll happened.
+The schema is unchanged; the reason text records the exact selected day count
+in bold and the configured range in parentheses. `schedule_log` is omitted
+when `p:<N>` was not given, or when `s:<N>` won the scheduled date and no roll
+happened.
 
 Clipboard captures additionally include a `clip` object. Single captures keep
 the existing shape: `header`, `mode` (`"inline"`, `"lines"`, `"attachments"`,
