@@ -13,8 +13,8 @@ use super::{
     atomic_save_pdf, bob_dir_arg, dry_run_arg, lib_dir_arg,
     parse_marker_with_normalization, pdf_text_string, ref_dir_arg,
     render_marker, validate_marker_parent_value, validate_required_marker_keys,
-    CommandError, Config, MarkerValue, Projection, Result, FIELD_PARENT,
-    FIELD_RESEARCH, FIELD_STATUS,
+    CommandError, Config, MarkerValue, Projection, Result, FIELD_ID,
+    FIELD_PARENT, FIELD_STATUS,
 };
 use crate::native::style::Styler;
 
@@ -66,9 +66,9 @@ end
 struct CreateOptions {
     dry_run: bool,
     force: bool,
+    include_id: bool,
     parent: String,
     ref_type: String,
-    research_root: Option<PathBuf>,
     status: String,
 }
 
@@ -78,7 +78,7 @@ struct CreatePlan {
     target: PathBuf,
     sidecar: PathBuf,
     title: String,
-    research: Option<String>,
+    id: Option<String>,
     marker: String,
 }
 
@@ -101,6 +101,13 @@ pub(super) fn command() -> ClapCommand {
                 .action(ArgAction::SetTrue)
                 .help("Overwrite an existing target PDF"),
         )
+        .arg(
+            Arg::new("include-id")
+                .long("include-id")
+                .short('i')
+                .action(ArgAction::SetTrue)
+                .help("Embed the Markdown filename without .md as marker id"),
+        )
         .arg(lib_dir_arg())
         .arg(
             Arg::new("parent")
@@ -111,14 +118,6 @@ pub(super) fn command() -> ClapCommand {
                 .help("Bare Obsidian note target for the marker parent"),
         )
         .arg(ref_dir_arg())
-        .arg(
-            Arg::new("research-root")
-                .long("research-root")
-                .short('R')
-                .value_name("PATH")
-                .value_parser(clap::builder::OsStringValueParser::new())
-                .help("Embed the Markdown source path relative to this research root"),
-        )
         .arg(
             Arg::new("status")
                 .long("status")
@@ -158,6 +157,7 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
     let options = CreateOptions {
         dry_run: matches.get_flag("dry-run"),
         force: matches.get_flag("force"),
+        include_id: matches.get_flag("include-id"),
         parent: matches
             .get_one::<String>("parent")
             .expect("defaulted by clap")
@@ -166,9 +166,6 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
             .get_one::<String>("ref-type")
             .expect("defaulted by clap")
             .clone(),
-        research_root: matches
-            .get_one::<OsString>("research-root")
-            .map(|value| PathBuf::from(value.as_os_str())),
         status: matches
             .get_one::<String>("status")
             .expect("defaulted by clap")
@@ -253,8 +250,8 @@ fn create_pdf(
     println!("title: {}", plan.title);
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
-    if let Some(research) = &plan.research {
-        println!("research: {research}");
+    if let Some(id) = &plan.id {
+        println!("id: {id}");
     }
     println!("pages: {page_count}");
     println!("next: bob highlights scan");
@@ -273,10 +270,9 @@ fn plan_create(
             source.display()
         ))
     })?;
-    let research = options
-        .research_root
-        .as_deref()
-        .map(|root| derive_research_path(&source, root))
+    let id = options
+        .include_id
+        .then(|| derive_marker_id(&source))
         .transpose()?;
     let markdown = fs::read_to_string(&source).map_err(|error| {
         CommandError::new(format!(
@@ -290,7 +286,7 @@ fn plan_create(
         &options.status,
         &options.parent,
         &title,
-        research.as_deref(),
+        id.as_deref(),
     )?;
     let stem = source.file_stem().ok_or_else(|| {
         CommandError::new(format!(
@@ -324,64 +320,27 @@ fn plan_create(
         target,
         sidecar,
         title,
-        research,
+        id,
         marker,
     })
 }
 
-fn derive_research_path(source: &Path, root: &Path) -> Result<String> {
-    let root = fs::canonicalize(root).map_err(|error| {
+fn derive_marker_id(source: &Path) -> Result<String> {
+    let stem = source.file_stem().ok_or_else(|| {
         CommandError::new(format!(
-            "resolve research root {} for Markdown source {}: {error}",
-            root.display(),
+            "Markdown source {} has no filename stem for marker id",
             source.display()
         ))
     })?;
-    if !root.is_dir() {
-        return Err(CommandError::new(format!(
-            "research root {} for Markdown source {} is not a directory",
-            root.display(),
-            source.display()
-        )));
-    }
-
-    let relative = source.strip_prefix(&root).map_err(|_| {
-        CommandError::new(format!(
-            "Markdown source {} is not contained by research root {}",
-            source.display(),
-            root.display()
-        ))
-    })?;
-
-    let mut parts = Vec::new();
-    for component in relative.components() {
-        let Component::Normal(part) = component else {
-            return Err(CommandError::new(format!(
-                "research path for Markdown source {} under research root {} is not a normal relative path: {}",
-                source.display(),
-                root.display(),
-                relative.display()
-            )));
-        };
-        let Some(part) = part.to_str().filter(|part| !part.is_empty()) else {
-            return Err(CommandError::new(format!(
-                "research path for Markdown source {} under research root {} is not valid UTF-8: {}",
-                source.display(),
-                root.display(),
-                relative.display()
-            )));
-        };
-        parts.push(part.to_string());
-    }
-
-    if parts.is_empty() {
-        return Err(CommandError::new(format!(
-            "research path for Markdown source {} under research root {} is empty",
-            source.display(),
-            root.display()
-        )));
-    }
-    Ok(parts.join("/"))
+    stem.to_str()
+        .filter(|stem| !stem.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CommandError::new(format!(
+                "Markdown source {} filename stem is not a nonempty UTF-8 marker id",
+                source.display()
+            ))
+        })
 }
 
 fn validate_markdown_path(source: &Path) -> Result<()> {
@@ -484,7 +443,7 @@ fn compose_marker(
     status: &str,
     parent: &str,
     title: &str,
-    research: Option<&str>,
+    id: Option<&str>,
 ) -> Result<String> {
     validate_marker_parent_value(
         parent,
@@ -502,11 +461,9 @@ fn compose_marker(
     );
     projection
         .insert("title".to_string(), MarkerValue::String(title.to_string()));
-    if let Some(research) = research {
-        projection.insert(
-            FIELD_RESEARCH.to_string(),
-            MarkerValue::String(research.to_string()),
-        );
+    if let Some(id) = id {
+        projection
+            .insert(FIELD_ID.to_string(), MarkerValue::String(id.to_string()));
     }
     validate_required_marker_keys(&projection, "create marker")?;
     let marker = render_marker(&projection)?;
@@ -684,8 +641,8 @@ fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
     println!("title: {}", plan.title);
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
-    if let Some(research) = &plan.research {
-        println!("research: {research}");
+    if let Some(id) = &plan.id {
+        println!("id: {id}");
     }
     println!("marker:");
     print!("{}", plan.marker);
@@ -721,9 +678,9 @@ mod tests {
         CreateOptions {
             dry_run: false,
             force: false,
+            include_id: false,
             parent: DEFAULT_PARENT.to_string(),
             ref_type: DEFAULT_REF_TYPE.to_string(),
-            research_root: None,
             status: DEFAULT_STATUS.to_string(),
         }
     }
@@ -777,36 +734,30 @@ mod tests {
             marker.projection.get(FIELD_STATUS),
             Some(&MarkerValue::String(DEFAULT_STATUS.to_string()))
         );
-        assert!(!marker.projection.contains_key(FIELD_RESEARCH));
+        assert!(!marker.projection.contains_key(FIELD_ID));
     }
 
     #[test]
-    fn plan_embeds_research_path_relative_to_root() {
-        let temp = TempDir::new("research-root");
-        let research_root = temp.path.join("research");
-        let source =
-            research_root.join("202608/artifact_reference_rendering.md");
+    fn plan_embeds_markdown_stem_id_when_opted_in() {
+        let temp = TempDir::new("include-id");
+        let source = temp
+            .path
+            .join("202608/xprompt_role_binding/xprompt_role_binding.md");
         fs::create_dir_all(source.parent().expect("source parent"))
             .expect("create source parent");
-        fs::write(&source, "# Artifact Reference Rendering\n")
-            .expect("write source");
+        fs::write(&source, "# Xprompt Role Binding\n").expect("write source");
         let mut options = options();
-        options.research_root = Some(research_root);
+        options.include_id = true;
 
         let plan =
             plan_create(&config(&temp.path), &source, &options).expect("plan");
 
-        assert_eq!(
-            plan.research.as_deref(),
-            Some("202608/artifact_reference_rendering.md")
-        );
+        assert_eq!(plan.id.as_deref(), Some("xprompt_role_binding"));
         let marker =
             parse_marker_with_normalization(&plan.marker).expect("marker");
         assert_eq!(
-            marker.projection.get(FIELD_RESEARCH),
-            Some(&MarkerValue::String(
-                "202608/artifact_reference_rendering.md".to_string()
-            ))
+            marker.projection.get(FIELD_ID),
+            Some(&MarkerValue::String("xprompt_role_binding".to_string()))
         );
     }
 

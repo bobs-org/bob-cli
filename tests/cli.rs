@@ -11,7 +11,10 @@ use std::{
 use chrono::Local;
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::{
+    ffi::OsStringExt,
+    fs::{MetadataExt, PermissionsExt},
+};
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -9279,13 +9282,17 @@ fn highlights_create_help_lists_options_alphabetically() {
             "-b, --bob-dir",
             "-d, --dry-run",
             "-f, --force",
+            "-i, --include-id",
             "-l, --lib-dir",
             "-P, --parent",
             "-r, --ref-dir",
-            "-R, --research-root",
             "-s, --status",
             "-t, --ref-type",
         ],
+    );
+    assert!(
+        !help.contains("--research-root"),
+        "obsolete research-root option must not be advertised:\n{help}"
     );
     assert_stdout_has_no_ansi(&output);
 }
@@ -9293,8 +9300,9 @@ fn highlights_create_help_lists_options_alphabetically() {
 #[test]
 fn highlights_create_dry_run_prints_plan_without_writes() {
     let temp = TempDir::new("bob-cli-highlights-create-dry-run");
-    let research_root = temp.path().join("research");
-    let source = research_root.join("202608/artifact_reference_rendering.md");
+    let source = temp
+        .path()
+        .join("202608/xprompt_role_binding/xprompt_role_binding.md");
     let vault = temp.path().join("vault");
     write_file(
         &source,
@@ -9310,8 +9318,7 @@ fn highlights_create_dry_run_prints_plan_without_writes() {
         .arg("-d")
         .arg("-P")
         .arg("sase_ref")
-        .arg("-R")
-        .arg(&research_root)
+        .arg("-i")
         .arg("-s")
         .arg("next")
         .arg("-t")
@@ -9326,27 +9333,28 @@ fn highlights_create_dry_run_prints_plan_without_writes() {
         report.contains("A Useful Report")
             && report.contains("status: next")
             && report.contains("parent: sase_ref")
-            && report
-                .contains("research: 202608/artifact_reference_rendering.md")
-            && report.contains("lib/papers/artifact_reference_rendering.pdf")
-            && report
-                .contains("- research: 202608/artifact_reference_rendering.md")
+            && report.contains("id: xprompt_role_binding")
+            && report.contains("lib/papers/xprompt_role_binding.pdf")
+            && report.contains("- id: xprompt_role_binding")
             && report.contains("writes: none"),
         "{report}"
     );
+    assert!(!report.contains("research:"), "{report}");
     assert!(!vault.exists(), "dry-run must not create the vault");
 }
 
+#[cfg(unix)]
 #[test]
-fn highlights_create_rejects_source_outside_research_root_before_writes() {
-    let temp = TempDir::new("bob-cli-highlights-create-research-root-outside");
-    let source = temp.path().join("outside/artifact_reference_rendering.md");
-    let research_root = temp.path().join("research");
+fn highlights_create_rejects_non_utf8_include_id_before_writes() {
+    let temp = TempDir::new("bob-cli-highlights-create-invalid-id");
+    let source = temp
+        .path()
+        .join("research")
+        .join(OsString::from_vec(b"xprompt_\xff.md".to_vec()));
     let vault = temp.path().join("vault");
     let pandoc = temp.path().join("pandoc");
     let sentinel = temp.path().join("pandoc-invoked");
-    write_file(&source, "# Outside Research\n");
-    fs::create_dir_all(&research_root).expect("create research root");
+    write_file(&source, "# Invalid ID\n");
     write_executable(
         &pandoc,
         &format!(
@@ -9361,23 +9369,23 @@ fn highlights_create_rejects_source_outside_research_root_before_writes() {
         .arg(&source)
         .arg("-b")
         .arg(&vault)
-        .arg("--research-root")
-        .arg(&research_root)
+        .arg("--include-id")
         .env("BOB_PANDOC_COMMAND", &pandoc)
         .output()
-        .expect("run bob highlights create outside research root");
+        .expect("run bob highlights create invalid id");
 
     assert_eq!(
         output.status.code(),
         Some(1),
-        "outside research root should fail:\n{}",
+        "invalid include-id source should fail:\n{}",
         format_output(&output)
     );
     let diagnostic = stderr(&output);
     assert!(
-        diagnostic.contains("not contained by research root")
-            && diagnostic.contains(path_str(&source))
-            && diagnostic.contains(path_str(&research_root)),
+        diagnostic.contains("filename stem is not a nonempty UTF-8 marker id")
+            && diagnostic.contains("xprompt_")
+            && diagnostic.contains(".md")
+            && diagnostic.contains("Markdown source"),
         "{diagnostic}"
     );
     assert!(!vault.exists(), "failure must happen before vault writes");
@@ -9438,8 +9446,9 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
     }
 
     let temp = TempDir::new("bob-cli-highlights-create-render");
-    let research_root = temp.path().join("research");
-    let source = research_root.join("202608/artifact_reference_rendering.md");
+    let source = temp
+        .path()
+        .join("202608/xprompt_role_binding/xprompt_role_binding.md");
     let vault = temp.path().join("vault");
     write_file(
         &source,
@@ -9467,21 +9476,20 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
         .arg(&source)
         .arg("-b")
         .arg(&vault)
-        .arg("--research-root")
-        .arg(&research_root)
+        .arg("--include-id")
         .output()
         .expect("run bob highlights create");
 
     assert_success(&output);
     let report = stdout(&output);
-    let pdf = vault.join("lib/chat/artifact_reference_rendering.pdf");
+    let pdf = vault.join("lib/chat/xprompt_role_binding.pdf");
     assert!(
         report.contains("created Highlights-ready PDF")
-            && report
-                .contains("research: 202608/artifact_reference_rendering.md")
+            && report.contains("id: xprompt_role_binding")
             && report.contains("next: bob highlights scan"),
         "{report}"
     );
+    assert!(!report.contains("research:"), "{report}");
     assert!(pdf.is_file(), "missing rendered PDF: {}", pdf.display());
 
     let document = lopdf::Document::load(&pdf)
@@ -9513,10 +9521,8 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
         marker.contains("- title: Rendered Research Report\n"),
         "{marker}"
     );
-    assert!(
-        marker.contains("- research: 202608/artifact_reference_rendering.md\n"),
-        "{marker}"
-    );
+    assert!(marker.contains("- id: xprompt_role_binding\n"), "{marker}");
+    assert!(!marker.contains("- research:"), "{marker}");
 }
 
 #[test]
@@ -9636,7 +9642,7 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     let note = vault.join("ref/systems-performance.md");
     write_highlights_pdf(
         &pdf,
-        "- status: wip\n- parent: obsidian\n- title: Systems Performance\n- research: 202608/artifact_reference_rendering.md\n- topics: [linux, performance]\n",
+        "- status: wip\n- parent: obsidian\n- title: Systems Performance\n- id: systems-performance\n- topics: [linux, performance]\n",
     );
 
     let output = bob_command()
@@ -9663,13 +9669,10 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
         contents.contains("topics: [linux, performance]\n"),
         "{contents}"
     );
-    assert!(
-        contents.contains("research: 202608/artifact_reference_rendering.md\n"),
-        "{contents}"
-    );
+    assert!(contents.contains("id: systems-performance\n"), "{contents}");
     assert!(
         !contents.contains("highlights_marker_fields"),
-        "research should not require an unknown-field opt-in:\n{contents}"
+        "id should not require an unknown-field opt-in:\n{contents}"
     );
     assert!(
         contents.contains("source_pdf: lib/systems-performance.pdf\n"),
@@ -9706,13 +9709,12 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     let repeat_contents =
         fs::read_to_string(&note).expect("read repeat-synced ref note");
     assert!(
-        repeat_contents
-            .contains("research: 202608/artifact_reference_rendering.md\n"),
+        repeat_contents.contains("id: systems-performance\n"),
         "{repeat_contents}"
     );
     assert!(
         !repeat_contents.contains("highlights_marker_fields"),
-        "research should remain standard after repeat sync:\n{repeat_contents}"
+        "id should remain standard after repeat sync:\n{repeat_contents}"
     );
 
     let edited = fs::read_to_string(&note)
@@ -9736,6 +9738,59 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
         "{contents}"
     );
     assert_eq!(pdf_marker_contents(&pdf), marker_before);
+}
+
+#[test]
+fn highlights_ref_sync_preserves_legacy_research_frontmatter() {
+    let temp = TempDir::new("bob-cli-highlights-ref-legacy-research");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/artifact-reference-rendering.pdf");
+    let note = vault.join("ref/artifact-reference-rendering.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Artifact Reference Rendering\n- research: 202608/artifact_reference_rendering.md\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob highlights sync with legacy research");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read generated ref note");
+    assert!(
+        contents.contains("research: 202608/artifact_reference_rendering.md\n"),
+        "{contents}"
+    );
+    assert!(!contents.contains("\nid: "), "{contents}");
+    assert!(
+        !contents.contains("highlights_marker_fields"),
+        "legacy research should not require an unknown-field opt-in:\n{contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat bob highlights sync with legacy research");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("note_action: none")
+            && stdout(&output).contains("writes: none"),
+        "legacy research should be idempotent:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        pdf_marker_contents(&pdf)
+            .contains("- research: 202608/artifact_reference_rendering.md\n"),
+        "legacy research must remain in the PDF marker"
+    );
 }
 
 #[test]

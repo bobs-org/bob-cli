@@ -697,7 +697,7 @@ and `-p, --plugin <ID>` to sync a single plugin.
 The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 
 ```bash
-bob highlights create <md-file> [-d|--dry-run] [-f|--force] [-P|--parent NOTE] [-R|--research-root PATH] [-s|--status STATUS] [-t|--ref-type DIR]
+bob highlights create <md-file> [-d|--dry-run] [-f|--force] [-i|--include-id] [-P|--parent NOTE] [-s|--status STATUS] [-t|--ref-type DIR]
 bob highlights doctor
 bob highlights marker <pdf>
 bob highlights scan [-d|--dry-run] [-j|--jobs N] [-w|--write-pdfs]
@@ -714,14 +714,12 @@ stem). Use `--ref-type` to select another single library subdirectory,
 PDF. Creation always refuses a same-basename Markdown sidecar because
 Highlights would claim it as annotation data. Set `BOB_PANDOC_COMMAND` to
 override the pandoc executable.
-Use `--research-root PATH` to opt into source provenance. Bob canonicalizes the
-root and Markdown source, requires the source to be inside that root, and
-embeds a slash-separated UTF-8 relative marker property such as `research:
-202608/artifact_reference_rendering.md`. Omitting the option leaves the marker
-unchanged. A hook that runs from the research repository root can use
-`bob highlights create --research-root . 202608/artifact_reference_rendering.md`;
-invalid roots or outside-root sources fail before pandoc or output-directory
-writes.
+Use `--include-id` to embed the Markdown filename without its final `.md`
+extension as marker `id`. For example,
+`bob highlights create --include-id 202608/xprompt_role_binding/xprompt_role_binding.md`
+adds `id: xprompt_role_binding`. Omitting the option leaves manual `create`
+calls at the default marker shape. Invalid or non-UTF-8 filename stems fail
+before pandoc or output-directory writes.
 `sync <pdf>` reads the first standalone `/Text` PDF note annotation on page 1
 as the marker note, parses its `key: value` list, and creates or updates
 `ref/<ref_type>/<pdf-basename>.md` frontmatter and the managed Highlights body
@@ -749,9 +747,11 @@ carry `legacy_status` frontmatter to preserve the previous value; it is not a
 standard marker-synced field. Generated reference notes always include
 `type: "[[ref]]"` and include command-managed `ref_type` when it can be derived
 from the first library path component.
-The `research` marker/frontmatter property is a standard synced field, so
-generated reference notes retain it as ordinary frontmatter without a
-`highlights_marker_fields` opt-in.
+The `id` marker/frontmatter property is a standard synced field, so generated
+reference notes retain it as ordinary frontmatter without a
+`highlights_marker_fields` opt-in. Existing `research` properties from the old
+repository-relative source path rollout remain legacy standard fields and
+round-trip without automatic migration to `id`.
 
 The generated PDF `^ref` task is the visible lifecycle control: `[ ]` maps to
 `ready`, `[*]` to `next`, `[/]` to `wip`, `[x]`/`[X]` to `read`, and `[-]` to

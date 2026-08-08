@@ -34,7 +34,7 @@ writes files.
 Available commands:
 
 ```bash
-bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-l|--lib-dir PATH] [-P|--parent NOTE] [-r|--ref-dir PATH] [-R|--research-root PATH] [-s|--status STATUS] [-t|--ref-type DIR]
+bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
 bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-w|--write-pdfs]
@@ -61,28 +61,27 @@ with `writes: none`. An existing target requires `-f, --force`; a same-stem
 Markdown file beside the target PDF is always refused because the scanner
 would interpret it as a Highlights sidecar. `BOB_PANDOC_COMMAND` overrides the
 pandoc executable, and a render failure includes pandoc's diagnostic output.
-`-R, --research-root <PATH>` opts into source provenance. Bob canonicalizes the
-root and Markdown source, requires the root to be a directory and the source to
-be contained by it, rejects empty, non-UTF-8, or non-normal relative results,
-and embeds the path with `/` separators:
+`-i, --include-id` opts into a stable marker ID derived from the Markdown
+filename. Bob canonicalizes the Markdown source, removes only the final `.md`
+extension from the filename, requires the resulting stem to be nonempty valid
+UTF-8, and embeds it as `id`:
 
 ```text
 - status: ready
 - parent: obsidian_ref
 - title: <document title>
-- research: 202608/artifact_reference_rendering.md
+- id: xprompt_role_binding
 ```
 
-The option is intended for repository-root hook execution, for example:
+The option is intended for research hook execution, for example:
 
 ```bash
-bob highlights create --research-root . 202608/artifact_reference_rendering.md
+bob highlights create --include-id 202608/xprompt_role_binding/xprompt_role_binding.md
 ```
 
-If the root is invalid or the source is outside it, the command fails before
-running pandoc or creating output directories. Without `--research-root`,
-manual `create` calls keep the previous marker shape and do not add
-`research`.
+If the filename stem is invalid for marker output, the command fails before
+running pandoc or creating output directories. Without `--include-id`, manual
+`create` calls keep the previous marker shape and do not add `id`.
 
 Path configuration options are `-b, --bob-dir <PATH>`, `-l, --lib-dir <PATH>`,
 and `-r, --ref-dir <PATH>`. `scan` also accepts `-j, --jobs <N>`.
@@ -178,7 +177,7 @@ The marker note is an unordered list of `key: value` pairs:
 - status: ready
 - parent: obsidian
 - title: Systems Performance
-- research: 202608/artifact_reference_rendering.md
+- id: systems-performance
 - aliases: ["Systems Performance", "Brendan Gregg systems performance"]
 - topics: [linux, performance]
 - source_url: https://example.com/book
@@ -268,10 +267,12 @@ The command-managed `type` and `ref_type` fields are also excluded from marker
 sync. `type` is always rendered as `[[ref]]`; `ref_type` is rendered only when
 the PDF path is under `lib/<ref_type>/`.
 
-Standard synced user fields are `status`, `parent`, `title`, `research`,
-`aliases`, `topics`, `source_url`, `author`, and `published`. `research` is
-ordinary user frontmatter for the repository-relative Markdown source path and
-does not require `highlights_marker_fields`.
+Standard synced user fields are `status`, `parent`, `title`, `id`, `research`,
+`aliases`, `topics`, `source_url`, `author`, and `published`. `id` is ordinary
+user frontmatter for the basename-derived source identifier and does not
+require `highlights_marker_fields`. Existing `research` values remain legacy
+standard fields for repository-relative Markdown source paths; they round-trip
+without being renamed automatically to `id`.
 
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or

@@ -38,6 +38,7 @@ const ENV_REF_DIR: &str = "BOB_HIGHLIGHTS_REF_DIR";
 
 const FIELD_STATUS: &str = "status";
 const FIELD_PARENT: &str = "parent";
+const FIELD_ID: &str = "id";
 const FIELD_RESEARCH: &str = "research";
 const FIELD_NOTE_TYPE: &str = "type";
 const FIELD_REF_TYPE: &str = "ref_type";
@@ -100,6 +101,7 @@ const PIPELINE_FIELDS: &[&str] = &[
 const COMMON_USER_FIELDS: &[&str] = &[
     FIELD_PARENT,
     "title",
+    FIELD_ID,
     FIELD_RESEARCH,
     "aliases",
     "topics",
