@@ -130,7 +130,7 @@ entry recording why, byte-for-byte matching what the Obsidian
 ```markdown
 - [ ] #task someday idea [created::2026-08-07] [priority::lowest] [scheduled::2026-11-06]
 	- 🗓️ **SCHEDULE LOG**
-		- *2026-11-06* — 🎲 priority P0 → P4 · random in **91** (91–365) days
+		- *2026-11-06* — 🎲 P0 → P4 · in **91** (91–365) days
 ```
 
 The bold number is the exact relative day offset selected for that scheduled

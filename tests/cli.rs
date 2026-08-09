@@ -2790,7 +2790,7 @@ fn capture_priority_level_one_rolls_scheduled_date_in_window() {
     let expected = concat!(
         "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]\n",
         "\t- 🗓️ **SCHEDULE LOG**\n",
-        "\t\t- *2026-06-22* — 🎲 priority P0 → P1 · random in **7** (2–7) days\n",
+        "\t\t- *2026-06-22* — 🎲 P0 → P1 · in **7** (2–7) days\n",
     );
     assert!(
         stdout(&output).contains(task_line),
@@ -2847,7 +2847,7 @@ fn capture_priority_level_four_rolls_scheduled_date_in_window() {
     let expected = concat!(
         "- [ ] #task someday idea [created::2026-06-15] [priority::lowest] [scheduled::2027-05-12]\n",
         "\t- 🗓️ **SCHEDULE LOG**\n",
-        "\t\t- *2027-05-12* — 🎲 priority P0 → P4 · random in **331** (91–365) days\n",
+        "\t\t- *2027-05-12* — 🎲 P0 → P4 · in **331** (91–365) days\n",
     );
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
@@ -2997,13 +2997,13 @@ fn capture_priority_json_includes_priority_fields_only_when_set() {
     );
     assert_eq!(
         json["schedule_log"]["reason"],
-        "🎲 priority P0 → P3 · random in **36** (31–90) days"
+        "🎲 P0 → P3 · in **36** (31–90) days"
     );
     assert_eq!(
         json["schedule_log"]["lines"],
         serde_json::json!([
             "\t- 🗓️ **SCHEDULE LOG**",
-            "\t\t- *2026-07-21* — 🎲 priority P0 → P3 · random in **36** (31–90) days",
+            "\t\t- *2026-07-21* — 🎲 P0 → P3 · in **36** (31–90) days",
         ])
     );
 
@@ -3084,7 +3084,7 @@ fn capture_priority_renders_before_scheduled_and_before_pomodoro_block_id() {
             "- [ ] #task Existing\n",
             "- [*] #task Some foobar task. [created::2026-07-10] [priority::medium] [scheduled::2026-07-21] ^foobar\n",
             "\t- 🗓️ **SCHEDULE LOG**\n",
-            "\t\t- *2026-07-21* — 🎲 priority P0 → P2 · random in **11** (8–30) days\n",
+            "\t\t- *2026-07-21* — 🎲 P0 → P2 · in **11** (8–30) days\n",
         )
     );
 }
@@ -3123,7 +3123,7 @@ fn capture_priority_schedule_log_uses_the_target_notes_indent_unit() {
             .contains(concat!(
                 "- [ ] #task buy milk [created::2026-07-10] [priority::medium] [scheduled::2026-07-21]\n",
                 "  - 🗓️ **SCHEDULE LOG**\n",
-                "    - *2026-07-21* — 🎲 priority P0 → P2 · random in **11** (8–30) days\n",
+                "    - *2026-07-21* — 🎲 P0 → P2 · in **11** (8–30) days\n",
             )),
         "expected the SCHEDULE LOG block indented with the note's two-space unit"
     );
@@ -3163,7 +3163,7 @@ fn capture_priority_with_clip_orders_clip_children_before_schedule_log() {
             "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]\n",
             "\t- clipped note\n",
             "\t- 🗓️ **SCHEDULE LOG**\n",
-            "\t\t- *2026-06-22* — 🎲 priority P0 → P1 · random in **7** (2–7) days\n",
+            "\t\t- *2026-06-22* — 🎲 P0 → P1 · in **7** (2–7) days\n",
         ),
         "clip children must come before the schedule log"
     );
@@ -3205,7 +3205,7 @@ fn capture_priority_sub_bullet_nests_schedule_log_under_the_child() {
             "- [ ] #task Parent ^parent\n",
             "\t- buy milk [priority::medium] [scheduled::2026-07-21]\n",
             "\t\t- 🗓️ **SCHEDULE LOG**\n",
-            "\t\t\t- *2026-07-21* — 🎲 priority P0 → P2 · random in **11** (8–30) days\n",
+            "\t\t\t- *2026-07-21* — 🎲 P0 → P2 · in **11** (8–30) days\n",
         ),
         "the schedule log must nest under the captured child, and the parent line stays untouched"
     );
@@ -3242,8 +3242,7 @@ fn capture_priority_dry_run_prints_schedule_log_without_writing() {
     let out = stdout(&output);
     assert!(
         out.contains("🗓️ **SCHEDULE LOG**")
-            && out
-                .contains("🎲 priority P0 → P2 · random in **11** (8–30) days"),
+            && out.contains("🎲 P0 → P2 · in **11** (8–30) days"),
         "unexpected dry-run output:\n{out}"
     );
     assert!(

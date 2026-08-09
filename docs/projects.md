@@ -268,7 +268,7 @@ without prompting:
 ```markdown
 - [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-09-02] ^ship
   - 🗓️ **SCHEDULE LOG**
-    - _2026-08-13 → 2026-09-02_ — 🎲 priority P1 → P2 · random in **20** (8–30) days
+    - _2026-08-13 → 2026-09-02_ — 🎲 P1 → P2 · in **20** (8–30) days
 ```
 
 The bold number is the actual day offset selected for the scheduled date. The
@@ -285,7 +285,7 @@ same `~/.config/bob/config.yml` levels as the picker. `N` is the picker row
 row. Capture leaves the task's `[ ]` marker as written; `bob task-status-hooks`
 is what later marks a future-scheduled task Blocked, not capture itself. A
 rolled `p:<N>` also writes the same `🗓️ **SCHEDULE LOG**` entry the picker
-would, always as a `priority P0 → <to>` transition since a brand-new capture
+would, always as a `P0 → <to>` transition since a brand-new capture
 never has a previous priority field. Its JSON output keeps the same
 `schedule_log` shape; only the rendered reason string and rendered line text
 carry the bold exact offset. `p:<N> s:<N>` writes no entry, because the
@@ -352,12 +352,12 @@ they read as machine-written months later — 🎲 for a date the software rolle
 
 | Gesture                                                       | Reason text                                                             |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Priority level picked, previous level differs                 | `🎲 priority <from> → <to> · random in **<chosen>** (<min>–<max>) days` |
-| Priority level picked, task had no priority field             | `🎲 priority P0 → <to> · random in **<chosen>** (<min>–<max>) days` |
-| Priority level re-picked unchanged                            | `🎲 priority <level> · random in **<chosen>** (<min>–<max>) days` |
-| Pinned roll suggestion chosen in the `scheduled` stage         | `🎲 <level> roll · random in **<chosen>** (<min>–<max>) days` |
+| Priority level picked, previous level differs                 | `🎲 <from> → <to> · in **<chosen>** (<min>–<max>) days` |
+| Priority level picked, task had no priority field             | `🎲 P0 → <to> · in **<chosen>** (<min>–<max>) days` |
+| Priority level re-picked unchanged                            | `🎲 <level> · in **<chosen>** (<min>–<max>) days` |
+| Pinned roll suggestion chosen in the `scheduled` stage         | `🎲 <level> roll · in **<chosen>** (<min>–<max>) days` |
 | Reason prompt skipped on a task that already has a log         | `🤷 no reason given` |
-| `bob capture <text> p:<N>` rolls the scheduled date            | `🎲 priority P0 → <to> · random in **<chosen>** (<min>–<max>) days` |
+| `bob capture <text> p:<N>` rolls the scheduled date            | `🎲 P0 → <to> · in **<chosen>** (<min>–<max>) days` |
 
 `bob capture` has no interactive stage, so it never prompts for a reason and
 never writes the `🤷 no reason given` fallback: a captured task is always a

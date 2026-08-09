@@ -3402,7 +3402,7 @@ mod tests {
         ];
         let schedule_log_lines = vec![
             "\t- 🗓️ **SCHEDULE LOG**".to_string(),
-            "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in **91** (91–365) days"
+            "\t\t- *2026-11-02* — 🎲 P0 → P4 · in **91** (91–365) days"
                 .to_string(),
         ];
 
@@ -3419,7 +3419,7 @@ mod tests {
                 "\t- clip child one",
                 "\t- clip child two",
                 "\t- 🗓️ **SCHEDULE LOG**",
-                "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in **91** (91–365) days",
+                "\t\t- *2026-11-02* — 🎲 P0 → P4 · in **91** (91–365) days",
             ]
             .join("\n")
         );

@@ -27,9 +27,9 @@ pub(crate) const AUTO_REASON_SEPARATOR: &str = "·";
 pub(crate) const IMPLICIT_LEVEL_LABEL: &str = "P0";
 
 /// `formatPriorityRollScheduleReason` in main.js, restricted to the
-/// `source: "priority"` branch that a `p:<N>` capture always takes. The
-/// roll window's en dash (`U+2013`) is distinct from both the transition
-/// arrow and the entry separator's em dash.
+/// `source: "priority"` branch that a `p:<N>` capture always takes. The die
+/// emoji marks this as machine-rolled; the roll window's en dash (`U+2013`) is
+/// distinct from both the transition arrow and the entry separator's em dash.
 pub(crate) fn priority_roll_reason(
     from_label: &str,
     to_label: &str,
@@ -43,7 +43,7 @@ pub(crate) fn priority_roll_reason(
         format!("{from_label} {TRANSITION} {to_label}")
     };
     format!(
-        "{AUTO_REASON_EMOJI} priority {head} {AUTO_REASON_SEPARATOR} random in **{rolled_days}** ({min_days}\u{2013}{max_days}) days"
+        "{AUTO_REASON_EMOJI} {head} {AUTO_REASON_SEPARATOR} in **{rolled_days}** ({min_days}\u{2013}{max_days}) days"
     )
 }
 
@@ -100,7 +100,7 @@ mod tests {
             log.lines,
             vec![
                 "\t- 🗓️ **SCHEDULE LOG**",
-                "\t\t- *2026-11-02* — 🎲 priority P0 → P4 · random in **91** (91–365) days",
+                "\t\t- *2026-11-02* — 🎲 P0 → P4 · in **91** (91–365) days",
             ]
         );
     }
@@ -149,7 +149,7 @@ mod tests {
     fn priority_roll_reason_collapses_when_the_level_is_unchanged() {
         assert_eq!(
             priority_roll_reason("P2", "P2", 17, 8, 30),
-            "🎲 priority P2 · random in **17** (8–30) days"
+            "🎲 P2 · in **17** (8–30) days"
         );
     }
 
@@ -157,7 +157,7 @@ mod tests {
     fn priority_roll_reason_keeps_fixed_window_endpoints() {
         assert_eq!(
             priority_roll_reason("P0", "P1", 4, 4, 4),
-            "🎲 priority P0 → P1 · random in **4** (4–4) days"
+            "🎲 P0 → P1 · in **4** (4–4) days"
         );
     }
 }
