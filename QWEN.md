@@ -13,7 +13,7 @@ The following memories contain core (always loaded) context:
 
 ### 1. Glossary of Terms (glossary)
 
-#### Pomodoro
+#### 1.1 Pomodoro
 
 A checkbox item in the "Pomodoros" section of my Obsidian daily file that represents a
 particular session (or planned session) of work. Past pomodoros have a timespan
@@ -21,14 +21,14 @@ associated with them and are closed (i.e. checked). Current pomodoros have a tim
 but are open (i.e. unchecked). Future pomodoros have an empty `()` instead of a timespan
 and are also open (i.e. unchecked).
 
-#### Schedule Log
+#### 1.2 Schedule Log
 
 When the `<ctrl+shift+p>` Obsidian keymap is used to add the `scheduled` or `priority`
 dataview property to a task (or when the `bob capture` command's input argument contains
 the special `p:<N>` syntax), we add a `SCHEDULE LOG` bullet that contains one sub-bullet
 that corresponds with each time the task was scheduled / re-scheduled.
 
-#### Task Link
+#### 1.3 Task Link
 
 ALIASES: task block link
 
@@ -40,7 +40,7 @@ dependencies) of that task.
 
 ### 2. SASE = Structured Agentic Software Engineering (sase)
 
-#### Ephemeral `bob-cli_<N>` Workspace Directories
+#### 2.1 Ephemeral `bob-cli_<N>` Workspace Directories
 
 SASE runs agents (like you) from ephemeral workspace directories, which are full clones
 of the bob-cli repo. These directories are named `bob-cli_<N>` where `<N>` is some
@@ -51,7 +51,7 @@ IMPORTANT: Do NOT mention your workspace directory (or any sibling workspace dir
 in any plan files that you generate using your `/sase_plan` skill. The agent(s) that
 implement the plan might not run in the same workspace directory as you!
 
-#### Repositories
+#### 2.2 Repositories
 
 Configured linked and sidecar repositories for this context:
 
@@ -79,7 +79,7 @@ discussions.
 IMPORTANT REMINDER: Do NOT locate, clone, or web-fetch another repo's contents any other
 way than by using `/sase_repo`!
 
-#### File Discovered Work As Task Beads
+#### 2.3 File Discovered Work As Task Beads
 
 Unless your prompt explicitly forbids creating beads (epic phase workers, for example,
 must record `PROPOSED FOLLOW-UP:` notes on their own bead instead), you can and SHOULD
