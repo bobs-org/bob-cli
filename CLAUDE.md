@@ -11,7 +11,7 @@ ask for separate permission to initialize sase memory in that case.
 
 The following memories contain core (always loaded) context:
 
-### 1. Glossary (glossary)
+### 1. Glossary of Terms (glossary)
 
 #### Pomodoro
 
@@ -20,6 +20,13 @@ particular session (or planned session) of work. Past pomodoros have a timespan
 associated with them and are closed (i.e. checked). Current pomodoros have a timespan
 but are open (i.e. unchecked). Future pomodoros have an empty `()` instead of a timespan
 and are also open (i.e. unchecked).
+
+#### Schedule Log
+
+When the `<ctrl+shift+p>` Obsidian keymap is used to add the `scheduled` or `priority`
+dataview property to a task (or when the `bob capture` command's input argument contains
+the special `p:<N>` syntax), we add a `SCHEDULE LOG` bullet that contains one sub-bullet
+that corresponds with each time the task was scheduled / re-scheduled.
 
 #### Task Link
 
