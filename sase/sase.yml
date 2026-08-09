@@ -1,4 +1,20 @@
 is_sase_managed: true
+glossary:
+  Pomodoro:
+    definition: >-
+      A checkbox item in the "Pomodoros" section of my Obsidian daily file that
+      represents a particular session (or planned session) of work. Past pomodoros have
+      a timespan associated with them and are closed (i.e. checked). Current pomodoros
+      have a timespan but are open (i.e. unchecked). Future pomodoros have an empty `()`
+      instead of a timespan and are also open (i.e. unchecked).
+  Task Link:
+    aliases: ["task block link"]
+    definition: >-
+      A block link to an Obsidian task. These can be located anywhere but, when they are
+      the only contents of a sub-bullet on a pomodoro, they are treated as
+      logged/planned tasks for that pomodoro. As another special case, transcluded task
+      links that are the only contents of a sub-bullet on another Obsidian task are
+      treated as sub-tasks (i.e. dependencies) of that task.
 repos:
   linked:
     - name: bob-plugins
@@ -15,7 +31,8 @@ repos:
       beads:
         auto_clone: true
       agents:
-        description: Hidden sidecar that stores commit-associated sase agent data for this project.
+        description:
+          Hidden sidecar that stores commit-associated sase agent data for this project.
     custom:
       research:
         description: Durable SASE research reports and generated media.
