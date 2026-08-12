@@ -1,7 +1,11 @@
 ---
-type: short
+type: long
 parent: AGENTS.md
-description: Project-local glossary generated from sase.yml.
+description:
+  Read this note before relying on any of these SASE glossary terms and aliases -
+  Pomodoro; Schedule Log; Task Link (aka task block link). Read it with `sase memory
+  read glossary.md` whenever one of those terms or aliases appears in a prompt, bead,
+  plan, or code comment and you are not certain what it means in SASE.
 sase_generated: glossary
 ---
 

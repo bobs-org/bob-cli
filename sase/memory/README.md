@@ -49,14 +49,6 @@ always-loaded notes from detailed reference notes that agents read only when rel
 
 ## Memory Notes
 
-### `sase/memory/glossary.md`
-
-- Type: `short`
-- Description: Project-local glossary generated from sase.yml.
-- Parent: `AGENTS.md`
-- Lines: 33
-- Approx. tokens: 325
-
 ### `sase/memory/sase.md`
 
 - Type: `short`
@@ -72,6 +64,17 @@ always-loaded notes from detailed reference notes that agents read only when rel
 - Parent: `AGENTS.md`
 - Lines: 14
 - Approx. tokens: 129
+
+### `sase/memory/glossary.md`
+
+- Type: `long`
+- Description: Read this note before relying on any of these SASE glossary terms and
+  aliases - Pomodoro; Schedule Log; Task Link (aka task block link). Read it with
+  `sase memory read glossary.md` whenever one of those terms or aliases appears in a
+  prompt, bead, plan, or code comment and you are not certain what it means in SASE.
+- Parent: `AGENTS.md`
+- Lines: 37
+- Approx. tokens: 394
 
 ### `sase/memory/sase_beads.md`
 
@@ -96,10 +99,10 @@ always-loaded notes from detailed reference notes that agents read only when rel
 ## Statistics
 
 - Total notes: 5
-- Short notes: 2
-- Long notes: 3
-- Total lines: 288
-- Total approx. tokens: 3526
+- Short notes: 1
+- Long notes: 4
+- Total lines: 292
+- Total approx. tokens: 3595
 
 ## Commands
 
