@@ -198,6 +198,21 @@ missing, and invalid dates do not receive a chip. The compact `🗓️` in the
 generated parent ledger represents the same future-only state without the
 picker's labeled date chip.
 
+A direct child bullet under the source task becomes a project-note **section**
+instead of a task when it has no checkbox, its trimmed body is an ALL-CAPS
+title (letters, digits, spaces, and a small set of punctuation), and it has at
+least one nested list item of its own; a bare ALL-CAPS bullet with no nested
+list items, or one written with a checkbox, still converts to a task as
+usual. A qualifying bullet's body is lowercased and then title-cased —
+`FUTURE WORK` becomes `Future Work`, `NON-GOALS` becomes `Non-Goals` — without
+preserving acronyms, so `API DESIGN` becomes `Api Design`. The title reuses a
+matching `##` header already on the note, case-insensitively and without
+touching the header's own casing, appending the notes after that section's
+existing content; with no match, a new `## Title` section is appended at the
+end of the note. Either way the bullet's descendants are copied in verbatim,
+re-indented but otherwise untouched — no `#task` token and no `[created::]`
+field — so they read as reference notes rather than tasks.
+
 ### Scheduling from the `^prj` task
 
 With the cursor on a valid `#task ... ^prj` lifecycle task, Bob Navigation
