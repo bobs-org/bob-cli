@@ -702,23 +702,25 @@ and `-p, --plugin <ID>` to sync a single plugin.
 The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 
 ```bash
-bob highlights create <md-file> [-d|--dry-run] [-f|--force] [-i|--include-id] [-P|--parent NOTE] [-s|--status STATUS] [-t|--ref-type DIR]
-bob highlights doctor
-bob highlights marker <pdf>
-bob highlights scan [-d|--dry-run] [-j|--jobs N] [-w|--write-pdfs]
-bob highlights sync <pdf> [-d|--dry-run] [-w|--write-pdf] [-p|--prefer marker|frontmatter]
+bob highlights create <md-file> [-d|--dry-run] [-f|--force] [-i|--include-id] [-P|--parent NOTE] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights doctor [-x|--xlib-dir PATH]
+bob highlights marker <pdf> [-x|--xlib-dir PATH]
+bob highlights scan [-d|--dry-run] [-j|--jobs N] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob highlights sync <pdf> [-d|--dry-run] [-w|--write-pdf] [-p|--prefer marker|frontmatter] [-x|--xlib-dir PATH]
 ```
 
 Prepares the Highlights app PDF annotation to Bob reference note sync workflow.
 `create <md-file>` renders Markdown through pandoc and xelatex into a polished,
-TOC-indexed PDF at `lib/chat/<basename>.pdf`, then embeds the page-1 marker
-needed by `scan`. The default marker is `status: ready`, `parent:
+TOC-indexed PDF at `xlib/chat/<basename>.pdf`, then embeds the page-1 marker
+needed by `scan`. The next scan moves it to `lib/chat/<basename>.pdf` before
+writing the reference note. The default marker is `status: ready`, `parent:
 obsidian_ref`, and the document title (frontmatter `title`, first H1, then file
-stem). Use `--ref-type` to select another single library subdirectory,
+stem). Use `--ref-type` to select another single intake/library subdirectory,
 `--dry-run` to preview without writing, and `--force` to replace an existing
-PDF. Creation always refuses a same-basename Markdown sidecar because
-Highlights would claim it as annotation data. Set `BOB_PANDOC_COMMAND` to
-override the pandoc executable.
+intake PDF. Creation always refuses a same-basename Markdown sidecar beside the
+intake target because Highlights would claim it as annotation data, and also
+refuses an existing archived library PDF or sidecar because scan will not
+overwrite it. Set `BOB_PANDOC_COMMAND` to override the pandoc executable.
 Use `--include-id` to embed the Markdown filename without its final `.md`
 extension as marker `id`. For example,
 `bob highlights create --include-id 202608/xprompt_role_binding/xprompt_role_binding.md`
@@ -736,12 +738,14 @@ into the PDF marker. Simultaneous marker/frontmatter edits fail with a conflict
 report unless `--prefer marker` or `--prefer frontmatter` is supplied.
 `--dry-run` reports the planned note/PDF actions without writing either side.
 `marker <pdf>` inspects and renders the marker contract without writing. `scan`
-recursively processes PDFs under the configured library with collision and
-dirty-target preflights. By default scan does not write PDF markers; use
+first intakes PDFs from `xlib/<rel>` to `lib/<rel>`, moving Markdown and
+TextBundle sidecars with them and refusing any existing library destination.
+It then recursively processes PDFs under the configured library with collision
+and dirty-target preflights. By default scan does not write PDF markers; use
 `scan --dry-run --write-pdfs`, review the planned marker updates, back up PDFs,
 then run `scan --write-pdfs` to opt in to bulk marker write-back. `doctor`
-checks vault paths, sidecars, marker readability, Git state, pandoc, and
-optional `ob` availability without writing files.
+checks vault paths, xlib pending intake, sidecars, marker readability, Git
+state, pandoc, and optional `ob` availability without writing files.
 Marker notes must include `status` and `parent`; marker `parent` must be a bare
 note target such as `obsidian`, while generated reference-note frontmatter
 renders it as an Obsidian wikilink. `status` must be one of `ready`, `next`,

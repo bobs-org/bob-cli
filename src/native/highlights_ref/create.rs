@@ -13,8 +13,8 @@ use super::{
     atomic_save_pdf, bob_dir_arg, dry_run_arg, lib_dir_arg,
     parse_marker_with_normalization, pdf_text_string, ref_dir_arg,
     render_marker, validate_marker_parent_value, validate_required_marker_keys,
-    CommandError, Config, MarkerValue, Projection, Result, FIELD_ID,
-    FIELD_PARENT, FIELD_STATUS,
+    xlib_dir_arg, CommandError, Config, MarkerValue, Projection, Result,
+    FIELD_ID, FIELD_PARENT, FIELD_STATUS,
 };
 use crate::native::style::Styler;
 
@@ -77,6 +77,7 @@ struct CreatePlan {
     source: PathBuf,
     target: PathBuf,
     sidecar: PathBuf,
+    library_destination: PathBuf,
     title: String,
     id: Option<String>,
     marker: String,
@@ -142,8 +143,9 @@ pub(super) fn command() -> ClapCommand {
                 .default_value(DEFAULT_REF_TYPE)
                 .help("Single library subdirectory for the generated PDF"),
         )
+        .arg(xlib_dir_arg())
         .after_help(
-            "Renders a hyperlinked table of contents and PDF bookmarks with pandoc, then embeds the page-1 marker used by `bob highlights scan`.",
+            "Renders a hyperlinked table of contents and PDF bookmarks with pandoc, writes the PDF to the intake directory, and embeds the page-1 marker used by `bob highlights scan`. Scan moves intake PDFs into the library before writing reference notes.",
         )
 }
 
@@ -295,11 +297,16 @@ fn plan_create(
         ))
     })?;
     let target = config
-        .lib_dir
+        .xlib_dir
         .join(&options.ref_type)
         .join(stem)
         .with_extension("pdf");
     let sidecar = target.with_extension("md");
+    let library_destination = config
+        .lib_dir
+        .join(&options.ref_type)
+        .join(stem)
+        .with_extension("pdf");
 
     if sidecar.exists() {
         return Err(CommandError::new(format!(
@@ -307,6 +314,22 @@ fn plan_create(
             target.display(),
             sidecar.display()
         )));
+    }
+    if library_destination.exists() {
+        return Err(CommandError::new(format!(
+            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new PDF over it)",
+            target.display(),
+            library_destination.display()
+        )));
+    }
+    for library_sidecar in library_destination_sidecars(&library_destination) {
+        if library_sidecar.exists() {
+            return Err(CommandError::new(format!(
+                "refusing to create {} because the library destination sidecar already exists: {}; remove or rename the archived sidecar before recreating it (bob highlights scan would refuse to move the new PDF sidecar over it)",
+                target.display(),
+                library_sidecar.display()
+            )));
+        }
     }
     if target.exists() && !options.force {
         return Err(CommandError::new(format!(
@@ -319,10 +342,18 @@ fn plan_create(
         source,
         target,
         sidecar,
+        library_destination,
         title,
         id,
         marker,
     })
+}
+
+fn library_destination_sidecars(library_destination: &Path) -> [PathBuf; 2] {
+    [
+        library_destination.with_extension("md"),
+        library_destination.with_extension("textbundle"),
+    ]
 }
 
 fn derive_marker_id(source: &Path) -> Result<String> {
@@ -638,6 +669,10 @@ fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
     println!("source: {}", plan.source.display());
     println!("pdf: {}", plan.target.display());
     println!("sidecar_guard: {}", plan.sidecar.display());
+    println!(
+        "library_destination: {}",
+        plan.library_destination.display()
+    );
     println!("title: {}", plan.title);
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
@@ -690,6 +725,7 @@ mod tests {
             bob_dir: root.to_path_buf(),
             lib_dir: root.join("lib"),
             ref_dir: root.join("ref"),
+            xlib_dir: root.join("xlib"),
         }
     }
 
@@ -722,8 +758,12 @@ mod tests {
         let plan =
             plan_create(&config(&temp.path), &source, &options).expect("plan");
 
-        assert_eq!(plan.target, temp.path.join("lib/books/report.pdf"));
-        assert_eq!(plan.sidecar, temp.path.join("lib/books/report.md"));
+        assert_eq!(plan.target, temp.path.join("xlib/books/report.pdf"));
+        assert_eq!(plan.sidecar, temp.path.join("xlib/books/report.md"));
+        assert_eq!(
+            plan.library_destination,
+            temp.path.join("lib/books/report.pdf")
+        );
         let marker =
             parse_marker_with_normalization(&plan.marker).expect("marker");
         assert_eq!(
@@ -766,7 +806,7 @@ mod tests {
         let temp = TempDir::new("overwrite");
         let source = temp.path.join("report.md");
         fs::write(&source, "# Report\n").expect("write source");
-        let target = temp.path.join("lib/chat/report.pdf");
+        let target = temp.path.join("xlib/chat/report.pdf");
         fs::create_dir_all(target.parent().expect("target parent"))
             .expect("create target parent");
         fs::write(&target, b"existing").expect("write target");
@@ -785,7 +825,7 @@ mod tests {
         let temp = TempDir::new("sidecar");
         let source = temp.path.join("report.md");
         fs::write(&source, "# Report\n").expect("write source");
-        let sidecar = temp.path.join("lib/chat/report.md");
+        let sidecar = temp.path.join("xlib/chat/report.md");
         fs::create_dir_all(sidecar.parent().expect("sidecar parent"))
             .expect("create sidecar parent");
         fs::write(&sidecar, "# Sidecar\n").expect("write sidecar");
@@ -795,6 +835,54 @@ mod tests {
         let error = plan_create(&config(&temp.path), &source, &forced)
             .expect_err("must refuse sidecar collision");
         assert!(error.to_string().contains("sidecar"), "{error}");
+    }
+
+    #[test]
+    fn plan_refuses_existing_library_pdf_even_with_force() {
+        let temp = TempDir::new("library-pdf");
+        let source = temp.path.join("report.md");
+        fs::write(&source, "# Report\n").expect("write source");
+        let library_destination = temp.path.join("lib/chat/report.pdf");
+        fs::create_dir_all(
+            library_destination
+                .parent()
+                .expect("library destination parent"),
+        )
+        .expect("create library destination parent");
+        fs::write(&library_destination, b"existing")
+            .expect("write library destination");
+        let mut forced = options();
+        forced.force = true;
+
+        let error = plan_create(&config(&temp.path), &source, &forced)
+            .expect_err("must refuse archived library destination");
+
+        let message = error.to_string();
+        assert!(message.contains("xlib/chat/report.pdf"), "{message}");
+        assert!(message.contains("lib/chat/report.pdf"), "{message}");
+        assert!(
+            message.contains("library destination already exists"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn plan_refuses_existing_library_sidecar() {
+        let temp = TempDir::new("library-sidecar");
+        let source = temp.path.join("report.md");
+        fs::write(&source, "# Report\n").expect("write source");
+        let library_sidecar = temp.path.join("lib/chat/report.md");
+        fs::create_dir_all(library_sidecar.parent().expect("sidecar parent"))
+            .expect("create sidecar parent");
+        fs::write(&library_sidecar, "# Sidecar\n").expect("write sidecar");
+
+        let error = plan_create(&config(&temp.path), &source, &options())
+            .expect_err("must refuse archived library sidecar");
+
+        let message = error.to_string();
+        assert!(message.contains("xlib/chat/report.pdf"), "{message}");
+        assert!(message.contains("lib/chat/report.md"), "{message}");
+        assert!(message.contains("library destination sidecar"), "{message}");
     }
 
     #[test]

@@ -10,8 +10,8 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 
 The MVP implements marker/frontmatter synchronization, Markdown/TextBundle
 sidecar parsing, generated note rendering, TextBundle image selection asset
-copying, recursive library scan, prerequisite checks, output collision
-detection, dirty-target refusal, and atomic note writes.
+copying, recursive library scan with `xlib` intake, prerequisite checks, output
+collision detection, dirty-target refusal, and atomic note writes.
 
 `sync <pdf>` loads one PDF with native Rust code, treats the first standalone
 `/Text` annotation on page 1 as the marker note, parses the marker list,
@@ -21,32 +21,36 @@ sidecar when one is present. Top-level library PDFs and explicit out-of-library
 syncs keep the legacy `ref/<pdf-basename>.md` target. `marker <pdf>` inspects
 the same marker without writing.
 
-`scan` recursively finds PDFs under the configured library directory and
-processes them in stable path order. Per-PDF validation or write failures are
-reported without stopping unrelated PDFs; the final command status is still
-non-zero when any PDF fails. It refuses duplicate output paths such as two PDFs
-that would both write the same `ref/<ref_type>/<basename>.md` target.
+`scan` first moves pending PDFs from the configured intake directory into the
+mirrored library path, then recursively finds PDFs under the configured library
+directory and processes them in stable path order. Per-PDF validation or write
+failures are reported without stopping unrelated PDFs; the final command status
+is still non-zero when any PDF fails. It refuses intake destinations that already
+exist and duplicate output paths such as two PDFs that would both write the same
+`ref/<ref_type>/<basename>.md` target.
 
-`doctor` checks vault paths, library/ref directories, sidecar presence, marker
-readability, Git worktree status, and optional `ob` availability. It never
-writes files.
+`doctor` checks vault paths, library/ref/xlib directories, pending intake,
+sidecar presence, marker readability, Git worktree status, and optional `ob`
+availability. It never writes files.
 
 Available commands:
 
 ```bash
-bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR]
-bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
-bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH]
-bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-w|--write-pdfs]
-bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf]
+bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
 `create` accepts an existing `.md` file and writes
-`<lib-dir>/<ref-type>/<basename>.pdf` (by default
-`~/bob/lib/chat/<basename>.pdf`). It uses the frontmatter `title`, first H1, or
-file stem in that order, asks pandoc/xelatex for a hyperlinked three-level
-table of contents and PDF outline bookmarks, and embeds a page-1 `/Text`
-annotation containing:
+`<xlib-dir>/<ref-type>/<basename>.pdf` (by default
+`~/bob/xlib/chat/<basename>.pdf`). The next `scan` moves that PDF to
+`<lib-dir>/<ref-type>/<basename>.pdf`, refusing to create when that archived
+library PDF or sidecar already exists. It uses the frontmatter `title`, first
+H1, or file stem in that order, asks pandoc/xelatex for a hyperlinked
+three-level table of contents and PDF outline bookmarks, and embeds a page-1
+`/Text` annotation containing:
 
 ```text
 - status: ready
@@ -57,10 +61,11 @@ annotation containing:
 The marker parent is deliberately bare; generated Obsidian frontmatter turns
 it into a wikilink later. `-P, --parent`, `-s, --status`, and `-t, --ref-type`
 override those defaults. `-d, --dry-run` prints the resolved paths and marker
-with `writes: none`. An existing target requires `-f, --force`; a same-stem
-Markdown file beside the target PDF is always refused because the scanner
-would interpret it as a Highlights sidecar. `BOB_PANDOC_COMMAND` overrides the
-pandoc executable, and a render failure includes pandoc's diagnostic output.
+with `writes: none`. An existing intake target requires `-f, --force`; a
+same-stem Markdown file beside the intake target PDF is always refused because
+the scanner would interpret it as a Highlights sidecar. `BOB_PANDOC_COMMAND`
+overrides the pandoc executable, and a render failure includes pandoc's
+diagnostic output.
 `-i, --include-id` opts into a stable marker ID derived from the Markdown
 filename. Bob canonicalizes the Markdown source, removes only the final `.md`
 extension from the filename, requires the resulting stem to be nonempty valid
@@ -84,7 +89,8 @@ running pandoc or creating output directories. Without `--include-id`, manual
 `create` calls keep the previous marker shape and do not add `id`.
 
 Path configuration options are `-b, --bob-dir <PATH>`, `-l, --lib-dir <PATH>`,
-and `-r, --ref-dir <PATH>`. `scan` also accepts `-j, --jobs <N>`.
+`-r, --ref-dir <PATH>`, and `-x, --xlib-dir <PATH>`. `scan` also accepts
+`-j, --jobs <N>`.
 
 `sync <pdf> --dry-run` prints the resolved configuration and planned note/PDF
 actions without modifying either side. Without `--dry-run`, the command writes
@@ -126,15 +132,32 @@ PDFs are discovered under the Highlights library directory:
 BOB_HIGHLIGHTS_LIB_DIR=lib
 ```
 
+Freshly created PDFs are written under the Highlights intake directory:
+
+```text
+BOB_HIGHLIGHTS_XLIB_DIR=xlib
+```
+
 Reference notes are written under:
 
 ```text
 BOB_HIGHLIGHTS_REF_DIR=ref
 ```
 
-Relative `BOB_HIGHLIGHTS_LIB_DIR` and `BOB_HIGHLIGHTS_REF_DIR` values are
-resolved under `BOB_DIR`. Absolute paths and `~/...` paths are used directly
-after tilde expansion.
+Relative `BOB_HIGHLIGHTS_LIB_DIR`, `BOB_HIGHLIGHTS_XLIB_DIR`, and
+`BOB_HIGHLIGHTS_REF_DIR` values are resolved under `BOB_DIR`. Absolute paths
+and `~/...` paths are used directly after tilde expansion. `lib` and `xlib`
+must be distinct, non-nested directories so intake cannot move PDFs inside the
+tree being scanned.
+
+During `scan`, every pending intake PDF maps from `xlib/<rel>` to `lib/<rel>`.
+For example:
+
+```text
+~/bob/xlib/chat/report.pdf
+~/bob/lib/chat/report.pdf
+~/bob/ref/chat/report.md
+```
 
 For `~/bob/lib/books/systems-performance.pdf`, the default output note is:
 
@@ -317,17 +340,28 @@ writes so the apps do not race the CLI.
 
 ## Scan, Safety, and Git/ob Behavior
 
-`scan --dry-run` reports every discovered PDF. Valid PDFs show their target
-reference note, sidecar path if present, selected sync source, and note/PDF
-marker action. Invalid PDFs show a `plan_error`. Scan output also reports
-`write_pdfs: true|false` so bulk marker-write runs are auditable. Dry runs do
-not create directories, write notes, or write PDFs, even when combined with
-`--write-pdfs`.
+`scan --dry-run` reports every discovered PDF, including PDFs that are still
+pending under `xlib`. It prints each planned `xlib/<rel> -> lib/<rel>` intake
+move, but does not move anything. Valid PDFs show their target reference note,
+sidecar path if present, selected sync source, and note/PDF marker action.
+Invalid PDFs show a `plan_error`. Scan output also reports `write_pdfs:
+true|false` so bulk marker-write runs are auditable. Dry runs do not create
+directories, move intake files, write notes, or write PDFs, even when combined
+with `--write-pdfs`.
 
-Before a writing scan, the command rejects duplicate output paths, builds
-per-PDF plans, and checks Git status for existing vault files that successfully
-planned PDFs would modify. If a target ref note or PDF marker target is dirty,
-it fails before any write, except for a tracked target ref note whose only body
+Before planning notes, `scan` preflights intake. It moves each PDF under
+`xlib` to the mirrored `lib` path and moves same-stem Markdown sidecars and
+TextBundle directories with the PDF, so annotation text and image assets are
+not orphaned. If any destination PDF or sidecar already exists, the whole scan
+aborts before moving or writing anything. Intake runs before the dirty-target
+Git check because a newly rendered intake PDF is normally untracked, and the
+move never overwrites an existing path; a tracked synced PDF behaves as an
+ordinary Git rename.
+
+After intake, the command rejects duplicate output paths, builds per-PDF plans,
+and checks Git status for existing vault files that successfully planned PDFs
+would modify. If a target ref note or PDF marker target is dirty, it fails
+before any note/PDF write, except for a tracked target ref note whose only body
 change is the exact generated `^ref` checkbox toggle, optionally combined with
 frontmatter edits. There is no force mode in the MVP; commit, stash, or clean
 unrelated dirty files before rerunning.
@@ -349,7 +383,10 @@ byte-identical to the existing file.
 
 `bob highlights` does not run `ob sync` before or after writes. The existing
 `bob nightly` sync gate owns `ob sync` orchestration, while this command only
-reports whether `ob` is available through `doctor`.
+reports whether `ob` is available through `doctor`. `source_pdf` is a
+pipeline-owned field rewritten on every sync, so a direct
+`bob highlights sync ~/bob/xlib/...` dry run or one-off sync self-heals to the
+library-relative path on the next scan after intake.
 
 ## Generated Body Contract
 
@@ -703,12 +740,14 @@ block under `### Removed highlights` — still a valid, resolvable jump.
 ## MacBook Setup Guide
 
 Run these steps on the MacBook. The intended checkout is
-`~/projects/bob-cli`, and the intended vault paths are `~/bob/lib` for PDFs and
-`~/bob/ref` for generated reference notes.
+`~/projects/bob-cli`, and the intended vault paths are `~/bob/xlib` for PDF
+intake, `~/bob/lib` for archived PDFs, and `~/bob/ref` for generated reference
+notes.
 
 This Linux host currently has `~/bob/lit`, but the requested MVP defaults are
-still `~/bob/lib` and `~/bob/ref`. Do not infer `lit` as the production default.
-If a one-off test must use `lit`, pass `--lib-dir lit` explicitly.
+still `~/bob/xlib`, `~/bob/lib`, and `~/bob/ref`. Do not infer `lit` as the
+production default. If a one-off test must use `lit`, pass `--lib-dir lit`
+explicitly.
 
 Install prerequisites if needed:
 
@@ -734,13 +773,15 @@ bob highlights --help
 Create or confirm the vault layout:
 
 ```bash
-mkdir -p ~/bob/lib/books ~/bob/ref
+mkdir -p ~/bob/xlib/chat ~/bob/lib/books ~/bob/ref
 git -C ~/bob status --short
 ```
 
 In Highlights Pro on the MacBook:
 
-- Keep PDFs that should sync under `~/bob/lib/<ref_type>/`, such as
+- Fresh PDFs created by `bob highlights create` land under
+  `~/bob/xlib/<ref_type>/`; the next scan moves them to `~/bob/lib/<ref_type>/`.
+- Keep existing PDFs that should sync under `~/bob/lib/<ref_type>/`, such as
   `~/bob/lib/books`.
 - Enable autosaved sidecars next to each PDF. Plain Markdown creates
   `~/bob/lib/books/example.md`; TextBundle creates
@@ -782,12 +823,15 @@ MacBook validation checklist:
 
 - `cargo install --path ~/projects/bob-cli --locked --force` installs the local
   checkout.
-- `bob highlights doctor` reports valid vault/library/ref paths, marker
-  readability, Git status, and optional `ob` availability.
-- `bob highlights scan --dry-run` lists the expected PDFs under
-  `~/bob/lib`, reports the intended `~/bob/ref/<ref_type>/*.md` targets, and
-  prints `writes: none`. If `scan_failures` is non-zero, inspect the per-PDF
-  `plan_error` lines while noting that valid PDFs were still reported.
+- `bob highlights doctor` reports valid vault/library/ref paths, the xlib intake
+  path and pending count, marker readability, Git status, and optional `ob`
+  availability. A missing `~/bob/xlib` is warning-only because `create` creates
+  it on demand.
+- `bob highlights scan --dry-run` lists the expected PDFs under `~/bob/lib` and
+  any pending `~/bob/xlib` intake moves, reports the intended
+  `~/bob/ref/<ref_type>/*.md` targets, and prints `writes: none`. If
+  `scan_failures` is non-zero, inspect the per-PDF `plan_error` lines while
+  noting that valid PDFs were still reported.
 - `bob highlights sync ~/bob/lib/books/example.pdf --dry-run` shows the
   expected marker page/note, sync source, sidecar path, note action, and no
   writes.
@@ -884,6 +928,8 @@ cat > ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist <<'PLIST'
     <string>lib</string>
     <key>BOB_HIGHLIGHTS_REF_DIR</key>
     <string>ref</string>
+    <key>BOB_HIGHLIGHTS_XLIB_DIR</key>
+    <string>xlib</string>
   </dict>
   <key>StartInterval</key>
   <integer>3600</integer>
@@ -916,6 +962,7 @@ PATH=/Users/bryan/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/bin:/usr/bin
 BOB_DIR=/Users/bryan/bob
 BOB_HIGHLIGHTS_LIB_DIR=lib
 BOB_HIGHLIGHTS_REF_DIR=ref
+BOB_HIGHLIGHTS_XLIB_DIR=xlib
 0 * * * * /Users/bryan/.cargo/bin/bob highlights scan --dry-run >> /Users/bryan/Library/Logs/bob/highlights-scan.log 2>&1
 ```
 
@@ -1072,6 +1119,7 @@ preflight failures remain hard global failures before writes.
 | `'ref_type' is command-managed` | The marker tries to set the path-derived reference type. | Remove `ref_type` from the marker; nested library paths derive it automatically. |
 | `invalid marker item on line` | A marker line is not `- key: value` or `* key: value`. | Rewrite the marker as a flat list. |
 | `duplicate marker key on line` | The marker repeats a normalized key. | Keep only one value for that key. |
+| `xlib intake collision(s) detected before writes` | A PDF or sidecar under `~/bob/xlib` would move over an existing `~/bob/lib` destination. | Remove, rename, or archive one side deliberately before scanning. |
 | `output path collision(s) detected before writes` | Multiple PDFs would write the same reference note path, such as `ref/books/example.md`, or the same planned image asset destination. | Rename or move one PDF before scanning. |
 | `image asset not found` | The sidecar references an image file that is not present relative to the sidecar text file. This usually means the PDF was exported as plain Markdown, or Highlights failed to create the TextBundle for a PDF with image/area annotations. | Manually create/export the TextBundle once, beside the PDF and with the exact PDF basename, so `assets/...` files are included, then rerun. See [Known Highlights TextBundle Creation Bug](#known-highlights-textbundle-creation-bug). |
 | `image asset destination exists with different bytes` | A content-addressed `ref/.../*.assets/h-<id>.<ext>` destination already exists but its bytes do not match the source asset. | Inspect the existing asset, then remove or restore it before rerunning. |

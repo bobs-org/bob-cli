@@ -9379,6 +9379,7 @@ fn highlights_create_help_lists_options_alphabetically() {
             "-r, --ref-dir",
             "-s, --status",
             "-t, --ref-type",
+            "-x, --xlib-dir",
         ],
     );
     assert!(
@@ -9425,6 +9426,8 @@ fn highlights_create_dry_run_prints_plan_without_writes() {
             && report.contains("status: next")
             && report.contains("parent: sase_ref")
             && report.contains("id: xprompt_role_binding")
+            && report.contains("xlib/papers/xprompt_role_binding.pdf")
+            && report.contains("library_destination:")
             && report.contains("lib/papers/xprompt_role_binding.pdf")
             && report.contains("- id: xprompt_role_binding")
             && report.contains("writes: none"),
@@ -9514,8 +9517,57 @@ fn highlights_create_reports_pandoc_failure_diagnostics() {
         "{diagnostic}"
     );
     assert!(
-        !vault.join("lib/chat/research.pdf").exists(),
+        !vault.join("xlib/chat/research.pdf").exists(),
         "failed render must not install a target PDF"
+    );
+}
+
+#[test]
+fn highlights_create_refuses_existing_library_pdf_with_or_without_force() {
+    let temp = TempDir::new("bob-cli-highlights-create-library-destination");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    let library_pdf = vault.join("lib/chat/report.pdf");
+    write_file(&source, "# Report\n");
+    write_highlights_pdf(
+        &library_pdf,
+        "- status: ready\n- parent: obsidian\n- title: Archived Report\n",
+    );
+
+    for force in [false, true] {
+        let mut command = bob_command();
+        command
+            .arg("highlights")
+            .arg("create")
+            .arg(&source)
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc");
+        if force {
+            command.arg("--force");
+        }
+
+        let output = command.output().unwrap_or_else(|error| {
+            panic!("run create force={force}: {error}")
+        });
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "existing library PDF should fail force={force}:\n{}",
+            format_output(&output)
+        );
+        let diagnostic = stderr(&output);
+        assert!(
+            diagnostic.contains("library destination already exists")
+                && diagnostic.contains("xlib/chat/report.pdf")
+                && diagnostic.contains("lib/chat/report.pdf"),
+            "{diagnostic}"
+        );
+    }
+    assert!(
+        !vault.join("xlib/chat/report.pdf").exists(),
+        "create refusal must not write an intake PDF"
     );
 }
 
@@ -9573,7 +9625,7 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
 
     assert_success(&output);
     let report = stdout(&output);
-    let pdf = vault.join("lib/chat/xprompt_role_binding.pdf");
+    let pdf = vault.join("xlib/chat/xprompt_role_binding.pdf");
     assert!(
         report.contains("created Highlights-ready PDF")
             && report.contains("id: xprompt_role_binding")
@@ -9640,6 +9692,7 @@ fn highlights_ref_sync_help_lists_options_alphabetically() {
             "-p, --prefer",
             "-r, --ref-dir",
             "-w, --write-pdf",
+            "-x, --xlib-dir",
         ],
     );
     assert_stdout_has_no_ansi(&output);
@@ -9670,6 +9723,7 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
             "-r, --ref-dir",
             "-v, --verbose",
             "-w, --write-pdfs",
+            "-x, --xlib-dir",
         ],
     );
     assert_stdout_has_no_ansi(&output);
@@ -9696,6 +9750,8 @@ fn highlights_ref_short_options_are_accepted() {
         .arg("ref")
         .arg("-v")
         .arg("-w")
+        .arg("-x")
+        .arg("xlib")
         .output()
         .expect("run bob highlights scan with short options");
 
@@ -10421,6 +10477,231 @@ Note: marker note
 }
 
 #[test]
+fn highlights_ref_scan_intakes_xlib_pdf_and_writes_note_in_same_run() {
+    let temp = TempDir::new("bob-cli-highlights-ref-xlib-intake");
+    let vault = temp.path().join("vault");
+    let source_pdf = vault.join("xlib/chat/intake.pdf");
+    let destination_pdf = vault.join("lib/chat/intake.pdf");
+    let note = vault.join("ref/chat/intake.md");
+    write_highlights_pdf(
+        &source_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Intake PDF\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("scan xlib intake");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("intake_moves: 1")
+            && report.contains(
+                "intake: moved xlib/chat/intake.pdf -> lib/chat/intake.pdf"
+            )
+            && report.contains("notes_created: 1"),
+        "expected intake and note write in same scan:\n{report}"
+    );
+    assert!(!source_pdf.exists(), "scan must move the PDF out of xlib");
+    assert!(destination_pdf.is_file(), "scan must move the PDF into lib");
+    let contents = fs::read_to_string(&note).expect("read generated note");
+    assert!(
+        contents.contains("source_pdf: lib/chat/intake.pdf\n"),
+        "{contents}"
+    );
+    assert!(contents.contains("title: \"Intake PDF\"\n"), "{contents}");
+}
+
+#[test]
+fn highlights_ref_scan_dry_run_previews_xlib_intake_without_writes() {
+    let temp = TempDir::new("bob-cli-highlights-ref-xlib-dry-run");
+    let vault = temp.path().join("vault");
+    let source_pdf = vault.join("xlib/chat/preview.pdf");
+    let destination_pdf = vault.join("lib/chat/preview.pdf");
+    let note = vault.join("ref/chat/preview.md");
+    write_highlights_pdf(
+        &source_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Preview PDF\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--dry-run")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run xlib intake");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("intake_moves: 1")
+            && report.contains("intake: would-move xlib/chat/preview.pdf -> lib/chat/preview.pdf")
+            && report.contains(path_str(&note))
+            && report.contains("notes_create: 1")
+            && report.contains("writes: none"),
+        "expected dry-run to preview intake and reference note:\n{report}"
+    );
+    assert!(source_pdf.is_file(), "dry-run must leave PDF in xlib");
+    assert!(
+        !destination_pdf.exists(),
+        "dry-run must not move PDF into lib"
+    );
+    assert!(!note.exists(), "dry-run must not create note");
+}
+
+#[test]
+fn highlights_ref_scan_intakes_xlib_sidecars_with_pdfs() {
+    let temp = TempDir::new("bob-cli-highlights-ref-xlib-sidecars");
+    let vault = temp.path().join("vault");
+    let markdown_pdf = vault.join("xlib/chat/markdown.pdf");
+    let markdown_sidecar = markdown_pdf.with_extension("md");
+    let markdown_note = vault.join("ref/chat/markdown.md");
+    let markdown_destination = vault.join("lib/chat/markdown.pdf");
+    let bundle_pdf = vault.join("xlib/chat/bundle.pdf");
+    let bundle = bundle_pdf.with_extension("textbundle");
+    let bundle_sidecar = bundle.join("text.md");
+    let bundle_note = vault.join("ref/chat/bundle.md");
+    let bundle_destination = vault.join("lib/chat/bundle.pdf");
+
+    write_highlights_pdf(
+        &markdown_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Markdown Sidecar\n",
+    );
+    write_file(
+        &markdown_sidecar,
+        "\
+## Page 1
+
+Note: marker note
+
+---
+
+> Markdown sidecar quote.
+",
+    );
+    write_highlights_pdf(
+        &bundle_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Bundle Sidecar\n",
+    );
+    write_file(
+        &bundle_sidecar,
+        "\
+## Page 2
+
+Note: marker note
+
+---
+
+> TextBundle sidecar quote.
+",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("scan xlib sidecars");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(report.contains("intake_moves: 2"), "{report}");
+    assert!(markdown_destination.is_file(), "markdown PDF moved");
+    assert!(
+        markdown_destination.with_extension("md").is_file(),
+        "markdown sidecar moved"
+    );
+    assert!(
+        !markdown_pdf.exists() && !markdown_sidecar.exists(),
+        "markdown intake files should be gone"
+    );
+    assert!(bundle_destination.is_file(), "bundle PDF moved");
+    assert!(
+        bundle_destination
+            .with_extension("textbundle")
+            .join("text.md")
+            .is_file(),
+        "textbundle sidecar moved"
+    );
+    assert!(
+        !bundle_pdf.exists() && !bundle.exists(),
+        "bundle intake files should be gone"
+    );
+
+    let markdown_contents =
+        fs::read_to_string(&markdown_note).expect("read markdown note");
+    assert!(
+        markdown_contents
+            .contains("highlights_sidecar: lib/chat/markdown.md\n")
+            && markdown_contents
+                .contains("> [!quote] Markdown sidecar quote.\n"),
+        "{markdown_contents}"
+    );
+    let bundle_contents =
+        fs::read_to_string(&bundle_note).expect("read bundle note");
+    assert!(
+        bundle_contents.contains(
+            "highlights_sidecar: lib/chat/bundle.textbundle/text.md\n"
+        ) && bundle_contents.contains("> [!quote] TextBundle sidecar quote.\n"),
+        "{bundle_contents}"
+    );
+}
+
+#[test]
+fn highlights_ref_scan_refuses_xlib_intake_conflict_before_writes() {
+    let temp = TempDir::new("bob-cli-highlights-ref-xlib-conflict");
+    let vault = temp.path().join("vault");
+    let source_pdf = vault.join("xlib/chat/conflict.pdf");
+    let destination_pdf = vault.join("lib/chat/conflict.pdf");
+    let note = vault.join("ref/chat/conflict.md");
+    write_highlights_pdf(
+        &source_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Intake Conflict\n",
+    );
+    write_highlights_pdf(
+        &destination_pdf,
+        "- status: ready\n- parent: obsidian\n- title: Archived Conflict\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("scan xlib conflict");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "conflicting intake should fail:\n{}",
+        format_output(&output)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("xlib intake collision(s) detected before writes")
+            && diagnostic.contains("xlib/chat/conflict.pdf")
+            && diagnostic.contains("lib/chat/conflict.pdf"),
+        "{diagnostic}"
+    );
+    assert!(
+        source_pdf.is_file(),
+        "conflict must leave xlib PDF in place"
+    );
+    assert!(
+        destination_pdf.is_file(),
+        "conflict must leave library PDF in place"
+    );
+    assert!(!note.exists(), "conflict must not write a reference note");
+}
+
+#[test]
 fn highlights_ref_scan_dry_run_reports_valid_and_invalid_pdfs() {
     let temp = TempDir::new("bob-cli-highlights-ref-scan-mixed-dry-run");
     let vault = temp.path().join("vault");
@@ -11091,6 +11372,8 @@ Note: marker note
     assert!(report.contains("vault_path: ok"), "{report}");
     assert!(report.contains("library_dir: ok"), "{report}");
     assert!(report.contains("ref_dir: ok"), "{report}");
+    assert!(report.contains("xlib_dir: fail"), "{report}");
+    assert!(report.contains("xlib_pending: 0"), "{report}");
     assert!(report.contains("sidecars_found: 1"), "{report}");
     assert!(report.contains("pdf_markers_readable: 1"), "{report}");
     assert!(report.contains("git: ok (clean worktree)"), "{report}");

@@ -32,9 +32,11 @@ mod create;
 const COMMAND_NAME: &str = "bob highlights";
 const DEFAULT_LIB_DIR: &str = "lib";
 const DEFAULT_REF_DIR: &str = "ref";
+const DEFAULT_XLIB_DIR: &str = "xlib";
 
 const ENV_LIB_DIR: &str = "BOB_HIGHLIGHTS_LIB_DIR";
 const ENV_REF_DIR: &str = "BOB_HIGHLIGHTS_REF_DIR";
+const ENV_XLIB_DIR: &str = "BOB_HIGHLIGHTS_XLIB_DIR";
 
 const FIELD_STATUS: &str = "status";
 const FIELD_PARENT: &str = "parent";
@@ -115,6 +117,7 @@ struct Config {
     bob_dir: PathBuf,
     lib_dir: PathBuf,
     ref_dir: PathBuf,
+    xlib_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,6 +306,13 @@ struct PdfPathMetadata {
     relative_pdf_path: Option<PathBuf>,
     note_relative_path: PathBuf,
     ref_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IntakeMove {
+    source: PathBuf,
+    destination: PathBuf,
+    companions: Vec<(PathBuf, PathBuf)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -671,7 +681,12 @@ fn scan_library(
     jobs: usize,
     verbose: bool,
 ) -> Result<()> {
-    let pdfs = collect_pdf_paths(config)?;
+    validate_library_layout(config)?;
+    let intake = plan_xlib_intake(config)?;
+    if !options.dry_run {
+        execute_xlib_intake(&intake)?;
+    }
+    let pdfs = collect_pdf_paths(config, options.dry_run)?;
     validate_output_collisions(config, &pdfs)?;
 
     // `plan_pdf_sync` is a pure, read-only computation over an independent
@@ -719,9 +734,11 @@ fn scan_library(
             config,
             options,
             pdfs.len(),
+            &intake,
             &plan_outcomes,
         );
     } else {
+        print_concise_intake_report(config, &intake, options.dry_run, &styler);
         print_scan_header(config, pdfs.len(), options.dry_run, &styler);
     }
 
@@ -1453,6 +1470,7 @@ fn print_verbose_scan_plan_report(
     config: &Config,
     options: SyncOptions,
     pdf_count: usize,
+    intake: &[IntakeMove],
     plan_outcomes: &[ScanPlanOutcome],
 ) {
     print_config_report("scan", config);
@@ -1460,6 +1478,19 @@ fn print_verbose_scan_plan_report(
     println!("write_pdfs: {}", options.write_pdf);
     println!("ob_sync: not-run");
     println!("pdf_count: {pdf_count}");
+    println!("intake_moves: {}", intake.len());
+    for intake_move in intake {
+        println!(
+            "intake: {} {} -> {}",
+            if options.dry_run {
+                "would-move"
+            } else {
+                "moved"
+            },
+            display_vault_relative_path(config, &intake_move.source),
+            display_vault_relative_path(config, &intake_move.destination)
+        );
+    }
     for outcome in plan_outcomes {
         match outcome {
             ScanPlanOutcome::Planned(plan) => print_scan_plan_entry(plan),
@@ -1490,6 +1521,26 @@ fn print_scan_header(
     println!();
 }
 
+fn print_concise_intake_report(
+    config: &Config,
+    intake: &[IntakeMove],
+    dry_run: bool,
+    styler: &Styler,
+) {
+    for intake_move in intake {
+        let action = if dry_run { "would move" } else { "moved" };
+        println!(
+            "  {} {} -> {}",
+            styler.green(action),
+            display_vault_relative_path(config, &intake_move.source),
+            display_vault_relative_path(config, &intake_move.destination)
+        );
+    }
+    if !intake.is_empty() {
+        println!();
+    }
+}
+
 fn display_scan_lib_dir(config: &Config) -> String {
     config
         .lib_dir
@@ -1498,6 +1549,10 @@ fn display_scan_lib_dir(config: &Config) -> String {
         .filter(|path| !path.as_os_str().is_empty())
         .map(display_path)
         .unwrap_or_else(|| config.lib_dir.display().to_string())
+}
+
+fn display_vault_relative_path(config: &Config, path: &Path) -> String {
+    display_path(Path::new(&vault_relative_path_value(config, path)))
 }
 
 fn display_path(path: &Path) -> String {
@@ -2160,6 +2215,13 @@ fn doctor_vault(config: &Config) -> Result<()> {
     print_config_report("doctor", config);
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
+    let layout_valid = match validate_library_layout(config) {
+        Ok(()) => true,
+        Err(error) => {
+            failures.push(error.to_string());
+            false
+        }
+    };
 
     print_path_check("vault_path", &config.bob_dir, config.bob_dir.is_dir());
     if !config.bob_dir.is_dir() {
@@ -2185,8 +2247,32 @@ fn doctor_vault(config: &Config) -> Result<()> {
         ));
     }
 
+    print_path_check("xlib_dir", &config.xlib_dir, config.xlib_dir.is_dir());
+    if !config.xlib_dir.is_dir() {
+        warnings.push(format!(
+            "xlib intake directory does not exist: {} (bob highlights create creates it on demand)",
+            config.xlib_dir.display()
+        ));
+    }
+    let xlib_pending = if layout_valid && config.xlib_dir.is_dir() {
+        let mut pending = Vec::new();
+        match collect_pdf_paths_from_dir(&config.xlib_dir, &mut pending) {
+            Ok(()) => pending.len(),
+            Err(error) => {
+                failures.push(error.to_string());
+                0
+            }
+        }
+    } else {
+        0
+    };
+    println!("xlib_pending: {xlib_pending}");
+    if layout_valid && let Err(error) = plan_xlib_intake(config) {
+        failures.push(error.to_string());
+    }
+
     let pdfs = if config.lib_dir.is_dir() {
-        match collect_pdf_paths(config) {
+        match collect_pdf_paths(config, false) {
             Ok(pdfs) => pdfs,
             Err(error) => {
                 failures.push(error.to_string());
@@ -2309,8 +2395,169 @@ fn print_path_check(name: &str, path: &Path, ok: bool) {
     );
 }
 
-fn collect_pdf_paths(config: &Config) -> Result<Vec<PathBuf>> {
-    if !config.lib_dir.is_dir() {
+fn validate_library_layout(config: &Config) -> Result<()> {
+    if config.xlib_dir == config.lib_dir {
+        return Err(CommandError::new(format!(
+            "xlib_dir and lib_dir must be distinct: {}",
+            config.lib_dir.display()
+        )));
+    }
+    if config.xlib_dir.starts_with(&config.lib_dir) {
+        return Err(CommandError::new(format!(
+            "xlib_dir must not be inside lib_dir: {} is under {}",
+            config.xlib_dir.display(),
+            config.lib_dir.display()
+        )));
+    }
+    if config.lib_dir.starts_with(&config.xlib_dir) {
+        return Err(CommandError::new(format!(
+            "lib_dir must not be inside xlib_dir: {} is under {}",
+            config.lib_dir.display(),
+            config.xlib_dir.display()
+        )));
+    }
+    Ok(())
+}
+
+fn plan_xlib_intake(config: &Config) -> Result<Vec<IntakeMove>> {
+    if !config.xlib_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut pdfs = Vec::new();
+    collect_pdf_paths_from_dir(&config.xlib_dir, &mut pdfs)?;
+    pdfs.sort();
+
+    let mut moves = Vec::new();
+    let mut conflicts = Vec::new();
+    for source in pdfs {
+        let relative =
+            source.strip_prefix(&config.xlib_dir).map_err(|error| {
+                CommandError::new(format!(
+                    "derive xlib-relative path for {}: {error}",
+                    source.display()
+                ))
+            })?;
+        let destination = config.lib_dir.join(relative);
+        let companions = intake_companion_moves(&source, &destination)?;
+
+        if destination.exists() {
+            conflicts.push((source.clone(), destination.clone()));
+        }
+        for (companion_source, companion_destination) in &companions {
+            if companion_destination.exists() {
+                conflicts.push((
+                    companion_source.clone(),
+                    companion_destination.clone(),
+                ));
+            }
+        }
+
+        moves.push(IntakeMove {
+            source,
+            destination,
+            companions,
+        });
+    }
+
+    if !conflicts.is_empty() {
+        let mut message =
+            String::from("xlib intake collision(s) detected before writes:");
+        for (source, destination) in conflicts {
+            message.push('\n');
+            message.push_str("  ");
+            message.push_str(&source.display().to_string());
+            message.push_str(" -> ");
+            message.push_str(&destination.display().to_string());
+        }
+        message.push_str(
+            "\nremove or rename the existing library destination(s) before rerunning scan",
+        );
+        return Err(CommandError::new(message));
+    }
+
+    Ok(moves)
+}
+
+fn intake_companion_moves(
+    source: &Path,
+    destination: &Path,
+) -> Result<Vec<(PathBuf, PathBuf)>> {
+    let mut companions = Vec::new();
+
+    let markdown = source.with_extension("md");
+    if markdown.is_file() {
+        companions.push((markdown, destination.with_extension("md")));
+    }
+
+    let textbundle = source.with_extension("textbundle");
+    if textbundle.exists() {
+        if !textbundle.is_dir() {
+            return Err(CommandError::new(format!(
+                "unsupported sidecar {}: expected a .textbundle directory",
+                textbundle.display()
+            )));
+        }
+        let has_text_file = TEXTBUNDLE_TEXT_FILES
+            .iter()
+            .any(|file_name| textbundle.join(file_name).is_file());
+        if !has_text_file {
+            return Err(CommandError::new(format!(
+                "unsupported textbundle sidecar {}: expected text.md or text.markdown",
+                textbundle.display()
+            )));
+        }
+        companions.push((textbundle, destination.with_extension("textbundle")));
+    }
+
+    Ok(companions)
+}
+
+fn execute_xlib_intake(moves: &[IntakeMove]) -> Result<()> {
+    for intake_move in moves {
+        execute_intake_move(&intake_move.source, &intake_move.destination)?;
+        for (source, destination) in &intake_move.companions {
+            execute_intake_move(source, destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn execute_intake_move(source: &Path, destination: &Path) -> Result<()> {
+    if let Some(parent) = destination.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            CommandError::new(format!(
+                "create parent directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::rename(source, destination).map_err(|error| {
+        CommandError::new(format!(
+            "move {} to {}: {error}",
+            source.display(),
+            destination.display()
+        ))
+    })
+}
+
+fn collect_pdf_paths(
+    config: &Config,
+    include_xlib: bool,
+) -> Result<Vec<PathBuf>> {
+    if config.lib_dir.is_dir() {
+        let mut paths = Vec::new();
+        collect_pdf_paths_from_dir(&config.lib_dir, &mut paths)?;
+        if include_xlib && config.xlib_dir.is_dir() {
+            collect_pdf_paths_from_dir(&config.xlib_dir, &mut paths)?;
+        }
+        paths.sort();
+        return Ok(paths);
+    }
+
+    if !include_xlib || !config.xlib_dir.is_dir() {
         return Err(CommandError::new(format!(
             "library directory does not exist or is not a directory: {}",
             config.lib_dir.display()
@@ -2318,7 +2565,7 @@ fn collect_pdf_paths(config: &Config) -> Result<Vec<PathBuf>> {
     }
 
     let mut paths = Vec::new();
-    collect_pdf_paths_from_dir(&config.lib_dir, &mut paths)?;
+    collect_pdf_paths_from_dir(&config.xlib_dir, &mut paths)?;
     paths.sort();
     Ok(paths)
 }
@@ -5020,6 +5267,7 @@ fn print_config_report(operation: &str, config: &Config) {
     println!("bob_dir: {}", config.bob_dir.display());
     println!("lib_dir: {}", config.lib_dir.display());
     println!("ref_dir: {}", config.ref_dir.display());
+    println!("xlib_dir: {}", config.xlib_dir.display());
     println!("managed_body_begin: {MANAGED_BODY_BEGIN}");
     println!("managed_body_end: {MANAGED_BODY_END}");
     println!(
@@ -5064,6 +5312,7 @@ fn with_config_args(command: ClapCommand) -> ClapCommand {
         .arg(bob_dir_arg())
         .arg(lib_dir_arg())
         .arg(ref_dir_arg())
+        .arg(xlib_dir_arg())
 }
 
 fn with_scan_args(command: ClapCommand) -> ClapCommand {
@@ -5075,6 +5324,7 @@ fn with_scan_args(command: ClapCommand) -> ClapCommand {
         .arg(ref_dir_arg())
         .arg(verbose_arg())
         .arg(write_pdfs_arg())
+        .arg(xlib_dir_arg())
 }
 
 fn with_sync_args(command: ClapCommand) -> ClapCommand {
@@ -5087,6 +5337,7 @@ fn with_sync_args(command: ClapCommand) -> ClapCommand {
         .arg(prefer_arg())
         .arg(ref_dir_arg())
         .arg(write_pdf_arg())
+        .arg(xlib_dir_arg())
         .after_help("The first standalone /Text annotation on page 1 is treated as the marker note.")
 }
 
@@ -5117,6 +5368,15 @@ fn ref_dir_arg() -> Arg {
         .value_name("PATH")
         .value_parser(OsStringValueParser::new())
         .help("Reference note output directory; defaults to BOB_HIGHLIGHTS_REF_DIR or ref")
+}
+
+fn xlib_dir_arg() -> Arg {
+    Arg::new("xlib-dir")
+        .long("xlib-dir")
+        .short('x')
+        .value_name("PATH")
+        .value_parser(OsStringValueParser::new())
+        .help("Highlights PDF intake directory; defaults to BOB_HIGHLIGHTS_XLIB_DIR or xlib")
 }
 
 fn pdf_arg(help: &'static str) -> Arg {
@@ -5200,10 +5460,18 @@ impl Config {
             DEFAULT_REF_DIR,
             &bob_dir,
         );
+        let xlib_dir = configured_path(
+            matches,
+            "xlib-dir",
+            ENV_XLIB_DIR,
+            DEFAULT_XLIB_DIR,
+            &bob_dir,
+        );
         Self {
             bob_dir,
             lib_dir,
             ref_dir,
+            xlib_dir,
         }
     }
 }
@@ -6776,6 +7044,16 @@ fn pdf_path_metadata(config: &Config, pdf: &Path) -> Result<PdfPathMetadata> {
             ref_type,
         });
     }
+    if let Ok(relative_pdf_path) = pdf.strip_prefix(&config.xlib_dir) {
+        let mut note_relative_path = relative_pdf_path.to_path_buf();
+        note_relative_path.set_extension("md");
+        let ref_type = ref_type_from_relative_pdf_path(pdf, relative_pdf_path)?;
+        return Ok(PdfPathMetadata {
+            relative_pdf_path: Some(relative_pdf_path.to_path_buf()),
+            note_relative_path,
+            ref_type,
+        });
+    }
 
     Ok(PdfPathMetadata {
         relative_pdf_path: None,
@@ -7017,6 +7295,7 @@ mod tests {
             bob_dir: PathBuf::from("/tmp/bob"),
             lib_dir: PathBuf::from("/tmp/bob/lib"),
             ref_dir: PathBuf::from("/tmp/bob/ref"),
+            xlib_dir: PathBuf::from("/tmp/bob/xlib"),
         }
     }
 
@@ -7024,6 +7303,7 @@ mod tests {
         Config {
             lib_dir: bob_dir.join("lib"),
             ref_dir: bob_dir.join("ref"),
+            xlib_dir: bob_dir.join("xlib"),
             bob_dir,
         }
     }
@@ -7060,6 +7340,106 @@ mod tests {
             resolve_under_bob(bob_dir, Path::new("/var/lib/pdfs")),
             PathBuf::from("/var/lib/pdfs")
         );
+    }
+
+    #[test]
+    fn plan_xlib_intake_maps_nested_paths_and_companions() {
+        let bob_dir = temp_bob_dir("xlib-intake");
+        let config = test_config_for_bob_dir(bob_dir.clone());
+
+        let missing =
+            super::plan_xlib_intake(&config).expect("missing xlib is ok");
+        assert!(missing.is_empty());
+
+        let source = config.xlib_dir.join("chat/a/b.pdf");
+        let markdown = source.with_extension("md");
+        let textbundle = source.with_extension("textbundle");
+        write_test_file(&source, "pdf");
+        write_test_file(&markdown, "# Sidecar\n");
+        write_test_file(&textbundle.join("text.md"), "# TextBundle\n");
+
+        let moves = super::plan_xlib_intake(&config).expect("plan intake");
+
+        assert_eq!(moves.len(), 1);
+        assert_eq!(moves[0].source, source);
+        assert_eq!(moves[0].destination, config.lib_dir.join("chat/a/b.pdf"));
+        assert_eq!(
+            moves[0].companions,
+            vec![
+                (
+                    config.xlib_dir.join("chat/a/b.md"),
+                    config.lib_dir.join("chat/a/b.md"),
+                ),
+                (
+                    config.xlib_dir.join("chat/a/b.textbundle"),
+                    config.lib_dir.join("chat/a/b.textbundle"),
+                ),
+            ]
+        );
+
+        fs::remove_dir_all(bob_dir).expect("remove temp bob dir");
+    }
+
+    #[test]
+    fn plan_xlib_intake_reports_every_destination_conflict() {
+        let bob_dir = temp_bob_dir("xlib-intake-conflicts");
+        let config = test_config_for_bob_dir(bob_dir.clone());
+        let source = config.xlib_dir.join("chat/report.pdf");
+        write_test_file(&source, "pdf");
+        write_test_file(&source.with_extension("md"), "# Sidecar\n");
+        write_test_file(
+            &source.with_extension("textbundle").join("text.md"),
+            "# Bundle\n",
+        );
+        write_test_file(&config.lib_dir.join("chat/report.pdf"), "archived");
+        write_test_file(&config.lib_dir.join("chat/report.md"), "# Archived\n");
+        write_test_file(
+            &config.lib_dir.join("chat/report.textbundle/text.md"),
+            "# Archived bundle\n",
+        );
+
+        let error = super::plan_xlib_intake(&config)
+            .expect_err("destination conflicts must fail preflight");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("xlib intake collision(s) detected before writes"),
+            "{message}"
+        );
+        assert!(
+            message.contains("xlib/chat/report.pdf")
+                && message.contains("lib/chat/report.pdf"),
+            "{message}"
+        );
+        assert!(
+            message.contains("xlib/chat/report.md")
+                && message.contains("lib/chat/report.md"),
+            "{message}"
+        );
+        assert!(
+            message.contains("xlib/chat/report.textbundle")
+                && message.contains("lib/chat/report.textbundle"),
+            "{message}"
+        );
+
+        fs::remove_dir_all(bob_dir).expect("remove temp bob dir");
+    }
+
+    #[test]
+    fn validate_library_layout_rejects_equal_and_nested_paths() {
+        let bob_dir = PathBuf::from("/tmp/bob");
+        let mut config = test_config_for_bob_dir(bob_dir.clone());
+        assert!(super::validate_library_layout(&config).is_ok());
+
+        config.xlib_dir = config.lib_dir.clone();
+        assert!(super::validate_library_layout(&config).is_err());
+
+        config.xlib_dir = bob_dir.join("lib/intake");
+        assert!(super::validate_library_layout(&config).is_err());
+
+        config.lib_dir = bob_dir.join("xlib/archive");
+        config.xlib_dir = bob_dir.join("xlib");
+        assert!(super::validate_library_layout(&config).is_err());
     }
 
     #[test]
@@ -8652,6 +9032,7 @@ Keep me here.
             bob_dir: PathBuf::from("/tmp/bob"),
             lib_dir: PathBuf::from("/tmp/bob/lib"),
             ref_dir: PathBuf::from("/tmp/bob/ref"),
+            xlib_dir: PathBuf::from("/tmp/bob/xlib"),
         };
 
         let top_level =
@@ -8688,6 +9069,15 @@ Keep me here.
                 .expect("nested note path"),
             PathBuf::from("/tmp/bob/ref/books/example.md")
         );
+
+        let xlib_nested = pdf_path_metadata(
+            &config,
+            Path::new("/tmp/bob/xlib/books/example.pdf"),
+        )
+        .expect("xlib nested metadata");
+        assert_eq!(xlib_nested.relative_pdf_path, nested.relative_pdf_path);
+        assert_eq!(xlib_nested.note_relative_path, nested.note_relative_path);
+        assert_eq!(xlib_nested.ref_type, nested.ref_type);
 
         let deeper = pdf_path_metadata(
             &config,
