@@ -213,6 +213,13 @@ end of the note. Either way the bullet's descendants are copied in verbatim,
 re-indented but otherwise untouched — no `#task` token and no `[created::]`
 field — so they read as reference notes rather than tasks.
 
+A managed source-task schedule log, written as `🗓️ **SCHEDULE LOG**`,
+`**SCHEDULE LOG**`, or legacy `**Schedule log:**`, moves with the source task
+instead. It lands as a direct child of the new project's `^prj` task rather
+than a new `## Tasks` task line, preserving its marker spelling and nested
+entries. Later `Ctrl+Shift+P` schedule or priority edits on the `^prj` task
+continue appending to that same log.
+
 ### Scheduling from the `^prj` task
 
 With the cursor on a valid `#task ... ^prj` lifecycle task, Bob Navigation
