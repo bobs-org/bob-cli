@@ -26,7 +26,9 @@ always-loaded notes from detailed reference notes that agents read only when rel
 - `parent`: `AGENTS.md` for top-level notes, or `sase/memory/<note>.md` when a long note
   belongs under another long note.
 - `description`: required for long notes and used in generated agent instructions and
-  this README.
+  this README. Long-note descriptions may be Markdown blocks authored as YAML literal
+  block scalars; Tier 2 entries render those blocks verbatim, while single-line surfaces
+  collapse them.
 
 ### Linking
 
@@ -69,12 +71,12 @@ always-loaded notes from detailed reference notes that agents read only when rel
 
 - Type: `long`
 - Description: Read this note before relying on any of these SASE glossary terms and
-  aliases - Pomodoro; Schedule Log; Task Link (aka task block link). Read it with
+  aliases: - Pomodoro - Schedule Log - Task Link (aka task block link) Read it with
   `sase memory read glossary.md` whenever one of those terms or aliases appears in a
   prompt, bead, plan, or code comment and you are not certain what it means in SASE.
 - Parent: `AGENTS.md`
-- Lines: 37
-- Approx. tokens: 394
+- Lines: 40
+- Approx. tokens: 396
 
 ### `sase/memory/sase_beads.md`
 
@@ -101,8 +103,8 @@ always-loaded notes from detailed reference notes that agents read only when rel
 - Total notes: 5
 - Short notes: 1
 - Long notes: 4
-- Total lines: 292
-- Total approx. tokens: 3595
+- Total lines: 295
+- Total approx. tokens: 3597
 
 ## Commands
 
