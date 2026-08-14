@@ -187,6 +187,30 @@ fn capture_help_is_native_only() {
 }
 
 #[test]
+fn capture_parse_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-capture-parse-native-help");
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob capture-parse --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob capture-parse"),
+        "expected capture-parse help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only capture-parse should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_sections_help_is_native_only() {
     let temp = TempDir::new("bob-cli-capture-sections-native-help");
     let output = bob_command()
@@ -365,6 +389,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
     let cases: &[(&[&str], &str)] = &[
         (&["bulk-git-commit", "--help"], "usage: bob bulk-git-commit"),
         (&["capture", "--help"], "bob capture"),
+        (&["capture-parse", "--help"], "bob capture-parse"),
         (&["capture-sections", "--help"], "bob capture-sections"),
         (&["capture-targets", "--help"], "bob capture-targets"),
         (&["capture-tasks", "--help"], "bob capture-tasks"),
@@ -406,6 +431,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["--help"], "bob --help"),
         (&["bulk-git-commit", "--help"], "bob bulk-git-commit --help"),
         (&["capture", "--help"], "bob capture --help"),
+        (&["capture-parse", "--help"], "bob capture-parse --help"),
         (
             &["capture-sections", "--help"],
             "bob capture-sections --help",
@@ -2516,6 +2542,248 @@ fn capture_targets_help_lists_options_alphabetically() {
         ],
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_parse_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-parse --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("purely lexical and completely read-only"),
+        "expected capture-parse long help:\n{help}"
+    );
+    assert_text_order(&help, &["-f, --format", "-h, --help"]);
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_parse_human_output_is_plain_and_concise() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("Call bank @Cash^")
+        .output()
+        .expect("run bob capture-parse human");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected capture-parse stderr:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert_text_order(
+        &out,
+        &[
+            "incomplete",
+            "body",
+            "Call bank",
+            "route",
+            "cash",
+            "needs",
+            "task",
+            "sub_bullet_route",
+            "interactive_placeholder",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_parse_json_output_is_stable_and_parseable() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Call bank @Cash^")
+        .output()
+        .expect("run bob capture-parse json");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected capture-parse stderr:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], "Call bank @Cash^");
+    assert_eq!(json["body"], "Call bank");
+    assert_eq!(json["mode"], "incomplete");
+    assert_eq!(json["route"], "cash");
+    assert!(json["section"].is_null());
+    assert!(json["block_id"].is_null());
+    assert_eq!(json["needs"], serde_json::json!(["task"]));
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 10, "end": 15, "kind": "sub_bullet_route" },
+            { "start": 15, "end": 16, "kind": "interactive_placeholder" },
+        ])
+    );
+    assert_eq!(json["diagnostics"], serde_json::json!([]));
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_parse_reports_diagnostics_without_failing() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note @dev^bad.id")
+        .output()
+        .expect("run bob capture-parse diagnostic");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["mode"], "task");
+    assert_eq!(
+        json["diagnostics"][0]["code"],
+        "invalid_sub_bullet_block_id"
+    );
+    assert_eq!(json["diagnostics"][0]["severity"], "error");
+    assert_eq!(json["diagnostics"][0]["range"], serde_json::json!([5, 16]));
+}
+
+#[test]
+fn capture_parse_reads_one_stdin_line_when_text_is_omitted() {
+    let output = run_with_stdin(
+        bob_command().arg("capture-parse").arg("-f").arg("json"),
+        "jot idea @notes#Ideas\n",
+    );
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "bullet");
+    assert_eq!(json["route"], "notes");
+    assert_eq!(json["section"], "Ideas");
+    assert_eq!(json["body"], "jot idea");
+}
+
+#[test]
+fn capture_parse_missing_text_is_a_usage_error() {
+    let human = run_with_stdin(bob_command().arg("capture-parse"), "   \n");
+    assert_eq!(human.status.code(), Some(2));
+    assert!(
+        stdout(&human).is_empty()
+            && stderr(&human).contains("task text is required"),
+        "unexpected capture-parse missing-text output:\n{}",
+        format_output(&human)
+    );
+
+    let json_output = run_with_stdin(
+        bob_command().arg("capture-parse").arg("-f").arg("json"),
+        "   \n",
+    );
+    assert_eq!(json_output.status.code(), Some(2));
+    assert!(
+        stderr(&json_output).is_empty(),
+        "JSON failures keep stderr clean:\n{}",
+        format_output(&json_output)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&json_output).trim())
+            .expect("capture-parse failure JSON");
+    assert_eq!(json["ok"], false);
+    assert!(
+        json["error"]
+            .as_str()
+            .expect("error string")
+            .contains("task text is required"),
+        "unexpected capture-parse failure JSON: {json}"
+    );
+}
+
+#[test]
+fn capture_parse_reports_utf8_byte_offsets() {
+    let text = "caf\u{e9} run \u{1f680} @Cash^goog-exit";
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(text)
+        .output()
+        .expect("run bob capture-parse utf8");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "sub_bullet");
+    assert_eq!(json["body"], "caf\u{e9} run \u{1f680}");
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 15, "end": 20, "kind": "sub_bullet_route" },
+            { "start": 21, "end": 30, "kind": "sub_bullet_block_id" },
+        ])
+    );
+    assert_eq!(&text[15..20], "@Cash");
+    assert_eq!(&text[21..30], "goog-exit");
+}
+
+#[test]
+fn capture_parse_never_touches_the_vault_or_clipboard() {
+    let temp = TempDir::new("bob-cli-capture-parse-no-io");
+    let missing = temp.path().join("missing-vault");
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("save this %build_log @dev:focus-1")
+        .env("BOB_DIR", &missing)
+        .env("BOB_CLIPBOARD_CMD", "/nonexistent/clipboard-command")
+        .output()
+        .expect("run bob capture-parse without a vault");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected capture-parse stderr:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["mode"], "pomodoro_task");
+    assert_eq!(json["route"], "dev");
+    assert_eq!(json["block_id"], "focus-1");
+    assert_eq!(json["body"], "save this");
+    assert!(
+        !missing.exists(),
+        "capture-parse must not create the vault directory"
+    );
+
+    // Contrast: the same input makes `bob capture` reach for the clipboard.
+    let captured = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&missing)
+        .arg("--")
+        .arg("save this %build_log @dev:focus-1")
+        .env("BOB_CLIPBOARD_CMD", "/nonexistent/clipboard-command")
+        .output()
+        .expect("run bob capture without a vault");
+    assert!(
+        !captured.status.success(),
+        "expected bob capture to fail without clipboard access:\n{}",
+        format_output(&captured)
+    );
 }
 
 #[test]
@@ -16001,6 +16269,23 @@ fn bob_command() -> Command {
 
 fn bob_notify_command() -> Command {
     Command::new(BOB_NOTIFY_BIN)
+}
+
+fn run_with_stdin(command: &mut Command, input: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn command with piped stdin");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe")
+        .write_all(input.as_bytes())
+        .expect("write stdin");
+    drop(child.stdin.take());
+    child.wait_with_output().expect("wait for command")
 }
 
 fn bob_pomodoro_command() -> Command {

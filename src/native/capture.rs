@@ -3,7 +3,6 @@ use std::{
     fs,
     io::{self, BufRead, IsTerminal, Write},
     iter,
-    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -17,12 +16,19 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture_clip, capture_schedule_log, collect_done, config, env as bob_env,
-    markdown, note_tasks,
+    capture_clip, capture_language,
+    capture_language::{
+        is_block_id, CaptureKind, ClipRequest, ParsedCaptureText,
+        SubBulletTarget,
+    },
+    capture_schedule_log, collect_done, config, env as bob_env, markdown,
+    note_tasks,
     note_tasks::{BlockIdLookup, RefLookup},
     pomodoro,
     style::Styler,
 };
+
+pub(crate) use super::capture_language::is_route_token;
 
 const COMMAND_NAME: &str = "bob capture";
 pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
@@ -1438,72 +1444,6 @@ fn fs_error(action: &str, path: &Path, error: io::Error) -> CaptureError {
     CaptureError::io(format!("{action} {}: {error}", path.display()))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum CaptureKind {
-    Task,
-    Bullet {
-        section_prefix: Option<String>,
-        exact: bool,
-    },
-    Pomodoro {
-        block_id: String,
-    },
-    SubBullet {
-        target: SubBulletTarget,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SubBulletTarget {
-    BlockId(String),
-    Ref { line: usize, digest: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedCaptureText {
-    body: String,
-    clip: Option<ClipRequest>,
-    route: Option<String>,
-    kind: CaptureKind,
-    scheduled_offset: Option<u64>,
-    priority_level: Option<u64>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct TerminalMarkers {
-    clip: Option<ClipRequest>,
-    scheduled_offset: Option<u64>,
-    priority_level: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ClipRequest {
-    Current { header: Option<String> },
-    History { count: NonZeroUsize },
-}
-
-struct RouteToken {
-    route: String,
-    kind: CaptureKind,
-}
-
-impl RouteToken {
-    fn into_parsed(
-        self,
-        body: String,
-        markers: TerminalMarkers,
-    ) -> ParsedCaptureText {
-        ParsedCaptureText {
-            body,
-            clip: markers.clip,
-            route: Some(self.route),
-            kind: self.kind,
-            scheduled_offset: markers.scheduled_offset,
-            priority_level: markers.priority_level,
-        }
-    }
-}
-
 #[cfg(test)]
 fn parse_capture_text(
     raw_text: &str,
@@ -1518,473 +1458,28 @@ fn parse_capture_text(
     )
 }
 
+/// Run the shared capture grammar and re-wrap its message as this command's
+/// usage error, which owns the exit code `bob capture` reports.
 fn parse_capture_text_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     parse_clip_markers: bool,
 ) -> Result<ParsedCaptureText, CaptureError> {
-    let normalized = normalize_task_text(raw_text);
-    if normalized.is_empty() {
-        return Err(missing_text_error());
-    }
-
-    let mut tokens: Vec<&str> = normalized.split(' ').collect();
-    let markers = extract_terminal_markers(&mut tokens, parse_clip_markers);
-    if tokens.is_empty() {
-        return Err(missing_text_error());
-    }
-    let body = tokens.join(" ");
-
-    if let Some(section) = forced_section {
-        let Some(route) = forced_route else {
-            return Err(CaptureError::usage("--section requires --route"));
-        };
-        if section.trim().is_empty() {
-            return Err(CaptureError::usage("--section must not be empty"));
-        }
-        let route = normalize_forced_route(route)?;
-        reject_legacy_bullet_markers(&tokens, false)?;
-        return Ok(ParsedCaptureText {
-            body,
-            clip: markers.clip,
-            route: Some(route),
-            kind: CaptureKind::Bullet {
-                section_prefix: Some(section.to_string()),
-                exact: true,
-            },
-            scheduled_offset: markers.scheduled_offset,
-            priority_level: markers.priority_level,
-        });
-    }
-
-    if let Some(route) = forced_route {
-        let route = normalize_forced_route(route)?;
-        reject_legacy_bullet_markers(&tokens, false)?;
-        return Ok(ParsedCaptureText {
-            body,
-            clip: markers.clip,
-            route: Some(route),
-            kind: CaptureKind::Task,
-            scheduled_offset: markers.scheduled_offset,
-            priority_level: markers.priority_level,
-        });
-    }
-
-    reject_legacy_bullet_markers(&tokens, true)?;
-
-    // Leading route wins: when the first token is a route token followed by
-    // body text, route by it and do not inspect later route-looking tokens.
-    if let Some(token) = parse_terminal_route_token(tokens[0])? {
-        let body = tokens[1..].join(" ");
-        if body.is_empty() {
-            if !matches!(token.kind, CaptureKind::Task) {
-                return Err(missing_text_error());
-            }
-            // A bare `@foo` with no body stays literal task text.
-        } else {
-            return Ok(token.into_parsed(body, markers));
-        }
-    }
-
-    validate_special_terminal_markers(&tokens)?;
-
-    // Otherwise a trailing route token routes the body that precedes it.
-    if let Some((&last, rest)) = tokens.split_last()
-        && !rest.is_empty()
-        && let Some(token) = parse_terminal_route_token(last)?
-    {
-        return Ok(token.into_parsed(rest.join(" "), markers));
-    }
-
-    Ok(ParsedCaptureText {
-        body,
-        clip: markers.clip,
-        route: None,
-        kind: CaptureKind::Task,
-        scheduled_offset: markers.scheduled_offset,
-        priority_level: markers.priority_level,
-    })
-}
-
-fn missing_text_error() -> CaptureError {
-    CaptureError::usage(
-        "task text is required; pass TEXT or pipe one line on stdin",
+    capture_language::parse_capture_text_with_clip_control(
+        raw_text,
+        forced_route,
+        forced_section,
+        parse_clip_markers,
     )
-}
-
-fn legacy_marker_error() -> CaptureError {
-    CaptureError::usage(
-        "bullet section markers must be appended to an @route token; use \
-@foo#bar instead of #bar @foo",
-    )
-}
-
-fn normalize_task_text(raw_text: &str) -> String {
-    raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Parse one whitespace-free token as an `@route` token, returning `None` when
-/// it does not begin with `@` or its route part is not a valid route name. A
-/// `#` suffix selects bullet mode and is split off before route validation.
-fn parse_route_token(token: &str) -> Option<RouteToken> {
-    let rest = token.strip_prefix('@')?;
-    let (route_part, bullet) = match rest.split_once('#') {
-        Some((route, prefix)) => {
-            let marker = (!prefix.is_empty()).then(|| prefix.to_string());
-            (route, Some(marker))
-        }
-        None => (rest, None),
-    };
-    is_route_token(route_part).then(|| RouteToken {
-        route: route_part.to_ascii_lowercase(),
-        kind: match bullet {
-            Some(section_prefix) => CaptureKind::Bullet {
-                section_prefix,
-                exact: false,
-            },
-            None => CaptureKind::Task,
-        },
-    })
-}
-
-fn parse_terminal_route_token(
-    token: &str,
-) -> Result<Option<RouteToken>, CaptureError> {
-    if is_sub_bullet_marker_candidate(token) {
-        return parse_sub_bullet_route_token(token).map(Some);
-    }
-    if is_pomodoro_marker_candidate(token) {
-        return parse_pomodoro_route_token(token).map(Some);
-    }
-    Ok(parse_route_token(token))
-}
-
-fn parse_sub_bullet_route_token(
-    token: &str,
-) -> Result<RouteToken, CaptureError> {
-    let marker = token.strip_prefix('@').ok_or_else(|| {
-        CaptureError::usage(
-            "sub-bullet capture markers must use @<route>^<block-id>",
-        )
-    })?;
-    let Some((route, block_id)) = marker.split_once('^') else {
-        return Err(CaptureError::usage(
-            "sub-bullet capture markers must use @<route>^<block-id>",
-        ));
-    };
-    if route.is_empty() {
-        return Err(CaptureError::usage(
-            "sub-bullet capture markers must use @<route>^<block-id>",
-        ));
-    }
-    if block_id.is_empty() {
-        return Err(CaptureError::usage(format!(
-            "sub-bullet capture requires a block ID: @<route>^<block-id> (run 'bob capture-tasks -r {}' to list task block IDs)",
-            route.to_ascii_lowercase()
-        )));
-    }
-    if !is_route_token(route) {
-        return Err(CaptureError::usage(
-            "sub-bullet capture route must contain only A-Z, a-z, 0-9, '_' or '-'",
-        ));
-    }
-    if !is_block_id(block_id) {
-        return Err(CaptureError::usage(
-            "sub-bullet capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'",
-        ));
-    }
-
-    Ok(RouteToken {
-        route: route.to_ascii_lowercase(),
-        kind: CaptureKind::SubBullet {
-            target: SubBulletTarget::BlockId(block_id.to_string()),
-        },
-    })
-}
-
-fn is_sub_bullet_marker_candidate(token: &str) -> bool {
-    let Some(marker) = token.strip_prefix('@') else {
-        return false;
-    };
-    if token.starts_with("@!") {
-        return false;
-    }
-    let Some(caret) = marker.find('^') else {
-        return false;
-    };
-    marker
-        .find([':', '#'])
-        .is_none_or(|separator| caret < separator)
-}
-
-fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, CaptureError> {
-    let marker = token
-        .strip_prefix("@!")
-        .or_else(|| token.strip_prefix('@'))
-        .ok_or_else(|| {
-            CaptureError::usage(
-                "Pomodoro capture markers must use @<route>:<block-id>",
-            )
-        })?;
-    let Some((route, block_id)) = marker.split_once(':') else {
-        return Err(CaptureError::usage(
-            "Pomodoro capture markers must use @<route>:<block-id>",
-        ));
-    };
-    if !is_route_token(route) {
-        return Err(CaptureError::usage(
-            "Pomodoro capture route must contain only A-Z, a-z, 0-9, '_' or '-'",
-        ));
-    }
-    if !is_block_id(block_id) {
-        return Err(CaptureError::usage(
-            "Pomodoro capture block ID must be non-empty and contain only A-Z, a-z, 0-9, '_' or '-'",
-        ));
-    }
-
-    Ok(RouteToken {
-        route: route.to_ascii_lowercase(),
-        kind: CaptureKind::Pomodoro {
-            block_id: block_id.to_string(),
-        },
-    })
-}
-
-/// Return whether a terminal token belongs to the Pomodoro-marker grammar.
-/// A colon that follows `#` remains part of an ordinary bullet section prefix.
-fn is_pomodoro_marker_candidate(token: &str) -> bool {
-    let Some(marker) =
-        token.strip_prefix("@!").or_else(|| token.strip_prefix('@'))
-    else {
-        return false;
-    };
-    if token.starts_with("@!") {
-        return true;
-    }
-
-    let colon = marker.find(':');
-    let hash = marker.find('#');
-    let caret = marker.find('^');
-    colon.is_some_and(|colon| {
-        hash.is_none_or(|hash| colon < hash)
-            && caret.is_none_or(|caret| colon < caret)
-            && marker[..colon]
-                .bytes()
-                .any(|byte| byte.is_ascii_alphabetic())
-    })
-}
-
-fn validate_special_terminal_markers(
-    tokens: &[&str],
-) -> Result<(), CaptureError> {
-    for token in tokens.first().into_iter().chain(tokens.last()) {
-        if is_sub_bullet_marker_candidate(token) {
-            parse_sub_bullet_route_token(token)?;
-            continue;
-        }
-        if is_pomodoro_marker_candidate(token) {
-            parse_pomodoro_route_token(token)?;
-        }
-    }
-    Ok(())
-}
-
-fn is_block_id(value: &str) -> bool {
-    !value.is_empty() && value.bytes().all(collect_done::is_block_id_byte)
-}
-
-/// Parse one whitespace-free token as a schedule offset (`s:<N>`), returning
-/// the non-negative day count. Invalid or overflowing tokens stay literal.
-fn parse_schedule_token(token: &str) -> Option<u64> {
-    let digits = token.strip_prefix("s:")?;
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse::<u64>().ok()
-}
-
-/// Parse one whitespace-free token as a priority level (`p:<N>`), returning the
-/// 1-based level number. Non-digit or overflowing tokens stay literal.
-fn parse_priority_token(token: &str) -> Option<u64> {
-    let digits = token.strip_prefix("p:")?;
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse::<u64>().ok()
-}
-
-fn parse_clip_token(token: &str) -> Option<ClipRequest> {
-    let header = token.strip_prefix('%')?;
-    if header.is_empty() {
-        return Some(ClipRequest::Current { header: None });
-    }
-    if header.bytes().all(|byte| byte.is_ascii_digit()) {
-        return header
-            .parse::<usize>()
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .map(|count| ClipRequest::History { count });
-    }
-    capture_clip::is_valid_header(header).then(|| ClipRequest::Current {
-        header: Some(header.to_string()),
-    })
-}
-
-/// Remove schedule and clipboard markers from the terminal marker region.
-/// Each marker kind is extracted at most once, in either order, on either
-/// side of a trailing route token. A duplicate or non-marker stops parsing.
-fn extract_terminal_markers(
-    tokens: &mut Vec<&str>,
-    parse_clip_markers: bool,
-) -> TerminalMarkers {
-    let marker_like = |token: &str| {
-        parse_schedule_token(token).is_some()
-            || parse_priority_token(token).is_some()
-            || (parse_clip_markers && parse_clip_token(token).is_some())
-    };
-    let route_index =
-        if tokens.last().is_some_and(|token| is_route_marker(token)) {
-            Some(tokens.len() - 1)
-        } else {
-            let mut index = tokens.len();
-            while index > 0 && marker_like(tokens[index - 1]) {
-                index -= 1;
-            }
-            if index > 0 && is_route_marker(tokens[index - 1]) {
-                Some(index - 1)
-            } else {
-                None
-            }
-        };
-    let mut cursor = match route_index {
-        Some(index) if index == tokens.len() - 1 => index,
-        _ => tokens.len(),
-    };
-    let route_before_trailing_markers =
-        route_index.is_some_and(|index| index < tokens.len() - 1);
-    let mut markers = TerminalMarkers::default();
-    let mut reached_route = false;
-
-    while cursor > 0 {
-        let index = cursor - 1;
-        if route_index == Some(index) {
-            reached_route = true;
-            break;
-        }
-        let token = tokens[index];
-        if !extract_terminal_marker(token, parse_clip_markers, &mut markers) {
-            break;
-        }
-        tokens.remove(index);
-        cursor -= 1;
-    }
-
-    if reached_route && route_before_trailing_markers {
-        cursor = route_index.expect("reached route");
-        while cursor > 0 {
-            let index = cursor - 1;
-            let token = tokens[index];
-            if !extract_terminal_marker(token, parse_clip_markers, &mut markers)
-            {
-                break;
-            }
-            tokens.remove(index);
-            cursor -= 1;
-        }
-    }
-
-    markers
-}
-
-fn extract_terminal_marker(
-    token: &str,
-    parse_clip_markers: bool,
-    markers: &mut TerminalMarkers,
-) -> bool {
-    if let Some(offset) = parse_schedule_token(token) {
-        if markers.scheduled_offset.is_some() {
-            return false;
-        }
-        markers.scheduled_offset = Some(offset);
-        return true;
-    }
-    if let Some(number) = parse_priority_token(token) {
-        if markers.priority_level.is_some() {
-            return false;
-        }
-        markers.priority_level = Some(number);
-        return true;
-    }
-    if parse_clip_markers
-        && let Some(clip) = parse_clip_token(token)
-        && markers.clip.is_none()
-    {
-        markers.clip = Some(clip);
-        return true;
-    }
-    false
+    .map_err(CaptureError::usage)
 }
 
 #[cfg(test)]
 fn extract_trailing_schedule(tokens: &mut Vec<&str>) -> Option<u64> {
-    extract_terminal_markers(tokens, false).scheduled_offset
-}
-
-fn is_route_marker(token: &str) -> bool {
-    parse_route_token(token).is_some()
-        || (is_sub_bullet_marker_candidate(token)
-            && parse_sub_bullet_route_token(token).is_ok())
-        || (is_pomodoro_marker_candidate(token)
-            && parse_pomodoro_route_token(token).is_ok())
-}
-
-/// Reject the retired standalone bullet marker forms so they fail clearly
-/// instead of silently capturing literal `#...` text. The marker is honored
-/// only when appended to an `@route` token (`@foo#bar`).
-///
-/// Two terminal positions are rejected: a final token that itself starts with
-/// `#`, and (when `allow_route`) a final plain `@route` token preceded by a
-/// `#...` token. A `#tag` anywhere else stays literal task text.
-fn reject_legacy_bullet_markers(
-    tokens: &[&str],
-    allow_route: bool,
-) -> Result<(), CaptureError> {
-    let Some(&last) = tokens.last() else {
-        return Ok(());
-    };
-
-    if last.starts_with('#') {
-        return Err(legacy_marker_error());
-    }
-
-    if allow_route
-        && tokens.len() >= 2
-        && tokens[tokens.len() - 2].starts_with('#')
-        && parse_route_token(last)
-            .is_some_and(|token| matches!(token.kind, CaptureKind::Task))
-    {
-        return Err(legacy_marker_error());
-    }
-
-    Ok(())
-}
-
-fn normalize_forced_route(route: &str) -> Result<String, CaptureError> {
-    if is_route_token(route) {
-        return Ok(route.to_ascii_lowercase());
-    }
-
-    Err(CaptureError::usage(
-        "--route must contain only A-Z, a-z, 0-9, '_' or '-'",
-    ))
-}
-
-pub(crate) fn is_route_token(value: &str) -> bool {
-    !value.is_empty()
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
-        })
+    capture_language::extract_terminal_markers(tokens, false)
+        .0
+        .scheduled_offset
 }
 
 fn insert_task_line(contents: &str, task_line: &str) -> (String, Placement) {
@@ -2685,7 +2180,16 @@ impl CaptureErrorKind {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use super::*;
+    // Grammar helpers now live in `capture_language`; these tests keep
+    // exercising them through `bob capture` so the move stays behavior
+    // preserving.
+    use crate::native::capture_language::{
+        extract_terminal_markers, normalize_task_text, parse_priority_token,
+        parse_schedule_token,
+    };
 
     const TASK: &str = "- [ ] #task new thing [created::2026-06-15]";
     const BULLET: &str = "- new idea [created::2026-06-15]";
@@ -2755,35 +2259,45 @@ mod tests {
     fn extracts_priority_markers_from_terminal_region() {
         let mut tokens = vec!["buy", "milk", "p:2"];
         assert_eq!(
-            extract_terminal_markers(&mut tokens, false).priority_level,
+            extract_terminal_markers(&mut tokens, false)
+                .0
+                .priority_level,
             Some(2)
         );
         assert_eq!(tokens, vec!["buy", "milk"]);
 
         let mut tokens = vec!["buy", "milk", "p:2", "@groceries"];
         assert_eq!(
-            extract_terminal_markers(&mut tokens, false).priority_level,
+            extract_terminal_markers(&mut tokens, false)
+                .0
+                .priority_level,
             Some(2)
         );
         assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
 
         let mut tokens = vec!["buy", "milk", "@groceries", "p:3"];
         assert_eq!(
-            extract_terminal_markers(&mut tokens, false).priority_level,
+            extract_terminal_markers(&mut tokens, false)
+                .0
+                .priority_level,
             Some(3)
         );
         assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
 
         let mut tokens = vec!["set", "p:2", "priority"];
         assert_eq!(
-            extract_terminal_markers(&mut tokens, false).priority_level,
+            extract_terminal_markers(&mut tokens, false)
+                .0
+                .priority_level,
             None
         );
         assert_eq!(tokens, vec!["set", "p:2", "priority"]);
 
         let mut tokens = vec!["buy", "p:1", "p:2"];
         assert_eq!(
-            extract_terminal_markers(&mut tokens, false).priority_level,
+            extract_terminal_markers(&mut tokens, false)
+                .0
+                .priority_level,
             Some(2)
         );
         assert_eq!(tokens, vec!["buy", "p:1"]);

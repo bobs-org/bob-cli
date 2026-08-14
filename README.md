@@ -51,6 +51,7 @@ bob projects list
 | --- | --- |
 | `bulk-git-commit` | Stage, commit, and push all Bob vault changes |
 | `capture` | Capture a task or section bullet, optionally with clipboard content |
+| `capture-parse` | Preview what in-progress capture text currently means |
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
 | `capture-targets` | List inbox, area, and non-terminal project capture routes |
 | `capture-tasks` | List the open tasks in a routed note |
@@ -395,6 +396,78 @@ only the task, or `<text> @^block-id` to choose only the destination. A complete
 `<text> @route^block-id` request captures immediately. The task chooser shows
 each task's literal checkbox with status color and searchable status, block ID,
 section, and child-note details; picker selections use stale-safe task refs.
+
+```bash
+bob capture-parse [-f|--format human|json] [--] [TEXT]...
+```
+
+Reports the authoritative capture grammar's reading of `TEXT` so an editor can
+highlight capture syntax while the user is still typing. It shares one parser
+with `bob capture`: the same tokenizer, the same terminal-marker extraction,
+and the same `@token` classification, so the two commands can never disagree
+about a complete capture.
+
+The command is purely lexical and completely read-only. It never opens the
+vault, never reads the clipboard, never touches the filesystem, and takes no
+`--bob-dir`; running it with a nonexistent `BOB_DIR` and a `%...` clipboard
+marker still succeeds. If `TEXT` is omitted and stdin is piped, it reads one
+line from stdin, like `bob capture`. Only a missing `TEXT` or a bad flag is an
+error (exit 2); every other input succeeds.
+
+Incomplete interactive markers are valid input rather than errors, so `@`,
+`@#`, `@#Ideas`, `@route#`, `@:`, `@route:`, `@^`, `@route^`, and the legacy
+`@!` aliases all parse. An invalid marker component becomes a diagnostic
+instead of a failure, while `bob capture` keeps its strict execution errors for
+the same text.
+
+JSON output is a single versioned object:
+
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "input": "Call bank @Cash^",
+  "body": "Call bank",
+  "mode": "incomplete",
+  "route": "cash",
+  "section": null,
+  "block_id": null,
+  "needs": ["task"],
+  "spans": [
+    { "start": 10, "end": 15, "kind": "sub_bullet_route" },
+    { "start": 15, "end": 16, "kind": "interactive_placeholder" }
+  ],
+  "diagnostics": []
+}
+```
+
+`input` is the raw text as received, before whitespace normalization. `body` is
+the normalized capture body after terminal `s:<N>`, `p:<N>`, and `%...` markers
+and the recognized `@...` token are removed, matching what `bob capture` would
+write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
+`sub_bullet`, or `incomplete`. `route`, `section`, and `block_id` are the
+resolved components, or `null`; `block_id` carries the Pomodoro or sub-bullet
+ID, whichever applies. `needs` lists what a picker still has to supply, in the
+order `route`, `section`, `pomodoro_id`, `task`; it is an independent
+completion hint, so the executable `@route#` bullet reports mode `bullet` and
+needs `["section"]`.
+
+`spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
+non-overlapping, and always on a character boundary. Each `kind` is one of
+`route`, `section`, `pomodoro_route`, `pomodoro_block_id`, `sub_bullet_route`,
+`sub_bullet_block_id`, `schedule`, `priority`, `clipboard`, or
+`interactive_placeholder`. A placeholder marks the part of a marker the user
+has not filled in yet: the trailing `^` in `@cash^`, or the whole `@^` when the
+route is still empty too.
+
+Each entry in `diagnostics` has `severity` (`error`, `warning`, or `info`), a
+stable snake_case `code`, a `message` reusing `bob capture`'s exact wording,
+and a nullable `range` given as a two-element `[start, end]` byte array.
+Today's codes are `invalid_sub_bullet_route`, `invalid_sub_bullet_block_id`,
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, and
+`legacy_bullet_marker`. Human output prints the same information without color
+escapes when piped. On a missing `TEXT`, JSON mode prints a single
+`{"ok": false, "error": "..."}` object on stdout and keeps stderr clean.
 
 ```bash
 bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]

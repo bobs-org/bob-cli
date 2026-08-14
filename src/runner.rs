@@ -43,6 +43,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Capture,
     },
     Subcommand {
+        name: "capture-parse",
+        script_command: None,
+        about: "Explain what in-progress capture text currently means",
+        native_command: NativeCommand::CaptureParse,
+    },
+    Subcommand {
         name: "capture-sections",
         script_command: None,
         about: "List the non-Tasks sections of a capture note",
@@ -275,6 +281,8 @@ Examples:
                                  Capture a task into groceries.md
   bob capture '@dev:foobar' 'Some foobar task.'
                                  Capture and link a next Pomodoro task
+  bob capture-parse --format json -- 'Call bank @cash^'
+                                 Explain in-progress capture text
   bob capture-sections --route cash --format json
                                  List picker sections for one capture target
   bob capture-targets --format json
