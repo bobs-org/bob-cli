@@ -16,6 +16,10 @@ use serde_json::json;
 use super::{
     capture,
     capture_language::{self, CompletionContext},
+    capture_links::{
+        self, WikilinkBlockCandidate, WikilinkHeadingCandidate,
+        WikilinkNoteCandidate,
+    },
     capture_targets::{self, CaptureTargetKind},
     capture_tasks, env as bob_env, note_tasks,
     style::Styler,
@@ -76,7 +80,7 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Complete the capture marker at the cursor")
+        .about("Complete capture or wikilink syntax at the cursor")
         .long_about(
             "Return cursor-aware completion candidates for in-progress \
 capture TEXT.\n\n\
@@ -98,10 +102,17 @@ completion covers '@route:prefix' and parent-task completion covers \
 '@route^prefix', both backed by the same open-task scan as \
 `bob capture-tasks`. Candidates rank exact prefix matches before substring \
 matches, case-insensitively, while keeping each discovery source's stable \
-order.",
+order.\n\n\
+When the cursor is inside an Obsidian wikilink, wikilink completion takes \
+precedence over capture-marker completion. Note completion covers `[[note` \
+and offers Markdown note paths, stems, and aliases. Heading and block \
+completion cover target-qualified links like `[[note#Head` and \
+`[[note#^block`, same-destination links like `[[#Head`, and vault-wide \
+searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
+missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n\nContexts:\n  route, section, pomodoro_block_id, task",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -258,6 +269,9 @@ enum Candidates {
     Route(Vec<RouteCandidate>),
     Section(Vec<SectionCandidate>),
     Task(Vec<TaskCandidate>),
+    WikilinkNote(Vec<WikilinkNoteCandidate>),
+    WikilinkHeading(Vec<WikilinkHeadingCandidate>),
+    WikilinkBlock(Vec<WikilinkBlockCandidate>),
 }
 
 impl Candidates {
@@ -266,6 +280,9 @@ impl Candidates {
             Self::Route(items) => items.len(),
             Self::Section(items) => items.len(),
             Self::Task(items) => items.len(),
+            Self::WikilinkNote(items) => items.len(),
+            Self::WikilinkHeading(items) => items.len(),
+            Self::WikilinkBlock(items) => items.len(),
         }
     }
 }
@@ -278,6 +295,8 @@ struct CaptureCompleteResult {
     replacement: Replacement,
     context: Option<CompletionContext>,
     candidates: Candidates,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
 }
 
 impl CaptureCompleteResult {
@@ -292,6 +311,7 @@ impl CaptureCompleteResult {
             },
             context: None,
             candidates: Candidates::Route(Vec::new()),
+            warnings: Vec::new(),
         }
     }
 }
@@ -301,6 +321,46 @@ fn build_result(
     raw_text: &str,
     cursor: usize,
 ) -> Result<CaptureCompleteResult, CompleteError> {
+    let current_note_path = capture_language::parse_for_editor(raw_text)
+        .route
+        .as_deref()
+        .map(capture::route_label)
+        .unwrap_or_else(|| capture::route_label(capture::inbox_route()));
+    if let Some(field) =
+        capture_links::completion_field_at(raw_text, cursor, current_note_path)
+    {
+        let index = capture_links::NoteIndex::read(bob_dir)
+            .map_err(CompleteError::io)?;
+        let candidates = match field.context {
+            CompletionContext::WikilinkNote => Candidates::WikilinkNote(
+                capture_links::note_candidates(&field, &index),
+            ),
+            CompletionContext::WikilinkHeading => Candidates::WikilinkHeading(
+                capture_links::heading_candidates(&field, &index),
+            ),
+            CompletionContext::WikilinkBlock => Candidates::WikilinkBlock(
+                capture_links::block_candidates(&field, &index),
+            ),
+            CompletionContext::Route
+            | CompletionContext::Section
+            | CompletionContext::PomodoroBlockId
+            | CompletionContext::Task => unreachable!("link field context"),
+        };
+
+        return Ok(CaptureCompleteResult {
+            ok: true,
+            schema_version: SCHEMA_VERSION,
+            cursor,
+            replacement: Replacement {
+                start: field.replacement.0,
+                end: field.replacement.1,
+            },
+            context: Some(field.context),
+            candidates,
+            warnings: index.warnings(),
+        });
+    }
+
     let Some(field) = capture_language::completion_field_at(raw_text, cursor)
     else {
         return Ok(CaptureCompleteResult::empty(cursor));
@@ -316,6 +376,11 @@ fn build_result(
             let route = field.route.as_deref().expect("route resolved");
             task_candidates(bob_dir, route, &field.query)?
         }
+        CompletionContext::WikilinkNote
+        | CompletionContext::WikilinkHeading
+        | CompletionContext::WikilinkBlock => {
+            unreachable!("marker field context")
+        }
     };
 
     Ok(CaptureCompleteResult {
@@ -328,6 +393,7 @@ fn build_result(
         },
         context: Some(field.context),
         candidates,
+        warnings: Vec::new(),
     })
 }
 
@@ -494,6 +560,7 @@ fn print_human_success_with_styler(
     if result.candidates.len() == 0 {
         println!();
         println!("  No candidates found.");
+        print_warnings(result, styler);
         println!();
         println!("0 candidates");
         return;
@@ -504,8 +571,20 @@ fn print_human_success_with_styler(
     for line in candidate_lines(&result.candidates) {
         println!("    {} {}", styler.cyan(&line.0), styler.dim(&line.1));
     }
+    print_warnings(result, styler);
     println!();
     println!("{} {}", result.candidates.len(), plural_candidates(result));
+}
+
+fn print_warnings(result: &CaptureCompleteResult, styler: &Styler) {
+    if result.warnings.is_empty() {
+        return;
+    }
+    println!();
+    println!("  Warnings");
+    for warning in &result.warnings {
+        println!("    {}", styler.yellow(warning));
+    }
 }
 
 fn plural_candidates(result: &CaptureCompleteResult) -> &'static str {
@@ -535,6 +614,39 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
             .iter()
             .map(|item| (item.replacement.clone(), item.text.clone()))
             .collect(),
+        Candidates::WikilinkNote(items) => items
+            .iter()
+            .map(|item| {
+                (
+                    item.replacement.clone(),
+                    item.alias.as_ref().map_or_else(
+                        || item.path.clone(),
+                        |alias| format!("{}  alias {alias}", item.path),
+                    ),
+                )
+            })
+            .collect(),
+        Candidates::WikilinkHeading(items) => items
+            .iter()
+            .map(|item| {
+                (
+                    item.replacement.clone(),
+                    format!("{}  H{}", item.path, item.level),
+                )
+            })
+            .collect(),
+        Candidates::WikilinkBlock(items) => items
+            .iter()
+            .map(|item| {
+                (
+                    item.replacement.clone(),
+                    item.preview.as_ref().map_or_else(
+                        || item.path.clone(),
+                        |preview| format!("{}  {}", item.path, preview),
+                    ),
+                )
+            })
+            .collect(),
     }
 }
 
@@ -544,6 +656,9 @@ fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::Section => "section",
         CompletionContext::PomodoroBlockId => "pomodoro_block_id",
         CompletionContext::Task => "task",
+        CompletionContext::WikilinkNote => "wikilink_note",
+        CompletionContext::WikilinkHeading => "wikilink_heading",
+        CompletionContext::WikilinkBlock => "wikilink_block",
     }
 }
 
@@ -745,6 +860,70 @@ mod tests {
     }
 
     #[test]
+    fn wikilink_note_completion_returns_alias_metadata_and_cursor_after() {
+        let temp = TempDir::new("bob-cli-capture-complete-link-note");
+        write_file(
+            &temp.path().join("Artificial Intelligence.md"),
+            "---\naliases: [AI]\n---\n",
+        );
+
+        let value = result(temp.path(), "[[AI", 4);
+        assert_eq!(value.context, Some(CompletionContext::WikilinkNote));
+        assert_eq!(value.replacement, Replacement { start: 2, end: 4 });
+        let Candidates::WikilinkNote(notes) = &value.candidates else {
+            panic!("expected wikilink note candidates");
+        };
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].replacement, "Artificial Intelligence|AI]]");
+        assert_eq!(notes[0].cursor_after, 30);
+        assert_eq!(notes[0].path, "Artificial Intelligence.md");
+        assert_eq!(notes[0].alias.as_deref(), Some("AI"));
+    }
+
+    #[test]
+    fn wikilink_completion_takes_precedence_over_marker_text_inside_link() {
+        let temp = TempDir::new("bob-cli-capture-complete-link-precedence");
+        write_file(&temp.path().join("Project Dev.md"), "");
+
+        let value = result(temp.path(), "[[Project @d", 11);
+        assert_eq!(value.context, Some(CompletionContext::WikilinkNote));
+        assert_eq!(value.replacement, Replacement { start: 2, end: 12 });
+    }
+
+    #[test]
+    fn wikilink_same_note_heading_uses_capture_route_then_inbox_fallback() {
+        let temp = TempDir::new("bob-cli-capture-complete-link-heading");
+        write_file(&temp.path().join("sase.md"), "# Design\n");
+        write_file(&temp.path().join("mac_inbox.md"), "# Inbox\n");
+
+        let routed = result(temp.path(), "@sase task [[#De", 16);
+        assert_eq!(routed.context, Some(CompletionContext::WikilinkHeading));
+        let Candidates::WikilinkHeading(headings) = &routed.candidates else {
+            panic!("expected heading candidates");
+        };
+        assert_eq!(headings[0].replacement, "Design]]");
+        assert_eq!(headings[0].path, "sase.md");
+
+        let fallback = result(temp.path(), "[[#In", 5);
+        let Candidates::WikilinkHeading(headings) = &fallback.candidates else {
+            panic!("expected heading candidates");
+        };
+        assert_eq!(headings[0].path, "mac_inbox.md");
+    }
+
+    #[test]
+    fn wikilink_completion_surfaces_bounded_index_warnings() {
+        let temp = TempDir::new("bob-cli-capture-complete-link-warnings");
+        write_file(&temp.path().join("Good.md"), "");
+        write_file(&temp.path().join("Bad.md"), "---\naliases: [\n---\n");
+
+        let value = result(temp.path(), "[[G", 3);
+        assert_eq!(value.context, Some(CompletionContext::WikilinkNote));
+        assert_eq!(value.warnings.len(), 1);
+        assert!(value.warnings[0].contains("parse aliases in Bad.md"));
+    }
+
+    #[test]
     fn json_shape_is_stable() {
         let value = serde_json::to_value(CaptureCompleteResult {
             ok: true,
@@ -759,6 +938,7 @@ mod tests {
                 kind: CaptureTargetKind::Area,
                 status: None,
             }]),
+            warnings: Vec::new(),
         })
         .expect("json");
 
@@ -804,6 +984,7 @@ mod tests {
                     kind: CaptureTargetKind::Area,
                     status: None,
                 }]),
+                warnings: Vec::new(),
             },
             &styler,
         );

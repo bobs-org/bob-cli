@@ -13,6 +13,7 @@ use serde_json::json;
 
 use super::{
     capture_language::{self, Diagnostic, EditorMode, Need, Severity, Span},
+    capture_links,
     style::Styler,
 };
 
@@ -69,10 +70,12 @@ vault, never reads the clipboard, never touches the filesystem, and takes no \
 still succeeds.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, the UTF-8 \
-byte spans of every recognized token, every authored sub-bullet's normalized \
-body, and structured diagnostics. Byte offsets index the original TEXT \
-before whitespace normalization, are half-open [start, end), never overlap, \
-and always land on a character boundary.\n\n\
+byte spans of every recognized token, Obsidian wikilink component spans, \
+every authored sub-bullet's normalized body, and structured diagnostics. \
+Wikilink highlighting is syntax-only and never touches the vault. Byte \
+offsets index the original TEXT before whitespace normalization, are \
+half-open [start, end), never overlap, and always land on a character \
+boundary.\n\n\
 TEXT accepts the same multi-line authored-bullet draft 'bob capture' does: \
 the first physical line is the parent, and later flat '-'/'*'/'+' lines \
 become authored children. Incomplete interactive markers are valid input, \
@@ -82,6 +85,9 @@ plus what they still need. An invalid marker component, a malformed \
 continuation line, an item emptied by marker removal, or a duplicate \
 capture-wide marker across lines becomes a diagnostic, so live editors keep \
 a usable parse while 'bob capture' keeps its strict execution errors.\n\n\
+Complete and in-progress Obsidian wikilinks such as '[[note', '![[note]]', \
+'[[note#Heading|Alias]]', and '[[#^block-id]]' add semantic delimiter, target, \
+heading, block, and alias spans without changing capture routing.\n\n\
 Only a missing TEXT or a bad flag is an error; every other input succeeds. \
 If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
@@ -193,6 +199,8 @@ struct CaptureParseResult {
 impl CaptureParseResult {
     fn new(input: String) -> Self {
         let parse = capture_language::parse_for_editor(&input);
+        let spans =
+            merge_spans(parse.spans, capture_links::wikilink_spans(&input));
         Self {
             ok: true,
             schema_version: SCHEMA_VERSION,
@@ -203,11 +211,30 @@ impl CaptureParseResult {
             section: parse.section,
             block_id: parse.block_id,
             needs: parse.needs,
-            spans: parse.spans,
+            spans,
             diagnostics: parse.diagnostics,
             sub_bullets: parse.sub_bullets,
         }
     }
+}
+
+fn merge_spans(
+    mut capture_spans: Vec<Span>,
+    link_spans: Vec<Span>,
+) -> Vec<Span> {
+    capture_spans.extend(link_spans);
+    capture_spans.sort_by_key(|span| (span.start, span.end));
+    let mut merged = Vec::new();
+    for span in capture_spans {
+        if merged
+            .last()
+            .is_some_and(|previous: &Span| previous.end > span.start)
+        {
+            continue;
+        }
+        merged.push(span);
+    }
+    merged
 }
 
 fn print_success(result: &CaptureParseResult, output_format: OutputFormat) {
@@ -424,6 +451,51 @@ mod tests {
                 .map(|span| span["kind"].as_str().expect("kind"))
                 .collect::<Vec<_>>(),
             vec!["priority", "schedule", "clipboard", "route"]
+        );
+    }
+
+    #[test]
+    fn json_reports_wikilink_semantic_spans_without_changing_capture_body() {
+        let value = json("See [[sase#Design|Spec]] @Cash^");
+        assert_eq!(value["body"], "See [[sase#Design|Spec]]");
+        assert_eq!(value["route"], "cash");
+        assert_eq!(
+            value["spans"]
+                .as_array()
+                .expect("array")
+                .iter()
+                .map(|span| span["kind"].as_str().expect("kind"))
+                .collect::<Vec<_>>(),
+            vec![
+                "wikilink_delimiter",
+                "wikilink_target",
+                "wikilink_delimiter",
+                "wikilink_heading",
+                "wikilink_delimiter",
+                "wikilink_alias",
+                "wikilink_delimiter",
+                "sub_bullet_route",
+                "interactive_placeholder",
+            ]
+        );
+    }
+
+    #[test]
+    fn json_ignores_wikilinks_inside_code_literals() {
+        let value = json("Use `[[literal]]` and [[real]]");
+        let kinds = value["spans"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|span| span["kind"].as_str().expect("kind"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                "wikilink_delimiter",
+                "wikilink_target",
+                "wikilink_delimiter",
+            ]
         );
     }
 

@@ -51,8 +51,8 @@ bob projects list
 | --- | --- |
 | `bulk-git-commit` | Stage, commit, and push all Bob vault changes |
 | `capture` | Capture a task or section bullet, optionally with clipboard content |
-| `capture-complete` | Complete the capture marker at the cursor |
-| `capture-parse` | Preview what in-progress capture text currently means |
+| `capture-complete` | Complete capture marker or wikilink syntax at the cursor |
+| `capture-parse` | Preview what in-progress capture text and wikilinks mean |
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
 | `capture-targets` | List inbox, area, and non-terminal project capture routes |
 | `capture-tasks` | List the open tasks in a routed note |
@@ -463,10 +463,11 @@ bob capture-parse [-f|--format human|json] [--] [TEXT]...
 ```
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
-highlight capture syntax while the user is still typing. It shares one parser
-with `bob capture`: the same tokenizer, the same terminal-marker extraction,
-and the same `@token` classification, so the two commands can never disagree
-about a complete capture.
+highlight capture syntax and Obsidian wikilinks while the user is still typing.
+It shares one parser with `bob capture`: the same tokenizer, the same
+terminal-marker extraction, and the same `@token` classification, so the two
+commands can never disagree about a complete capture. Wikilink highlighting is
+syntax-only and additive; it does not change capture routing or diagnostics.
 
 The command is purely lexical and completely read-only. It never opens the
 vault, never reads the clipboard, never touches the filesystem, and takes no
@@ -480,10 +481,12 @@ does: the first physical line is the parent, and later flat `-`/`*`/`+`
 lines become authored children. Incomplete interactive markers are valid
 input rather than errors, so `@`, `@#`, `@#Ideas`, `@route#`, `@:`,
 `@route:`, `@^`, `@route^`, and the legacy `@!` aliases all parse on any
-line. An invalid marker component, a malformed continuation line, an item
-emptied by marker removal, or a duplicate capture-wide marker across lines
-becomes a diagnostic instead of a failure, while `bob capture` keeps its
-strict execution errors for the same text.
+line. Complete and in-progress Obsidian links such as `[[sase`,
+`![[sase]]`, `[[sase#Design|Spec]]`, and `[[#^block-id]]` also parse for
+semantic highlighting. An invalid marker component, a malformed continuation
+line, an item emptied by marker removal, or a duplicate capture-wide marker
+across lines becomes a diagnostic instead of a failure, while `bob capture`
+keeps its strict execution errors for the same text.
 
 JSON output is a single versioned object:
 
@@ -529,10 +532,12 @@ no target-selected indentation or `- ` marker, unlike `bob capture`'s own
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `pomodoro_route`, `pomodoro_block_id`, `sub_bullet_route`,
-`sub_bullet_block_id`, `schedule`, `priority`, `clipboard`, or
-`interactive_placeholder`. A placeholder marks the part of a marker the user
-has not filled in yet: the trailing `^` in `@cash^`, or the whole `@^` when the
-route is still empty too.
+`sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
+`interactive_placeholder`, `wikilink_delimiter`, `wikilink_target`,
+`wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
+marks the part of a marker the user has not filled in yet: the trailing `^` in
+`@cash^`, or the whole `@^` when the route is still empty too. Wikilink spans
+cover syntax only; unresolved note targets are not errors.
 
 Each entry in `diagnostics` has `severity` (`error`, `warning`, or `info`), a
 stable snake_case `code`, a `message` reusing `bob capture`'s exact wording,
@@ -554,13 +559,13 @@ bob capture-complete --cursor BYTE [-b|--bob-dir DIR] [-f|--format human|json] [
 ```
 
 Returns cursor-aware completion candidates for in-progress capture `TEXT`. It
-shares the phase-`grammar` tokenizer and `@token` classification with
+shares the phase-grammar tokenizer and `@token` classification with
 `bob capture-parse`, so a completion can never disagree with the marker
-highlighting derived from that command; it never independently reparses
-marker prefixes. `--cursor`/`-c` is required and must be a UTF-8 byte offset
-on a character boundary within `TEXT`; a missing `TEXT` defaults to an empty
-draft rather than an error, since cursor `0` against an empty draft is an
-ordinary interactive state, not a mistake.
+highlighting derived from that command; it never independently reparses marker
+prefixes. `--cursor`/`-c` is required and must be a UTF-8 byte offset on a
+character boundary within `TEXT`; a missing `TEXT` defaults to an empty draft
+rather than an error, since cursor `0` against an empty draft is an ordinary
+interactive state, not a mistake.
 
 For a multi-line, authored-bullet draft, completion always scopes to the
 physical line the cursor is on: only the first (parent) line offers a
@@ -586,6 +591,18 @@ Candidates rank exact prefix matches before substring matches,
 case-insensitively, while keeping each discovery source's stable order; a
 non-matching candidate is dropped, and an empty query keeps every candidate.
 
+When the cursor is inside a valid Obsidian wikilink component, link completion
+takes precedence over marker completion so `@` and `%` inside link text remain
+ordinary link text. `wikilink_note` searches Markdown note paths, stems, and
+frontmatter aliases. `wikilink_heading` searches ATX headings in a resolved
+target, in the current capture destination for `[[#...]]`, or across the vault
+for `[[##...]]`. `wikilink_block` searches named block IDs in the analogous
+target, current-destination, or `[[^^...]]` vault-wide scope. The note index is
+read-only, skips hidden directories plus `.git`, `.obsidian`, `_generated`, and
+`_templates`, never follows directory symlinks, and returns bounded warnings for
+individual unreadable notes or malformed alias frontmatter while keeping path
+completion available.
+
 JSON output is a single versioned object:
 
 ```json
@@ -601,22 +618,26 @@ JSON output is a single versioned object:
 }
 ```
 
-`replacement` is the half-open UTF-8 byte range a chosen candidate replaces
-in full, regardless of where the cursor sits inside it; it is always present,
-even in an empty result, where it collapses to a zero-length range at the
-cursor. `context` is `route`, `section`, `pomodoro_block_id`, `task`, or
-`null` when no marker is active. Each candidate's `replacement` is the exact
-text to insert; the remaining fields are passthrough display metadata,
-without synthesis. A route candidate has `route`, `label`, `kind`
-(`inbox`, `area`, or `project`), and nullable `status`. A section candidate
-has `title` and `level`. A task candidate (`pomodoro_block_id` or `task`
-context) has `ref`, `block_id`, `status_symbol`, `status_name`,
-`status_type`, `text`, nullable `section`, `depth`, and `child_count`. A
-missing note behind a resolved route is not an error; it returns an empty
-candidate list. Discovery failures never fall back to a default route or an
-empty result silently; they return the same actionable error in human and
-JSON forms as the underlying `capture-targets`, `capture-sections`, or
-`capture-tasks` scan would.
+`replacement` is the half-open UTF-8 byte range a chosen candidate replaces in
+full, regardless of where the cursor sits inside it; it is always present, even
+in an empty result, where it collapses to a zero-length range at the cursor.
+`context` is `route`, `section`, `pomodoro_block_id`, `task`, `wikilink_note`,
+`wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+active. Each candidate's `replacement` is the exact text to insert; wikilink
+candidates also include `cursor_after`, the post-accept UTF-8 byte offset after
+deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
+`label`, `kind` (`inbox`, `area`, or `project`), and nullable `status`. A
+section candidate has `title` and `level`. A task candidate
+(`pomodoro_block_id` or `task` context) has `ref`, `block_id`, `status_symbol`,
+`status_name`, `status_type`, `text`, nullable `section`, `depth`, and
+`child_count`. A wikilink note candidate has `path`, `name`, optional `alias`,
+and `match_kind`; heading and block candidates add `heading`/`level` or
+`block_id`/optional `preview` metadata. Link-index warnings, when present, are
+reported in a bounded top-level `warnings` array without logging draft text. A
+missing note behind a resolved route or link target is not an error; it returns
+an empty candidate list. Discovery failures never fall back to a default route
+or an empty result silently; they return the same actionable error in human and
+JSON forms as the underlying scan would.
 
 ```bash
 bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]

@@ -13,6 +13,7 @@ mod capture;
 mod capture_clip;
 mod capture_complete;
 mod capture_language;
+mod capture_links;
 mod capture_parse;
 mod capture_schedule_log;
 mod capture_sections;

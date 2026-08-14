@@ -883,6 +883,11 @@ pub(crate) enum SpanKind {
     Priority,
     Clipboard,
     InteractivePlaceholder,
+    WikilinkDelimiter,
+    WikilinkTarget,
+    WikilinkHeading,
+    WikilinkBlockId,
+    WikilinkAlias,
 }
 
 impl SpanKind {
@@ -898,6 +903,11 @@ impl SpanKind {
             Self::Priority => "priority",
             Self::Clipboard => "clipboard",
             Self::InteractivePlaceholder => "interactive_placeholder",
+            Self::WikilinkDelimiter => "wikilink_delimiter",
+            Self::WikilinkTarget => "wikilink_target",
+            Self::WikilinkHeading => "wikilink_heading",
+            Self::WikilinkBlockId => "wikilink_block_id",
+            Self::WikilinkAlias => "wikilink_alias",
         }
     }
 }
@@ -1628,6 +1638,9 @@ pub(crate) enum CompletionContext {
     Section,
     PomodoroBlockId,
     Task,
+    WikilinkNote,
+    WikilinkHeading,
+    WikilinkBlock,
 }
 
 /// The active marker component at one cursor position, ready for a

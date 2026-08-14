@@ -2690,6 +2690,41 @@ fn capture_parse_json_output_is_stable_and_parseable() {
 }
 
 #[test]
+fn capture_parse_json_reports_wikilink_semantic_spans() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("See [[sase#Design|Spec]]")
+        .output()
+        .expect("run bob capture-parse wikilink json");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["body"], "See [[sase#Design|Spec]]");
+    assert_eq!(
+        json["spans"]
+            .as_array()
+            .expect("spans array")
+            .iter()
+            .map(|span| span["kind"].as_str().expect("kind"))
+            .collect::<Vec<_>>(),
+        vec![
+            "wikilink_delimiter",
+            "wikilink_target",
+            "wikilink_delimiter",
+            "wikilink_heading",
+            "wikilink_delimiter",
+            "wikilink_alias",
+            "wikilink_delimiter",
+        ]
+    );
+}
+
+#[test]
 fn capture_parse_reports_diagnostics_without_failing() {
     let output = bob_command()
         .arg("capture-parse")
@@ -7160,6 +7195,82 @@ fn capture_complete_task_json_only_offers_tasks_with_a_block_id() {
     assert_eq!(candidates[0]["text"], "Finish Google Exit Packet!");
     assert_eq!(candidates[0]["section"], "Tasks");
     assert_eq!(candidates[0]["status_symbol"], "*");
+}
+
+#[test]
+fn capture_complete_wikilink_note_json_returns_replacement_and_cursor_after() {
+    let temp = TempDir::new("bob-cli-capture-complete-wikilink-note");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("Artificial Intelligence.md"),
+        "---\naliases: [AI]\n---\n# Design\n",
+    );
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("4")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("[[AI")
+        .output()
+        .expect("run bob capture-complete wikilink note json");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["context"], "wikilink_note");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": 2, "end": 4})
+    );
+    assert!(json.get("warnings").is_none());
+    let candidates = json["candidates"].as_array().expect("candidates array");
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["replacement"], "Artificial Intelligence|AI]]");
+    assert_eq!(candidates[0]["cursor_after"], 30);
+    assert_eq!(candidates[0]["path"], "Artificial Intelligence.md");
+    assert_eq!(candidates[0]["name"], "Artificial Intelligence");
+    assert_eq!(candidates[0]["alias"], "AI");
+    assert_eq!(candidates[0]["match_kind"], "exact_alias");
+}
+
+#[test]
+fn capture_complete_wikilink_same_note_heading_uses_capture_route() {
+    let temp = TempDir::new("bob-cli-capture-complete-wikilink-heading");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "# Design\n# Decision Log\n");
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("16")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@sase task [[#De")
+        .output()
+        .expect("run bob capture-complete wikilink heading json");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["context"], "wikilink_heading");
+    let candidates = json["candidates"].as_array().expect("candidates array");
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate["heading"].as_str().expect("heading"))
+            .collect::<Vec<_>>(),
+        vec!["Design", "Decision Log"]
+    );
+    assert_eq!(candidates[0]["replacement"], "Design]]");
+    assert_eq!(candidates[0]["path"], "sase.md");
 }
 
 #[test]
