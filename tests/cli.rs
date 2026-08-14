@@ -4497,7 +4497,7 @@ fn capture_percent_one_is_an_exact_single_clip_alias() {
     assert_eq!(json["clip"]["header"], serde_json::Value::Null);
     assert_eq!(json["clip"]["mode"], "inline");
     assert_eq!(json["clip"]["lines"], serde_json::json!(["\t- live value"]));
-    assert!(json["clip"].get("entries").is_none(), "{json}");
+    assert_eq!(json["clip"]["entries"], serde_json::json!([]));
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
         concat!(
@@ -4554,6 +4554,9 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
     assert_eq!(json["clip"]["entries"][0]["mode"], "inline");
     assert_eq!(json["clip"]["entries"][1]["mode"], "lines");
     assert_eq!(json["clip"]["entries"][2]["mode"], "inline");
+    for entry in json["clip"]["entries"].as_array().unwrap() {
+        assert_eq!(entry["entries"], serde_json::json!([]));
+    }
     assert!(json["clip"].get("snippet").is_none(), "{json}");
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
@@ -4634,6 +4637,40 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
         fs::read_to_string(day_file).expect("read day"),
         "## Pomodoros\n- [ ] Current\n  - [[dev#^history-id]]\n"
     );
+}
+
+#[test]
+fn capture_clip_json_always_emits_collection_fields() {
+    let temp = TempDir::new("bob-cli-capture-clip-json-collections");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'live value\n'\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("single %")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("capture plain clip");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("clip JSON");
+    let clip = json["clip"]
+        .as_object()
+        .expect("plain clip emits a JSON object");
+
+    assert!(clip.contains_key("lines"), "{json}");
+    assert!(clip.contains_key("attachments"), "{json}");
+    assert!(clip.contains_key("entries"), "{json}");
+    assert_eq!(clip["lines"], serde_json::json!(["\t- live value"]));
+    assert_eq!(clip["attachments"], serde_json::json!([]));
+    assert_eq!(clip["entries"], serde_json::json!([]));
 }
 
 #[test]

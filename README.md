@@ -414,11 +414,12 @@ happened.
 
 Clipboard captures additionally include a `clip` object. Single captures keep
 the existing shape: `header`, `mode` (`"inline"`, `"lines"`, `"attachments"`,
-or `"snippet"`), `lines` (the exact rendered child lines), and `attachments`.
-Each attachment has `source`, vault-relative `saved`, `kind` (`"image"` or
-`"file"`), and `reused` fields. Snippet results also include the vault-relative
-`snippet` path. The `header` value is `null` when the capture omitted a header
-and is the rendered string (for example, `"BUILD LOG"`) when one was explicit.
+or `"snippet"`), `lines` (the exact rendered child lines), `attachments`, and
+`entries`. Leaf clips emit `entries: []`. Each attachment has `source`,
+vault-relative `saved`, `kind` (`"image"` or `"file"`), and `reused` fields.
+Snippet results also include the vault-relative `snippet` path. The `header`
+value is `null` when the capture omitted a header and is the rendered string
+(for example, `"BUILD LOG"`) when one was explicit.
 
 Counted histories above one use `mode: "history"`, `header: null`, flattened
 `lines`, and attachment records aggregated in entry order. Their `entries`

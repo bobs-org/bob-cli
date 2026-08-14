@@ -63,7 +63,8 @@ pub(crate) struct ClipOutput {
     pub(crate) attachments: Vec<AttachmentOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) snippet: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    // bob-mac-capture decodes clip collections as required fields; omitting
+    // empty entries broke every `%` capture in the app.
     pub(crate) entries: Vec<ClipOutput>,
 }
 
@@ -1728,7 +1729,7 @@ mod tests {
         assert_eq!(headerless_inline.output.lines, ["  - hello"]);
         let single_json = serde_json::to_value(&headerless_inline.output)
             .expect("single output JSON");
-        assert!(single_json.get("entries").is_none(), "{single_json}");
+        assert_eq!(single_json["entries"], serde_json::json!([]));
 
         let inline =
             plan(root, Some("clip"), "hello", now).expect("headed inline");
