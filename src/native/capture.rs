@@ -1,7 +1,7 @@
 use std::{
     ffi::OsString,
     fs,
-    io::{self, BufRead, IsTerminal, Write},
+    io::{self, IsTerminal, Read, Write},
     iter,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -72,10 +72,26 @@ fn build_cli() -> ClapCommand {
         .about("Capture a task or bullet into the Bob vault")
         .long_about(
             "Capture one task into the Bob Obsidian vault.\n\n\
-Text is normalized to one line, formatted as a #task with a [created::] stamp, \
-and written to mac_inbox.md unless an @route token or --route target is \
-provided. Existing target files prefer a Tasks section, then fall back to the \
-last top-level task block. Missing target files are created when needed.\n\n\
+TEXT is one or more physical lines. The first line's whitespace is \
+normalized and becomes the parent, formatted as a #task with a [created::] \
+stamp, and written to mac_inbox.md unless an @route token or --route target \
+is provided. Existing target files prefer a Tasks section, then fall back \
+to the last top-level task block. Missing target files are created when \
+needed.\n\n\
+Every later nonblank line must be a flat Markdown bullet: '-', '*', or '+' \
+at the start of the line, followed by a space or tab. Its source marker is \
+stripped and it is rendered '- <body>' one indentation unit beneath the \
+parent, using the target note's dominant tab-or-two-space child indentation. \
+A blank line or a marker alone ('- ') is a harmless placeholder and is \
+skipped. Any other shape -- indented, nested, wrapped, or plain continuation \
+prose -- fails with a usage error naming the line, and so does an item left \
+with no text once its own capture markers are removed. Every recognized \
+terminal 's:<N>', 'p:<N>', '%...', and '@route' marker configures the whole \
+capture no matter which line's end it appears on and is stripped from that \
+line's rendered text; a second line resolving the same marker is ambiguous \
+and fails before anything is written. Only the first line keeps the \
+established leading '@route text' form. Authored children render before any \
+clipboard children and the priority schedule log.\n\n\
 Append a trailing lowercase 's:<N>' token, where N is a non-negative integer, \
 to schedule the capture N days from today. The token is removed from the task \
 text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It \
@@ -135,7 +151,7 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash^goog-exit' 'Called Morgan Stanley today.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash^goog-exit' 'Called Morgan Stanley today.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -396,12 +412,12 @@ fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, CaptureError> {
         return Ok(String::new());
     }
 
-    let mut line = String::new();
+    let mut text = String::new();
     io::stdin()
         .lock()
-        .read_line(&mut line)
+        .read_to_string(&mut text)
         .map_err(|error| CaptureError::io(format!("read stdin: {error}")))?;
-    Ok(line)
+    Ok(text)
 }
 
 fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
@@ -478,8 +494,20 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let kind_label = capture_kind_label(&parsed.kind);
     let relative_target = relative_target(parsed.route.as_deref());
     let target = request.bob_dir.join(&relative_target);
-    let child_indent = (parsed.clip.is_some() || schedule_log_reason.is_some())
-        .then(|| child_indent_unit(&target));
+    let child_indent = (parsed.clip.is_some()
+        || schedule_log_reason.is_some()
+        || !parsed.sub_bullets.is_empty())
+    .then(|| child_indent_unit(&target));
+    let sub_bullet_lines: Vec<String> = if parsed.sub_bullets.is_empty() {
+        Vec::new()
+    } else {
+        let indent = child_indent.as_deref().unwrap_or("\t");
+        parsed
+            .sub_bullets
+            .iter()
+            .map(|body| format!("{indent}- {body}"))
+            .collect()
+    };
     let clip_plan = match parsed.clip.as_ref() {
         Some(ClipRequest::Current { header }) => {
             let clipboard =
@@ -535,6 +563,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     });
     let capture_block = assemble_capture_block(
         &capture_line,
+        (!sub_bullet_lines.is_empty()).then_some(sub_bullet_lines.as_slice()),
         clip_plan.as_ref().map(|plan| plan.output.lines.as_slice()),
         schedule_log.as_ref().map(|log| log.lines.as_slice()),
     );
@@ -613,6 +642,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             .as_ref()
             .map(|resolved| resolved.label.clone()),
         placement: note_plan.placement,
+        sub_bullets: sub_bullet_lines,
         clip: clip_plan.map(|plan| plan.output),
         schedule_log,
         block_id: special
@@ -634,16 +664,21 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     })
 }
 
-/// Join the capture line with its clip children (if any) and its schedule
-/// log lines (if any), in note order: the captured line first, any
-/// clipboard children next, and the schedule log last since it documents
-/// the whole block above it.
+/// Join the capture line with its authored children (if any), its clip
+/// children (if any), and its schedule log lines (if any), in note order:
+/// the captured line first, then the authored bullets the user typed
+/// beneath it, then any clipboard children, and the schedule log last since
+/// it documents the whole block above it.
 fn assemble_capture_block(
     capture_line: &str,
+    sub_bullet_lines: Option<&[String]>,
     clip_lines: Option<&[String]>,
     schedule_log_lines: Option<&[String]>,
 ) -> String {
     let mut lines = vec![capture_line];
+    if let Some(sub_bullet_lines) = sub_bullet_lines {
+        lines.extend(sub_bullet_lines.iter().map(String::as_str));
+    }
     if let Some(clip_lines) = clip_lines {
         lines.extend(clip_lines.iter().map(String::as_str));
     }
@@ -2001,6 +2036,8 @@ struct CaptureResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     priority_label: Option<String>,
     placement: Placement,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sub_bullets: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     clip: Option<capture_clip::ClipOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2061,6 +2098,9 @@ fn print_human_success(result: &CaptureResult) {
         println!("  under {marker} {parent_text}{block_id}");
     }
     println!("  {}", styler.dim(&result.task_line));
+    for line in &result.sub_bullets {
+        println!("  {}", styler.dim(line));
+    }
     if let Some(clip) = &result.clip {
         for line in &clip.lines {
             println!("  {}", styler.dim(line));
@@ -2922,6 +2962,7 @@ mod tests {
 
         let block = assemble_capture_block(
             capture_line,
+            None,
             Some(&clip_lines),
             Some(&schedule_log_lines),
         );
@@ -2934,6 +2975,36 @@ mod tests {
                 "\t- clip child two",
                 "\t- 🗓️ **SCHEDULE LOG**",
                 "\t\t- *2026-11-02* — 🎲 P0 → P4 · in **91** (91–365) days",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn assembles_capture_block_with_sub_bullets_before_clip_and_schedule_log() {
+        let capture_line = "- [ ] #task plan trip [created::2026-08-07]";
+        let sub_bullet_lines = vec![
+            "\t- book flights".to_string(),
+            "\t- reserve hotel".to_string(),
+        ];
+        let clip_lines = vec!["\t- clip child".to_string()];
+        let schedule_log_lines = vec!["\t- 🗓️ **SCHEDULE LOG**".to_string()];
+
+        let block = assemble_capture_block(
+            capture_line,
+            Some(&sub_bullet_lines),
+            Some(&clip_lines),
+            Some(&schedule_log_lines),
+        );
+
+        assert_eq!(
+            block,
+            [
+                capture_line,
+                "\t- book flights",
+                "\t- reserve hotel",
+                "\t- clip child",
+                "\t- 🗓️ **SCHEDULE LOG**",
             ]
             .join("\n")
         );
@@ -3383,6 +3454,7 @@ mod tests {
             priority: None,
             priority_label: None,
             placement: Placement::Inserted,
+            sub_bullets: Vec::new(),
             clip: None,
             schedule_log: None,
             block_id: None,
@@ -3414,6 +3486,7 @@ mod tests {
         assert!(value["scheduled"].is_null(), "{value}");
         assert_eq!(value["placement"], "inserted");
         assert!(value.get("clip").is_none(), "{value}");
+        assert!(value.get("sub_bullets").is_none(), "{value}");
         for special_field in [
             "priority",
             "priority_label",

@@ -1,6 +1,6 @@
 use std::{
     ffi::OsString,
-    io::{self, BufRead, IsTerminal},
+    io::{self, IsTerminal, Read},
     iter,
 };
 
@@ -69,18 +69,25 @@ vault, never reads the clipboard, never touches the filesystem, and takes no \
 still succeeds.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, the UTF-8 \
-byte spans of every recognized token, and structured diagnostics. Byte offsets \
-index the original TEXT before whitespace normalization, are half-open \
-[start, end), never overlap, and always land on a character boundary.\n\n\
-Incomplete interactive markers are valid input, not errors: '@', '@#', \
-'@#Ideas', '@route#', '@:', '@route:', '@^', '@route^', and the legacy '@!' \
-aliases all report mode 'incomplete' plus what they still need. An invalid \
-marker component becomes a diagnostic, so live editors keep a usable parse \
-while 'bob capture' keeps its strict execution errors.\n\n\
-Only a missing TEXT or a bad flag is an error; every other input succeeds.",
+byte spans of every recognized token, every authored sub-bullet's normalized \
+body, and structured diagnostics. Byte offsets index the original TEXT \
+before whitespace normalization, are half-open [start, end), never overlap, \
+and always land on a character boundary.\n\n\
+TEXT accepts the same multi-line authored-bullet draft 'bob capture' does: \
+the first physical line is the parent, and later flat '-'/'*'/'+' lines \
+become authored children. Incomplete interactive markers are valid input, \
+not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@:', '@route:', \
+'@^', '@route^', and the legacy '@!' aliases all report mode 'incomplete' \
+plus what they still need. An invalid marker component, a malformed \
+continuation line, an item emptied by marker removal, or a duplicate \
+capture-wide marker across lines becomes a diagnostic, so live editors keep \
+a usable parse while 'bob capture' keeps its strict execution errors.\n\n\
+Only a missing TEXT or a bad flag is an error; every other input succeeds. \
+If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
+stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash^'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, pomodoro_id, task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash^'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n- second child\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, pomodoro_id, task",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -136,7 +143,9 @@ impl OutputFormat {
 }
 
 /// Mirror `bob capture`'s convention: join every TEXT argument with spaces,
-/// or read exactly one line from a piped stdin when TEXT is omitted.
+/// or read the complete piped stdin stream when TEXT is omitted, so a
+/// multi-line authored-bullet draft survives a pipe exactly like it does as
+/// a single argv value.
 fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, String> {
     if let Some(values) = matches.get_many::<OsString>("text") {
         return Ok(values
@@ -149,12 +158,12 @@ fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, String> {
         return Ok(String::new());
     }
 
-    let mut line = String::new();
+    let mut text = String::new();
     io::stdin()
         .lock()
-        .read_line(&mut line)
+        .read_to_string(&mut text)
         .map_err(|error| format!("read stdin: {error}"))?;
-    Ok(line)
+    Ok(text)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -170,6 +179,15 @@ struct CaptureParseResult {
     needs: Vec<Need>,
     spans: Vec<Span>,
     diagnostics: Vec<Diagnostic>,
+    /// Normalized authored-child bodies (source list marker and capture
+    /// markers already removed) of every valid later physical line, in
+    /// source order. Additive to schema version 1: omitted when empty, so
+    /// an ordinary single-line draft's JSON shape is unchanged. These are
+    /// semantic parse bodies, not rendered Markdown -- they carry no
+    /// target-selected indentation or `- ` marker, unlike `bob capture`'s
+    /// own `sub_bullets` output field.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sub_bullets: Vec<String>,
 }
 
 impl CaptureParseResult {
@@ -187,6 +205,7 @@ impl CaptureParseResult {
             needs: parse.needs,
             spans: parse.spans,
             diagnostics: parse.diagnostics,
+            sub_bullets: parse.sub_bullets,
         }
     }
 }
@@ -231,6 +250,14 @@ fn print_human_success_with_styler(
             .collect::<Vec<_>>()
             .join(", ");
         print_field(styler, "needs", &needs);
+    }
+
+    if !result.sub_bullets.is_empty() {
+        println!();
+        println!("  Sub-bullets");
+        for sub_bullet in &result.sub_bullets {
+            println!("    - {sub_bullet}");
+        }
     }
 
     if !result.spans.is_empty() {
@@ -430,7 +457,7 @@ mod tests {
     fn missing_text_uses_the_shared_capture_message() {
         assert_eq!(
             capture_language::missing_text_error(),
-            "task text is required; pass TEXT or pipe one line on stdin"
+            "task text is required; pass TEXT or pipe it on stdin"
         );
     }
 

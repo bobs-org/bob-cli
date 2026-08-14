@@ -47,6 +47,10 @@ pub(crate) struct ParsedCaptureText {
     pub(crate) kind: CaptureKind,
     pub(crate) scheduled_offset: Option<u64>,
     pub(crate) priority_level: Option<u64>,
+    /// Normalized authored-child bodies, in source order, with their `-`,
+    /// `*`, or `+` source marker and capture-wide markers already removed.
+    /// Empty when the draft was an ordinary single-line capture.
+    pub(crate) sub_bullets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -65,23 +69,6 @@ pub(crate) enum ClipRequest {
 pub(crate) struct RouteToken {
     route: String,
     kind: CaptureKind,
-}
-
-impl RouteToken {
-    fn into_parsed(
-        self,
-        body: String,
-        markers: TerminalMarkers,
-    ) -> ParsedCaptureText {
-        ParsedCaptureText {
-            body,
-            clip: markers.clip,
-            route: Some(self.route),
-            kind: self.kind,
-            scheduled_offset: markers.scheduled_offset,
-            priority_level: markers.priority_level,
-        }
-    }
 }
 
 /// One whitespace-free token with UTF-8 byte offsets into the original,
@@ -153,24 +140,140 @@ pub(crate) fn tokenize_with_spans(raw: &str) -> Vec<Token<'_>> {
     tokens
 }
 
+/// One physical line of raw capture input, with UTF-8 byte offsets into the
+/// original, un-normalized text. A physical line's `text` never includes
+/// its terminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RawLine<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+/// Split `raw` into physical lines on LF, CRLF, and bare CR alike, so pasted
+/// Windows and classic-Mac text behaves exactly like LF text. Byte offsets
+/// index the original, un-normalized `raw` string. A trailing line
+/// terminator does not produce an extra empty final line; an empty `raw`
+/// produces zero lines.
+pub(crate) fn split_physical_lines(raw: &str) -> Vec<RawLine<'_>> {
+    let bytes = raw.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\n' => {
+                lines.push(RawLine {
+                    text: &raw[start..index],
+                    start,
+                    end: index,
+                });
+                index += 1;
+                start = index;
+            }
+            b'\r' => {
+                lines.push(RawLine {
+                    text: &raw[start..index],
+                    start,
+                    end: index,
+                });
+                index += 1;
+                if bytes.get(index) == Some(&b'\n') {
+                    index += 1;
+                }
+                start = index;
+            }
+            _ => index += 1,
+        }
+    }
+
+    if start < raw.len() {
+        lines.push(RawLine {
+            text: &raw[start..],
+            start,
+            end: raw.len(),
+        });
+    }
+
+    lines
+}
+
+/// Recognize one physical continuation line as a flat authored bullet: it
+/// must start at byte 0 with `-`, `*`, or `+`, immediately followed by at
+/// least one space or tab. Returns the text after the marker and its
+/// contiguous run of separating whitespace, which is the item's raw body
+/// before whitespace normalization. Returns `None` for every other shape --
+/// indentation, nesting, a different leading character, or ordinary
+/// continuation prose -- so the caller can report one consistent diagnostic
+/// for all of them.
+pub(crate) fn strip_bullet_marker(line_text: &str) -> Option<&str> {
+    let mut chars = line_text.char_indices();
+    let (_, first) = chars.next()?;
+    if !matches!(first, '-' | '*' | '+') {
+        return None;
+    }
+    let (next_index, next_char) = chars.next()?;
+    if next_char != ' ' && next_char != '\t' {
+        return None;
+    }
+
+    let bytes = line_text.as_bytes();
+    let mut end = next_index + next_char.len_utf8();
+    while end < bytes.len() && matches!(bytes[end], b' ' | b'\t') {
+        end += 1;
+    }
+    Some(&line_text[end..])
+}
+
 pub(crate) fn parse_capture_text_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     parse_clip_markers: bool,
 ) -> Result<ParsedCaptureText, String> {
-    let normalized = normalize_task_text(raw_text);
-    if normalized.is_empty() {
+    let lines = split_physical_lines(raw_text);
+    let Some((parent_line, child_lines)) = lines.split_first() else {
+        return Err(missing_text_error());
+    };
+    let detect_route = forced_route.is_none();
+
+    let parent_normalized = normalize_task_text(parent_line.text);
+    if parent_normalized.is_empty() {
+        return Err(missing_text_error());
+    }
+    let parent_tokens: Vec<&str> = parent_normalized.split(' ').collect();
+    let parent_outcome =
+        resolve_line(parent_tokens, true, detect_route, parse_clip_markers)?;
+    if parent_outcome.body.is_empty() {
         return Err(missing_text_error());
     }
 
-    let mut tokens: Vec<&str> = normalized.split(' ').collect();
-    let (markers, _) =
-        extract_terminal_markers(&mut tokens, parse_clip_markers);
-    if tokens.is_empty() {
-        return Err(missing_text_error());
+    let mut aggregate = AggregateMarkers::default();
+    aggregate.absorb(parent_outcome.markers, parent_outcome.route)?;
+
+    let mut sub_bullets = Vec::new();
+    for (index, line) in child_lines.iter().enumerate() {
+        let line_number = index + 2;
+        if line.text.trim().is_empty() {
+            continue;
+        }
+        let Some(remainder) = strip_bullet_marker(line.text) else {
+            return Err(invalid_child_line_error(line_number));
+        };
+        if remainder.trim().is_empty() {
+            continue;
+        }
+        let normalized = normalize_task_text(remainder);
+        let tokens: Vec<&str> = normalized.split(' ').collect();
+        let outcome =
+            resolve_line(tokens, false, detect_route, parse_clip_markers)?;
+        if outcome.body.is_empty() {
+            return Err(empty_child_after_markers_error(line_number));
+        }
+        aggregate.absorb(outcome.markers, outcome.route)?;
+        sub_bullets.push(outcome.body);
     }
-    let body = tokens.join(" ");
 
     if let Some(section) = forced_section {
         let Some(route) = forced_route else {
@@ -180,71 +283,200 @@ pub(crate) fn parse_capture_text_with_clip_control(
             return Err("--section must not be empty".to_string());
         }
         let route = normalize_forced_route(route)?;
-        reject_legacy_bullet_markers(&tokens, false)?;
         return Ok(ParsedCaptureText {
-            body,
-            clip: markers.clip,
+            body: parent_outcome.body,
+            clip: aggregate.clip,
             route: Some(route),
             kind: CaptureKind::Bullet {
                 section_prefix: Some(section.to_string()),
                 exact: true,
             },
-            scheduled_offset: markers.scheduled_offset,
-            priority_level: markers.priority_level,
+            scheduled_offset: aggregate.scheduled_offset,
+            priority_level: aggregate.priority_level,
+            sub_bullets,
         });
     }
 
     if let Some(route) = forced_route {
         let route = normalize_forced_route(route)?;
-        reject_legacy_bullet_markers(&tokens, false)?;
         return Ok(ParsedCaptureText {
-            body,
-            clip: markers.clip,
+            body: parent_outcome.body,
+            clip: aggregate.clip,
             route: Some(route),
             kind: CaptureKind::Task,
-            scheduled_offset: markers.scheduled_offset,
-            priority_level: markers.priority_level,
+            scheduled_offset: aggregate.scheduled_offset,
+            priority_level: aggregate.priority_level,
+            sub_bullets,
         });
     }
 
-    reject_legacy_bullet_markers(&tokens, true)?;
+    let (route, kind) = match aggregate.route {
+        Some(token) => (Some(token.route), token.kind),
+        None => (None, CaptureKind::Task),
+    };
+    Ok(ParsedCaptureText {
+        body: parent_outcome.body,
+        clip: aggregate.clip,
+        route,
+        kind,
+        scheduled_offset: aggregate.scheduled_offset,
+        priority_level: aggregate.priority_level,
+        sub_bullets,
+    })
+}
+
+/// One physical line's resolved capture-wide markers and (when a route was
+/// recognized on this line) its route/mode token. `body` is the line's
+/// remaining text after every recognized marker is removed; it is empty
+/// exactly when the line held no non-marker tokens.
+struct LineOutcome {
+    body: String,
+    markers: TerminalMarkers,
+    route: Option<RouteToken>,
+}
+
+/// Resolve one physical line's whitespace tokens exactly like the original
+/// single-line grammar resolved the whole draft. `leading` allows a
+/// first-token route to win and is only ever set for the parent line, which
+/// is the only line that preserves the established leading-route form.
+/// `detect_route` is false whenever `--route`/`--section` already fixed the
+/// route, in which case every `@...`-shaped token stays literal on every
+/// line, exactly like the single-line forced-route path did.
+fn resolve_line(
+    mut tokens: Vec<&str>,
+    leading: bool,
+    detect_route: bool,
+    parse_clip_markers: bool,
+) -> Result<LineOutcome, String> {
+    let (markers, _) =
+        extract_terminal_markers(&mut tokens, parse_clip_markers);
+    if tokens.is_empty() {
+        return Ok(LineOutcome {
+            body: String::new(),
+            markers,
+            route: None,
+        });
+    }
+
+    reject_legacy_bullet_markers(&tokens, detect_route)?;
+
+    if !detect_route {
+        return Ok(LineOutcome {
+            body: tokens.join(" "),
+            markers,
+            route: None,
+        });
+    }
 
     // Leading route wins: when the first token is a route token followed by
     // body text, route by it and do not inspect later route-looking tokens.
-    if let Some(token) = parse_terminal_route_token(tokens[0])? {
-        let body = tokens[1..].join(" ");
-        if body.is_empty() {
+    if leading && let Some(token) = parse_terminal_route_token(tokens[0])? {
+        let rest = &tokens[1..];
+        if rest.is_empty() {
             if !matches!(token.kind, CaptureKind::Task) {
                 return Err(missing_text_error());
             }
             // A bare `@foo` with no body stays literal task text.
         } else {
-            return Ok(token.into_parsed(body, markers));
+            return Ok(LineOutcome {
+                body: rest.join(" "),
+                markers,
+                route: Some(token),
+            });
         }
     }
 
-    validate_special_terminal_markers(&tokens)?;
+    validate_special_terminal_markers_line(&tokens, leading)?;
 
     // Otherwise a trailing route token routes the body that precedes it.
     if let Some((&last, rest)) = tokens.split_last()
         && !rest.is_empty()
         && let Some(token) = parse_terminal_route_token(last)?
     {
-        return Ok(token.into_parsed(rest.join(" "), markers));
+        return Ok(LineOutcome {
+            body: rest.join(" "),
+            markers,
+            route: Some(token),
+        });
     }
 
-    Ok(ParsedCaptureText {
-        body,
-        clip: markers.clip,
+    Ok(LineOutcome {
+        body: tokens.join(" "),
+        markers,
         route: None,
-        kind: CaptureKind::Task,
-        scheduled_offset: markers.scheduled_offset,
-        priority_level: markers.priority_level,
     })
 }
 
+/// Accumulate the four capture-wide marker slots (route/mode, schedule,
+/// priority, clipboard) across every physical line. Each slot may be set by
+/// at most one line; a second line that resolves the same slot is ambiguous.
+#[derive(Default)]
+struct AggregateMarkers {
+    clip: Option<ClipRequest>,
+    scheduled_offset: Option<u64>,
+    priority_level: Option<u64>,
+    route: Option<RouteToken>,
+}
+
+impl AggregateMarkers {
+    fn absorb(
+        &mut self,
+        markers: TerminalMarkers,
+        route: Option<RouteToken>,
+    ) -> Result<(), String> {
+        if let Some(clip) = markers.clip {
+            if self.clip.is_some() {
+                return Err(duplicate_marker_error("clipboard marker (%)"));
+            }
+            self.clip = Some(clip);
+        }
+        if let Some(offset) = markers.scheduled_offset {
+            if self.scheduled_offset.is_some() {
+                return Err(duplicate_marker_error("schedule marker (s:<N>)"));
+            }
+            self.scheduled_offset = Some(offset);
+        }
+        if let Some(level) = markers.priority_level {
+            if self.priority_level.is_some() {
+                return Err(duplicate_marker_error("priority marker (p:<N>)"));
+            }
+            self.priority_level = Some(level);
+        }
+        if let Some(route) = route {
+            if self.route.is_some() {
+                return Err(duplicate_marker_error(
+                    "route/mode marker (@route)",
+                ));
+            }
+            self.route = Some(route);
+        }
+        Ok(())
+    }
+}
+
+fn duplicate_marker_error(kind: &str) -> String {
+    format!(
+        "a {kind} may appear on only one line of the capture; found a \
+second one"
+    )
+}
+
+fn invalid_child_line_error(line_number: usize) -> String {
+    format!(
+        "capture line {line_number} must be a flat bullet starting with \
+\"- \", \"* \", or \"+ \" at the start of the line, or left blank"
+    )
+}
+
+fn empty_child_after_markers_error(line_number: usize) -> String {
+    format!(
+        "capture line {line_number} has no text left after its capture \
+markers were removed"
+    )
+}
+
 pub(crate) fn missing_text_error() -> String {
-    "task text is required; pass TEXT or pipe one line on stdin".to_string()
+    "task text is required; pass TEXT or pipe it on stdin".to_string()
 }
 
 fn legacy_marker_error() -> String {
@@ -392,8 +624,18 @@ fn is_pomodoro_marker_candidate(token: &str) -> bool {
     })
 }
 
-fn validate_special_terminal_markers(tokens: &[&str]) -> Result<(), String> {
-    for token in tokens.first().into_iter().chain(tokens.last()) {
+/// Catch an invalid sub-bullet/Pomodoro marker shape sitting at a position
+/// [`resolve_line`]'s route detection would otherwise never inspect closely
+/// enough to reject -- most importantly a lone invalid marker with no body
+/// on the other side, which the leading/trailing route checks both skip.
+/// `check_first` mirrors [`resolve_line`]'s `leading` flag: only the parent
+/// line's first token can ever resolve a route, so only it is validated.
+fn validate_special_terminal_markers_line(
+    tokens: &[&str],
+    check_first: bool,
+) -> Result<(), String> {
+    let first = check_first.then(|| tokens.first()).flatten();
+    for token in first.into_iter().chain(tokens.last()) {
         if is_sub_bullet_marker_candidate(token) {
             parse_sub_bullet_route_token(token)?;
             continue;
@@ -750,6 +992,10 @@ pub(crate) struct EditorParse {
     pub(crate) needs: Vec<Need>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    /// Normalized authored-child bodies of every other valid, nonempty
+    /// physical line, in source order. A malformed or empty-after-markers
+    /// child line is reported as a diagnostic instead and excluded here.
+    pub(crate) sub_bullets: Vec<String>,
 }
 
 /// One `@...` token resolved for the editor. `requires_body` marks the plain
@@ -772,31 +1018,52 @@ enum TokenParse {
     Invalid(Diagnostic),
 }
 
-/// Parse in-progress capture text for a live editor.
-///
-/// Unlike [`parse_capture_text_with_clip_control`] this never fails: an
-/// incomplete interactive marker (`@`, `@#`, `@route#`, `@:`, `@route:`,
-/// `@^`, `@route^`, and their legacy `@!` aliases) is a valid editing state,
-/// and an invalid marker component becomes a diagnostic instead of an error.
-/// Tokenization, terminal marker extraction, and marker classification all
-/// run through the same functions `bob capture` executes with.
-pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
-    let mut tokens = tokenize_with_spans(raw_text);
-    let (_, marker_spans) = extract_terminal_markers(&mut tokens, true);
+/// Remap one physical line's own tokenizer output into the original
+/// multi-line text's byte offsets, so every span an editor receives always
+/// indexes the raw text the user is looking at.
+fn tokenize_line_with_spans<'a>(line: &RawLine<'a>) -> Vec<Token<'a>> {
+    tokenize_with_spans(line.text)
+        .into_iter()
+        .map(|token| Token {
+            text: token.text,
+            start: token.start + line.start,
+            end: token.end + line.start,
+        })
+        .collect()
+}
 
-    let mut spans: Vec<Span> = marker_spans
+/// One physical line's marker resolution for the editor: its remaining body
+/// text, the marker it resolved (if any), the terminal schedule/priority/
+/// clipboard spans it carries, and any diagnostics raised along the way.
+struct LineEditorParse {
+    body: String,
+    marker: Option<MarkerParse>,
+    terminal_spans: Vec<Span>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// Resolve one line's already offset-tagged tokens exactly like
+/// `parse_for_editor` resolved its single line before this module became
+/// line-aware. `leading` allows a first-token route to win and must only be
+/// set for the parent line.
+fn parse_editor_line(
+    mut tokens: Vec<Token<'_>>,
+    leading: bool,
+) -> LineEditorParse {
+    let (_, marker_spans) = extract_terminal_markers(&mut tokens, true);
+    let terminal_spans: Vec<Span> = marker_spans
         .into_iter()
         .map(|(kind, start, end)| Span { start, end, kind })
         .collect();
-    let mut diagnostics = Vec::new();
 
+    let mut diagnostics = Vec::new();
     if let Some(diagnostic) = legacy_bullet_marker_diagnostic(&tokens) {
         diagnostics.push(diagnostic);
     }
 
     // The recognized `@...` token leaves the body exactly like execution
     // drops it before joining the remaining tokens with single spaces.
-    let selected = select_marker_token(&tokens);
+    let selected = select_marker_token(&tokens, leading);
     let marker_index = selected.as_ref().map(|(index, _)| *index);
     let body = tokens
         .iter()
@@ -814,19 +1081,196 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         }
         None => None,
     };
-    let (mode, route, section, block_id, needs) = match marker {
-        Some(marker) => {
-            spans.extend(marker.spans);
-            (
-                marker.mode,
-                marker.route,
-                marker.section,
-                marker.block_id,
-                marker.needs,
-            )
+
+    LineEditorParse {
+        body,
+        marker,
+        terminal_spans,
+        diagnostics,
+    }
+}
+
+/// Track which capture-wide marker slots earlier lines already resolved, so
+/// a later line that resolves the same slot becomes a diagnostic instead of
+/// silently overriding or being silently dropped.
+#[derive(Default)]
+struct SeenMarkers {
+    schedule: bool,
+    priority: bool,
+    clip: bool,
+    route: bool,
+}
+
+impl SeenMarkers {
+    fn absorb_terminal_spans(
+        &mut self,
+        spans: &[Span],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        for span in spans {
+            let seen = match span.kind {
+                SpanKind::Schedule => &mut self.schedule,
+                SpanKind::Priority => &mut self.priority,
+                SpanKind::Clipboard => &mut self.clip,
+                _ => continue,
+            };
+            if *seen {
+                diagnostics.push(duplicate_capture_marker_diagnostic(
+                    duplicate_marker_error(terminal_marker_label(span.kind)),
+                    (span.start, span.end),
+                ));
+            }
+            *seen = true;
         }
-        None => (EditorMode::Task, None, None, None, Vec::new()),
+    }
+
+    fn absorb_route(
+        &mut self,
+        range: Option<(usize, usize)>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> bool {
+        let already_seen = self.route;
+        if already_seen && let Some(range) = range {
+            diagnostics.push(duplicate_capture_marker_diagnostic(
+                duplicate_marker_error("route/mode marker (@route)"),
+                range,
+            ));
+        }
+        self.route = true;
+        !already_seen
+    }
+}
+
+fn terminal_marker_label(kind: SpanKind) -> &'static str {
+    match kind {
+        SpanKind::Schedule => "schedule marker (s:<N>)",
+        SpanKind::Priority => "priority marker (p:<N>)",
+        SpanKind::Clipboard => "clipboard marker (%)",
+        _ => "capture marker",
+    }
+}
+
+fn duplicate_capture_marker_diagnostic(
+    message: String,
+    range: (usize, usize),
+) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Error,
+        code: "duplicate_capture_marker",
+        message,
+        range: Some(range),
+    }
+}
+
+/// Parse in-progress, possibly multi-line capture text for a live editor.
+///
+/// Unlike [`parse_capture_text_with_clip_control`] this never fails: an
+/// incomplete interactive marker (`@`, `@#`, `@route#`, `@:`, `@route:`,
+/// `@^`, `@route^`, and their legacy `@!` aliases) is a valid editing state,
+/// and an invalid marker component -- or line shape -- becomes a diagnostic
+/// instead of an error. Tokenization, terminal marker extraction, and
+/// marker classification all run through the same functions `bob capture`
+/// executes with; `mode`/`route`/`section`/`block_id`/`needs` describe
+/// whichever line resolved a marker first, exactly like `bob capture`
+/// prefers the first line's leading form and later lines only compose
+/// trailing markers, while `sub_bullets` reports every other authored
+/// child's normalized body in source order.
+pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
+    let lines = split_physical_lines(raw_text);
+    let synthetic_empty = RawLine {
+        text: "",
+        start: 0,
+        end: 0,
     };
+    let parent_line = lines.first().copied().unwrap_or(synthetic_empty);
+    let child_lines: &[RawLine] =
+        if lines.len() > 1 { &lines[1..] } else { &[] };
+
+    let mut spans: Vec<Span> = Vec::new();
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    let mut seen = SeenMarkers::default();
+
+    let parent_tokens = tokenize_line_with_spans(&parent_line);
+    let parent_parse = parse_editor_line(parent_tokens, true);
+    seen.absorb_terminal_spans(&parent_parse.terminal_spans, &mut diagnostics);
+    spans.extend(parent_parse.terminal_spans);
+    diagnostics.extend(parent_parse.diagnostics);
+
+    let body = parent_parse.body;
+    let (mut mode, mut route, mut section, mut block_id, mut needs) =
+        match &parent_parse.marker {
+            Some(marker) => {
+                spans.extend(marker.spans.clone());
+                seen.absorb_route(None, &mut diagnostics);
+                (
+                    marker.mode,
+                    marker.route.clone(),
+                    marker.section.clone(),
+                    marker.block_id.clone(),
+                    marker.needs.clone(),
+                )
+            }
+            None => (EditorMode::Task, None, None, None, Vec::new()),
+        };
+
+    let mut sub_bullets = Vec::new();
+    for (index, line) in child_lines.iter().enumerate() {
+        let line_number = index + 2;
+        if line.text.trim().is_empty() {
+            continue;
+        }
+        let Some(remainder) = strip_bullet_marker(line.text) else {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_child_line",
+                message: invalid_child_line_error(line_number),
+                range: Some((line.start, line.end)),
+            });
+            continue;
+        };
+        if remainder.trim().is_empty() {
+            continue;
+        }
+
+        let remainder_start = line.start + (line.text.len() - remainder.len());
+        let child_line = RawLine {
+            text: remainder,
+            start: remainder_start,
+            end: line.end,
+        };
+        let child_tokens = tokenize_line_with_spans(&child_line);
+        let child_parse = parse_editor_line(child_tokens, false);
+
+        seen.absorb_terminal_spans(
+            &child_parse.terminal_spans,
+            &mut diagnostics,
+        );
+        spans.extend(child_parse.terminal_spans);
+        diagnostics.extend(child_parse.diagnostics);
+
+        if let Some(marker) = &child_parse.marker {
+            spans.extend(marker.spans.clone());
+            let range = marker.spans.first().map(|span| (span.start, span.end));
+            if seen.absorb_route(range, &mut diagnostics) {
+                mode = marker.mode;
+                route = marker.route.clone();
+                section = marker.section.clone();
+                block_id = marker.block_id.clone();
+                needs = marker.needs.clone();
+            }
+        }
+
+        if child_parse.body.is_empty() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "empty_child_after_markers",
+                message: empty_child_after_markers_error(line_number),
+                range: Some((line.start, line.end)),
+            });
+        } else {
+            sub_bullets.push(child_parse.body);
+        }
+    }
 
     spans.sort_by_key(|span| (span.start, span.end));
 
@@ -839,14 +1283,20 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         needs,
         spans,
         diagnostics,
+        sub_bullets,
     }
 }
 
 /// Mirror `parse_capture_text_with_clip_control`'s precedence: the leading
-/// token wins, and only a plain `@route` token needs body text on the other
-/// side before it routes at all.
-fn select_marker_token(tokens: &[Token<'_>]) -> Option<(usize, TokenParse)> {
-    if let Some(first) = tokens.first()
+/// token wins when `leading` is set (only ever true for the parent line),
+/// and only a plain `@route` token needs body text on the other side before
+/// it routes at all.
+fn select_marker_token(
+    tokens: &[Token<'_>],
+    leading: bool,
+) -> Option<(usize, TokenParse)> {
+    if leading
+        && let Some(first) = tokens.first()
         && let Some(parse) = classify_editor_token(first)
     {
         let requires_body = matches!(
@@ -1202,14 +1652,42 @@ pub(crate) struct CompletionField {
 /// eligible leading or trailing `@` marker: plain body text, a token in the
 /// middle of the input, and an unrecognized or invalid marker never produce
 /// a completion field.
+///
+/// Multi-line drafts complete the physical line the cursor is on: only the
+/// first (parent) line offers a leading marker, and a child line's bullet
+/// marker (`- `, `* `, or `+ `) itself is never completable, matching the
+/// authored-bullet grammar `bob capture` and `bob capture-parse` execute
+/// with.
 pub(crate) fn completion_field_at(
     raw_text: &str,
     cursor: usize,
 ) -> Option<CompletionField> {
-    let mut tokens = tokenize_with_spans(raw_text);
+    let lines = split_physical_lines(raw_text);
+    let (line_index, line) = lines
+        .iter()
+        .enumerate()
+        .find(|(_, line)| cursor >= line.start && cursor <= line.end)?;
+    let leading = line_index == 0;
+
+    let scan_line = if leading {
+        *line
+    } else {
+        let remainder = strip_bullet_marker(line.text)?;
+        let remainder_start = line.start + (line.text.len() - remainder.len());
+        if cursor < remainder_start {
+            return None;
+        }
+        RawLine {
+            text: remainder,
+            start: remainder_start,
+            end: line.end,
+        }
+    };
+
+    let mut tokens = tokenize_line_with_spans(&scan_line);
     extract_terminal_markers(&mut tokens, true);
 
-    let index = completion_marker_index(&tokens)?;
+    let index = completion_marker_index(&tokens, leading)?;
     let token = tokens[index];
     if cursor < token.start || cursor > token.end {
         return None;
@@ -1222,8 +1700,13 @@ pub(crate) fn completion_field_at(
 /// without its requires-body/single-token exclusion: a lone leading
 /// `@route` fragment with no body text yet is still the token a user is
 /// actively completing, even though `bob capture` would leave it literal.
-fn completion_marker_index(tokens: &[Token<'_>]) -> Option<usize> {
-    if let Some(first) = tokens.first()
+/// `leading` is only ever set for the parent (first) physical line.
+fn completion_marker_index(
+    tokens: &[Token<'_>],
+    leading: bool,
+) -> Option<usize> {
+    if leading
+        && let Some(first) = tokens.first()
         && classify_editor_token(first).is_some()
     {
         return Some(0);
@@ -2385,10 +2868,20 @@ mod tests {
     }
 
     #[test]
-    fn editor_normalizes_whitespace_like_execution() {
-        let parse = editor(" \n buy\t  milk \r\n @groceries  ");
+    fn editor_normalizes_intra_line_whitespace_like_execution() {
+        // Only horizontal whitespace collapses within a physical line now;
+        // `\n`/`\r` are line terminators, not normalized-away whitespace.
+        let parse = editor(" \t buy\t  milk \t @groceries  ");
         assert_eq!(parse.body, "buy milk");
         assert_eq!(parse.route.as_deref(), Some("groceries"));
+    }
+
+    #[test]
+    fn normalize_task_text_still_collapses_newlines_as_whitespace() {
+        // `normalize_task_text` is a general-purpose whitespace collapser
+        // reused for each physical line's own text; called directly on a
+        // string that still has embedded newlines, it keeps collapsing them
+        // exactly like `split_whitespace` always has.
         assert_eq!(
             normalize_task_text(" \n buy\t  milk \r\n @groceries  "),
             "buy milk @groceries"
@@ -2585,5 +3078,372 @@ mod tests {
         assert_eq!(task.route.as_deref(), Some("cash"));
         assert_eq!(task.query, "goog");
         assert_eq!(task.replacement, (17, 26));
+    }
+
+    // -----------------------------------------------------------------
+    // Line-aware capture: physical line splitting and bullet stripping.
+    // -----------------------------------------------------------------
+
+    fn line_texts(raw: &str) -> Vec<&str> {
+        split_physical_lines(raw)
+            .iter()
+            .map(|line| line.text)
+            .collect()
+    }
+
+    #[test]
+    fn split_physical_lines_treats_lf_crlf_and_bare_cr_as_terminators() {
+        assert_eq!(line_texts("a\nb"), vec!["a", "b"]);
+        assert_eq!(line_texts("a\r\nb"), vec!["a", "b"]);
+        assert_eq!(line_texts("a\rb"), vec!["a", "b"]);
+        assert_eq!(line_texts("a\r\n\rb\n\r\nc"), vec!["a", "", "b", "", "c"]);
+    }
+
+    #[test]
+    fn split_physical_lines_drops_only_one_trailing_terminator() {
+        assert_eq!(line_texts("a\n"), vec!["a"]);
+        assert_eq!(line_texts("a\r\n"), vec!["a"]);
+        assert_eq!(line_texts("a\n\n"), vec!["a", ""]);
+        assert_eq!(line_texts(""), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn split_physical_lines_reports_byte_offsets_excluding_terminators() {
+        let raw = "ab\r\ncd\nef";
+        let lines = split_physical_lines(raw);
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| (line.text, line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![("ab", 0, 2), ("cd", 4, 6), ("ef", 7, 9)]
+        );
+        for line in &lines {
+            assert_eq!(&raw[line.start..line.end], line.text);
+        }
+    }
+
+    #[test]
+    fn strip_bullet_marker_accepts_dash_star_plus_with_space_or_tab() {
+        assert_eq!(strip_bullet_marker("- body"), Some("body"));
+        assert_eq!(strip_bullet_marker("* body"), Some("body"));
+        assert_eq!(strip_bullet_marker("+ body"), Some("body"));
+        assert_eq!(strip_bullet_marker("-\tbody"), Some("body"));
+        assert_eq!(strip_bullet_marker("-   body"), Some("body"));
+        assert_eq!(strip_bullet_marker("- "), Some(""));
+        assert_eq!(strip_bullet_marker("-\t"), Some(""));
+    }
+
+    #[test]
+    fn strip_bullet_marker_rejects_every_other_shape() {
+        assert_eq!(strip_bullet_marker("body"), None);
+        assert_eq!(strip_bullet_marker("  - indented"), None);
+        assert_eq!(strip_bullet_marker("-body"), None);
+        assert_eq!(strip_bullet_marker("-"), None);
+        assert_eq!(strip_bullet_marker("#body"), None);
+        assert_eq!(strip_bullet_marker(""), None);
+    }
+
+    // -----------------------------------------------------------------
+    // Line-aware capture: execution grammar.
+    // -----------------------------------------------------------------
+
+    fn execute(raw: &str) -> Result<ParsedCaptureText, String> {
+        parse_capture_text_with_clip_control(raw, None, None, true)
+    }
+
+    #[test]
+    fn execution_renders_authored_children_in_source_order() {
+        let parsed =
+            execute("@work parent line\n- first child\n- second child")
+                .expect("parse");
+        assert_eq!(parsed.body, "parent line");
+        assert_eq!(parsed.route.as_deref(), Some("work"));
+        assert_eq!(
+            parsed.sub_bullets,
+            vec!["first child".to_string(), "second child".to_string()]
+        );
+    }
+
+    #[test]
+    fn execution_treats_crlf_and_bare_cr_children_like_lf() {
+        for raw in [
+            "@work parent\n- child one\n- child two",
+            "@work parent\r\n- child one\r\n- child two",
+            "@work parent\r- child one\r- child two",
+        ] {
+            let parsed = execute(raw).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(parsed.body, "parent");
+            assert_eq!(
+                parsed.sub_bullets,
+                vec!["child one".to_string(), "child two".to_string()],
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_skips_blank_and_placeholder_child_lines() {
+        let parsed =
+            execute("parent\n\n- real child\n- \n-\t\n   \n").expect("parse");
+        assert_eq!(parsed.sub_bullets, vec!["real child".to_string()]);
+    }
+
+    #[test]
+    fn execution_rejects_indented_or_nested_child_lines() {
+        let error = execute("parent\n  - nested").unwrap_err();
+        assert_eq!(
+            error,
+            "capture line 2 must be a flat bullet starting with \"- \", \
+\"* \", or \"+ \" at the start of the line, or left blank"
+        );
+    }
+
+    #[test]
+    fn execution_rejects_nonbullet_continuation_prose() {
+        let error =
+            execute("parent\n- real child\ncontinuation prose").unwrap_err();
+        assert!(error.contains("capture line 3"), "{error}");
+    }
+
+    #[test]
+    fn execution_rejects_a_child_emptied_by_marker_removal() {
+        let error = execute("parent\n- s:1").unwrap_err();
+        assert_eq!(
+            error,
+            "capture line 2 has no text left after its capture markers \
+were removed"
+        );
+
+        let error = execute("parent\n- p:2\n- @work").unwrap_err();
+        assert_eq!(
+            error,
+            "capture line 2 has no text left after its capture markers \
+were removed"
+        );
+    }
+
+    #[test]
+    fn execution_composes_a_trailing_marker_from_any_child_line() {
+        let parsed = execute(
+            "Prepare the launch review\n- Confirm the owner\n- Attach the checklist @work p:1 s:2",
+        )
+        .expect("parse");
+        assert_eq!(parsed.body, "Prepare the launch review");
+        assert_eq!(parsed.route.as_deref(), Some("work"));
+        assert_eq!(parsed.priority_level, Some(1));
+        assert_eq!(parsed.scheduled_offset, Some(2));
+        assert_eq!(
+            parsed.sub_bullets,
+            vec![
+                "Confirm the owner".to_string(),
+                "Attach the checklist".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn execution_rejects_duplicate_route_markers_across_lines() {
+        let error = execute("@work parent\n- child @home").unwrap_err();
+        assert!(error.contains("route/mode marker"), "{error}");
+        assert!(error.contains("only one line"), "{error}");
+    }
+
+    #[test]
+    fn execution_rejects_duplicate_schedule_priority_and_clip_markers_across_lines(
+    ) {
+        assert!(execute("@work parent s:1\n- child s:2")
+            .unwrap_err()
+            .contains("schedule marker"));
+        assert!(execute("@work parent p:1\n- child p:2")
+            .unwrap_err()
+            .contains("priority marker"));
+        assert!(execute("@work parent %\n- child %")
+            .unwrap_err()
+            .contains("clipboard marker"));
+    }
+
+    #[test]
+    fn execution_allows_the_same_marker_kind_once_across_the_whole_draft() {
+        let parsed =
+            execute("parent s:1\n- child one\n- child two p:3").expect("parse");
+        assert_eq!(parsed.scheduled_offset, Some(1));
+        assert_eq!(parsed.priority_level, Some(3));
+    }
+
+    #[test]
+    fn execution_preserves_unicode_child_bodies() {
+        let parsed = execute("café parent\n- \u{1f680} launch\n- \u{e9}tude")
+            .expect("parse");
+        assert_eq!(parsed.body, "café parent");
+        assert_eq!(
+            parsed.sub_bullets,
+            vec!["\u{1f680} launch".to_string(), "\u{e9}tude".to_string()]
+        );
+    }
+
+    #[test]
+    fn execution_forced_route_keeps_child_markers_literal() {
+        let parsed = parse_capture_text_with_clip_control(
+            "parent\n- child @home",
+            Some("work"),
+            None,
+            true,
+        )
+        .expect("parse");
+        assert_eq!(parsed.route.as_deref(), Some("work"));
+        assert_eq!(parsed.sub_bullets, vec!["child @home".to_string()]);
+    }
+
+    #[test]
+    fn execution_ordinary_single_line_capture_has_no_sub_bullets() {
+        let parsed = execute("buy milk @groceries").expect("parse");
+        assert!(parsed.sub_bullets.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Line-aware capture: editor grammar.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn editor_reports_sub_bullets_for_a_multiline_draft() {
+        let parse = editor("@work parent\n- first child\n- second child");
+        assert_eq!(parse.body, "parent");
+        assert_eq!(parse.route.as_deref(), Some("work"));
+        assert_eq!(
+            parse.sub_bullets,
+            vec!["first child".to_string(), "second child".to_string()]
+        );
+        assert!(parse.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn editor_diagnoses_an_invalid_child_line_without_failing() {
+        let parse = editor("parent\n  - nested");
+        assert_eq!(parse.body, "parent");
+        assert!(parse.sub_bullets.is_empty());
+        assert_eq!(codes(&parse), vec!["invalid_child_line"]);
+        let raw = "parent\n  - nested";
+        let expected_start = raw.find("  - nested").expect("line 2 offset");
+        assert_eq!(
+            parse.diagnostics[0].range,
+            Some((expected_start, raw.len()))
+        );
+    }
+
+    #[test]
+    fn editor_diagnoses_a_child_emptied_by_marker_removal() {
+        let raw = "parent\n- s:1";
+        let parse = editor(raw);
+        assert!(parse.sub_bullets.is_empty());
+        assert_eq!(codes(&parse), vec!["empty_child_after_markers"]);
+        let line2_start = raw.find("- s:1").expect("line 2 offset");
+        assert_eq!(parse.diagnostics[0].range, Some((line2_start, raw.len())));
+    }
+
+    #[test]
+    fn editor_diagnoses_duplicate_markers_across_lines_but_keeps_the_first() {
+        let parse = editor("@work parent\n- child @home");
+        assert_eq!(parse.route.as_deref(), Some("work"));
+        assert_eq!(codes(&parse), vec!["duplicate_capture_marker"]);
+        assert!(
+            parse.diagnostics[0].message.contains("route/mode marker"),
+            "{:?}",
+            parse.diagnostics
+        );
+
+        let parse = editor("parent s:1\n- child s:2");
+        assert_eq!(codes(&parse), vec!["duplicate_capture_marker"]);
+        assert!(parse.diagnostics[0].message.contains("schedule marker"));
+    }
+
+    #[test]
+    fn editor_child_line_markers_extend_spans_with_absolute_offsets() {
+        let raw = "parent\n- child @work";
+        let parse = editor(raw);
+        assert_eq!(parse.route.as_deref(), Some("work"));
+        let route_span = parse
+            .spans
+            .iter()
+            .find(|span| span.kind == SpanKind::Route)
+            .expect("route span");
+        assert_eq!(&raw[route_span.start..route_span.end], "@work");
+    }
+
+    #[test]
+    fn editor_placeholder_and_blank_child_lines_produce_no_sub_bullet_or_diagnostic(
+    ) {
+        let parse = editor("parent\n\n- real child\n- \n");
+        assert_eq!(parse.sub_bullets, vec!["real child".to_string()]);
+        assert!(parse.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn editor_child_line_alone_can_resolve_the_capture_mode() {
+        // The parent has no marker of its own; the child's trailing marker
+        // becomes the whole capture's mode, exactly like execution.
+        let parse = editor("plain parent\n- do it @dev:focus-1");
+        assert_eq!(parse.mode, EditorMode::PomodoroTask);
+        assert_eq!(parse.route.as_deref(), Some("dev"));
+        assert_eq!(parse.block_id.as_deref(), Some("focus-1"));
+        assert_eq!(parse.sub_bullets, vec!["do it".to_string()]);
+    }
+
+    // -----------------------------------------------------------------
+    // Line-aware capture: cursor-aware completion.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn completion_on_a_child_line_completes_a_trailing_route() {
+        let raw = "parent line\n- context @ca";
+        let completion = field(raw, raw.len()).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.query, "ca");
+        let at_index = raw.rfind('@').expect("at sign");
+        assert_eq!(completion.replacement, (at_index + 1, raw.len()));
+    }
+
+    #[test]
+    fn completion_works_on_an_earlier_child_line_not_only_the_last() {
+        // A marker on the *first* child line, with more lines after it,
+        // still completes -- completion is scoped per physical line, not
+        // just to the leading/trailing ends of the whole draft.
+        let raw = "parent line\n- first @ca\n- second child\n- third child";
+        let at_index = raw.find('@').expect("at sign");
+        let cursor = at_index + 3;
+        let completion = field(raw, cursor).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.query, "ca");
+        let line_end = raw.find("\n- second").expect("line end");
+        assert_eq!(completion.replacement, (at_index + 1, line_end));
+    }
+
+    #[test]
+    fn completion_inside_a_child_bullet_marker_has_no_completion() {
+        let raw = "parent\n- @work";
+        // Cursor sitting inside the "- " marker itself, before the body.
+        let dash_index = raw.rfind("- ").expect("marker");
+        assert_eq!(field(raw, dash_index), None);
+        assert_eq!(field(raw, dash_index + 1), None);
+    }
+
+    #[test]
+    fn completion_on_the_parent_line_still_supports_leading_markers() {
+        let raw = "@ca parent\n- child";
+        let completion = field(raw, 3).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.query, "ca");
+        assert_eq!(completion.replacement, (1, 3));
+    }
+
+    #[test]
+    fn completion_on_a_child_line_never_offers_a_leading_route() {
+        // On the parent line a lone `@ca` fragment still completes (see
+        // `leading_route_fragment_completes_with_no_body_yet`), because the
+        // first line keeps the established leading-route form. A child line
+        // never gets that treatment, so the identical lone fragment here is
+        // not completable at all.
+        let raw = "parent\n- @ca";
+        assert_eq!(field(raw, raw.len()), None);
     }
 }

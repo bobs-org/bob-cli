@@ -1,7 +1,7 @@
 use std::{
     ffi::OsString,
     fs,
-    io::{self, BufRead, IsTerminal},
+    io::{self, IsTerminal, Read},
     iter,
     path::{Path, PathBuf},
 };
@@ -82,10 +82,14 @@ fn build_cli() -> ClapCommand {
 capture TEXT.\n\n\
 It shares the phase-grammar tokenizer and `@token` classification with \
 `bob capture-parse`, so a completion can never disagree with the marker \
-highlighting derived from that command. The service decides whether \
-completion applies at all: an unrecognized marker, a cursor in plain body \
-text, or a cursor on a token in the middle of TEXT all return a successful \
-empty result rather than an error.\n\n\
+highlighting derived from that command. TEXT accepts the same multi-line \
+authored-bullet draft `bob capture` does; completion always scopes to the \
+physical line the cursor is on, so only the first (parent) line offers a \
+leading marker and a later line only completes its own trailing marker. The \
+service decides whether completion applies at all: an unrecognized marker, \
+a cursor in plain body text, a cursor on a child line's bullet marker \
+itself, or a cursor on a token in the middle of a line all return a \
+successful empty result rather than an error.\n\n\
 Route completion covers a bare '@', a still-typing '@fragment', and the \
 missing route portion of '@:...', '@^...', and '@#...', backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
@@ -182,10 +186,12 @@ fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
 }
 
 /// Mirror `bob capture`'s and `bob capture-parse`'s convention: join every
-/// TEXT argument with spaces, or read exactly one line from a piped stdin
-/// when TEXT is omitted. Unlike `capture-parse`, empty TEXT is not an
-/// error here: cursor 0 against an empty draft is an ordinary interactive
-/// state that simply has no active marker to complete.
+/// TEXT argument with spaces, or read the complete piped stdin stream when
+/// TEXT is omitted, minus exactly one trailing line terminator so a shell
+/// pipe's closing newline never becomes part of the draft. Unlike
+/// `capture-parse`, empty TEXT is not an error here: cursor 0 against an
+/// empty draft is an ordinary interactive state that simply has no active
+/// marker to complete.
 fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, String> {
     if let Some(values) = matches.get_many::<OsString>("text") {
         return Ok(values
@@ -198,12 +204,15 @@ fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, String> {
         return Ok(String::new());
     }
 
-    let mut line = String::new();
+    let mut text = String::new();
     io::stdin()
         .lock()
-        .read_line(&mut line)
+        .read_to_string(&mut text)
         .map_err(|error| format!("read stdin: {error}"))?;
-    Ok(line.strip_suffix('\n').unwrap_or(&line).to_string())
+    if let Some(stripped) = text.strip_suffix("\r\n") {
+        return Ok(stripped.to_string());
+    }
+    Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

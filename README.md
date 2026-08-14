@@ -85,11 +85,14 @@ bob capture [OPTIONS] [--] [TEXT]...
 ```
 
 Captures one task, ordinary Markdown bullet, or task sub-bullet into the Bob vault without
-requiring desktop Obsidian to be open. Input whitespace is normalized to one
-line. Task mode writes `- [ ] #task <text> [created::YYYY-MM-DD]` and routes to
-`mac_inbox.md` by default; bullet mode writes into a selected non-`Tasks`
-section as described below. The created date uses the local date from
-`BOB_NOW`, `DATE`, or the system clock.
+requiring desktop Obsidian to be open. `TEXT` is one or more physical lines: the
+first line is the captured parent, and whitespace within each line is
+normalized, but line breaks are meaningful -- see "Authored sub-bullets"
+below for the flat bullet syntax later lines accept. Task mode writes
+`- [ ] #task <text> [created::YYYY-MM-DD]` and routes to `mac_inbox.md` by
+default; bullet mode writes into a selected non-`Tasks` section as described
+below. The created date uses the local date from `BOB_NOW`, `DATE`, or the
+system clock.
 
 Automatic routing matches the Hammerspoon capture keymap: a leading
 `@route text` prefix wins, otherwise a trailing `text @route` suffix is used.
@@ -143,6 +146,52 @@ and no roll happened. An out-of-range `p:<N>` fails with a usage error naming
 the configured levels instead of staying literal. Capture always writes
 `[ ]`; `bob task-status-hooks` is what later marks a future-scheduled task
 Blocked.
+
+### Authored sub-bullets
+
+`TEXT` may carry flat authored bullets beneath the parent line:
+
+```text
+Prepare the launch review
+- Confirm the rollout owner
+- Attach the final checklist @work p:1
+```
+
+Every physical line after the first must be blank or a flat, unindented
+Markdown item: `-`, `*`, or `+` at column zero, followed by at least one
+space or tab. The source marker and separating whitespace are stripped, and
+each item is rendered one indentation unit beneath the captured parent,
+matching the target note's dominant tab-or-two-space child indentation (or a
+tab for a fresh note):
+
+```markdown
+- [ ] #task Attach the final checklist [created::2026-08-14] [priority::high]
+	- Confirm the rollout owner
+```
+
+A blank line or a marker with nothing after it (`- ` alone) is a harmless
+placeholder and produces no child; this keeps interactive editors safe while
+a row is only half-typed. Any other non-bullet line -- indented, nested,
+wrapped, or ordinary continuation prose -- is a usage error naming the
+physical line number, and an item that becomes empty only because its whole
+body was a capture marker is rejected the same way. Every recognized
+terminal `s:<N>`, `p:<N>`, `%...`, and `@route`/`@route#`/`@route:block-id`/
+`@route^block-id` marker is a capture-wide directive no matter which physical
+line's terminal region it appears in -- as shown above, `@work` and `p:1` on
+the last child still route and prioritize the whole capture -- and is
+stripped from the rendered line it was typed on. A second line that resolves
+the same marker slot (two routes, two schedules, two priorities, or two
+clipboard markers) is ambiguous and fails with a usage error before anything
+is written. Only the first physical line keeps the established leading
+`@route text` form; later lines compose trailing markers only. This creates
+one flat authored-child level only: it does not infer nested hierarchy from
+indentation, and a `sub_bullet` capture (`@route^block-id`) nests the newly
+captured line under the selected existing task with authored children one
+additional level beneath that.
+
+Authored children render before clipboard children and the priority
+schedule log, so the full block order is: parent line, authored children,
+clipboard children, then the schedule log.
 
 Append one of these whitespace-delimited terminal markers to capture clipboard
 content beneath the new task or bullet:
@@ -330,15 +379,26 @@ Useful options:
 - `-s, --section TITLE`: with `--route`, force a bullet into the exact section
 - `-t, --task BLOCK-ID`: with `--route`, append beneath the identified task
 
-If `TEXT` is omitted and stdin is piped, `bob capture` reads one line from
-stdin. Put options before text, or use `--` when the task itself starts with a
-hyphen. Hammerspoon integrations should call
-`bob capture --format json -- <text>` and parse the JSON object, whose stable
-fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
+If `TEXT` is omitted and stdin is piped, `bob capture` reads the complete
+piped stdin stream, so a multi-line authored-bullet draft survives a pipe:
+`printf 'parent\n- child\n' | bob capture`. Put options before text, or use
+`--` when the task itself starts with a hyphen; a multi-line draft passed as
+an argument needs its own shell quoting, for example
+`bob capture -- "$(printf 'parent\n- child\n')"`. Embedded newlines inside a
+single `TEXT` argument stay intact; multiple `TEXT` arguments are still
+joined with single spaces, never newlines. Hammerspoon integrations should
+call `bob capture --format json -- <text>` and parse the JSON object, whose
+stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`, and
 `placement`. The `kind` field is `"task"`, `"bullet"`, or `"sub_bullet"`, and `task_line` holds
 the rendered line for either kind. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
+
+A capture with authored sub-bullets additionally includes a `sub_bullets`
+array of the exact rendered child lines, including their target-selected
+indentation, in source order; it is omitted entirely for an ordinary
+capture with no authored children. Human output prints those lines directly
+beneath `task_line`, before any clipboard children and schedule log.
 
 A `p:<N>` capture additionally includes `priority` (the written value, such as
 `"high"`) and `priority_label` (the configured label, such as `"P1"`); a
@@ -411,15 +471,19 @@ about a complete capture.
 The command is purely lexical and completely read-only. It never opens the
 vault, never reads the clipboard, never touches the filesystem, and takes no
 `--bob-dir`; running it with a nonexistent `BOB_DIR` and a `%...` clipboard
-marker still succeeds. If `TEXT` is omitted and stdin is piped, it reads one
-line from stdin, like `bob capture`. Only a missing `TEXT` or a bad flag is an
-error (exit 2); every other input succeeds.
+marker still succeeds. If `TEXT` is omitted and stdin is piped, it reads the
+complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
+bad flag is an error (exit 2); every other input succeeds.
 
-Incomplete interactive markers are valid input rather than errors, so `@`,
-`@#`, `@#Ideas`, `@route#`, `@:`, `@route:`, `@^`, `@route^`, and the legacy
-`@!` aliases all parse. An invalid marker component becomes a diagnostic
-instead of a failure, while `bob capture` keeps its strict execution errors for
-the same text.
+`TEXT` accepts the same multi-line authored-bullet draft `bob capture`
+does: the first physical line is the parent, and later flat `-`/`*`/`+`
+lines become authored children. Incomplete interactive markers are valid
+input rather than errors, so `@`, `@#`, `@#Ideas`, `@route#`, `@:`,
+`@route:`, `@^`, `@route^`, and the legacy `@!` aliases all parse on any
+line. An invalid marker component, a malformed continuation line, an item
+emptied by marker removal, or a duplicate capture-wide marker across lines
+becomes a diagnostic instead of a failure, while `bob capture` keeps its
+strict execution errors for the same text.
 
 JSON output is a single versioned object:
 
@@ -446,12 +510,21 @@ JSON output is a single versioned object:
 the normalized capture body after terminal `s:<N>`, `p:<N>`, and `%...` markers
 and the recognized `@...` token are removed, matching what `bob capture` would
 write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
-`sub_bullet`, or `incomplete`. `route`, `section`, and `block_id` are the
+`sub_bullet`, or `incomplete`, describing whichever line resolved a marker
+first -- the parent's leading or trailing form, or else the first child line
+with a trailing marker. `route`, `section`, and `block_id` are the
 resolved components, or `null`; `block_id` carries the Pomodoro or sub-bullet
 ID, whichever applies. `needs` lists what a picker still has to supply, in the
 order `route`, `section`, `pomodoro_id`, `task`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`.
+
+`sub_bullets` is an optional array, omitted when empty, of every other valid
+physical line's normalized body -- its source `-`/`*`/`+` marker and any
+capture-wide markers already removed -- in source order. These are semantic
+parse bodies for an editor's own preview, not rendered Markdown: they carry
+no target-selected indentation or `- ` marker, unlike `bob capture`'s own
+`sub_bullets` output field. This is additive to schema version 1.
 
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
@@ -465,10 +538,16 @@ Each entry in `diagnostics` has `severity` (`error`, `warning`, or `info`), a
 stable snake_case `code`, a `message` reusing `bob capture`'s exact wording,
 and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_sub_bullet_route`, `invalid_sub_bullet_block_id`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, and
-`legacy_bullet_marker`. Human output prints the same information without color
-escapes when piped. On a missing `TEXT`, JSON mode prints a single
-`{"ok": false, "error": "..."}` object on stdout and keeps stderr clean.
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `legacy_bullet_marker`,
+`invalid_child_line` (a later physical line is not blank or a flat `-`/`*`/`+`
+bullet at column zero), `empty_child_after_markers` (an authored bullet has no
+text left once its capture markers are removed), and
+`duplicate_capture_marker` (a later line resolves a route, schedule,
+priority, or clipboard marker a prior line already resolved). Human output
+prints the same information without color escapes when piped, plus a
+`Sub-bullets` section listing `sub_bullets` when it is nonempty. On a missing
+`TEXT`, JSON mode prints a single `{"ok": false, "error": "..."}` object on
+stdout and keeps stderr clean.
 
 ```bash
 bob capture-complete --cursor BYTE [-b|--bob-dir DIR] [-f|--format human|json] [--] [TEXT]...
@@ -483,12 +562,18 @@ on a character boundary within `TEXT`; a missing `TEXT` defaults to an empty
 draft rather than an error, since cursor `0` against an empty draft is an
 ordinary interactive state, not a mistake.
 
+For a multi-line, authored-bullet draft, completion always scopes to the
+physical line the cursor is on: only the first (parent) line offers a
+leading marker, matching `bob capture-parse`'s leading-wins precedence, and
+a later line only completes its own trailing marker. A cursor sitting on a
+child line's `-`/`*`/`+` bullet marker itself is never completable.
+
 The service itself decides whether completion applies. An unrecognized
 marker, a cursor sitting in plain body text, or a cursor on an `@token` that
-is not the leading or trailing marker (mirroring `bob capture-parse`'s
-leading-wins precedence) all return a successful empty result rather than an
-error. A lone leading `@route` fragment with no body text yet is still
-completed, even though `bob capture` would leave that exact input literal.
+is not the leading or trailing marker on its line all return a successful
+empty result rather than an error. A lone leading `@route` fragment with no
+body text yet is still completed on the parent line, even though
+`bob capture` would leave that exact input literal.
 
 Route completion covers a bare `@`, a still-typing `@fragment`, and the
 missing route portion of `@:...`, `@^...`, and `@#...`, backed by the same
