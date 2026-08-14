@@ -231,7 +231,7 @@ fn list_capture_tasks(
     })
 }
 
-fn status_type_label(status_type: TaskStatusType) -> &'static str {
+pub(crate) fn status_type_label(status_type: TaskStatusType) -> &'static str {
     match status_type {
         TaskStatusType::Todo => "TODO",
         TaskStatusType::Done => "DONE",
@@ -243,7 +243,7 @@ fn status_type_label(status_type: TaskStatusType) -> &'static str {
     }
 }
 
-fn indentation_depth(indentation: &str) -> usize {
+pub(crate) fn indentation_depth(indentation: &str) -> usize {
     let mut depth = 0usize;
     let mut spaces = 0usize;
     for character in indentation.chars() {

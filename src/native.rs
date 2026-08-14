@@ -11,6 +11,7 @@ fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
 
 mod capture;
 mod capture_clip;
+mod capture_complete;
 mod capture_language;
 mod capture_parse;
 mod capture_schedule_log;
@@ -38,6 +39,7 @@ mod task_status_hooks;
 pub(crate) enum NativeCommand {
     BulkGitCommit,
     Capture,
+    CaptureComplete,
     CaptureParse,
     CaptureSections,
     CaptureTargets,
@@ -70,6 +72,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
     match command {
         NativeCommand::BulkGitCommit => sync::run(args),
         NativeCommand::Capture => capture::run(args),
+        NativeCommand::CaptureComplete => capture_complete::run(args),
         NativeCommand::CaptureParse => capture_parse::run(args),
         NativeCommand::CaptureSections => capture_sections::run(args),
         NativeCommand::CaptureTargets => capture_targets::run(args),

@@ -187,6 +187,30 @@ fn capture_help_is_native_only() {
 }
 
 #[test]
+fn capture_complete_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-capture-complete-native-help");
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob capture-complete --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob capture-complete"),
+        "expected capture-complete help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only capture-complete should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_parse_help_is_native_only() {
     let temp = TempDir::new("bob-cli-capture-parse-native-help");
     let output = bob_command()
@@ -389,6 +413,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
     let cases: &[(&[&str], &str)] = &[
         (&["bulk-git-commit", "--help"], "usage: bob bulk-git-commit"),
         (&["capture", "--help"], "bob capture"),
+        (&["capture-complete", "--help"], "bob capture-complete"),
         (&["capture-parse", "--help"], "bob capture-parse"),
         (&["capture-sections", "--help"], "bob capture-sections"),
         (&["capture-targets", "--help"], "bob capture-targets"),
@@ -431,6 +456,10 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["--help"], "bob --help"),
         (&["bulk-git-commit", "--help"], "bob bulk-git-commit --help"),
         (&["capture", "--help"], "bob capture --help"),
+        (
+            &["capture-complete", "--help"],
+            "bob capture-complete --help",
+        ),
         (&["capture-parse", "--help"], "bob capture-parse --help"),
         (
             &["capture-sections", "--help"],
@@ -2474,6 +2503,32 @@ fn task_status_hooks_blocked_status_guard_writes_nothing() {
         assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
         assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
     }
+}
+
+#[test]
+fn capture_complete_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-complete --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("cursor-aware completion candidates"),
+        "expected capture-complete long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-c, --cursor",
+            "-f, --format",
+            "-h, --help",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
 }
 
 #[test]
@@ -6382,6 +6437,412 @@ fn capture_targets_json_failure_prints_error_object() {
             .as_str()
             .is_some_and(|error| error.contains("failed to read directory")),
         "unexpected json failure object: {json}"
+    );
+}
+
+#[test]
+fn capture_complete_route_json_ranks_prefix_before_substring() {
+    let temp = TempDir::new("bob-cli-capture-complete-route");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    fs::write(vault.join("cash.md"), "---\ntype: [[area]]\n---\n")
+        .expect("write cash.md");
+    fs::write(vault.join("petty-cash.md"), "---\ntype: [[area]]\n---\n")
+        .expect("write petty-cash.md");
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("3")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@ca")
+        .output()
+        .expect("run bob capture-complete route json");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected capture-complete stderr:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["cursor"], 3);
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": 1, "end": 3})
+    );
+    assert_eq!(json["context"], "route");
+    let routes: Vec<&str> = json["candidates"]
+        .as_array()
+        .expect("candidates array")
+        .iter()
+        .map(|candidate| candidate["route"].as_str().expect("route"))
+        .collect();
+    assert_eq!(routes, vec!["cash", "petty-cash"]);
+    assert_eq!(json["candidates"][0]["replacement"], "cash");
+    assert_eq!(json["candidates"][0]["kind"], "area");
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_complete_section_json_lists_headings_of_the_resolved_route() {
+    let temp = TempDir::new("bob-cli-capture-complete-section");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    fs::write(vault.join("notes.md"), "# Ideas\n## Inbox Ideas\n")
+        .expect("write notes.md");
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("14")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Idea @notes#Id")
+        .output()
+        .expect("run bob capture-complete section json");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["context"], "section");
+    assert_eq!(
+        json["candidates"]
+            .as_array()
+            .expect("candidates array")
+            .iter()
+            .map(|candidate| candidate["title"].as_str().expect("title"))
+            .collect::<Vec<_>>(),
+        vec!["Ideas", "Inbox Ideas"]
+    );
+}
+
+#[test]
+fn capture_complete_task_json_only_offers_tasks_with_a_block_id() {
+    let temp = TempDir::new("bob-cli-capture-complete-task");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        r##"{
+          "globalFilter": "#task",
+          "statusSettings": {
+            "coreStatuses": [
+              {"symbol":" ","name":"Todo","type":"TODO"},
+              {"symbol":"x","name":"Done","type":"DONE"}
+            ],
+            "customStatuses": [
+              {"symbol":"*","name":"Next","type":"ON_HOLD"}
+            ]
+          }
+        }"##,
+    );
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "# Tasks\n",
+            "- [ ] #task No block ID\n",
+            "- [*] #task Finish Google Exit Packet! ^goog-exit\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("15")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note @Cash^goog")
+        .output()
+        .expect("run bob capture-complete task json");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["context"], "task");
+    let candidates = json["candidates"].as_array().expect("candidates array");
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["replacement"], "goog-exit");
+    assert_eq!(candidates[0]["block_id"], "goog-exit");
+    assert_eq!(candidates[0]["text"], "Finish Google Exit Packet!");
+    assert_eq!(candidates[0]["section"], "Tasks");
+    assert_eq!(candidates[0]["status_symbol"], "*");
+}
+
+#[test]
+fn capture_complete_missing_note_behind_a_resolved_route_is_an_empty_success() {
+    let temp = TempDir::new("bob-cli-capture-complete-missing-note");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("12")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Idea @notes#")
+        .output()
+        .expect("run bob capture-complete missing note");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["context"], "section");
+    assert_eq!(json["candidates"], serde_json::json!([]));
+}
+
+#[test]
+fn capture_complete_cursor_in_body_text_is_an_empty_success() {
+    let temp = TempDir::new("bob-cli-capture-complete-body");
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(temp.path())
+        .arg("-c")
+        .arg("4")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("buy milk @groceries")
+        .output()
+        .expect("run bob capture-complete body text");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["ok"], true);
+    assert!(json["context"].is_null());
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": 4, "end": 4})
+    );
+    assert_eq!(json["candidates"], serde_json::json!([]));
+}
+
+#[test]
+fn capture_complete_empty_text_defaults_to_an_empty_draft() {
+    let temp = TempDir::new("bob-cli-capture-complete-empty-text");
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture-complete")
+            .arg("-b")
+            .arg(temp.path())
+            .arg("-c")
+            .arg("0")
+            .arg("-f")
+            .arg("json"),
+        "",
+    );
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["ok"], true);
+    assert!(json["context"].is_null());
+    assert_eq!(json["candidates"], serde_json::json!([]));
+}
+
+#[test]
+fn capture_complete_rejects_a_cursor_outside_the_text() {
+    let temp = TempDir::new("bob-cli-capture-complete-cursor-range");
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(temp.path())
+        .arg("-c")
+        .arg("99")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@ca")
+        .output()
+        .expect("run bob capture-complete out-of-range cursor");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).is_empty(),
+        "JSON failures keep stderr clean:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete failure JSON");
+    assert_eq!(json["ok"], false);
+    assert!(
+        json["error"]
+            .as_str()
+            .expect("error string")
+            .contains("UTF-8 byte boundary"),
+        "unexpected capture-complete failure JSON: {json}"
+    );
+}
+
+#[test]
+fn capture_complete_rejects_a_cursor_that_splits_a_multibyte_character() {
+    let temp = TempDir::new("bob-cli-capture-complete-cursor-boundary");
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(temp.path())
+        .arg("-c")
+        .arg("1")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("\u{e9}x")
+        .output()
+        .expect("run bob capture-complete mid-character cursor");
+
+    assert_eq!(output.status.code(), Some(2));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete failure JSON");
+    assert_eq!(json["ok"], false);
+}
+
+#[test]
+fn capture_complete_reports_utf8_byte_offsets() {
+    let text = "caf\u{e9} \u{1f680} @Cash^goog-exit";
+    let temp = TempDir::new("bob-cli-capture-complete-utf8");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    fs::write(
+        vault.join("cash.md"),
+        "# Tasks\n- [ ] #task Google exit ^goog-exit\n",
+    )
+    .expect("write cash.md");
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("21")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(text)
+        .output()
+        .expect("run bob capture-complete utf8");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["context"], "task");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": 17, "end": 26})
+    );
+    assert_eq!(&text[17..26], "goog-exit");
+}
+
+#[test]
+fn capture_complete_human_output_is_plain_and_concise() {
+    let temp = TempDir::new("bob-cli-capture-complete-human");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    fs::write(vault.join("cash.md"), "---\ntype: [[area]]\n---\n")
+        .expect("write cash.md");
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("1")
+        .arg("--")
+        .arg("@")
+        .output()
+        .expect("run bob capture-complete human");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected capture-complete stderr:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert_text_order(&out, &["route", "replacement", "Candidates", "cash"]);
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_complete_discovery_failure_reports_an_actionable_error() {
+    let temp = TempDir::new("bob-cli-capture-complete-discovery-failure");
+    let missing_vault = temp.path().join("missing-vault");
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&missing_vault)
+        .arg("-c")
+        .arg("1")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@")
+        .output()
+        .expect("run bob capture-complete discovery failure");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "missing vault should be an IO failure:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete failure JSON");
+    assert_eq!(json["ok"], false);
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("failed to read directory")),
+        "unexpected capture-complete failure JSON: {json}"
+    );
+}
+
+#[test]
+fn capture_complete_never_creates_the_vault_directory() {
+    let temp = TempDir::new("bob-cli-capture-complete-no-mutations");
+    let missing = temp.path().join("missing-vault");
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&missing)
+        .arg("-c")
+        .arg("12")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Idea @notes#")
+        .output()
+        .expect("run bob capture-complete section against a missing vault");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["context"], "section");
+    assert_eq!(json["candidates"], serde_json::json!([]));
+    assert!(
+        !missing.exists(),
+        "capture-complete must not create the vault directory"
     );
 }
 

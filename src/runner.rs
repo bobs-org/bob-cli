@@ -43,6 +43,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Capture,
     },
     Subcommand {
+        name: "capture-complete",
+        script_command: None,
+        about: "Complete the capture marker at the cursor",
+        native_command: NativeCommand::CaptureComplete,
+    },
+    Subcommand {
         name: "capture-parse",
         script_command: None,
         about: "Explain what in-progress capture text currently means",
@@ -281,6 +287,8 @@ Examples:
                                  Capture a task into groceries.md
   bob capture '@dev:foobar' 'Some foobar task.'
                                  Capture and link a next Pomodoro task
+  bob capture-complete --cursor 1 --format json -- '@'
+                                 Complete the capture marker at the cursor
   bob capture-parse --format json -- 'Call bank @cash^'
                                  Explain in-progress capture text
   bob capture-sections --route cash --format json

@@ -143,10 +143,10 @@ fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CaptureTargetsReport {
-    targets: Vec<CaptureTarget>,
-    warnings: Vec<ScanNote>,
-    issues: Vec<ScanNote>,
+pub(crate) struct CaptureTargetsReport {
+    pub(crate) targets: Vec<CaptureTarget>,
+    pub(crate) warnings: Vec<ScanNote>,
+    pub(crate) issues: Vec<ScanNote>,
 }
 
 impl CaptureTargetsReport {
@@ -159,7 +159,7 @@ impl CaptureTargetsReport {
         }
     }
 
-    fn issue_summary(&self) -> String {
+    pub(crate) fn issue_summary(&self) -> String {
         self.issues
             .iter()
             .map(ScanNote::display)
@@ -169,7 +169,7 @@ impl CaptureTargetsReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ScanNote {
+pub(crate) struct ScanNote {
     relative_path: PathBuf,
     message: String,
 }
@@ -185,7 +185,7 @@ impl ScanNote {
         }
     }
 
-    fn display(&self) -> String {
+    pub(crate) fn display(&self) -> String {
         format!("{}: {}", display_path(&self.relative_path), self.message)
     }
 }
@@ -199,25 +199,25 @@ struct CaptureTargetsResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct CaptureTarget {
-    route: String,
-    name: String,
-    label: String,
-    kind: CaptureTargetKind,
-    is_default: bool,
-    status: Option<String>,
-    relative_path: String,
+pub(crate) struct CaptureTarget {
+    pub(crate) route: String,
+    pub(crate) name: String,
+    pub(crate) label: String,
+    pub(crate) kind: CaptureTargetKind,
+    pub(crate) is_default: bool,
+    pub(crate) status: Option<String>,
+    pub(crate) relative_path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum CaptureTargetKind {
+pub(crate) enum CaptureTargetKind {
     Inbox,
     Area,
     Project,
 }
 
-fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
+pub(crate) fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
     let mut report = CaptureTargetsReport {
         targets: vec![default_inbox_target()],
         warnings: Vec::new(),

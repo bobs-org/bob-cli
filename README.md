@@ -51,6 +51,7 @@ bob projects list
 | --- | --- |
 | `bulk-git-commit` | Stage, commit, and push all Bob vault changes |
 | `capture` | Capture a task or section bullet, optionally with clipboard content |
+| `capture-complete` | Complete the capture marker at the cursor |
 | `capture-parse` | Preview what in-progress capture text currently means |
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
 | `capture-targets` | List inbox, area, and non-terminal project capture routes |
@@ -468,6 +469,69 @@ Today's codes are `invalid_sub_bullet_route`, `invalid_sub_bullet_block_id`,
 `legacy_bullet_marker`. Human output prints the same information without color
 escapes when piped. On a missing `TEXT`, JSON mode prints a single
 `{"ok": false, "error": "..."}` object on stdout and keeps stderr clean.
+
+```bash
+bob capture-complete --cursor BYTE [-b|--bob-dir DIR] [-f|--format human|json] [--] [TEXT]...
+```
+
+Returns cursor-aware completion candidates for in-progress capture `TEXT`. It
+shares the phase-`grammar` tokenizer and `@token` classification with
+`bob capture-parse`, so a completion can never disagree with the marker
+highlighting derived from that command; it never independently reparses
+marker prefixes. `--cursor`/`-c` is required and must be a UTF-8 byte offset
+on a character boundary within `TEXT`; a missing `TEXT` defaults to an empty
+draft rather than an error, since cursor `0` against an empty draft is an
+ordinary interactive state, not a mistake.
+
+The service itself decides whether completion applies. An unrecognized
+marker, a cursor sitting in plain body text, or a cursor on an `@token` that
+is not the leading or trailing marker (mirroring `bob capture-parse`'s
+leading-wins precedence) all return a successful empty result rather than an
+error. A lone leading `@route` fragment with no body text yet is still
+completed, even though `bob capture` would leave that exact input literal.
+
+Route completion covers a bare `@`, a still-typing `@fragment`, and the
+missing route portion of `@:...`, `@^...`, and `@#...`, backed by the same
+scan as `bob capture-targets`. Section completion covers `@route#prefix`,
+backed by the same scan as `bob capture-sections`. Pomodoro block-ID
+completion covers `@route:prefix` and parent-task completion covers
+`@route^prefix`; both are backed by the same open-task scan as
+`bob capture-tasks` and only offer tasks that already carry a block ID.
+Candidates rank exact prefix matches before substring matches,
+case-insensitively, while keeping each discovery source's stable order; a
+non-matching candidate is dropped, and an empty query keeps every candidate.
+
+JSON output is a single versioned object:
+
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "cursor": 3,
+  "replacement": { "start": 1, "end": 3 },
+  "context": "route",
+  "candidates": [
+    { "replacement": "cash", "route": "cash", "label": "cash.md", "kind": "area", "status": null }
+  ]
+}
+```
+
+`replacement` is the half-open UTF-8 byte range a chosen candidate replaces
+in full, regardless of where the cursor sits inside it; it is always present,
+even in an empty result, where it collapses to a zero-length range at the
+cursor. `context` is `route`, `section`, `pomodoro_block_id`, `task`, or
+`null` when no marker is active. Each candidate's `replacement` is the exact
+text to insert; the remaining fields are passthrough display metadata,
+without synthesis. A route candidate has `route`, `label`, `kind`
+(`inbox`, `area`, or `project`), and nullable `status`. A section candidate
+has `title` and `level`. A task candidate (`pomodoro_block_id` or `task`
+context) has `ref`, `block_id`, `status_symbol`, `status_name`,
+`status_type`, `text`, nullable `section`, `depth`, and `child_count`. A
+missing note behind a resolved route is not an error; it returns an empty
+candidate list. Discovery failures never fall back to a default route or an
+empty result silently; they return the same actionable error in human and
+JSON forms as the underlying `capture-targets`, `capture-sections`, or
+`capture-tasks` scan would.
 
 ```bash
 bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]

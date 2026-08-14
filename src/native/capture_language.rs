@@ -1166,6 +1166,196 @@ fn legacy_bullet_marker_diagnostic(tokens: &[Token<'_>]) -> Option<Diagnostic> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Cursor-aware completion
+// ---------------------------------------------------------------------------
+
+/// Which discovery source a completion request should query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CompletionContext {
+    Route,
+    Section,
+    PomodoroBlockId,
+    Task,
+}
+
+/// The active marker component at one cursor position, ready for a
+/// discovery scan and case-insensitive prefix/substring ranking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompletionField {
+    pub(crate) context: CompletionContext,
+    /// The already-resolved, lowercased route, when `context` needs one
+    /// (`section`, `pomodoro_block_id`, and `task`).
+    pub(crate) route: Option<String>,
+    /// The text already typed in this component, up to `cursor`.
+    pub(crate) query: String,
+    /// The half-open UTF-8 byte range of the whole component, which a
+    /// completion replaces in full regardless of where the cursor sits
+    /// inside it.
+    pub(crate) replacement: (usize, usize),
+}
+
+/// Identify the completable marker component at `cursor`, reusing the same
+/// tokenizer, terminal-marker extraction, and `@token` candidate detection
+/// as [`parse_for_editor`]. Returns `None` when the cursor is not inside an
+/// eligible leading or trailing `@` marker: plain body text, a token in the
+/// middle of the input, and an unrecognized or invalid marker never produce
+/// a completion field.
+pub(crate) fn completion_field_at(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let mut tokens = tokenize_with_spans(raw_text);
+    extract_terminal_markers(&mut tokens, true);
+
+    let index = completion_marker_index(&tokens)?;
+    let token = tokens[index];
+    if cursor < token.start || cursor > token.end {
+        return None;
+    }
+
+    marker_field_at_cursor(&token, cursor)
+}
+
+/// Mirror [`select_marker_token`]'s leading-then-trailing precedence, but
+/// without its requires-body/single-token exclusion: a lone leading
+/// `@route` fragment with no body text yet is still the token a user is
+/// actively completing, even though `bob capture` would leave it literal.
+fn completion_marker_index(tokens: &[Token<'_>]) -> Option<usize> {
+    if let Some(first) = tokens.first()
+        && classify_editor_token(first).is_some()
+    {
+        return Some(0);
+    }
+
+    if tokens.len() >= 2 {
+        let last = tokens.len() - 1;
+        if classify_editor_token(&tokens[last]).is_some() {
+            return Some(last);
+        }
+    }
+
+    None
+}
+
+/// Split one `@`-token the same way [`classify_route_token`],
+/// [`classify_pomodoro_token`], and [`classify_sub_bullet_token`] do, then
+/// resolve which component -- route or right-hand -- `cursor` sits in.
+fn marker_field_at_cursor(
+    token: &Token<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let text = token.text;
+
+    if is_sub_bullet_marker_candidate(text) {
+        let marker = &text[1..];
+        let (route_part, block_part) =
+            marker.split_once('^').expect("sub-bullet candidate");
+        return completion_field_from_parts(
+            token,
+            1,
+            route_part,
+            true,
+            block_part,
+            CompletionContext::Task,
+            cursor,
+        );
+    }
+
+    if is_pomodoro_marker_candidate(text)
+        || is_incomplete_pomodoro_marker_candidate(text)
+    {
+        let legacy = text.starts_with("@!");
+        let sigil_len = if legacy { 2 } else { 1 };
+        let marker = &text[sigil_len..];
+        let (route_part, block_part, separator) = match marker.split_once(':') {
+            Some((route, block_id)) => (route, block_id, true),
+            None => (marker, "", false),
+        };
+        return completion_field_from_parts(
+            token,
+            sigil_len,
+            route_part,
+            separator,
+            block_part,
+            CompletionContext::PomodoroBlockId,
+            cursor,
+        );
+    }
+
+    let rest = text.strip_prefix('@')?;
+    if let Some((route_part, prefix)) = rest.split_once('#') {
+        return completion_field_from_parts(
+            token,
+            1,
+            route_part,
+            true,
+            prefix,
+            CompletionContext::Section,
+            cursor,
+        );
+    }
+
+    // A bare `@` or a still-typing `@fragment` with no separator yet: the
+    // whole remainder is the route component, and there is no right-hand
+    // component to fall into.
+    completion_field_from_parts(
+        token,
+        1,
+        rest,
+        false,
+        "",
+        CompletionContext::Route,
+        cursor,
+    )
+}
+
+/// Build the completion field for one decomposed `@<route><sep><right>`
+/// marker, given which side of the (possible) separator `cursor` lands on.
+/// The route component spans exactly the route text, excluding the leading
+/// sigil; the right component spans exactly its text, excluding the
+/// one-byte separator. Both stay well-defined -- and empty -- when their
+/// text has not been typed yet, so a bare `@` or a fresh `@route:` still
+/// reports a real, zero-length replacement range at the insertion point.
+fn completion_field_from_parts(
+    token: &Token<'_>,
+    sigil_len: usize,
+    route_part: &str,
+    separator: bool,
+    right_part: &str,
+    right_context: CompletionContext,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let route_start = token.start + sigil_len;
+    let route_end = route_start + route_part.len();
+
+    if !separator || cursor <= route_end {
+        let split = cursor.clamp(route_start, route_end) - route_start;
+        return Some(CompletionField {
+            context: CompletionContext::Route,
+            route: None,
+            query: route_part[..split].to_string(),
+            replacement: (route_start, route_end),
+        });
+    }
+
+    // Past the one-byte separator: complete the right-hand component. It
+    // only makes sense once the route it belongs to already resolves.
+    if !is_route_token(route_part) {
+        return None;
+    }
+    let right_start = route_end + 1;
+    let right_end = right_start + right_part.len();
+    let split = cursor.clamp(right_start, right_end) - right_start;
+    Some(CompletionField {
+        context: right_context,
+        route: Some(route_part.to_ascii_lowercase()),
+        query: right_part[..split].to_string(),
+        replacement: (right_start, right_end),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2228,5 +2418,172 @@ mod tests {
         assert_eq!(value[0]["code"], "invalid_sub_bullet_block_id");
         assert_eq!(value[0]["range"][0], 5);
         assert_eq!(value[0]["range"][1], 16);
+    }
+
+    // -----------------------------------------------------------------
+    // Cursor-aware completion
+    // -----------------------------------------------------------------
+
+    fn field(raw: &str, cursor: usize) -> Option<CompletionField> {
+        completion_field_at(raw, cursor)
+    }
+
+    #[test]
+    fn bare_at_completes_an_empty_route() {
+        let completion = field("@", 1).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.route, None);
+        assert_eq!(completion.query, "");
+        assert_eq!(completion.replacement, (1, 1));
+    }
+
+    #[test]
+    fn leading_route_fragment_completes_with_no_body_yet() {
+        // The lone `@ca` token never routes for `bob capture` (no body text
+        // exists), but it is still the fragment a live editor completes.
+        let completion = field("@ca", 3).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.query, "ca");
+        assert_eq!(completion.replacement, (1, 3));
+    }
+
+    #[test]
+    fn cursor_mid_route_fragment_uses_the_prefix_before_the_cursor() {
+        let completion = field("@cash buy milk", 2).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.query, "c");
+        // The whole fragment is replaced regardless of where the cursor sits.
+        assert_eq!(completion.replacement, (1, 5));
+    }
+
+    #[test]
+    fn missing_route_portion_of_bullet_marker_completes_a_route() {
+        let completion = field("Idea @#Ideas", 6).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.query, "");
+        assert_eq!(completion.replacement, (6, 6));
+    }
+
+    #[test]
+    fn missing_route_portion_of_pomodoro_marker_completes_a_route() {
+        let completion = field("@:focus-123", 1).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.replacement, (1, 1));
+    }
+
+    #[test]
+    fn missing_route_portion_of_sub_bullet_marker_completes_a_route() {
+        let completion = field("@^focus-123", 1).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.replacement, (1, 1));
+    }
+
+    #[test]
+    fn section_completes_after_a_resolved_route() {
+        let completion = field("Idea @notes#Id", 14).expect("section field");
+        assert_eq!(completion.context, CompletionContext::Section);
+        assert_eq!(completion.route.as_deref(), Some("notes"));
+        assert_eq!(completion.query, "Id");
+        assert_eq!(completion.replacement, (12, 14));
+    }
+
+    #[test]
+    fn pomodoro_block_id_completes_after_a_resolved_route() {
+        let completion = field("Do work @Dev:foc", 16).expect("pomodoro id");
+        assert_eq!(completion.context, CompletionContext::PomodoroBlockId);
+        assert_eq!(completion.route.as_deref(), Some("dev"));
+        assert_eq!(completion.query, "foc");
+        assert_eq!(completion.replacement, (13, 16));
+    }
+
+    #[test]
+    fn legacy_pomodoro_alias_completes_the_same_as_the_canonical_form() {
+        let completion = field("Do work @!Dev:foc", 17).expect("pomodoro id");
+        assert_eq!(completion.context, CompletionContext::PomodoroBlockId);
+        assert_eq!(completion.route.as_deref(), Some("dev"));
+        assert_eq!(completion.query, "foc");
+        assert_eq!(completion.replacement, (14, 17));
+    }
+
+    #[test]
+    fn task_completes_after_a_resolved_sub_bullet_route() {
+        let completion = field("note @Cash^goog", 15).expect("task field");
+        assert_eq!(completion.context, CompletionContext::Task);
+        assert_eq!(completion.route.as_deref(), Some("cash"));
+        assert_eq!(completion.query, "goog");
+        assert_eq!(completion.replacement, (11, 15));
+    }
+
+    #[test]
+    fn right_component_without_a_resolved_route_has_no_completion() {
+        assert_eq!(field("@:foc", 5), None);
+        assert_eq!(field("@^foc", 5), None);
+    }
+
+    #[test]
+    fn cursor_in_body_text_has_no_completion() {
+        assert_eq!(field("buy milk @groceries", 4), None);
+    }
+
+    #[test]
+    fn cursor_on_a_middle_token_has_no_completion() {
+        // `@home` here stays literal body text because the leading `@work`
+        // marker wins, exactly like `parse_for_editor` reports it.
+        assert_eq!(field("@work buy milk @home", 17), None);
+        assert!(field("@work buy milk @home", 0).is_some());
+    }
+
+    #[test]
+    fn cursor_past_a_trailing_space_has_no_completion() {
+        assert_eq!(field("Body @dev ", 10), None);
+    }
+
+    #[test]
+    fn invalid_block_id_characters_still_produce_a_field() {
+        // The field extractor never validates block-ID syntax; a discovery
+        // scan naturally returns no candidates for a query no real block ID
+        // could match, without a separate invalid/error path here.
+        let completion = field("note @dev^bad.id", 16).expect("task field");
+        assert_eq!(completion.context, CompletionContext::Task);
+        assert_eq!(completion.route.as_deref(), Some("dev"));
+        assert_eq!(completion.query, "bad.id");
+    }
+
+    #[test]
+    fn terminal_markers_do_not_interfere_with_route_completion() {
+        let completion = field("body p:2 s:1 % @ca", 18).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.query, "ca");
+        assert_eq!(completion.replacement, (16, 18));
+    }
+
+    #[test]
+    fn completion_field_stays_on_unicode_scalar_boundaries() {
+        let raw = "caf\u{e9} \u{1f680} @Cash^goog-exit";
+        for cursor in
+            (0..=raw.len()).filter(|&index| raw.is_char_boundary(index))
+        {
+            let _ = field(raw, cursor);
+        }
+    }
+
+    #[test]
+    fn completion_field_uses_byte_offsets_after_multibyte_prefix_text() {
+        let raw = "caf\u{e9} \u{1f680} @Cash^goog-exit";
+        // "@Cash^goog-exit" starts at byte 11, right after the multibyte
+        // café and rocket-emoji body text.
+        assert_eq!(&raw[11..16], "@Cash");
+        assert_eq!(&raw[17..26], "goog-exit");
+
+        let route = field(raw, 15).expect("route field");
+        assert_eq!(route.context, CompletionContext::Route);
+        assert_eq!(route.query, "Cas");
+        assert_eq!(route.replacement, (12, 16));
+
+        let task = field(raw, 21).expect("task field");
+        assert_eq!(task.context, CompletionContext::Task);
+        assert_eq!(task.route.as_deref(), Some("cash"));
+        assert_eq!(task.query, "goog");
+        assert_eq!(task.replacement, (17, 26));
     }
 }
