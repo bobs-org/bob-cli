@@ -33,6 +33,10 @@ Configured linked and sidecar repositories for this context:
   directly in the ~/bob/ directory, as they will be overwritten on the next sync.
   Instead, make changes to this linked repo and, when done, run the `bob plugins sync`
   command to deploy them to the ~/bob/ directory.
+- `bob-mac-capture`: Native macOS menu-bar frontend for Bob capture. It delegates
+  capture grammar, completion, live preview, and vault mutation to bob-cli's versioned
+  `bob` subprocess/JSON interfaces, so coordinate capture-contract changes across both
+  repositories.
 - `bob-cli--research`: Durable SASE research reports and generated media.
 
 When you need to read or modify files in any repository other than your own workspace

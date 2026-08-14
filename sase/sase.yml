@@ -32,6 +32,13 @@ repos:
         You should NOT edit these plugins directly in the ~/bob/ directory, as they will be overwritten on the next
         sync. Instead, make changes to this linked repo and, when done, run the `bob plugins sync` command to deploy them
         to the ~/bob/ directory.
+    - name: bob-mac-capture
+      path: ~/projects/github/bobs-org/bob-mac-capture
+      description: >-
+        Native macOS menu-bar frontend for Bob capture. It delegates capture grammar,
+        completion, live preview, and vault mutation to bob-cli's versioned `bob`
+        subprocess/JSON interfaces, so coordinate capture-contract changes across both
+        repositories.
   sidecar:
     builtin:
       plans:
