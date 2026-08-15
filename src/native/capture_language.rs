@@ -21,6 +21,9 @@ use super::{capture_clip, collect_done};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CaptureKind {
     Task,
+    TaskWithBlockId {
+        block_id: String,
+    },
     Bullet {
         section_prefix: Option<String>,
         exact: bool,
@@ -519,6 +522,9 @@ fn parse_terminal_route_token(
     if is_sub_bullet_marker_candidate(token) {
         return parse_sub_bullet_route_token(token).map(Some);
     }
+    if is_task_block_id_marker_candidate(token) {
+        return parse_task_block_id_route_token(token).map(Some);
+    }
     if is_pomodoro_marker_candidate(token) {
         return parse_pomodoro_route_token(token).map(Some);
     }
@@ -571,6 +577,51 @@ fn is_sub_bullet_marker_candidate(token: &str) -> bool {
     marker
         .find([':', '#'])
         .is_none_or(|separator| caret < separator)
+}
+
+fn parse_task_block_id_route_token(token: &str) -> Result<RouteToken, String> {
+    let marker = token.strip_prefix('@').ok_or_else(|| {
+        "task block-ID capture markers must use @<route>::<block-id>"
+            .to_string()
+    })?;
+    let Some((route, block_id)) = marker.split_once("::") else {
+        return Err(
+            "task block-ID capture markers must use @<route>::<block-id>"
+                .to_string(),
+        );
+    };
+    if !is_route_token(route) {
+        return Err(TASK_BLOCK_ID_ROUTE_ERROR.to_string());
+    }
+    if !is_block_id(block_id) {
+        return Err(TASK_BLOCK_ID_ERROR.to_string());
+    }
+
+    Ok(RouteToken {
+        route: route.to_ascii_lowercase(),
+        kind: CaptureKind::TaskWithBlockId {
+            block_id: block_id.to_string(),
+        },
+    })
+}
+
+/// Return whether a terminal token belongs to the ordinary task-with-ID
+/// marker grammar. A double colon that follows `#` remains part of a bullet
+/// section prefix, and a double colon that follows `^` remains part of the
+/// sub-bullet block-ID component.
+fn is_task_block_id_marker_candidate(token: &str) -> bool {
+    let Some(marker) = token.strip_prefix('@') else {
+        return false;
+    };
+    if token.starts_with("@!") {
+        return false;
+    }
+    let Some(double_colon) = marker.find("::") else {
+        return false;
+    };
+    marker
+        .find(['#', '^'])
+        .is_none_or(|separator| double_colon < separator)
 }
 
 fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
@@ -638,6 +689,10 @@ fn validate_special_terminal_markers_line(
     for token in first.into_iter().chain(tokens.last()) {
         if is_sub_bullet_marker_candidate(token) {
             parse_sub_bullet_route_token(token)?;
+            continue;
+        }
+        if is_task_block_id_marker_candidate(token) {
+            parse_task_block_id_route_token(token)?;
             continue;
         }
         if is_pomodoro_marker_candidate(token) {
@@ -807,6 +862,8 @@ fn is_route_marker(token: &str) -> bool {
     parse_route_token(token).is_some()
         || (is_sub_bullet_marker_candidate(token)
             && parse_sub_bullet_route_token(token).is_ok())
+        || (is_task_block_id_marker_candidate(token)
+            && parse_task_block_id_route_token(token).is_ok())
         || (is_pomodoro_marker_candidate(token)
             && parse_pomodoro_route_token(token).is_ok())
 }
@@ -861,6 +918,10 @@ const SUB_BULLET_ROUTE_ERROR: &str =
     "sub-bullet capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 const SUB_BULLET_BLOCK_ID_ERROR: &str =
     "sub-bullet capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
+const TASK_BLOCK_ID_ROUTE_ERROR: &str =
+    "task block-ID capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
+const TASK_BLOCK_ID_ERROR: &str =
+    "task block-ID capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
 const POMODORO_ROUTE_ERROR: &str =
     "Pomodoro capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 const POMODORO_BLOCK_ID_ERROR: &str =
@@ -875,6 +936,8 @@ const POMODORO_BLOCK_ID_ERROR: &str =
 pub(crate) enum SpanKind {
     Route,
     Section,
+    TaskBlockIdRoute,
+    TaskBlockId,
     PomodoroRoute,
     PomodoroBlockId,
     SubBulletRoute,
@@ -895,6 +958,8 @@ impl SpanKind {
         match self {
             Self::Route => "route",
             Self::Section => "section",
+            Self::TaskBlockIdRoute => "task_block_id_route",
+            Self::TaskBlockId => "task_block_id",
             Self::PomodoroRoute => "pomodoro_route",
             Self::PomodoroBlockId => "pomodoro_block_id",
             Self::SubBulletRoute => "sub_bullet_route",
@@ -977,6 +1042,7 @@ impl EditorMode {
 pub(crate) enum Need {
     Route,
     Section,
+    BlockId,
     PomodoroId,
     Task,
 }
@@ -986,6 +1052,7 @@ impl Need {
         match self {
             Self::Route => "route",
             Self::Section => "section",
+            Self::BlockId => "block_id",
             Self::PomodoroId => "pomodoro_id",
             Self::Task => "task",
         }
@@ -1338,6 +1405,9 @@ fn classify_editor_token(token: &Token<'_>) -> Option<TokenParse> {
     if is_sub_bullet_marker_candidate(text) {
         return Some(classify_sub_bullet_token(token));
     }
+    if is_task_block_id_marker_candidate(text) {
+        return Some(classify_task_block_id_token(token));
+    }
     if is_pomodoro_marker_candidate(text)
         || is_incomplete_pomodoro_marker_candidate(text)
     {
@@ -1383,12 +1453,47 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
         MarkerShape {
             sigil_len: 1,
             route_part,
-            separator: true,
+            separator_len: 1,
             right_part: block_part,
             route_kind: SpanKind::SubBulletRoute,
             right_kind: SpanKind::SubBulletBlockId,
             complete_mode: EditorMode::SubBullet,
             right_need: Need::Task,
+        },
+    ))
+}
+
+fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
+    let marker = &token.text[1..];
+    let (route_part, block_part) =
+        marker.split_once("::").expect("task block-ID candidate");
+
+    if !route_part.is_empty() && !is_route_token(route_part) {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_task_block_id_route",
+            TASK_BLOCK_ID_ROUTE_ERROR,
+        ));
+    }
+    if !block_part.is_empty() && !is_block_id(block_part) {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_task_block_id",
+            TASK_BLOCK_ID_ERROR,
+        ));
+    }
+
+    TokenParse::Marker(marker_parse(
+        token,
+        MarkerShape {
+            sigil_len: 1,
+            route_part,
+            separator_len: 2,
+            right_part: block_part,
+            route_kind: SpanKind::TaskBlockIdRoute,
+            right_kind: SpanKind::TaskBlockId,
+            complete_mode: EditorMode::Task,
+            right_need: Need::BlockId,
         },
     ))
 }
@@ -1431,7 +1536,7 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         MarkerShape {
             sigil_len,
             route_part,
-            separator,
+            separator_len: usize::from(separator),
             right_part: block_part,
             route_kind: SpanKind::PomodoroRoute,
             right_kind: SpanKind::PomodoroBlockId,
@@ -1491,7 +1596,7 @@ fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
         MarkerShape {
             sigil_len: 1,
             route_part,
-            separator: true,
+            separator_len: 1,
             right_part: prefix,
             route_kind: SpanKind::Route,
             right_kind: SpanKind::Section,
@@ -1505,7 +1610,7 @@ fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
 struct MarkerShape<'a> {
     sigil_len: usize,
     route_part: &'a str,
-    separator: bool,
+    separator_len: usize,
     right_part: &'a str,
     route_kind: SpanKind,
     right_kind: SpanKind,
@@ -1532,19 +1637,15 @@ fn marker_parse(token: &Token<'_>, shape: MarkerShape<'_>) -> MarkerParse {
             end: route_end,
             kind: shape.route_kind,
         });
-        if !has_right && shape.separator {
+        if !has_right && shape.separator_len > 0 {
             spans.push(Span {
                 start: route_end,
-                end: route_end + 1,
+                end: route_end + shape.separator_len,
                 kind: SpanKind::InteractivePlaceholder,
             });
         }
     } else {
-        let placeholder_end = if shape.separator {
-            route_end + 1
-        } else {
-            route_end
-        };
+        let placeholder_end = route_end + shape.separator_len;
         spans.push(Span {
             start: token.start,
             end: placeholder_end,
@@ -1752,10 +1853,19 @@ fn marker_field_at_cursor(
             token,
             1,
             route_part,
-            true,
+            1,
             block_part,
-            CompletionContext::Task,
+            Some(CompletionContext::Task),
             cursor,
+        );
+    }
+
+    if is_task_block_id_marker_candidate(text) {
+        let marker = &text[1..];
+        let (route_part, block_part) =
+            marker.split_once("::").expect("task block-ID candidate");
+        return completion_field_from_parts(
+            token, 1, route_part, 2, block_part, None, cursor,
         );
     }
 
@@ -1773,9 +1883,9 @@ fn marker_field_at_cursor(
             token,
             sigil_len,
             route_part,
-            separator,
+            usize::from(separator),
             block_part,
-            CompletionContext::PomodoroBlockId,
+            Some(CompletionContext::PomodoroBlockId),
             cursor,
         );
     }
@@ -1786,9 +1896,9 @@ fn marker_field_at_cursor(
             token,
             1,
             route_part,
-            true,
+            1,
             prefix,
-            CompletionContext::Section,
+            Some(CompletionContext::Section),
             cursor,
         );
     }
@@ -1800,9 +1910,9 @@ fn marker_field_at_cursor(
         token,
         1,
         rest,
-        false,
+        0,
         "",
-        CompletionContext::Route,
+        Some(CompletionContext::Route),
         cursor,
     )
 }
@@ -1811,22 +1921,22 @@ fn marker_field_at_cursor(
 /// marker, given which side of the (possible) separator `cursor` lands on.
 /// The route component spans exactly the route text, excluding the leading
 /// sigil; the right component spans exactly its text, excluding the
-/// one-byte separator. Both stay well-defined -- and empty -- when their
+/// separator. Both stay well-defined -- and empty -- when their
 /// text has not been typed yet, so a bare `@` or a fresh `@route:` still
 /// reports a real, zero-length replacement range at the insertion point.
 fn completion_field_from_parts(
     token: &Token<'_>,
     sigil_len: usize,
     route_part: &str,
-    separator: bool,
+    separator_len: usize,
     right_part: &str,
-    right_context: CompletionContext,
+    right_context: Option<CompletionContext>,
     cursor: usize,
 ) -> Option<CompletionField> {
     let route_start = token.start + sigil_len;
     let route_end = route_start + route_part.len();
 
-    if !separator || cursor <= route_end {
+    if separator_len == 0 || cursor <= route_end {
         let split = cursor.clamp(route_start, route_end) - route_start;
         return Some(CompletionField {
             context: CompletionContext::Route,
@@ -1836,12 +1946,20 @@ fn completion_field_from_parts(
         });
     }
 
-    // Past the one-byte separator: complete the right-hand component. It
-    // only makes sense once the route it belongs to already resolves.
+    let right_start = route_end + separator_len;
+    if cursor < right_start {
+        return None;
+    }
+
+    // Past the separator: complete the right-hand component when that
+    // component is backed by a discovery source. Authored ID-only task block
+    // IDs intentionally have no right-hand completion source.
+    let right_context = right_context?;
+    // The right-hand component only makes sense once the route it belongs to
+    // already resolves.
     if !is_route_token(route_part) {
         return None;
     }
-    let right_start = route_end + 1;
     let right_end = right_start + right_part.len();
     let split = cursor.clamp(right_start, right_end) - right_start;
     Some(CompletionField {
@@ -2034,6 +2152,38 @@ mod tests {
                 &[Need::Route, Need::Task],
             ),
             (
+                "Body @dev::focus-123",
+                EditorMode::Task,
+                Some("dev"),
+                None,
+                Some("focus-123"),
+                &[],
+            ),
+            (
+                "Body @dev::",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                None,
+                &[Need::BlockId],
+            ),
+            (
+                "Body @::focus-123",
+                EditorMode::Incomplete,
+                None,
+                None,
+                Some("focus-123"),
+                &[Need::Route],
+            ),
+            (
+                "Body @::",
+                EditorMode::Incomplete,
+                None,
+                None,
+                None,
+                &[Need::Route, Need::BlockId],
+            ),
+            (
                 "Body @dev:focus-123",
                 EditorMode::PomodoroTask,
                 Some("dev"),
@@ -2169,6 +2319,19 @@ mod tests {
             ),
             ("Body @^", &[SpanKind::InteractivePlaceholder]),
             (
+                "Body @dev::focus-123",
+                &[SpanKind::TaskBlockIdRoute, SpanKind::TaskBlockId],
+            ),
+            (
+                "Body @dev::",
+                &[SpanKind::TaskBlockIdRoute, SpanKind::InteractivePlaceholder],
+            ),
+            (
+                "Body @::focus-123",
+                &[SpanKind::InteractivePlaceholder, SpanKind::TaskBlockId],
+            ),
+            ("Body @::", &[SpanKind::InteractivePlaceholder]),
+            (
                 "Body @dev:focus-123",
                 &[SpanKind::PomodoroRoute, SpanKind::PomodoroBlockId],
             ),
@@ -2228,6 +2391,16 @@ mod tests {
                 "Body @dev^bad.id",
                 "invalid_sub_bullet_block_id",
                 SUB_BULLET_BLOCK_ID_ERROR,
+            ),
+            (
+                "Body @bad.route::id",
+                "invalid_task_block_id_route",
+                TASK_BLOCK_ID_ROUTE_ERROR,
+            ),
+            (
+                "Body @dev::bad.id",
+                "invalid_task_block_id",
+                TASK_BLOCK_ID_ERROR,
             ),
             (
                 "Body @bad.route:id",
@@ -2292,6 +2465,7 @@ mod tests {
             "standup @10:00",
             "Discuss @dev:id later",
             "Discuss @dev^id later",
+            "Discuss @dev::id later",
         ] {
             let parse = editor(raw);
             assert_eq!(parse.mode, EditorMode::Task, "{raw}");
@@ -2332,6 +2506,9 @@ mod tests {
             "Email @home soon",
             "@route",
             "@bad! body @Good",
+            "Do thing @Dev::Foo-Bar",
+            "@Dev::Foo-Bar Do thing s:2",
+            "Do thing @Dev::Foo-Bar p:2 s:1",
             "Do thing @Dev:Foo-Bar",
             "@Dev:Foo-Bar Do thing s:2",
             "Do thing @!Dev:Foo-Bar s:2",
@@ -2358,12 +2535,17 @@ mod tests {
             assert_eq!(parse.body, executed.body, "{raw}");
             assert_eq!(parse.route, executed.route, "{raw}");
             let expected_mode = match &executed.kind {
-                CaptureKind::Task => EditorMode::Task,
+                CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => {
+                    EditorMode::Task
+                }
                 CaptureKind::Bullet { .. } => EditorMode::Bullet,
                 CaptureKind::Pomodoro { .. } => EditorMode::PomodoroTask,
                 CaptureKind::SubBullet { .. } => EditorMode::SubBullet,
             };
             assert_eq!(parse.mode, expected_mode, "{raw}");
+            if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {
+                assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
+            }
             if let CaptureKind::Pomodoro { block_id } = &executed.kind {
                 assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
             }
@@ -2410,6 +2592,9 @@ mod tests {
         for raw in [
             "Body @^",
             "Body @dev^",
+            "Body @::",
+            "Body @::focus-123",
+            "Body @dev::",
             "Body @dev:",
             "Body @!",
             "Body @!dev",
@@ -2978,6 +3163,13 @@ mod tests {
     }
 
     #[test]
+    fn missing_route_portion_of_task_block_id_marker_completes_a_route() {
+        let completion = field("@::focus-123", 1).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.replacement, (1, 1));
+    }
+
+    #[test]
     fn missing_route_portion_of_sub_bullet_marker_completes_a_route() {
         let completion = field("@^focus-123", 1).expect("route field");
         assert_eq!(completion.context, CompletionContext::Route);
@@ -3000,6 +3192,18 @@ mod tests {
         assert_eq!(completion.route.as_deref(), Some("dev"));
         assert_eq!(completion.query, "foc");
         assert_eq!(completion.replacement, (13, 16));
+    }
+
+    #[test]
+    fn task_block_id_route_completes_but_authored_id_does_not() {
+        let route = field("Do work @Dev::new-id", 12).expect("route field");
+        assert_eq!(route.context, CompletionContext::Route);
+        assert_eq!(route.query, "Dev");
+        assert_eq!(route.replacement, (9, 12));
+
+        assert_eq!(field("Do work @Dev::new-id", 13), None);
+        assert_eq!(field("Do work @Dev::new-id", 14), None);
+        assert_eq!(field("Do work @Dev::new-id", 20), None);
     }
 
     #[test]

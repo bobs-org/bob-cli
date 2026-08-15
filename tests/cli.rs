@@ -2690,6 +2690,47 @@ fn capture_parse_json_output_is_stable_and_parseable() {
 }
 
 #[test]
+fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @Dev::")
+        .output()
+        .expect("run bob capture-parse task block ID marker");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "incomplete");
+    assert_eq!(json["route"], "dev");
+    assert!(json["block_id"].is_null());
+    assert_eq!(json["needs"], serde_json::json!(["block_id"]));
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 8, "end": 12, "kind": "task_block_id_route" },
+            { "start": 12, "end": 14, "kind": "interactive_placeholder" },
+        ])
+    );
+
+    let invalid = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @Dev::bad.id")
+        .output()
+        .expect("run invalid task block ID parse");
+    assert_success(&invalid);
+    let json: serde_json::Value = serde_json::from_str(stdout(&invalid).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "task");
+    assert_eq!(json["diagnostics"][0]["code"], "invalid_task_block_id");
+}
+
+#[test]
 fn capture_parse_json_reports_wikilink_semantic_spans() {
     let output = bob_command()
         .arg("capture-parse")
@@ -3567,6 +3608,160 @@ fn capture_priority_sub_bullet_nests_schedule_log_under_the_child() {
         ),
         "the schedule log must nest under the captured child, and the parent line stays untouched"
     );
+}
+
+#[test]
+fn capture_task_block_id_marker_writes_ordinary_task_and_ignores_daily_note() {
+    let temp = TempDir::new("bob-cli-capture-task-block-id-existing");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing\n");
+    write_file(&day_file, "## Notes\n- not a Pomodoro ledger\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .args(["Do", "work", "@Dev::id-only"])
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run ID-only capture");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["kind"], "task");
+    assert_eq!(json["route"], "dev");
+    assert_eq!(json["block_id"], "id-only");
+    assert_eq!(
+        json["task_line"],
+        "- [ ] #task Do work [created::2026-07-10] ^id-only"
+    );
+    assert!(json.get("day_file").is_none(), "{json}");
+    assert!(json.get("block_link").is_none(), "{json}");
+    assert!(json.get("pomodoro_link_placement").is_none(), "{json}");
+    assert_eq!(
+        fs::read_to_string(&target).expect("read routed note"),
+        concat!(
+            "# Dev\n",
+            "## Tasks\n",
+            "- [ ] #task Existing\n",
+            "- [ ] #task Do work [created::2026-07-10] ^id-only\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read untouched daily note"),
+        "## Notes\n- not a Pomodoro ledger\n"
+    );
+}
+
+#[test]
+fn capture_task_block_id_marker_creates_missing_routed_note() {
+    let temp = TempDir::new("bob-cli-capture-task-block-id-create");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let missing_day = vault.join("missing-day.md");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["New", "task", "@Projects::launch-id"])
+        .env("BOB_DAY_FILE", &missing_day)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run ID-only capture into missing route");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("projects.md")).expect("read route"),
+        "- [ ] #task New task [created::2026-07-10] ^launch-id\n"
+    );
+    assert!(
+        !missing_day.exists(),
+        "ID-only capture must not create or require the daily note"
+    );
+}
+
+#[test]
+fn capture_task_block_id_dry_run_and_duplicate_preflight_do_not_write() {
+    let temp = TempDir::new("bob-cli-capture-task-block-id-preflight");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let before = "# Dev\n## Tasks\n- [ ] #task Existing ^dup\n";
+    write_file(&target, before);
+
+    let preview = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .args(["Preview", "@dev::new-id"])
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run ID-only dry-run");
+
+    assert_success(&preview);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&preview).trim()).expect("dry-run JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["block_id"], "new-id");
+    assert_eq!(fs::read_to_string(&target).expect("read target"), before);
+
+    let duplicate = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .args(["Duplicate", "@dev::dup"])
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run duplicate ID-only dry-run");
+
+    assert_eq!(
+        duplicate.status.code(),
+        Some(1),
+        "{}",
+        format_output(&duplicate)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&duplicate).trim()).expect("failure JSON");
+    assert_eq!(json["ok"], false);
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("block ID ^dup already exists")),
+        "{json}"
+    );
+    assert_eq!(fs::read_to_string(&target).expect("read target"), before);
+}
+
+#[test]
+fn capture_malformed_task_block_id_marker_is_usage_error_without_writes() {
+    let temp = TempDir::new("bob-cli-capture-task-block-id-malformed");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["Do", "work", "@dev::bad.id"])
+        .output()
+        .expect("run malformed ID-only capture");
+
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(stderr(&output).contains("task block-ID capture block ID"));
+    assert_eq!(fs::read_dir(&vault).expect("read vault").count(), 0);
 }
 
 #[test]
@@ -7142,6 +7337,62 @@ fn capture_complete_route_json_ranks_prefix_before_substring() {
     assert_eq!(json["candidates"][0]["replacement"], "cash");
     assert_eq!(json["candidates"][0]["kind"], "area");
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_complete_task_block_id_marker_completes_only_route_side() {
+    let temp = TempDir::new("bob-cli-capture-complete-task-block-id");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    fs::write(vault.join("cash.md"), "---\ntype: [[area]]\n---\n")
+        .expect("write cash.md");
+
+    let route_side = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("6")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do @ca::new-id")
+        .output()
+        .expect("run route-side task block ID completion");
+
+    assert_success(&route_side);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&route_side).trim())
+            .expect("capture-complete JSON");
+    assert_eq!(json["context"], "route");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": 4, "end": 6})
+    );
+    assert_eq!(json["candidates"][0]["route"], "cash");
+
+    let id_side = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("10")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do @ca::new-id")
+        .output()
+        .expect("run ID-side task block ID completion");
+
+    assert_success(&id_side);
+    let json: serde_json::Value = serde_json::from_str(stdout(&id_side).trim())
+        .expect("capture-complete JSON");
+    assert!(json["context"].is_null(), "{json}");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": 10, "end": 10})
+    );
+    assert_eq!(json["candidates"].as_array().expect("candidates").len(), 0);
 }
 
 #[test]

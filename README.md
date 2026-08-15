@@ -175,8 +175,8 @@ a row is only half-typed. Any other non-bullet line -- indented, nested,
 wrapped, or ordinary continuation prose -- is a usage error naming the
 physical line number, and an item that becomes empty only because its whole
 body was a capture marker is rejected the same way. Every recognized
-terminal `s:<N>`, `p:<N>`, `%...`, and `@route`/`@route#`/`@route:block-id`/
-`@route^block-id` marker is a capture-wide directive no matter which physical
+terminal `s:<N>`, `p:<N>`, `%...`, and `@route`/`@route#`/`@route::block-id`/
+`@route:block-id`/`@route^block-id` marker is a capture-wide directive no matter which physical
 line's terminal region it appears in -- as shown above, `@work` and `p:1` on
 the last child still route and prioritize the whole capture -- and is
 stripped from the rendered line it was typed on. A second line that resolves
@@ -206,9 +206,9 @@ content beneath the new task or bullet:
   and replace underscores with spaces; for example, `%build_log` renders
   `**BUILD LOG:**`.
 
-The marker composes with `s:<N>`, `p:<N>`, ordinary routes, bullet routes, and
-Pomodoro routes in either terminal order. Invalid `%...` tokens and `%` tokens
-in the middle of the body stay literal. A counted capture requires every
+The marker composes with `s:<N>`, `p:<N>`, ordinary routes, bullet routes,
+ID-only task routes, and Pomodoro routes in either terminal order. Invalid
+`%...` tokens and `%` tokens in the middle of the body stay literal. A counted capture requires every
 requested entry to read, normalize, classify, and plan successfully;
 insufficient or invalid history aborts the capture instead of writing a
 partial result.
@@ -291,6 +291,25 @@ explicit header. Both forms force a single live value and keep `%` tokens in
 the captured text literal. A numeric header can be requested unambiguously with
 `--clip=20`; use `-n, --no-clip` when a genuine trailing `%N` or other `%...`
 token should remain literal. `--clip` and `--no-clip` conflict.
+
+Use a leading or trailing `@<route>::<block-id>` marker to create an ordinary
+open task with a requested Obsidian block ID, without creating or modifying a
+Pomodoro task link. For example,
+`bob capture '@dev::foobar' 'Some ordinary task.'` writes:
+
+```markdown
+- [ ] #task Some ordinary task. [created::2026-07-10] ^foobar
+```
+
+The route is lower-cased, and the destination may be an existing note or a
+missing note that can be created like any ordinary routed task. The task
+remains an ordinary `[ ]` task: priority and scheduled properties render before
+the final `^block-id`, and the JSON `kind` stays `"task"`. The block ID uses
+the same validator as other Bob task block IDs (letters, digits, and `-`).
+Before a real capture or `--dry-run` reports success, Bob rejects an ID that
+already appears anywhere in the destination note, leaving the note unchanged.
+This form never reads, validates, creates, or writes today's daily note; an
+invalid or missing `BOB_DAY_FILE` has no effect.
 
 Use a leading or trailing `@<route>:<block-id>` marker to create a
 Pomodoro-linked next task. For example,
@@ -390,8 +409,8 @@ joined with single spaces, never newlines. Hammerspoon integrations should
 call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`, and
-`placement`. The `kind` field is `"task"`, `"bullet"`, or `"sub_bullet"`, and `task_line` holds
-the rendered line for either kind. On JSON-mode failures, stdout is still a
+`placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`, or
+`"sub_bullet"`, and `task_line` holds the rendered line for any kind. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
 
 A capture with authored sub-bullets additionally includes a `sub_bullets`
@@ -428,9 +447,11 @@ entry boundaries and any owning `snippet` path explicit. The aggregate omits a
 singular `snippet` field. `%1` uses the unchanged single-capture shape.
 `task_line` remains the parent line only, and non-clipboard JSON omits `clip`.
 
+ID-only task results use kind `"task"` and additionally include `block_id`.
+They omit `day_file`, `block_link`, and `pomodoro_link_placement`.
+
 Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
-`block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`. Ordinary
-capture JSON remains unchanged.
+`block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`.
 
 Sub-bullet results additionally include `parent_line`, `parent_text`,
 `parent_status_symbol`, and `parent_status_name`. They reuse `block_id` for the
@@ -459,6 +480,14 @@ only the task, or `<text> @^block-id` to choose only the destination. A complete
 each task's literal checkbox with status color and searchable status, block ID,
 section, and child-note details; picker selections use stale-safe task refs.
 
+Editor clients that speak the versioned JSON interfaces also support the
+ordinary task-with-ID `::` family. Use `<task> @::` to choose a destination and
+then author a new block ID, `<task> @route::` to prompt only for the new block
+ID, or `<task> @::block-id` to prompt only for the destination. A complete
+`<task> @route::block-id` request captures immediately as an ordinary task.
+The right-hand block ID is user-authored and must be new, so completion is
+deliberately route-only and never offers existing task block IDs for that side.
+
 ```bash
 bob capture-parse [-f|--format human|json] [--] [TEXT]...
 ```
@@ -480,8 +509,8 @@ bad flag is an error (exit 2); every other input succeeds.
 `TEXT` accepts the same multi-line authored-bullet draft `bob capture`
 does: the first physical line is the parent, and later flat `-`/`*`/`+`
 lines become authored children. Incomplete interactive markers are valid
-input rather than errors, so `@`, `@#`, `@#Ideas`, `@route#`, `@:`,
-`@route:`, `@^`, `@route^`, and the legacy `@!` aliases all parse on any
+input rather than errors, so `@`, `@#`, `@#Ideas`, `@route#`, `@::`,
+`@route::`, `@:`, `@route:`, `@^`, `@route^`, and the legacy `@!` aliases all parse on any
 line. Complete and in-progress Obsidian links such as `[[sase`,
 `![[sase]]`, `[[sase#Design|Spec]]`, and `[[#^block-id]]` also parse for
 semantic highlighting. An invalid marker component, a malformed continuation
@@ -517,9 +546,9 @@ write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
 `sub_bullet`, or `incomplete`, describing whichever line resolved a marker
 first -- the parent's leading or trailing form, or else the first child line
 with a trailing marker. `route`, `section`, and `block_id` are the
-resolved components, or `null`; `block_id` carries the Pomodoro or sub-bullet
-ID, whichever applies. `needs` lists what a picker still has to supply, in the
-order `route`, `section`, `pomodoro_id`, `task`; it is an independent
+resolved components, or `null`; `block_id` carries the ID-only task, Pomodoro,
+or sub-bullet ID, whichever applies. `needs` lists what a picker still has to supply, in the
+order `route`, `section`, `block_id`, `pomodoro_id`, `task`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`.
 
@@ -532,7 +561,8 @@ no target-selected indentation or `- ` marker, unlike `bob capture`'s own
 
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
-`route`, `section`, `pomodoro_route`, `pomodoro_block_id`, `sub_bullet_route`,
+`route`, `section`, `task_block_id_route`, `task_block_id`,
+`pomodoro_route`, `pomodoro_block_id`, `sub_bullet_route`,
 `sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
 `interactive_placeholder`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
@@ -543,7 +573,8 @@ cover syntax only; unresolved note targets are not errors.
 Each entry in `diagnostics` has `severity` (`error`, `warning`, or `info`), a
 stable snake_case `code`, a `message` reusing `bob capture`'s exact wording,
 and a nullable `range` given as a two-element `[start, end]` byte array.
-Today's codes are `invalid_sub_bullet_route`, `invalid_sub_bullet_block_id`,
+Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
+`invalid_sub_bullet_route`, `invalid_sub_bullet_block_id`,
 `invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `legacy_bullet_marker`,
 `invalid_child_line` (a later physical line is not blank or a flat `-`/`*`/`+`
 bullet at column zero), `empty_child_after_markers` (an authored bullet has no
@@ -582,12 +613,15 @@ body text yet is still completed on the parent line, even though
 `bob capture` would leave that exact input literal.
 
 Route completion covers a bare `@`, a still-typing `@fragment`, and the
-missing route portion of `@:...`, `@^...`, and `@#...`, backed by the same
+missing route portion of `@::...`, `@:...`, `@^...`, and `@#...`, backed by the same
 scan as `bob capture-targets`. Section completion covers `@route#prefix`,
 backed by the same scan as `bob capture-sections`. Pomodoro block-ID
 completion covers `@route:prefix` and parent-task completion covers
 `@route^prefix`; both are backed by the same open-task scan as
-`bob capture-tasks` and only offer tasks that already carry a block ID.
+`bob capture-tasks` and only offer tasks that already carry a block ID. The
+right-hand side of `@route::block-id` is a new user-authored ID, so it has no
+completion context and returns an empty successful result while the caret is
+inside it.
 Candidates rank exact prefix matches before substring matches,
 case-insensitively, while keeping each discovery source's stable order; a
 non-matching candidate is dropped, and an empty query keeps every candidate.

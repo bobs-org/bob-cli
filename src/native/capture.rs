@@ -131,6 +131,14 @@ timed entry in its Pomodoros section and otherwise uses the first open entry. \
 Both notes are fully validated before either is replaced; duplicate block IDs, \
 missing ledger structure, no open entry, and multiple open timed entries fail \
 without a partial capture.\n\n\
+Use '@<route>::<block-id>' in the same leading or trailing position to create \
+an ordinary open task with the requested trailing Obsidian block ID, without \
+creating or modifying a Pomodoro ledger link. It renders as '- [ ] #task \
+<body> [created::YYYY-MM-DD] ^<block-id>' (with priority and scheduled \
+properties before the final block ID). Duplicate block IDs in the destination \
+note fail before the note is replaced; a missing destination note may still be \
+created like any ordinary routed task. This form never reads or requires the \
+daily note.\n\n\
 Use '@<route>^<block-id>' in the same leading or trailing position to append \
 an ordinary child bullet beneath an existing task without a [created::] stamp. It \
 renders as '- <body>' and appends only the optional scheduled property. The note \
@@ -151,7 +159,7 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash^goog-exit' 'Called Morgan Stanley today.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev::foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash^goog-exit' 'Called Morgan Stanley today.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -472,6 +480,15 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             priority_field,
             scheduled.as_deref(),
         ),
+        CaptureKind::TaskWithBlockId { block_id } => {
+            format_task_with_block_id_line(
+                &parsed.body,
+                &created,
+                priority_field,
+                scheduled.as_deref(),
+                block_id,
+            )
+        }
         CaptureKind::Bullet { .. } => format_bullet_line(
             &parsed.body,
             &created,
@@ -492,6 +509,10 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         ),
     };
     let kind_label = capture_kind_label(&parsed.kind);
+    let task_block_id = match &parsed.kind {
+        CaptureKind::TaskWithBlockId { block_id } => Some(block_id.clone()),
+        _ => None,
+    };
     let relative_target = relative_target(parsed.route.as_deref());
     let target = request.bob_dir.join(&relative_target);
     let child_indent = (parsed.clip.is_some()
@@ -645,9 +666,10 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         sub_bullets: sub_bullet_lines,
         clip: clip_plan.map(|plan| plan.output),
         schedule_log,
-        block_id: special
-            .as_ref()
-            .map(|edit| edit.details.block_id.clone())
+        block_id: task_block_id
+            .or_else(|| {
+                special.as_ref().map(|edit| edit.details.block_id.clone())
+            })
             .or_else(|| sub_bullet.and_then(|edit| edit.block_id.clone())),
         day_file: special.as_ref().map(|edit| edit.details.day_file.clone()),
         block_link: special
@@ -690,7 +712,7 @@ fn assemble_capture_block(
 
 fn capture_kind_label(kind: &CaptureKind) -> &'static str {
     match kind {
-        CaptureKind::Task => "task",
+        CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => "task",
         CaptureKind::Bullet { .. } => "bullet",
         CaptureKind::Pomodoro { .. } => "pomodoro_task",
         CaptureKind::SubBullet { .. } => "sub_bullet",
@@ -785,6 +807,18 @@ fn format_task_line(
     line
 }
 
+fn format_task_with_block_id_line(
+    body: &str,
+    created: &str,
+    priority: Option<(&str, &str)>,
+    scheduled: Option<&str>,
+    block_id: &str,
+) -> String {
+    let mut line = format_task_line(body, created, priority, scheduled);
+    append_block_id(&mut line, block_id);
+    line
+}
+
 fn format_bullet_line(
     body: &str,
     created: &str,
@@ -818,7 +852,7 @@ fn format_pomodoro_task_line(
     let mut line = format!("- [*] #task {body} [created::{created}]");
     append_priority_property(&mut line, priority);
     append_scheduled_property(&mut line, scheduled);
-    line.push_str(&format!(" ^{block_id}"));
+    append_block_id(&mut line, block_id);
     line
 }
 
@@ -832,6 +866,10 @@ fn append_scheduled_property(line: &mut String, scheduled: Option<&str>) {
     if let Some(scheduled) = scheduled {
         line.push_str(&format!(" [scheduled::{scheduled}]"));
     }
+}
+
+fn append_block_id(line: &mut String, block_id: &str) {
+    line.push_str(&format!(" ^{block_id}"));
 }
 
 fn plan_capture_to_target(
@@ -853,8 +891,13 @@ fn plan_capture_to_target(
     }
 
     let contents = read_target(target)?;
+    if let CaptureKind::TaskWithBlockId { block_id } = kind {
+        reject_duplicate_block_id(&contents, block_id, target)?;
+    }
     let (updated, placement) = match kind {
-        CaptureKind::Task | CaptureKind::Pomodoro { .. } => {
+        CaptureKind::Task
+        | CaptureKind::TaskWithBlockId { .. }
+        | CaptureKind::Pomodoro { .. } => {
             insert_task_line(&contents, capture_block)
         }
         CaptureKind::Bullet {
@@ -931,15 +974,7 @@ fn plan_capture_with_pomodoro_link(
     } else {
         String::new()
     };
-    if collect_done::block_ids_in_markdown(&original_target)
-        .iter()
-        .any(|existing| existing == block_id)
-    {
-        return Err(CaptureError::io(format!(
-            "block ID ^{block_id} already exists in {}",
-            target.display()
-        )));
-    }
+    reject_duplicate_block_id(&original_target, block_id, target)?;
 
     let (updated_target, placement) = if target_existed {
         insert_task_line(&original_target, capture_block)
@@ -989,6 +1024,23 @@ fn plan_capture_with_pomodoro_link(
         }),
         sub_bullet: None,
     })
+}
+
+fn reject_duplicate_block_id(
+    markdown: &str,
+    block_id: &str,
+    target: &Path,
+) -> Result<(), CaptureError> {
+    if collect_done::block_ids_in_markdown(markdown)
+        .iter()
+        .any(|existing| existing == block_id)
+    {
+        return Err(CaptureError::io(format!(
+            "block ID ^{block_id} already exists in {}",
+            target.display()
+        )));
+    }
+    Ok(())
 }
 
 fn plan_sub_bullet_capture(
@@ -2772,6 +2824,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_task_block_id_routes_in_terminal_positions_with_schedules() {
+        let cases = [
+            ("@Dev::Foo-Bar Do thing", "Do thing", None),
+            ("Do thing @Dev::Foo-Bar", "Do thing", None),
+            ("Do thing s:2 @Dev::Foo-Bar", "Do thing", Some(2)),
+            ("Do thing @Dev::Foo-Bar s:2", "Do thing", Some(2)),
+            ("@Dev::Foo-Bar Do thing s:2", "Do thing", Some(2)),
+        ];
+
+        for (raw, body, scheduled_offset) in cases {
+            let parsed = parse_capture_text(raw, None)
+                .unwrap_or_else(|error| panic!("{raw}: {error:?}"));
+            assert_eq!(parsed.body, body, "{raw}");
+            assert_eq!(parsed.route.as_deref(), Some("dev"), "{raw}");
+            assert_eq!(parsed.scheduled_offset, scheduled_offset, "{raw}");
+            assert_eq!(
+                parsed.kind,
+                CaptureKind::TaskWithBlockId {
+                    block_id: "Foo-Bar".to_string(),
+                },
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_sub_bullet_routes_with_precedence_and_terminal_markers() {
         let cases = [
             ("@Cash^Goog-Exit Called today", "Called today", None, None),
@@ -2829,6 +2907,9 @@ mod tests {
                 .expect_err("caret must take precedence");
             assert!(error.message.contains("sub-bullet"), "{raw}: {error:?}");
         }
+        let parsed = parse_capture_text("body @foo::id", None)
+            .expect("double colon takes precedence over Pomodoro");
+        assert!(matches!(parsed.kind, CaptureKind::TaskWithBlockId { .. }));
         let parsed = parse_capture_text("body @foo:id", None)
             .expect("colon remains Pomodoro");
         assert!(matches!(parsed.kind, CaptureKind::Pomodoro { .. }));
@@ -2857,6 +2938,22 @@ mod tests {
             .expect("mid-text marker remains literal");
         assert_eq!(parsed.body, "Discuss @cash^id later");
         assert_eq!(parsed.kind, CaptureKind::Task);
+    }
+
+    #[test]
+    fn malformed_task_block_id_markers_are_usage_errors() {
+        for (raw, expected) in [
+            ("body @cash::", "block ID must be"),
+            ("body @::id", "route must contain"),
+            ("body @bad.route::id", "route must contain"),
+            ("body @cash::bad.id", "block ID must be"),
+            ("@cash::id", "task text is required"),
+        ] {
+            let error = parse_capture_text(raw, None)
+                .expect_err(&format!("{raw} should fail"));
+            assert_eq!(error.kind, CaptureErrorKind::Usage, "{raw}");
+            assert!(error.message.contains(expected), "{raw}: {error:?}");
+        }
     }
 
     #[test]
@@ -3042,6 +3139,30 @@ mod tests {
                 Some("2026-06-16"),
             ),
             "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-16]"
+        );
+    }
+
+    #[test]
+    fn formats_task_with_block_id_as_ordinary_task_with_final_block_id() {
+        assert_eq!(
+            format_task_with_block_id_line(
+                "Some foobar task.",
+                "2026-07-10",
+                None,
+                None,
+                "foobar",
+            ),
+            "- [ ] #task Some foobar task. [created::2026-07-10] ^foobar"
+        );
+        assert_eq!(
+            format_task_with_block_id_line(
+                "Some foobar task.",
+                "2026-07-10",
+                Some(("priority", "lowest")),
+                Some("2026-07-12"),
+                "foobar",
+            ),
+            "- [ ] #task Some foobar task. [created::2026-07-10] [priority::lowest] [scheduled::2026-07-12] ^foobar"
         );
     }
 

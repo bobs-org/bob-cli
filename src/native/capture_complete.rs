@@ -95,12 +95,13 @@ a cursor in plain body text, a cursor on a child line's bullet marker \
 itself, or a cursor on a token in the middle of a line all return a \
 successful empty result rather than an error.\n\n\
 Route completion covers a bare '@', a still-typing '@fragment', and the \
-missing route portion of '@:...', '@^...', and '@#...', backed by the same \
+missing route portion of '@::...', '@:...', '@^...', and '@#...', backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
 backed by the same scan as `bob capture-sections`. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route^prefix', both backed by the same open-task scan as \
-`bob capture-tasks`. Candidates rank exact prefix matches before substring \
+`bob capture-tasks`. The authored ID portion of '@route::block-id' has no \
+completion source and returns an empty success. Candidates rank exact prefix matches before substring \
 matches, case-insensitively, while keeping each discovery source's stable \
 order.\n\n\
 When the cursor is inside an Obsidian wikilink, wikilink completion takes \
@@ -112,7 +113,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev::new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())

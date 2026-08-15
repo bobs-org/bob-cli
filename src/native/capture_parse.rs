@@ -79,9 +79,9 @@ boundary.\n\n\
 TEXT accepts the same multi-line authored-bullet draft 'bob capture' does: \
 the first physical line is the parent, and later flat '-'/'*'/'+' lines \
 become authored children. Incomplete interactive markers are valid input, \
-not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@:', '@route:', \
-'@^', '@route^', and the legacy '@!' aliases all report mode 'incomplete' \
-plus what they still need. An invalid marker component, a malformed \
+not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@::', \
+'@route::', '@:', '@route:', '@^', '@route^', and the legacy '@!' aliases \
+all report mode 'incomplete' plus what they still need. An invalid marker component, a malformed \
 continuation line, an item emptied by marker removal, or a duplicate \
 capture-wide marker across lines becomes a diagnostic, so live editors keep \
 a usable parse while 'bob capture' keeps its strict execution errors.\n\n\
@@ -93,7 +93,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash^'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n- second child\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, pomodoro_id, task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash^'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev::focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n- second child\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task",
         )
         .disable_help_flag(true)
         .arg(format_arg())
