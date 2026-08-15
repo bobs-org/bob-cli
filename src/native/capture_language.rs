@@ -50,10 +50,35 @@ pub(crate) struct ParsedCaptureText {
     pub(crate) kind: CaptureKind,
     pub(crate) scheduled_offset: Option<u64>,
     pub(crate) priority_level: Option<u64>,
-    /// Normalized authored-child bodies, in source order, with their `-`,
-    /// `*`, or `+` source marker and capture-wide markers already removed.
-    /// Empty when the draft was an ordinary single-line capture.
-    pub(crate) sub_bullets: Vec<String>,
+    /// Normalized authored-child bodies plus their semantic depth, in source
+    /// order, with their source marker and capture-wide markers already
+    /// removed. Empty when the draft was an ordinary single-line capture.
+    pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthoredDepth {
+    First,
+    Nested,
+}
+
+impl AuthoredDepth {
+    pub(crate) fn level(self) -> u8 {
+        match self {
+            Self::First => 1,
+            Self::Nested => 2,
+        }
+    }
+
+    pub(crate) fn indent_units(self) -> usize {
+        usize::from(self.level())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthoredSubBullet {
+    pub(crate) body: String,
+    pub(crate) depth: AuthoredDepth,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -202,31 +227,119 @@ pub(crate) fn split_physical_lines(raw: &str) -> Vec<RawLine<'_>> {
     lines
 }
 
-/// Recognize one physical continuation line as a flat authored bullet: it
-/// must start at byte 0 with `-`, `*`, or `+`, immediately followed by at
-/// least one space or tab. Returns the text after the marker and its
-/// contiguous run of separating whitespace, which is the item's raw body
-/// before whitespace normalization. Returns `None` for every other shape --
-/// indentation, nesting, a different leading character, or ordinary
-/// continuation prose -- so the caller can report one consistent diagnostic
-/// for all of them.
-pub(crate) fn strip_bullet_marker(line_text: &str) -> Option<&str> {
-    let mut chars = line_text.char_indices();
-    let (_, first) = chars.next()?;
-    if !matches!(first, '-' | '*' | '+') {
+/// One authored continuation line after its list marker has been stripped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AuthoredLine<'a> {
+    pub(crate) body: &'a str,
+    pub(crate) body_start: usize,
+    pub(crate) depth: AuthoredDepth,
+}
+
+/// The shared physical-line classifier for authored capture children.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthoredLineClass<'a> {
+    EmptyOrPlaceholder,
+    Item(AuthoredLine<'a>),
+    Invalid,
+}
+
+/// Classify one physical continuation line. A real item is either a
+/// column-zero `-`/`*`/`+` bullet or the same bullet prefixed by exactly two
+/// ASCII spaces. Blank rows and marker-only placeholder rows are harmless;
+/// every other nonempty shape is invalid.
+pub(crate) fn classify_authored_line<'a>(
+    line: RawLine<'a>,
+) -> AuthoredLineClass<'a> {
+    if line.text.trim().is_empty() {
+        return AuthoredLineClass::EmptyOrPlaceholder;
+    }
+
+    if let Some((body_offset, body)) = strip_bullet_marker_at(line.text, 0) {
+        if body.trim().is_empty() {
+            return AuthoredLineClass::EmptyOrPlaceholder;
+        }
+        return AuthoredLineClass::Item(AuthoredLine {
+            body,
+            body_start: line.start + body_offset,
+            depth: AuthoredDepth::First,
+        });
+    }
+
+    if let Some((body_offset, body)) = strip_bullet_marker_at(line.text, 2) {
+        if body.trim().is_empty() {
+            return AuthoredLineClass::EmptyOrPlaceholder;
+        }
+        return AuthoredLineClass::Item(AuthoredLine {
+            body,
+            body_start: line.start + body_offset,
+            depth: AuthoredDepth::Nested,
+        });
+    }
+
+    if is_marker_only_placeholder(line.text) {
+        return AuthoredLineClass::EmptyOrPlaceholder;
+    }
+
+    AuthoredLineClass::Invalid
+}
+
+/// Recognize a list marker at a fixed byte prefix and return the raw body
+/// after the contiguous separator run. `prefix_len == 2` accepts exactly two
+/// leading spaces; one, three, a tab, or deeper indentation all fail.
+fn strip_bullet_marker_at(
+    line_text: &str,
+    prefix_len: usize,
+) -> Option<(usize, &str)> {
+    let prefix = line_text.as_bytes().get(..prefix_len)?;
+    if prefix_len == 2 && prefix != b"  " {
         return None;
     }
-    let (next_index, next_char) = chars.next()?;
-    if next_char != ' ' && next_char != '\t' {
+    if prefix_len == 0 && line_text.as_bytes().first() == Some(&b' ') {
+        return None;
+    }
+
+    let marker = *line_text.as_bytes().get(prefix_len)?;
+    if !matches!(marker, b'-' | b'*' | b'+') {
+        return None;
+    }
+    let separator_index = prefix_len + 1;
+    let separator = *line_text.as_bytes().get(separator_index)?;
+    if !matches!(separator, b' ' | b'\t') {
         return None;
     }
 
     let bytes = line_text.as_bytes();
-    let mut end = next_index + next_char.len_utf8();
+    let mut end = separator_index + 1;
     while end < bytes.len() && matches!(bytes[end], b' ' | b'\t') {
         end += 1;
     }
-    Some(&line_text[end..])
+    Some((end, &line_text[end..]))
+}
+
+fn is_marker_only_placeholder(line_text: &str) -> bool {
+    marker_only_placeholder_after_prefix(line_text, 0)
+        || marker_only_placeholder_after_prefix(line_text, 1)
+        || marker_only_placeholder_after_prefix(line_text, 2)
+}
+
+fn marker_only_placeholder_after_prefix(
+    line_text: &str,
+    prefix_len: usize,
+) -> bool {
+    let bytes = line_text.as_bytes();
+    let Some(prefix) = bytes.get(..prefix_len) else {
+        return false;
+    };
+    if !prefix.iter().all(|byte| *byte == b' ') {
+        return false;
+    }
+    let Some(marker) = bytes.get(prefix_len) else {
+        return false;
+    };
+    matches!(marker, b'-' | b'*' | b'+')
+        && bytes[prefix_len + 1..]
+            .iter()
+            .all(|byte| matches!(byte, b' ' | b'\t'))
 }
 
 pub(crate) fn parse_capture_text_with_clip_control(
@@ -256,18 +369,20 @@ pub(crate) fn parse_capture_text_with_clip_control(
     aggregate.absorb(parent_outcome.markers, parent_outcome.route)?;
 
     let mut sub_bullets = Vec::new();
+    let mut has_first_level_owner = false;
     for (index, line) in child_lines.iter().enumerate() {
         let line_number = index + 2;
-        if line.text.trim().is_empty() {
-            continue;
-        }
-        let Some(remainder) = strip_bullet_marker(line.text) else {
-            return Err(invalid_child_line_error(line_number));
+        let authored = match classify_authored_line(*line) {
+            AuthoredLineClass::EmptyOrPlaceholder => continue,
+            AuthoredLineClass::Invalid => {
+                return Err(invalid_child_line_error(line_number));
+            }
+            AuthoredLineClass::Item(authored) => authored,
         };
-        if remainder.trim().is_empty() {
-            continue;
+        if authored.depth == AuthoredDepth::Nested && !has_first_level_owner {
+            return Err(orphaned_nested_bullet_error(line_number));
         }
-        let normalized = normalize_task_text(remainder);
+        let normalized = normalize_task_text(authored.body);
         let tokens: Vec<&str> = normalized.split(' ').collect();
         let outcome =
             resolve_line(tokens, false, detect_route, parse_clip_markers)?;
@@ -275,7 +390,13 @@ pub(crate) fn parse_capture_text_with_clip_control(
             return Err(empty_child_after_markers_error(line_number));
         }
         aggregate.absorb(outcome.markers, outcome.route)?;
-        sub_bullets.push(outcome.body);
+        sub_bullets.push(AuthoredSubBullet {
+            body: outcome.body,
+            depth: authored.depth,
+        });
+        if authored.depth == AuthoredDepth::First {
+            has_first_level_owner = true;
+        }
     }
 
     if let Some(section) = forced_section {
@@ -466,8 +587,9 @@ second one"
 
 fn invalid_child_line_error(line_number: usize) -> String {
     format!(
-        "capture line {line_number} must be a flat bullet starting with \
-\"- \", \"* \", or \"+ \" at the start of the line, or left blank"
+        "capture line {line_number} must be a column-zero bullet or a \
+two-space nested bullet using \"-\", \"*\", or \"+\" followed by a space or \
+tab, or be left blank"
     )
 }
 
@@ -475,6 +597,13 @@ fn empty_child_after_markers_error(line_number: usize) -> String {
     format!(
         "capture line {line_number} has no text left after its capture \
 markers were removed"
+    )
+}
+
+fn orphaned_nested_bullet_error(line_number: usize) -> String {
+    format!(
+        "capture line {line_number} is a nested bullet but has no preceding \
+first-level authored bullet to attach to"
     )
 }
 
@@ -1069,10 +1198,11 @@ pub(crate) struct EditorParse {
     pub(crate) needs: Vec<Need>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
-    /// Normalized authored-child bodies of every other valid, nonempty
-    /// physical line, in source order. A malformed or empty-after-markers
-    /// child line is reported as a diagnostic instead and excluded here.
-    pub(crate) sub_bullets: Vec<String>,
+    /// Normalized authored-child bodies plus semantic depth for every other
+    /// valid, nonempty physical line, in source order. A malformed,
+    /// orphaned, or empty-after-markers child line is reported as a
+    /// diagnostic instead and excluded here.
+    pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
 }
 
 /// One `@...` token resolved for the editor. `requires_body` marks the plain
@@ -1291,28 +1421,35 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         };
 
     let mut sub_bullets = Vec::new();
+    let mut has_first_level_owner = false;
     for (index, line) in child_lines.iter().enumerate() {
         let line_number = index + 2;
-        if line.text.trim().is_empty() {
-            continue;
-        }
-        let Some(remainder) = strip_bullet_marker(line.text) else {
+        let authored = match classify_authored_line(*line) {
+            AuthoredLineClass::EmptyOrPlaceholder => continue,
+            AuthoredLineClass::Invalid => {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_child_line",
+                    message: invalid_child_line_error(line_number),
+                    range: Some((line.start, line.end)),
+                });
+                continue;
+            }
+            AuthoredLineClass::Item(authored) => authored,
+        };
+        if authored.depth == AuthoredDepth::Nested && !has_first_level_owner {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                code: "invalid_child_line",
-                message: invalid_child_line_error(line_number),
+                code: "orphaned_nested_bullet",
+                message: orphaned_nested_bullet_error(line_number),
                 range: Some((line.start, line.end)),
             });
             continue;
-        };
-        if remainder.trim().is_empty() {
-            continue;
         }
 
-        let remainder_start = line.start + (line.text.len() - remainder.len());
         let child_line = RawLine {
-            text: remainder,
-            start: remainder_start,
+            text: authored.body,
+            start: authored.body_start,
             end: line.end,
         };
         let child_tokens = tokenize_line_with_spans(&child_line);
@@ -1345,7 +1482,13 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
                 range: Some((line.start, line.end)),
             });
         } else {
-            sub_bullets.push(child_parse.body);
+            sub_bullets.push(AuthoredSubBullet {
+                body: child_parse.body,
+                depth: authored.depth,
+            });
+            if authored.depth == AuthoredDepth::First {
+                has_first_level_owner = true;
+            }
         }
     }
 
@@ -1768,8 +1911,8 @@ pub(crate) struct CompletionField {
 /// a completion field.
 ///
 /// Multi-line drafts complete the physical line the cursor is on: only the
-/// first (parent) line offers a leading marker, and a child line's bullet
-/// marker (`- `, `* `, or `+ `) itself is never completable, matching the
+/// first (parent) line offers a leading marker, and a later line's source
+/// indentation plus bullet marker itself is never completable, matching the
 /// authored-bullet grammar `bob capture` and `bob capture-parse` execute
 /// with.
 pub(crate) fn completion_field_at(
@@ -1786,14 +1929,21 @@ pub(crate) fn completion_field_at(
     let scan_line = if leading {
         *line
     } else {
-        let remainder = strip_bullet_marker(line.text)?;
-        let remainder_start = line.start + (line.text.len() - remainder.len());
-        if cursor < remainder_start {
+        let AuthoredLineClass::Item(authored) = classify_authored_line(*line)
+        else {
+            return None;
+        };
+        if authored.depth == AuthoredDepth::Nested
+            && !has_previous_first_level_authored_item(&lines, line_index)
+        {
+            return None;
+        }
+        if cursor < authored.body_start {
             return None;
         }
         RawLine {
-            text: remainder,
-            start: remainder_start,
+            text: authored.body,
+            start: authored.body_start,
             end: line.end,
         }
     };
@@ -1808,6 +1958,27 @@ pub(crate) fn completion_field_at(
     }
 
     marker_field_at_cursor(&token, cursor)
+}
+
+fn has_previous_first_level_authored_item(
+    lines: &[RawLine<'_>],
+    current_line_index: usize,
+) -> bool {
+    lines[1..current_line_index].iter().any(|line| {
+        let AuthoredLineClass::Item(authored) = classify_authored_line(*line)
+        else {
+            return false;
+        };
+        if authored.depth != AuthoredDepth::First {
+            return false;
+        }
+        let normalized = normalize_task_text(authored.body);
+        if normalized.is_empty() {
+            return false;
+        }
+        let tokens = tokenize_with_spans(&normalized);
+        !parse_editor_line(tokens, false).body.is_empty()
+    })
 }
 
 /// Mirror [`select_marker_token`]'s leading-then-trailing precedence, but
@@ -3341,24 +3512,69 @@ mod tests {
     }
 
     #[test]
-    fn strip_bullet_marker_accepts_dash_star_plus_with_space_or_tab() {
-        assert_eq!(strip_bullet_marker("- body"), Some("body"));
-        assert_eq!(strip_bullet_marker("* body"), Some("body"));
-        assert_eq!(strip_bullet_marker("+ body"), Some("body"));
-        assert_eq!(strip_bullet_marker("-\tbody"), Some("body"));
-        assert_eq!(strip_bullet_marker("-   body"), Some("body"));
-        assert_eq!(strip_bullet_marker("- "), Some(""));
-        assert_eq!(strip_bullet_marker("-\t"), Some(""));
+    fn authored_line_classifier_accepts_first_level_and_nested_items() {
+        for (raw, body, depth, body_start) in [
+            ("- body", "body", AuthoredDepth::First, 2),
+            ("* body", "body", AuthoredDepth::First, 2),
+            ("+ body", "body", AuthoredDepth::First, 2),
+            ("-\tbody", "body", AuthoredDepth::First, 2),
+            ("-   body", "body", AuthoredDepth::First, 4),
+            ("  - nested", "nested", AuthoredDepth::Nested, 4),
+            ("  * nested", "nested", AuthoredDepth::Nested, 4),
+            ("  +\tnested", "nested", AuthoredDepth::Nested, 4),
+        ] {
+            let line = RawLine {
+                text: raw,
+                start: 10,
+                end: 10 + raw.len(),
+            };
+            let AuthoredLineClass::Item(item) = classify_authored_line(line)
+            else {
+                panic!("expected item for {raw:?}");
+            };
+            assert_eq!(item.body, body, "{raw}");
+            assert_eq!(item.depth, depth, "{raw}");
+            assert_eq!(item.body_start, 10 + body_start, "{raw}");
+        }
     }
 
     #[test]
-    fn strip_bullet_marker_rejects_every_other_shape() {
-        assert_eq!(strip_bullet_marker("body"), None);
-        assert_eq!(strip_bullet_marker("  - indented"), None);
-        assert_eq!(strip_bullet_marker("-body"), None);
-        assert_eq!(strip_bullet_marker("-"), None);
-        assert_eq!(strip_bullet_marker("#body"), None);
-        assert_eq!(strip_bullet_marker(""), None);
+    fn authored_line_classifier_accepts_placeholders_without_items() {
+        for raw in ["", "   ", "- ", "-\t", "-", " -", "  -", "  - "] {
+            let line = RawLine {
+                text: raw,
+                start: 0,
+                end: raw.len(),
+            };
+            assert_eq!(
+                classify_authored_line(line),
+                AuthoredLineClass::EmptyOrPlaceholder,
+                "{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn authored_line_classifier_rejects_every_other_shape() {
+        for raw in [
+            "body",
+            " - indented",
+            "   - too deep",
+            "\t- tabbed",
+            "-body",
+            "#body",
+        ] {
+            let line = RawLine {
+                text: raw,
+                start: 0,
+                end: raw.len(),
+            };
+            assert_eq!(
+                classify_authored_line(line),
+                AuthoredLineClass::Invalid,
+                "{raw:?}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------
@@ -3369,6 +3585,14 @@ mod tests {
         parse_capture_text_with_clip_control(raw, None, None, true)
     }
 
+    fn sub_bullet_bodies(sub_bullets: &[AuthoredSubBullet]) -> Vec<&str> {
+        sub_bullets.iter().map(|item| item.body.as_str()).collect()
+    }
+
+    fn sub_bullet_depths(sub_bullets: &[AuthoredSubBullet]) -> Vec<u8> {
+        sub_bullets.iter().map(|item| item.depth.level()).collect()
+    }
+
     #[test]
     fn execution_renders_authored_children_in_source_order() {
         let parsed =
@@ -3377,9 +3601,39 @@ mod tests {
         assert_eq!(parsed.body, "parent line");
         assert_eq!(parsed.route.as_deref(), Some("work"));
         assert_eq!(
-            parsed.sub_bullets,
-            vec!["first child".to_string(), "second child".to_string()]
+            sub_bullet_bodies(&parsed.sub_bullets),
+            vec!["first child", "second child"]
         );
+        assert_eq!(sub_bullet_depths(&parsed.sub_bullets), vec![1, 1]);
+    }
+
+    #[test]
+    fn execution_tracks_nested_children_under_the_nearest_first_level_owner() {
+        let parsed = execute(
+            "@work parent line\n- first child\n  - first detail\n- second child\n\n  - second detail",
+        )
+        .expect("parse");
+        assert_eq!(
+            sub_bullet_bodies(&parsed.sub_bullets),
+            vec![
+                "first child",
+                "first detail",
+                "second child",
+                "second detail"
+            ]
+        );
+        assert_eq!(sub_bullet_depths(&parsed.sub_bullets), vec![1, 2, 1, 2]);
+    }
+
+    #[test]
+    fn execution_nested_placeholders_do_not_require_or_clear_an_owner() {
+        let parsed = execute("parent\n  - \n- first child\n  -\n\n  - detail")
+            .expect("parse");
+        assert_eq!(
+            sub_bullet_bodies(&parsed.sub_bullets),
+            vec!["first child", "detail"]
+        );
+        assert_eq!(sub_bullet_depths(&parsed.sub_bullets), vec![1, 2]);
     }
 
     #[test]
@@ -3392,10 +3646,11 @@ mod tests {
             let parsed = execute(raw).unwrap_or_else(|error| panic!("{error}"));
             assert_eq!(parsed.body, "parent");
             assert_eq!(
-                parsed.sub_bullets,
-                vec!["child one".to_string(), "child two".to_string()],
+                sub_bullet_bodies(&parsed.sub_bullets),
+                vec!["child one", "child two"],
                 "{raw}"
             );
+            assert_eq!(sub_bullet_depths(&parsed.sub_bullets), vec![1, 1]);
         }
     }
 
@@ -3403,16 +3658,27 @@ mod tests {
     fn execution_skips_blank_and_placeholder_child_lines() {
         let parsed =
             execute("parent\n\n- real child\n- \n-\t\n   \n").expect("parse");
-        assert_eq!(parsed.sub_bullets, vec!["real child".to_string()]);
+        assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["real child"]);
     }
 
     #[test]
-    fn execution_rejects_indented_or_nested_child_lines() {
-        let error = execute("parent\n  - nested").unwrap_err();
+    fn execution_rejects_indented_or_deeper_child_lines() {
+        let error = execute("parent\n   - too deep").unwrap_err();
         assert_eq!(
             error,
-            "capture line 2 must be a flat bullet starting with \"- \", \
-\"* \", or \"+ \" at the start of the line, or left blank"
+            "capture line 2 must be a column-zero bullet or a two-space nested \
+bullet using \"-\", \"*\", or \"+\" followed by a space or tab, or be left \
+blank"
+        );
+    }
+
+    #[test]
+    fn execution_rejects_orphaned_nested_child_lines() {
+        let error = execute("parent\n  - orphan").unwrap_err();
+        assert_eq!(
+            error,
+            "capture line 2 is a nested bullet but has no preceding first-level \
+authored bullet to attach to"
         );
     }
 
@@ -3451,12 +3717,10 @@ were removed"
         assert_eq!(parsed.priority_level, Some(1));
         assert_eq!(parsed.scheduled_offset, Some(2));
         assert_eq!(
-            parsed.sub_bullets,
-            vec![
-                "Confirm the owner".to_string(),
-                "Attach the checklist".to_string()
-            ]
+            sub_bullet_bodies(&parsed.sub_bullets),
+            vec!["Confirm the owner", "Attach the checklist"]
         );
+        assert_eq!(sub_bullet_depths(&parsed.sub_bullets), vec![1, 1]);
     }
 
     #[test]
@@ -3494,8 +3758,8 @@ were removed"
             .expect("parse");
         assert_eq!(parsed.body, "café parent");
         assert_eq!(
-            parsed.sub_bullets,
-            vec!["\u{1f680} launch".to_string(), "\u{e9}tude".to_string()]
+            sub_bullet_bodies(&parsed.sub_bullets),
+            vec!["\u{1f680} launch", "\u{e9}tude"]
         );
     }
 
@@ -3509,7 +3773,7 @@ were removed"
         )
         .expect("parse");
         assert_eq!(parsed.route.as_deref(), Some("work"));
-        assert_eq!(parsed.sub_bullets, vec!["child @home".to_string()]);
+        assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["child @home"]);
     }
 
     #[test]
@@ -3528,20 +3792,53 @@ were removed"
         assert_eq!(parse.body, "parent");
         assert_eq!(parse.route.as_deref(), Some("work"));
         assert_eq!(
-            parse.sub_bullets,
-            vec!["first child".to_string(), "second child".to_string()]
+            sub_bullet_bodies(&parse.sub_bullets),
+            vec!["first child", "second child"]
         );
+        assert_eq!(sub_bullet_depths(&parse.sub_bullets), vec![1, 1]);
+        assert!(parse.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn editor_reports_nested_sub_bullets_and_depths() {
+        let parse = editor(
+            "@work parent\n- first child\n  - first detail\n- second child\n  - second detail",
+        );
+        assert_eq!(
+            sub_bullet_bodies(&parse.sub_bullets),
+            vec![
+                "first child",
+                "first detail",
+                "second child",
+                "second detail"
+            ]
+        );
+        assert_eq!(sub_bullet_depths(&parse.sub_bullets), vec![1, 2, 1, 2]);
         assert!(parse.diagnostics.is_empty());
     }
 
     #[test]
     fn editor_diagnoses_an_invalid_child_line_without_failing() {
-        let parse = editor("parent\n  - nested");
+        let parse = editor("parent\n   - nested");
         assert_eq!(parse.body, "parent");
         assert!(parse.sub_bullets.is_empty());
         assert_eq!(codes(&parse), vec!["invalid_child_line"]);
-        let raw = "parent\n  - nested";
-        let expected_start = raw.find("  - nested").expect("line 2 offset");
+        let raw = "parent\n   - nested";
+        let expected_start = raw.find("   - nested").expect("line 2 offset");
+        assert_eq!(
+            parse.diagnostics[0].range,
+            Some((expected_start, raw.len()))
+        );
+    }
+
+    #[test]
+    fn editor_diagnoses_an_orphaned_nested_child_without_failing() {
+        let raw = "parent\n  - orphan";
+        let parse = editor(raw);
+        assert_eq!(parse.body, "parent");
+        assert!(parse.sub_bullets.is_empty());
+        assert_eq!(codes(&parse), vec!["orphaned_nested_bullet"]);
+        let expected_start = raw.find("  - orphan").expect("line 2 offset");
         assert_eq!(
             parse.diagnostics[0].range,
             Some((expected_start, raw.len()))
@@ -3591,7 +3888,7 @@ were removed"
     fn editor_placeholder_and_blank_child_lines_produce_no_sub_bullet_or_diagnostic(
     ) {
         let parse = editor("parent\n\n- real child\n- \n");
-        assert_eq!(parse.sub_bullets, vec!["real child".to_string()]);
+        assert_eq!(sub_bullet_bodies(&parse.sub_bullets), vec!["real child"]);
         assert!(parse.diagnostics.is_empty());
     }
 
@@ -3603,7 +3900,7 @@ were removed"
         assert_eq!(parse.mode, EditorMode::PomodoroTask);
         assert_eq!(parse.route.as_deref(), Some("dev"));
         assert_eq!(parse.block_id.as_deref(), Some("focus-1"));
-        assert_eq!(parse.sub_bullets, vec!["do it".to_string()]);
+        assert_eq!(sub_bullet_bodies(&parse.sub_bullets), vec!["do it"]);
     }
 
     // -----------------------------------------------------------------
@@ -3618,6 +3915,28 @@ were removed"
         assert_eq!(completion.query, "ca");
         let at_index = raw.rfind('@').expect("at sign");
         assert_eq!(completion.replacement, (at_index + 1, raw.len()));
+    }
+
+    #[test]
+    fn completion_on_a_nested_child_line_completes_a_trailing_route() {
+        let raw = "parent line\n- first child\n  - context @ca";
+        let completion = field(raw, raw.len()).expect("route field");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.query, "ca");
+        let at_index = raw.rfind('@').expect("at sign");
+        assert_eq!(completion.replacement, (at_index + 1, raw.len()));
+    }
+
+    #[test]
+    fn completion_on_nested_prefix_or_orphaned_nested_line_is_empty() {
+        let raw = "parent line\n- first child\n  - context @ca";
+        let nested_line_start = raw.rfind("  -").expect("nested line");
+        assert_eq!(field(raw, nested_line_start), None);
+        assert_eq!(field(raw, nested_line_start + 1), None);
+        assert_eq!(field(raw, nested_line_start + 3), None);
+
+        let orphan = "parent line\n  - context @ca";
+        assert_eq!(field(orphan, orphan.len()), None);
     }
 
     #[test]

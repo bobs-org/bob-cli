@@ -18,8 +18,8 @@ use serde_json::json;
 use super::{
     capture_clip, capture_language,
     capture_language::{
-        is_block_id, CaptureKind, ClipRequest, ParsedCaptureText,
-        SubBulletTarget,
+        is_block_id, AuthoredSubBullet, CaptureKind, ClipRequest,
+        ParsedCaptureText, SubBulletTarget,
     },
     capture_schedule_log, collect_done, config, env as bob_env, markdown,
     note_tasks,
@@ -78,14 +78,17 @@ stamp, and written to mac_inbox.md unless an @route token or --route target \
 is provided. Existing target files prefer a Tasks section, then fall back \
 to the last top-level task block. Missing target files are created when \
 needed.\n\n\
-Every later nonblank line must be a flat Markdown bullet: '-', '*', or '+' \
-at the start of the line, followed by a space or tab. Its source marker is \
-stripped and it is rendered '- <body>' one indentation unit beneath the \
-parent, using the target note's dominant tab-or-two-space child indentation. \
-A blank line or a marker alone ('- ') is a harmless placeholder and is \
-skipped. Any other shape -- indented, nested, wrapped, or plain continuation \
-prose -- fails with a usage error naming the line, and so does an item left \
-with no text once its own capture markers are removed. Every recognized \
+Every later nonblank line must be either a column-zero Markdown bullet or a \
+nested bullet prefixed by exactly two ASCII spaces. At either depth, '-', \
+'*', or '+' must be followed by a space or tab; the source marker and \
+separator are stripped and the item is rendered with the canonical '- <body>' \
+marker. Column-zero authored items render one target-selected indentation \
+unit beneath the parent; two-space source items render two units beneath the \
+parent and attach to the nearest preceding nonempty column-zero authored \
+item. A blank line or marker-only placeholder is skipped and never clears \
+that owner. Unsupported indentation, prose continuation, or an orphaned \
+nested item fails with a usage error naming the line, and so does an item \
+left with no text once its own capture markers are removed. Every recognized \
 terminal 's:<N>', 'p:<N>', '%...', and '@route' marker configures the whole \
 capture no matter which line's end it appears on and is stripped from that \
 line's rendered text; a second line resolving the same marker is ambiguous \
@@ -523,11 +526,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         Vec::new()
     } else {
         let indent = child_indent.as_deref().unwrap_or("\t");
-        parsed
-            .sub_bullets
-            .iter()
-            .map(|body| format!("{indent}- {body}"))
-            .collect()
+        render_authored_sub_bullets(&parsed.sub_bullets, indent)
     };
     let clip_plan = match parsed.clip.as_ref() {
         Some(ClipRequest::Current { header }) => {
@@ -708,6 +707,19 @@ fn assemble_capture_block(
         lines.extend(schedule_log_lines.iter().map(String::as_str));
     }
     lines.join("\n")
+}
+
+fn render_authored_sub_bullets(
+    sub_bullets: &[AuthoredSubBullet],
+    indent_unit: &str,
+) -> Vec<String> {
+    sub_bullets
+        .iter()
+        .map(|item| {
+            let indentation = indent_unit.repeat(item.depth.indent_units());
+            format!("{indentation}- {}", item.body)
+        })
+        .collect()
 }
 
 fn capture_kind_label(kind: &CaptureKind) -> &'static str {

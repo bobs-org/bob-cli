@@ -89,10 +89,11 @@ It shares the phase-grammar tokenizer and `@token` classification with \
 highlighting derived from that command. TEXT accepts the same multi-line \
 authored-bullet draft `bob capture` does; completion always scopes to the \
 physical line the cursor is on, so only the first (parent) line offers a \
-leading marker and a later line only completes its own trailing marker. The \
+leading marker and a later column-zero or valid two-space nested authored \
+line only completes its own trailing marker. The \
 service decides whether completion applies at all: an unrecognized marker, \
-a cursor in plain body text, a cursor on a child line's bullet marker \
-itself, or a cursor on a token in the middle of a line all return a \
+a cursor in plain body text, a cursor on an authored line's indentation or \
+bullet marker itself, an orphaned nested line, or a cursor on a token in the middle of a line all return a \
 successful empty result rather than an error.\n\n\
 Route completion covers a bare '@', a still-typing '@fragment', and the \
 missing route portion of '@::...', '@:...', '@^...', and '@#...', backed by the same \

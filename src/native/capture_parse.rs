@@ -12,7 +12,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture_language::{self, Diagnostic, EditorMode, Need, Severity, Span},
+    capture_language::{
+        self, AuthoredSubBullet, Diagnostic, EditorMode, Need, Severity, Span,
+    },
     capture_links,
     style::Styler,
 };
@@ -71,18 +73,20 @@ still succeeds.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, the UTF-8 \
 byte spans of every recognized token, Obsidian wikilink component spans, \
-every authored sub-bullet's normalized body, and structured diagnostics. \
+every authored sub-bullet's normalized body plus depth, and structured diagnostics. \
 Wikilink highlighting is syntax-only and never touches the vault. Byte \
 offsets index the original TEXT before whitespace normalization, are \
 half-open [start, end), never overlap, and always land on a character \
 boundary.\n\n\
 TEXT accepts the same multi-line authored-bullet draft 'bob capture' does: \
-the first physical line is the parent, and later flat '-'/'*'/'+' lines \
-become authored children. Incomplete interactive markers are valid input, \
+the first physical line is the parent, later column-zero '-'/'*'/'+' lines \
+become first-level authored children, and later lines prefixed by exactly \
+two ASCII spaces become nested authored children. Incomplete interactive \
+markers are valid input, \
 not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@::', \
 '@route::', '@:', '@route:', '@^', '@route^', and the legacy '@!' aliases \
 all report mode 'incomplete' plus what they still need. An invalid marker component, a malformed \
-continuation line, an item emptied by marker removal, or a duplicate \
+continuation line, an orphaned nested bullet, an item emptied by marker removal, or a duplicate \
 capture-wide marker across lines becomes a diagnostic, so live editors keep \
 a usable parse while 'bob capture' keeps its strict execution errors.\n\n\
 Complete and in-progress Obsidian wikilinks such as '[[note', '![[note]]', \
@@ -93,7 +97,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash^'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev::focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n- second child\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash^'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev::focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n  - nested child\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -194,6 +198,11 @@ struct CaptureParseResult {
     /// own `sub_bullets` output field.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sub_bullets: Vec<String>,
+    /// Additive schema-version-1 field aligned one-to-one with
+    /// `sub_bullets`; each entry is `1` for a first-level authored child or
+    /// `2` for a nested authored child.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sub_bullet_depths: Vec<u8>,
 }
 
 impl CaptureParseResult {
@@ -201,6 +210,8 @@ impl CaptureParseResult {
         let parse = capture_language::parse_for_editor(&input);
         let spans =
             merge_spans(parse.spans, capture_links::wikilink_spans(&input));
+        let sub_bullets = parse.sub_bullets;
+        let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         Self {
             ok: true,
             schema_version: SCHEMA_VERSION,
@@ -213,9 +224,18 @@ impl CaptureParseResult {
             needs: parse.needs,
             spans,
             diagnostics: parse.diagnostics,
-            sub_bullets: parse.sub_bullets,
+            sub_bullets: sub_bullet_bodies(&sub_bullets),
+            sub_bullet_depths,
         }
     }
+}
+
+fn sub_bullet_bodies(sub_bullets: &[AuthoredSubBullet]) -> Vec<String> {
+    sub_bullets.iter().map(|item| item.body.clone()).collect()
+}
+
+fn sub_bullet_depths(sub_bullets: &[AuthoredSubBullet]) -> Vec<u8> {
+    sub_bullets.iter().map(|item| item.depth.level()).collect()
 }
 
 fn merge_spans(
@@ -282,8 +302,13 @@ fn print_human_success_with_styler(
     if !result.sub_bullets.is_empty() {
         println!();
         println!("  Sub-bullets");
-        for sub_bullet in &result.sub_bullets {
-            println!("    - {sub_bullet}");
+        for (sub_bullet, depth) in result
+            .sub_bullets
+            .iter()
+            .zip(result.sub_bullet_depths.iter().copied())
+        {
+            let indentation = "  ".repeat(usize::from(depth.saturating_sub(1)));
+            println!("    {indentation}- {sub_bullet}");
         }
     }
 

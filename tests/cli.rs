@@ -5403,7 +5403,7 @@ fn capture_rejects_stdin_continuation_text_that_is_not_a_bullet() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&output.stderr).trim(),
-        "bob capture: capture line 2 must be a flat bullet starting with \"- \", \"* \", or \"+ \" at the start of the line, or left blank"
+        "bob capture: capture line 2 must be a column-zero bullet or a two-space nested bullet using \"-\", \"*\", or \"+\" followed by a space or tab, or be left blank"
     );
     assert!(!vault.join("work.md").exists());
 }
@@ -5462,6 +5462,48 @@ fn capture_authored_bullets_render_task_with_children_in_order() {
         stdout(&human).contains("\t- only child"),
         "human output should print the authored child:\n{}",
         format_output(&human)
+    );
+}
+
+#[test]
+fn capture_authored_nested_bullets_render_under_their_owners() {
+    let temp = TempDir::new("bob-cli-capture-authored-nested");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@work Prepare the launch review\n- Confirm the rollout owner\n  - Send the owner the final date\n- Attach the final checklist\n  - Verify the links")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run nested authored-bullet capture");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("work.md")).expect("read work route"),
+        concat!(
+            "- [ ] #task Prepare the launch review [created::2026-06-15]\n",
+            "\t- Confirm the rollout owner\n",
+            "\t\t- Send the owner the final date\n",
+            "\t- Attach the final checklist\n",
+            "\t\t- Verify the links\n",
+        )
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(
+        json["sub_bullets"],
+        serde_json::json!([
+            "\t- Confirm the rollout owner",
+            "\t\t- Send the owner the final date",
+            "\t- Attach the final checklist",
+            "\t\t- Verify the links"
+        ])
     );
 }
 
@@ -5546,7 +5588,8 @@ fn capture_authored_bullets_skip_blank_and_placeholder_lines() {
 #[test]
 fn capture_authored_bullets_reject_indented_or_nonbullet_lines() {
     let cases = [
-        ("indented", "parent\n  - nested item"),
+        ("one-space", "parent\n - nested item"),
+        ("too-deep", "parent\n   - nested item"),
         ("prose", "parent\n- real child\ncontinuation prose"),
     ];
 
@@ -5567,12 +5610,37 @@ fn capture_authored_bullets_reject_indented_or_nonbullet_lines() {
 
         assert_eq!(output.status.code(), Some(2), "{name}");
         assert!(
-            stderr(&output).contains("must be a flat bullet"),
+            stderr(&output).contains("must be a column-zero bullet"),
             "{name}: {}",
             format_output(&output)
         );
         assert!(!vault.join("work.md").exists(), "{name}");
     }
+}
+
+#[test]
+fn capture_authored_bullets_reject_orphaned_nested_lines() {
+    let temp = TempDir::new("bob-cli-capture-authored-orphan-nested");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("@work parent\n  - orphan")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run orphaned nested authored-bullet capture");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("nested bullet")
+            && stderr(&output).contains("no preceding first-level"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!vault.join("work.md").exists());
 }
 
 #[test]
@@ -5805,7 +5873,7 @@ fn capture_authored_bullets_use_two_space_target_indentation() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .arg("@spaced parent\n- child one")
+        .arg("@spaced parent\n- child one\n  - detail")
         .env("BOB_NOW", "2026-06-15")
         .output()
         .expect("run two-space-indent authored-bullet capture");
@@ -5817,6 +5885,7 @@ fn capture_authored_bullets_use_two_space_target_indentation() {
             .contains(concat!(
                 "- [ ] #task parent [created::2026-06-15]\n",
                 "  - child one\n",
+                "    - detail\n",
             )),
         "expected two-space child indentation"
     );
@@ -5862,7 +5931,7 @@ fn capture_authored_bullets_dry_run_reports_children_without_writing() {
         .arg("-f")
         .arg("json")
         .arg("--dry-run")
-        .arg("@work parent\n- child one\n- child two")
+        .arg("@work parent\n- child one\n  - child detail\n- child two")
         .env("BOB_NOW", "2026-06-15")
         .output()
         .expect("run dry-run authored-bullet capture");
@@ -5874,7 +5943,11 @@ fn capture_authored_bullets_dry_run_reports_children_without_writing() {
     assert_eq!(json["dry_run"], true);
     assert_eq!(
         json["sub_bullets"],
-        serde_json::json!(["\t- child one", "\t- child two"])
+        serde_json::json!([
+            "\t- child one",
+            "\t\t- child detail",
+            "\t- child two"
+        ])
     );
 }
 
@@ -5920,6 +5993,48 @@ fn capture_parse_reports_sub_bullets_for_a_multiline_draft() {
         json["sub_bullets"],
         serde_json::json!(["first child", "second child"])
     );
+    assert_eq!(json["sub_bullet_depths"], serde_json::json!([1, 1]));
+}
+
+#[test]
+fn capture_parse_reports_nested_sub_bullets_and_depths() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("parent line\n- first child\n  - first detail @work\n- second child")
+        .output()
+        .expect("run nested multiline capture-parse");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["body"], "parent line");
+    assert_eq!(json["route"], "work");
+    assert_eq!(
+        json["sub_bullets"],
+        serde_json::json!(["first child", "first detail", "second child"])
+    );
+    assert_eq!(json["sub_bullet_depths"], serde_json::json!([1, 2, 1]));
+}
+
+#[test]
+fn capture_parse_reports_orphaned_nested_bullet_diagnostic() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("parent line\n  - orphan @work")
+        .output()
+        .expect("run orphaned nested capture-parse");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert!(json.get("sub_bullets").is_none(), "{json}");
+    assert!(json.get("sub_bullet_depths").is_none(), "{json}");
+    assert_eq!(json["route"], serde_json::Value::Null);
+    assert_eq!(json["diagnostics"][0]["code"], "orphaned_nested_bullet");
 }
 
 #[test]
@@ -5942,6 +6057,40 @@ fn capture_complete_completes_a_marker_on_a_child_line() {
         .arg(draft)
         .output()
         .expect("run child-line capture-complete");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["context"], "route");
+    let names: Vec<&str> = json["candidates"]
+        .as_array()
+        .expect("route candidates")
+        .iter()
+        .map(|candidate| candidate["route"].as_str().expect("route"))
+        .collect();
+    assert_eq!(names, vec!["cash", "cash-flow"]);
+}
+
+#[test]
+fn capture_complete_completes_a_marker_on_a_nested_child_line() {
+    let temp = TempDir::new("bob-cli-capture-complete-nested-child-line");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), "---\ntype: [[area]]\n---\n");
+    write_file(&vault.join("cash-flow.md"), "---\ntype: [[area]]\n---\n");
+
+    let draft = "parent line\n- first child\n  - context @ca";
+    let cursor = draft.len().to_string();
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--cursor")
+        .arg(&cursor)
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .output()
+        .expect("run nested child-line capture-complete");
 
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
