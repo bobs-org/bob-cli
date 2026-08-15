@@ -6487,6 +6487,99 @@ fn capture_complete_scopes_to_later_batch_item_and_ignores_separator() {
 }
 
 #[test]
+fn capture_complete_all_tasks_uses_global_ranges_in_later_batch_item() {
+    let temp = TempDir::new("bob-cli-capture-complete-batch-all-tasks");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(&vault.join("work.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("file.md"),
+        concat!(
+            "# Tasks\n",
+            "- [ ] #task Plan the handoff\n",
+            "- [*] #task Handoff ready ^hand-ready\n",
+            "- [x] #task Done handoff\n",
+            "- [ ] #task Later handoff\n",
+        ),
+    );
+
+    let draft = "café first @work\n\nsecond @file+hand";
+    let cursor = draft.len();
+    let replacement_start =
+        draft.find("@file+").expect("task marker") + "@file+".len();
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("--all-tasks")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--cursor")
+        .arg(cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run later batch all-tasks completion");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["cursor"], cursor);
+    assert_eq!(json["context"], "task");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({
+            "start": replacement_start,
+            "end": cursor,
+        })
+    );
+    let candidates = json["candidates"].as_array().expect("candidates");
+    assert_eq!(candidates.len(), 3);
+    assert_eq!(candidates[0]["block_id"], "hand-ready");
+    assert_eq!(candidates[0]["requires_block_id"], false);
+    assert_eq!(candidates[0]["replacement"], "hand-ready");
+    assert_eq!(candidates[0]["route"], "file");
+    assert_eq!(candidates[0]["text"], "Handoff ready");
+    assert!(candidates[0]["ref"].as_str().expect("ref").contains(':'));
+    assert!(candidates[1]["block_id"].is_null());
+    assert_eq!(candidates[1]["requires_block_id"], true);
+    assert_eq!(candidates[1]["replacement"], "");
+    assert_eq!(candidates[1]["route"], "file");
+    assert_eq!(candidates[1]["text"], "Plan the handoff");
+    assert!(candidates[1]["ref"].as_str().expect("ref").contains(':'));
+    assert_eq!(candidates[2]["text"], "Later handoff");
+
+    let separator_cursor = draft.find("\n\n").expect("separator") + 1;
+    let separator_output = bob_command()
+        .arg("capture-complete")
+        .arg("--all-tasks")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--cursor")
+        .arg(separator_cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run separator all-tasks completion");
+
+    assert_success(&separator_output);
+    let separator_json: serde_json::Value =
+        serde_json::from_str(stdout(&separator_output).trim())
+            .expect("capture-complete JSON");
+    assert!(separator_json["context"].is_null(), "{separator_json}");
+    assert_eq!(separator_json["candidates"], serde_json::json!([]));
+    assert_eq!(
+        separator_json["replacement"],
+        serde_json::json!({
+            "start": separator_cursor,
+            "end": separator_cursor,
+        })
+    );
+}
+
+#[test]
 fn capture_empty_input_is_usage_error() {
     let temp = TempDir::new("bob-cli-capture-empty");
     let vault = temp.path().join("vault");
