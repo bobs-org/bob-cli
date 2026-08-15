@@ -1003,7 +1003,7 @@ fn is_done_tasks_frontmatter_line(content: &str) -> bool {
     content.starts_with(DONE_TASKS_KEY)
 }
 
-fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -2452,7 +2452,7 @@ fn leading_indent_len(line: &str) -> usize {
         .unwrap_or(line.len())
 }
 
-fn split_line_ending(line: &str) -> (&str, &str) {
+pub(crate) fn split_line_ending(line: &str) -> (&str, &str) {
     if let Some(content) = line.strip_suffix("\r\n") {
         return (content, "\r\n");
     }

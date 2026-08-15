@@ -46,6 +46,7 @@ install-smoke:
     "${root}/bin/bob" capture-parse --help >/dev/null
     "${root}/bin/bob" capture-sections --help >/dev/null
     "${root}/bin/bob" capture-targets --help >/dev/null
+    "${root}/bin/bob" capture-task-id --help >/dev/null
     "${root}/bin/bob" capture-tasks --help >/dev/null
     "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null

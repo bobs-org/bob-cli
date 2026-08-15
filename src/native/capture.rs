@@ -385,22 +385,14 @@ fn forced_sub_bullet_target_from_matches(
 }
 
 fn parse_task_ref(value: &str) -> Result<SubBulletTarget, CaptureError> {
-    let valid_digest = |digest: &str| {
-        digest.len() == 8
-            && digest.bytes().all(|byte| {
-                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
-            })
-    };
-    let parsed = value.split_once(':').and_then(|(line, digest)| {
-        let line = line.parse::<usize>().ok().filter(|line| *line > 0)?;
-        valid_digest(digest).then(|| SubBulletTarget::Ref {
-            line,
-            digest: digest.to_string(),
+    note_tasks::TaskRef::parse(value)
+        .map(|task_ref| SubBulletTarget::Ref {
+            line: task_ref.line,
+            digest: task_ref.digest,
         })
-    });
-    parsed.ok_or_else(|| {
-        CaptureError::usage("--task-ref must use <line>:<digest>")
-    })
+        .ok_or_else(|| {
+            CaptureError::usage("--task-ref must use <line>:<digest>")
+        })
 }
 
 fn forced_section_from_matches(

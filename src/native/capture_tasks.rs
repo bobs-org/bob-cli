@@ -209,7 +209,7 @@ fn list_capture_tasks(
     let tasks = scan
         .open_tasks()
         .map(|task| CaptureTask {
-            task_ref: format!("{}:{}", task.line_index + 1, task.digest),
+            task_ref: task.task_ref(),
             line: task.line_index + 1,
             block_id: task.block_id.clone(),
             status_symbol: task.status_symbol,

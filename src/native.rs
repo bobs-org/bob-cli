@@ -18,6 +18,7 @@ mod capture_parse;
 mod capture_schedule_log;
 mod capture_sections;
 mod capture_targets;
+mod capture_task_id;
 mod capture_tasks;
 mod collect_done;
 mod config;
@@ -44,6 +45,7 @@ pub(crate) enum NativeCommand {
     CaptureParse,
     CaptureSections,
     CaptureTargets,
+    CaptureTaskId,
     CaptureTasks,
     Query,
     Highlights,
@@ -77,6 +79,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::CaptureParse => capture_parse::run(args),
         NativeCommand::CaptureSections => capture_sections::run(args),
         NativeCommand::CaptureTargets => capture_targets::run(args),
+        NativeCommand::CaptureTaskId => capture_task_id::run(args),
         NativeCommand::CaptureTasks => capture_tasks::run(args),
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),

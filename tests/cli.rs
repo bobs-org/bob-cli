@@ -259,6 +259,30 @@ fn capture_sections_help_is_native_only() {
 }
 
 #[test]
+fn capture_task_id_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-capture-task-id-native-help");
+    let output = bob_command()
+        .arg("capture-task-id")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob capture-task-id --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob capture-task-id"),
+        "expected capture-task-id help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only capture-task-id should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_tasks_help_is_native_only() {
     let temp = TempDir::new("bob-cli-capture-tasks-native-help");
     let output = bob_command()
@@ -417,6 +441,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture-parse", "--help"], "bob capture-parse"),
         (&["capture-sections", "--help"], "bob capture-sections"),
         (&["capture-targets", "--help"], "bob capture-targets"),
+        (&["capture-task-id", "--help"], "bob capture-task-id"),
         (&["capture-tasks", "--help"], "bob capture-tasks"),
         (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob highlights"),
@@ -466,6 +491,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             "bob capture-sections --help",
         ),
         (&["capture-targets", "--help"], "bob capture-targets --help"),
+        (&["capture-task-id", "--help"], "bob capture-task-id --help"),
         (&["capture-tasks", "--help"], "bob capture-tasks --help"),
         (&["query", "--help"], "bob query --help"),
         (&["highlights", "--help"], "bob highlights --help"),
@@ -2526,6 +2552,7 @@ fn capture_complete_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &[
+            "-a, --all-tasks",
             "-b, --bob-dir",
             "-c, --cursor",
             "-f, --format",
@@ -2552,6 +2579,35 @@ fn capture_sections_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &["-b, --bob-dir", "-f, --format", "-h, --help", "-r, --route"],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_task_id_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture-task-id")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-task-id --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Assign a user-authored Obsidian block ID"),
+        "expected capture-task-id long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-i, --block-id",
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+            "-r, --route",
+            "-t, --task-ref",
+        ],
     );
     assert_stdout_has_no_ansi(&output);
 }
@@ -7954,9 +8010,351 @@ fn capture_complete_task_json_only_offers_tasks_with_a_block_id() {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0]["replacement"], "goog-exit");
     assert_eq!(candidates[0]["block_id"], "goog-exit");
+    assert_eq!(candidates[0]["route"], "cash");
+    assert_eq!(candidates[0]["requires_block_id"], false);
     assert_eq!(candidates[0]["text"], "Finish Google Exit Packet!");
     assert_eq!(candidates[0]["section"], "Tasks");
     assert_eq!(candidates[0]["status_symbol"], "*");
+}
+
+#[test]
+fn capture_complete_all_tasks_is_opt_in_and_plus_context_only() {
+    let temp = TempDir::new("bob-cli-capture-complete-all-tasks");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(
+        &vault.join("file.md"),
+        concat!(
+            "# Tasks\n",
+            "- [ ] #task First missing\n",
+            "- [ ] #task Ready one ^ready-one\n",
+            "- [x] #task Done missing\n",
+            "- [*] #task Ready two ^ready-two\n",
+            "- [ ] #task Second missing\n",
+        ),
+    );
+
+    let default = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("6")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@file+")
+        .output()
+        .expect("run default task completion");
+    assert_success(&default);
+    let default_json: serde_json::Value =
+        serde_json::from_str(stdout(&default).trim()).expect("json");
+    assert_eq!(default_json["context"], "task");
+    let default_ids = task_block_ids(&default_json);
+    assert_eq!(default_ids, vec![Some("ready-one"), Some("ready-two")]);
+
+    let all_tasks = bob_command()
+        .arg("capture-complete")
+        .arg("-a")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("6")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@file+")
+        .output()
+        .expect("run all-tasks completion");
+    assert_success(&all_tasks);
+    let all_json: serde_json::Value =
+        serde_json::from_str(stdout(&all_tasks).trim()).expect("json");
+    assert_eq!(all_json["context"], "task");
+    let candidates = all_json["candidates"].as_array().expect("candidates");
+    assert_eq!(candidates.len(), 4);
+    assert_eq!(candidates[0]["block_id"], "ready-one");
+    assert_eq!(candidates[0]["requires_block_id"], false);
+    assert_eq!(candidates[1]["block_id"], "ready-two");
+    assert!(candidates[2]["block_id"].is_null());
+    assert_eq!(candidates[2]["requires_block_id"], true);
+    assert_eq!(candidates[2]["replacement"], "");
+    assert_eq!(candidates[2]["route"], "file");
+    assert_eq!(candidates[2]["text"], "First missing");
+    assert!(candidates[2]["ref"].as_str().expect("ref").contains(':'));
+    assert_eq!(candidates[3]["text"], "Second missing");
+
+    let pomodoro = bob_command()
+        .arg("capture-complete")
+        .arg("--all-tasks")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("6")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@file:")
+        .output()
+        .expect("run pomodoro completion with all-tasks");
+    assert_success(&pomodoro);
+    let pomodoro_json: serde_json::Value =
+        serde_json::from_str(stdout(&pomodoro).trim()).expect("json");
+    assert_eq!(pomodoro_json["context"], "pomodoro_block_id");
+    assert_eq!(
+        task_block_ids(&pomodoro_json),
+        vec![Some("ready-one"), Some("ready-two")]
+    );
+}
+
+#[test]
+fn capture_task_id_assigns_and_dry_runs_lf_and_crlf_notes() {
+    let temp = TempDir::new("bob-cli-capture-task-id-write");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+
+    let lf = concat!(
+        "# Tasks\n",
+        "- [ ] #task Write the report\n",
+        "- [ ] #task Keep me ^keep-me\n",
+    );
+    write_file(&vault.join("file.md"), lf);
+    let lf_ref = capture_task_ref("- [ ] #task Write the report");
+
+    let dry = bob_command()
+        .arg("capture-task-id")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("file")
+        .arg("-t")
+        .arg(&lf_ref)
+        .arg("-i")
+        .arg("report-id")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("dry-run capture-task-id");
+    assert_success(&dry);
+    let dry_json: serde_json::Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("json");
+    assert_eq!(dry_json["ok"], true);
+    assert_eq!(dry_json["schema_version"], 1);
+    assert_eq!(dry_json["dry_run"], true);
+    assert_eq!(dry_json["block_id"], "report-id");
+    assert_eq!(fs::read_to_string(vault.join("file.md")).expect("read"), lf);
+
+    let written = bob_command()
+        .arg("capture-task-id")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("file")
+        .arg("-t")
+        .arg(&lf_ref)
+        .arg("-i")
+        .arg("report-id")
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("write capture-task-id");
+    assert_success(&written);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&written).trim()).expect("json");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["dry_run"], false);
+    assert_eq!(json["route"], "file");
+    assert_eq!(json["relative_target"], "file.md");
+    assert_eq!(json["block_id"], "report-id");
+    assert_eq!(json["line"], 2);
+    assert_eq!(json["task"]["text"], "Write the report");
+    assert_eq!(
+        json["ref"],
+        format!(
+            "2:{}",
+            &capture_task_ref("- [ ] #task Write the report ^report-id")[2..]
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("file.md")).expect("read"),
+        concat!(
+            "# Tasks\n",
+            "- [ ] #task Write the report ^report-id\n",
+            "- [ ] #task Keep me ^keep-me\n",
+        )
+    );
+
+    let crlf = concat!(
+        "# Tasks\r\n",
+        "- [ ] #task CRLF report\r\n",
+        "- ordinary\r\n",
+    );
+    write_file(&vault.join("notes.md"), crlf);
+    let crlf_ref = capture_task_ref("- [ ] #task CRLF report");
+    let crlf_out = bob_command()
+        .arg("capture-task-id")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("notes")
+        .arg("-t")
+        .arg(&crlf_ref)
+        .arg("-i")
+        .arg("crlf-id")
+        .output()
+        .expect("CRLF capture-task-id");
+    assert_success(&crlf_out);
+    assert_eq!(
+        fs::read_to_string(vault.join("notes.md")).expect("read"),
+        concat!(
+            "# Tasks\r\n",
+            "- [ ] #task CRLF report ^crlf-id\r\n",
+            "- ordinary\r\n",
+        )
+    );
+}
+
+#[test]
+fn capture_task_id_recovers_a_shifted_line_and_rejects_write_free_failures() {
+    let temp = TempDir::new("bob-cli-capture-task-id-errors");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    let original = concat!(
+        "Plain heading ^plain-id\n",
+        "- [ ] #task Same\n",
+        "- [ ] #task Same\n",
+        "- [ ] #task Ready ^ready-id\n",
+        "- [x] #task Done task\n",
+        "- [ ] #task Open missing\n",
+    );
+    write_file(&vault.join("file.md"), original);
+    let missing_ref = capture_task_ref("- [ ] #task Open missing");
+    let ready_ref = capture_task_ref("- [ ] #task Ready ^ready-id");
+    let done_ref = capture_task_ref("- [x] #task Done task");
+    let same_digest = &capture_task_ref("- [ ] #task Same")[2..];
+
+    write_file(
+        &vault.join("shifted.md"),
+        "Intro\n- [ ] #task Open missing\n",
+    );
+    let shifted = bob_command()
+        .arg("capture-task-id")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("shifted")
+        .arg("-t")
+        .arg(&missing_ref)
+        .arg("-i")
+        .arg("new-id")
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("shifted capture-task-id");
+    assert_success(&shifted);
+    let shifted_json: serde_json::Value =
+        serde_json::from_str(stdout(&shifted).trim()).expect("json");
+    assert_eq!(shifted_json["line"], 2);
+    assert_eq!(
+        fs::read_to_string(vault.join("shifted.md")).expect("read"),
+        "Intro\n- [ ] #task Open missing ^new-id\n"
+    );
+
+    let ambiguous_ref = format!("99:{same_digest}");
+    let cases: &[(&str, i32, &str, &[&str])] = &[
+        (
+            "invalid-id",
+            2,
+            "--block-id must be",
+            &["-r", "file", "-t", &missing_ref, "-i", "bad.id"],
+        ),
+        (
+            "duplicate-task-id",
+            1,
+            "already exists",
+            &["-r", "file", "-t", &missing_ref, "-i", "ready-id"],
+        ),
+        (
+            "duplicate-anchor",
+            1,
+            "already exists",
+            &["-r", "file", "-t", &missing_ref, "-i", "plain-id"],
+        ),
+        (
+            "already-identified",
+            1,
+            "already has block ID ^ready-id",
+            &["-r", "file", "-t", &ready_ref, "-i", "fresh-id"],
+        ),
+        (
+            "terminal",
+            1,
+            "no longer open",
+            &["-r", "file", "-t", &done_ref, "-i", "fresh-id"],
+        ),
+        (
+            "stale",
+            1,
+            "no longer in file.md",
+            &["-r", "file", "-t", "99:deadbeef", "-i", "fresh-id"],
+        ),
+        (
+            "ambiguous",
+            1,
+            "matches more than one line",
+            &["-r", "file", "-t", &ambiguous_ref, "-i", "fresh-id"],
+        ),
+        (
+            "missing-note",
+            1,
+            "does not exist",
+            &["-r", "missing", "-t", &missing_ref, "-i", "fresh-id"],
+        ),
+        (
+            "invalid-ref",
+            2,
+            "--task-ref must use",
+            &["-r", "file", "-t", "nope", "-i", "fresh-id"],
+        ),
+        (
+            "invalid-route",
+            2,
+            "--route must contain",
+            &["-r", "../bad", "-t", &missing_ref, "-i", "fresh-id"],
+        ),
+    ];
+
+    for (name, exit, expected, extra) in cases {
+        let output = bob_command()
+            .arg("capture-task-id")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .args(*extra)
+            .output()
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(
+            output.status.code(),
+            Some(*exit),
+            "{name}: {}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|_| {
+                panic!("{name}: {}", format_output(&output))
+            });
+        assert_eq!(json["ok"], false, "{name}");
+        assert!(
+            json["error"].as_str().expect("error").contains(expected),
+            "{name}: {json}"
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("file.md")).expect("read"),
+            original,
+            "{name} mutated the note"
+        );
+    }
 }
 
 #[test]
@@ -17815,6 +18213,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "capture",
         "capture-sections",
         "capture-targets",
+        "capture-task-id",
         "capture-tasks",
         "highlights",
         "move-done-tasks",
@@ -17845,6 +18244,9 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
             && help.contains("bob bulk-git-commit")
             && help.contains("bob capture-sections --route cash --format json")
             && help.contains("bob capture-targets --format json")
+            && help.contains(
+                "bob capture-task-id -r file -t 3:1f3a9c2b -i report-id"
+            )
             && help.contains("bob capture-tasks --route cash --format json")
             && help.contains("bob query --source '#project'")
             && help.contains("bob highlights create report.md")
@@ -18180,6 +18582,38 @@ fn done_tasks_source(count: usize) -> String {
 
 fn bob_command() -> Command {
     Command::new(BOB_BIN)
+}
+
+fn write_capture_task_settings(vault: &Path) {
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        r##"{
+          "globalFilter": "#task",
+          "statusSettings": {
+            "coreStatuses": [
+              {"symbol":" ","name":"Todo","type":"TODO"},
+              {"symbol":"x","name":"Done","type":"DONE"}
+            ],
+            "customStatuses": [
+              {"symbol":"*","name":"Next","type":"ON_HOLD"}
+            ]
+          }
+        }"##,
+    );
+}
+
+fn capture_task_ref(line: &str) -> String {
+    let digest = hex::encode(Sha256::digest(line.trim_end().as_bytes()));
+    format!("1:{}", &digest[..8])
+}
+
+fn task_block_ids(json: &serde_json::Value) -> Vec<Option<&str>> {
+    json["candidates"]
+        .as_array()
+        .expect("candidates array")
+        .iter()
+        .map(|candidate| candidate["block_id"].as_str())
+        .collect()
 }
 
 fn bob_notify_command() -> Command {

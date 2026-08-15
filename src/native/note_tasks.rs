@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     path::Path,
     sync::LazyLock,
 };
@@ -36,6 +37,48 @@ pub(crate) struct NoteTask {
     pub(crate) digest: String,
 }
 
+impl NoteTask {
+    pub(crate) fn task_ref(&self) -> String {
+        TaskRef::from_task(self).to_string()
+    }
+}
+
+/// Stale-safe picker ref: one-based line plus the 8-hex digest of the
+/// physical task line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskRef {
+    pub(crate) line: usize,
+    pub(crate) digest: String,
+}
+
+impl TaskRef {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        let (line, digest) = value.split_once(':')?;
+        let line = line.parse::<usize>().ok().filter(|line| *line > 0)?;
+        let valid_digest = digest.len() == 8
+            && digest.bytes().all(|byte| {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+            });
+        valid_digest.then(|| Self {
+            line,
+            digest: digest.to_string(),
+        })
+    }
+
+    pub(crate) fn from_task(task: &NoteTask) -> Self {
+        Self {
+            line: task.line_index + 1,
+            digest: task.digest.clone(),
+        }
+    }
+}
+
+impl fmt::Display for TaskRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}:{}", self.line, self.digest)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BlockIdOccurrence {
     line_index: usize,
@@ -67,6 +110,17 @@ pub(crate) enum RefLookup<'a> {
 impl NoteTaskScan {
     pub(crate) fn open_tasks(&self) -> impl Iterator<Item = &NoteTask> {
         self.tasks.iter().filter(|task| task.status_type.is_open())
+    }
+
+    pub(crate) fn task_at(&self, line_index: usize) -> Option<&NoteTask> {
+        self.tasks.iter().find(|task| task.line_index == line_index)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn task_named(&self, description: &str) -> Option<&NoteTask> {
+        self.tasks
+            .iter()
+            .find(|task| task.description == description)
     }
 
     pub(crate) fn by_block_id(&self, id: &str) -> BlockIdLookup<'_> {
@@ -559,6 +613,29 @@ mod tests {
         assert_eq!(scan.suggest_block_id("Alphx"), Some("Alpha"));
         assert_eq!(scan.suggest_block_id("bravx"), None);
         assert_eq!(scan.suggest_block_id("nothing-close"), None);
+    }
+
+    #[test]
+    fn task_refs_parse_strictly_and_round_trip_scan_metadata() {
+        assert_eq!(
+            TaskRef::parse("24:1f3a9c2b"),
+            Some(TaskRef {
+                line: 24,
+                digest: "1f3a9c2b".to_string(),
+            })
+        );
+        for value in ["", "0:1f3a9c2b", "24:ABCDEF12", "24:abc", "x:1f3a9c2b"] {
+            assert_eq!(TaskRef::parse(value), None, "{value}");
+        }
+
+        let (_root, settings) = missing_settings();
+        let scan = scan("- [ ] #task Same\n", &settings);
+        let task = &scan.tasks[0];
+        assert_eq!(task.task_ref(), format!("1:{}", task.digest));
+        assert_eq!(
+            TaskRef::parse(&task.task_ref()),
+            Some(TaskRef::from_task(task))
+        );
     }
 
     struct TempDir {

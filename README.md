@@ -55,6 +55,7 @@ bob projects list
 | `capture-parse` | Preview what in-progress capture text and wikilinks mean |
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
 | `capture-targets` | List inbox, area, and non-terminal project capture routes |
+| `capture-task-id` | Assign a user-authored block ID to an open capture task |
 | `capture-tasks` | List the open tasks in a routed note |
 | `highlights` | Synchronize Highlights PDF annotations with reference notes |
 | `move-done-tasks` | Archive done and canceled task blocks and repair their links |
@@ -647,7 +648,7 @@ a single `{"ok": false, "error": "..."}` object on stdout and keeps stderr
 clean.
 
 ```bash
-bob capture-complete --cursor BYTE [-b|--bob-dir DIR] [-f|--format human|json] [--] [TEXT]...
+bob capture-complete --cursor BYTE [-a|--all-tasks] [-b|--bob-dir DIR] [-f|--format human|json] [--] [TEXT]...
 ```
 
 Returns cursor-aware completion candidates for in-progress capture `TEXT`. It
@@ -681,13 +682,22 @@ scan as `bob capture-targets`. Section completion covers `@route#prefix`,
 backed by the same scan as `bob capture-sections`. Pomodoro block-ID
 completion covers `@route:prefix` and parent-task completion covers
 `@route+prefix`; both are backed by the same open-task scan as
-`bob capture-tasks` and only offer tasks that already carry a block ID. The
-right-hand side of `@route^block-id` is a new user-authored ID, so it has no
+`bob capture-tasks`. By default both contexts only offer tasks that already
+carry a block ID so older callers stay compatible. Pass `-a`/`--all-tasks` to
+include open tasks that still need an ID, but only in the `task` / `@route+`
+context. Pomodoro `@route:` completion stays identified-only even when
+`--all-tasks` is set. Missing-ID discovery is therefore opt-in and
+plus-context-only.
+The right-hand side of `@route^block-id` is a new user-authored ID, so it has no
 completion context and returns an empty successful result while the caret is
 inside it.
-Candidates rank exact prefix matches before substring matches,
-case-insensitively, while keeping each discovery source's stable order; a
-non-matching candidate is dropped, and an empty query keeps every candidate.
+Route, section, and wikilink candidates rank exact prefix matches before
+substring matches, case-insensitively, while keeping each discovery source's
+stable order. Task candidates in `@route+` search block ID (when present),
+task text, section, and status name or symbol the same way, but identified
+tasks always stay ahead of unidentified tasks and prefix matches precede
+substring matches inside each of those two groups. A non-matching candidate
+is dropped, and an empty query keeps every eligible candidate.
 
 When the cursor is inside a valid Obsidian wikilink component, link completion
 takes precedence over marker completion so `@` and `%` inside link text remain
@@ -726,9 +736,13 @@ candidates also include `cursor_after`, the post-accept UTF-8 byte offset after
 deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
 `label`, `kind` (`inbox`, `area`, or `project`), and nullable `status`. A
 section candidate has `title` and `level`. A task candidate
-(`pomodoro_block_id` or `task` context) has `ref`, `block_id`, `status_symbol`,
-`status_name`, `status_type`, `text`, nullable `section`, `depth`, and
-`child_count`. A wikilink note candidate has `path`, `name`, optional `alias`,
+(`pomodoro_block_id` or `task` context) has `ref`, nullable `block_id`,
+`route`, `requires_block_id`, `status_symbol`, `status_name`, `status_type`,
+`text`, nullable `section`, `depth`, and `child_count`. Identified tasks keep
+their normal block-ID `replacement`. Missing-ID tasks, which appear only when
+`--all-tasks` is set in the `task` context, have `block_id: null`,
+`requires_block_id: true`, and an empty placeholder `replacement` that the
+updated client must never insert. A wikilink note candidate has `path`, `name`, optional `alias`,
 and `match_kind`; heading and block candidates add `heading`/`level` or
 `block_id`/optional `preview` metadata. Link-index warnings, when present, are
 reported in a bounded top-level `warnings` array without logging draft text. A
@@ -789,8 +803,33 @@ color escapes when piped. JSON output has `ok`, `route`, `relative_target`,
 `count`, and an ordered `tasks` array. Each task has `ref` (`<line>:<digest>`),
 `line`, nullable `block_id`, `status_symbol`, `status_name`, `status_type`,
 `text`, nullable `section`, indentation `depth`, and `child_count`. The ref is
-the picker-safe value accepted by `bob capture --task-ref` and can recover when
-unrelated edits shift the task's line.
+the picker-safe value accepted by `bob capture --task-ref` and
+`bob capture-task-id --task-ref` and can recover when unrelated edits shift
+the task's line.
+
+```bash
+bob capture-task-id --route NAME --task-ref REF --block-id ID [-b|--bob-dir DIR] [-f|--format human|json] [-d|--dry-run]
+```
+
+Assigns a user-authored Obsidian block ID to one open task in a routed note.
+This is the only write needed to turn a missing-ID `capture-complete --all-tasks`
+candidate into an identified task. The command validates `--route` and
+`--block-id` with Bob's shared grammar (`A-Z`, `a-z`, `0-9`, and `-` for the
+ID; routes also allow `_`), resolves `--task-ref` with the same stale-safe
+`<line>:<digest>` recovery as `bob capture --task-ref`, and then confirms the
+task is still open and still lacks an ID. An ID already used anywhere in the
+routed note — including a non-task `^anchor` — is rejected. Success appends
+` ^<id>` to the resolved physical task line, preserves that line's ending and
+every unrelated byte, and replaces the note with one same-directory temporary
+file rename. The write is observable only after that rename completes.
+`--dry-run` returns the same success shape without writing.
+
+JSON success is a single versioned object with `ok`, `schema_version` `1`,
+`dry_run`, `route`, `relative_target`, the canonical `block_id`, the updated
+one-based `line`, the updated `ref`, and a `task` object with the same picker
+metadata as `capture-tasks` after the assignment. JSON failure is
+`{"ok": false, "error": "..."}` and is write-free, as are stale, ambiguous,
+terminal, already-identified, duplicate, missing, and unreadable-note errors.
 
 ```bash
 bob nightly

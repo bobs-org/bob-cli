@@ -41,6 +41,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
 
     let output_format = OutputFormat::from_matches(&matches);
+    let all_tasks = matches.get_flag("all-tasks");
     let bob_dir = bob_dir_from_matches(&matches);
     let cursor = *matches.get_one::<usize>("cursor").expect("required");
 
@@ -59,7 +60,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         );
     }
 
-    match build_result(&bob_dir, &raw_text, cursor) {
+    match build_result(&bob_dir, &raw_text, cursor, all_tasks) {
         Ok(result) => {
             print_success(&result, output_format);
             0
@@ -102,10 +103,19 @@ scan as `bob capture-targets`. Section completion covers '@route#prefix', \
 backed by the same scan as `bob capture-sections`. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
-`bob capture-tasks`. The authored ID portion of '@route^block-id' has no \
-completion source and returns an empty success. Candidates rank exact prefix matches before substring \
-matches, case-insensitively, while keeping each discovery source's stable \
-order.\n\n\
+`bob capture-tasks` and, by default, only offer tasks that already carry a \
+block ID. Pass -a/--all-tasks to include open tasks that still need an ID, \
+but only in the '@route+' task context; Pomodoro '@route:' completion stays \
+identified-only so older callers never receive action candidates they cannot \
+handle. Missing-ID task candidates keep a placeholder replacement that must \
+not be inserted, expose a nullable block_id, carry the route and stale-safe \
+ref, and set requires_block_id. Task search matches block ID, description, \
+section, and status name or symbol; identified tasks stay ahead of \
+unidentified tasks, and prefix matches precede substring matches inside \
+each group. The authored ID portion of '@route^block-id' has no \
+completion source and returns an empty success. Other contexts still rank \
+exact prefix matches before substring matches, case-insensitively, while \
+keeping each discovery source's stable order.\n\n\
 When the cursor is inside an Obsidian wikilink, wikilink completion takes \
 precedence over capture-marker completion. Note completion covers `[[note` \
 and offers Markdown note paths, stems, and aliases. Heading and block \
@@ -115,14 +125,25 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
+        .arg(all_tasks_arg())
         .arg(bob_dir_arg())
         .arg(cursor_arg())
         .arg(format_arg())
         .arg(help_arg())
         .arg(text_arg())
+}
+
+fn all_tasks_arg() -> Arg {
+    Arg::new("all-tasks")
+        .long("all-tasks")
+        .short('a')
+        .action(ArgAction::SetTrue)
+        .help(
+            "Include open tasks that still need a block ID (task context only)",
+        )
 }
 
 fn bob_dir_arg() -> Arg {
@@ -256,7 +277,9 @@ struct TaskCandidate {
     replacement: String,
     #[serde(rename = "ref")]
     task_ref: String,
-    block_id: String,
+    block_id: Option<String>,
+    route: String,
+    requires_block_id: bool,
     status_symbol: char,
     status_name: String,
     status_type: &'static str,
@@ -323,6 +346,7 @@ fn build_result(
     bob_dir: &Path,
     raw_text: &str,
     cursor: usize,
+    all_tasks: bool,
 ) -> Result<CaptureCompleteResult, CompleteError> {
     let current_route = capture_language::editor_item_at(raw_text, cursor)
         .and_then(|item| item.route);
@@ -376,9 +400,25 @@ fn build_result(
             let route = field.route.as_deref().expect("route resolved");
             section_candidates(bob_dir, route, &field.query)?
         }
-        CompletionContext::PomodoroBlockId | CompletionContext::Task => {
+        CompletionContext::PomodoroBlockId => {
             let route = field.route.as_deref().expect("route resolved");
-            task_candidates(bob_dir, route, &field.query)?
+            task_candidates(
+                bob_dir,
+                route,
+                &field.query,
+                false,
+                TaskSearch::BlockIdOnly,
+            )?
+        }
+        CompletionContext::Task => {
+            let route = field.route.as_deref().expect("route resolved");
+            task_candidates(
+                bob_dir,
+                route,
+                &field.query,
+                all_tasks,
+                TaskSearch::MultiField,
+            )?
         }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
@@ -446,35 +486,42 @@ fn section_candidates(
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskSearch {
+    BlockIdOnly,
+    MultiField,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatchKind {
+    Prefix,
+    Substring,
+}
+
 fn task_candidates(
     bob_dir: &Path,
     route: &str,
     query: &str,
+    include_missing: bool,
+    search: TaskSearch,
 ) -> Result<Candidates, CompleteError> {
     let contents = read_target(bob_dir, route)?;
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(&contents, &settings);
-    let with_block_id: Vec<_> = scan
-        .open_tasks()
-        .filter(|task| task.block_id.is_some())
-        .collect();
-    let ranked = rank(with_block_id, query, |task| {
-        task.block_id.as_deref().expect("filtered to Some")
-    });
+    let ranked =
+        rank_open_tasks(scan.open_tasks(), query, include_missing, search);
 
     Ok(Candidates::Task(
         ranked
             .into_iter()
             .map(|task| {
-                let block_id = task.block_id.clone().expect("filtered to Some");
+                let requires_block_id = task.block_id.is_none();
                 TaskCandidate {
-                    replacement: block_id.clone(),
-                    task_ref: format!(
-                        "{}:{}",
-                        task.line_index + 1,
-                        task.digest
-                    ),
-                    block_id,
+                    replacement: task.block_id.clone().unwrap_or_default(),
+                    task_ref: task.task_ref(),
+                    block_id: task.block_id.clone(),
+                    route: route.to_string(),
+                    requires_block_id,
                     status_symbol: task.status_symbol,
                     status_name: task.status_name.clone(),
                     status_type: capture_tasks::status_type_label(
@@ -488,6 +535,96 @@ fn task_candidates(
             })
             .collect(),
     ))
+}
+
+fn rank_open_tasks<'a>(
+    tasks: impl Iterator<Item = &'a note_tasks::NoteTask>,
+    query: &str,
+    include_missing: bool,
+    search: TaskSearch,
+) -> Vec<&'a note_tasks::NoteTask> {
+    let mut identified = Vec::new();
+    let mut unidentified = Vec::new();
+    for task in tasks {
+        if task.block_id.is_some() {
+            identified.push(task);
+        } else if include_missing {
+            unidentified.push(task);
+        }
+    }
+
+    let mut ranked = rank_task_group(identified, query, search);
+    ranked.extend(rank_task_group(unidentified, query, search));
+    ranked
+}
+
+fn rank_task_group<'a>(
+    tasks: Vec<&'a note_tasks::NoteTask>,
+    query: &str,
+    search: TaskSearch,
+) -> Vec<&'a note_tasks::NoteTask> {
+    if query.is_empty() {
+        return tasks;
+    }
+
+    let query = query.to_lowercase();
+    let mut prefix_matches = Vec::new();
+    let mut substring_matches = Vec::new();
+    for task in tasks {
+        match task_match_kind(task, &query, search) {
+            Some(MatchKind::Prefix) => prefix_matches.push(task),
+            Some(MatchKind::Substring) => substring_matches.push(task),
+            None => {}
+        }
+    }
+    prefix_matches.extend(substring_matches);
+    prefix_matches
+}
+
+fn task_match_kind(
+    task: &note_tasks::NoteTask,
+    query: &str,
+    search: TaskSearch,
+) -> Option<MatchKind> {
+    let mut prefix = false;
+    let mut substring = false;
+    for field in task_search_fields(task, search) {
+        let value = field.to_lowercase();
+        if value.starts_with(query) {
+            prefix = true;
+        } else if value.contains(query) {
+            substring = true;
+        }
+    }
+    if prefix {
+        Some(MatchKind::Prefix)
+    } else if substring {
+        Some(MatchKind::Substring)
+    } else {
+        None
+    }
+}
+
+fn task_search_fields(
+    task: &note_tasks::NoteTask,
+    search: TaskSearch,
+) -> Vec<String> {
+    match search {
+        TaskSearch::BlockIdOnly => task.block_id.iter().cloned().collect(),
+        TaskSearch::MultiField => {
+            let mut fields = Vec::new();
+            if let Some(block_id) = &task.block_id {
+                fields.push(block_id.clone());
+            }
+            fields.push(task.description.clone());
+            if let Some(section) = &task.section {
+                fields.push(section.clone());
+            }
+            fields.push(task.status_name.clone());
+            fields.push(task.status_symbol.to_string());
+            fields
+        }
+    }
 }
 
 /// Read one routed note's contents; a missing note is not an error, exactly
@@ -616,7 +753,14 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
             .collect(),
         Candidates::Task(items) => items
             .iter()
-            .map(|item| (item.replacement.clone(), item.text.clone()))
+            .map(|item| {
+                let label = if item.requires_block_id {
+                    "needs id".to_string()
+                } else {
+                    item.replacement.clone()
+                };
+                (label, item.text.clone())
+            })
             .collect(),
         Candidates::WikilinkNote(items) => items
             .iter()
@@ -732,7 +876,15 @@ mod tests {
         raw: &str,
         cursor: usize,
     ) -> CaptureCompleteResult {
-        build_result(bob_dir, raw, cursor).expect("build result")
+        build_result(bob_dir, raw, cursor, false).expect("build result")
+    }
+
+    fn result_all(
+        bob_dir: &Path,
+        raw: &str,
+        cursor: usize,
+    ) -> CaptureCompleteResult {
+        build_result(bob_dir, raw, cursor, true).expect("build result")
     }
 
     #[test]
@@ -833,9 +985,12 @@ mod tests {
         let Candidates::Task(tasks) = &value.candidates else {
             panic!("expected task candidates");
         };
-        let ids: Vec<&str> =
-            tasks.iter().map(|task| task.block_id.as_str()).collect();
+        let ids: Vec<&str> = tasks
+            .iter()
+            .map(|task| task.block_id.as_deref().expect("identified"))
+            .collect();
         assert_eq!(ids, vec!["focus-123", "focus-999"]);
+        assert!(tasks.iter().all(|task| !task.requires_block_id));
     }
 
     #[test]
@@ -855,12 +1010,150 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         let task = &tasks[0];
         assert_eq!(task.replacement, "goog-exit");
-        assert_eq!(task.block_id, "goog-exit");
+        assert_eq!(task.block_id.as_deref(), Some("goog-exit"));
+        assert_eq!(task.route, "cash");
+        assert!(!task.requires_block_id);
         assert_eq!(task.text, "Finish Google Exit Packet!");
         assert_eq!(task.section.as_deref(), Some("Tasks"));
         assert_eq!(task.status_symbol, '*');
         assert_eq!(task.status_type, "ON_HOLD");
         assert_eq!(task.child_count, 0);
+    }
+
+    #[test]
+    fn default_task_completion_stays_identified_only() {
+        let temp = TempDir::new("bob-cli-capture-complete-identified-only");
+        write_settings(temp.path());
+        write_file(
+            &temp.path().join("file.md"),
+            concat!(
+                "# Tasks\n",
+                "- [ ] #task No block ID\n",
+                "- [ ] #task Ready one ^ready-one\n",
+                "- [x] #task Done task\n",
+                "- [*] #task Ready two ^ready-two\n",
+            ),
+        );
+
+        let value = result(temp.path(), "note @file+", 11);
+        assert_eq!(value.context, Some(CompletionContext::Task));
+        let Candidates::Task(tasks) = &value.candidates else {
+            panic!("expected task candidates");
+        };
+        let ids: Vec<Option<&str>> =
+            tasks.iter().map(|task| task.block_id.as_deref()).collect();
+        assert_eq!(ids, vec![Some("ready-one"), Some("ready-two")]);
+        assert!(tasks.iter().all(|task| !task.requires_block_id));
+    }
+
+    #[test]
+    fn all_tasks_lists_identified_tasks_before_unidentified_tasks() {
+        let temp = TempDir::new("bob-cli-capture-complete-all-tasks");
+        write_settings(temp.path());
+        write_file(
+            &temp.path().join("file.md"),
+            concat!(
+                "# Inbox\n",
+                "- [ ] #task First missing\n",
+                "- [ ] #task Ready one ^ready-one\n",
+                "- [x] #task Done missing\n",
+                "- [*] #task Ready two ^ready-two\n",
+                "- [/] #task Second missing\n",
+            ),
+        );
+
+        let value = result_all(temp.path(), "note @file+", 11);
+        assert_eq!(value.context, Some(CompletionContext::Task));
+        let Candidates::Task(tasks) = &value.candidates else {
+            panic!("expected task candidates");
+        };
+        let rows: Vec<(Option<&str>, &str, bool)> = tasks
+            .iter()
+            .map(|task| {
+                (
+                    task.block_id.as_deref(),
+                    task.text.as_str(),
+                    task.requires_block_id,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (Some("ready-one"), "Ready one", false),
+                (Some("ready-two"), "Ready two", false),
+                (None, "First missing", true),
+                (None, "Second missing", true),
+            ]
+        );
+        assert_eq!(tasks[2].replacement, "");
+        assert_eq!(tasks[2].route, "file");
+        assert!(!tasks[2].task_ref.is_empty());
+    }
+
+    #[test]
+    fn all_tasks_search_keeps_identified_groups_ahead_of_unidentified() {
+        let temp = TempDir::new("bob-cli-capture-complete-all-search");
+        write_settings(temp.path());
+        write_file(
+            &temp.path().join("file.md"),
+            concat!(
+                "# Planning\n",
+                "- [ ] #task Draft report\n",
+                "- [ ] #task Ready alpha ^alpha-id\n",
+                "# Review\n",
+                "- [*] #task Planning notes ^later-id\n",
+                "- [/] #task Alpha follow-up\n",
+            ),
+        );
+
+        let by_id_and_text = result_all(temp.path(), "note @file+alpha", 16);
+        let Candidates::Task(tasks) = &by_id_and_text.candidates else {
+            panic!("expected task candidates");
+        };
+        let texts: Vec<&str> =
+            tasks.iter().map(|task| task.text.as_str()).collect();
+        assert_eq!(texts, vec!["Ready alpha", "Alpha follow-up"]);
+        assert!(!tasks[0].requires_block_id);
+        assert!(tasks[1].requires_block_id);
+
+        let by_status = result_all(temp.path(), "note @file+Next", 15);
+        let Candidates::Task(tasks) = &by_status.candidates else {
+            panic!("expected task candidates");
+        };
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].text, "Planning notes");
+        assert_eq!(tasks[0].status_name, "Next");
+
+        let by_section = result_all(temp.path(), "note @file+rev", 14);
+        let Candidates::Task(tasks) = &by_section.candidates else {
+            panic!("expected task candidates");
+        };
+        let texts: Vec<&str> =
+            tasks.iter().map(|task| task.text.as_str()).collect();
+        assert_eq!(texts, vec!["Planning notes", "Alpha follow-up"]);
+    }
+
+    #[test]
+    fn all_tasks_does_not_change_pomodoro_completion() {
+        let temp = TempDir::new("bob-cli-capture-complete-all-pomodoro");
+        write_settings(temp.path());
+        write_file(
+            &temp.path().join("dev.md"),
+            concat!(
+                "- [ ] #task No block ID\n",
+                "- [ ] #task Focus session ^focus-123\n",
+            ),
+        );
+
+        let value = result_all(temp.path(), "Do work @Dev:foc", 16);
+        assert_eq!(value.context, Some(CompletionContext::PomodoroBlockId));
+        let Candidates::Task(tasks) = &value.candidates else {
+            panic!("expected task candidates");
+        };
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].block_id.as_deref(), Some("focus-123"));
+        assert!(!tasks[0].requires_block_id);
     }
 
     #[test]
