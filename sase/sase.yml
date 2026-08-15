@@ -23,6 +23,12 @@ memory:
         logged/planned tasks for that pomodoro. As another special case, transcluded task
         links that are the only contents of a sub-bullet on another Obsidian task are
         treated as sub-tasks (i.e. dependencies) of that task.
+    Work Log:
+      definition: >-
+        A task-local history of work performed, stored as a `🛠️ **WORK LOG**` direct
+        child with newest-first summary sub-bullets. When `<ctrl+shift+enter>` changes an
+        In Progress (`[/]`) task to Open, its nonblank work summary is prepended; a blank
+        summary leaves the log untouched.
 repos:
   linked:
     - name: bob-plugins

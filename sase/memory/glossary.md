@@ -7,6 +7,7 @@ description: |-
   - Pomodoro
   - Schedule Log
   - Task Link (aka task block link)
+  - Work Log
 
   Read it with `sase memory read glossary.md` whenever one of those terms or aliases appears in a prompt, bead, plan, or code comment and you are not certain what it means in SASE.
 sase_generated: glossary
@@ -38,3 +39,10 @@ only contents of a sub-bullet on a pomodoro, they are treated as logged/planned 
 for that pomodoro. As another special case, transcluded task links that are the only
 contents of a sub-bullet on another Obsidian task are treated as sub-tasks (i.e.
 dependencies) of that task.
+
+## Work Log
+
+A task-local history of work performed, stored as a `🛠️ **WORK LOG**` direct child with
+newest-first summary sub-bullets. When `<ctrl+shift+enter>` changes an In Progress
+(`[/]`) task to Open, its nonblank work summary is prepended; a blank summary leaves the
+log untouched.
