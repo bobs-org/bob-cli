@@ -96,12 +96,12 @@ a cursor in plain body text, a cursor on an authored line's indentation or \
 bullet marker itself, an orphaned nested line, or a cursor on a token in the middle of a line all return a \
 successful empty result rather than an error.\n\n\
 Route completion covers a bare '@', a still-typing '@fragment', and the \
-missing route portion of '@::...', '@:...', '@^...', and '@#...', backed by the same \
+missing route portion of '@^...', '@+...', '@:...', and '@#...', backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
 backed by the same scan as `bob capture-sections`. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
-'@route^prefix', both backed by the same open-task scan as \
-`bob capture-tasks`. The authored ID portion of '@route::block-id' has no \
+'@route+prefix', both backed by the same open-task scan as \
+`bob capture-tasks`. The authored ID portion of '@route^block-id' has no \
 completion source and returns an empty success. Candidates rank exact prefix matches before substring \
 matches, case-insensitively, while keeping each discovery source's stable \
 order.\n\n\
@@ -114,7 +114,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev::new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -845,7 +845,7 @@ mod tests {
             "# Tasks\n- [*] #task Finish Google Exit Packet! ^goog-exit\n",
         );
 
-        let value = result(temp.path(), "note @Cash^goog", 15);
+        let value = result(temp.path(), "note @Cash+goog", 15);
         assert_eq!(value.context, Some(CompletionContext::Task));
         let Candidates::Task(tasks) = &value.candidates else {
             panic!("expected task candidates");
@@ -859,6 +859,27 @@ mod tests {
         assert_eq!(task.status_symbol, '*');
         assert_eq!(task.status_type, "ON_HOLD");
         assert_eq!(task.child_count, 0);
+    }
+
+    #[test]
+    fn task_block_id_completion_offers_routes_but_not_authored_ids() {
+        let temp = TempDir::new("bob-cli-capture-complete-task-block-id");
+        write_file(&temp.path().join("cash.md"), "---\ntype: [[area]]\n---\n");
+        write_file(
+            &temp.path().join("dev.md"),
+            "# Tasks\n- [ ] #task Existing ^existing-id\n",
+        );
+
+        let route_side = result(temp.path(), "Do @ca^new-id", 6);
+        assert_eq!(route_side.context, Some(CompletionContext::Route));
+        let Candidates::Route(routes) = &route_side.candidates else {
+            panic!("expected route candidates");
+        };
+        assert_eq!(routes[0].route, "cash");
+
+        let id_side = result(temp.path(), "Do @dev^new-id", 14);
+        assert_eq!(id_side.context, None);
+        assert_eq!(id_side.candidates.len(), 0);
     }
 
     #[test]

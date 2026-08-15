@@ -814,10 +814,12 @@ fn capture_help_lists_options_alphabetically() {
         ],
     );
     assert!(
-        help.contains("@<route>^<block-id>")
-            && help.contains("bob capture '@cash^goog-exit'")
+        help.contains("@<route>+<block-id>")
+            && help.contains("bob capture '@cash+goog-exit'")
+            && help.contains("@<route>^<block-id>")
+            && help.contains("bob capture '@dev^foobar'")
             && !help.contains("--task-ref"),
-        "expected public sub-bullet help without hidden task ref:\n{help}"
+        "expected public sub-bullet and ID-only help without hidden task ref:\n{help}"
     );
     assert_stdout_has_no_ansi(&output);
 }
@@ -2622,7 +2624,7 @@ fn capture_parse_human_output_is_plain_and_concise() {
     let output = bob_command()
         .arg("capture-parse")
         .arg("--")
-        .arg("Call bank @Cash^")
+        .arg("Call bank @Cash+")
         .output()
         .expect("run bob capture-parse human");
 
@@ -2657,7 +2659,7 @@ fn capture_parse_json_output_is_stable_and_parseable() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Call bank @Cash^")
+        .arg("Call bank @Cash+")
         .output()
         .expect("run bob capture-parse json");
 
@@ -2671,7 +2673,7 @@ fn capture_parse_json_output_is_stable_and_parseable() {
         .expect("capture-parse JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["schema_version"], 1);
-    assert_eq!(json["input"], "Call bank @Cash^");
+    assert_eq!(json["input"], "Call bank @Cash+");
     assert_eq!(json["body"], "Call bank");
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["route"], "cash");
@@ -2696,7 +2698,7 @@ fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do work @Dev::")
+        .arg("Do work @Dev^")
         .output()
         .expect("run bob capture-parse task block ID marker");
 
@@ -2711,7 +2713,7 @@ fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
         json["spans"],
         serde_json::json!([
             { "start": 8, "end": 12, "kind": "task_block_id_route" },
-            { "start": 12, "end": 14, "kind": "interactive_placeholder" },
+            { "start": 12, "end": 13, "kind": "interactive_placeholder" },
         ])
     );
 
@@ -2720,7 +2722,7 @@ fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do work @Dev::bad.id")
+        .arg("Do work @Dev^bad.id")
         .output()
         .expect("run invalid task block ID parse");
     assert_success(&invalid);
@@ -2728,6 +2730,36 @@ fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
         .expect("capture-parse JSON");
     assert_eq!(json["mode"], "task");
     assert_eq!(json["diagnostics"][0]["code"], "invalid_task_block_id");
+}
+
+#[test]
+fn capture_parse_json_reports_retired_double_colon_as_migration_guidance() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Follow up @file::new-id")
+        .output()
+        .expect("run bob capture-parse retired double colon");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "task");
+    assert_eq!(
+        json["diagnostics"][0]["code"],
+        "retired_task_block_id_marker"
+    );
+    assert!(
+        json["diagnostics"][0]["message"]
+            .as_str()
+            .is_some_and(|message| {
+                message.contains("'@<route>::<block-id>' is no longer accepted")
+                    && message.contains("@<route>^<block-id>")
+            }),
+        "{json}"
+    );
 }
 
 #[test]
@@ -2772,7 +2804,7 @@ fn capture_parse_reports_diagnostics_without_failing() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("note @dev^bad.id")
+        .arg("note @dev+bad.id")
         .output()
         .expect("run bob capture-parse diagnostic");
 
@@ -2841,7 +2873,7 @@ fn capture_parse_missing_text_is_a_usage_error() {
 
 #[test]
 fn capture_parse_reports_utf8_byte_offsets() {
-    let text = "caf\u{e9} run \u{1f680} @Cash^goog-exit";
+    let text = "caf\u{e9} run \u{1f680} @Cash+goog-exit";
     let output = bob_command()
         .arg("capture-parse")
         .arg("-f")
@@ -3625,7 +3657,7 @@ fn capture_task_block_id_marker_writes_ordinary_task_and_ignores_daily_note() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .args(["Do", "work", "@Dev::id-only"])
+        .args(["Do", "work", "@Dev^id-only"])
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -3671,7 +3703,7 @@ fn capture_task_block_id_marker_creates_missing_routed_note() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .args(["New", "task", "@Projects::launch-id"])
+        .args(["New", "task", "@Projects^launch-id"])
         .env("BOB_DAY_FILE", &missing_day)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -3703,7 +3735,7 @@ fn capture_task_block_id_dry_run_and_duplicate_preflight_do_not_write() {
         .arg("-d")
         .arg("-f")
         .arg("json")
-        .args(["Preview", "@dev::new-id"])
+        .args(["Preview", "@dev^new-id"])
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
         .expect("run ID-only dry-run");
@@ -3722,7 +3754,7 @@ fn capture_task_block_id_dry_run_and_duplicate_preflight_do_not_write() {
         .arg("-d")
         .arg("-f")
         .arg("json")
-        .args(["Duplicate", "@dev::dup"])
+        .args(["Duplicate", "@dev^dup"])
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
         .expect("run duplicate ID-only dry-run");
@@ -3755,12 +3787,37 @@ fn capture_malformed_task_block_id_marker_is_usage_error_without_writes() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .args(["Do", "work", "@dev::bad.id"])
+        .args(["Do", "work", "@dev^bad.id"])
         .output()
         .expect("run malformed ID-only capture");
 
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     assert!(stderr(&output).contains("task block-ID capture block ID"));
+    assert_eq!(fs::read_dir(&vault).expect("read vault").count(), 0);
+}
+
+#[test]
+fn capture_retired_double_colon_marker_is_usage_error_without_writes() {
+    let temp = TempDir::new("bob-cli-capture-retired-double-colon");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["Follow", "up", "@file::new-id"])
+        .output()
+        .expect("run retired double-colon capture");
+
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output)
+            .contains("'@<route>::<block-id>' is no longer accepted")
+            && stderr(&output).contains("@<route>^<block-id>"),
+        "{}",
+        format_output(&output)
+    );
     assert_eq!(fs::read_dir(&vault).expect("read vault").count(), 0);
 }
 
@@ -5842,7 +5899,7 @@ fn capture_authored_bullets_sub_bullet_nests_children_two_levels() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .arg("@cash^parent new note\n- nested detail")
+        .arg("@cash+parent new note\n- nested detail")
         .env("BOB_NOW", "2026-07-31")
         .output()
         .expect("run sub-bullet authored-bullet capture");
@@ -6616,7 +6673,7 @@ fn capture_sub_bullet_inserts_with_parent_indentation_and_reports_json() {
             .arg(&vault)
             .arg("-f")
             .arg("json")
-            .arg("@cash^parent")
+            .arg("@cash+parent")
             .arg("new note")
             .env("BOB_NOW", "2026-07-31")
             .output()
@@ -6664,7 +6721,7 @@ fn capture_sub_bullet_uses_dominant_indent_preserves_crlf_and_dry_run() {
         .arg("-b")
         .arg(&vault)
         .arg("--dry-run")
-        .arg("new note @cash^parent")
+        .arg("new note @cash+parent")
         .env("BOB_NOW", "2026-07-31")
         .output()
         .expect("dry-run sub-bullet");
@@ -6676,7 +6733,7 @@ fn capture_sub_bullet_uses_dominant_indent_preserves_crlf_and_dry_run() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .arg("new note @cash^parent")
+        .arg("new note @cash+parent")
         .env("BOB_NOW", "2026-07-31")
         .output()
         .expect("CRLF sub-bullet");
@@ -6790,28 +6847,28 @@ fn capture_sub_bullet_errors_are_actionable_in_human_and_json_modes() {
         ErrorCase {
             name: "missing-id",
             note: Some("- [ ] #task Parent ^parent\n"),
-            args: vec!["body".into(), "@cash^missing".into()],
+            args: vec!["body".into(), "@cash+missing".into()],
             exit: 1,
             expected: "no task with block ID ^missing in cash.md",
         },
         ErrorCase {
             name: "suggestion",
             note: Some("- [ ] #task Parent ^parent\n"),
-            args: vec!["body".into(), "@cash^paren".into()],
+            args: vec!["body".into(), "@cash+paren".into()],
             exit: 1,
             expected: "did you mean ^parent?",
         },
         ErrorCase {
             name: "not-task",
             note: Some("ordinary paragraph ^parent\n"),
-            args: vec!["body".into(), "@cash^parent".into()],
+            args: vec!["body".into(), "@cash+parent".into()],
             exit: 1,
             expected: "^parent in cash.md is not a task (line 1:",
         },
         ErrorCase {
             name: "duplicate",
             note: Some(duplicate),
-            args: vec!["body".into(), "@cash^dup".into()],
+            args: vec!["body".into(), "@cash+dup".into()],
             exit: 1,
             expected: "block ID ^dup appears 2 times",
         },
@@ -6844,35 +6901,35 @@ fn capture_sub_bullet_errors_are_actionable_in_human_and_json_modes() {
         ErrorCase {
             name: "missing-note",
             note: None,
-            args: vec!["body".into(), "@cash^parent".into()],
+            args: vec!["body".into(), "@cash+parent".into()],
             exit: 1,
             expected: "note does not exist:",
         },
         ErrorCase {
             name: "empty-marker-id",
             note: Some("- [ ] #task Parent ^parent\n"),
-            args: vec!["body".into(), "@cash^".into()],
+            args: vec!["body".into(), "@cash+".into()],
             exit: 2,
             expected: "sub-bullet capture requires a block ID",
         },
         ErrorCase {
             name: "marker-no-route",
             note: Some("- [ ] #task Parent ^parent\n"),
-            args: vec!["body".into(), "@^parent".into()],
+            args: vec!["body".into(), "@+parent".into()],
             exit: 2,
-            expected: "markers must use @<route>^<block-id>",
+            expected: "markers must use @<route>+<block-id>",
         },
         ErrorCase {
             name: "invalid-route-char",
             note: Some("- [ ] #task Parent ^parent\n"),
-            args: vec!["body".into(), "@bad.route^parent".into()],
+            args: vec!["body".into(), "@bad.route+parent".into()],
             exit: 2,
             expected: "sub-bullet capture route must contain only A-Z, a-z, 0-9, '_' or '-'",
         },
         ErrorCase {
             name: "invalid-block-id-char",
             note: Some("- [ ] #task Parent ^parent\n"),
-            args: vec!["body".into(), "@cash^bad.id".into()],
+            args: vec!["body".into(), "@cash+bad.id".into()],
             exit: 2,
             expected:
                 "sub-bullet capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'",
@@ -7505,7 +7562,7 @@ fn capture_complete_task_block_id_marker_completes_only_route_side() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do @ca::new-id")
+        .arg("Do @ca^new-id")
         .output()
         .expect("run route-side task block ID completion");
 
@@ -7529,7 +7586,7 @@ fn capture_complete_task_block_id_marker_completes_only_route_side() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do @ca::new-id")
+        .arg("Do @ca^new-id")
         .output()
         .expect("run ID-side task block ID completion");
 
@@ -7617,7 +7674,7 @@ fn capture_complete_task_json_only_offers_tasks_with_a_block_id() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("note @Cash^goog")
+        .arg("note @Cash+goog")
         .output()
         .expect("run bob capture-complete task json");
 
@@ -7846,7 +7903,7 @@ fn capture_complete_rejects_a_cursor_that_splits_a_multibyte_character() {
 
 #[test]
 fn capture_complete_reports_utf8_byte_offsets() {
-    let text = "caf\u{e9} \u{1f680} @Cash^goog-exit";
+    let text = "caf\u{e9} \u{1f680} @Cash+goog-exit";
     let temp = TempDir::new("bob-cli-capture-complete-utf8");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");

@@ -654,6 +654,9 @@ fn parse_terminal_route_token(
     if is_task_block_id_marker_candidate(token) {
         return parse_task_block_id_route_token(token).map(Some);
     }
+    if is_retired_double_colon_marker_candidate(token) {
+        return Err(RETIRED_DOUBLE_COLON_ERROR.to_string());
+    }
     if is_pomodoro_marker_candidate(token) {
         return parse_pomodoro_route_token(token).map(Some);
     }
@@ -662,19 +665,19 @@ fn parse_terminal_route_token(
 
 fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
     let marker = token.strip_prefix('@').ok_or_else(|| {
-        "sub-bullet capture markers must use @<route>^<block-id>".to_string()
+        "sub-bullet capture markers must use @<route>+<block-id>".to_string()
     })?;
-    let Some((route, block_id)) = marker.split_once('^') else {
-        return Err("sub-bullet capture markers must use @<route>^<block-id>"
+    let Some((route, block_id)) = marker.split_once('+') else {
+        return Err("sub-bullet capture markers must use @<route>+<block-id>"
             .to_string());
     };
     if route.is_empty() {
-        return Err("sub-bullet capture markers must use @<route>^<block-id>"
+        return Err("sub-bullet capture markers must use @<route>+<block-id>"
             .to_string());
     }
     if block_id.is_empty() {
         return Err(format!(
-            "sub-bullet capture requires a block ID: @<route>^<block-id> (run 'bob capture-tasks -r {}' to list task block IDs)",
+            "sub-bullet capture requires a block ID: @<route>+<block-id> (run 'bob capture-tasks -r {}' to list task block IDs)",
             route.to_ascii_lowercase()
         ));
     }
@@ -700,22 +703,21 @@ fn is_sub_bullet_marker_candidate(token: &str) -> bool {
     if token.starts_with("@!") {
         return false;
     }
-    let Some(caret) = marker.find('^') else {
+    let Some(plus) = marker.find('+') else {
         return false;
     };
     marker
-        .find([':', '#'])
-        .is_none_or(|separator| caret < separator)
+        .find([':', '#', '^'])
+        .is_none_or(|separator| plus < separator)
 }
 
 fn parse_task_block_id_route_token(token: &str) -> Result<RouteToken, String> {
     let marker = token.strip_prefix('@').ok_or_else(|| {
-        "task block-ID capture markers must use @<route>::<block-id>"
-            .to_string()
+        "task block-ID capture markers must use @<route>^<block-id>".to_string()
     })?;
-    let Some((route, block_id)) = marker.split_once("::") else {
+    let Some((route, block_id)) = marker.split_once('^') else {
         return Err(
-            "task block-ID capture markers must use @<route>::<block-id>"
+            "task block-ID capture markers must use @<route>^<block-id>"
                 .to_string(),
         );
     };
@@ -735,10 +737,31 @@ fn parse_task_block_id_route_token(token: &str) -> Result<RouteToken, String> {
 }
 
 /// Return whether a terminal token belongs to the ordinary task-with-ID
-/// marker grammar. A double colon that follows `#` remains part of a bullet
-/// section prefix, and a double colon that follows `^` remains part of the
-/// sub-bullet block-ID component.
+/// marker grammar. A caret that follows `#` remains part of a bullet
+/// section prefix, a caret that follows `+` remains part of the
+/// sub-bullet block-ID component, and a caret that follows `:` remains
+/// part of a Pomodoro block ID.
 fn is_task_block_id_marker_candidate(token: &str) -> bool {
+    let Some(marker) = token.strip_prefix('@') else {
+        return false;
+    };
+    if token.starts_with("@!") {
+        return false;
+    }
+    let Some(caret) = marker.find('^') else {
+        return false;
+    };
+    marker
+        .find(['#', ':', '+'])
+        .is_none_or(|separator| caret < separator)
+}
+
+/// Return whether a terminal token is the retired double-colon
+/// task-with-ID spelling. A `::` that follows `#`, `+`, or `^` stays
+/// inside that earlier family; a single `:` that begins before `::`
+/// stays in the Pomodoro family so this detector cannot steal
+/// `@route:id` or misreport `@route::id` as a malformed Pomodoro marker.
+fn is_retired_double_colon_marker_candidate(token: &str) -> bool {
     let Some(marker) = token.strip_prefix('@') else {
         return false;
     };
@@ -748,9 +771,13 @@ fn is_task_block_id_marker_candidate(token: &str) -> bool {
     let Some(double_colon) = marker.find("::") else {
         return false;
     };
-    marker
-        .find(['#', '^'])
-        .is_none_or(|separator| double_colon < separator)
+    if marker
+        .find(['#', '+', '^'])
+        .is_some_and(|separator| separator < double_colon)
+    {
+        return false;
+    }
+    marker.find(':').is_none_or(|colon| colon >= double_colon)
 }
 
 fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
@@ -795,9 +822,11 @@ fn is_pomodoro_marker_candidate(token: &str) -> bool {
     let colon = marker.find(':');
     let hash = marker.find('#');
     let caret = marker.find('^');
+    let plus = marker.find('+');
     colon.is_some_and(|colon| {
         hash.is_none_or(|hash| colon < hash)
             && caret.is_none_or(|caret| colon < caret)
+            && plus.is_none_or(|plus| colon < plus)
             && marker[..colon]
                 .bytes()
                 .any(|byte| byte.is_ascii_alphabetic())
@@ -823,6 +852,9 @@ fn validate_special_terminal_markers_line(
         if is_task_block_id_marker_candidate(token) {
             parse_task_block_id_route_token(token)?;
             continue;
+        }
+        if is_retired_double_colon_marker_candidate(token) {
+            return Err(RETIRED_DOUBLE_COLON_ERROR.to_string());
         }
         if is_pomodoro_marker_candidate(token) {
             parse_pomodoro_route_token(token)?;
@@ -1051,6 +1083,8 @@ const TASK_BLOCK_ID_ROUTE_ERROR: &str =
     "task block-ID capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 const TASK_BLOCK_ID_ERROR: &str =
     "task block-ID capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
+const RETIRED_DOUBLE_COLON_ERROR: &str =
+    "'@<route>::<block-id>' is no longer accepted; use '@<route>^<block-id>' to create an ordinary task with an authored block ID";
 const POMODORO_ROUTE_ERROR: &str =
     "Pomodoro capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 const POMODORO_BLOCK_ID_ERROR: &str =
@@ -1373,7 +1407,7 @@ fn duplicate_capture_marker_diagnostic(
 ///
 /// Unlike [`parse_capture_text_with_clip_control`] this never fails: an
 /// incomplete interactive marker (`@`, `@#`, `@route#`, `@:`, `@route:`,
-/// `@^`, `@route^`, and their legacy `@!` aliases) is a valid editing state,
+/// `@^`, `@route^`, `@+`, `@route+`, and their legacy `@!` aliases) is a valid editing state,
 /// and an invalid marker component -- or line shape -- becomes a diagnostic
 /// instead of an error. Tokenization, terminal marker extraction, and
 /// marker classification all run through the same functions `bob capture`
@@ -1551,6 +1585,9 @@ fn classify_editor_token(token: &Token<'_>) -> Option<TokenParse> {
     if is_task_block_id_marker_candidate(text) {
         return Some(classify_task_block_id_token(token));
     }
+    if is_retired_double_colon_marker_candidate(text) {
+        return Some(classify_retired_double_colon_token(token));
+    }
     if is_pomodoro_marker_candidate(text)
         || is_incomplete_pomodoro_marker_candidate(text)
     {
@@ -1574,7 +1611,7 @@ fn is_incomplete_pomodoro_marker_candidate(token: &str) -> bool {
 fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
     let marker = &token.text[1..];
     let (route_part, block_part) =
-        marker.split_once('^').expect("sub-bullet candidate");
+        marker.split_once('+').expect("sub-bullet candidate");
 
     if !route_part.is_empty() && !is_route_token(route_part) {
         return TokenParse::Invalid(token_diagnostic(
@@ -1609,7 +1646,7 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
 fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
     let marker = &token.text[1..];
     let (route_part, block_part) =
-        marker.split_once("::").expect("task block-ID candidate");
+        marker.split_once('^').expect("task block-ID candidate");
 
     if !route_part.is_empty() && !is_route_token(route_part) {
         return TokenParse::Invalid(token_diagnostic(
@@ -1631,13 +1668,21 @@ fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
         MarkerShape {
             sigil_len: 1,
             route_part,
-            separator_len: 2,
+            separator_len: 1,
             right_part: block_part,
             route_kind: SpanKind::TaskBlockIdRoute,
             right_kind: SpanKind::TaskBlockId,
             complete_mode: EditorMode::Task,
             right_need: Need::BlockId,
         },
+    ))
+}
+
+fn classify_retired_double_colon_token(token: &Token<'_>) -> TokenParse {
+    TokenParse::Invalid(token_diagnostic(
+        token,
+        "retired_task_block_id_marker",
+        RETIRED_DOUBLE_COLON_ERROR,
     ))
 }
 
@@ -2019,7 +2064,7 @@ fn marker_field_at_cursor(
     if is_sub_bullet_marker_candidate(text) {
         let marker = &text[1..];
         let (route_part, block_part) =
-            marker.split_once('^').expect("sub-bullet candidate");
+            marker.split_once('+').expect("sub-bullet candidate");
         return completion_field_from_parts(
             token,
             1,
@@ -2034,10 +2079,14 @@ fn marker_field_at_cursor(
     if is_task_block_id_marker_candidate(text) {
         let marker = &text[1..];
         let (route_part, block_part) =
-            marker.split_once("::").expect("task block-ID candidate");
+            marker.split_once('^').expect("task block-ID candidate");
         return completion_field_from_parts(
-            token, 1, route_part, 2, block_part, None, cursor,
+            token, 1, route_part, 1, block_part, None, cursor,
         );
+    }
+
+    if is_retired_double_colon_marker_candidate(text) {
+        return None;
     }
 
     if is_pomodoro_marker_candidate(text)
@@ -2232,7 +2281,7 @@ mod tests {
 
     #[test]
     fn editor_spans_use_original_byte_offsets_after_multibyte_text() {
-        let raw = "caf\u{e9} run \u{1f680} @Cash^goog-exit";
+        let raw = "caf\u{e9} run \u{1f680} @Cash+goog-exit";
         let parse = editor(raw);
         assert_eq!(parse.body, "caf\u{e9} run \u{1f680}");
         assert_eq!(parse.mode, EditorMode::SubBullet);
@@ -2251,7 +2300,7 @@ mod tests {
 
     #[test]
     fn plan_worked_example_matches_documented_offsets() {
-        let raw = "Call bank @Cash^";
+        let raw = "Call bank @Cash+";
         let parse = editor(raw);
         assert_eq!(parse.body, "Call bank");
         assert_eq!(parse.mode, EditorMode::Incomplete);
@@ -2265,7 +2314,7 @@ mod tests {
             ]
         );
         assert_eq!(&raw[10..15], "@Cash");
-        assert_eq!(&raw[15..16], "^");
+        assert_eq!(&raw[15..16], "+");
     }
 
     #[test]
@@ -2291,8 +2340,40 @@ mod tests {
         // (input, mode, route, section, block_id, needs)
         let cases: &[MarkerCase] = &[
             (
-                "Body @dev^focus-123",
+                "Body @dev+focus-123",
                 EditorMode::SubBullet,
+                Some("dev"),
+                None,
+                Some("focus-123"),
+                &[],
+            ),
+            (
+                "Body @dev+",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                None,
+                &[Need::Task],
+            ),
+            (
+                "Body @+focus-123",
+                EditorMode::Incomplete,
+                None,
+                None,
+                Some("focus-123"),
+                &[Need::Route],
+            ),
+            (
+                "Body @+",
+                EditorMode::Incomplete,
+                None,
+                None,
+                None,
+                &[Need::Route, Need::Task],
+            ),
+            (
+                "Body @dev^focus-123",
+                EditorMode::Task,
                 Some("dev"),
                 None,
                 Some("focus-123"),
@@ -2304,7 +2385,7 @@ mod tests {
                 Some("dev"),
                 None,
                 None,
-                &[Need::Task],
+                &[Need::BlockId],
             ),
             (
                 "Body @^focus-123",
@@ -2316,38 +2397,6 @@ mod tests {
             ),
             (
                 "Body @^",
-                EditorMode::Incomplete,
-                None,
-                None,
-                None,
-                &[Need::Route, Need::Task],
-            ),
-            (
-                "Body @dev::focus-123",
-                EditorMode::Task,
-                Some("dev"),
-                None,
-                Some("focus-123"),
-                &[],
-            ),
-            (
-                "Body @dev::",
-                EditorMode::Incomplete,
-                Some("dev"),
-                None,
-                None,
-                &[Need::BlockId],
-            ),
-            (
-                "Body @::focus-123",
-                EditorMode::Incomplete,
-                None,
-                None,
-                Some("focus-123"),
-                &[Need::Route],
-            ),
-            (
-                "Body @::",
                 EditorMode::Incomplete,
                 None,
                 None,
@@ -2477,31 +2526,31 @@ mod tests {
     fn editor_spans_cover_every_marker_shape() {
         let cases: &[(&str, &[SpanKind])] = &[
             (
-                "Body @dev^focus-123",
+                "Body @dev+focus-123",
                 &[SpanKind::SubBulletRoute, SpanKind::SubBulletBlockId],
             ),
             (
-                "Body @dev^",
+                "Body @dev+",
                 &[SpanKind::SubBulletRoute, SpanKind::InteractivePlaceholder],
             ),
             (
-                "Body @^focus-123",
+                "Body @+focus-123",
                 &[SpanKind::InteractivePlaceholder, SpanKind::SubBulletBlockId],
             ),
-            ("Body @^", &[SpanKind::InteractivePlaceholder]),
+            ("Body @+", &[SpanKind::InteractivePlaceholder]),
             (
-                "Body @dev::focus-123",
+                "Body @dev^focus-123",
                 &[SpanKind::TaskBlockIdRoute, SpanKind::TaskBlockId],
             ),
             (
-                "Body @dev::",
+                "Body @dev^",
                 &[SpanKind::TaskBlockIdRoute, SpanKind::InteractivePlaceholder],
             ),
             (
-                "Body @::focus-123",
+                "Body @^focus-123",
                 &[SpanKind::InteractivePlaceholder, SpanKind::TaskBlockId],
             ),
-            ("Body @::", &[SpanKind::InteractivePlaceholder]),
+            ("Body @^", &[SpanKind::InteractivePlaceholder]),
             (
                 "Body @dev:focus-123",
                 &[SpanKind::PomodoroRoute, SpanKind::PomodoroBlockId],
@@ -2554,22 +2603,22 @@ mod tests {
     fn editor_reports_invalid_components_as_diagnostics() {
         let cases: &[(&str, &str, &str)] = &[
             (
-                "Body @bad.route^id",
+                "Body @bad.route+id",
                 "invalid_sub_bullet_route",
                 SUB_BULLET_ROUTE_ERROR,
             ),
             (
-                "Body @dev^bad.id",
+                "Body @dev+bad.id",
                 "invalid_sub_bullet_block_id",
                 SUB_BULLET_BLOCK_ID_ERROR,
             ),
             (
-                "Body @bad.route::id",
+                "Body @bad.route^id",
                 "invalid_task_block_id_route",
                 TASK_BLOCK_ID_ROUTE_ERROR,
             ),
             (
-                "Body @dev::bad.id",
+                "Body @dev^bad.id",
                 "invalid_task_block_id",
                 TASK_BLOCK_ID_ERROR,
             ),
@@ -2597,6 +2646,80 @@ mod tests {
             assert_eq!(diagnostic.message, *message, "{raw}");
             assert_eq!(diagnostic.range, Some((5, raw.len())), "{raw}");
         }
+    }
+
+    #[test]
+    fn editor_reports_retired_double_colon_as_migration_guidance() {
+        for raw in [
+            "Body @dev::focus-123",
+            "Body @dev::",
+            "Body @::focus-123",
+            "Body @::",
+            "Body @dev::bad.id",
+        ] {
+            let parse = editor(raw);
+            assert_eq!(parse.mode, EditorMode::Task, "{raw}");
+            assert_eq!(parse.body, "Body", "{raw}");
+            assert_eq!(parse.route, None, "{raw}");
+            assert!(parse.needs.is_empty(), "{raw}");
+            assert_eq!(
+                codes(&parse),
+                vec!["retired_task_block_id_marker"],
+                "{raw}"
+            );
+            assert_eq!(
+                parse.diagnostics[0].message, RETIRED_DOUBLE_COLON_ERROR,
+                "{raw}"
+            );
+            assert_eq!(
+                parse.diagnostics[0].range,
+                Some((5, raw.len())),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_separators_keep_the_first_family_and_do_not_steal_section_suffixes(
+    ) {
+        let bullet_plus = editor("Jot @notes#time+box");
+        assert_eq!(bullet_plus.mode, EditorMode::Bullet);
+        assert_eq!(bullet_plus.section.as_deref(), Some("time+box"));
+        assert!(bullet_plus.diagnostics.is_empty());
+
+        let bullet_caret = editor("Jot @notes#time^box");
+        assert_eq!(bullet_caret.mode, EditorMode::Bullet);
+        assert_eq!(bullet_caret.section.as_deref(), Some("time^box"));
+        assert!(bullet_caret.diagnostics.is_empty());
+
+        let bullet_colons = editor("Jot @notes#time::box");
+        assert_eq!(bullet_colons.mode, EditorMode::Bullet);
+        assert_eq!(bullet_colons.section.as_deref(), Some("time::box"));
+        assert!(bullet_colons.diagnostics.is_empty());
+
+        let plus_then_colon = editor("Add context @route+bad:id");
+        assert_eq!(
+            codes(&plus_then_colon),
+            vec!["invalid_sub_bullet_block_id"]
+        );
+
+        let caret_then_colon = editor("Do work @route^bad:id");
+        assert_eq!(codes(&caret_then_colon), vec!["invalid_task_block_id"]);
+
+        let plus_then_caret = editor("Add context @route+id^x");
+        assert_eq!(
+            codes(&plus_then_caret),
+            vec!["invalid_sub_bullet_block_id"]
+        );
+
+        let caret_then_plus = editor("Do work @route^id+x");
+        assert_eq!(codes(&caret_then_plus), vec!["invalid_task_block_id"]);
+
+        let colon_then_plus = editor("Do work @route:id+x");
+        assert_eq!(codes(&colon_then_plus), vec!["invalid_pomodoro_block_id"]);
+
+        let colon_then_caret = editor("Do work @route:id^x");
+        assert_eq!(codes(&colon_then_caret), vec!["invalid_pomodoro_block_id"]);
     }
 
     #[test]
@@ -2635,6 +2758,7 @@ mod tests {
             "call dentist @5:30pm",
             "standup @10:00",
             "Discuss @dev:id later",
+            "Discuss @dev+id later",
             "Discuss @dev^id later",
             "Discuss @dev::id later",
         ] {
@@ -2652,7 +2776,9 @@ mod tests {
         for (raw, mode) in [
             ("@dev:id", EditorMode::PomodoroTask),
             ("@:", EditorMode::Incomplete),
-            ("@dev^id", EditorMode::SubBullet),
+            ("@dev+id", EditorMode::SubBullet),
+            ("@+", EditorMode::Incomplete),
+            ("@dev^id", EditorMode::Task),
             ("@^", EditorMode::Incomplete),
             ("@", EditorMode::Incomplete),
         ] {
@@ -2664,8 +2790,9 @@ mod tests {
 
     /// Every input `bob capture` resolves to a concrete capture must parse
     /// identically here. The interactive-only forms (`@`, `@#`, `@:`, `@^`,
-    /// and friends) are the documented exception: execution keeps them
-    /// literal, and this module reports them as `incomplete` instead.
+    /// `@+`, and friends) are the documented exception: execution keeps them
+    /// literal or rejects incomplete markers, and this module reports them
+    /// as `incomplete` instead.
     #[test]
     fn editor_agrees_with_execution_for_resolved_captures() {
         let inputs = [
@@ -2677,15 +2804,15 @@ mod tests {
             "Email @home soon",
             "@route",
             "@bad! body @Good",
-            "Do thing @Dev::Foo-Bar",
-            "@Dev::Foo-Bar Do thing s:2",
-            "Do thing @Dev::Foo-Bar p:2 s:1",
+            "Do thing @Dev^Foo-Bar",
+            "@Dev^Foo-Bar Do thing s:2",
+            "Do thing @Dev^Foo-Bar p:2 s:1",
             "Do thing @Dev:Foo-Bar",
             "@Dev:Foo-Bar Do thing s:2",
             "Do thing @!Dev:Foo-Bar s:2",
-            "Called today @Cash^Goog-Exit",
-            "Called today %log @Cash^Goog-Exit",
-            "Called today @Cash^Goog-Exit s:1",
+            "Called today @Cash+Goog-Exit",
+            "Called today %log @Cash+Goog-Exit",
+            "Called today @Cash+Goog-Exit s:1",
             "Some note @foo#bar",
             "@foo#bar Some note",
             "Some note @foo#",
@@ -2763,9 +2890,10 @@ mod tests {
         for raw in [
             "Body @^",
             "Body @dev^",
-            "Body @::",
-            "Body @::focus-123",
-            "Body @dev::",
+            "Body @^focus-123",
+            "Body @+",
+            "Body @dev+",
+            "Body @+focus-123",
             "Body @dev:",
             "Body @!",
             "Body @!dev",
@@ -2834,28 +2962,49 @@ mod tests {
 
     #[test]
     fn lua_parses_all_four_canonical_sub_bullet_forms() {
-        let complete = editor("Add context @Dev^focus-123");
+        let complete = editor("Add context @Dev+focus-123");
         assert_eq!(complete.mode, EditorMode::SubBullet);
         assert_eq!(complete.body, "Add context");
         assert_eq!(complete.route.as_deref(), Some("dev"));
         assert_eq!(complete.block_id.as_deref(), Some("focus-123"));
         assert!(complete.needs.is_empty());
 
-        let needs_task = editor("Add context @Dev^");
+        let needs_task = editor("Add context @Dev+");
         assert_eq!(needs_task.route.as_deref(), Some("dev"));
         assert_eq!(needs_task.needs, vec![Need::Task]);
 
-        let needs_target = editor("Add context @^focus-123");
+        let needs_target = editor("Add context @+focus-123");
         assert_eq!(needs_target.block_id.as_deref(), Some("focus-123"));
         assert_eq!(needs_target.needs, vec![Need::Route]);
 
-        let needs_both = editor("Add context @^");
+        let needs_both = editor("Add context @+");
         assert_eq!(needs_both.needs, vec![Need::Route, Need::Task]);
     }
 
     #[test]
+    fn lua_parses_all_four_canonical_task_block_id_forms() {
+        let complete = editor("Do work @Dev^focus-123");
+        assert_eq!(complete.mode, EditorMode::Task);
+        assert_eq!(complete.body, "Do work");
+        assert_eq!(complete.route.as_deref(), Some("dev"));
+        assert_eq!(complete.block_id.as_deref(), Some("focus-123"));
+        assert!(complete.needs.is_empty());
+
+        let needs_id = editor("Do work @Dev^");
+        assert_eq!(needs_id.route.as_deref(), Some("dev"));
+        assert_eq!(needs_id.needs, vec![Need::BlockId]);
+
+        let needs_target = editor("Do work @^focus-123");
+        assert_eq!(needs_target.block_id.as_deref(), Some("focus-123"));
+        assert_eq!(needs_target.needs, vec![Need::Route]);
+
+        let needs_both = editor("Do work @^");
+        assert_eq!(needs_both.needs, vec![Need::Route, Need::BlockId]);
+    }
+
+    #[test]
     fn lua_gives_sub_bullet_markers_precedence_over_pomodoro_markers() {
-        let malformed = editor("Add context @route^bad:id");
+        let malformed = editor("Add context @route+bad:id");
         assert_eq!(codes(&malformed), vec!["invalid_sub_bullet_block_id"]);
         assert!(
             malformed.diagnostics[0].message.contains("sub-bullet"),
@@ -2871,9 +3020,9 @@ mod tests {
     #[test]
     fn lua_rejects_invalid_sub_bullet_and_pomodoro_components() {
         let cases = [
-            ("Add context @bad.route^id", "invalid_sub_bullet_route"),
-            ("Add context @route^bad.id", "invalid_sub_bullet_block_id"),
-            ("Add context @route^bad_id", "invalid_sub_bullet_block_id"),
+            ("Add context @bad.route+id", "invalid_sub_bullet_route"),
+            ("Add context @route+bad.id", "invalid_sub_bullet_block_id"),
+            ("Add context @route+bad_id", "invalid_sub_bullet_block_id"),
             ("Do work @bad.route:id", "invalid_pomodoro_route"),
             ("Do work @route:bad.id", "invalid_pomodoro_block_id"),
             ("Do work @route:id:extra", "invalid_pomodoro_block_id"),
@@ -2893,11 +3042,15 @@ mod tests {
         assert_eq!(parse.mode, EditorMode::Task);
         assert_eq!(parse.body, "Discuss @dev:id later");
 
+        let parse = editor("Discuss @dev+id later");
+        assert_eq!(parse.mode, EditorMode::Task);
+        assert_eq!(parse.body, "Discuss @dev+id later");
+
         let parse = editor("Discuss @dev^id later");
         assert_eq!(parse.mode, EditorMode::Task);
         assert_eq!(parse.body, "Discuss @dev^id later");
 
-        for raw in ["@dev:id", "@:", "@dev^id", "@^"] {
+        for raw in ["@dev:id", "@:", "@dev+id", "@+", "@dev^id", "@^"] {
             assert_eq!(editor(raw).body, "", "{raw}");
         }
     }
@@ -2995,8 +3148,40 @@ mod tests {
                 &[Need::Route, Need::PomodoroId],
             ),
             (
-                "@Dev^focus-123",
+                "@Dev+focus-123",
                 EditorMode::SubBullet,
+                Some("dev"),
+                None,
+                Some("focus-123"),
+                &[],
+            ),
+            (
+                "@Dev+",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                None,
+                &[Need::Task],
+            ),
+            (
+                "@+focus-123",
+                EditorMode::Incomplete,
+                None,
+                None,
+                Some("focus-123"),
+                &[Need::Route],
+            ),
+            (
+                "@+",
+                EditorMode::Incomplete,
+                None,
+                None,
+                None,
+                &[Need::Route, Need::Task],
+            ),
+            (
+                "@Dev^focus-123",
+                EditorMode::Task,
                 Some("dev"),
                 None,
                 Some("focus-123"),
@@ -3008,7 +3193,7 @@ mod tests {
                 Some("dev"),
                 None,
                 None,
-                &[Need::Task],
+                &[Need::BlockId],
             ),
             (
                 "@^focus-123",
@@ -3024,7 +3209,7 @@ mod tests {
                 None,
                 None,
                 None,
-                &[Need::Route, Need::Task],
+                &[Need::Route, Need::BlockId],
             ),
         ];
 
@@ -3055,6 +3240,8 @@ mod tests {
         // with execution) only recognizes complete route tokens.
         assert_eq!(editor("Body % @Dev:focus-123").body, "Body");
         assert_eq!(editor("Body @Dev:focus-123 %").body, "Body");
+        assert_eq!(editor("Body @Dev+ %build_log").body, "Body");
+        assert_eq!(editor("Body % @Dev+").body, "Body %");
         assert_eq!(editor("Body @Dev^ %build_log").body, "Body");
         assert_eq!(editor("Body % @Dev^").body, "Body %");
     }
@@ -3098,6 +3285,13 @@ mod tests {
                 "Body",
             ),
             (
+                "Body @Dev+ s:10 %build_log",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                "Body",
+            ),
+            (
                 "Body @Dev^ s:10 %build_log",
                 EditorMode::Incomplete,
                 Some("dev"),
@@ -3123,6 +3317,13 @@ mod tests {
                 EditorMode::Incomplete,
                 None,
                 Some("focus-123"),
+                "Body",
+            ),
+            (
+                "Body @Dev+ p:4 s:10",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
                 "Body",
             ),
             (
@@ -3259,7 +3460,7 @@ mod tests {
 
     #[test]
     fn editor_serializes_snake_case_vocabulary() {
-        let parse = editor("Call bank @Cash^");
+        let parse = editor("Call bank @Cash+");
         let value = serde_json::json!({
             "mode": parse.mode,
             "needs": parse.needs,
@@ -3274,7 +3475,7 @@ mod tests {
 
     #[test]
     fn diagnostics_serialize_with_a_nullable_range_pair() {
-        let parse = editor("Body @dev^bad.id");
+        let parse = editor("Body @dev+bad.id");
         let value = serde_json::to_value(&parse.diagnostics).expect("json");
         assert_eq!(value[0]["severity"], "error");
         assert_eq!(value[0]["code"], "invalid_sub_bullet_block_id");
@@ -3335,14 +3536,14 @@ mod tests {
 
     #[test]
     fn missing_route_portion_of_task_block_id_marker_completes_a_route() {
-        let completion = field("@::focus-123", 1).expect("route field");
+        let completion = field("@^focus-123", 1).expect("route field");
         assert_eq!(completion.context, CompletionContext::Route);
         assert_eq!(completion.replacement, (1, 1));
     }
 
     #[test]
     fn missing_route_portion_of_sub_bullet_marker_completes_a_route() {
-        let completion = field("@^focus-123", 1).expect("route field");
+        let completion = field("@+focus-123", 1).expect("route field");
         assert_eq!(completion.context, CompletionContext::Route);
         assert_eq!(completion.replacement, (1, 1));
     }
@@ -3367,14 +3568,13 @@ mod tests {
 
     #[test]
     fn task_block_id_route_completes_but_authored_id_does_not() {
-        let route = field("Do work @Dev::new-id", 12).expect("route field");
+        let route = field("Do work @Dev^new-id", 12).expect("route field");
         assert_eq!(route.context, CompletionContext::Route);
         assert_eq!(route.query, "Dev");
         assert_eq!(route.replacement, (9, 12));
 
-        assert_eq!(field("Do work @Dev::new-id", 13), None);
-        assert_eq!(field("Do work @Dev::new-id", 14), None);
-        assert_eq!(field("Do work @Dev::new-id", 20), None);
+        assert_eq!(field("Do work @Dev^new-id", 13), None);
+        assert_eq!(field("Do work @Dev^new-id", 19), None);
     }
 
     #[test]
@@ -3388,7 +3588,7 @@ mod tests {
 
     #[test]
     fn task_completes_after_a_resolved_sub_bullet_route() {
-        let completion = field("note @Cash^goog", 15).expect("task field");
+        let completion = field("note @Cash+goog", 15).expect("task field");
         assert_eq!(completion.context, CompletionContext::Task);
         assert_eq!(completion.route.as_deref(), Some("cash"));
         assert_eq!(completion.query, "goog");
@@ -3399,6 +3599,7 @@ mod tests {
     fn right_component_without_a_resolved_route_has_no_completion() {
         assert_eq!(field("@:foc", 5), None);
         assert_eq!(field("@^foc", 5), None);
+        assert_eq!(field("@+foc", 5), None);
     }
 
     #[test]
@@ -3420,11 +3621,19 @@ mod tests {
     }
 
     #[test]
+    fn retired_double_colon_marker_has_no_completion_field() {
+        assert_eq!(field("Do work @Dev::new-id", 12), None);
+        assert_eq!(field("Do work @Dev::new-id", 14), None);
+        assert_eq!(field("Do work @Dev::new-id", 20), None);
+        assert_eq!(field("@::focus-123", 1), None);
+    }
+
+    #[test]
     fn invalid_block_id_characters_still_produce_a_field() {
         // The field extractor never validates block-ID syntax; a discovery
         // scan naturally returns no candidates for a query no real block ID
         // could match, without a separate invalid/error path here.
-        let completion = field("note @dev^bad.id", 16).expect("task field");
+        let completion = field("note @dev+bad.id", 16).expect("task field");
         assert_eq!(completion.context, CompletionContext::Task);
         assert_eq!(completion.route.as_deref(), Some("dev"));
         assert_eq!(completion.query, "bad.id");
@@ -3440,7 +3649,7 @@ mod tests {
 
     #[test]
     fn completion_field_stays_on_unicode_scalar_boundaries() {
-        let raw = "caf\u{e9} \u{1f680} @Cash^goog-exit";
+        let raw = "caf\u{e9} \u{1f680} @Cash+goog-exit";
         for cursor in
             (0..=raw.len()).filter(|&index| raw.is_char_boundary(index))
         {
@@ -3450,8 +3659,8 @@ mod tests {
 
     #[test]
     fn completion_field_uses_byte_offsets_after_multibyte_prefix_text() {
-        let raw = "caf\u{e9} \u{1f680} @Cash^goog-exit";
-        // "@Cash^goog-exit" starts at byte 11, right after the multibyte
+        let raw = "caf\u{e9} \u{1f680} @Cash+goog-exit";
+        // "@Cash+goog-exit" starts at byte 11, right after the multibyte
         // café and rocket-emoji body text.
         assert_eq!(&raw[11..16], "@Cash");
         assert_eq!(&raw[17..26], "goog-exit");
@@ -3780,6 +3989,53 @@ were removed"
     fn execution_ordinary_single_line_capture_has_no_sub_bullets() {
         let parsed = execute("buy milk @groceries").expect("parse");
         assert!(parsed.sub_bullets.is_empty());
+    }
+
+    #[test]
+    fn execution_retired_double_colon_is_a_usage_error() {
+        for raw in [
+            "Do thing @Dev::Foo-Bar",
+            "@Dev::Foo-Bar Do thing",
+            "body @cash::",
+            "body @::id",
+        ] {
+            let error = execute(raw).expect_err(raw);
+            assert_eq!(error, RETIRED_DOUBLE_COLON_ERROR, "{raw}");
+        }
+    }
+
+    #[test]
+    fn execution_plus_sub_bullet_does_not_conflict_with_authored_plus_child() {
+        let parsed = execute(
+            "parent line\n+ authored child @dev+focus-123\n+ second child",
+        )
+        .expect("parse");
+        assert_eq!(parsed.body, "parent line");
+        assert_eq!(parsed.route.as_deref(), Some("dev"));
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::SubBullet {
+                target: SubBulletTarget::BlockId("focus-123".to_string()),
+            }
+        );
+        assert_eq!(
+            sub_bullet_bodies(&parsed.sub_bullets),
+            vec!["authored child", "second child"]
+        );
+    }
+
+    #[test]
+    fn execution_forced_route_keeps_retired_and_special_markers_literal() {
+        let parsed = parse_capture_text_with_clip_control(
+            "Do thing @dev::id @dev+parent @dev^new-id",
+            Some("work"),
+            None,
+            true,
+        )
+        .expect("parse");
+        assert_eq!(parsed.route.as_deref(), Some("work"));
+        assert_eq!(parsed.kind, CaptureKind::Task);
+        assert_eq!(parsed.body, "Do thing @dev::id @dev+parent @dev^new-id");
     }
 
     // -----------------------------------------------------------------

@@ -289,7 +289,7 @@ Examples:
                                  Capture and link a next Pomodoro task
   bob capture-complete --cursor 1 --format json -- '@'
                                  Complete the capture marker at the cursor
-  bob capture-parse --format json -- 'Call bank @cash^'
+  bob capture-parse --format json -- 'Call bank @cash+'
                                  Explain in-progress capture text
   bob capture-sections --route cash --format json
                                  List picker sections for one capture target

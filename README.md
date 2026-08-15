@@ -186,8 +186,8 @@ prose is a usage error naming the physical line number. A nonempty nested item
 before any first-level authored item is an `orphaned_nested_bullet` error, and
 an item that becomes empty only because its whole body was a capture marker is
 rejected the same way. Every recognized
-terminal `s:<N>`, `p:<N>`, `%...`, and `@route`/`@route#`/`@route::block-id`/
-`@route:block-id`/`@route^block-id` marker is a capture-wide directive no matter which physical
+terminal `s:<N>`, `p:<N>`, `%...`, and `@route`/`@route#`/`@route^block-id`/
+`@route:block-id`/`@route+block-id` marker is a capture-wide directive no matter which physical
 line's terminal region it appears in -- as shown above, `@work` and `p:1` on
 the last child still route and prioritize the whole capture -- and is
 stripped from the rendered line it was typed on. A second line that resolves
@@ -195,7 +195,7 @@ the same marker slot (two routes, two schedules, two priorities, or two
 clipboard markers) is ambiguous and fails with a usage error before anything
 is written. Only the first physical line keeps the established leading
 `@route text` form; later lines compose trailing markers only. A `sub_bullet`
-capture (`@route^block-id`) nests the newly captured line under the selected
+capture (`@route+block-id`) nests the newly captured line under the selected
 existing task, then preserves both authored levels relative to that new line.
 
 Authored children render before clipboard children and the priority
@@ -301,10 +301,10 @@ the captured text literal. A numeric header can be requested unambiguously with
 `--clip=20`; use `-n, --no-clip` when a genuine trailing `%N` or other `%...`
 token should remain literal. `--clip` and `--no-clip` conflict.
 
-Use a leading or trailing `@<route>::<block-id>` marker to create an ordinary
+Use a leading or trailing `@<route>^<block-id>` marker to create an ordinary
 open task with a requested Obsidian block ID, without creating or modifying a
 Pomodoro task link. For example,
-`bob capture '@dev::foobar' 'Some ordinary task.'` writes:
+`bob capture '@dev^foobar' 'Some ordinary task.'` writes:
 
 ```markdown
 - [ ] #task Some ordinary task. [created::2026-07-10] ^foobar
@@ -318,7 +318,9 @@ the same validator as other Bob task block IDs (letters, digits, and `-`).
 Before a real capture or `--dry-run` reports success, Bob rejects an ID that
 already appears anywhere in the destination note, leaving the note unchanged.
 This form never reads, validates, creates, or writes today's daily note; an
-invalid or missing `BOB_DAY_FILE` has no effect.
+invalid or missing `BOB_DAY_FILE` has no effect. The retired
+`@<route>::<block-id>` spelling is no longer accepted; use
+`@<route>^<block-id>` instead.
 
 Use a leading or trailing `@<route>:<block-id>` marker to create a
 Pomodoro-linked next task. For example,
@@ -349,10 +351,10 @@ ambiguity, malformed marker, or duplicate block ID leaves both notes unchanged.
 `--dry-run` performs the same validation and reports both planned edits without
 writing either file.
 
-Use a leading or trailing `@<route>^<block-id>` marker to append an ordinary
+Use a leading or trailing `@<route>+<block-id>` marker to append an ordinary
 child bullet beneath an existing task, without creating a note or changing the
 parent task. For example,
-`bob capture '@cash^goog-exit' 'Called Morgan Stanley today.'` writes:
+`bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'` writes:
 
 ```markdown
 - [*] #task Finish Google Exit Packet! [created::2026-07-31] ^goog-exit
@@ -482,18 +484,18 @@ opens the section picker for `sase.md`; the panel consumes only `@sase#`, and
 `bob capture` still owns clipboard, schedule, and priority interpretation
 after the section is chosen.
 
-Sub-bullet capture has the matching four-way `^` family. Use `<text> @^` to
-choose a destination and then one of its open tasks, `<text> @route^` to choose
-only the task, or `<text> @^block-id` to choose only the destination. A complete
-`<text> @route^block-id` request captures immediately. The task chooser shows
+Sub-bullet capture has the matching four-way `+` family. Use `<text> @+` to
+choose a destination and then one of its open tasks, `<text> @route+` to choose
+only the task, or `<text> @+block-id` to choose only the destination. A complete
+`<text> @route+block-id` request captures immediately. The task chooser shows
 each task's literal checkbox with status color and searchable status, block ID,
 section, and child-note details; picker selections use stale-safe task refs.
 
 Editor clients that speak the versioned JSON interfaces also support the
-ordinary task-with-ID `::` family. Use `<task> @::` to choose a destination and
-then author a new block ID, `<task> @route::` to prompt only for the new block
-ID, or `<task> @::block-id` to prompt only for the destination. A complete
-`<task> @route::block-id` request captures immediately as an ordinary task.
+ordinary task-with-ID `^` family. Use `<task> @^` to choose a destination and
+then author a new block ID, `<task> @route^` to prompt only for the new block
+ID, or `<task> @^block-id` to prompt only for the destination. A complete
+`<task> @route^block-id` request captures immediately as an ordinary task.
 The right-hand block ID is user-authored and must be new, so completion is
 deliberately route-only and never offers existing task block IDs for that side.
 
@@ -520,9 +522,10 @@ does: the first physical line is the parent, later column-zero `-`/`*`/`+`
 lines become first-level authored children, and later lines prefixed by
 exactly two ASCII spaces become nested authored children. Incomplete
 interactive markers are valid input rather than errors, so `@`, `@#`,
-`@#Ideas`, `@route#`, `@::`,
-`@route::`, `@:`, `@route:`, `@^`, `@route^`, and the legacy `@!` aliases all parse on any
-line. Complete and in-progress Obsidian links such as `[[sase`,
+`@#Ideas`, `@route#`, `@^`, `@route^`, `@+`, `@route+`, `@:`, `@route:`,
+and the legacy `@!` aliases all parse on any line. The retired
+`@route::...` spelling is a diagnostic directing users to `@route^...`;
+it is not an incomplete Pomodoro marker. Complete and in-progress Obsidian links such as `[[sase`,
 `![[sase]]`, `[[sase#Design|Spec]]`, and `[[#^block-id]]` also parse for
 semantic highlighting. An invalid marker component, a malformed continuation
 line, an orphaned nested bullet, an item emptied by marker removal, or a
@@ -536,7 +539,7 @@ JSON output is a single versioned object:
 {
   "ok": true,
   "schema_version": 1,
-  "input": "Call bank @Cash^",
+  "input": "Call bank @Cash+",
   "body": "Call bank",
   "mode": "incomplete",
   "route": "cash",
@@ -583,15 +586,16 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
 `interactive_placeholder`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
-marks the part of a marker the user has not filled in yet: the trailing `^` in
-`@cash^`, or the whole `@^` when the route is still empty too. Wikilink spans
+marks the part of a marker the user has not filled in yet: the trailing `+` in
+`@cash+`, or the whole `@+` when the route is still empty too. Wikilink spans
 cover syntax only; unresolved note targets are not errors.
 
 Each entry in `diagnostics` has `severity` (`error`, `warning`, or `info`), a
 stable snake_case `code`, a `message` reusing `bob capture`'s exact wording,
 and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
-`invalid_sub_bullet_route`, `invalid_sub_bullet_block_id`,
+`retired_task_block_id_marker`, `invalid_sub_bullet_route`,
+`invalid_sub_bullet_block_id`,
 `invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `legacy_bullet_marker`,
 `invalid_child_line` (a later physical line is not blank, a column-zero
 authored bullet, or a two-space nested authored bullet),
@@ -635,13 +639,13 @@ body text yet is still completed on the parent line, even though
 `bob capture` would leave that exact input literal.
 
 Route completion covers a bare `@`, a still-typing `@fragment`, and the
-missing route portion of `@::...`, `@:...`, `@^...`, and `@#...`, backed by the same
+missing route portion of `@^...`, `@+...`, `@:...`, and `@#...`, backed by the same
 scan as `bob capture-targets`. Section completion covers `@route#prefix`,
 backed by the same scan as `bob capture-sections`. Pomodoro block-ID
 completion covers `@route:prefix` and parent-task completion covers
-`@route^prefix`; both are backed by the same open-task scan as
+`@route+prefix`; both are backed by the same open-task scan as
 `bob capture-tasks` and only offer tasks that already carry a block ID. The
-right-hand side of `@route::block-id` is a new user-authored ID, so it has no
+right-hand side of `@route^block-id` is a new user-authored ID, so it has no
 completion context and returns an empty successful result while the caret is
 inside it.
 Candidates rank exact prefix matches before substring matches,

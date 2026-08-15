@@ -83,9 +83,11 @@ the first physical line is the parent, later column-zero '-'/'*'/'+' lines \
 become first-level authored children, and later lines prefixed by exactly \
 two ASCII spaces become nested authored children. Incomplete interactive \
 markers are valid input, \
-not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@::', \
-'@route::', '@:', '@route:', '@^', '@route^', and the legacy '@!' aliases \
-all report mode 'incomplete' plus what they still need. An invalid marker component, a malformed \
+not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@^', \
+'@route^', '@+', '@route+', '@:', '@route:', and the legacy '@!' aliases \
+all report mode 'incomplete' plus what they still need. The retired \
+'@route::...' spelling is a diagnostic directing users to '@route^...'; \
+it is not an incomplete Pomodoro marker. An invalid marker component, a malformed \
 continuation line, an orphaned nested bullet, an item emptied by marker removal, or a duplicate \
 capture-wide marker across lines becomes a diagnostic, so live editors keep \
 a usable parse while 'bob capture' keeps its strict execution errors.\n\n\
@@ -97,7 +99,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash^'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev::focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n  - nested child\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n  - nested child\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -403,12 +405,12 @@ mod tests {
                 "--",
                 "Call",
                 "bank",
-                "@Cash^",
+                "@Cash+",
             ])
             .expect("parse arguments");
         assert_eq!(
             raw_text_from_matches(&matches).expect("text"),
-            "Call bank @Cash^"
+            "Call bank @Cash+"
         );
         assert_eq!(OutputFormat::from_matches(&matches), OutputFormat::Human);
     }
@@ -432,17 +434,17 @@ mod tests {
     #[test]
     fn cli_keeps_hyphenated_text_literal_like_bob_capture() {
         let matches = build_cli()
-            .try_get_matches_from(vec![COMMAND_NAME, "--", "-x", "@dev^"])
+            .try_get_matches_from(vec![COMMAND_NAME, "--", "-x", "@dev+"])
             .expect("parse arguments");
-        assert_eq!(raw_text_from_matches(&matches).expect("text"), "-x @dev^");
+        assert_eq!(raw_text_from_matches(&matches).expect("text"), "-x @dev+");
     }
 
     #[test]
     fn json_shape_is_stable() {
-        let value = json("Call bank @Cash^");
+        let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["input"], "Call bank @Cash^");
+        assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
         assert_eq!(value["route"], "cash");
@@ -463,7 +465,9 @@ mod tests {
         assert_eq!(json("buy milk")["mode"], "task");
         assert_eq!(json("jot idea @notes#Ideas")["mode"], "bullet");
         assert_eq!(json("do work @dev:focus-1")["mode"], "pomodoro_task");
-        assert_eq!(json("note @dev^focus-1")["mode"], "sub_bullet");
+        assert_eq!(json("note @dev+focus-1")["mode"], "sub_bullet");
+        assert_eq!(json("note @dev+")["mode"], "incomplete");
+        assert_eq!(json("note @dev^focus-1")["mode"], "task");
         assert_eq!(json("note @dev^")["mode"], "incomplete");
 
         let value = json("body p:2 s:1 % @groceries");
@@ -481,7 +485,7 @@ mod tests {
 
     #[test]
     fn json_reports_wikilink_semantic_spans_without_changing_capture_body() {
-        let value = json("See [[sase#Design|Spec]] @Cash^");
+        let value = json("See [[sase#Design|Spec]] @Cash+");
         assert_eq!(value["body"], "See [[sase#Design|Spec]]");
         assert_eq!(value["route"], "cash");
         assert_eq!(
@@ -526,7 +530,7 @@ mod tests {
 
     #[test]
     fn json_reports_diagnostics_with_a_range_pair() {
-        let value = json("note @dev^bad.id");
+        let value = json("note @dev+bad.id");
         assert_eq!(value["ok"], true);
         assert_eq!(value["mode"], "task");
         assert_eq!(
@@ -539,12 +543,27 @@ mod tests {
     }
 
     #[test]
+    fn json_reports_retired_double_colon_as_a_diagnostic() {
+        let value = json("note @dev::new-id");
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["mode"], "task");
+        assert_eq!(
+            value["diagnostics"][0]["code"],
+            "retired_task_block_id_marker"
+        );
+        assert!(value["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("'@<route>::<block-id>' is no longer accepted"));
+    }
+
+    #[test]
     fn human_output_is_plain_without_color() {
         let styler = Styler::plain();
         assert!(!styler.is_color());
         // Rendering must not panic for a parse that exercises every branch.
         print_human_success_with_styler(
-            &parse("note @dev^bad.id % s:1"),
+            &parse("note @dev+bad.id % s:1"),
             &styler,
         );
         print_human_success_with_styler(&parse("@"), &styler);
@@ -560,7 +579,7 @@ mod tests {
 
     #[test]
     fn spans_stay_ordered_and_on_character_boundaries() {
-        let raw = "caf\u{e9} \u{1f680} @Cash^goog-exit s:2";
+        let raw = "caf\u{e9} \u{1f680} @Cash+goog-exit s:2";
         let result = parse(raw);
         assert!(!result.spans.is_empty());
         for span in &result.spans {
