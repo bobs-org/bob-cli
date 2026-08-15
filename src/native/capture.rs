@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ffi::OsString,
     fs,
     io::{self, IsTerminal, Read, Write},
@@ -19,7 +20,7 @@ use super::{
     capture_clip, capture_language,
     capture_language::{
         is_block_id, AuthoredSubBullet, CaptureKind, ClipRequest,
-        ParsedCaptureText, SubBulletTarget,
+        ParsedCaptureItem, SubBulletTarget,
     },
     capture_schedule_log, collect_done, config, env as bob_env, markdown,
     note_tasks,
@@ -29,6 +30,8 @@ use super::{
 };
 
 pub(crate) use super::capture_language::is_route_token;
+#[cfg(test)]
+use super::capture_language::ParsedCaptureText;
 
 const COMMAND_NAME: &str = "bob capture";
 pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
@@ -71,30 +74,38 @@ fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Capture a task or bullet into the Bob vault")
         .long_about(
-            "Capture one task into the Bob Obsidian vault.\n\n\
-TEXT is one or more physical lines. The first line's whitespace is \
-normalized and becomes the parent, formatted as a #task with a [created::] \
-stamp, and written to mac_inbox.md unless an @route token or --route target \
-is provided. Existing target files prefer a Tasks section, then fall back \
-to the last top-level task block. Missing target files are created when \
-needed.\n\n\
-Every later nonblank line must be either a column-zero Markdown bullet or a \
-nested bullet prefixed by exactly two ASCII spaces. At either depth, '-', \
-'*', or '+' must be followed by a space or tab; the source marker and \
-separator are stripped and the item is rendered with the canonical '- <body>' \
-marker. Column-zero authored items render one target-selected indentation \
-unit beneath the parent; two-space source items render two units beneath the \
-parent and attach to the nearest preceding nonempty column-zero authored \
-item. A blank line or marker-only placeholder is skipped and never clears \
-that owner. Unsupported indentation, prose continuation, or an orphaned \
-nested item fails with a usage error naming the line, and so does an item \
+            "Capture one or more tasks or bullets into the Bob Obsidian vault.\n\n\
+TEXT is split into ordered capture items by one or more blank or whitespace-only \
+physical lines; leading, trailing, and repeated separators are ignored. Each \
+item's first nonblank line is normalized and becomes that item's parent, \
+formatted as a #task with a [created::] stamp unless a bullet or sub-bullet \
+route is selected, and written to mac_inbox.md unless an @route token or \
+--route target is provided. Existing target files prefer a Tasks section, \
+then fall back to the last top-level task block. Missing target files are \
+created when needed.\n\n\
+Within each item, every later physical line must be either a column-zero \
+Markdown bullet or a nested bullet prefixed by exactly two ASCII spaces. At \
+either depth, '-', '*', or '+' must be followed by a space or tab; the source \
+marker and separator are stripped and the item is rendered with the canonical \
+'- <body>' marker. Column-zero authored items render one target-selected \
+indentation unit beneath the parent; two-space source items render two units \
+beneath the parent and attach to the nearest preceding nonempty column-zero \
+authored item. A marker-only placeholder is skipped and never clears that \
+owner. Unsupported indentation, prose continuation, or an orphaned nested \
+item fails with a usage error naming the physical line, and so does an item \
 left with no text once its own capture markers are removed. Every recognized \
-terminal 's:<N>', 'p:<N>', '%...', and '@route' marker configures the whole \
-capture no matter which line's end it appears on and is stripped from that \
-line's rendered text; a second line resolving the same marker is ambiguous \
-and fails before anything is written. Only the first line keeps the \
-established leading '@route text' form. Authored children render before any \
-clipboard children and the priority schedule log.\n\n\
+terminal 's:<N>', 'p:<N>', '%...', and '@route' marker configures only its own \
+capture item and is stripped from the rendered line it was typed on; a second \
+line in the same item resolving the same marker is ambiguous and fails before \
+anything is written. Only an item's first line keeps the established leading \
+'@route text' form. Authored children render before any clipboard children \
+and the priority schedule log.\n\n\
+All items are planned against in-memory note snapshots before commit. Later \
+items see earlier planned edits to the same target, and any parse, clipboard, \
+validation, staging, or replace failure leaves notes, ledgers, and newly \
+created clipboard files at their original state. Single-item JSON keeps its \
+legacy shape; multi-item JSON keeps the first result at the top level and adds \
+an ordered 'captures' array.\n\n\
 Append a trailing lowercase 's:<N>' token, where N is a non-negative integer, \
 to schedule the capture N days from today. The token is removed from the task \
 text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It \
@@ -163,7 +174,7 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -433,26 +444,95 @@ fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, CaptureError> {
 }
 
 fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
+    let batch = plan_capture_batch(&request)?;
+    if !request.dry_run {
+        commit_capture_batch(&batch)?;
+    }
+    Ok(CaptureResult::from_items(
+        batch.items.into_iter().map(|item| item.result).collect(),
+    ))
+}
+
+struct PlannedCaptureBatch {
+    items: Vec<PlannedCaptureItem>,
+    text_files: Vec<StagedTextFile>,
+}
+
+struct PlannedCaptureItem {
+    result: CaptureItemResult,
+    clip_plan: Option<capture_clip::ClipPlan>,
+}
+
+fn plan_capture_batch(
+    request: &CaptureRequest,
+) -> Result<PlannedCaptureBatch, CaptureError> {
     let parse_clip_markers = request.forced_clip.is_none() && !request.no_clip;
-    let mut parsed = parse_capture_text_with_clip_control(
+    let parsed_items = parse_capture_items_with_clip_control(
         &request.raw_text,
         request.forced_route.as_deref(),
         request.forced_section.as_deref(),
         parse_clip_markers,
     )?;
-    if let Some(target) = request.forced_sub_bullet_target {
-        parsed.kind = CaptureKind::SubBullet { target };
+    let now = bob_env::current_datetime();
+    let today = now.date();
+    let roll_seed = config::roll_seed();
+    let mut planner = CaptureBatchPlanner::default();
+    let mut clip_reservations = capture_clip::ClipReservations::default();
+    let mut items = Vec::new();
+
+    for parsed_item in parsed_items {
+        let item_number = parsed_item.index + 1;
+        let line_start = parsed_item.line_start;
+        let planned = plan_capture_item(
+            request,
+            parsed_item,
+            now,
+            today,
+            roll_seed,
+            &mut planner,
+            &mut clip_reservations,
+        )
+        .map_err(|mut error| {
+            error.message = format!(
+                "capture item {item_number} starting on line {line_start}: {}",
+                error.message
+            );
+            error
+        })?;
+        items.push(planned);
+    }
+
+    Ok(PlannedCaptureBatch {
+        items,
+        text_files: planner.into_staged_files(),
+    })
+}
+
+fn plan_capture_item(
+    request: &CaptureRequest,
+    parsed_item: ParsedCaptureItem,
+    now: chrono::NaiveDateTime,
+    today: NaiveDate,
+    roll_seed: u64,
+    planner: &mut CaptureBatchPlanner,
+    clip_reservations: &mut capture_clip::ClipReservations,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    let mut parsed = parsed_item.parsed;
+    if let Some(target) = request.forced_sub_bullet_target.as_ref() {
+        parsed.kind = CaptureKind::SubBullet {
+            target: target.clone(),
+        };
     }
     if let Some(clip) = request.forced_clip.as_ref() {
         parsed.clip = Some(clip.clone());
     }
-    let now = bob_env::current_datetime();
-    let today = now.date();
     let created = date_string(today);
     let priority = match parsed.priority_level {
-        Some(number) => {
-            Some(resolve_priority(number, parsed.scheduled_offset)?)
-        }
+        Some(number) => Some(resolve_priority(
+            number,
+            parsed.scheduled_offset,
+            item_roll_seed(roll_seed, parsed_item.index),
+        )?),
         None => None,
     };
     let priority_field = priority
@@ -522,7 +602,8 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let child_indent = (parsed.clip.is_some()
         || schedule_log_reason.is_some()
         || !parsed.sub_bullets.is_empty())
-    .then(|| child_indent_unit(&target));
+    .then(|| child_indent_unit(planner, &target))
+    .transpose()?;
     let sub_bullet_lines: Vec<String> = if parsed.sub_bullets.is_empty() {
         Vec::new()
     } else {
@@ -534,12 +615,13 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             let clipboard =
                 capture_clip::read_clipboard().map_err(CaptureError::io)?;
             Some(
-                capture_clip::plan(
+                capture_clip::plan_with_reservations(
                     &request.bob_dir,
                     header.as_deref(),
                     &clipboard,
                     now,
                     child_indent.as_deref().unwrap_or("\t"),
+                    clip_reservations,
                 )
                 .map_err(CaptureError::io)?,
             )
@@ -548,12 +630,13 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             let clipboard =
                 capture_clip::read_clipboard().map_err(CaptureError::io)?;
             Some(
-                capture_clip::plan(
+                capture_clip::plan_with_reservations(
                     &request.bob_dir,
                     None,
                     &clipboard,
                     now,
                     child_indent.as_deref().unwrap_or("\t"),
+                    clip_reservations,
                 )
                 .map_err(CaptureError::io)?,
             )
@@ -562,17 +645,19 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             let clipboards = capture_clip::read_clipboard_history(count.get())
                 .map_err(CaptureError::io)?;
             Some(
-                capture_clip::plan_history(
+                capture_clip::plan_history_with_reservations(
                     &request.bob_dir,
                     &clipboards,
                     now,
                     child_indent.as_deref().unwrap_or("\t"),
+                    clip_reservations,
                 )
                 .map_err(CaptureError::io)?,
             )
         }
         None => None,
     };
+    let clip_output = clip_plan.as_ref().map(|plan| plan.output.clone());
     let schedule_log = schedule_log_reason.and_then(|reason| {
         scheduled.as_deref().map(|scheduled| {
             capture_schedule_log::plan(
@@ -598,6 +683,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
                 )
             })?;
             plan_sub_bullet_capture(
+                planner,
                 &request.bob_dir,
                 &target,
                 route,
@@ -612,6 +698,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
                 )
             })?;
             plan_capture_with_pomodoro_link(
+                planner,
                 &request.bob_dir,
                 &target,
                 route,
@@ -619,71 +706,69 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
                 &capture_block,
             )?
         }
-        _ => plan_capture_to_target(&target, &capture_block, &parsed.kind)?,
+        _ => plan_capture_to_target(
+            planner,
+            &target,
+            &capture_block,
+            &parsed.kind,
+        )?,
     };
-    if !request.dry_run {
-        let created_clip_files = match &clip_plan {
-            Some(plan) => plan.save().map_err(CaptureError::io)?,
-            None => Vec::new(),
-        };
-        if let Err(mut error) = write_capture_plan(&note_plan) {
-            if !created_clip_files.is_empty() {
-                let cleanup =
-                    capture_clip::cleanup_created(&created_clip_files);
-                capture_clip::append_cleanup_message(
-                    &mut error.message,
-                    &cleanup,
-                );
-            }
-            return Err(error);
-        }
-    }
     let special = note_plan.pomodoro.as_ref();
     let sub_bullet = note_plan.sub_bullet.as_ref();
 
-    Ok(CaptureResult {
-        ok: true,
-        dry_run: request.dry_run,
-        routed: parsed.route.is_some(),
-        route_label: parsed
-            .route
-            .as_deref()
-            .map(route_label)
-            .unwrap_or_default(),
-        route: parsed.route,
-        relative_target: relative_target.to_string_lossy().into_owned(),
-        target: target.display().to_string(),
-        text: parsed.body,
-        task_line: capture_line,
-        kind: kind_label,
-        created,
-        scheduled,
-        priority: priority.as_ref().map(|resolved| resolved.value.clone()),
-        priority_label: priority
-            .as_ref()
-            .map(|resolved| resolved.label.clone()),
-        placement: note_plan.placement,
-        sub_bullets: sub_bullet_lines,
-        clip: clip_plan.map(|plan| plan.output),
-        schedule_log,
-        block_id: task_block_id
-            .or_else(|| {
-                special.as_ref().map(|edit| edit.details.block_id.clone())
-            })
-            .or_else(|| sub_bullet.and_then(|edit| edit.block_id.clone())),
-        day_file: special.as_ref().map(|edit| edit.details.day_file.clone()),
-        block_link: special
-            .as_ref()
-            .map(|edit| edit.details.block_link.clone()),
-        pomodoro_link_placement: special
-            .as_ref()
-            .map(|edit| edit.details.pomodoro_link_placement),
-        parent_line: sub_bullet.map(|edit| edit.parent_line),
-        parent_text: sub_bullet.map(|edit| edit.parent_text.clone()),
-        parent_status_symbol: sub_bullet.map(|edit| edit.parent_status_symbol),
-        parent_status_name: sub_bullet
-            .map(|edit| edit.parent_status_name.clone()),
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: parsed.route.is_some(),
+            route_label: parsed
+                .route
+                .as_deref()
+                .map(route_label)
+                .unwrap_or_default(),
+            route: parsed.route,
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            target: target.display().to_string(),
+            text: parsed.body,
+            task_line: capture_line,
+            kind: kind_label,
+            created,
+            scheduled,
+            priority: priority.as_ref().map(|resolved| resolved.value.clone()),
+            priority_label: priority
+                .as_ref()
+                .map(|resolved| resolved.label.clone()),
+            placement: note_plan.placement,
+            sub_bullets: sub_bullet_lines,
+            clip: clip_output,
+            schedule_log,
+            block_id: task_block_id
+                .or_else(|| {
+                    special.as_ref().map(|edit| edit.details.block_id.clone())
+                })
+                .or_else(|| sub_bullet.and_then(|edit| edit.block_id.clone())),
+            day_file: special
+                .as_ref()
+                .map(|edit| edit.details.day_file.clone()),
+            block_link: special
+                .as_ref()
+                .map(|edit| edit.details.block_link.clone()),
+            pomodoro_link_placement: special
+                .as_ref()
+                .map(|edit| edit.details.pomodoro_link_placement),
+            parent_line: sub_bullet.map(|edit| edit.parent_line),
+            parent_text: sub_bullet.map(|edit| edit.parent_text.clone()),
+            parent_status_symbol: sub_bullet
+                .map(|edit| edit.parent_status_symbol),
+            parent_status_name: sub_bullet
+                .map(|edit| edit.parent_status_name.clone()),
+        },
+        clip_plan,
     })
+}
+
+fn item_roll_seed(base: u64, item_index: usize) -> u64 {
+    base.wrapping_add((item_index as u64).wrapping_mul(0x9E3779B97F4A7C15))
 }
 
 /// Join the capture line with its authored children (if any), its clip
@@ -766,6 +851,7 @@ struct ResolvedPriority {
 fn resolve_priority(
     number: u64,
     explicit_scheduled_offset: Option<u64>,
+    roll_seed: u64,
 ) -> Result<ResolvedPriority, CaptureError> {
     let property = config::load_priority_property(&config::config_path())
         .map_err(|error| match error {
@@ -783,7 +869,7 @@ fn resolve_priority(
     })?;
     let rolled_offset = explicit_scheduled_offset
         .is_none()
-        .then(|| level.roll_offset(config::roll_seed()));
+        .then(|| level.roll_offset(roll_seed));
     Ok(ResolvedPriority {
         name: property.name().to_string(),
         value: level.value().to_string(),
@@ -885,25 +971,122 @@ fn append_block_id(line: &mut String, block_id: &str) {
     line.push_str(&format!(" ^{block_id}"));
 }
 
+#[derive(Default)]
+struct CaptureBatchPlanner {
+    files: Vec<BatchTextFile>,
+    by_path: HashMap<PathBuf, usize>,
+}
+
+struct BatchTextFile {
+    path: PathBuf,
+    existed: bool,
+    present: bool,
+    original: String,
+    current: String,
+}
+
+struct StagedTextFile {
+    target: PathBuf,
+    target_existed: bool,
+    original_target: String,
+    updated_target: String,
+}
+
+impl CaptureBatchPlanner {
+    fn currently_exists(&mut self, path: &Path) -> Result<bool, CaptureError> {
+        let index = self.ensure_loaded(path)?;
+        Ok(self.files[index].present)
+    }
+
+    fn read_existing(&mut self, path: &Path) -> Result<String, CaptureError> {
+        let index = self.ensure_loaded(path)?;
+        if !self.files[index].present {
+            return Err(CaptureError::io(format!(
+                "note does not exist: {}",
+                path.display()
+            )));
+        }
+        Ok(self.files[index].current.clone())
+    }
+
+    fn current_contents(
+        &mut self,
+        path: &Path,
+    ) -> Result<Option<String>, CaptureError> {
+        let index = self.ensure_loaded(path)?;
+        Ok(self.files[index]
+            .present
+            .then(|| self.files[index].current.clone()))
+    }
+
+    fn stage(
+        &mut self,
+        path: &Path,
+        updated: String,
+    ) -> Result<(), CaptureError> {
+        let index = self.ensure_loaded(path)?;
+        self.files[index].present = true;
+        self.files[index].current = updated;
+        Ok(())
+    }
+
+    fn ensure_loaded(&mut self, path: &Path) -> Result<usize, CaptureError> {
+        if let Some(index) = self.by_path.get(path) {
+            return Ok(*index);
+        }
+
+        let present = path.exists();
+        let original = if present {
+            read_target(path)?
+        } else {
+            String::new()
+        };
+        let index = self.files.len();
+        self.by_path.insert(path.to_path_buf(), index);
+        self.files.push(BatchTextFile {
+            path: path.to_path_buf(),
+            existed: present,
+            present,
+            current: original.clone(),
+            original,
+        });
+        Ok(index)
+    }
+
+    fn into_staged_files(self) -> Vec<StagedTextFile> {
+        self.files
+            .into_iter()
+            .filter(|file| {
+                file.present && (!file.existed || file.current != file.original)
+            })
+            .map(|file| StagedTextFile {
+                target: file.path,
+                target_existed: file.existed,
+                original_target: file.original,
+                updated_target: file.current,
+            })
+            .collect()
+    }
+}
+
 fn plan_capture_to_target(
+    planner: &mut CaptureBatchPlanner,
     target: &Path,
     capture_block: &str,
     kind: &CaptureKind,
 ) -> Result<CaptureWritePlan, CaptureError> {
-    if !target.exists() {
+    if !planner.currently_exists(target)? {
         validate_target_parent(target)?;
+        let updated_target = format!("{capture_block}\n");
+        planner.stage(target, updated_target)?;
         return Ok(CaptureWritePlan {
-            target: target.to_path_buf(),
-            target_existed: false,
-            original_target: String::new(),
-            updated_target: format!("{capture_block}\n"),
             placement: Placement::Created,
             pomodoro: None,
             sub_bullet: None,
         });
     }
 
-    let contents = read_target(target)?;
+    let contents = planner.read_existing(target)?;
     if let CaptureKind::TaskWithBlockId { block_id } = kind {
         reject_duplicate_block_id(&contents, block_id, target)?;
     }
@@ -928,11 +1111,8 @@ fn plan_capture_to_target(
             ));
         }
     };
+    planner.stage(target, updated)?;
     Ok(CaptureWritePlan {
-        target: target.to_path_buf(),
-        target_existed: true,
-        original_target: contents,
-        updated_target: updated,
         placement,
         pomodoro: None,
         sub_bullet: None,
@@ -941,10 +1121,6 @@ fn plan_capture_to_target(
 
 #[derive(Debug)]
 struct CaptureWritePlan {
-    target: PathBuf,
-    target_existed: bool,
-    original_target: String,
-    updated_target: String,
     placement: Placement,
     pomodoro: Option<PlannedPomodoroEdit>,
     sub_bullet: Option<SubBulletCaptureDetails>,
@@ -962,8 +1138,6 @@ struct SubBulletCaptureDetails {
 #[derive(Debug)]
 struct PlannedPomodoroEdit {
     details: PomodoroCaptureDetails,
-    day_file: PathBuf,
-    updated_day: String,
 }
 
 #[derive(Debug)]
@@ -975,18 +1149,15 @@ struct PomodoroCaptureDetails {
 }
 
 fn plan_capture_with_pomodoro_link(
+    planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
     target: &Path,
     route: &str,
     block_id: &str,
     capture_block: &str,
 ) -> Result<CaptureWritePlan, CaptureError> {
-    let target_existed = target.exists();
-    let original_target = if target_existed {
-        read_target(target)?
-    } else {
-        String::new()
-    };
+    let target_existed = planner.currently_exists(target)?;
+    let original_target = planner.current_contents(target)?.unwrap_or_default();
     reject_duplicate_block_id(&original_target, block_id, target)?;
 
     let (updated_target, placement) = if target_existed {
@@ -1009,7 +1180,7 @@ fn plan_capture_with_pomodoro_link(
         ));
     }
 
-    let original_day = read_target(&day_file)?;
+    let original_day = planner.read_existing(&day_file)?;
     let block_link = format!("[[{route}#^{block_id}]]");
     if original_day.contains(&block_link) {
         return Err(CaptureError::io(format!(
@@ -1018,22 +1189,19 @@ fn plan_capture_with_pomodoro_link(
     }
     let (updated_day, pomodoro_link_placement) =
         insert_pomodoro_block_link(&original_day, &block_link)?;
+    let day_file_label = day_file.display().to_string();
+    planner.stage(target, updated_target)?;
+    planner.stage(&day_file, updated_day)?;
 
     Ok(CaptureWritePlan {
-        target: target.to_path_buf(),
-        target_existed,
-        original_target,
-        updated_target,
         placement,
         pomodoro: Some(PlannedPomodoroEdit {
             details: PomodoroCaptureDetails {
                 block_id: block_id.to_string(),
-                day_file: day_file.display().to_string(),
+                day_file: day_file_label,
                 block_link,
                 pomodoro_link_placement,
             },
-            day_file,
-            updated_day,
         }),
         sub_bullet: None,
     })
@@ -1057,20 +1225,14 @@ fn reject_duplicate_block_id(
 }
 
 fn plan_sub_bullet_capture(
+    planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
     target: &Path,
     route: &str,
     sub_bullet_target: &SubBulletTarget,
     capture_block: &str,
 ) -> Result<CaptureWritePlan, CaptureError> {
-    if !target.is_file() {
-        return Err(CaptureError::io(format!(
-            "note does not exist: {}",
-            target.display()
-        )));
-    }
-
-    let contents = read_target(target)?;
+    let contents = planner.read_existing(target)?;
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(&contents, &settings);
     let parent = match sub_bullet_target {
@@ -1159,11 +1321,10 @@ fn plan_sub_bullet_capture(
         parent_status_name: parent.status_name.clone(),
     };
 
+    let updated_target = insert_at(&contents, parent.block_end, &addition);
+    planner.stage(target, updated_target)?;
+
     Ok(CaptureWritePlan {
-        target: target.to_path_buf(),
-        target_existed: true,
-        original_target: contents.clone(),
-        updated_target: insert_at(&contents, parent.block_end, &addition),
         placement,
         pomodoro: None,
         sub_bullet: Some(details),
@@ -1202,13 +1363,16 @@ fn dominant_indent_unit(lines: &[LineSpan<'_>]) -> Option<&'static str> {
     }
 }
 
-fn child_indent_unit(target: &Path) -> String {
-    let Ok(contents) = fs::read_to_string(target) else {
-        return "\t".to_string();
+fn child_indent_unit(
+    planner: &mut CaptureBatchPlanner,
+    target: &Path,
+) -> Result<String, CaptureError> {
+    let Some(contents) = planner.current_contents(target)? else {
+        return Ok("\t".to_string());
     };
-    dominant_indent_unit(&line_spans(&contents))
+    Ok(dominant_indent_unit(&line_spans(&contents))
         .unwrap_or("\t")
-        .to_string()
+        .to_string())
 }
 
 fn leading_whitespace(line: &str) -> &str {
@@ -1231,37 +1395,172 @@ fn validate_target_parent(target: &Path) -> Result<(), CaptureError> {
     }
 }
 
-fn write_capture_plan(plan: &CaptureWritePlan) -> Result<(), CaptureError> {
-    if let Some(pomodoro) = &plan.pomodoro {
-        return coordinated_replace(
-            &plan.target,
-            plan.target_existed.then_some(plan.original_target.as_str()),
-            &plan.updated_target,
-            &pomodoro.day_file,
-            &pomodoro.updated_day,
-        );
-    }
-
-    replace_single_file(&plan.target, plan.target_existed, &plan.updated_target)
-}
-
-fn replace_single_file(
-    target: &Path,
-    target_existed: bool,
-    updated: &str,
+fn commit_capture_batch(
+    batch: &PlannedCaptureBatch,
 ) -> Result<(), CaptureError> {
-    let temporary = write_temporary_file(target, updated, "target")?;
-    if let Err(error) = fs::rename(&temporary, target) {
-        remove_temporary_file(&temporary);
-        return Err(fs_error("replace target", target, error));
-    }
-    if !target_existed && !target.is_file() {
-        return Err(CaptureError::io(format!(
-            "create target {} failed",
-            target.display()
-        )));
+    let created_clip_files = save_clip_plans(&batch.items)?;
+    if let Err(mut error) = write_staged_files(&batch.text_files) {
+        if !created_clip_files.is_empty() {
+            let cleanup = capture_clip::cleanup_created(&created_clip_files);
+            capture_clip::append_cleanup_message(&mut error.message, &cleanup);
+        }
+        return Err(error);
     }
     Ok(())
+}
+
+fn save_clip_plans(
+    items: &[PlannedCaptureItem],
+) -> Result<Vec<PathBuf>, CaptureError> {
+    let mut created = Vec::new();
+    for item in items {
+        let Some(plan) = &item.clip_plan else {
+            continue;
+        };
+        match plan.save() {
+            Ok(paths) => created.extend(paths),
+            Err(mut message) => {
+                if !created.is_empty() {
+                    let cleanup = capture_clip::cleanup_created(&created);
+                    capture_clip::append_cleanup_message(
+                        &mut message,
+                        &cleanup,
+                    );
+                }
+                return Err(CaptureError::io(message));
+            }
+        }
+    }
+    Ok(created)
+}
+
+struct PendingTextFile<'a> {
+    staged: &'a StagedTextFile,
+    temporary: PathBuf,
+    backup: Option<PathBuf>,
+}
+
+struct AppliedTextFile {
+    target: PathBuf,
+    backup: Option<PathBuf>,
+    target_existed: bool,
+}
+
+fn write_staged_files(files: &[StagedTextFile]) -> Result<(), CaptureError> {
+    let mut pending = Vec::new();
+    for (index, staged) in files.iter().enumerate() {
+        let role = format!("batch-{index}");
+        let temporary = match write_temporary_file(
+            &staged.target,
+            &staged.updated_target,
+            &role,
+        ) {
+            Ok(path) => path,
+            Err(error) => {
+                cleanup_pending_text_files(&pending);
+                return Err(error);
+            }
+        };
+        let backup = if staged.target_existed {
+            match write_temporary_file(
+                &staged.target,
+                &staged.original_target,
+                "backup",
+            ) {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    remove_temporary_file(&temporary);
+                    cleanup_pending_text_files(&pending);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+        pending.push(PendingTextFile {
+            staged,
+            temporary,
+            backup,
+        });
+    }
+
+    let mut applied = Vec::new();
+    while !pending.is_empty() {
+        let pending_file = pending.remove(0);
+        if let Err(error) =
+            fs::rename(&pending_file.temporary, &pending_file.staged.target)
+        {
+            remove_temporary_file(&pending_file.temporary);
+            if let Some(backup) = &pending_file.backup {
+                remove_temporary_file(backup);
+            }
+            cleanup_pending_text_files(&pending);
+            let mut message = format!(
+                "replace target {}: {error}",
+                pending_file.staged.target.display()
+            );
+            append_rollback_message(
+                &mut message,
+                rollback_applied_files(&applied),
+            );
+            return Err(CaptureError::io(message));
+        }
+        applied.push(AppliedTextFile {
+            target: pending_file.staged.target.clone(),
+            backup: pending_file.backup,
+            target_existed: pending_file.staged.target_existed,
+        });
+    }
+
+    for file in &applied {
+        if let Some(backup) = &file.backup {
+            remove_temporary_file(backup);
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_pending_text_files(files: &[PendingTextFile<'_>]) {
+    for file in files {
+        remove_temporary_file(&file.temporary);
+        if let Some(backup) = &file.backup {
+            remove_temporary_file(backup);
+        }
+    }
+}
+
+fn rollback_applied_files(files: &[AppliedTextFile]) -> Vec<String> {
+    let mut failures = Vec::new();
+    for file in files.iter().rev() {
+        let rollback = match &file.backup {
+            Some(backup) => fs::rename(backup, &file.target),
+            None if file.target_existed => Ok(()),
+            None => fs::remove_file(&file.target),
+        };
+        if let Err(error) = rollback {
+            let suffix = file
+                .backup
+                .as_ref()
+                .map(|backup| {
+                    format!("; original remains at {}", backup.display())
+                })
+                .unwrap_or_default();
+            failures.push(format!(
+                "rollback of {} failed: {error}{suffix}",
+                file.target.display()
+            ));
+        }
+    }
+    failures
+}
+
+fn append_rollback_message(message: &mut String, failures: Vec<String>) {
+    if failures.is_empty() {
+        message.push_str("; rolled back earlier note writes");
+    } else {
+        message.push_str("; ");
+        message.push_str(&failures.join("; "));
+    }
 }
 
 fn paths_refer_to_same_file(first: &Path, second: &Path) -> bool {
@@ -1394,74 +1693,6 @@ fn insertion_text_preserving_line_endings(
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn coordinated_replace(
-    target: &Path,
-    original_target: Option<&str>,
-    updated_target: &str,
-    day_file: &Path,
-    updated_day: &str,
-) -> Result<(), CaptureError> {
-    let target_temp = write_temporary_file(target, updated_target, "target")?;
-    let day_temp = match write_temporary_file(day_file, updated_day, "day") {
-        Ok(path) => path,
-        Err(error) => {
-            remove_temporary_file(&target_temp);
-            return Err(error);
-        }
-    };
-    let target_backup = match original_target {
-        Some(contents) => {
-            match write_temporary_file(target, contents, "backup") {
-                Ok(path) => Some(path),
-                Err(error) => {
-                    remove_temporary_file(&target_temp);
-                    remove_temporary_file(&day_temp);
-                    return Err(error);
-                }
-            }
-        }
-        None => None,
-    };
-
-    if let Err(error) = fs::rename(&target_temp, target) {
-        remove_temporary_file(&target_temp);
-        remove_temporary_file(&day_temp);
-        if let Some(backup) = &target_backup {
-            remove_temporary_file(backup);
-        }
-        return Err(fs_error("replace target", target, error));
-    }
-
-    if let Err(error) = fs::rename(&day_temp, day_file) {
-        let rollback = match &target_backup {
-            Some(backup) => fs::rename(backup, target),
-            None => fs::remove_file(target),
-        };
-        remove_temporary_file(&day_temp);
-        let mut message =
-            format!("replace daily note {}: {error}", day_file.display());
-        if let Err(rollback_error) = rollback {
-            message.push_str(&format!(
-                "; rollback of {} also failed: {rollback_error}{}",
-                target.display(),
-                target_backup
-                    .as_ref()
-                    .map(|backup| format!(
-                        "; original remains at {}",
-                        backup.display()
-                    ))
-                    .unwrap_or_default()
-            ));
-        }
-        return Err(CaptureError::io(message));
-    }
-
-    if let Some(backup) = &target_backup {
-        remove_temporary_file(backup);
-    }
-    Ok(())
-}
-
 fn write_temporary_file(
     destination: &Path,
     contents: &str,
@@ -1560,6 +1791,7 @@ fn parse_capture_text(
 
 /// Run the shared capture grammar and re-wrap its message as this command's
 /// usage error, which owns the exit code `bob capture` reports.
+#[cfg(test)]
 fn parse_capture_text_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
@@ -1567,6 +1799,21 @@ fn parse_capture_text_with_clip_control(
     parse_clip_markers: bool,
 ) -> Result<ParsedCaptureText, CaptureError> {
     capture_language::parse_capture_text_with_clip_control(
+        raw_text,
+        forced_route,
+        forced_section,
+        parse_clip_markers,
+    )
+    .map_err(CaptureError::usage)
+}
+
+fn parse_capture_items_with_clip_control(
+    raw_text: &str,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    parse_clip_markers: bool,
+) -> Result<Vec<ParsedCaptureItem>, CaptureError> {
+    capture_language::parse_capture_items_with_clip_control(
         raw_text,
         forced_route,
         forced_section,
@@ -2084,6 +2331,33 @@ enum Placement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct CaptureResult {
+    #[serde(flatten)]
+    item: CaptureItemResult,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    captures: Vec<CaptureItemResult>,
+}
+
+impl CaptureResult {
+    fn from_items(items: Vec<CaptureItemResult>) -> Self {
+        let item = items
+            .first()
+            .cloned()
+            .expect("capture batch always contains at least one item");
+        let captures = if items.len() > 1 { items } else { Vec::new() };
+        Self { item, captures }
+    }
+}
+
+impl std::ops::Deref for CaptureResult {
+    type Target = CaptureItemResult;
+
+    fn deref(&self) -> &Self::Target {
+        &self.item
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CaptureItemResult {
     ok: bool,
     dry_run: bool,
     routed: bool,
@@ -2133,6 +2407,24 @@ fn print_success(result: &CaptureResult, output_format: OutputFormat) {
 }
 
 fn print_human_success(result: &CaptureResult) {
+    if result.captures.is_empty() {
+        print_human_item_success(result, None);
+        return;
+    }
+
+    let total = result.captures.len();
+    for (index, item) in result.captures.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        print_human_item_success(item, Some((index + 1, total)));
+    }
+}
+
+fn print_human_item_success(
+    result: &CaptureItemResult,
+    ordinal: Option<(usize, usize)>,
+) {
     let styler = Styler::detect();
     let target_label = if result.route_label.is_empty() {
         result.relative_target.as_str()
@@ -2150,7 +2442,10 @@ fn print_human_success(result: &CaptureResult) {
     } else {
         styler.green("\u{2713}")
     };
-    println!("{prefix} {verb}  {target_label}");
+    let ordinal = ordinal
+        .map(|(index, total)| format!("{index}/{total}  "))
+        .unwrap_or_default();
+    println!("{prefix} {verb}  {ordinal}{target_label}");
     if let (Some(symbol), Some(parent_text)) =
         (result.parent_status_symbol, result.parent_text.as_deref())
     {
@@ -3618,7 +3913,7 @@ mod tests {
 
     #[test]
     fn json_success_shape_is_stable() {
-        let result = CaptureResult {
+        let result = CaptureResult::from_items(vec![CaptureItemResult {
             ok: true,
             dry_run: false,
             routed: true,
@@ -3645,7 +3940,7 @@ mod tests {
             parent_text: None,
             parent_status_symbol: None,
             parent_status_name: None,
-        };
+        }]);
 
         let value: serde_json::Value =
             serde_json::from_str(&success_json(&result)).expect("json");
@@ -3667,6 +3962,7 @@ mod tests {
         assert_eq!(value["placement"], "inserted");
         assert!(value.get("clip").is_none(), "{value}");
         assert!(value.get("sub_bullets").is_none(), "{value}");
+        assert!(value.get("captures").is_none(), "{value}");
         for special_field in [
             "priority",
             "priority_label",

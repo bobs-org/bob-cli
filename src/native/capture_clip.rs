@@ -115,6 +115,11 @@ pub(crate) struct ClipPlan {
 }
 
 #[derive(Debug, Default)]
+pub(crate) struct ClipReservations {
+    files: FileReservations,
+}
+
+#[derive(Debug, Default)]
 struct FileReservations {
     files: Vec<PlannedFile>,
     by_destination: HashMap<PathBuf, usize>,
@@ -641,6 +646,7 @@ content"
     Ok(normalized)
 }
 
+#[cfg(test)]
 pub(crate) fn plan(
     bob_dir: &Path,
     header: Option<&str>,
@@ -648,30 +654,80 @@ pub(crate) fn plan(
     now: NaiveDateTime,
     indent: &str,
 ) -> Result<ClipPlan, String> {
-    let mut reservations = FileReservations::default();
-    let output =
-        plan_entry(bob_dir, header, clipboard, now, indent, &mut reservations)?;
+    let mut reservations = ClipReservations::default();
+    plan_with_reservations(
+        bob_dir,
+        header,
+        clipboard,
+        now,
+        indent,
+        &mut reservations,
+    )
+}
+
+pub(crate) fn plan_with_reservations(
+    bob_dir: &Path,
+    header: Option<&str>,
+    clipboard: &str,
+    now: NaiveDateTime,
+    indent: &str,
+    reservations: &mut ClipReservations,
+) -> Result<ClipPlan, String> {
+    let start = reservations.files.files.len();
+    let output = plan_entry(
+        bob_dir,
+        header,
+        clipboard,
+        now,
+        indent,
+        &mut reservations.files,
+    )?;
     Ok(ClipPlan {
         output,
-        files: reservations.files,
+        files: reservations.files.files[start..].to_vec(),
     })
 }
 
+#[cfg(test)]
 pub(crate) fn plan_history(
     bob_dir: &Path,
     clipboards: &[String],
     now: NaiveDateTime,
     indent: &str,
 ) -> Result<ClipPlan, String> {
-    let mut reservations = FileReservations::default();
+    let mut reservations = ClipReservations::default();
+    plan_history_with_reservations(
+        bob_dir,
+        clipboards,
+        now,
+        indent,
+        &mut reservations,
+    )
+}
+
+pub(crate) fn plan_history_with_reservations(
+    bob_dir: &Path,
+    clipboards: &[String],
+    now: NaiveDateTime,
+    indent: &str,
+    reservations: &mut ClipReservations,
+) -> Result<ClipPlan, String> {
+    let start = reservations.files.files.len();
     let entries = clipboards
         .iter()
         .enumerate()
         .map(|(index, clipboard)| {
-            plan_entry(bob_dir, None, clipboard, now, indent, &mut reservations)
-                .map_err(|error| {
-                    format!("clipboard history entry {}: {error}", index + 1)
-                })
+            plan_entry(
+                bob_dir,
+                None,
+                clipboard,
+                now,
+                indent,
+                &mut reservations.files,
+            )
+            .map_err(|error| {
+                format!("clipboard history entry {}: {error}", index + 1)
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let lines = entries
@@ -691,7 +747,7 @@ pub(crate) fn plan_history(
             snippet: None,
             entries,
         },
-        files: reservations.files,
+        files: reservations.files.files[start..].to_vec(),
     })
 }
 

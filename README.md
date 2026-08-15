@@ -147,6 +147,29 @@ the configured levels instead of staying literal. Capture always writes
 `[ ]`; `bob task-status-hooks` is what later marks a future-scheduled task
 Blocked.
 
+### Multi-item capture
+
+One or more blank or whitespace-only physical lines split `TEXT` into ordered
+capture items. Leading, trailing, and repeated separator runs are ignored, so
+a draft with at least one nonempty item is valid even if it starts or ends
+with blank rows. Each item uses the normal capture grammar independently:
+the first nonblank line is that item's parent, later contiguous authored
+bullet rows belong only to that item, and terminal `s:<N>`, `p:<N>`,
+`%...`, and `@...` markers configure only that item.
+
+Bob plans the whole batch against in-memory note and daily-ledger snapshots
+before writing anything. Later items see earlier planned edits to the same
+target, so order, insertion points, duplicate block-ID checks, sub-bullet
+lookups, and Pomodoro links match a successful sequential capture. If any
+item fails to parse, read the clipboard, validate, stage, or replace, Bob
+leaves notes, ledgers, and newly-created clipboard files at their original
+state. `--dry-run` uses the same planner with the commit step disabled.
+
+Single-item success JSON keeps the legacy shape. A multi-item success keeps
+the first result in the legacy top-level fields and adds an ordered
+`captures` array containing every per-item result. Human output numbers
+batch items as `1/N`, `2/N`, and so on.
+
 ### Authored sub-bullets
 
 `TEXT` may carry authored bullets beneath the parent line:
@@ -159,15 +182,16 @@ Prepare the launch review
   - Verify the links
 ```
 
-Every physical line after the first must be blank, a first-level Markdown
-item at column zero, or a nested Markdown item prefixed by exactly two ASCII
-spaces. At either level, `-`, `*`, or `+` must be followed by at least one
-space or tab. The source marker and separating whitespace are stripped, and
-each item is rendered with the canonical `- <body>` marker. First-level items
-render one indentation unit beneath the captured parent; nested items render
-two units beneath the parent and attach to the nearest preceding nonempty
-first-level authored item. The unit matches the target note's dominant
-tab-or-two-space child indentation, with a tab for a fresh note:
+Within one capture item, every physical line after the first must be a
+first-level Markdown item at column zero or a nested Markdown item prefixed
+by exactly two ASCII spaces. At either level, `-`, `*`, or `+` must be
+followed by at least one space or tab. The source marker and separating
+whitespace are stripped, and each item is rendered with the canonical
+`- <body>` marker. First-level items render one indentation unit beneath the
+captured parent; nested items render two units beneath the parent and attach
+to the nearest preceding nonempty first-level authored item. The unit matches
+the target note's dominant tab-or-two-space child indentation, with a tab for
+a fresh note:
 
 ```markdown
 - [ ] #task Prepare the launch review [created::2026-08-14] [priority::high]
@@ -177,24 +201,26 @@ tab-or-two-space child indentation, with a tab for a fresh note:
 		- Verify the links
 ```
 
-A blank line or a marker with nothing after it (`- ` or `  - ` alone) is a
-harmless placeholder and produces no child; this keeps interactive editors
-safe while a row is only half-typed. Blank and placeholder rows do not clear
-the current first-level owner, so a later nested item still attaches to it.
+A marker with nothing after it (`- ` or `  - ` alone) is a harmless
+placeholder and produces no child; this keeps interactive editors safe while
+a row is only half-typed. Placeholder rows do not clear the current
+first-level owner, so a later nested item still attaches to it. A true blank
+row ends the item and starts the next item at the following nonblank line.
 One-space, three-or-more-space, tabbed, wrapped, or ordinary continuation
-prose is a usage error naming the physical line number. A nonempty nested item
-before any first-level authored item is an `orphaned_nested_bullet` error, and
-an item that becomes empty only because its whole body was a capture marker is
-rejected the same way. Every recognized
+prose is a usage error naming the physical line number. A nonempty nested
+item before any first-level authored item is an `orphaned_nested_bullet`
+error, and an item that becomes empty only because its whole body was a
+capture marker is rejected the same way. Every recognized
 terminal `s:<N>`, `p:<N>`, `%...`, and `@route`/`@route#`/`@route^block-id`/
-`@route:block-id`/`@route+block-id` marker is a capture-wide directive no matter which physical
-line's terminal region it appears in -- as shown above, `@work` and `p:1` on
-the last child still route and prioritize the whole capture -- and is
-stripped from the rendered line it was typed on. A second line that resolves
-the same marker slot (two routes, two schedules, two priorities, or two
-clipboard markers) is ambiguous and fails with a usage error before anything
-is written. Only the first physical line keeps the established leading
-`@route text` form; later lines compose trailing markers only. A `sub_bullet`
+`@route:block-id`/`@route+block-id` marker is an item-wide directive no matter
+which physical line in that item it appears on -- as shown above, `@work` and
+`p:1` on the last child still route and prioritize that item -- and is
+stripped from the rendered line it was typed on. A second line in the same
+item that resolves the same marker slot (two routes, two schedules, two
+priorities, or two clipboard markers) is ambiguous and fails with a usage
+error before anything is written. Only the first physical line of an item
+keeps the established leading `@route text` form; later lines compose trailing
+markers only. A `sub_bullet`
 capture (`@route+block-id`) nests the newly captured line under the selected
 existing task, then preserves both authored levels relative to that new line.
 
@@ -517,10 +543,13 @@ marker still succeeds. If `TEXT` is omitted and stdin is piped, it reads the
 complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
 
-`TEXT` accepts the same multi-line authored-bullet draft `bob capture`
-does: the first physical line is the parent, later column-zero `-`/`*`/`+`
-lines become first-level authored children, and later lines prefixed by
-exactly two ASCII spaces become nested authored children. Incomplete
+`TEXT` accepts the same batch draft `bob capture` does: one or more blank or
+whitespace-only physical lines separate capture items, and each item keeps the
+existing parent-plus-authored-bullets grammar. Within an item, the first
+physical line is the parent, later column-zero `-`/`*`/`+` lines become
+first-level authored children, and later lines prefixed by exactly two ASCII
+spaces become nested authored children. Separator rows themselves have no
+marker completion or highlighting. Incomplete
 interactive markers are valid input rather than errors, so `@`, `@#`,
 `@#Ideas`, `@route#`, `@^`, `@route^`, `@+`, `@route+`, `@:`, `@route:`,
 and the legacy `@!` aliases all parse on any line. The retired
@@ -529,7 +558,7 @@ it is not an incomplete Pomodoro marker. Complete and in-progress Obsidian links
 `![[sase]]`, `[[sase#Design|Spec]]`, and `[[#^block-id]]` also parse for
 semantic highlighting. An invalid marker component, a malformed continuation
 line, an orphaned nested bullet, an item emptied by marker removal, or a
-duplicate capture-wide marker across lines becomes a diagnostic instead of a
+duplicate item-wide marker across lines becomes a diagnostic instead of a
 failure, while `bob capture` keeps its strict execution errors for the same
 text.
 
@@ -569,7 +598,7 @@ needs `["section"]`.
 
 `sub_bullets` is an optional array, omitted when empty, of every other valid
 physical line's normalized body -- its source `-`/`*`/`+` marker and any
-capture-wide markers already removed -- in source order. These are semantic
+item-wide markers already removed -- in source order. These are semantic
 parse bodies for an editor's own preview, not rendered Markdown: they carry
 no target-selected indentation or `- ` marker, unlike `bob capture`'s own
 `sub_bullets` output field. When `sub_bullets` is present,
@@ -578,6 +607,13 @@ per body, so version-tolerant clients can preserve hierarchy without a
 breaking schema change. Older clients may ignore the additive field; clients
 talking to an older `bob` that omits it should treat every body as depth `1`.
 This remains schema version 1.
+
+For a multi-item draft, `items` is an ordered optional array, omitted for a
+single item. Each entry has a one-based `index`, a `range` with global UTF-8
+`start`/`end` offsets into `input`, `line_start`/`line_end` physical line
+numbers, the item's `body`, `mode`, `route`, `section`, `block_id`, `needs`,
+and optional `sub_bullets`/`sub_bullet_depths`. The legacy top-level fields
+continue to describe the first item so older clients retain a useful preview.
 
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
@@ -602,8 +638,8 @@ authored bullet, or a two-space nested authored bullet),
 `orphaned_nested_bullet` (a nonempty nested item has no preceding first-level
 authored owner), `empty_child_after_markers` (an authored bullet has no text
 left once its capture markers are removed), and
-`duplicate_capture_marker` (a later line resolves a route, schedule,
-priority, or clipboard marker a prior line already resolved). Human output
+`duplicate_capture_marker` (a later line in the same item resolves a route,
+schedule, priority, or clipboard marker a prior line already resolved). Human output
 prints the same information without color escapes when piped, plus a
 `Sub-bullets` section listing `sub_bullets` with indentation from
 `sub_bullet_depths` when it is nonempty. On a missing `TEXT`, JSON mode prints
@@ -623,13 +659,14 @@ character boundary within `TEXT`; a missing `TEXT` defaults to an empty draft
 rather than an error, since cursor `0` against an empty draft is an ordinary
 interactive state, not a mistake.
 
-For a multi-line, authored-bullet draft, completion always scopes to the
-physical line the cursor is on: only the first (parent) line offers a
-leading marker, matching `bob capture-parse`'s leading-wins precedence, and
-a later valid column-zero or two-space nested authored line only completes its
-own trailing marker. A cursor sitting on a later line's source indentation,
-`-`/`*`/`+` bullet marker, or marker separator is never completable. Orphaned
-nested lines do not provide completion.
+For a blank-line-separated batch draft, completion always scopes to the item
+and physical line the cursor is on: only that item's first (parent) line
+offers a leading marker, matching `bob capture-parse`'s leading-wins
+precedence, and a later valid column-zero or two-space nested authored line
+only completes its own trailing marker. A cursor sitting on a separator row,
+a later line's source indentation, `-`/`*`/`+` bullet marker, or marker
+separator is never completable. Orphaned nested lines do not provide
+completion.
 
 The service itself decides whether completion applies. An unrecognized
 marker, a cursor sitting in plain body text, or a cursor on an `@token` that

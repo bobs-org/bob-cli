@@ -768,7 +768,9 @@ fn capture_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("Capture one task into the Bob Obsidian vault"),
+        help.contains(
+            "Capture one or more tasks or bullets into the Bob Obsidian vault"
+        ),
         "expected capture long help:\n{help}"
     );
     assert!(
@@ -2692,6 +2694,62 @@ fn capture_parse_json_output_is_stable_and_parseable() {
 }
 
 #[test]
+fn capture_parse_json_reports_batch_items_with_global_ranges() {
+    let draft = "First @cash\n- child\n\nSecond @notes#Ideas";
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .output()
+        .expect("run batch capture-parse json");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    let first_end = draft.find("\n\n").expect("separator");
+    let second_start = first_end + 2;
+
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["body"], "First");
+    assert_eq!(json["route"], "cash");
+    assert_eq!(json["sub_bullets"], serde_json::json!(["child"]));
+    assert_eq!(json["items"].as_array().expect("items").len(), 2);
+    assert_eq!(json["items"][0]["index"], 1);
+    assert_eq!(
+        json["items"][0]["range"],
+        serde_json::json!({ "start": 0, "end": first_end })
+    );
+    assert_eq!(json["items"][0]["line_start"], 1);
+    assert_eq!(json["items"][0]["line_end"], 2);
+    assert_eq!(json["items"][0]["body"], "First");
+    assert_eq!(json["items"][0]["route"], "cash");
+    assert_eq!(
+        json["items"][0]["sub_bullets"],
+        serde_json::json!(["child"])
+    );
+    assert_eq!(json["items"][1]["index"], 2);
+    assert_eq!(
+        json["items"][1]["range"],
+        serde_json::json!({ "start": second_start, "end": draft.len() })
+    );
+    assert_eq!(json["items"][1]["line_start"], 4);
+    assert_eq!(json["items"][1]["line_end"], 4);
+    assert_eq!(json["items"][1]["body"], "Second");
+    assert_eq!(json["items"][1]["mode"], "bullet");
+    assert_eq!(json["items"][1]["route"], "notes");
+    assert_eq!(json["items"][1]["section"], "Ideas");
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 6, "end": 11, "kind": "route" },
+            { "start": 28, "end": 34, "kind": "route" },
+            { "start": 35, "end": 40, "kind": "section" },
+        ])
+    );
+}
+
+#[test]
 fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
     let output = bob_command()
         .arg("capture-parse")
@@ -4394,6 +4452,147 @@ fn capture_json_output_is_machine_readable() {
     assert_eq!(json["created"], "2026-06-15");
     assert!(json["scheduled"].is_null(), "unexpected json: {json}");
     assert_eq!(json["placement"], "created");
+    assert!(json.get("captures").is_none(), "{json}");
+}
+
+#[test]
+fn capture_batch_json_is_ordered_and_keeps_legacy_top_level() {
+    let temp = TempDir::new("bob-cli-capture-batch-json");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let draft = concat!(
+        "first task @work\n",
+        "- child detail\n",
+        "\n",
+        "second note @notes#Ideas\n",
+        "\n",
+        "third task @work",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run batch json capture");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["text"], "first task");
+    assert_eq!(json["route"], "work");
+    assert_eq!(json["relative_target"], "work.md");
+    assert_eq!(json["sub_bullets"], serde_json::json!(["\t- child detail"]));
+
+    let captures = json["captures"].as_array().expect("captures array");
+    assert_eq!(captures.len(), 3);
+    assert_eq!(captures[0]["text"], "first task");
+    assert_eq!(captures[0]["route"], "work");
+    assert_eq!(captures[0]["relative_target"], "work.md");
+    assert_eq!(captures[1]["text"], "second note");
+    assert_eq!(captures[1]["kind"], "bullet");
+    assert_eq!(captures[1]["route"], "notes");
+    assert_eq!(captures[1]["relative_target"], "notes.md");
+    assert_eq!(captures[2]["text"], "third task");
+    assert_eq!(captures[2]["route"], "work");
+
+    assert_eq!(
+        fs::read_to_string(vault.join("work.md")).expect("read work route"),
+        concat!(
+            "- [ ] #task first task [created::2026-06-15]\n",
+            "\t- child detail\n",
+            "- [ ] #task third task [created::2026-06-15]\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("notes.md")).expect("read notes route"),
+        "- second note [created::2026-06-15]\n"
+    );
+}
+
+#[test]
+fn capture_batch_dry_run_reports_all_items_without_writing() {
+    let temp = TempDir::new("bob-cli-capture-batch-dry-run");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("-f")
+        .arg("json")
+        .arg("one @work\n\ntwo @notes")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run dry-run batch capture");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["captures"].as_array().expect("captures").len(), 2);
+    assert_eq!(json["captures"][0]["text"], "one");
+    assert_eq!(json["captures"][1]["text"], "two");
+    assert!(!vault.join("work.md").exists());
+    assert!(!vault.join("notes.md").exists());
+}
+
+#[test]
+fn capture_batch_human_output_numbers_items() {
+    let temp = TempDir::new("bob-cli-capture-batch-human");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("one @work\n\ntwo @notes")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run human batch capture");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("would capture  1/2  work.md")
+            && out.contains("would capture  2/2  notes.md"),
+        "{out}"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_batch_duplicate_block_id_failure_leaves_no_partial_write() {
+    let temp = TempDir::new("bob-cli-capture-batch-duplicate-id");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("first @work^dup\n\nsecond @work^dup")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run duplicate block-id batch capture");
+
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("capture item 2 starting on line 3")
+            && stderr(&output).contains("block ID ^dup already exists"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!vault.join("work.md").exists());
 }
 
 #[test]
@@ -5460,7 +5659,7 @@ fn capture_rejects_stdin_continuation_text_that_is_not_a_bullet() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&output.stderr).trim(),
-        "bob capture: capture line 2 must be a column-zero bullet or a two-space nested bullet using \"-\", \"*\", or \"+\" followed by a space or tab, or be left blank"
+        "bob capture: capture item 1 starting on line 1: capture line 2 must be a column-zero bullet or a two-space nested bullet using \"-\", \"*\", or \"+\" followed by a space or tab, or be left blank"
     );
     assert!(!vault.join("work.md").exists());
 }
@@ -5618,7 +5817,7 @@ fn capture_authored_bullets_preserve_inline_markdown_and_checkbox_text() {
 }
 
 #[test]
-fn capture_authored_bullets_skip_blank_and_placeholder_lines() {
+fn capture_authored_bullets_skip_placeholder_lines() {
     let temp = TempDir::new("bob-cli-capture-authored-placeholders");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -5627,7 +5826,7 @@ fn capture_authored_bullets_skip_blank_and_placeholder_lines() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .arg("@work parent\n\n- real child\n- \n-\t\n")
+        .arg("@work parent\n- real child\n- \n-\t\n")
         .env("BOB_NOW", "2026-06-15")
         .output()
         .expect("run placeholder-tolerant authored-bullet capture");
@@ -5718,7 +5917,7 @@ fn capture_authored_bullets_reject_item_emptied_by_markers() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&output.stderr).trim(),
-        "bob capture: capture line 2 has no text left after its capture markers were removed"
+        "bob capture: capture item 1 starting on line 1: capture line 2 has no text left after its capture markers were removed"
     );
     assert!(!vault.join("mac_inbox.md").exists());
 }
@@ -5753,7 +5952,7 @@ fn capture_authored_bullet_marker_on_child_line_configures_whole_capture() {
     );
     assert!(
         content.contains("\t- Attach the final checklist\n"),
-        "child line should drop its capture-wide markers:\n{content}"
+        "child line should drop its item-wide markers:\n{content}"
     );
     assert!(
         !content.contains('@'),
@@ -6160,6 +6359,75 @@ fn capture_complete_completes_a_marker_on_a_nested_child_line() {
         .map(|candidate| candidate["route"].as_str().expect("route"))
         .collect();
     assert_eq!(names, vec!["cash", "cash-flow"]);
+}
+
+#[test]
+fn capture_complete_scopes_to_later_batch_item_and_ignores_separator() {
+    let temp = TempDir::new("bob-cli-capture-complete-batch-item");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), "---\ntype: [[area]]\n---\n");
+    write_file(&vault.join("cash-flow.md"), "---\ntype: [[area]]\n---\n");
+    write_file(&vault.join("work.md"), "---\ntype: [[area]]\n---\n");
+
+    let draft = "first @work\n\nsecond @ca";
+    let cursor = draft.len();
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--cursor")
+        .arg(cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .output()
+        .expect("run batch item capture-complete");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["context"], "route");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({
+            "start": draft.rfind('@').expect("at sign") + 1,
+            "end": cursor,
+        })
+    );
+    let names: Vec<&str> = json["candidates"]
+        .as_array()
+        .expect("route candidates")
+        .iter()
+        .map(|candidate| candidate["route"].as_str().expect("route"))
+        .collect();
+    assert_eq!(names, vec!["cash", "cash-flow"]);
+
+    let separator_cursor = draft.find("\n\n").expect("separator") + 1;
+    let separator_output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--cursor")
+        .arg(separator_cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .output()
+        .expect("run separator capture-complete");
+
+    assert_success(&separator_output);
+    let separator_json: serde_json::Value =
+        serde_json::from_str(stdout(&separator_output).trim())
+            .expect("capture-complete JSON");
+    assert!(separator_json["context"].is_null(), "{separator_json}");
+    assert_eq!(separator_json["candidates"], serde_json::json!([]));
+    assert_eq!(
+        separator_json["replacement"],
+        serde_json::json!({
+            "start": separator_cursor,
+            "end": separator_cursor,
+        })
+    );
 }
 
 #[test]

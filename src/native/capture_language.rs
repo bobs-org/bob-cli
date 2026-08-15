@@ -51,8 +51,8 @@ pub(crate) struct ParsedCaptureText {
     pub(crate) scheduled_offset: Option<u64>,
     pub(crate) priority_level: Option<u64>,
     /// Normalized authored-child bodies plus their semantic depth, in source
-    /// order, with their source marker and capture-wide markers already
-    /// removed. Empty when the draft was an ordinary single-line capture.
+    /// order, with their source marker and item-wide markers already removed.
+    /// Empty when the item was an ordinary single-line capture.
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
 }
 
@@ -178,6 +178,32 @@ pub(crate) struct RawLine<'a> {
     pub(crate) end: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ItemLine<'a> {
+    pub(crate) raw: RawLine<'a>,
+    pub(crate) line_number: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CaptureItem<'a> {
+    pub(crate) index: usize,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) line_start: usize,
+    pub(crate) line_end: usize,
+    pub(crate) lines: Vec<ItemLine<'a>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedCaptureItem {
+    pub(crate) index: usize,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) line_start: usize,
+    pub(crate) line_end: usize,
+    pub(crate) parsed: ParsedCaptureText,
+}
+
 /// Split `raw` into physical lines on LF, CRLF, and bare CR alike, so pasted
 /// Windows and classic-Mac text behaves exactly like LF text. Byte offsets
 /// index the original, un-normalized `raw` string. A trailing line
@@ -227,6 +253,49 @@ pub(crate) fn split_physical_lines(raw: &str) -> Vec<RawLine<'_>> {
     lines
 }
 
+/// Split a draft into capture items. One or more blank/whitespace-only
+/// physical lines separate items; leading, trailing, and repeated separator
+/// runs are ignored. Item ranges and line numbers always refer back to the
+/// complete original draft.
+pub(crate) fn split_capture_items(raw: &str) -> Vec<CaptureItem<'_>> {
+    let mut items = Vec::new();
+    let mut current: Vec<ItemLine<'_>> = Vec::new();
+
+    for (offset, raw_line) in split_physical_lines(raw).into_iter().enumerate()
+    {
+        if raw_line.text.trim().is_empty() {
+            push_capture_item(&mut items, &mut current);
+            continue;
+        }
+
+        current.push(ItemLine {
+            raw: raw_line,
+            line_number: offset + 1,
+        });
+    }
+
+    push_capture_item(&mut items, &mut current);
+    items
+}
+
+fn push_capture_item<'a>(
+    items: &mut Vec<CaptureItem<'a>>,
+    current: &mut Vec<ItemLine<'a>>,
+) {
+    let Some(first) = current.first().copied() else {
+        return;
+    };
+    let last = current.last().copied().expect("nonempty item");
+    items.push(CaptureItem {
+        index: items.len(),
+        start: first.raw.start,
+        end: last.raw.end,
+        line_start: first.line_number,
+        line_end: last.line_number,
+        lines: std::mem::take(current),
+    });
+}
+
 /// One authored continuation line after its list marker has been stripped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AuthoredLine<'a> {
@@ -245,8 +314,10 @@ pub(crate) enum AuthoredLineClass<'a> {
 
 /// Classify one physical continuation line. A real item is either a
 /// column-zero `-`/`*`/`+` bullet or the same bullet prefixed by exactly two
-/// ASCII spaces. Blank rows and marker-only placeholder rows are harmless;
-/// every other nonempty shape is invalid.
+/// ASCII spaces. Whitespace-only rows are batch separators before strict
+/// item parsing reaches this classifier; when classified directly, they and
+/// marker-only placeholder rows are harmless. Every other nonempty shape is
+/// invalid.
 pub(crate) fn classify_authored_line<'a>(
     line: RawLine<'a>,
 ) -> AuthoredLineClass<'a> {
@@ -342,19 +413,82 @@ fn marker_only_placeholder_after_prefix(
             .all(|byte| matches!(byte, b' ' | b'\t'))
 }
 
+#[cfg(test)]
 pub(crate) fn parse_capture_text_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     parse_clip_markers: bool,
 ) -> Result<ParsedCaptureText, String> {
-    let lines = split_physical_lines(raw_text);
-    let Some((parent_line, child_lines)) = lines.split_first() else {
+    let items = split_capture_items(raw_text);
+    if items.is_empty() {
+        return Err(missing_text_error());
+    }
+    if items.len() > 1 {
+        return Err(
+            "capture text contains multiple blank-line-separated items"
+                .to_string(),
+        );
+    }
+    parse_capture_item(
+        &items[0],
+        forced_route,
+        forced_section,
+        parse_clip_markers,
+    )
+}
+
+pub(crate) fn parse_capture_items_with_clip_control(
+    raw_text: &str,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    parse_clip_markers: bool,
+) -> Result<Vec<ParsedCaptureItem>, String> {
+    let items = split_capture_items(raw_text);
+    if items.is_empty() {
+        return Err(missing_text_error());
+    }
+
+    items
+        .iter()
+        .map(|item| {
+            parse_capture_item(
+                item,
+                forced_route,
+                forced_section,
+                parse_clip_markers,
+            )
+            .map(|parsed| ParsedCaptureItem {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                parsed,
+            })
+            .map_err(|message| {
+                format!(
+                    "capture item {} starting on line {}: {message}",
+                    item.index + 1,
+                    item.line_start
+                )
+            })
+        })
+        .collect()
+}
+
+fn parse_capture_item(
+    item: &CaptureItem<'_>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    parse_clip_markers: bool,
+) -> Result<ParsedCaptureText, String> {
+    let Some((parent_line, child_lines)) = item.lines.split_first() else {
         return Err(missing_text_error());
     };
     let detect_route = forced_route.is_none();
 
-    let parent_normalized = normalize_task_text(parent_line.text);
+    let parent_normalized = normalize_task_text(parent_line.raw.text);
     if parent_normalized.is_empty() {
         return Err(missing_text_error());
     }
@@ -370,9 +504,9 @@ pub(crate) fn parse_capture_text_with_clip_control(
 
     let mut sub_bullets = Vec::new();
     let mut has_first_level_owner = false;
-    for (index, line) in child_lines.iter().enumerate() {
-        let line_number = index + 2;
-        let authored = match classify_authored_line(*line) {
+    for line in child_lines {
+        let line_number = line.line_number;
+        let authored = match classify_authored_line(line.raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
             AuthoredLineClass::Invalid => {
                 return Err(invalid_child_line_error(line_number));
@@ -449,7 +583,7 @@ pub(crate) fn parse_capture_text_with_clip_control(
     })
 }
 
-/// One physical line's resolved capture-wide markers and (when a route was
+/// One physical line's resolved item-wide markers and (when a route was
 /// recognized on this line) its route/mode token. `body` is the line's
 /// remaining text after every recognized marker is removed; it is empty
 /// exactly when the line held no non-marker tokens.
@@ -531,7 +665,7 @@ fn resolve_line(
     })
 }
 
-/// Accumulate the four capture-wide marker slots (route/mode, schedule,
+/// Accumulate the four item-wide marker slots (route/mode, schedule,
 /// priority, clipboard) across every physical line. Each slot may be set by
 /// at most one line; a second line that resolves the same slot is ambiguous.
 #[derive(Default)]
@@ -1237,6 +1371,25 @@ pub(crate) struct EditorParse {
     /// orphaned, or empty-after-markers child line is reported as a
     /// diagnostic instead and excluded here.
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
+    pub(crate) items: Vec<EditorItemParse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EditorItemParse {
+    pub(crate) index: usize,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) line_start: usize,
+    pub(crate) line_end: usize,
+    pub(crate) body: String,
+    pub(crate) mode: EditorMode,
+    pub(crate) route: Option<String>,
+    pub(crate) section: Option<String>,
+    pub(crate) block_id: Option<String>,
+    pub(crate) needs: Vec<Need>,
+    pub(crate) spans: Vec<Span>,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
 }
 
 /// One `@...` token resolved for the editor. `requires_body` marks the plain
@@ -1331,7 +1484,7 @@ fn parse_editor_line(
     }
 }
 
-/// Track which capture-wide marker slots earlier lines already resolved, so
+/// Track which item-wide marker slots earlier lines already resolved, so
 /// a later line that resolves the same slot becomes a diagnostic instead of
 /// silently overriding or being silently dropped.
 #[derive(Default)]
@@ -1417,20 +1570,62 @@ fn duplicate_capture_marker_diagnostic(
 /// trailing markers, while `sub_bullets` reports every other authored
 /// child's normalized body in source order.
 pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
-    let lines = split_physical_lines(raw_text);
-    let synthetic_empty = RawLine {
-        text: "",
-        start: 0,
-        end: 0,
+    let items = split_capture_items(raw_text)
+        .iter()
+        .map(parse_editor_item)
+        .collect::<Vec<_>>();
+    let Some(first) = items.first() else {
+        return EditorParse {
+            body: String::new(),
+            mode: EditorMode::Task,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            spans: Vec::new(),
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            items,
+        };
     };
-    let parent_line = lines.first().copied().unwrap_or(synthetic_empty);
-    let child_lines: &[RawLine] =
-        if lines.len() > 1 { &lines[1..] } else { &[] };
 
+    let body = first.body.clone();
+    let mode = first.mode;
+    let route = first.route.clone();
+    let section = first.section.clone();
+    let block_id = first.block_id.clone();
+    let needs = first.needs.clone();
+    let sub_bullets = first.sub_bullets.clone();
+    let mut spans = items
+        .iter()
+        .flat_map(|item| item.spans.iter().copied())
+        .collect::<Vec<_>>();
+    let diagnostics = items
+        .iter()
+        .flat_map(|item| item.diagnostics.iter().cloned())
+        .collect::<Vec<_>>();
+    spans.sort_by_key(|span| (span.start, span.end));
+
+    EditorParse {
+        body,
+        mode,
+        route,
+        section,
+        block_id,
+        needs,
+        spans,
+        diagnostics,
+        sub_bullets,
+        items,
+    }
+}
+
+fn parse_editor_item(item: &CaptureItem<'_>) -> EditorItemParse {
     let mut spans: Vec<Span> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut seen = SeenMarkers::default();
 
+    let parent_line = item.lines.first().expect("nonempty item").raw;
     let parent_tokens = tokenize_line_with_spans(&parent_line);
     let parent_parse = parse_editor_line(parent_tokens, true);
     seen.absorb_terminal_spans(&parent_parse.terminal_spans, &mut diagnostics);
@@ -1456,16 +1651,17 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
 
     let mut sub_bullets = Vec::new();
     let mut has_first_level_owner = false;
-    for (index, line) in child_lines.iter().enumerate() {
-        let line_number = index + 2;
-        let authored = match classify_authored_line(*line) {
+    for line in item.lines.iter().skip(1) {
+        let line_number = line.line_number;
+        let raw = line.raw;
+        let authored = match classify_authored_line(raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
             AuthoredLineClass::Invalid => {
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     code: "invalid_child_line",
                     message: invalid_child_line_error(line_number),
-                    range: Some((line.start, line.end)),
+                    range: Some((raw.start, raw.end)),
                 });
                 continue;
             }
@@ -1476,7 +1672,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
                 severity: Severity::Error,
                 code: "orphaned_nested_bullet",
                 message: orphaned_nested_bullet_error(line_number),
-                range: Some((line.start, line.end)),
+                range: Some((raw.start, raw.end)),
             });
             continue;
         }
@@ -1484,7 +1680,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         let child_line = RawLine {
             text: authored.body,
             start: authored.body_start,
-            end: line.end,
+            end: raw.end,
         };
         let child_tokens = tokenize_line_with_spans(&child_line);
         let child_parse = parse_editor_line(child_tokens, false);
@@ -1513,7 +1709,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
                 severity: Severity::Error,
                 code: "empty_child_after_markers",
                 message: empty_child_after_markers_error(line_number),
-                range: Some((line.start, line.end)),
+                range: Some((raw.start, raw.end)),
             });
         } else {
             sub_bullets.push(AuthoredSubBullet {
@@ -1527,8 +1723,12 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
     }
 
     spans.sort_by_key(|span| (span.start, span.end));
-
-    EditorParse {
+    EditorItemParse {
+        index: item.index,
+        start: item.start,
+        end: item.end,
+        line_start: item.line_start,
+        line_end: item.line_end,
         body,
         mode,
         route,
@@ -1539,6 +1739,20 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         diagnostics,
         sub_bullets,
     }
+}
+
+pub(crate) fn editor_item_at(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<EditorItemParse> {
+    split_capture_items(raw_text)
+        .into_iter()
+        .find(|item| {
+            item.lines
+                .iter()
+                .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
+        })
+        .map(|item| parse_editor_item(&item))
 }
 
 /// Mirror `parse_capture_text_with_clip_control`'s precedence: the leading
@@ -1964,22 +2178,27 @@ pub(crate) fn completion_field_at(
     raw_text: &str,
     cursor: usize,
 ) -> Option<CompletionField> {
-    let lines = split_physical_lines(raw_text);
-    let (line_index, line) = lines
-        .iter()
-        .enumerate()
-        .find(|(_, line)| cursor >= line.start && cursor <= line.end)?;
+    let items = split_capture_items(raw_text);
+    let (item, line_index, line) = items.iter().find_map(|item| {
+        item.lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| {
+                cursor >= line.raw.start && cursor <= line.raw.end
+            })
+            .map(|(line_index, line)| (item, line_index, line.raw))
+    })?;
     let leading = line_index == 0;
 
     let scan_line = if leading {
-        *line
+        line
     } else {
-        let AuthoredLineClass::Item(authored) = classify_authored_line(*line)
+        let AuthoredLineClass::Item(authored) = classify_authored_line(line)
         else {
             return None;
         };
         if authored.depth == AuthoredDepth::Nested
-            && !has_previous_first_level_authored_item(&lines, line_index)
+            && !has_previous_first_level_authored_item(&item.lines, line_index)
         {
             return None;
         }
@@ -2006,11 +2225,12 @@ pub(crate) fn completion_field_at(
 }
 
 fn has_previous_first_level_authored_item(
-    lines: &[RawLine<'_>],
+    lines: &[ItemLine<'_>],
     current_line_index: usize,
 ) -> bool {
     lines[1..current_line_index].iter().any(|line| {
-        let AuthoredLineClass::Item(authored) = classify_authored_line(*line)
+        let AuthoredLineClass::Item(authored) =
+            classify_authored_line(line.raw)
         else {
             return false;
         };
@@ -3721,6 +3941,32 @@ mod tests {
     }
 
     #[test]
+    fn split_capture_items_reports_ranges_and_ignores_separator_runs() {
+        let raw = " \nfirst\n- child\n\n\nsecond @work\r\n\r\nthird";
+        let items = split_capture_items(raw);
+        let summaries = items
+            .iter()
+            .map(|item| {
+                (
+                    item.index,
+                    item.line_start,
+                    item.line_end,
+                    &raw[item.start..item.end],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            summaries,
+            vec![
+                (0, 2, 3, "first\n- child"),
+                (1, 6, 6, "second @work"),
+                (2, 8, 8, "third"),
+            ]
+        );
+    }
+
+    #[test]
     fn authored_line_classifier_accepts_first_level_and_nested_items() {
         for (raw, body, depth, body_start) in [
             ("- body", "body", AuthoredDepth::First, 2),
@@ -3819,7 +4065,7 @@ mod tests {
     #[test]
     fn execution_tracks_nested_children_under_the_nearest_first_level_owner() {
         let parsed = execute(
-            "@work parent line\n- first child\n  - first detail\n- second child\n\n  - second detail",
+            "@work parent line\n- first child\n  - first detail\n- second child\n  - second detail",
         )
         .expect("parse");
         assert_eq!(
@@ -3836,7 +4082,7 @@ mod tests {
 
     #[test]
     fn execution_nested_placeholders_do_not_require_or_clear_an_owner() {
-        let parsed = execute("parent\n  - \n- first child\n  -\n\n  - detail")
+        let parsed = execute("parent\n  - \n- first child\n  -\n  - detail")
             .expect("parse");
         assert_eq!(
             sub_bullet_bodies(&parsed.sub_bullets),
@@ -3864,10 +4110,33 @@ mod tests {
     }
 
     #[test]
-    fn execution_skips_blank_and_placeholder_child_lines() {
-        let parsed =
-            execute("parent\n\n- real child\n- \n-\t\n   \n").expect("parse");
+    fn execution_skips_placeholder_child_lines() {
+        let parsed = execute("parent\n- real child\n- \n-\t\n").expect("parse");
         assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["real child"]);
+    }
+
+    #[test]
+    fn execution_single_item_parser_rejects_blank_line_batches() {
+        let error = execute("parent\n\nsecond item").unwrap_err();
+        assert_eq!(
+            error,
+            "capture text contains multiple blank-line-separated items"
+        );
+    }
+
+    #[test]
+    fn execution_batch_parser_prefixes_item_and_line_context() {
+        let error = parse_capture_items_with_clip_control(
+            "parent\n\nsecond\n  - orphan",
+            None,
+            None,
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "capture item 2 starting on line 3: capture line 4 is a nested bullet but has no preceding first-level authored bullet to attach to"
+        );
     }
 
     #[test]
@@ -4141,9 +4410,8 @@ were removed"
     }
 
     #[test]
-    fn editor_placeholder_and_blank_child_lines_produce_no_sub_bullet_or_diagnostic(
-    ) {
-        let parse = editor("parent\n\n- real child\n- \n");
+    fn editor_placeholder_child_lines_produce_no_sub_bullet_or_diagnostic() {
+        let parse = editor("parent\n- real child\n- \n");
         assert_eq!(sub_bullet_bodies(&parse.sub_bullets), vec!["real child"]);
         assert!(parse.diagnostics.is_empty());
     }

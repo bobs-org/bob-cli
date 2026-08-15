@@ -86,11 +86,12 @@ fn build_cli() -> ClapCommand {
 capture TEXT.\n\n\
 It shares the phase-grammar tokenizer and `@token` classification with \
 `bob capture-parse`, so a completion can never disagree with the marker \
-highlighting derived from that command. TEXT accepts the same multi-line \
-authored-bullet draft `bob capture` does; completion always scopes to the \
-physical line the cursor is on, so only the first (parent) line offers a \
-leading marker and a later column-zero or valid two-space nested authored \
-line only completes its own trailing marker. The \
+highlighting derived from that command. TEXT accepts the same \
+blank-line-separated batch draft `bob capture` does; completion always scopes \
+to the item and physical line the cursor is on, so only that item's first \
+(parent) line offers a leading marker and a later column-zero or valid \
+two-space nested authored line only completes its own trailing marker. A \
+cursor on a blank separator row returns an empty success. The \
 service decides whether completion applies at all: an unrecognized marker, \
 a cursor in plain body text, a cursor on an authored line's indentation or \
 bullet marker itself, an orphaned nested line, or a cursor on a token in the middle of a line all return a \
@@ -323,8 +324,9 @@ fn build_result(
     raw_text: &str,
     cursor: usize,
 ) -> Result<CaptureCompleteResult, CompleteError> {
-    let current_note_path = capture_language::parse_for_editor(raw_text)
-        .route
+    let current_route = capture_language::editor_item_at(raw_text, cursor)
+        .and_then(|item| item.route);
+    let current_note_path = current_route
         .as_deref()
         .map(capture::route_label)
         .unwrap_or_else(|| capture::route_label(capture::inbox_route()));
@@ -932,6 +934,22 @@ mod tests {
             panic!("expected heading candidates");
         };
         assert_eq!(headings[0].path, "mac_inbox.md");
+    }
+
+    #[test]
+    fn wikilink_same_note_heading_uses_the_cursor_item_route() {
+        let temp = TempDir::new("bob-cli-capture-complete-batch-link-heading");
+        write_file(&temp.path().join("work.md"), "# Work\n");
+        write_file(&temp.path().join("sase.md"), "# Design\n");
+
+        let draft = "@work first\n\n@sase second [[#De";
+        let value = result(temp.path(), draft, draft.len());
+        assert_eq!(value.context, Some(CompletionContext::WikilinkHeading));
+        let Candidates::WikilinkHeading(headings) = &value.candidates else {
+            panic!("expected heading candidates");
+        };
+        assert_eq!(headings[0].replacement, "Design]]");
+        assert_eq!(headings[0].path, "sase.md");
     }
 
     #[test]

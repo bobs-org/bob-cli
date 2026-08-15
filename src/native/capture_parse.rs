@@ -13,7 +13,8 @@ use serde_json::json;
 
 use super::{
     capture_language::{
-        self, AuthoredSubBullet, Diagnostic, EditorMode, Need, Severity, Span,
+        self, AuthoredSubBullet, Diagnostic, EditorItemParse, EditorMode, Need,
+        Severity, Span,
     },
     capture_links,
     style::Styler,
@@ -71,17 +72,21 @@ vault, never reads the clipboard, never touches the filesystem, and takes no \
 --bob-dir. Running it with a nonexistent BOB_DIR and a '%' clipboard marker \
 still succeeds.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
-section, and block ID, which parts a picker still has to supply, the UTF-8 \
-byte spans of every recognized token, Obsidian wikilink component spans, \
-every authored sub-bullet's normalized body plus depth, and structured diagnostics. \
+section, and block ID, which parts a picker still has to supply, ordered \
+blank-line-separated item summaries and ranges, the UTF-8 byte spans of every \
+recognized token, Obsidian wikilink component spans, every authored \
+sub-bullet's normalized body plus depth, and structured diagnostics. \
 Wikilink highlighting is syntax-only and never touches the vault. Byte \
 offsets index the original TEXT before whitespace normalization, are \
 half-open [start, end), never overlap, and always land on a character \
 boundary.\n\n\
-TEXT accepts the same multi-line authored-bullet draft 'bob capture' does: \
-the first physical line is the parent, later column-zero '-'/'*'/'+' lines \
-become first-level authored children, and later lines prefixed by exactly \
-two ASCII spaces become nested authored children. Incomplete interactive \
+TEXT accepts the same draft 'bob capture' does: one or more blank or \
+whitespace-only physical lines separate capture items, and each item keeps \
+the established authored-bullet grammar. Within an item, the first physical \
+line is the parent, later column-zero '-'/'*'/'+' lines become first-level \
+authored children, and later lines prefixed by exactly two ASCII spaces \
+become nested authored children. Separator rows have no spans, diagnostics, \
+or completion fields. Incomplete interactive \
 markers are valid input, \
 not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@^', \
 '@route^', '@+', '@route+', '@:', '@route:', and the legacy '@!' aliases \
@@ -89,7 +94,7 @@ all report mode 'incomplete' plus what they still need. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. An invalid marker component, a malformed \
 continuation line, an orphaned nested bullet, an item emptied by marker removal, or a duplicate \
-capture-wide marker across lines becomes a diagnostic, so live editors keep \
+item-wide marker across lines becomes a diagnostic, so live editors keep \
 a usable parse while 'bob capture' keeps its strict execution errors.\n\n\
 Complete and in-progress Obsidian wikilinks such as '[[note', '![[note]]', \
 '[[note#Heading|Alias]]', and '[[#^block-id]]' add semantic delimiter, target, \
@@ -99,7 +104,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n  - nested child\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -205,6 +210,32 @@ struct CaptureParseResult {
     /// `2` for a nested authored child.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sub_bullet_depths: Vec<u8>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    items: Vec<CaptureParseItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CaptureParseItem {
+    index: usize,
+    range: SourceRange,
+    line_start: usize,
+    line_end: usize,
+    body: String,
+    mode: EditorMode,
+    route: Option<String>,
+    section: Option<String>,
+    block_id: Option<String>,
+    needs: Vec<Need>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sub_bullets: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sub_bullet_depths: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct SourceRange {
+    start: usize,
+    end: usize,
 }
 
 impl CaptureParseResult {
@@ -212,6 +243,7 @@ impl CaptureParseResult {
         let parse = capture_language::parse_for_editor(&input);
         let spans =
             merge_spans(parse.spans, capture_links::wikilink_spans(&input));
+        let items = parse_items(&parse.items);
         let sub_bullets = parse.sub_bullets;
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         Self {
@@ -228,8 +260,35 @@ impl CaptureParseResult {
             diagnostics: parse.diagnostics,
             sub_bullets: sub_bullet_bodies(&sub_bullets),
             sub_bullet_depths,
+            items,
         }
     }
+}
+
+fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
+    if items.len() <= 1 {
+        return Vec::new();
+    }
+    items
+        .iter()
+        .map(|item| CaptureParseItem {
+            index: item.index + 1,
+            range: SourceRange {
+                start: item.start,
+                end: item.end,
+            },
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: item.body.clone(),
+            mode: item.mode,
+            route: item.route.clone(),
+            section: item.section.clone(),
+            block_id: item.block_id.clone(),
+            needs: item.needs.clone(),
+            sub_bullets: sub_bullet_bodies(&item.sub_bullets),
+            sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
+        })
+        .collect()
 }
 
 fn sub_bullet_bodies(sub_bullets: &[AuthoredSubBullet]) -> Vec<String> {
@@ -458,6 +517,37 @@ mod tests {
         assert_eq!(value["spans"][1]["end"], 16);
         assert_eq!(value["spans"][1]["kind"], "interactive_placeholder");
         assert_eq!(value["diagnostics"].as_array().expect("array").len(), 0);
+        assert!(value.get("items").is_none(), "{value}");
+    }
+
+    #[test]
+    fn json_reports_batch_items_without_bumping_schema() {
+        let raw = "First @cash\n\nSecond @notes#Ideas";
+        let value = json(raw);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["body"], "First");
+        assert_eq!(value["route"], "cash");
+        assert_eq!(value["items"].as_array().expect("items").len(), 2);
+        assert_eq!(value["items"][0]["index"], 1);
+        assert_eq!(
+            value["items"][0]["range"],
+            json!({ "start": 0, "end": raw.find("\n\n").unwrap() })
+        );
+        assert_eq!(value["items"][0]["line_start"], 1);
+        assert_eq!(value["items"][0]["line_end"], 1);
+        assert_eq!(value["items"][0]["body"], "First");
+        assert_eq!(value["items"][0]["route"], "cash");
+        assert_eq!(value["items"][1]["index"], 2);
+        assert_eq!(
+            value["items"][1]["range"],
+            json!({ "start": raw.find("\n\n").unwrap() + 2, "end": raw.len() })
+        );
+        assert_eq!(value["items"][1]["line_start"], 3);
+        assert_eq!(value["items"][1]["line_end"], 3);
+        assert_eq!(value["items"][1]["body"], "Second");
+        assert_eq!(value["items"][1]["mode"], "bullet");
+        assert_eq!(value["items"][1]["route"], "notes");
+        assert_eq!(value["items"][1]["section"], "Ideas");
     }
 
     #[test]
