@@ -154,11 +154,14 @@ note fail before the note is replaced; a missing destination note may still be \
 created like any ordinary routed task. This form never reads or requires the \
 daily note. The retired '@<route>::<block-id>' spelling is no longer accepted; \
 use '@<route>^<block-id>' instead.\n\n\
-Use '@<route>+<block-id>' in the same leading or trailing position to append \
+Use '@<route>+<block-id>' in the same leading or trailing position to capture \
 an ordinary child bullet beneath an existing task without a [created::] stamp. It \
-renders as '- <body>' and appends only the optional scheduled property. The note \
-and task must already exist. Existing child indentation and line endings are \
-preserved; run 'bob capture-tasks -r <route>' to list eligible task block IDs.\n\n\
+renders as '- <body>' and writes only the optional scheduled property. The complete \
+new child is placed before the selected task's first direct-child Schedule Log or \
+Work Log; if neither managed log exists, the child is appended at the end of the \
+task block. The note and task must already exist. Existing child indentation and \
+line endings are preserved; run 'bob capture-tasks -r <route>' to list eligible \
+task block IDs.\n\n\
 Append '#<section-prefix>' or a bare '#' to an @route token (such as \
 '@notes#Ideas' or '@notes#') to capture an ordinary bullet instead. It renders \
 as '- <body> [created::YYYY-MM-DD]' and is placed in a non-Tasks section whose \
@@ -1295,12 +1298,18 @@ fn plan_sub_bullet_capture(
         .map(|line| format!("{indentation}{line}"))
         .collect::<Vec<_>>()
         .join("\n");
+    let insertion_offset = first_direct_managed_log_start(
+        &lines,
+        parent.line_index,
+        parent.block_end,
+    )
+    .unwrap_or(parent.block_end);
     let addition = insertion_text_preserving_line_endings(
         &contents,
-        parent.block_end,
+        insertion_offset,
         &indented_block,
     );
-    let placement = if parent.block_end >= contents.len() {
+    let placement = if insertion_offset >= contents.len() {
         Placement::Appended
     } else {
         Placement::Inserted
@@ -1313,7 +1322,7 @@ fn plan_sub_bullet_capture(
         parent_status_name: parent.status_name.clone(),
     };
 
-    let updated_target = insert_at(&contents, parent.block_end, &addition);
+    let updated_target = insert_at(&contents, insertion_offset, &addition);
     planner.stage(target, updated_target)?;
 
     Ok(CaptureWritePlan {
@@ -1336,6 +1345,140 @@ fn first_child_indentation(
         .map(|line| leading_whitespace(line.text))
         .find(|indentation| indentation.len() > parent_indentation.len())
         .map(str::to_string)
+}
+
+// Plugin-compatible Schedule Log / Work Log markers: optional matching emoji,
+// the canonical or legacy bold label, an optional colon, and no trailing
+// text. Direct-child ancestry skips blanks and uses the nearest shallower
+// list item, so a log nested under another child does not move insertion.
+const SCHEDULE_LOG_EMOJI: &str = "🗓️";
+const WORK_LOG_EMOJI: &str = "🛠️";
+const MANAGED_TASK_LOG_LABELS: &[(&str, ManagedTaskLogKind)] = &[
+    ("SCHEDULE LOG", ManagedTaskLogKind::Schedule),
+    ("Schedule log", ManagedTaskLogKind::Schedule),
+    ("WORK LOG", ManagedTaskLogKind::Work),
+    ("Work log", ManagedTaskLogKind::Work),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedTaskLogKind {
+    Schedule,
+    Work,
+}
+
+fn first_direct_managed_log_start(
+    lines: &[LineSpan<'_>],
+    parent_line_index: usize,
+    block_end: usize,
+) -> Option<usize> {
+    let mut line_start = lines[parent_line_index].end;
+    for (offset, line) in lines[parent_line_index + 1..].iter().enumerate() {
+        if line.end > block_end {
+            break;
+        }
+        let line_index = parent_line_index + 1 + offset;
+        if !line.text.trim().is_empty()
+            && parse_managed_task_log_marker(line.text).is_some()
+            && nearest_shallower_list_item_parent(lines, line_index)
+                == Some(parent_line_index)
+        {
+            return Some(line_start);
+        }
+        line_start = line.end;
+    }
+    None
+}
+
+fn nearest_shallower_list_item_parent(
+    lines: &[LineSpan<'_>],
+    child_index: usize,
+) -> Option<usize> {
+    if child_index == 0 {
+        return None;
+    }
+    let child_indent = leading_spaces_or_tabs_len(lines[child_index].text);
+    for index in (0..child_index).rev() {
+        let text = lines[index].text;
+        if text.trim().is_empty()
+            || leading_spaces_or_tabs_len(text) >= child_indent
+        {
+            continue;
+        }
+        if list_item_body(text).is_some() {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn parse_managed_task_log_marker(line: &str) -> Option<ManagedTaskLogKind> {
+    let rest = list_item_body(line)?;
+    if let Some(after_emoji) = strip_log_emoji(rest, SCHEDULE_LOG_EMOJI) {
+        return parse_managed_task_log_label(after_emoji)
+            .filter(|kind| *kind == ManagedTaskLogKind::Schedule);
+    }
+    if let Some(after_emoji) = strip_log_emoji(rest, WORK_LOG_EMOJI) {
+        return parse_managed_task_log_label(after_emoji)
+            .filter(|kind| *kind == ManagedTaskLogKind::Work);
+    }
+    parse_managed_task_log_label(rest)
+}
+
+fn parse_managed_task_log_label(rest: &str) -> Option<ManagedTaskLogKind> {
+    let rest = rest.strip_prefix("**")?;
+    for (label, kind) in MANAGED_TASK_LOG_LABELS {
+        let Some(after_label) = rest.strip_prefix(label) else {
+            continue;
+        };
+        let after_label = after_label.strip_prefix(':').unwrap_or(after_label);
+        let Some(after_close) = after_label.strip_prefix("**") else {
+            continue;
+        };
+        if after_close.bytes().all(|byte| matches!(byte, b' ' | b'\t')) {
+            return Some(*kind);
+        }
+    }
+    None
+}
+
+fn strip_log_emoji<'a>(rest: &'a str, emoji: &str) -> Option<&'a str> {
+    let after_emoji = rest.strip_prefix(emoji)?;
+    let whitespace = leading_spaces_or_tabs_len(after_emoji);
+    (whitespace > 0).then_some(&after_emoji[whitespace..])
+}
+
+fn list_item_body(line: &str) -> Option<&str> {
+    let indent_len = leading_spaces_or_tabs_len(line);
+    let after_indent = &line[indent_len..];
+    let marker_len = list_marker_len(after_indent)?;
+    let after_marker = &after_indent[marker_len..];
+    let whitespace = leading_spaces_or_tabs_len(after_marker);
+    (whitespace > 0).then_some(&after_marker[whitespace..])
+}
+
+fn list_marker_len(after_indent: &str) -> Option<usize> {
+    let bytes = after_indent.as_bytes();
+    match bytes.first() {
+        Some(b'-' | b'*' | b'+') => Some(1),
+        Some(b'0'..=b'9') => {
+            let digits = bytes
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            match bytes.get(digits) {
+                Some(b'.' | b')') => Some(digits + 1),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn leading_spaces_or_tabs_len(text: &str) -> usize {
+    text.as_bytes()
+        .iter()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count()
 }
 
 fn dominant_indent_unit(lines: &[LineSpan<'_>]) -> Option<&'static str> {
@@ -3450,6 +3593,110 @@ mod tests {
                 "\t- 🗓️ **SCHEDULE LOG**",
             ]
             .join("\n")
+        );
+    }
+
+    #[test]
+    fn recognizes_plugin_compatible_managed_log_markers() {
+        let accepted = [
+            ("\t- 🗓️ **SCHEDULE LOG**", ManagedTaskLogKind::Schedule),
+            ("  * **SCHEDULE LOG**", ManagedTaskLogKind::Schedule),
+            ("\t+ **SCHEDULE LOG:**", ManagedTaskLogKind::Schedule),
+            ("  1. **Schedule log:**", ManagedTaskLogKind::Schedule),
+            ("2) 🗓️ **Schedule log**", ManagedTaskLogKind::Schedule),
+            ("\t- 🛠️ **WORK LOG**", ManagedTaskLogKind::Work),
+            ("  * **WORK LOG**", ManagedTaskLogKind::Work),
+            ("\t+ **Work log:**", ManagedTaskLogKind::Work),
+            ("  10. **Work log**", ManagedTaskLogKind::Work),
+            ("3) 🛠️ **WORK LOG:**", ManagedTaskLogKind::Work),
+        ];
+        for (line, kind) in accepted {
+            assert_eq!(
+                parse_managed_task_log_marker(line),
+                Some(kind),
+                "{line}"
+            );
+        }
+
+        for line in [
+            "\t- **SCHEDULE LOG** trailing",
+            "\t- **schedule log**",
+            "\t- **Schedule Log**",
+            "\t- **WORK LOG** extra",
+            "\t- **work log**",
+            "\t- **Work Log:**",
+            "\t- SCHEDULE LOG",
+            "\t- [ ] 🗓️ **SCHEDULE LOG**",
+            "\t- 🗓️ **WORK LOG**",
+            "\t- 🛠️ **SCHEDULE LOG**",
+            "\t- 🗓️**SCHEDULE LOG**",
+            "- [ ] #task 🗓️ **SCHEDULE LOG**",
+        ] {
+            assert_eq!(parse_managed_task_log_marker(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn finds_the_earliest_direct_child_managed_log() {
+        let both_logs = concat!(
+            "- [ ] #task Parent\n",
+            "\t- keep me\n",
+            "\t- 🛠️ **WORK LOG**\n",
+            "\t\t- *2026-08-15* — work\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-08-01* — scheduled\n",
+        );
+        let lines = line_spans(both_logs);
+        assert_eq!(
+            first_direct_managed_log_start(&lines, 0, both_logs.len()),
+            Some(both_logs.find("\t- 🛠️ **WORK LOG**").expect("work log")),
+        );
+
+        let schedule_first = concat!(
+            "- [ ] #task Parent\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-08-01* — scheduled\n",
+            "\t- 🛠️ **WORK LOG**\n",
+        );
+        let lines = line_spans(schedule_first);
+        assert_eq!(
+            first_direct_managed_log_start(&lines, 0, schedule_first.len()),
+            Some(lines[0].end),
+        );
+
+        let nested_only = concat!(
+            "- [ ] #task Parent\n",
+            "\t- child\n",
+            "\t\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t- other\n",
+        );
+        let lines = line_spans(nested_only);
+        assert_eq!(
+            first_direct_managed_log_start(&lines, 0, nested_only.len()),
+            None
+        );
+
+        let sibling_log = concat!(
+            "- [ ] #task Parent\n",
+            "\t- child\n",
+            "- [ ] #task Other\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+        );
+        let lines = line_spans(sibling_log);
+        assert_eq!(
+            first_direct_managed_log_start(&lines, 0, lines[1].end),
+            None
+        );
+
+        let lookalike = concat!(
+            "- [ ] #task Parent\n",
+            "\t- **SCHEDULE LOG** trailing\n",
+            "\t- **schedule log**\n",
+        );
+        let lines = line_spans(lookalike);
+        assert_eq!(
+            first_direct_managed_log_start(&lines, 0, lookalike.len()),
+            None
         );
     }
 

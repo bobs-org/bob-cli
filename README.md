@@ -378,7 +378,7 @@ ambiguity, malformed marker, or duplicate block ID leaves both notes unchanged.
 `--dry-run` performs the same validation and reports both planned edits without
 writing either file.
 
-Use a leading or trailing `@<route>+<block-id>` marker to append an ordinary
+Use a leading or trailing `@<route>+<block-id>` marker to capture an ordinary
 child bullet beneath an existing task, without creating a note or changing the
 parent task. For example,
 `bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'` writes:
@@ -387,6 +387,13 @@ parent task. For example,
 - [*] #task Finish Google Exit Packet! [created::2026-07-31] ^goog-exit
   - Called Morgan Stanley today.
 ```
+
+When the selected task already has a direct-child Schedule Log or Work Log, the
+complete new child — including any authored children, clipboard children, or a
+`p:<N>`-generated Schedule Log nested under that child — is inserted immediately
+before the earliest of those managed logs. Nested or lookalike log markers do
+not move the insertion point. Tasks with neither managed log still append at
+the end of the task block.
 
 The marker composes with terminal `s:<N>`, `p:<N>`, and clipboard markers in
 either order. Scheduled properties are still rendered for consistency even

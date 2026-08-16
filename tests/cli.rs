@@ -844,6 +844,7 @@ fn capture_help_lists_options_alphabetically() {
     assert!(
         help.contains("@<route>+<block-id>")
             && help.contains("bob capture '@cash+goog-exit'")
+            && help.contains("first direct-child Schedule Log or Work Log")
             && help.contains("@<route>^<block-id>")
             && help.contains("bob capture '@dev^foobar'")
             && !help.contains("--task-ref"),
@@ -7244,6 +7245,385 @@ fn capture_sub_bullet_task_option_keeps_at_tokens_literal() {
             "- [ ] #task Parent ^parent\n",
             "\t- mention @other literally\n",
         )
+    );
+}
+
+#[test]
+fn capture_sub_bullet_lands_before_direct_managed_logs() {
+    let cases = [
+        (
+            "before-schedule",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- keep me\n",
+                "\t- 🗓️ **SCHEDULE LOG**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- keep me\n",
+                "\t- new note\n",
+                "\t- 🗓️ **SCHEDULE LOG**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+            ),
+        ),
+        (
+            "before-work",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- keep me\n",
+                "\t- 🛠️ **WORK LOG**\n",
+                "\t\t- *2026-08-15* — keep this work\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- keep me\n",
+                "\t- new note\n",
+                "\t- 🛠️ **WORK LOG**\n",
+                "\t\t- *2026-08-15* — keep this work\n",
+            ),
+        ),
+        (
+            "both-work-first",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- 🛠️ **WORK LOG**\n",
+                "\t\t- *2026-08-15* — keep this work\n",
+                "\t- 🗓️ **SCHEDULE LOG**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- new note\n",
+                "\t- 🛠️ **WORK LOG**\n",
+                "\t\t- *2026-08-15* — keep this work\n",
+                "\t- 🗓️ **SCHEDULE LOG**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+            ),
+        ),
+        (
+            "both-schedule-first",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- 🗓️ **SCHEDULE LOG**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+                "\t- 🛠️ **WORK LOG**\n",
+                "\t\t- *2026-08-15* — keep this work\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- new note\n",
+                "\t- 🗓️ **SCHEDULE LOG**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+                "\t- 🛠️ **WORK LOG**\n",
+                "\t\t- *2026-08-15* — keep this work\n",
+            ),
+        ),
+        (
+            "emoji-less-and-legacy-markers",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t* **SCHEDULE LOG:**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+                "\t+ **Work log:**\n",
+                "\t\t- *2026-08-15* — keep this work\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- new note\n",
+                "\t* **SCHEDULE LOG:**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+                "\t+ **Work log:**\n",
+                "\t\t- *2026-08-15* — keep this work\n",
+            ),
+        ),
+        (
+            "ordered-marker",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t1. 🗓️ **SCHEDULE LOG**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- new note\n",
+                "\t1. 🗓️ **SCHEDULE LOG**\n",
+                "\t\t- *2026-08-01* — keep this entry\n",
+            ),
+        ),
+        (
+            "lookalikes-append",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- **SCHEDULE LOG** trailing notes\n",
+                "\t- **schedule log**\n",
+                "\t- **Work Log:**\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- **SCHEDULE LOG** trailing notes\n",
+                "\t- **schedule log**\n",
+                "\t- **Work Log:**\n",
+                "\t- new note\n",
+            ),
+        ),
+        (
+            "nested-log-ignored",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- child\n",
+                "\t\t- 🗓️ **SCHEDULE LOG**\n",
+                "\t\t\t- *2026-08-01* — nested\n",
+                "\t- other\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- child\n",
+                "\t\t- 🗓️ **SCHEDULE LOG**\n",
+                "\t\t\t- *2026-08-01* — nested\n",
+                "\t- other\n",
+                "\t- new note\n",
+            ),
+        ),
+        (
+            "no-log-appends",
+            concat!("- [ ] #task Parent ^parent\n", "\t- existing\n",),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- existing\n",
+                "\t- new note\n",
+            ),
+        ),
+        (
+            "two-space",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "  - 🗓️ **SCHEDULE LOG**\n",
+                "    - *2026-08-01* — keep this entry\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "  - new note\n",
+                "  - 🗓️ **SCHEDULE LOG**\n",
+                "    - *2026-08-01* — keep this entry\n",
+            ),
+        ),
+        (
+            "indented-parent",
+            concat!(
+                "- [ ] #task Root\n",
+                "  - [ ] #task Nested ^parent\n",
+                "    - 🗓️ **SCHEDULE LOG**\n",
+                "      - *2026-08-01* — keep this entry\n",
+            ),
+            concat!(
+                "- [ ] #task Root\n",
+                "  - [ ] #task Nested ^parent\n",
+                "    - new note\n",
+                "    - 🗓️ **SCHEDULE LOG**\n",
+                "      - *2026-08-01* — keep this entry\n",
+            ),
+        ),
+        (
+            "crlf",
+            concat!(
+                "- [ ] #task Parent ^parent\r\n",
+                "\t- 🗓️ **SCHEDULE LOG**\r\n",
+                "\t\t- *2026-08-01* — keep this entry\r\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\r\n",
+                "\t- new note\r\n",
+                "\t- 🗓️ **SCHEDULE LOG**\r\n",
+                "\t\t- *2026-08-01* — keep this entry\r\n",
+            ),
+        ),
+        (
+            "eof-without-newline",
+            concat!("- [ ] #task Parent ^parent\n", "\t- 🗓️ **SCHEDULE LOG**",),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- new note\n",
+                "\t- 🗓️ **SCHEDULE LOG**",
+            ),
+        ),
+    ];
+
+    for (name, original, expected) in cases {
+        let temp = TempDir::new(&format!("bob-cli-sub-bullet-log-{name}"));
+        let vault = temp.path().join("vault");
+        write_file(&vault.join("cash.md"), original);
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("@cash+parent")
+            .arg("new note")
+            .env("BOB_NOW", "2026-07-31")
+            .output()
+            .expect("run sub-bullet capture before managed logs");
+        assert_success(&output);
+        assert_eq!(
+            fs::read_to_string(vault.join("cash.md")).expect("read note"),
+            expected,
+            "{name}: {}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
+fn capture_sub_bullet_selectors_and_batch_keep_order_above_logs() {
+    let original = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t- *2026-08-01* — keep this entry\n",
+    );
+    let expected_one = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- new note\n",
+        "\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t- *2026-08-01* — keep this entry\n",
+    );
+
+    let temp = TempDir::new("bob-cli-sub-bullet-log-task-option");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), original);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--route")
+        .arg("cash")
+        .arg("--task")
+        .arg("parent")
+        .arg("--")
+        .arg("new note")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("run --task capture before managed log");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        expected_one
+    );
+
+    let parent = "- [?] #task Parent without ID";
+    let digest = hex::encode(Sha256::digest(parent.as_bytes()));
+    let temp = TempDir::new("bob-cli-sub-bullet-log-task-ref");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        &format!(
+            "{parent}\n\t- 🗓️ **SCHEDULE LOG**\n\t\t- *2026-08-01* — keep\n"
+        ),
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--route")
+        .arg("cash")
+        .arg("--task-ref")
+        .arg(format!("1:{}", &digest[..8]))
+        .arg("--")
+        .arg("new note")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("run --task-ref capture before managed log");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        format!("{parent}\n\t- new note\n\t- 🗓️ **SCHEDULE LOG**\n\t\t- *2026-08-01* — keep\n"),
+    );
+
+    let temp = TempDir::new("bob-cli-sub-bullet-log-batch");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), original);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("first note @cash+parent\n\nsecond note @cash+parent")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("run batch capture before managed log");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- first note\n",
+            "\t- second note\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-08-01* — keep this entry\n",
+        )
+    );
+}
+
+#[test]
+fn capture_sub_bullet_inserts_complete_subtree_before_parent_logs() {
+    let original = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t- *2026-08-01* — keep this entry\n",
+        "\t- 🛠️ **WORK LOG**\n",
+        "\t\t- *2026-08-15* — keep this work\n",
+    );
+    let temp = TempDir::new("bob-cli-sub-bullet-log-subtree");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    let config = temp.path().join("config.yml");
+    write_file(&vault.join("cash.md"), original);
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'clip child\\n'\n");
+    write_priority_config(&config);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@cash+parent buy milk p:2 %\n- authored child")
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_PRIORITY_ROLL_SEED", "1")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .output()
+        .expect("run subtree capture before parent logs");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["kind"], "sub_bullet");
+    assert_eq!(json["block_id"], "parent");
+    assert_eq!(json["parent_text"], "Parent");
+    assert_eq!(
+        json["task_line"],
+        "- buy milk [priority::medium] [scheduled::2026-07-21]"
+    );
+    assert_eq!(
+        json["sub_bullets"],
+        serde_json::json!(["\t- authored child"])
+    );
+    assert_eq!(json["placement"], "inserted");
+    assert!(json["schedule_log"]["lines"].as_array().is_some());
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- buy milk [priority::medium] [scheduled::2026-07-21]\n",
+            "\t\t- authored child\n",
+            "\t\t- clip child\n",
+            "\t\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t\t- *2026-07-21* — 🎲 P0 → P2 · in **11** (8–30) days\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-08-01* — keep this entry\n",
+            "\t- 🛠️ **WORK LOG**\n",
+            "\t\t- *2026-08-15* — keep this work\n",
+        ),
+        "{}",
+        format_output(&output)
     );
 }
 
