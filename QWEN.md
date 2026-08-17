@@ -83,10 +83,12 @@ The below files contain detailed reference material. When working in their domai
 MUST use your `/sase_memory_read` skill to review their contents. Do not read canonical
 memory files directly.
 
-**`sase/memory/cli_rules.md`**  
+### 2.1 `sase/memory/cli_rules.md`
+
 Read anytime new CLI subcommands or options are added.
 
-**`sase/memory/glossary.md`**  
+### 2.2 `sase/memory/glossary.md`
+
 Read this note before relying on any of these SASE glossary terms and aliases:
 
 - Pomodoro
@@ -98,7 +100,8 @@ Read it with `sase memory read glossary.md` whenever one of those terms or alias
 appears in a prompt, bead, plan, or code comment and you are not certain what it means
 in SASE.
 
-**`sase/memory/sase_beads.md`**  
+### 2.3 `sase/memory/sase_beads.md`
+
 Read before creating, updating, closing, or querying sase beads — bead types and tiers,
 the status lifecycle agents must never hand-edit, task-bead triage, phase-bead
 description prefixes, and non-cascading close, resolution, and note semantics.
