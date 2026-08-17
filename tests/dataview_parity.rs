@@ -1,5 +1,7 @@
 use std::{
-    env, fs, io,
+    env,
+    ffi::OsString,
+    fs, io,
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicUsize, Ordering},
@@ -1629,11 +1631,50 @@ fn write_obsidian_protocol_stub(path: &Path, payload: &str) {
     );
 }
 
+/// Write the payload via a scratch file and `cp` so this process never holds
+/// a writable descriptor on the executed inode (ETXTBSY / "Text file busy").
 fn write_executable(path: &Path, contents: &str) {
-    fs::write(path, contents).unwrap_or_else(|error| {
-        panic!("write executable stub {}: {error}", path.display())
+    let payload = scratch_payload_path(path);
+    fs::write(&payload, contents).unwrap_or_else(|error| {
+        panic!(
+            "write executable stub payload {}: {error}",
+            payload.display()
+        )
+    });
+    // Copy onto a fresh inode so rewriting a stub cannot disturb a copy that
+    // is still executing.
+    let _ = fs::remove_file(path);
+    let output = Command::new("cp")
+        .arg("--")
+        .arg(&payload)
+        .arg(path)
+        .output()
+        .unwrap_or_else(|error| {
+            panic!("copy executable stub {}: {error}", path.display())
+        });
+    assert!(
+        output.status.success(),
+        "copy executable stub {}:\n{}",
+        path.display(),
+        format_output(&output)
+    );
+    fs::remove_file(&payload).unwrap_or_else(|error| {
+        panic!("remove stub payload {}: {error}", payload.display())
     });
     set_mode(path, 0o755);
+}
+
+/// Scratch path for a stub payload: written in this process, never executed,
+/// and removed once `cp` has copied it onto the stub path.
+fn scratch_payload_path(path: &Path) -> PathBuf {
+    let file_name = path.file_name().unwrap_or_else(|| {
+        panic!("stub path has no file name: {}", path.display())
+    });
+    let unique = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut name = OsString::from(".");
+    name.push(file_name);
+    name.push(format!(".{unique}.payload"));
+    path.with_file_name(name)
 }
 
 fn shell_single_quote(value: &str) -> String {

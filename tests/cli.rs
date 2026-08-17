@@ -4,7 +4,11 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -19044,6 +19048,77 @@ fn nightly_failed_step_still_runs_later_steps_and_exits_nonzero() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn executable_stubs_stay_executable_while_other_threads_fork() {
+    // Guards the `Text file busy` flake (bead bob-cli-o): a stub must never be
+    // written through a descriptor this process holds, because any child
+    // forked during the write inherits it and makes `execve` of the stub fail
+    // with ETXTBSY until that child execs.
+    let temp = TempDir::new("bob-cli-etxtbsy-stub");
+    let stub = temp.path().join("stub");
+    let padding = "#".repeat(256 * 1024);
+    let payload = format!("#!/bin/sh\nexit 7\n{padding}");
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let lurkers: Vec<_> = (0..4)
+        .map(|_| {
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = Command::new("true").output();
+                }
+            })
+        })
+        .collect();
+
+    for iteration in 0..60 {
+        write_executable(&stub, &payload);
+        if iteration == 0 {
+            assert_eq!(
+                fs::read_to_string(&stub).expect("read stub"),
+                payload,
+                "stub contents must match the payload"
+            );
+            assert_unix_mode(&stub, 0o755);
+            let leftovers: Vec<_> = fs::read_dir(temp.path())
+                .expect("read stub dir")
+                .map(|entry| entry.expect("dir entry").file_name())
+                .collect();
+            assert_eq!(
+                leftovers,
+                [OsString::from("stub")],
+                "stub directory must contain only the stub, no leftover payload"
+            );
+        }
+        match Command::new(&stub).output() {
+            Err(error) if error.raw_os_error() == Some(26) => {
+                panic!(
+                    "Text file busy (ETXTBSY, os error 26) executing stub {} — \
+                     write_executable leaked a writable descriptor (bead bob-cli-o)",
+                    stub.display()
+                );
+            }
+            Err(error) => {
+                panic!("execute stub {}: {error}", stub.display());
+            }
+            Ok(output) => {
+                assert_eq!(
+                    output.status.code(),
+                    Some(7),
+                    "stub should exit 7:\n{}",
+                    format_output(&output)
+                );
+            }
+        }
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    for lurker in lurkers {
+        lurker.join().expect("lurker thread");
+    }
+}
+
 fn done_tasks_source(count: usize) -> String {
     let mut text = String::new();
     for index in 1..=count {
@@ -19569,11 +19644,60 @@ fn configure_test_git_identity(repo: &Path) {
     git_in(repo, ["config", "commit.gpgsign", "false"]);
 }
 
+/// Materialize an executable stub without ever holding a writable descriptor
+/// on the file the tests execute.
+///
+/// `fs::write` keeps a writable descriptor open while it fills the file, and
+/// `cargo test` runs every test in this one process. A child that another test
+/// thread forks inside that window inherits the descriptor — `O_CLOEXEC` only
+/// drops it once the child reaches `execve` — and until then every attempt to
+/// execute the stub fails with `ETXTBSY` ("Text file busy", os error 26), even
+/// from an unrelated process such as `bob` spawning its `ob` shim. Writing the
+/// payload to a scratch file that is never executed and letting a short-lived
+/// `cp` child create the stub keeps the writable descriptor out of this
+/// process, so no fork can capture it.
 fn write_executable(path: &Path, contents: &str) {
-    fs::write(path, contents).unwrap_or_else(|error| {
-        panic!("write executable stub {}: {error}", path.display())
+    let payload = scratch_payload_path(path);
+    fs::write(&payload, contents).unwrap_or_else(|error| {
+        panic!(
+            "write executable stub payload {}: {error}",
+            payload.display()
+        )
+    });
+    // Copy onto a fresh inode so rewriting a stub cannot disturb a copy that
+    // is still executing.
+    let _ = fs::remove_file(path);
+    let output = Command::new("cp")
+        .arg("--")
+        .arg(&payload)
+        .arg(path)
+        .output()
+        .unwrap_or_else(|error| {
+            panic!("copy executable stub {}: {error}", path.display())
+        });
+    assert!(
+        output.status.success(),
+        "copy executable stub {}:\n{}",
+        path.display(),
+        format_output(&output)
+    );
+    fs::remove_file(&payload).unwrap_or_else(|error| {
+        panic!("remove stub payload {}: {error}", payload.display())
     });
     set_mode(path, 0o755);
+}
+
+/// Scratch path for a stub payload: written in this process, never executed,
+/// and removed once `cp` has copied it onto the stub path.
+fn scratch_payload_path(path: &Path) -> PathBuf {
+    let file_name = path.file_name().unwrap_or_else(|| {
+        panic!("stub path has no file name: {}", path.display())
+    });
+    let unique = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut name = OsString::from(".");
+    name.push(file_name);
+    name.push(format!(".{unique}.payload"));
+    path.with_file_name(name)
 }
 
 fn write_obsidian_success_stub(path: &Path, payload: &str) {
