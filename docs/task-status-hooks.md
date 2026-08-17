@@ -291,6 +291,13 @@ never reopens a Done, canceled, non-task, unknown, unrelated, or already-active
 dependent, and Ctrl+Enter does not clean unrelated Blocked tasks with no
 dependencies.
 
+Hand-unblocking with the Task Status Cycler plugin's option-bracket cycle
+(`<option+]>`/`<option+[>` on a `[?]` task, to Ready or Cancelled) retires the
+future schedule that caused the Blocked marker, which is what keeps this
+command from immediately re-deriving `[?]` on its next run. A remaining open
+dependency, or a project-level `scheduled` frontmatter date that
+`bob projects sync` re-propagates, still re-blocks the task on the next run.
+
 The installed Tasks registry must contain exactly one compatible status:
 
 ```json
