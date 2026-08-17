@@ -213,6 +213,15 @@ end of the note. Either way the bullet's descendants are copied in verbatim,
 re-indented but otherwise untouched — no `#task` token and no `[created::]`
 field — so they read as reference notes rather than tasks.
 
+The same hotkey on a project note's `^prj` task restores that project as a
+single task in the parent note's `## Tasks` section. Tasks, uppercased
+section bullets, and the `^prj` task's own sub-bullets — including managed
+schedule and work logs — come back as children; `scheduled` and `created`
+return as inline fields, and a block ID is derived from the project note
+name. Inbound `#^prj` links are repointed at the restored task and the
+project note is moved to the trash. Content outside that expected format
+fails with a notice and changes nothing.
+
 A managed source-task schedule log, written as `🗓️ **SCHEDULE LOG**`,
 `**SCHEDULE LOG**`, or legacy `**Schedule log:**`, moves with the source task
 instead. It lands as a direct child of the new project's `^prj` task rather
