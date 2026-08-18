@@ -152,17 +152,25 @@ The below files contain detailed reference material. When working in their domai
 MUST use your `/sase_memory_read` skill to review their contents. Do not read canonical
 memory files directly.
 
-**GLOSSARY TERMS:** Run `sase glossary read <term> -r "<why>"` before relying on any of
-these SASE terms; it prints that term's definition plus every term the definition
-depends on. Terms (aliases follow in parentheses): Pomodoro; Schedule Log; Task Link
-(task block link); Work Log
+### 2.1 Long-Term Memory Files
 
-### 2.1 `sase/memory/cli_rules.md`
+#### 2.1.1 `sase/memory/cli_rules.md`
 
 Read anytime new CLI subcommands or options are added.
 
-### 2.2 `sase/memory/sase_beads.md`
+#### 2.1.2 `sase/memory/sase_beads.md`
 
 Read before creating, updating, closing, or querying sase beads — bead types and tiers,
 the status lifecycle agents must never hand-edit, task-bead triage, phase-bead
 description prefixes, and non-cascading close, resolution, and note semantics.
+
+### 2.2 Glossary Terms
+
+Run `sase glossary read <term> -r "<why>"` before relying on any of these SASE terms; it
+prints that term's definition plus every term the definition depends on. Aliases follow
+in parentheses.
+
+- Pomodoro
+- Schedule Log
+- Task Link (task block link)
+- Work Log
