@@ -56,8 +56,16 @@ always-loaded notes from detailed reference notes that agents read only when rel
 - Type: `short`
 - Description: No description set.
 - Parent: `AGENTS.md`
-- Lines: 70
-- Approx. tokens: 931
+- Lines: 49
+- Approx. tokens: 646
+
+### `sase/memory/task_types.md`
+
+- Type: `short`
+- Description: No description set.
+- Parent: `AGENTS.md`
+- Lines: 94
+- Approx. tokens: 925
 
 ### `sase/memory/cli_rules.md`
 
@@ -67,18 +75,6 @@ always-loaded notes from detailed reference notes that agents read only when rel
 - Lines: 14
 - Approx. tokens: 129
 
-### `sase/memory/glossary.md`
-
-- Type: `long`
-- Description: Read this note before relying on any of these SASE glossary terms and
-  aliases: - Pomodoro - Schedule Log - Task Link (aka task block link) - Work Log Read
-  it with `sase memory read glossary.md` whenever one of those terms or aliases appears
-  in a prompt, bead, plan, or code comment and you are not certain what it means in
-  SASE.
-- Parent: `AGENTS.md`
-- Lines: 48
-- Approx. tokens: 472
-
 ### `sase/memory/sase_beads.md`
 
 - Type: `long`
@@ -87,8 +83,8 @@ always-loaded notes from detailed reference notes that agents read only when rel
   phase-bead description prefixes, and non-cascading close, resolution, and note
   semantics.
 - Parent: `AGENTS.md`
-- Lines: 134
-- Approx. tokens: 1732
+- Lines: 139
+- Approx. tokens: 1847
 
 ### `sase/memory/sase_sizes.md`
 
@@ -102,10 +98,10 @@ always-loaded notes from detailed reference notes that agents read only when rel
 ## Statistics
 
 - Total notes: 5
-- Short notes: 1
-- Long notes: 4
-- Total lines: 306
-- Total approx. tokens: 3736
+- Short notes: 2
+- Long notes: 3
+- Total lines: 336
+- Total approx. tokens: 4019
 
 ## Commands
 
