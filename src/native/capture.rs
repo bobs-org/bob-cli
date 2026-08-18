@@ -166,8 +166,9 @@ Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
 Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
 no '#task' marker, and no block ID. The daily note comes from BOB_DAY_FILE or \
 <bob-dir>/YYYY/YYYYMMDD.md. Capture prefers the single open timed entry in its \
-Pomodoros section and otherwise uses the first open entry, appending the new \
-bullet at the end of that entry's child block. The marker composes with \
+Pomodoros section, otherwise the last completed entry, and otherwise the first \
+open entry, appending the new bullet at the end of that entry's child block. \
+The marker composes with \
 '%...' and --clip but is rejected alongside 's:<N>', 'p:<N>', '@route', and \
 --route.\n\n\
 Append '#<section-prefix>' or a bare '#' to an @route token (such as \
@@ -1286,7 +1287,11 @@ fn plan_pomodoro_note_capture(
 
     let contents = planner.read_existing(day_file)?;
     let (updated, placement, pomodoro_line, pomodoro_text) =
-        insert_pomodoro_child_block(&contents, capture_block)?;
+        insert_pomodoro_child_block(
+            &contents,
+            capture_block,
+            PomodoroSelection::CurrentOrLastCompleted,
+        )?;
     planner.stage(day_file, updated)?;
 
     Ok(CaptureWritePlan {
@@ -1791,24 +1796,56 @@ fn paths_refer_to_same_file(first: &Path, second: &Path) -> bool {
     }
 }
 
+/// Which ledger entry a daily-note child insertion attaches to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PomodoroSelection {
+    /// Current Pomodoro, else the first future one. Used by `@<route>:<id>`
+    /// ledger links, which must attach to a Pomodoro that is still open.
+    CurrentOrFuture,
+    /// Current Pomodoro, else the last completed one, else the first future
+    /// one. Used by the bare `#` Pomodoro-note marker.
+    CurrentOrLastCompleted,
+}
+
+impl PomodoroSelection {
+    fn no_entry_message(self) -> &'static str {
+        match self {
+            Self::CurrentOrFuture => {
+                "Bob daily note has no eligible open Pomodoro"
+            }
+            Self::CurrentOrLastCompleted => {
+                "Bob daily note has no eligible Pomodoro"
+            }
+        }
+    }
+}
+
 fn insert_pomodoro_block_link(
     contents: &str,
     block_link: &str,
 ) -> Result<(String, Placement), CaptureError> {
-    let (updated, placement, _, _) =
-        insert_pomodoro_child_block(contents, &format!("- {block_link}"))?;
+    let (updated, placement, _, _) = insert_pomodoro_child_block(
+        contents,
+        &format!("- {block_link}"),
+        PomodoroSelection::CurrentOrFuture,
+    )?;
     Ok((updated, placement))
 }
 
-/// Select the current (else next future) open Pomodoro in the daily note's
-/// `## Pomodoros` section and insert `block` -- indented to match the
-/// entry's existing children -- at the end of that entry's child block.
+/// Select a Pomodoro in the daily note's `## Pomodoros` section according to
+/// `selection` and insert `block` -- indented to match the entry's existing
+/// children -- at the end of that entry's child block.
+///
+/// `CurrentOrFuture` prefers the single open timed entry, else the first
+/// open entry. `CurrentOrLastCompleted` prefers the single open timed
+/// entry, else the last completed entry, else the first open entry.
 /// Returns the updated contents, the placement, the selected entry's
 /// 0-based line index, and its ledger task text (trimmed of the leading
 /// checkbox but not of its `(start-end)` time range or bracket fields).
 fn insert_pomodoro_child_block(
     contents: &str,
     block: &str,
+    selection: PomodoroSelection,
 ) -> Result<(String, Placement, usize, String), CaptureError> {
     let lines = line_spans(contents);
     let line_text = lines.iter().map(|line| line.text).collect::<Vec<_>>();
@@ -1819,6 +1856,7 @@ fn insert_pomodoro_child_block(
 
     let mut open = Vec::new();
     let mut timed = Vec::new();
+    let mut completed = Vec::new();
     let fenced = super::markdown::fenced_lines(&line_text, section.clone());
     for index in section.clone() {
         if fenced.contains(&index) {
@@ -1828,12 +1866,13 @@ fn insert_pomodoro_child_block(
         if is_indented_line(line) {
             continue;
         }
-        let Some(task) = pomodoro::open_ledger_task(line) else {
-            continue;
-        };
-        open.push(index);
-        if pomodoro::task_time_range(task).is_some() {
-            timed.push(index);
+        if let Some(task) = pomodoro::open_ledger_task(line) {
+            open.push((index, task));
+            if pomodoro::task_time_range(task).is_some() {
+                timed.push((index, task));
+            }
+        } else if let Some(task) = pomodoro::completed_ledger_task(line) {
+            completed.push((index, task));
         }
     }
 
@@ -1842,16 +1881,15 @@ fn insert_pomodoro_child_block(
             "Bob daily note has multiple open timed Pomodoros",
         ));
     }
-    let selected = timed
-        .first()
-        .copied()
-        .or_else(|| open.first().copied())
-        .ok_or_else(|| {
-            CaptureError::io("Bob daily note has no eligible open Pomodoro")
-        })?;
-    let pomodoro_text = pomodoro::open_ledger_task(lines[selected].text)
-        .expect("selected entry resolved from an open ledger task")
-        .to_string();
+    let (selected, selected_text) = match selection {
+        PomodoroSelection::CurrentOrFuture => timed.first().or(open.first()),
+        PomodoroSelection::CurrentOrLastCompleted => {
+            timed.first().or(completed.last()).or(open.first())
+        }
+    }
+    .copied()
+    .ok_or_else(|| CaptureError::io(selection.no_entry_message()))?;
+    let pomodoro_text = selected_text.to_string();
     let insertion_index = task_block_end(&lines, selected);
     let indentation =
         child_bullet_indentation(&lines, selected + 1, insertion_index)
@@ -4017,6 +4055,261 @@ mod tests {
                 .expect("find real section");
         assert!(updated.ends_with("- [ ] Real\n  - [[dev#^real]]\n"));
         assert!(!updated.contains("Example\n  - [[dev#^real]]"));
+    }
+
+    #[test]
+    fn pomodoro_note_current_wins_over_a_completed_entry() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] Done (0900-0930)\n",
+            "- [ ] Focus (1000-1030)\n",
+        );
+        for selection in [
+            PomodoroSelection::CurrentOrLastCompleted,
+            PomodoroSelection::CurrentOrFuture,
+        ] {
+            let (updated, placement, selected, text) =
+                insert_pomodoro_child_block(contents, "- note this", selection)
+                    .expect("select current Pomodoro");
+            assert_eq!(placement, Placement::Appended);
+            assert_eq!(selected, 2);
+            assert_eq!(text, "Focus (1000-1030)");
+            assert_eq!(
+                updated,
+                concat!(
+                    "## Pomodoros\n",
+                    "- [x] Done (0900-0930)\n",
+                    "- [ ] Focus (1000-1030)\n",
+                    "  - note this\n",
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn pomodoro_note_last_completed_wins_over_a_future_entry() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] First (0900-0930)\n",
+            "- [x] Second (1000-1030)\n",
+            "- [ ] Next ()\n",
+        );
+        let (updated, placement, selected, text) = insert_pomodoro_child_block(
+            contents,
+            "- note this",
+            PomodoroSelection::CurrentOrLastCompleted,
+        )
+        .expect("select last completed Pomodoro");
+        assert_eq!(placement, Placement::Inserted);
+        assert_eq!(selected, 2);
+        assert_eq!(text, "Second (1000-1030)");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] First (0900-0930)\n",
+                "- [x] Second (1000-1030)\n",
+                "  - note this\n",
+                "- [ ] Next ()\n",
+            )
+        );
+    }
+
+    #[test]
+    fn pomodoro_note_appends_after_completed_entry_children() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] Done (0900-0930)\n",
+            "    - existing child\n",
+            "- [ ] Next ()\n",
+        );
+        let (updated, placement, selected, text) = insert_pomodoro_child_block(
+            contents,
+            "- note this",
+            PomodoroSelection::CurrentOrLastCompleted,
+        )
+        .expect("append after completed children");
+        assert_eq!(placement, Placement::Inserted);
+        assert_eq!(selected, 1);
+        assert_eq!(text, "Done (0900-0930)");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] Done (0900-0930)\n",
+                "    - existing child\n",
+                "    - note this\n",
+                "- [ ] Next ()\n",
+            )
+        );
+    }
+
+    #[test]
+    fn pomodoro_selection_policies_diverge_on_completed_plus_future() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] Done (0900-0930)\n",
+            "- [ ] Next ()\n",
+        );
+        let (_, _, note_selected, note_text) = insert_pomodoro_child_block(
+            contents,
+            "- note this",
+            PomodoroSelection::CurrentOrLastCompleted,
+        )
+        .expect("note policy selects completed");
+        let (_, _, link_selected, link_text) = insert_pomodoro_child_block(
+            contents,
+            "- [[dev#^id]]",
+            PomodoroSelection::CurrentOrFuture,
+        )
+        .expect("link policy selects future");
+        assert_eq!(note_selected, 1);
+        assert_eq!(note_text, "Done (0900-0930)");
+        assert_eq!(link_selected, 2);
+        assert_eq!(link_text, "Next ()");
+    }
+
+    #[test]
+    fn pomodoro_note_first_future_when_nothing_is_completed() {
+        let contents =
+            concat!("## Pomodoros\n", "- [ ] Next ()\n", "- [ ] Later ()\n",);
+        for selection in [
+            PomodoroSelection::CurrentOrLastCompleted,
+            PomodoroSelection::CurrentOrFuture,
+        ] {
+            let (updated, _, selected, text) =
+                insert_pomodoro_child_block(contents, "- note this", selection)
+                    .expect("select first future Pomodoro");
+            assert_eq!(selected, 1);
+            assert_eq!(text, "Next ()");
+            assert_eq!(
+                updated,
+                concat!(
+                    "## Pomodoros\n",
+                    "- [ ] Next ()\n",
+                    "  - note this\n",
+                    "- [ ] Later ()\n",
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn pomodoro_note_returned_text_comes_from_the_completed_parser() {
+        let contents = concat!(
+            "## Heading\n",
+            "## Pomodoros\n",
+            "- [x] Done (0900-0930)\n",
+        );
+        let (_, _, selected, text) = insert_pomodoro_child_block(
+            contents,
+            "- note this",
+            PomodoroSelection::CurrentOrLastCompleted,
+        )
+        .expect("select completed entry");
+        assert_eq!(selected, 2);
+        assert_eq!(text, "Done (0900-0930)");
+        assert_eq!(
+            pomodoro::completed_ledger_task("- [x] Done (0900-0930)"),
+            Some(text.as_str())
+        );
+        assert!(pomodoro::open_ledger_task("- [x] Done (0900-0930)").is_none());
+    }
+
+    #[test]
+    fn pomodoro_note_ignores_cancelled_and_nested_completed_entries() {
+        for contents in [
+            concat!(
+                "## Pomodoros\n",
+                "- [-] Cancelled ()\n",
+                "  - [x] Nested (0900-0930)\n",
+            ),
+            "## Pomodoros\n",
+        ] {
+            let error = insert_pomodoro_child_block(
+                contents,
+                "- note this",
+                PomodoroSelection::CurrentOrLastCompleted,
+            )
+            .expect_err("ineligible ledger should fail");
+            assert!(
+                error.message.contains("no eligible Pomodoro"),
+                "{error:?}"
+            );
+            assert!(
+                !error.message.contains("no eligible open Pomodoro"),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pomodoro_note_scan_ignores_fenced_completed_lookalikes() {
+        let contents = concat!(
+            "```md\n",
+            "## Pomodoros\n",
+            "- [x] Example (0800-0830)\n",
+            "```\n",
+            "## Pomodoros\n",
+            "- [ ] Real ()\n",
+        );
+        let (updated, _, selected, text) = insert_pomodoro_child_block(
+            contents,
+            "- note this",
+            PomodoroSelection::CurrentOrLastCompleted,
+        )
+        .expect("ignore fenced completed lookalike");
+        assert_eq!(selected, 5);
+        assert_eq!(text, "Real ()");
+        assert!(updated.ends_with("- [ ] Real ()\n  - note this\n"));
+        assert!(!updated.contains("Example (0800-0830)\n  - note this"));
+    }
+
+    #[test]
+    fn pomodoro_note_timed_ambiguity_wins_over_completed_fallback() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] Done (0800-0830)\n",
+            "- [ ] One (0900-0930)\n",
+            "- [ ] Two (1000-1030)\n",
+        );
+        let error = insert_pomodoro_child_block(
+            contents,
+            "- note this",
+            PomodoroSelection::CurrentOrLastCompleted,
+        )
+        .expect_err("two open timed entries remain an error");
+        assert!(
+            error.message.contains("multiple open timed Pomodoros"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn pomodoro_note_preserves_crlf_under_a_completed_entry() {
+        let contents = concat!(
+            "## Pomodoros\r\n",
+            "- [x] Done (0900-0930)\r\n",
+            "- [ ] Next ()\r\n",
+        );
+        let (updated, placement, selected, text) = insert_pomodoro_child_block(
+            contents,
+            "- note this",
+            PomodoroSelection::CurrentOrLastCompleted,
+        )
+        .expect("insert CRLF note under completed");
+        assert_eq!(placement, Placement::Inserted);
+        assert_eq!(selected, 1);
+        assert_eq!(text, "Done (0900-0930)");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\r\n",
+                "- [x] Done (0900-0930)\r\n",
+                "  - note this\r\n",
+                "- [ ] Next ()\r\n",
+            )
+        );
     }
 
     #[test]

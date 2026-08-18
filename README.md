@@ -415,11 +415,14 @@ sub-bullet on a Pomodoro instead of a task. For example,
 
 as a child of the selected Pomodoro. It renders as `- <text>` with no
 `[created::YYYY-MM-DD]` stamp, no `#task` marker, and no block ID. The daily
-note is selected the same way as `@<route>:<block-id>` captures:
-`BOB_DAY_FILE` when set, otherwise `<bob-dir>/YYYY/YYYYMMDD.md`. Capture
-prefers the single open top-level entry with a recognized time range and
-otherwise uses the first open top-level entry; multiple open timed entries
-are an invariant error. The new bullet is appended at the end of the
+note file is selected the same way as `@<route>:<block-id>` captures:
+`BOB_DAY_FILE` when set, otherwise `<bob-dir>/YYYY/YYYYMMDD.md`. Unlike
+`@<route>:<block-id>`, a Pomodoro note may attach to a completed entry.
+Capture prefers the single open top-level entry with a recognized time
+range, otherwise the last completed top-level entry, and otherwise the
+first open top-level entry. A ledger with only completed entries therefore
+succeeds and attaches to the last one. Multiple open timed entries are
+an invariant error. The new bullet is appended at the end of the
 selected entry's child block, reusing existing child indentation when
 possible.
 

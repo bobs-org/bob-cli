@@ -6939,8 +6939,8 @@ fn capture_bare_terminal_marker_human_output_shows_the_ledger_entry() {
 }
 
 #[test]
-fn capture_bare_terminal_marker_falls_back_to_next_future_pomodoro() {
-    let temp = TempDir::new("bob-cli-capture-pomodoro-note-future");
+fn capture_bare_terminal_marker_falls_back_to_the_last_completed_pomodoro() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-completed");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
     write_file(
@@ -6960,18 +6960,96 @@ fn capture_bare_terminal_marker_falls_back_to_next_future_pomodoro() {
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
-        .expect("run Pomodoro-note capture with no timed entry");
+        .expect("run Pomodoro-note capture with no current entry");
 
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("Pomodoro-note JSON");
-    assert_eq!(json["parent_text"], "Next ()");
+    assert_eq!(json["parent_text"], "Done (0900-0930)");
+    assert_eq!(json["parent_line"], 3);
     assert_eq!(
         fs::read_to_string(&day_file).expect("read day"),
         concat!(
             "## Pomodoros\n\n",
             "- [x] Done (0900-0930)\n",
+            "  - note this\n",
             "- [ ] Next ()\n",
+        )
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_falls_back_to_the_first_future_pomodoro() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-future");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&day_file, "## Pomodoros\n\n- [ ] Next ()\n- [ ] Later ()\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("note")
+        .arg("this")
+        .arg("#")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run Pomodoro-note capture with only future entries");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("Pomodoro-note JSON");
+    assert_eq!(json["parent_text"], "Next ()");
+    assert_eq!(json["parent_line"], 3);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Next ()\n",
+            "  - note this\n",
+            "- [ ] Later ()\n",
+        )
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_selects_the_last_of_two_completed_pomodoros() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-last-completed");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [x] First (0900-0930)\n- [x] Second (1000-1030)\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("note")
+        .arg("this")
+        .arg("#")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run Pomodoro-note capture with two completed entries");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("Pomodoro-note JSON");
+    assert_eq!(json["parent_text"], "Second (1000-1030)");
+    assert_eq!(json["parent_line"], 4);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [x] First (0900-0930)\n",
+            "- [x] Second (1000-1030)\n",
             "  - note this\n",
         )
     );
@@ -7020,9 +7098,14 @@ fn capture_bare_terminal_marker_preflight_failures_leave_daily_note_untouched()
             "Bob daily note has no Pomodoros section",
         ),
         (
-            "no-open",
-            Some("## Pomodoros\n\n- [x] Done (0900-0930)\n"),
-            "Bob daily note has no eligible open Pomodoro",
+            "no-eligible",
+            Some("## Pomodoros\n\n- [-] Cancelled ()\n"),
+            "Bob daily note has no eligible Pomodoro",
+        ),
+        (
+            "empty-section",
+            Some("## Pomodoros\n"),
+            "Bob daily note has no eligible Pomodoro",
         ),
         ("missing-daily-note", None, "Bob daily note does not exist"),
     ];
@@ -7134,6 +7217,37 @@ fn capture_bare_terminal_marker_batch_items_land_under_the_same_pomodoro_in_orde
         concat!(
             "## Pomodoros\n\n",
             "- [ ] Current (0900-0930)\n",
+            "  - first note\n",
+            "  - second note\n",
+        )
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_batch_items_stack_under_the_same_completed_pomodoro(
+) {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-batch-completed");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&day_file, "## Pomodoros\n\n- [x] Done (0900-0930)\n");
+
+    let draft = concat!("first note #", "\n", "\n", "second note #");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg(draft)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run batched Pomodoro-note capture on a completed ledger");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [x] Done (0900-0930)\n",
             "  - first note\n",
             "  - second note\n",
         )
