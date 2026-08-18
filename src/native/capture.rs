@@ -162,6 +162,14 @@ Work Log; if neither managed log exists, the child is appended at the end of the
 task block. The note and task must already exist. Existing child indentation and \
 line endings are preserved; run 'bob capture-tasks -r <route>' to list eligible \
 task block IDs.\n\n\
+Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
+Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
+no '#task' marker, and no block ID. The daily note comes from BOB_DAY_FILE or \
+<bob-dir>/YYYY/YYYYMMDD.md. Capture prefers the single open timed entry in its \
+Pomodoros section and otherwise uses the first open entry, appending the new \
+bullet at the end of that entry's child block. The marker composes with \
+'%...' and --clip but is rejected alongside 's:<N>', 'p:<N>', '@route', and \
+--route.\n\n\
 Append '#<section-prefix>' or a bare '#' to an @route token (such as \
 '@notes#Ideas' or '@notes#') to capture an ordinary bullet instead. It renders \
 as '- <body> [created::YYYY-MM-DD]' and is placed in a non-Tasks section whose \
@@ -169,15 +177,16 @@ heading title starts with the prefix (compared case insensitively), or any \
 non-Tasks section for a bare '#'. A matching non-H1 section is preferred; a \
 matching H1 heading is used only when no non-H1 heading matches. The marker may \
 lead ('@notes#Ideas jot idea') or trail ('jot idea @notes#Ideas') the body. \
-Standalone terminal '#...' markers are no longer accepted and fail with a \
-usage error.\n\n\
+A standalone terminal '#<section-prefix>' marker (not appended to an @route \
+token) is still not accepted and fails with a usage error; a standalone bare \
+'#' is the Pomodoro-note marker described above, not a bullet marker.\n\n\
 Use --route with --section to force bullet mode while keeping @tokens literal. \
 The section title is matched exactly, case insensitively, against non-Tasks \
 headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -586,14 +595,30 @@ fn plan_capture_item(
             scheduled.as_deref(),
             block_id,
         ),
+        CaptureKind::PomodoroNote => {
+            format_sub_bullet_line(&parsed.body, None, None)
+        }
     };
     let kind_label = capture_kind_label(&parsed.kind);
     let task_block_id = match &parsed.kind {
         CaptureKind::TaskWithBlockId { block_id } => Some(block_id.clone()),
         _ => None,
     };
-    let relative_target = relative_target(parsed.route.as_deref());
-    let target = request.bob_dir.join(&relative_target);
+    let (relative_target, target) = match &parsed.kind {
+        CaptureKind::PomodoroNote => {
+            let day_file = pomodoro::day_file_for(&request.bob_dir);
+            let relative_target = day_file
+                .strip_prefix(&request.bob_dir)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| day_file.clone());
+            (relative_target, day_file)
+        }
+        _ => {
+            let relative_target = relative_target(parsed.route.as_deref());
+            let target = request.bob_dir.join(&relative_target);
+            (relative_target, target)
+        }
+    };
     let child_indent = (parsed.clip.is_some()
         || schedule_log_reason.is_some()
         || !parsed.sub_bullets.is_empty())
@@ -701,6 +726,9 @@ fn plan_capture_item(
                 &capture_block,
             )?
         }
+        CaptureKind::PomodoroNote => {
+            plan_pomodoro_note_capture(planner, &target, &capture_block)?
+        }
         _ => plan_capture_to_target(
             planner,
             &target,
@@ -710,6 +738,7 @@ fn plan_capture_item(
     };
     let special = note_plan.pomodoro.as_ref();
     let sub_bullet = note_plan.sub_bullet.as_ref();
+    let pomodoro_note = note_plan.pomodoro_note.as_ref();
 
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -744,15 +773,22 @@ fn plan_capture_item(
                 .or_else(|| sub_bullet.and_then(|edit| edit.block_id.clone())),
             day_file: special
                 .as_ref()
-                .map(|edit| edit.details.day_file.clone()),
+                .map(|edit| edit.details.day_file.clone())
+                .or_else(|| pomodoro_note.map(|note| note.day_file.clone())),
             block_link: special
                 .as_ref()
                 .map(|edit| edit.details.block_link.clone()),
             pomodoro_link_placement: special
                 .as_ref()
                 .map(|edit| edit.details.pomodoro_link_placement),
-            parent_line: sub_bullet.map(|edit| edit.parent_line),
-            parent_text: sub_bullet.map(|edit| edit.parent_text.clone()),
+            parent_line: sub_bullet
+                .map(|edit| edit.parent_line)
+                .or_else(|| pomodoro_note.map(|note| note.pomodoro_line)),
+            parent_text: sub_bullet
+                .map(|edit| edit.parent_text.clone())
+                .or_else(|| {
+                    pomodoro_note.map(|note| note.pomodoro_text.clone())
+                }),
             parent_status_symbol: sub_bullet
                 .map(|edit| edit.parent_status_symbol),
             parent_status_name: sub_bullet
@@ -809,6 +845,7 @@ fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::Bullet { .. } => "bullet",
         CaptureKind::Pomodoro { .. } => "pomodoro_task",
         CaptureKind::SubBullet { .. } => "sub_bullet",
+        CaptureKind::PomodoroNote => "pomodoro_note",
     }
 }
 
@@ -1078,6 +1115,7 @@ fn plan_capture_to_target(
             placement: Placement::Created,
             pomodoro: None,
             sub_bullet: None,
+            pomodoro_note: None,
         });
     }
 
@@ -1105,12 +1143,18 @@ fn plan_capture_to_target(
                 "sub-bullet capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::PomodoroNote => {
+            return Err(CaptureError::io(
+                "pomodoro-note capture invariant failed: wrong write planner",
+            ));
+        }
     };
     planner.stage(target, updated)?;
     Ok(CaptureWritePlan {
         placement,
         pomodoro: None,
         sub_bullet: None,
+        pomodoro_note: None,
     })
 }
 
@@ -1119,6 +1163,7 @@ struct CaptureWritePlan {
     placement: Placement,
     pomodoro: Option<PlannedPomodoroEdit>,
     sub_bullet: Option<SubBulletCaptureDetails>,
+    pomodoro_note: Option<PomodoroNoteDetails>,
 }
 
 #[derive(Debug)]
@@ -1141,6 +1186,13 @@ struct PomodoroCaptureDetails {
     day_file: String,
     block_link: String,
     pomodoro_link_placement: Placement,
+}
+
+#[derive(Debug)]
+struct PomodoroNoteDetails {
+    day_file: String,
+    pomodoro_line: usize,
+    pomodoro_text: String,
 }
 
 fn plan_capture_with_pomodoro_link(
@@ -1199,6 +1251,7 @@ fn plan_capture_with_pomodoro_link(
             },
         }),
         sub_bullet: None,
+        pomodoro_note: None,
     })
 }
 
@@ -1217,6 +1270,35 @@ fn reject_duplicate_block_id(
         )));
     }
     Ok(())
+}
+
+fn plan_pomodoro_note_capture(
+    planner: &mut CaptureBatchPlanner,
+    day_file: &Path,
+    capture_block: &str,
+) -> Result<CaptureWritePlan, CaptureError> {
+    if !day_file.is_file() {
+        return Err(CaptureError::io(format!(
+            "Bob daily note does not exist: {}",
+            day_file.display()
+        )));
+    }
+
+    let contents = planner.read_existing(day_file)?;
+    let (updated, placement, pomodoro_line, pomodoro_text) =
+        insert_pomodoro_child_block(&contents, capture_block)?;
+    planner.stage(day_file, updated)?;
+
+    Ok(CaptureWritePlan {
+        placement,
+        pomodoro: None,
+        sub_bullet: None,
+        pomodoro_note: Some(PomodoroNoteDetails {
+            day_file: day_file.display().to_string(),
+            pomodoro_line: pomodoro_line + 1,
+            pomodoro_text,
+        }),
+    })
 }
 
 fn plan_sub_bullet_capture(
@@ -1329,6 +1411,7 @@ fn plan_sub_bullet_capture(
         placement,
         pomodoro: None,
         sub_bullet: Some(details),
+        pomodoro_note: None,
     })
 }
 
@@ -1712,6 +1795,21 @@ fn insert_pomodoro_block_link(
     contents: &str,
     block_link: &str,
 ) -> Result<(String, Placement), CaptureError> {
+    let (updated, placement, _, _) =
+        insert_pomodoro_child_block(contents, &format!("- {block_link}"))?;
+    Ok((updated, placement))
+}
+
+/// Select the current (else next future) open Pomodoro in the daily note's
+/// `## Pomodoros` section and insert `block` -- indented to match the
+/// entry's existing children -- at the end of that entry's child block.
+/// Returns the updated contents, the placement, the selected entry's
+/// 0-based line index, and its ledger task text (trimmed of the leading
+/// checkbox but not of its `(start-end)` time range or bracket fields).
+fn insert_pomodoro_child_block(
+    contents: &str,
+    block: &str,
+) -> Result<(String, Placement, usize, String), CaptureError> {
     let lines = line_spans(contents);
     let line_text = lines.iter().map(|line| line.text).collect::<Vec<_>>();
     let section =
@@ -1751,6 +1849,9 @@ fn insert_pomodoro_block_link(
         .ok_or_else(|| {
             CaptureError::io("Bob daily note has no eligible open Pomodoro")
         })?;
+    let pomodoro_text = pomodoro::open_ledger_task(lines[selected].text)
+        .expect("selected entry resolved from an open ledger task")
+        .to_string();
     let insertion_index = task_block_end(&lines, selected);
     let indentation =
         child_bullet_indentation(&lines, selected + 1, insertion_index)
@@ -1762,18 +1863,27 @@ fn insert_pomodoro_block_link(
                 )
             })
             .unwrap_or_else(|| "  ".to_string());
-    let line = format!("{indentation}- {block_link}");
+    let indented_block = block
+        .split('\n')
+        .map(|line| format!("{indentation}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let addition = insertion_text_preserving_line_endings(
         contents,
         insertion_index,
-        &line,
+        &indented_block,
     );
     let placement = if insertion_index >= contents.len() {
         Placement::Appended
     } else {
         Placement::Inserted
     };
-    Ok((insert_at(contents, insertion_index, &addition), placement))
+    Ok((
+        insert_at(contents, insertion_index, &addition),
+        placement,
+        selected,
+        pomodoro_text,
+    ))
 }
 
 fn child_bullet_indentation(
@@ -2581,16 +2691,19 @@ fn print_human_item_success(
         .map(|(index, total)| format!("{index}/{total}  "))
         .unwrap_or_default();
     println!("{prefix} {verb}  {ordinal}{target_label}");
-    if let (Some(symbol), Some(parent_text)) =
-        (result.parent_status_symbol, result.parent_text.as_deref())
-    {
-        let marker = style_task_status_marker(&styler, symbol);
+    if let Some(parent_text) = result.parent_text.as_deref() {
+        let marker = result
+            .parent_status_symbol
+            .map(|symbol| {
+                format!("{} ", style_task_status_marker(&styler, symbol))
+            })
+            .unwrap_or_default();
         let block_id = result
             .block_id
             .as_deref()
             .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
             .unwrap_or_default();
-        println!("  under {marker} {parent_text}{block_id}");
+        println!("  under {marker}{parent_text}{block_id}");
     }
     println!("  {}", styler.dim(&result.task_line));
     for line in &result.sub_bullets {
@@ -4330,12 +4443,20 @@ mod tests {
             "Some note #bar @foo",
             "Some note @foo #bar",
             "Some note #bar",
-            "Some note #",
         ] {
             let error = parse_capture_text(raw, None)
                 .expect_err(&format!("{raw} should be a usage error"));
             assert_eq!(error.kind, CaptureErrorKind::Usage, "{raw}");
         }
+    }
+
+    #[test]
+    fn bare_trailing_hash_resolves_pomodoro_note() {
+        let parsed = parse_capture_text("Some note #", None)
+            .expect("bare trailing # is the Pomodoro-note marker");
+        assert_eq!(parsed.body, "Some note");
+        assert_eq!(parsed.route, None);
+        assert_eq!(parsed.kind, CaptureKind::PomodoroNote);
     }
 
     #[test]

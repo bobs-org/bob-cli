@@ -34,6 +34,7 @@ pub(crate) enum CaptureKind {
     SubBullet {
         target: SubBulletTarget,
     },
+    PomodoroNote,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,7 +96,7 @@ pub(crate) enum ClipRequest {
 }
 
 pub(crate) struct RouteToken {
-    route: String,
+    route: Option<String>,
     kind: CaptureKind,
 }
 
@@ -569,9 +570,17 @@ fn parse_capture_item(
     }
 
     let (route, kind) = match aggregate.route {
-        Some(token) => (Some(token.route), token.kind),
+        Some(token) => (token.route, token.kind),
         None => (None, CaptureKind::Task),
     };
+    if matches!(kind, CaptureKind::PomodoroNote) {
+        if aggregate.scheduled_offset.is_some() {
+            return Err(pomodoro_note_schedule_conflict_error());
+        }
+        if aggregate.priority_level.is_some() {
+            return Err(pomodoro_note_priority_conflict_error());
+        }
+    }
     Ok(ParsedCaptureText {
         body: parent_outcome.body,
         clip: aggregate.clip,
@@ -618,6 +627,36 @@ fn resolve_line(
 
     reject_legacy_bullet_markers(&tokens, detect_route)?;
 
+    // The bare `#` Pomodoro-note marker claims the route/mode slot from the
+    // final token position, exactly like an `@route` token does, but it
+    // never has a partially-typed form and never coexists with one.
+    if tokens
+        .last()
+        .is_some_and(|&token| is_pomodoro_note_marker(token))
+    {
+        if !detect_route {
+            return Err(pomodoro_note_forced_route_conflict_error());
+        }
+        tokens.pop();
+        if tokens.is_empty() {
+            return Err(missing_text_error());
+        }
+        if (leading
+            && tokens.first().is_some_and(|token| is_route_marker(token)))
+            || tokens.last().is_some_and(|token| is_route_marker(token))
+        {
+            return Err(pomodoro_note_route_conflict_error());
+        }
+        return Ok(LineOutcome {
+            body: tokens.join(" "),
+            markers,
+            route: Some(RouteToken {
+                route: None,
+                kind: CaptureKind::PomodoroNote,
+            }),
+        });
+    }
+
     if !detect_route {
         return Ok(LineOutcome {
             body: tokens.join(" "),
@@ -636,6 +675,9 @@ fn resolve_line(
             }
             // A bare `@foo` with no body stays literal task text.
         } else {
+            if rest.contains(&"#") {
+                return Err(pomodoro_note_route_conflict_error());
+            }
             return Ok(LineOutcome {
                 body: rest.join(" "),
                 markers,
@@ -651,6 +693,9 @@ fn resolve_line(
         && !rest.is_empty()
         && let Some(token) = parse_terminal_route_token(last)?
     {
+        if rest.contains(&"#") {
+            return Err(pomodoro_note_route_conflict_error());
+        }
         return Ok(LineOutcome {
             body: rest.join(" "),
             markers,
@@ -703,7 +748,7 @@ impl AggregateMarkers {
         if let Some(route) = route {
             if self.route.is_some() {
                 return Err(duplicate_marker_error(
-                    "route/mode marker (@route)",
+                    "route/mode marker (@route or #)",
                 ));
             }
             self.route = Some(route);
@@ -751,6 +796,23 @@ fn legacy_marker_error() -> String {
         .to_string()
 }
 
+fn pomodoro_note_route_conflict_error() -> String {
+    "the '#' Pomodoro-note marker cannot be combined with an @route marker"
+        .to_string()
+}
+
+fn pomodoro_note_forced_route_conflict_error() -> String {
+    "the '#' Pomodoro-note marker cannot be combined with --route".to_string()
+}
+
+fn pomodoro_note_schedule_conflict_error() -> String {
+    "the '#' Pomodoro-note marker cannot be combined with 's:<N>'".to_string()
+}
+
+fn pomodoro_note_priority_conflict_error() -> String {
+    "the '#' Pomodoro-note marker cannot be combined with 'p:<N>'".to_string()
+}
+
 pub(crate) fn normalize_task_text(raw_text: &str) -> String {
     raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -768,7 +830,7 @@ fn parse_route_token(token: &str) -> Option<RouteToken> {
         None => (rest, None),
     };
     is_route_token(route_part).then(|| RouteToken {
-        route: route_part.to_ascii_lowercase(),
+        route: Some(route_part.to_ascii_lowercase()),
         kind: match bullet {
             Some(section_prefix) => CaptureKind::Bullet {
                 section_prefix,
@@ -823,7 +885,7 @@ fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
     }
 
     Ok(RouteToken {
-        route: route.to_ascii_lowercase(),
+        route: Some(route.to_ascii_lowercase()),
         kind: CaptureKind::SubBullet {
             target: SubBulletTarget::BlockId(block_id.to_string()),
         },
@@ -863,7 +925,7 @@ fn parse_task_block_id_route_token(token: &str) -> Result<RouteToken, String> {
     }
 
     Ok(RouteToken {
-        route: route.to_ascii_lowercase(),
+        route: Some(route.to_ascii_lowercase()),
         kind: CaptureKind::TaskWithBlockId {
             block_id: block_id.to_string(),
         },
@@ -934,7 +996,7 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
     }
 
     Ok(RouteToken {
-        route: route.to_ascii_lowercase(),
+        route: Some(route.to_ascii_lowercase()),
         kind: CaptureKind::Pomodoro {
             block_id: block_id.to_string(),
         },
@@ -1154,13 +1216,21 @@ fn extract_terminal_marker(
 }
 
 fn is_route_marker(token: &str) -> bool {
-    parse_route_token(token).is_some()
+    is_pomodoro_note_marker(token)
+        || parse_route_token(token).is_some()
         || (is_sub_bullet_marker_candidate(token)
             && parse_sub_bullet_route_token(token).is_ok())
         || (is_task_block_id_marker_candidate(token)
             && parse_task_block_id_route_token(token).is_ok())
         || (is_pomodoro_marker_candidate(token)
             && parse_pomodoro_route_token(token).is_ok())
+}
+
+/// The bare `#` token: a Pomodoro-note marker, recognized only in the
+/// terminal marker region. `#<anything-else>` stays a distinct, retired
+/// legacy bullet-marker shape (see [`reject_legacy_bullet_markers`]).
+fn is_pomodoro_note_marker(token: &str) -> bool {
+    token == "#"
 }
 
 /// Reject the retired standalone bullet marker forms so they fail clearly
@@ -1178,13 +1248,14 @@ fn reject_legacy_bullet_markers(
         return Ok(());
     };
 
-    if last.starts_with('#') {
+    if last.starts_with('#') && !is_pomodoro_note_marker(last) {
         return Err(legacy_marker_error());
     }
 
     if allow_route
         && tokens.len() >= 2
         && tokens[tokens.len() - 2].starts_with('#')
+        && !is_pomodoro_note_marker(tokens[tokens.len() - 2])
         && parse_route_token(last)
             .is_some_and(|token| matches!(token.kind, CaptureKind::Task))
     {
@@ -1239,6 +1310,7 @@ pub(crate) enum SpanKind {
     PomodoroBlockId,
     SubBulletRoute,
     SubBulletBlockId,
+    PomodoroNote,
     Schedule,
     Priority,
     Clipboard,
@@ -1261,6 +1333,7 @@ impl SpanKind {
             Self::PomodoroBlockId => "pomodoro_block_id",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
+            Self::PomodoroNote => "pomodoro_note",
             Self::Schedule => "schedule",
             Self::Priority => "priority",
             Self::Clipboard => "clipboard",
@@ -1318,6 +1391,7 @@ pub(crate) enum EditorMode {
     Task,
     Bullet,
     PomodoroTask,
+    PomodoroNote,
     SubBullet,
     Incomplete,
 }
@@ -1328,6 +1402,7 @@ impl EditorMode {
             Self::Task => "task",
             Self::Bullet => "bullet",
             Self::PomodoroTask => "pomodoro_task",
+            Self::PomodoroNote => "pomodoro_note",
             Self::SubBullet => "sub_bullet",
             Self::Incomplete => "incomplete",
         }
@@ -1454,6 +1529,11 @@ fn parse_editor_line(
     if let Some(diagnostic) = legacy_bullet_marker_diagnostic(&tokens) {
         diagnostics.push(diagnostic);
     }
+    if let Some(diagnostic) =
+        pomodoro_note_conflict_diagnostic(&tokens, leading)
+    {
+        diagnostics.push(diagnostic);
+    }
 
     // The recognized `@...` token leaves the body exactly like execution
     // drops it before joining the remaining tokens with single spaces.
@@ -1526,7 +1606,7 @@ impl SeenMarkers {
         let already_seen = self.route;
         if already_seen && let Some(range) = range {
             diagnostics.push(duplicate_capture_marker_diagnostic(
-                duplicate_marker_error("route/mode marker (@route)"),
+                duplicate_marker_error("route/mode marker (@route or #)"),
                 range,
             ));
         }
@@ -1722,6 +1802,22 @@ fn parse_editor_item(item: &CaptureItem<'_>) -> EditorItemParse {
         }
     }
 
+    if mode == EditorMode::PomodoroNote {
+        for span in &spans {
+            let message = match span.kind {
+                SpanKind::Schedule => pomodoro_note_schedule_conflict_error(),
+                SpanKind::Priority => pomodoro_note_priority_conflict_error(),
+                _ => continue,
+            };
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "pomodoro_note_conflict",
+                message,
+                range: Some((span.start, span.end)),
+            });
+        }
+    }
+
     spans.sort_by_key(|span| (span.start, span.end));
     EditorItemParse {
         index: item.index,
@@ -1778,12 +1874,39 @@ fn select_marker_token(
 
     if tokens.len() >= 2 {
         let last = tokens.len() - 1;
+        if is_pomodoro_note_marker(tokens[last].text) {
+            return Some((
+                last,
+                TokenParse::Marker(pomodoro_note_marker_parse(&tokens[last])),
+            ));
+        }
         if let Some(parse) = classify_editor_token(&tokens[last]) {
             return Some((last, parse));
         }
     }
 
     None
+}
+
+/// The bare `#` token never has a partially-typed form, needs nothing else,
+/// and -- unlike every `@...` marker -- is only ever recognized as the final
+/// token of a line, so it is classified directly in
+/// [`select_marker_token`]'s trailing slot rather than through
+/// [`classify_editor_token`] (which a leading check also consults).
+fn pomodoro_note_marker_parse(token: &Token<'_>) -> MarkerParse {
+    MarkerParse {
+        mode: EditorMode::PomodoroNote,
+        route: None,
+        section: None,
+        block_id: None,
+        needs: Vec::new(),
+        spans: vec![Span {
+            start: token.start,
+            end: token.end,
+            kind: SpanKind::PomodoroNote,
+        }],
+        requires_body: false,
+    }
 }
 
 /// Classify one `@...` token, returning `None` when the token is not
@@ -2126,6 +2249,48 @@ fn legacy_bullet_marker_diagnostic(tokens: &[Token<'_>]) -> Option<Diagnostic> {
         code: "legacy_bullet_marker",
         message,
         range: Some((offender.start, offender.end)),
+    })
+}
+
+/// Diagnose a same-line combination of the bare `#` Pomodoro-note marker
+/// with an `@route`-shaped marker, mirroring [`resolve_line`]'s route
+/// conflict rejection so the editor and `bob capture` never disagree.
+/// Schedule (`s:<N>`) and priority (`p:<N>`) conflicts are item-wide and
+/// diagnosed separately in [`parse_editor_item`] once the whole item's mode
+/// is known; a forced `--route` conflict never reaches the editor, which has
+/// no forced-route flag.
+fn pomodoro_note_conflict_diagnostic(
+    tokens: &[Token<'_>],
+    leading: bool,
+) -> Option<Diagnostic> {
+    let texts: Vec<&str> = tokens.iter().map(|token| token.text).collect();
+    if !texts.contains(&"#") {
+        return None;
+    }
+    let hash = tokens.iter().find(|token| token.text == "#")?;
+
+    let conflict = match texts.last() {
+        Some(&"#") => {
+            let remaining = &texts[..texts.len() - 1];
+            (leading
+                && remaining
+                    .first()
+                    .is_some_and(|token| is_route_marker(token)))
+                || remaining.last().is_some_and(|token| is_route_marker(token))
+        }
+        Some(&last) => {
+            (leading
+                && texts.first().is_some_and(|token| is_route_marker(token)))
+                || is_route_marker(last)
+        }
+        None => false,
+    };
+
+    conflict.then(|| Diagnostic {
+        severity: Severity::Error,
+        code: "pomodoro_note_conflict",
+        message: pomodoro_note_route_conflict_error(),
+        range: Some((hash.start, hash.end)),
     })
 }
 
@@ -3043,6 +3208,9 @@ mod tests {
             "take s:1 pill",
             "save % now",
             "body %bad!",
+            "remembered to bump the timeout #",
+            "paste the failing output % #",
+            "paste the failing output # %",
         ];
 
         for raw in inputs {
@@ -3059,6 +3227,7 @@ mod tests {
                 CaptureKind::Bullet { .. } => EditorMode::Bullet,
                 CaptureKind::Pomodoro { .. } => EditorMode::PomodoroTask,
                 CaptureKind::SubBullet { .. } => EditorMode::SubBullet,
+                CaptureKind::PomodoroNote => EditorMode::PomodoroNote,
             };
             assert_eq!(parse.mode, expected_mode, "{raw}");
             if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {

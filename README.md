@@ -405,6 +405,42 @@ already exist, block IDs must be unique, and non-task block IDs are rejected.
 Missing IDs include a close-match suggestion when possible and direct callers
 to `bob capture-tasks -r <route>`.
 
+Append a bare trailing `#` marker to capture the item as a plain-text
+sub-bullet on a Pomodoro instead of a task. For example,
+`bob capture remembered to bump the timeout #` writes:
+
+```markdown
+- remembered to bump the timeout
+```
+
+as a child of the selected Pomodoro. It renders as `- <text>` with no
+`[created::YYYY-MM-DD]` stamp, no `#task` marker, and no block ID. The daily
+note is selected the same way as `@<route>:<block-id>` captures:
+`BOB_DAY_FILE` when set, otherwise `<bob-dir>/YYYY/YYYYMMDD.md`. Capture
+prefers the single open top-level entry with a recognized time range and
+otherwise uses the first open top-level entry; multiple open timed entries
+are an invariant error. The new bullet is appended at the end of the
+selected entry's child block, reusing existing child indentation when
+possible.
+
+The marker composes with `%...` and `--clip` in either terminal order, since
+"capture what I just copied onto this Pomodoro" is a plausible use, but it is
+rejected alongside `s:<N>`, `p:<N>`, any `@route` token, and `--route`, since
+a plain Pomodoro bullet has no field for a schedule, priority, or routed
+destination:
+
+| Marker                                                         | With `#` |
+| ---------------------------------------------------------------| -------- |
+| `%`, `%<N>`, `%<header>`, `--clip[=HEADER]`                     | allowed  |
+| `s:<N>`                                                         | rejected |
+| `p:<N>`                                                         | rejected |
+| `@route`, `@route#Sec`, `@route:id`, `@route^id`, `@route+id`   | rejected |
+| `--route` / `--section` / `--task` / `--task-ref`               | rejected |
+
+Only a trailing bare `#` is recognized; a leading `#` or a `#` in the middle
+of the body stays literal text, and `#<section-prefix>` keeps its existing
+meaning as a bullet-section marker (see below) rather than a Pomodoro note.
+
 Append `#<section-prefix>` or a bare `#` to an `@route` token, as in
 `@notes#Ideas` or `@notes#`, to capture an ordinary Markdown bullet instead of
 a task. It renders as `- <text> [created::YYYY-MM-DD]` and is placed in a
@@ -416,9 +452,11 @@ pre-heading (zeroth) section. Within the chosen section the bullet is inserted
 after the last existing top-level bullet, otherwise just below the heading (or
 after any YAML frontmatter for the zeroth section). The suffixed route token may
 lead or trail the body, so `@notes#Ideas jot idea` and `jot idea @notes#Ideas`
-both capture into `notes.md`. Standalone terminal `#...` markers, such as
-`note #Ideas @foo` or `note @foo #`, are no longer accepted and fail with a
-usage error.
+both capture into `notes.md`. A standalone terminal `#<section-prefix>`
+marker not appended to an `@route` token, such as `note #Ideas @foo`, is
+still not accepted and fails with a usage error; a standalone bare `#`, such
+as `note @foo #`, is instead the Pomodoro-note marker described above and
+still fails, since it conflicts with the `@route` token on the same item.
 
 A `--route` target keeps `@tokens` literal. Add `--section TITLE` with
 `--route` to force bullet mode and place the bullet in a non-`Tasks` heading
@@ -454,8 +492,9 @@ joined with single spaces, never newlines. Hammerspoon integrations should
 call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`, and
-`placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`, or
-`"sub_bullet"`, and `task_line` holds the rendered line for any kind. On JSON-mode failures, stdout is still a
+`placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
+`"pomodoro_note"`, or `"sub_bullet"`, and `task_line` holds the rendered line
+for any kind. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
 
 A capture with authored sub-bullets additionally includes a `sub_bullets`
@@ -501,6 +540,15 @@ Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 Sub-bullet results additionally include `parent_line`, `parent_text`,
 `parent_status_symbol`, and `parent_status_name`. They reuse `block_id` for the
 parent's ID, omitting it when a task-ref selected a parent without one.
+
+Pomodoro-note results use kind `"pomodoro_note"` with `routed: false`, `route:
+null`, and `target`/`relative_target` set to the daily note. They additionally
+include `day_file`, `parent_line`, and `parent_text` describing the selected
+Pomodoro's ledger line and text, but omit `block_id`, `block_link`,
+`pomodoro_link_placement`, `parent_status_symbol`, and `parent_status_name`,
+since the ledger checkbox is not an Obsidian task. Human output prints an
+`under <parent_text>` line without a status marker, then the rendered
+`- <text>` bullet.
 
 The Hammerspoon panel opened by `cmd+shift+ctrl+i` also supports incomplete
 interactive markers. Use `<task> @:` to choose an area or project and then enter

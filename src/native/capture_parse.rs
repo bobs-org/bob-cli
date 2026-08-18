@@ -92,7 +92,11 @@ not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@^', \
 '@route^', '@+', '@route+', '@:', '@route:', and the legacy '@!' aliases \
 all report mode 'incomplete' plus what they still need. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
-it is not an incomplete Pomodoro marker. An invalid marker component, a malformed \
+it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \
+'pomodoro_note' with no route, section, or block ID and an empty 'needs' list; \
+combining it with an '@route' marker, 's:<N>', or 'p:<N>' on the same item \
+reports a 'pomodoro_note_conflict' diagnostic instead of failing outright. \
+An invalid marker component, a malformed \
 continuation line, an orphaned nested bullet, an item emptied by marker removal, or a duplicate \
 item-wide marker across lines becomes a diagnostic, so live editors keep \
 a usable parse while 'bob capture' keeps its strict execution errors.\n\n\
@@ -104,7 +108,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task",
         )
         .disable_help_flag(true)
         .arg(format_arg())

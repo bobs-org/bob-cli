@@ -2882,6 +2882,46 @@ fn capture_parse_json_reports_retired_double_colon_as_migration_guidance() {
 }
 
 #[test]
+fn capture_parse_json_reports_pomodoro_note_mode_and_span() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note #")
+        .output()
+        .expect("run bob capture-parse on a bare #");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "pomodoro_note");
+    assert_eq!(json["body"], "note");
+    assert!(json["route"].is_null());
+    assert_eq!(json["needs"], serde_json::json!([]));
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([{ "start": 5, "end": 6, "kind": "pomodoro_note" }])
+    );
+    assert!(json["diagnostics"].as_array().unwrap().is_empty());
+
+    let conflict = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note # @work")
+        .output()
+        .expect("run bob capture-parse on a conflicting # and @route");
+
+    assert_success(&conflict);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&conflict).trim())
+            .expect("capture-parse JSON");
+    assert_eq!(json["diagnostics"][0]["code"], "pomodoro_note_conflict");
+}
+
+#[test]
 fn capture_parse_json_reports_wikilink_semantic_spans() {
     let output = bob_command()
         .arg("capture-parse")
@@ -6815,13 +6855,69 @@ fn capture_bullet_marker_order_routes_equivalently() {
 }
 
 #[test]
-fn capture_bare_terminal_marker_is_usage_error_and_does_not_write() {
-    let temp = TempDir::new("bob-cli-capture-bullet-bare-error");
+fn capture_bare_terminal_marker_writes_pomodoro_note_under_current_pomodoro() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-current");
     let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
     write_file(
-        &vault.join("mac_inbox.md"),
-        "## Tasks\n- [ ] #task t\n## Ideas\nNotes\n",
+        &day_file,
+        "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - existing child\n",
     );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("jot")
+        .arg("this")
+        .arg("#")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run Pomodoro-note capture");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["kind"], "pomodoro_note");
+    assert_eq!(json["routed"], false);
+    assert!(json["route"].is_null());
+    assert_eq!(json["text"], "jot this");
+    assert_eq!(json["task_line"], "- jot this");
+    assert_eq!(json["placement"], "appended");
+    assert_eq!(json["day_file"], day_file.display().to_string());
+    assert_eq!(json["parent_line"], 3);
+    assert_eq!(json["parent_text"], "Current (0900-0930)");
+    assert!(json["block_id"].is_null());
+    assert!(json["block_link"].is_null());
+    assert!(json["pomodoro_link_placement"].is_null());
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - existing child\n",
+            "  - jot this\n",
+        )
+    );
+    assert!(
+        !vault.join("mac_inbox.md").exists(),
+        "Pomodoro-note capture must not create the default inbox"
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_human_output_shows_the_ledger_entry() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-human");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&day_file, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
 
     let output = bob_command()
         .arg("capture")
@@ -6830,25 +6926,319 @@ fn capture_bare_terminal_marker_is_usage_error_and_does_not_write() {
         .arg("jot")
         .arg("this")
         .arg("#")
-        .env("BOB_NOW", "2026-06-15")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
-        .expect("run bare terminal marker capture");
+        .expect("run Pomodoro-note capture");
 
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "bare terminal marker should be a usage error:\n{}",
-        format_output(&output)
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(out.contains("captured  day.md"), "{out}");
+    assert!(out.contains("under Current (0900-0930)"), "{out}");
+    assert!(out.contains("- jot this"), "{out}");
+}
+
+#[test]
+fn capture_bare_terminal_marker_falls_back_to_next_future_pomodoro() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-future");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [x] Done (0900-0930)\n- [ ] Next ()\n",
     );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("note")
+        .arg("this")
+        .arg("#")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run Pomodoro-note capture with no timed entry");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("Pomodoro-note JSON");
+    assert_eq!(json["parent_text"], "Next ()");
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [x] Done (0900-0930)\n",
+            "- [ ] Next ()\n",
+            "  - note this\n",
+        )
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_multiple_open_timed_pomodoros_is_io_error() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-multiple-timed");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    let day_before =
+        "## Pomodoros\n\n- [ ] One (0900-0930)\n- [ ] Two (1000-1030)\n";
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("note")
+        .arg("this")
+        .arg("#")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run Pomodoro-note capture with two timed entries");
+
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert!(
-        stderr(&output).contains("must be appended to an @route token"),
-        "expected legacy marker usage error:\n{}",
+        stderr(&output).contains("multiple open timed Pomodoros"),
+        "{}",
         format_output(&output)
     );
     assert_eq!(
-        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
-        "## Tasks\n- [ ] #task t\n## Ideas\nNotes\n",
-        "legacy marker must not modify the target"
+        fs::read_to_string(&day_file).expect("read untouched day"),
+        day_before
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_preflight_failures_leave_daily_note_untouched()
+{
+    let cases = [
+        (
+            "missing-section",
+            Some("# Daily\n\nNo Pomodoros heading here.\n"),
+            "Bob daily note has no Pomodoros section",
+        ),
+        (
+            "no-open",
+            Some("## Pomodoros\n\n- [x] Done (0900-0930)\n"),
+            "Bob daily note has no eligible open Pomodoro",
+        ),
+        ("missing-daily-note", None, "Bob daily note does not exist"),
+    ];
+
+    for (name, day_before, expected_error) in cases {
+        let temp =
+            TempDir::new(&format!("bob-cli-capture-pomodoro-note-{name}"));
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(&vault).expect("create vault");
+        let day_file = vault.join("day.md");
+        if let Some(day_before) = day_before {
+            write_file(&day_file, day_before);
+        }
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("note")
+            .arg("this")
+            .arg("#")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 13:40:00")
+            .output()
+            .expect("run failing Pomodoro-note capture");
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: {}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains(expected_error),
+            "{name}: {}",
+            format_output(&output)
+        );
+        match day_before {
+            Some(day_before) => assert_eq!(
+                fs::read_to_string(&day_file).expect("read untouched day"),
+                day_before,
+                "{name}"
+            ),
+            None => assert!(
+                !day_file.exists(),
+                "{name}: daily note should not be created"
+            ),
+        }
+    }
+}
+
+#[test]
+fn capture_bare_terminal_marker_dry_run_reports_plan_and_writes_nothing() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-dry-run");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    let day_before = "## Pomodoros\n\n- [ ] Current (0900-0930)\n";
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .arg("note")
+        .arg("this")
+        .arg("#")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run dry-run Pomodoro-note capture");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("dry-run JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["kind"], "pomodoro_note");
+    assert_eq!(json["task_line"], "- note this");
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read untouched day"),
+        day_before
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_batch_items_land_under_the_same_pomodoro_in_order(
+) {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-batch");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&day_file, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+
+    let draft = concat!("first note #", "\n", "\n", "second note #");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg(draft)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run batched Pomodoro-note capture");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - first note\n",
+            "  - second note\n",
+        )
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_authored_children_nest_one_level_deeper() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-children");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - existing child\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("Parent #\n- child detail")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run Pomodoro-note capture with an authored child");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - existing child\n",
+            "  - Parent\n",
+            "    - child detail\n",
+        )
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_clipboard_marker_writes_children_beneath_note()
+{
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-clip");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    let clipboard = temp.path().join("clipboard");
+    write_executable(
+        &clipboard,
+        "#!/bin/sh\nprintf 'hello from clipboard\n'\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - existing child\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .args(["remember this", "%", "#"])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run Pomodoro-note capture with a clipboard marker");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - existing child\n",
+            "  - remember this\n",
+            "    - hello from clipboard\n",
+        )
+    );
+}
+
+#[test]
+fn capture_bare_terminal_marker_keeps_crlf_line_endings() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-crlf");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        "## Pomodoros\r\n\r\n- [ ] Current (0900-0930)\r\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("note")
+        .arg("this")
+        .arg("#")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run Pomodoro-note capture on a CRLF daily note");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        "## Pomodoros\r\n\r\n- [ ] Current (0900-0930)\r\n  - note this\r\n"
     );
 }
 
@@ -8961,6 +9351,34 @@ fn capture_complete_cursor_in_body_text_is_an_empty_success() {
     assert_eq!(
         json["replacement"],
         serde_json::json!({"start": 4, "end": 4})
+    );
+    assert_eq!(json["candidates"], serde_json::json!([]));
+}
+
+#[test]
+fn capture_complete_bare_hash_marker_is_an_empty_success() {
+    let temp = TempDir::new("bob-cli-capture-complete-pomodoro-note");
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(temp.path())
+        .arg("-c")
+        .arg("10")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("jot this #")
+        .output()
+        .expect("run bob capture-complete on a trailing #");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["ok"], true);
+    assert!(json["context"].is_null());
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": 10, "end": 10})
     );
     assert_eq!(json["candidates"], serde_json::json!([]));
 }
