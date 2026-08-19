@@ -1420,7 +1420,7 @@ fn plan_sub_bullet_capture(
     })
 }
 
-fn first_child_indentation(
+pub(crate) fn first_child_indentation(
     lines: &[LineSpan<'_>],
     parent_line_index: usize,
     block_end: usize,
@@ -1449,12 +1449,12 @@ const MANAGED_TASK_LOG_LABELS: &[(&str, ManagedTaskLogKind)] = &[
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ManagedTaskLogKind {
+pub(crate) enum ManagedTaskLogKind {
     Schedule,
     Work,
 }
 
-fn first_direct_managed_log_start(
+pub(crate) fn first_direct_managed_log_start(
     lines: &[LineSpan<'_>],
     parent_line_index: usize,
     block_end: usize,
@@ -1477,7 +1477,7 @@ fn first_direct_managed_log_start(
     None
 }
 
-fn nearest_shallower_list_item_parent(
+pub(crate) fn nearest_shallower_list_item_parent(
     lines: &[LineSpan<'_>],
     child_index: usize,
 ) -> Option<usize> {
@@ -1499,7 +1499,9 @@ fn nearest_shallower_list_item_parent(
     None
 }
 
-fn parse_managed_task_log_marker(line: &str) -> Option<ManagedTaskLogKind> {
+pub(crate) fn parse_managed_task_log_marker(
+    line: &str,
+) -> Option<ManagedTaskLogKind> {
     let rest = list_item_body(line)?;
     if let Some(after_emoji) = strip_log_emoji(rest, SCHEDULE_LOG_EMOJI) {
         return parse_managed_task_log_label(after_emoji)
@@ -1535,7 +1537,7 @@ fn strip_log_emoji<'a>(rest: &'a str, emoji: &str) -> Option<&'a str> {
     (whitespace > 0).then_some(&after_emoji[whitespace..])
 }
 
-fn list_item_body(line: &str) -> Option<&str> {
+pub(crate) fn list_item_body(line: &str) -> Option<&str> {
     let indent_len = leading_spaces_or_tabs_len(line);
     let after_indent = &line[indent_len..];
     let marker_len = list_marker_len(after_indent)?;
@@ -1544,7 +1546,7 @@ fn list_item_body(line: &str) -> Option<&str> {
     (whitespace > 0).then_some(&after_marker[whitespace..])
 }
 
-fn list_marker_len(after_indent: &str) -> Option<usize> {
+pub(crate) fn list_marker_len(after_indent: &str) -> Option<usize> {
     let bytes = after_indent.as_bytes();
     match bytes.first() {
         Some(b'-' | b'*' | b'+') => Some(1),
@@ -1562,14 +1564,16 @@ fn list_marker_len(after_indent: &str) -> Option<usize> {
     }
 }
 
-fn leading_spaces_or_tabs_len(text: &str) -> usize {
+pub(crate) fn leading_spaces_or_tabs_len(text: &str) -> usize {
     text.as_bytes()
         .iter()
         .take_while(|byte| matches!(byte, b' ' | b'\t'))
         .count()
 }
 
-fn dominant_indent_unit(lines: &[LineSpan<'_>]) -> Option<&'static str> {
+pub(crate) fn dominant_indent_unit(
+    lines: &[LineSpan<'_>],
+) -> Option<&'static str> {
     let (tabs, spaces) = lines.iter().fold((0usize, 0usize), |counts, line| {
         match line.text.as_bytes().first() {
             Some(b'\t') => (counts.0 + 1, counts.1),
@@ -1598,7 +1602,7 @@ fn child_indent_unit(
         .to_string())
 }
 
-fn leading_whitespace(line: &str) -> &str {
+pub(crate) fn leading_whitespace(line: &str) -> &str {
     let end = line
         .find(|character: char| !character.is_whitespace())
         .unwrap_or(line.len());
@@ -2556,12 +2560,12 @@ fn next_nonblank_is_indented(
 }
 
 #[derive(Debug, Clone, Copy)]
-struct LineSpan<'a> {
-    end: usize,
-    text: &'a str,
+pub(crate) struct LineSpan<'a> {
+    pub(crate) end: usize,
+    pub(crate) text: &'a str,
 }
 
-fn line_spans(contents: &str) -> Vec<LineSpan<'_>> {
+pub(crate) fn line_spans(contents: &str) -> Vec<LineSpan<'_>> {
     let mut spans = Vec::new();
     let mut start = 0;
     for segment in contents.split_inclusive('\n') {
