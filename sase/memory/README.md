@@ -72,8 +72,8 @@ always-loaded notes from detailed reference notes that agents read only when rel
 - Type: `short`
 - Description: No description set.
 - Parent: `AGENTS.md`
-- Lines: 94
-- Approx. tokens: 925
+- Lines: 83
+- Approx. tokens: 820
 
 ### `sase/memory/cli_rules.md`
 
@@ -108,8 +108,8 @@ always-loaded notes from detailed reference notes that agents read only when rel
 - Total notes: 6
 - Short notes: 3
 - Long notes: 3
-- Total lines: 351
-- Total approx. tokens: 4163
+- Total lines: 340
+- Total approx. tokens: 4058
 
 ## Commands
 
