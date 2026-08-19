@@ -409,9 +409,37 @@ to `bob capture-tasks -r <route>`.
 The same marker accepts an optional trailing `#<section>` selector, as in
 `@cash+goog-exit#requirements` or `@foo+bar#future-work`. The selector names an
 ALL-CAPS child section of that task and may use A-Z, a-z, 0-9, and
-`& ' ( ) , . / -`. `@route+id#` with an empty selector is incomplete and
-reports need `task_section`; it does not mean "any section". A second `#`,
-or `#` before `+`, is not this family (`@foo#bar+baz` remains a note-bullet).
+`& ' ( ) , . / -`. Whole-slug matches beat earlier prefix matches, so
+`#future-work` still reaches `FUTURE WORK` even when `FUTURE WORKFLOW` appears
+first; `#future` reaches the first slug that starts with `future`. The captured
+block is appended at the end of that section's own block — before the next
+direct child of the parent task, and before a managed log nested under the
+section — using the section's child indentation. A selector that matches
+nothing, or a task with no sections, is an error listing the real titles and
+pointing at `bob capture-task-sections`; capture never falls back to the end of
+the task. `@route+id#` with an empty selector is incomplete and reports need
+`task_section`; it does not mean "any section". A second `#`, or `#` before
+`+`, is not this family (`@foo#bar+baz` remains a note-bullet).
+
+For example, `bob capture 'Postgres 17 minimum @foo+bar#requirements'` against
+
+```markdown
+- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar
+	- REQUIREMENTS
+		- existing
+	- FUTURE WORK
+```
+
+appends the new bullet inside `REQUIREMENTS` rather than at the end of the
+task:
+
+```markdown
+- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar
+	- REQUIREMENTS
+		- existing
+		- Postgres 17 minimum
+	- FUTURE WORK
+```
 
 Append a bare trailing `#` marker to capture the item as a plain-text
 sub-bullet on a Pomodoro instead of a task. For example,
@@ -446,7 +474,7 @@ destination:
 | `s:<N>`                                                         | rejected |
 | `p:<N>`                                                         | rejected |
 | `@route`, `@route#Sec`, `@route:id`, `@route^id`, `@route+id`, `@route+id#sec` | rejected |
-| `--route` / `--section` / `--task` / `--task-ref`               | rejected |
+| `--route` / `--section` / `--task` / `--task-ref` / `--task-section` | rejected |
 
 Only a trailing bare `#` is recognized; a leading `#` or a `#` in the middle
 of the body stays literal text, and `#<section-prefix>` keeps its existing
@@ -477,9 +505,15 @@ keep the prefix-matching behavior described above. Without `--section`,
 `--route` captures a task.
 
 With `--route`, `-t, --task BLOCK-ID` selects sub-bullet mode while keeping
-every `@token` in the text literal. Picker integrations may instead use the
-hidden `--task-ref <line>:<digest>` option, which also reaches parents without
-block IDs and recovers when unrelated edits shift the selected task's line.
+every `@token` in the text literal. Add `-S, --task-section TITLE` to nest the
+new bullet under an ALL-CAPS child section of that task whose title matches
+`TITLE` exactly, compared case insensitively. This exact path is the picker
+counterpart to `--section`; typed `@route+id#prefix` tokens keep the
+slug/prefix matching described above, so `--task-section future-work` does
+**not** match `FUTURE WORK` while `--task-section "Future Work"` does. Picker
+integrations may instead use the hidden `--task-ref <line>:<digest>` option,
+which also reaches parents without block IDs and recovers when unrelated edits
+shift the selected task's line.
 
 Useful options:
 
@@ -491,6 +525,8 @@ Useful options:
 - `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
 - `-s, --section TITLE`: with `--route`, force a bullet into the exact section
 - `-t, --task BLOCK-ID`: with `--route`, append beneath the identified task
+- `-S, --task-section TITLE`: with `--route` and `--task`, nest under the exact
+  ALL-CAPS child section; conflicts with `--section`
 
 If `TEXT` is omitted and stdin is piped, `bob capture` reads the complete
 piped stdin stream, so a multi-line authored-bullet draft survives a pipe:
@@ -549,7 +585,9 @@ Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 `block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`.
 
 Sub-bullet results additionally include `parent_line`, `parent_text`,
-`parent_status_symbol`, and `parent_status_name`. They reuse `block_id` for the
+`parent_status_symbol`, and `parent_status_name`. A capture that targeted a
+task section also includes `parent_section` (the matched original title);
+plain `@route+block-id` captures omit it. They reuse `block_id` for the
 parent's ID, omitting it when a task-ref selected a parent without one.
 
 Pomodoro-note results use kind `"pomodoro_note"` with `routed: false`, `route:
@@ -849,10 +887,12 @@ normally uses the commands in this order:
 3. For a sub-bullet capture, run `capture-tasks` for the route and let the user
    choose an open task. Other capture modes skip this step.
 4. Optionally run `capture-task-sections` for that parent (`--block-id` or
-   `--task-ref`) and let the user choose a section title.
+   `--task-ref`) and let the user choose a section title, then pass
+   `--task-section TITLE` to nest under that ALL-CAPS child section.
 5. Run `bob capture --route NAME --section TITLE -- <text>` for a bullet, omit
    `--section` for a task, or run
-   `bob capture --route NAME --task-ref REF -- <text>` for a sub-bullet.
+   `bob capture --route NAME --task-ref REF [--task-section TITLE] -- <text>`
+   for a sub-bullet.
 
 On a successful scan, `capture-targets` returns `mac_inbox` first even when
 `mac_inbox.md` does not exist, followed by top-level area notes and

@@ -44,7 +44,6 @@ impl TaskSection {
 }
 
 /// Where a capture block lands under a selected section.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TaskSectionInsertion {
     pub(crate) offset: usize,
@@ -103,7 +102,6 @@ pub(crate) fn task_sections(
 }
 
 /// Whole-slug match in document order, else the first slug-prefix match.
-#[allow(dead_code)]
 pub(crate) fn select_section<'a>(
     sections: &'a [TaskSection],
     selector: &str,
@@ -122,8 +120,69 @@ pub(crate) fn select_section<'a>(
         })
 }
 
+/// Whole-title match in document order, compared case-insensitively.
+///
+/// This is the picker path (`--task-section TITLE`): hyphenated slugs are
+/// not rewritten, so `future-work` does not match `FUTURE WORK`.
+pub(crate) fn select_section_exact<'a>(
+    sections: &'a [TaskSection],
+    title: &str,
+) -> Option<&'a TaskSection> {
+    sections
+        .iter()
+        .find(|section| section.title.eq_ignore_ascii_case(title))
+}
+
+/// Dispatch slug/prefix matching or exact title matching.
+pub(crate) fn match_section<'a>(
+    sections: &'a [TaskSection],
+    selector: &str,
+    exact: bool,
+) -> Option<&'a TaskSection> {
+    if exact {
+        select_section_exact(sections, selector)
+    } else {
+        select_section(sections, selector)
+    }
+}
+
+/// Unique nearby section for a failed selector, or `None` when several
+/// candidates are equally close. Slug matching compares slugs; exact
+/// matching compares lowercased titles.
+pub(crate) fn suggest_section<'a>(
+    sections: &'a [TaskSection],
+    selector: &str,
+    exact: bool,
+) -> Option<&'a TaskSection> {
+    let requested = if exact {
+        selector.to_ascii_lowercase()
+    } else {
+        slug(selector)
+    };
+    if requested.is_empty() {
+        return None;
+    }
+    let key = |section: &TaskSection| {
+        if exact {
+            section.title.to_ascii_lowercase()
+        } else {
+            section.slug.clone()
+        }
+    };
+    if sections.iter().any(|section| key(section) == requested) {
+        return None;
+    }
+    let mut close = sections.iter().filter(|section| {
+        super::note_tasks::bounded_levenshtein(&requested, &key(section), 2)
+            .is_some()
+    });
+    match (close.next(), close.next()) {
+        (Some(section), None) => Some(section),
+        _ => None,
+    }
+}
+
 /// Insertion offset and indent for a capture nested under `section`.
-#[allow(dead_code)]
 pub(crate) fn section_insertion(
     contents: &str,
     section: &TaskSection,
@@ -1008,6 +1067,57 @@ mod tests {
         );
         assert_eq!(select_section(&sections, ""), None);
         assert_eq!(select_section(&sections, "absent"), None);
+    }
+
+    #[test]
+    fn exact_title_match_is_case_insensitive_and_not_a_slug() {
+        let contents = concat!(
+            "- [ ] #task Parent\n",
+            "\t- FUTURE WORKFLOW\n",
+            "\t- FUTURE WORK\n",
+        );
+        let sections = sections_of(contents);
+        assert_eq!(
+            select_section_exact(&sections, "Future Work")
+                .map(|section| section.title.as_str()),
+            Some("FUTURE WORK")
+        );
+        assert_eq!(select_section_exact(&sections, "future-work"), None);
+        assert_eq!(
+            match_section(&sections, "Future Work", true)
+                .map(|section| section.title.as_str()),
+            Some("FUTURE WORK")
+        );
+        assert_eq!(
+            match_section(&sections, "future", false)
+                .map(|section| section.title.as_str()),
+            Some("FUTURE WORKFLOW")
+        );
+    }
+
+    #[test]
+    fn suggests_unique_nearby_titles_and_slugs() {
+        let contents = concat!(
+            "- [ ] #task Parent\n",
+            "\t- REQUIREMENTS\n",
+            "\t- FUTURE WORK\n",
+            "\t- NOTES\n",
+            "\t- NOTE\n",
+        );
+        let sections = sections_of(contents);
+        assert_eq!(
+            suggest_section(&sections, "requirments", false)
+                .map(|section| section.title.as_str()),
+            Some("REQUIREMENTS")
+        );
+        assert_eq!(
+            suggest_section(&sections, "future-work", true)
+                .map(|section| section.title.as_str()),
+            Some("FUTURE WORK")
+        );
+        assert_eq!(suggest_section(&sections, "notx", false), None);
+        assert_eq!(suggest_section(&sections, "zzz", false), None);
+        assert_eq!(suggest_section(&sections, "", false), None);
     }
 
     #[test]

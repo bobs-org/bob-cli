@@ -875,6 +875,7 @@ fn capture_help_lists_options_alphabetically() {
             "-r, --route",
             "-s, --section",
             "-t, --task",
+            "-S, --task-section",
         ],
     );
     assert!(
@@ -882,6 +883,7 @@ fn capture_help_lists_options_alphabetically() {
             && help.contains("@<route>+<block-id>#<section>")
             && help.contains("bob capture '@cash+goog-exit'")
             && help.contains("bob capture 'Postgres 17 minimum @foo+bar#requirements'")
+            && help.contains("--task-section REQUIREMENTS")
             && help.contains("first direct-child Schedule Log or Work Log")
             && help.contains("@<route>^<block-id>")
             && help.contains("bob capture '@dev^foobar'")
@@ -7809,6 +7811,10 @@ fn capture_sub_bullet_inserts_with_parent_indentation_and_reports_json() {
             }
         );
         assert!(json["parent_line"].as_u64().is_some(), "{name}: {json}");
+        assert!(
+            json.get("parent_section").is_none(),
+            "{name}: plain sub-bullet must omit parent_section: {json}"
+        );
         assert_eq!(json["created"], "2026-07-31");
         assert_eq!(json["task_line"], "- new note");
     }
@@ -8488,6 +8494,829 @@ fn capture_sub_bullet_errors_are_actionable_in_human_and_json_modes() {
                 case.expected,
                 error_text
             );
+        }
+    }
+}
+
+#[test]
+fn capture_task_section_inserts_into_first_middle_and_last_sections() {
+    let original = concat!(
+        "- [ ] #task Parent [created::2026-07-01] ^parent\n",
+        "\t- REQUIREMENTS\n",
+        "\t\t- existing req\n",
+        "\t- FUTURE WORK\n",
+        "\t\t- later\n",
+        "\t- NOTES\n",
+        "Tail\n",
+    );
+    let cases = [
+        (
+            "first",
+            "Postgres 17 minimum @cash+parent#requirements",
+            concat!(
+                "- [ ] #task Parent [created::2026-07-01] ^parent\n",
+                "\t- REQUIREMENTS\n",
+                "\t\t- existing req\n",
+                "\t\t- Postgres 17 minimum\n",
+                "\t- FUTURE WORK\n",
+                "\t\t- later\n",
+                "\t- NOTES\n",
+                "Tail\n",
+            ),
+            "REQUIREMENTS",
+            "- Postgres 17 minimum",
+        ),
+        (
+            "middle",
+            "follow up @cash+parent#future-work",
+            concat!(
+                "- [ ] #task Parent [created::2026-07-01] ^parent\n",
+                "\t- REQUIREMENTS\n",
+                "\t\t- existing req\n",
+                "\t- FUTURE WORK\n",
+                "\t\t- later\n",
+                "\t\t- follow up\n",
+                "\t- NOTES\n",
+                "Tail\n",
+            ),
+            "FUTURE WORK",
+            "- follow up",
+        ),
+        (
+            "last-empty",
+            "jot this @cash+parent#notes",
+            concat!(
+                "- [ ] #task Parent [created::2026-07-01] ^parent\n",
+                "\t- REQUIREMENTS\n",
+                "\t\t- existing req\n",
+                "\t- FUTURE WORK\n",
+                "\t\t- later\n",
+                "\t- NOTES\n",
+                "\t\t- jot this\n",
+                "Tail\n",
+            ),
+            "NOTES",
+            "- jot this",
+        ),
+    ];
+
+    for (name, draft, expected, section, task_line) in cases {
+        let temp = TempDir::new(&format!("bob-cli-task-section-{name}"));
+        let vault = temp.path().join("vault");
+        write_file(&vault.join("cash.md"), original);
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg(draft)
+            .env("BOB_NOW", "2026-07-31")
+            .output()
+            .expect("run task-section capture");
+        assert_success(&output);
+        assert_eq!(
+            fs::read_to_string(vault.join("cash.md")).expect("read note"),
+            expected,
+            "{name}: {}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+        assert_eq!(json["kind"], "sub_bullet", "{name}");
+        assert_eq!(json["parent_section"], section, "{name}");
+        assert_eq!(json["parent_text"], "Parent", "{name}");
+        assert_eq!(json["block_id"], "parent", "{name}");
+        assert_eq!(json["task_line"], task_line, "{name}");
+        assert_eq!(json["placement"], "inserted", "{name}");
+    }
+}
+
+#[test]
+fn capture_task_section_prefix_vs_whole_slug_and_multiword() {
+    let original = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- FUTURE WORKFLOW\n",
+        "\t- FUTURE WORK\n",
+    );
+    let cases = [
+        (
+            "prefix",
+            "first prefix @cash+parent#future",
+            "FUTURE WORKFLOW",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- FUTURE WORKFLOW\n",
+                "\t\t- first prefix\n",
+                "\t- FUTURE WORK\n",
+            ),
+        ),
+        (
+            "whole-slug",
+            "exact slug @cash+parent#future-work",
+            "FUTURE WORK",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- FUTURE WORKFLOW\n",
+                "\t- FUTURE WORK\n",
+                "\t\t- exact slug\n",
+            ),
+        ),
+        (
+            "multiword-slug",
+            "by slug @cash+parent#future-workflow",
+            "FUTURE WORKFLOW",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- FUTURE WORKFLOW\n",
+                "\t\t- by slug\n",
+                "\t- FUTURE WORK\n",
+            ),
+        ),
+    ];
+
+    for (name, draft, section, expected) in cases {
+        let temp = TempDir::new(&format!("bob-cli-task-section-slug-{name}"));
+        let vault = temp.path().join("vault");
+        write_file(&vault.join("cash.md"), original);
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg(draft)
+            .env("BOB_NOW", "2026-07-31")
+            .output()
+            .expect("run slug selection capture");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+        assert_eq!(json["parent_section"], section, "{name}");
+        assert_eq!(
+            fs::read_to_string(vault.join("cash.md")).expect("read note"),
+            expected,
+            "{name}: {}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
+fn capture_task_section_managed_log_geometry() {
+    let nested_log = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- REQUIREMENTS\n",
+        "\t\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t\t- *2026-08-01* — scheduled\n",
+        "\t- FUTURE WORK\n",
+    );
+    let temp = TempDir::new("bob-cli-task-section-nested-log");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), nested_log);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("new note @cash+parent#requirements")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("run nested-log section capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- REQUIREMENTS\n",
+            "\t\t- new note\n",
+            "\t\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t\t- *2026-08-01* — scheduled\n",
+            "\t- FUTURE WORK\n",
+        )
+    );
+
+    let sibling_log = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- REQUIREMENTS\n",
+        "\t\t- existing\n",
+        "\t- FUTURE WORK\n",
+        "\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t- *2026-08-01* — scheduled\n",
+    );
+    let temp = TempDir::new("bob-cli-task-section-sibling-log");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), sibling_log);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("new note @cash+parent#future-work")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("run sibling-log section capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- REQUIREMENTS\n",
+            "\t\t- existing\n",
+            "\t- FUTURE WORK\n",
+            "\t\t- new note\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-08-01* — scheduled\n",
+        )
+    );
+}
+
+#[test]
+fn capture_task_section_indent_units_crlf_and_dry_run() {
+    let cases = [
+        (
+            "tab",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- REQUIREMENTS\n",
+                "\t\t- existing\n",
+                "\t- FUTURE WORK\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "\t- REQUIREMENTS\n",
+                "\t\t- existing\n",
+                "\t\t- new note\n",
+                "\t- FUTURE WORK\n",
+            ),
+        ),
+        (
+            "two-space",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "  - REQUIREMENTS\n",
+                "    - existing\n",
+                "  - FUTURE WORK\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "  - REQUIREMENTS\n",
+                "    - existing\n",
+                "    - new note\n",
+                "  - FUTURE WORK\n",
+            ),
+        ),
+        (
+            "four-space",
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "    - REQUIREMENTS\n",
+                "        - existing\n",
+                "    - FUTURE WORK\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\n",
+                "    - REQUIREMENTS\n",
+                "        - existing\n",
+                "        - new note\n",
+                "    - FUTURE WORK\n",
+            ),
+        ),
+        (
+            "crlf",
+            concat!(
+                "- [ ] #task Parent ^parent\r\n",
+                "\t- REQUIREMENTS\r\n",
+                "\t\t- existing\r\n",
+                "\t- FUTURE WORK\r\n",
+            ),
+            concat!(
+                "- [ ] #task Parent ^parent\r\n",
+                "\t- REQUIREMENTS\r\n",
+                "\t\t- existing\r\n",
+                "\t\t- new note\r\n",
+                "\t- FUTURE WORK\r\n",
+            ),
+        ),
+    ];
+
+    for (name, original, expected) in cases {
+        let temp = TempDir::new(&format!("bob-cli-task-section-indent-{name}"));
+        let vault = temp.path().join("vault");
+        let note = vault.join("cash.md");
+        write_file(&note, original);
+
+        let dry_run = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("--dry-run")
+            .arg("-f")
+            .arg("json")
+            .arg("new note @cash+parent#requirements")
+            .env("BOB_NOW", "2026-07-31")
+            .output()
+            .expect("dry-run task-section");
+        assert_success(&dry_run);
+        let dry_json: serde_json::Value =
+            serde_json::from_str(stdout(&dry_run).trim()).expect("dry JSON");
+        assert_eq!(dry_json["dry_run"], true, "{name}");
+        assert_eq!(dry_json["parent_section"], "REQUIREMENTS", "{name}");
+        assert_eq!(
+            fs::read_to_string(&note).expect("read dry note"),
+            original,
+            "{name} dry-run must not write"
+        );
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("new note @cash+parent#requirements")
+            .env("BOB_NOW", "2026-07-31")
+            .output()
+            .expect("run indent task-section");
+        assert_success(&output);
+        assert_eq!(
+            fs::read_to_string(&note).expect("read note"),
+            expected,
+            "{name}: {}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
+fn capture_task_section_authored_children_and_composition() {
+    let original = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- REQUIREMENTS\n",
+        "\t\t- existing\n",
+        "\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t- *2026-08-01* — keep this entry\n",
+    );
+    let temp = TempDir::new("bob-cli-task-section-composition");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    let config = temp.path().join("config.yml");
+    write_file(&vault.join("cash.md"), original);
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'clip child\\n'\n");
+    write_priority_config(&config);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@cash+parent#requirements buy milk p:2 %\n- authored child")
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_PRIORITY_ROLL_SEED", "1")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .output()
+        .expect("run composed task-section capture");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["parent_section"], "REQUIREMENTS");
+    assert_eq!(
+        json["task_line"],
+        "- buy milk [priority::medium] [scheduled::2026-07-21]"
+    );
+    assert_eq!(
+        json["sub_bullets"],
+        serde_json::json!(["\t- authored child"])
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- REQUIREMENTS\n",
+            "\t\t- existing\n",
+            "\t\t- buy milk [priority::medium] [scheduled::2026-07-21]\n",
+            "\t\t\t- authored child\n",
+            "\t\t\t- clip child\n",
+            "\t\t\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t\t\t- *2026-07-21* — 🎲 P0 → P2 · in **11** (8–30) days\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-08-01* — keep this entry\n",
+        ),
+        "{}",
+        format_output(&output)
+    );
+
+    let scheduled = TempDir::new("bob-cli-task-section-scheduled");
+    let vault = scheduled.path().join("vault");
+    write_file(&vault.join("cash.md"), original);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("ship it s:2 @cash+parent#requirements")
+        .env("BOB_NOW", "2026-07-10")
+        .output()
+        .expect("run scheduled task-section capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- REQUIREMENTS\n",
+            "\t\t- existing\n",
+            "\t\t- ship it [scheduled::2026-07-12]\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-08-01* — keep this entry\n",
+        )
+    );
+
+    let clipped = TempDir::new("bob-cli-task-section-clip-flag");
+    let vault = clipped.path().join("vault");
+    let clipboard = clipped.path().join("clipboard");
+    write_file(&vault.join("cash.md"), original);
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'forced clip\\n'\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--clip")
+        .arg("--")
+        .arg("from clip @cash+parent#requirements")
+        .env("BOB_NOW", "2026-07-31")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .output()
+        .expect("run --clip task-section capture");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- REQUIREMENTS\n",
+            "\t\t- existing\n",
+            "\t\t- from clip\n",
+            "\t\t\t- forced clip\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-08-01* — keep this entry\n",
+        )
+    );
+}
+
+#[test]
+fn capture_forced_task_section_matches_title_exactly() {
+    let original = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- REQUIREMENTS\n",
+        "\t- FUTURE WORK\n",
+    );
+    let temp = TempDir::new("bob-cli-forced-task-section");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), original);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--route")
+        .arg("cash")
+        .arg("--task")
+        .arg("parent")
+        .arg("--task-section")
+        .arg("REQUIREMENTS")
+        .arg("--")
+        .arg("mention @other literally")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("run --task-section capture");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["parent_section"], "REQUIREMENTS");
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- REQUIREMENTS\n",
+            "\t\t- mention @other literally\n",
+            "\t- FUTURE WORK\n",
+        )
+    );
+
+    let human = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--route")
+        .arg("cash")
+        .arg("-t")
+        .arg("parent")
+        .arg("-S")
+        .arg("Future Work")
+        .arg("--")
+        .arg("cased title")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("run -S Future Work");
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(out.contains("under"), "{out}");
+    assert!(out.contains(" · FUTURE WORK"), "{out}");
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- REQUIREMENTS\n",
+            "\t\t- mention @other literally\n",
+            "\t- FUTURE WORK\n",
+            "\t\t- cased title\n",
+        )
+    );
+
+    let parent_line = "- [ ] #task Parent ^parent";
+    let digest = hex::encode(Sha256::digest(parent_line.as_bytes()));
+    let ref_temp = TempDir::new("bob-cli-forced-task-section-ref");
+    let vault = ref_temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        &format!("{parent_line}\n\t- NOTES\n"),
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--route")
+        .arg("cash")
+        .arg("--task-ref")
+        .arg(format!("1:{}", &digest[..8]))
+        .arg("--task-section")
+        .arg("NOTES")
+        .arg("--")
+        .arg("from ref")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("run --task-ref --task-section");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read note"),
+        concat!(
+            "- [ ] #task Parent ^parent\n",
+            "\t- NOTES\n",
+            "\t\t- from ref\n",
+        )
+    );
+}
+
+#[test]
+fn capture_forced_task_section_option_errors() {
+    struct Case<'a> {
+        name: &'a str,
+        note: Option<&'a str>,
+        args: Vec<String>,
+        exit: i32,
+        expected: &'a str,
+    }
+
+    let note = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- REQUIREMENTS\n",
+        "\t- FUTURE WORK\n",
+    );
+    let cases = [
+        Case {
+            name: "slug-is-not-exact",
+            note: Some(note),
+            args: vec![
+                "--route".into(),
+                "cash".into(),
+                "--task".into(),
+                "parent".into(),
+                "--task-section".into(),
+                "future-work".into(),
+                "body".into(),
+            ],
+            exit: 1,
+            expected: "did you mean FUTURE WORK?",
+        },
+        Case {
+            name: "requires-route",
+            note: Some(note),
+            args: vec![
+                "--task-section".into(),
+                "REQUIREMENTS".into(),
+                "body".into(),
+            ],
+            exit: 2,
+            expected: "--task-section requires --route",
+        },
+        Case {
+            name: "requires-task",
+            note: Some(note),
+            args: vec![
+                "--route".into(),
+                "cash".into(),
+                "--task-section".into(),
+                "REQUIREMENTS".into(),
+                "body".into(),
+            ],
+            exit: 2,
+            expected: "--task-section requires --task or --task-ref",
+        },
+        Case {
+            name: "empty",
+            note: Some(note),
+            args: vec![
+                "--route".into(),
+                "cash".into(),
+                "--task".into(),
+                "parent".into(),
+                "--task-section".into(),
+                String::new(),
+                "body".into(),
+            ],
+            exit: 2,
+            expected: "--task-section must not be empty",
+        },
+        Case {
+            name: "conflicts-with-section",
+            note: Some(note),
+            args: vec![
+                "--route".into(),
+                "cash".into(),
+                "--section".into(),
+                "Ideas".into(),
+                "--task-section".into(),
+                "REQUIREMENTS".into(),
+                "body".into(),
+            ],
+            exit: 2,
+            expected: "cannot be used with",
+        },
+    ];
+
+    for case in cases {
+        let temp = TempDir::new(&format!(
+            "bob-cli-forced-task-section-error-{}",
+            case.name
+        ));
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(&vault).expect("create vault");
+        if let Some(note) = case.note {
+            write_file(&vault.join("cash.md"), note);
+        }
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .args(&case.args)
+            .env("BOB_NOW", "2026-07-31")
+            .output()
+            .expect("run forced task-section error");
+        assert_eq!(
+            output.status.code(),
+            Some(case.exit),
+            "{}: {}",
+            case.name,
+            format_output(&output)
+        );
+        let error_text = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(
+            error_text.contains(case.expected),
+            "{}: expected {:?} in {:?}",
+            case.name,
+            case.expected,
+            error_text
+        );
+        if let Some(note) = case.note {
+            assert_eq!(
+                fs::read_to_string(vault.join("cash.md")).expect("read note"),
+                note,
+                "{} must leave the note unchanged",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn capture_task_section_errors_leave_the_note_unchanged() {
+    struct Case<'a> {
+        name: &'a str,
+        note: Option<&'a str>,
+        args: Vec<String>,
+        exit: i32,
+        expected: &'a str,
+    }
+
+    let with_sections = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- REQUIREMENTS\n",
+        "\t- FUTURE WORK\n",
+    );
+    let no_sections = "- [ ] #task Parent ^parent\n\t- ordinary child\n";
+    let duplicate = "- [ ] #task One ^dup\n- [x] #task Two ^dup\n";
+    let cases = [
+        Case {
+            name: "no-match",
+            note: Some(with_sections),
+            args: vec!["body".into(), "@cash+parent#absent".into()],
+            exit: 1,
+            expected:
+                "no task section matching 'absent' under ^parent in cash.md",
+        },
+        Case {
+            name: "lists-titles",
+            note: Some(with_sections),
+            args: vec!["body".into(), "@cash+parent#zzz".into()],
+            exit: 1,
+            expected: "have: REQUIREMENTS, FUTURE WORK",
+        },
+        Case {
+            name: "close-match",
+            note: Some(with_sections),
+            args: vec!["body".into(), "@cash+parent#requirments".into()],
+            exit: 1,
+            expected: "did you mean REQUIREMENTS?",
+        },
+        Case {
+            name: "no-sections",
+            note: Some(no_sections),
+            args: vec!["body".into(), "@cash+parent#requirements".into()],
+            exit: 1,
+            expected: "task ^parent in cash.md has no task sections",
+        },
+        Case {
+            name: "missing-task-wins",
+            note: Some(with_sections),
+            args: vec!["body".into(), "@cash+missing#requirements".into()],
+            exit: 1,
+            expected: "no task with block ID ^missing in cash.md",
+        },
+        Case {
+            name: "duplicate-wins",
+            note: Some(duplicate),
+            args: vec!["body".into(), "@cash+dup#requirements".into()],
+            exit: 1,
+            expected: "block ID ^dup appears 2 times",
+        },
+        Case {
+            name: "non-task-wins",
+            note: Some("ordinary paragraph ^parent\n"),
+            args: vec!["body".into(), "@cash+parent#requirements".into()],
+            exit: 1,
+            expected: "^parent in cash.md is not a task (line 1:",
+        },
+    ];
+
+    for case in cases {
+        for json in [false, true] {
+            let temp = TempDir::new(&format!(
+                "bob-cli-task-section-error-{}-{}",
+                case.name,
+                if json { "json" } else { "human" }
+            ));
+            let vault = temp.path().join("vault");
+            fs::create_dir_all(&vault).expect("create vault");
+            if let Some(note) = case.note {
+                write_file(&vault.join("cash.md"), note);
+            }
+            let mut command = bob_command();
+            command.arg("capture").arg("-b").arg(&vault);
+            if json {
+                command.arg("-f").arg("json");
+            }
+            command.args(&case.args);
+            let output = command.output().expect("run failing section capture");
+            assert_eq!(
+                output.status.code(),
+                Some(case.exit),
+                "{} / {json}: {}",
+                case.name,
+                format_output(&output)
+            );
+            let error_text = if json {
+                let value: serde_json::Value =
+                    serde_json::from_str(stdout(&output).trim())
+                        .expect("JSON error object");
+                assert_eq!(value["ok"], false);
+                value["error"].as_str().unwrap_or_default().to_string()
+            } else {
+                stderr(&output)
+            };
+            assert!(
+                error_text.contains(case.expected),
+                "{} / {json}: expected {:?} in {:?}",
+                case.name,
+                case.expected,
+                error_text
+            );
+            if let Some(note) = case.note {
+                assert_eq!(
+                    fs::read_to_string(vault.join("cash.md"))
+                        .expect("read note"),
+                    note,
+                    "{} / {json} must leave the note unchanged",
+                    case.name
+                );
+            }
         }
     }
 }

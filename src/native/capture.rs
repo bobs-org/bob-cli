@@ -20,10 +20,10 @@ use super::{
     capture_clip, capture_language,
     capture_language::{
         is_block_id, AuthoredSubBullet, CaptureKind, ClipRequest,
-        ParsedCaptureItem, SubBulletTarget,
+        ParsedCaptureItem, SubBulletTarget, TaskSectionSelector,
     },
-    capture_schedule_log, collect_done, config, env as bob_env, markdown,
-    note_tasks,
+    capture_schedule_log, capture_task_sections, collect_done, config,
+    env as bob_env, markdown, note_tasks,
     note_tasks::{BlockIdLookup, RefLookup},
     pomodoro,
     style::Styler,
@@ -163,8 +163,13 @@ task block. The note and task must already exist. Existing child indentation and
 line endings are preserved; run 'bob capture-tasks -r <route>' to list eligible \
 task block IDs. A trailing '#<section>' component, as in \
 '@<route>+<block-id>#<section>', names an ALL-CAPS child section of that task. \
-The selector may use A-Z, a-z, 0-9, and & ' ( ) , . / -. '@<route>+<block-id>#' \
-with an empty selector is incomplete and needs a task section; run \
+The selector may use A-Z, a-z, 0-9, and & ' ( ) , . / -. Whole-slug matches beat \
+earlier prefix matches, so #future-work still wins over FUTURE WORKFLOW. The \
+captured block is appended at the end of that section, before a managed log \
+nested under it, using the section's child indentation. A selector that matches \
+nothing is an error listing the task's real sections; capture never falls back \
+to the end of the task. '@<route>+<block-id>#' with an empty selector is \
+incomplete and needs a task section; run \
 'bob capture-task-sections -r <route> -i <block-id>' to list them.\n\n\
 Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
 Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
@@ -188,10 +193,14 @@ token) is still not accepted and fails with a usage error; a standalone bare \
 Use --route with --section to force bullet mode while keeping @tokens literal. \
 The section title is matched exactly, case insensitively, against non-Tasks \
 headings; if no heading matches, the bullet falls back to the pre-heading \
-section.",
+section.\n\n\
+Use --route with --task and --task-section TITLE to nest a sub-bullet under \
+the named ALL-CAPS child section of that task. The title is matched exactly, \
+case insensitively; unlike a typed #<section> selector, it is not slug- or \
+prefix-matched, so --task-section future-work does not match FUTURE WORK.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -204,6 +213,7 @@ section.",
         .arg(section_arg())
         .arg(task_arg())
         .arg(task_ref_arg())
+        .arg(task_section_arg())
         .arg(text_arg())
 }
 
@@ -275,7 +285,7 @@ fn section_arg() -> Arg {
         .long("section")
         .short('s')
         .value_name("TITLE")
-        .conflicts_with_all(["task", "task-ref"])
+        .conflicts_with_all(["task", "task-ref", "task-section"])
         .help("Force a bullet into the exact section TITLE; requires --route")
 }
 
@@ -294,6 +304,17 @@ fn task_ref_arg() -> Arg {
         .value_name("REF")
         .conflicts_with_all(["section", "task"])
         .hide(true)
+}
+
+fn task_section_arg() -> Arg {
+    Arg::new("task-section")
+        .long("task-section")
+        .short('S')
+        .value_name("TITLE")
+        .conflicts_with("section")
+        .help(
+            "Nest under the exact task-section TITLE; requires --route and --task",
+        )
 }
 
 fn text_arg() -> Arg {
@@ -333,6 +354,7 @@ struct CaptureRequest {
     forced_route: Option<String>,
     forced_section: Option<String>,
     forced_sub_bullet_target: Option<SubBulletTarget>,
+    forced_task_section: Option<String>,
     no_clip: bool,
     raw_text: String,
 }
@@ -369,6 +391,15 @@ impl CaptureRequest {
                 "{option} requires --route"
             )));
         }
+        let forced_task_section = forced_task_section_from_matches(matches)?;
+        if forced_task_section.is_some() && forced_route.is_none() {
+            return Err(CaptureError::usage("--task-section requires --route"));
+        }
+        if forced_task_section.is_some() && forced_sub_bullet_target.is_none() {
+            return Err(CaptureError::usage(
+                "--task-section requires --task or --task-ref",
+            ));
+        }
 
         Ok(Self {
             bob_dir: bob_dir_from_matches(matches),
@@ -377,6 +408,7 @@ impl CaptureRequest {
             forced_route,
             forced_section,
             forced_sub_bullet_target,
+            forced_task_section,
             no_clip: matches.get_flag("no-clip"),
             raw_text: raw_text_from_matches(matches)?,
         })
@@ -420,6 +452,18 @@ fn forced_section_from_matches(
     };
     if section.trim().is_empty() {
         return Err(CaptureError::usage("--section must not be empty"));
+    }
+    Ok(Some(section.clone()))
+}
+
+fn forced_task_section_from_matches(
+    matches: &ArgMatches,
+) -> Result<Option<String>, CaptureError> {
+    let Some(section) = matches.get_one::<String>("task-section") else {
+        return Ok(None);
+    };
+    if section.trim().is_empty() {
+        return Err(CaptureError::usage("--task-section must not be empty"));
     }
     Ok(Some(section.clone()))
 }
@@ -532,6 +576,21 @@ fn plan_capture_item(
             target: target.clone(),
             section: None,
         };
+    }
+    if let Some(title) = request.forced_task_section.as_ref() {
+        match &mut parsed.kind {
+            CaptureKind::SubBullet { section, .. } => {
+                *section = Some(TaskSectionSelector {
+                    text: title.clone(),
+                    exact: true,
+                });
+            }
+            _ => {
+                return Err(CaptureError::usage(
+                    "--task-section requires --task or --task-ref",
+                ));
+            }
+        }
     }
     if let Some(clip) = request.forced_clip.as_ref() {
         parsed.clip = Some(clip.clone());
@@ -702,7 +761,7 @@ fn plan_capture_item(
     let note_plan = match &parsed.kind {
         CaptureKind::SubBullet {
             target: sub_bullet_target,
-            section: None,
+            section,
         } => {
             let route = parsed.route.as_deref().ok_or_else(|| {
                 CaptureError::io(
@@ -715,15 +774,9 @@ fn plan_capture_item(
                 &target,
                 route,
                 sub_bullet_target,
+                section.as_ref(),
                 &capture_block,
             )?
-        }
-        CaptureKind::SubBullet {
-            section: Some(_), ..
-        } => {
-            return Err(CaptureError::io(
-                "sub-bullet capture invariant failed: task-section insertion is not implemented",
-            ));
         }
         CaptureKind::Pomodoro { block_id } => {
             let route = parsed.route.as_deref().ok_or_else(|| {
@@ -803,6 +856,8 @@ fn plan_capture_item(
                 .or_else(|| {
                     pomodoro_note.map(|note| note.pomodoro_text.clone())
                 }),
+            parent_section: sub_bullet
+                .and_then(|edit| edit.parent_section.clone()),
             parent_status_symbol: sub_bullet
                 .map(|edit| edit.parent_status_symbol),
             parent_status_name: sub_bullet
@@ -1185,6 +1240,7 @@ struct SubBulletCaptureDetails {
     block_id: Option<String>,
     parent_line: usize,
     parent_text: String,
+    parent_section: Option<String>,
     parent_status_symbol: char,
     parent_status_name: String,
 }
@@ -1325,6 +1381,7 @@ fn plan_sub_bullet_capture(
     target: &Path,
     route: &str,
     sub_bullet_target: &SubBulletTarget,
+    section_selector: Option<&TaskSectionSelector>,
     capture_block: &str,
 ) -> Result<CaptureWritePlan, CaptureError> {
     let contents = planner.read_existing(target)?;
@@ -1381,29 +1438,45 @@ fn plan_sub_bullet_capture(
         }
     };
 
-    let lines = line_spans(&contents);
-    let indentation = first_child_indentation(
-        &lines,
-        parent.line_index,
-        parent.block_end,
-        &parent.indentation,
-    )
-    .or_else(|| {
-        dominant_indent_unit(&lines)
-            .map(|unit| format!("{}{}", parent.indentation, unit))
-    })
-    .unwrap_or_else(|| format!("{}\t", parent.indentation));
+    let (insertion_offset, indentation, parent_section) =
+        if let Some(selector) = section_selector {
+            let sections =
+                capture_task_sections::task_sections(&contents, parent);
+            let section =
+                resolve_parent_section(route, parent, selector, &sections)?;
+            let insertion =
+                capture_task_sections::section_insertion(&contents, section);
+            (
+                insertion.offset,
+                insertion.indentation,
+                Some(section.title.clone()),
+            )
+        } else {
+            let lines = line_spans(&contents);
+            let indentation = first_child_indentation(
+                &lines,
+                parent.line_index,
+                parent.block_end,
+                &parent.indentation,
+            )
+            .or_else(|| {
+                dominant_indent_unit(&lines)
+                    .map(|unit| format!("{}{}", parent.indentation, unit))
+            })
+            .unwrap_or_else(|| format!("{}\t", parent.indentation));
+            let insertion_offset = first_direct_managed_log_start(
+                &lines,
+                parent.line_index,
+                parent.block_end,
+            )
+            .unwrap_or(parent.block_end);
+            (insertion_offset, indentation, None)
+        };
     let indented_block = capture_block
         .split('\n')
         .map(|line| format!("{indentation}{line}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let insertion_offset = first_direct_managed_log_start(
-        &lines,
-        parent.line_index,
-        parent.block_end,
-    )
-    .unwrap_or(parent.block_end);
     let addition = insertion_text_preserving_line_endings(
         &contents,
         insertion_offset,
@@ -1418,6 +1491,7 @@ fn plan_sub_bullet_capture(
         block_id: parent.block_id.clone(),
         parent_line: parent.line_index + 1,
         parent_text: parent.description.clone(),
+        parent_section,
         parent_status_symbol: parent.status_symbol,
         parent_status_name: parent.status_name.clone(),
     };
@@ -1431,6 +1505,87 @@ fn plan_sub_bullet_capture(
         sub_bullet: Some(details),
         pomodoro_note: None,
     })
+}
+
+const MAX_LISTED_SECTION_TITLES: usize = 8;
+
+fn resolve_parent_section<'a>(
+    route: &str,
+    parent: &note_tasks::NoteTask,
+    selector: &TaskSectionSelector,
+    sections: &'a [capture_task_sections::TaskSection],
+) -> Result<&'a capture_task_sections::TaskSection, CaptureError> {
+    if sections.is_empty() {
+        return Err(CaptureError::io(format!(
+            "{} has no task sections ({})",
+            parent_task_label(route, parent),
+            capture_task_sections_hint(route, parent),
+        )));
+    }
+    if let Some(section) = capture_task_sections::match_section(
+        sections,
+        &selector.text,
+        selector.exact,
+    ) {
+        return Ok(section);
+    }
+    let listed = format_section_titles(sections);
+    let suggestion = capture_task_sections::suggest_section(
+        sections,
+        &selector.text,
+        selector.exact,
+    )
+    .map(|section| format!("; did you mean {}?", section.title))
+    .unwrap_or_default();
+    Err(CaptureError::io(format!(
+        "no task section matching '{}' under {}{suggestion} (have: {listed}; {})",
+        selector.text,
+        parent_under_label(route, parent),
+        capture_task_sections_hint(route, parent),
+    )))
+}
+
+fn parent_task_label(route: &str, parent: &note_tasks::NoteTask) -> String {
+    match parent.block_id.as_deref() {
+        Some(block_id) => format!("task ^{block_id} in {route}.md"),
+        None => format!("the selected task in {route}.md"),
+    }
+}
+
+fn parent_under_label(route: &str, parent: &note_tasks::NoteTask) -> String {
+    match parent.block_id.as_deref() {
+        Some(block_id) => format!("^{block_id} in {route}.md"),
+        None => format!("the selected task in {route}.md"),
+    }
+}
+
+fn capture_task_sections_hint(
+    route: &str,
+    parent: &note_tasks::NoteTask,
+) -> String {
+    match parent.block_id.as_deref() {
+        Some(block_id) => format!(
+            "run 'bob capture-task-sections -r {route} -i {block_id}' to list them"
+        ),
+        None => {
+            format!("run 'bob capture-task-sections -r {route}' to list them")
+        }
+    }
+}
+
+fn format_section_titles(
+    sections: &[capture_task_sections::TaskSection],
+) -> String {
+    let mut listed = sections
+        .iter()
+        .take(MAX_LISTED_SECTION_TITLES)
+        .map(|section| section.title.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if sections.len() > MAX_LISTED_SECTION_TITLES {
+        listed.push_str(", ...");
+    }
+    listed
 }
 
 pub(crate) fn first_child_indentation(
@@ -2694,6 +2849,8 @@ struct CaptureItemResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     parent_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    parent_section: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     parent_status_symbol: Option<char>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent_status_name: Option<String>,
@@ -2758,7 +2915,12 @@ fn print_human_item_success(
             .as_deref()
             .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
             .unwrap_or_default();
-        println!("  under {marker}{parent_text}{block_id}");
+        let parent_section = result
+            .parent_section
+            .as_deref()
+            .map(|title| format!(" · {}", styler.cyan(title)))
+            .unwrap_or_default();
+        println!("  under {marker}{parent_text}{block_id}{parent_section}");
     }
     println!("  {}", styler.dim(&result.task_line));
     for line in &result.sub_bullets {
@@ -4622,6 +4784,7 @@ mod tests {
             pomodoro_link_placement: None,
             parent_line: None,
             parent_text: None,
+            parent_section: None,
             parent_status_symbol: None,
             parent_status_name: None,
         }]);
@@ -4657,6 +4820,7 @@ mod tests {
             "pomodoro_link_placement",
             "parent_line",
             "parent_text",
+            "parent_section",
             "parent_status_symbol",
             "parent_status_name",
         ] {

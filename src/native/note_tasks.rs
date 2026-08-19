@@ -382,7 +382,11 @@ fn indentation_len(line: &str) -> usize {
         .unwrap_or(line.len())
 }
 
-fn bounded_levenshtein(left: &str, right: &str, limit: usize) -> Option<usize> {
+pub(crate) fn bounded_levenshtein(
+    left: &str,
+    right: &str,
+    limit: usize,
+) -> Option<usize> {
     if left.len().abs_diff(right.len()) > limit {
         return None;
     }
