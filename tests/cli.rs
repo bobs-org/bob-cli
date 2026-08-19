@@ -287,6 +287,30 @@ fn capture_task_id_help_is_native_only() {
 }
 
 #[test]
+fn capture_task_sections_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-capture-task-sections-native-help");
+    let output = bob_command()
+        .arg("capture-task-sections")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob capture-task-sections --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob capture-task-sections"),
+        "expected capture-task-sections help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only capture-task-sections should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_tasks_help_is_native_only() {
     let temp = TempDir::new("bob-cli-capture-tasks-native-help");
     let output = bob_command()
@@ -446,6 +470,10 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture-sections", "--help"], "bob capture-sections"),
         (&["capture-targets", "--help"], "bob capture-targets"),
         (&["capture-task-id", "--help"], "bob capture-task-id"),
+        (
+            &["capture-task-sections", "--help"],
+            "bob capture-task-sections",
+        ),
         (&["capture-tasks", "--help"], "bob capture-tasks"),
         (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob highlights"),
@@ -496,6 +524,10 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         ),
         (&["capture-targets", "--help"], "bob capture-targets --help"),
         (&["capture-task-id", "--help"], "bob capture-task-id --help"),
+        (
+            &["capture-task-sections", "--help"],
+            "bob capture-task-sections --help",
+        ),
         (&["capture-tasks", "--help"], "bob capture-tasks --help"),
         (&["query", "--help"], "bob query --help"),
         (&["highlights", "--help"], "bob highlights --help"),
@@ -2553,7 +2585,9 @@ fn capture_complete_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("cursor-aware completion candidates"),
+        help.contains("cursor-aware completion candidates")
+            && help.contains("task_section")
+            && help.contains("capture-task-sections"),
         "expected capture-complete long help:\n{help}"
     );
     assert_text_order(
@@ -2610,6 +2644,36 @@ fn capture_task_id_help_lists_options_alphabetically() {
             "-i, --block-id",
             "-b, --bob-dir",
             "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+            "-r, --route",
+            "-t, --task-ref",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_task_sections_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture-task-sections")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-task-sections --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("ALL-CAPS direct-child section bullets")
+            && help.contains("Exactly one of -i/--block-id or -t/--task-ref")
+            && help.contains("successful empty list"),
+        "expected capture-task-sections long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-i, --block-id",
+            "-b, --bob-dir",
             "-f, --format",
             "-h, --help",
             "-r, --route",
@@ -9457,6 +9521,431 @@ fn capture_task_id_recovers_a_shifted_line_and_rejects_write_free_failures() {
             "{name} mutated the note"
         );
     }
+}
+
+#[test]
+fn capture_task_sections_json_and_human_list_sections() {
+    let temp = TempDir::new("bob-cli-capture-task-sections-list");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(
+        &vault.join("foo.md"),
+        concat!(
+            "# Tasks\n",
+            "- [ ] #task Parent ^bar\n",
+            "\t- REQUIREMENTS\n",
+            "\t\t- existing\n",
+            "\t- FUTURE WORK\n",
+            "\t- NOTES\n",
+        ),
+    );
+
+    let json_out = bob_command()
+        .arg("capture-task-sections")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("Foo")
+        .arg("-i")
+        .arg("bar")
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run capture-task-sections json");
+    assert_success(&json_out);
+    assert!(
+        stderr(&json_out).is_empty(),
+        "json should keep stderr clean:\n{}",
+        format_output(&json_out)
+    );
+    let raw = stdout(&json_out);
+    assert_text_order(
+        raw.trim(),
+        &[
+            "\"ok\"",
+            "\"schema_version\"",
+            "\"route\"",
+            "\"block_id\"",
+            "\"ref\"",
+            "\"count\"",
+            "\"sections\"",
+            "\"title\"",
+            "\"slug\"",
+            "\"line\"",
+            "\"child_count\"",
+            "\"depth\"",
+        ],
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(raw.trim()).expect("json");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["route"], "foo");
+    assert_eq!(json["block_id"], "bar");
+    assert_eq!(json["count"], 3);
+    assert_eq!(json["sections"][0]["title"], "REQUIREMENTS");
+    assert_eq!(json["sections"][0]["slug"], "requirements");
+    assert_eq!(json["sections"][0]["line"], 3);
+    assert_eq!(json["sections"][0]["child_count"], 1);
+    assert_eq!(json["sections"][0]["depth"], 1);
+    assert_eq!(json["sections"][1]["title"], "FUTURE WORK");
+    assert_eq!(json["sections"][1]["slug"], "future-work");
+    assert_eq!(json["sections"][2]["title"], "NOTES");
+    assert_eq!(json["sections"][2]["child_count"], 0);
+    let task_ref = json["ref"].as_str().expect("ref");
+    let (line, digest) = task_ref.split_once(':').expect("ref separator");
+    assert_eq!(line, "2");
+    assert_eq!(digest.len(), 8);
+
+    let human = bob_command()
+        .arg("capture-task-sections")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("foo")
+        .arg("-i")
+        .arg("bar")
+        .output()
+        .expect("run capture-task-sections human");
+    assert_success(&human);
+    assert_stdout_has_no_ansi(&human);
+    let text = stdout(&human);
+    assert!(text.contains("Capture task sections - foo.md"), "{text}");
+    assert!(text.contains("^bar"), "{text}");
+    assert!(text.contains("REQUIREMENTS"), "{text}");
+    assert!(text.contains("requirements"), "{text}");
+    assert!(text.contains("FUTURE WORK"), "{text}");
+    assert!(text.contains("3 sections"), "{text}");
+}
+
+#[test]
+fn capture_task_sections_empty_and_error_paths() {
+    let temp = TempDir::new("bob-cli-capture-task-sections-errors");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    let original = concat!(
+        "Plain heading ^plain-id\n",
+        "- [ ] #task Ready ^ready-id\n",
+        "- [ ] #task Dup ^dup-id\n",
+        "- [ ] #task Also dup ^dup-id\n",
+        "- [ ] #task Same\n",
+        "- [ ] #task Same\n",
+        "- [ ] #task Empty ^empty-id\n",
+        "- [ ] #task Parent\n",
+        "\t- REQUIREMENTS\n",
+    );
+    write_file(&vault.join("foo.md"), original);
+    let parent_ref = capture_task_ref("- [ ] #task Parent");
+    let same_digest = &capture_task_ref("- [ ] #task Same")[2..];
+    let ambiguous_ref = format!("99:{same_digest}");
+
+    let empty = bob_command()
+        .arg("capture-task-sections")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("foo")
+        .arg("-i")
+        .arg("empty-id")
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("empty sections");
+    assert_success(&empty);
+    let empty_json: serde_json::Value =
+        serde_json::from_str(stdout(&empty).trim()).expect("json");
+    assert_eq!(empty_json["ok"], true);
+    assert_eq!(empty_json["count"], 0);
+    assert_eq!(
+        empty_json["sections"].as_array().expect("sections").len(),
+        0
+    );
+
+    let by_ref = bob_command()
+        .arg("capture-task-sections")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("foo")
+        .arg("-t")
+        .arg(&parent_ref)
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("task-ref sections");
+    assert_success(&by_ref);
+    let ref_json: serde_json::Value =
+        serde_json::from_str(stdout(&by_ref).trim()).expect("json");
+    assert!(ref_json["block_id"].is_null(), "{ref_json}");
+    assert_eq!(ref_json["count"], 1);
+    assert_eq!(ref_json["sections"][0]["title"], "REQUIREMENTS");
+
+    let cases: &[(&str, i32, &str, &[&str])] = &[
+        (
+            "missing-note",
+            1,
+            "does not exist",
+            &["-r", "missing", "-i", "bar"],
+        ),
+        (
+            "missing-task",
+            1,
+            "no task with block ID ^bar",
+            &["-r", "foo", "-i", "bar"],
+        ),
+        (
+            "duplicate-id",
+            1,
+            "appears 2 times",
+            &["-r", "foo", "-i", "dup-id"],
+        ),
+        (
+            "not-a-task",
+            1,
+            "is not a task",
+            &["-r", "foo", "-i", "plain-id"],
+        ),
+        (
+            "stale-ref",
+            1,
+            "no longer in foo.md",
+            &["-r", "foo", "-t", "99:deadbeef"],
+        ),
+        (
+            "ambiguous-ref",
+            1,
+            "matches more than one line",
+            &["-r", "foo", "-t", &ambiguous_ref],
+        ),
+        (
+            "both-selectors",
+            2,
+            "exactly one of --block-id or --task-ref",
+            &["-r", "foo", "-i", "ready-id", "-t", &parent_ref],
+        ),
+        (
+            "neither-selector",
+            2,
+            "exactly one of --block-id or --task-ref",
+            &["-r", "foo"],
+        ),
+        (
+            "invalid-id",
+            2,
+            "--block-id must be",
+            &["-r", "foo", "-i", "bad.id"],
+        ),
+        (
+            "invalid-ref",
+            2,
+            "--task-ref must use",
+            &["-r", "foo", "-t", "nope"],
+        ),
+        (
+            "invalid-route",
+            2,
+            "--route must contain",
+            &["-r", "../bad", "-i", "bar"],
+        ),
+        ("missing-route", 2, "--route is required", &["-i", "bar"]),
+    ];
+
+    for (name, exit, expected, extra) in cases {
+        let output = bob_command()
+            .arg("capture-task-sections")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .args(*extra)
+            .output()
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(
+            output.status.code(),
+            Some(*exit),
+            "{name}: {}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|_| {
+                panic!("{name}: {}", format_output(&output))
+            });
+        assert_eq!(json["ok"], false, "{name}");
+        assert!(
+            json["error"].as_str().expect("error").contains(expected),
+            "{name}: {json}"
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("foo.md")).expect("read"),
+            original,
+            "{name} mutated the note"
+        );
+    }
+}
+
+#[test]
+fn capture_complete_task_section_json_covers_components_and_warnings() {
+    let temp = TempDir::new("bob-cli-capture-complete-task-section");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(
+        &vault.join("foo.md"),
+        concat!(
+            "---\n",
+            "type: [[area]]\n",
+            "---\n",
+            "- [ ] #task Parent task ^bar\n",
+            "\t- REQUIREMENTS\n",
+            "\t- FUTURE WORK\n",
+        ),
+    );
+
+    let raw = "note @foo+bar#req";
+    let hash = raw.find('#').expect("hash");
+    let plus = raw.find('+').expect("plus");
+    let at = raw.find('@').expect("at");
+
+    let section = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(raw.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(raw)
+        .output()
+        .expect("section complete");
+    assert_success(&section);
+    let section_json: serde_json::Value =
+        serde_json::from_str(stdout(&section).trim()).expect("json");
+    assert_eq!(section_json["context"], "task_section");
+    assert_eq!(
+        section_json["replacement"],
+        serde_json::json!({"start": hash + 1, "end": raw.len()})
+    );
+    assert_eq!(section_json["candidates"][0]["replacement"], "requirements");
+    assert_eq!(section_json["candidates"][0]["title"], "REQUIREMENTS");
+    assert_eq!(section_json["candidates"][0]["slug"], "requirements");
+    assert_eq!(section_json["candidates"][0]["route"], "foo");
+    assert_eq!(section_json["candidates"][0]["block_id"], "bar");
+    assert_eq!(section_json["candidates"][0]["text"], "Parent task");
+
+    let empty_selector = "note @foo+bar#";
+    let bare = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(empty_selector.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(empty_selector)
+        .output()
+        .expect("bare hash complete");
+    assert_success(&bare);
+    let bare_json: serde_json::Value =
+        serde_json::from_str(stdout(&bare).trim()).expect("json");
+    assert_eq!(bare_json["context"], "task_section");
+    let titles: Vec<&str> = bare_json["candidates"]
+        .as_array()
+        .expect("candidates")
+        .iter()
+        .map(|candidate| candidate["title"].as_str().expect("title"))
+        .collect();
+    assert_eq!(titles, ["REQUIREMENTS", "FUTURE WORK"]);
+    assert_eq!(bare_json["candidates"][1]["replacement"], "future-work");
+
+    let empty_id = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("11")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note @foo+#")
+        .output()
+        .expect("empty block id");
+    assert_success(&empty_id);
+    let empty_id_json: serde_json::Value =
+        serde_json::from_str(stdout(&empty_id).trim()).expect("json");
+    assert_eq!(empty_id_json["context"], "task_section");
+    assert_eq!(
+        empty_id_json["candidates"]
+            .as_array()
+            .expect("candidates")
+            .len(),
+        0
+    );
+    assert!(empty_id_json.get("warnings").is_none());
+
+    let missing = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("18")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note @foo+missing#")
+        .output()
+        .expect("missing parent");
+    assert_success(&missing);
+    let missing_json: serde_json::Value =
+        serde_json::from_str(stdout(&missing).trim()).expect("json");
+    assert_eq!(missing_json["context"], "task_section");
+    assert_eq!(
+        missing_json["candidates"]
+            .as_array()
+            .expect("candidates")
+            .len(),
+        0
+    );
+    assert_eq!(
+        missing_json["warnings"][0],
+        "no task with block ID ^missing in foo.md"
+    );
+
+    let route = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg((at + 3).to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(raw)
+        .output()
+        .expect("route component");
+    assert_success(&route);
+    let route_json: serde_json::Value =
+        serde_json::from_str(stdout(&route).trim()).expect("json");
+    assert_eq!(route_json["context"], "route");
+    assert_eq!(route_json["candidates"][0]["route"], "foo");
+
+    let task = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg((plus + 2).to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(raw)
+        .output()
+        .expect("task component");
+    assert_success(&task);
+    let task_json: serde_json::Value =
+        serde_json::from_str(stdout(&task).trim()).expect("json");
+    assert_eq!(task_json["context"], "task");
+    assert_eq!(task_json["candidates"][0]["block_id"], "bar");
 }
 
 #[test]
@@ -19344,6 +19833,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "capture-sections",
         "capture-targets",
         "capture-task-id",
+        "capture-task-sections",
         "capture-tasks",
         "highlights",
         "move-done-tasks",
@@ -19377,6 +19867,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
             && help.contains(
                 "bob capture-task-id -r file -t 3:1f3a9c2b -i report-id"
             )
+            && help.contains("bob capture-task-sections -r foo -i bar")
             && help.contains("bob capture-tasks --route cash --format json")
             && help.contains("bob query --source '#project'")
             && help.contains("bob highlights create report.md")

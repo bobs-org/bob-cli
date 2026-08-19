@@ -73,6 +73,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::CaptureTaskId,
     },
     Subcommand {
+        name: "capture-task-sections",
+        script_command: None,
+        about: "List the ALL-CAPS child sections of a capture task",
+        native_command: NativeCommand::CaptureTaskSections,
+    },
+    Subcommand {
         name: "capture-tasks",
         script_command: None,
         about: "List the open tasks of a capture note",
@@ -303,6 +309,8 @@ Examples:
                                  List picker targets for task capture
   bob capture-task-id -r file -t 3:1f3a9c2b -i report-id
                                  Assign a block ID to an open capture task
+  bob capture-task-sections -r foo -i bar
+                                 List picker sections for one parent task
   bob capture-tasks --route cash --format json
                                  List picker tasks for one capture target
   bob query --source '#project'

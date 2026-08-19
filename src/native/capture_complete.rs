@@ -21,7 +21,8 @@ use super::{
         WikilinkNoteCandidate,
     },
     capture_targets::{self, CaptureTargetKind},
-    capture_tasks, env as bob_env, note_tasks,
+    capture_task_sections, capture_tasks, env as bob_env,
+    note_tasks::{self, BlockIdLookup},
     style::Styler,
 };
 
@@ -100,7 +101,10 @@ successful empty result rather than an error.\n\n\
 Route completion covers a bare '@', a still-typing '@fragment', and the \
 missing route portion of '@^...', '@+...', '@:...', and '@#...', backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
-backed by the same scan as `bob capture-sections`. Pomodoro block-ID \
+backed by the same scan as `bob capture-sections`. Task-section completion \
+covers '@route+id#prefix' and a bare '@route+id#', backed by the same \
+scanner as `bob capture-task-sections`; replacement text is the section \
+slug. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
 `bob capture-tasks` and, by default, only offer tasks that already carry a \
@@ -113,9 +117,14 @@ ref, and set requires_block_id. Task search matches block ID, description, \
 section, and status name or symbol; identified tasks stay ahead of \
 unidentified tasks, and prefix matches precede substring matches inside \
 each group. The authored ID portion of '@route^block-id' has no \
-completion source and returns an empty success. Other contexts still rank \
+completion source and returns an empty success. An empty block-ID component \
+('@route+#') returns a successful empty task-section list; an unresolvable \
+parent task returns a successful empty list plus one bounded warning. Other \
+contexts still rank \
 exact prefix matches before substring matches, case-insensitively, while \
-keeping each discovery source's stable order.\n\n\
+keeping each discovery source's stable order. Task-section ranking uses \
+slug-prefix matches first, then slug-substring matches, in document order \
+inside each tier.\n\n\
 When the cursor is inside an Obsidian wikilink, wikilink completion takes \
 precedence over capture-marker completion. Note completion covers `[[note` \
 and offers Markdown note paths, stems, and aliases. Heading and block \
@@ -125,7 +134,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, task_section, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -290,11 +299,24 @@ struct TaskCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct TaskSectionCandidate {
+    replacement: String,
+    title: String,
+    slug: String,
+    route: String,
+    block_id: Option<String>,
+    text: String,
+    line: usize,
+    child_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 enum Candidates {
     Route(Vec<RouteCandidate>),
     Section(Vec<SectionCandidate>),
     Task(Vec<TaskCandidate>),
+    TaskSection(Vec<TaskSectionCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
@@ -306,6 +328,7 @@ impl Candidates {
             Self::Route(items) => items.len(),
             Self::Section(items) => items.len(),
             Self::Task(items) => items.len(),
+            Self::TaskSection(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
@@ -397,33 +420,52 @@ fn build_result(
         return Ok(CaptureCompleteResult::empty(cursor));
     };
 
-    let candidates = match field.context {
-        CompletionContext::Route => route_candidates(bob_dir, &field.query)?,
+    let (candidates, warnings) = match field.context {
+        CompletionContext::Route => {
+            (route_candidates(bob_dir, &field.query)?, Vec::new())
+        }
         CompletionContext::Section => {
             let route = field.route.as_deref().expect("route resolved");
-            section_candidates(bob_dir, route, &field.query)?
+            (
+                section_candidates(bob_dir, route, &field.query)?,
+                Vec::new(),
+            )
         }
         CompletionContext::PomodoroBlockId => {
             let route = field.route.as_deref().expect("route resolved");
-            task_candidates(
-                bob_dir,
-                route,
-                &field.query,
-                false,
-                TaskSearch::BlockIdOnly,
-            )?
+            (
+                task_candidates(
+                    bob_dir,
+                    route,
+                    &field.query,
+                    false,
+                    TaskSearch::BlockIdOnly,
+                )?,
+                Vec::new(),
+            )
         }
         CompletionContext::Task => {
             let route = field.route.as_deref().expect("route resolved");
-            task_candidates(
+            (
+                task_candidates(
+                    bob_dir,
+                    route,
+                    &field.query,
+                    all_tasks,
+                    TaskSearch::MultiField,
+                )?,
+                Vec::new(),
+            )
+        }
+        CompletionContext::TaskSection => {
+            let route = field.route.as_deref().expect("route resolved");
+            task_section_candidates(
                 bob_dir,
                 route,
+                field.block_id.as_deref(),
                 &field.query,
-                all_tasks,
-                TaskSearch::MultiField,
             )?
         }
-        CompletionContext::TaskSection => Candidates::Section(Vec::new()),
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock => {
@@ -441,7 +483,7 @@ fn build_result(
         },
         context: Some(field.context),
         candidates,
-        warnings: Vec::new(),
+        warnings,
     })
 }
 
@@ -609,6 +651,143 @@ fn task_match_kind(
     }
 }
 
+fn task_section_candidates(
+    bob_dir: &Path,
+    route: &str,
+    block_id: Option<&str>,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let Some(block_id) = block_id.filter(|id| !id.is_empty()) else {
+        return Ok((Candidates::TaskSection(Vec::new()), Vec::new()));
+    };
+
+    let target = bob_dir.join(capture::route_label(route));
+    let contents = match fs::read_to_string(&target) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok((
+                Candidates::TaskSection(Vec::new()),
+                vec![unresolvable_parent_warning(
+                    route,
+                    block_id,
+                    TaskSectionLookupFailure::MissingNote,
+                )],
+            ));
+        }
+        Err(error) => {
+            return Err(CompleteError::io(format!(
+                "read target {}: {error}",
+                target.display()
+            )));
+        }
+    };
+
+    let settings = note_tasks::read_settings(bob_dir);
+    let scan = note_tasks::scan(&contents, &settings);
+    let parent = match scan.by_block_id(block_id) {
+        BlockIdLookup::Found(task) => task,
+        BlockIdLookup::Missing => {
+            return Ok((
+                Candidates::TaskSection(Vec::new()),
+                vec![unresolvable_parent_warning(
+                    route,
+                    block_id,
+                    TaskSectionLookupFailure::Missing {
+                        suggestion: scan
+                            .suggest_block_id(block_id)
+                            .map(str::to_string),
+                    },
+                )],
+            ));
+        }
+        BlockIdLookup::Duplicate(count) => {
+            return Ok((
+                Candidates::TaskSection(Vec::new()),
+                vec![unresolvable_parent_warning(
+                    route,
+                    block_id,
+                    TaskSectionLookupFailure::Duplicate(count),
+                )],
+            ));
+        }
+        BlockIdLookup::NotATask { .. } => {
+            return Ok((
+                Candidates::TaskSection(Vec::new()),
+                vec![unresolvable_parent_warning(
+                    route,
+                    block_id,
+                    TaskSectionLookupFailure::NotATask,
+                )],
+            ));
+        }
+    };
+
+    let parent_text = parent.description.clone();
+    let parent_block_id = parent.block_id.clone();
+    let ranked = rank(
+        capture_task_sections::task_sections(&contents, parent),
+        query,
+        |section| section.slug.as_str(),
+    );
+
+    Ok((
+        Candidates::TaskSection(
+            ranked
+                .into_iter()
+                .map(|section| TaskSectionCandidate {
+                    replacement: section.slug.clone(),
+                    title: section.title,
+                    slug: section.slug,
+                    route: route.to_string(),
+                    block_id: parent_block_id.clone(),
+                    text: parent_text.clone(),
+                    line: section.line,
+                    child_count: section.child_count,
+                })
+                .collect(),
+        ),
+        Vec::new(),
+    ))
+}
+
+enum TaskSectionLookupFailure {
+    MissingNote,
+    Missing { suggestion: Option<String> },
+    Duplicate(usize),
+    NotATask,
+}
+
+/// One warning, no draft text, and no task description.
+fn unresolvable_parent_warning(
+    route: &str,
+    block_id: &str,
+    failure: TaskSectionLookupFailure,
+) -> String {
+    match failure {
+        TaskSectionLookupFailure::MissingNote => {
+            format!("note does not exist: {route}.md")
+        }
+        TaskSectionLookupFailure::Missing { suggestion } => {
+            match suggestion {
+                Some(suggestion) => format!(
+                    "no task with block ID ^{block_id} in {route}.md; did you mean ^{suggestion}?"
+                ),
+                None => {
+                    format!("no task with block ID ^{block_id} in {route}.md")
+                }
+            }
+        }
+        TaskSectionLookupFailure::Duplicate(count) => {
+            format!(
+                "block ID ^{block_id} appears {count} times in {route}.md"
+            )
+        }
+        TaskSectionLookupFailure::NotATask => {
+            format!("^{block_id} in {route}.md is not a task")
+        }
+    }
+}
+
 fn task_search_fields(
     task: &note_tasks::NoteTask,
     search: TaskSearch,
@@ -764,6 +943,15 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
                     item.replacement.clone()
                 };
                 (label, item.text.clone())
+            })
+            .collect(),
+        Candidates::TaskSection(items) => items
+            .iter()
+            .map(|item| {
+                (
+                    item.replacement.clone(),
+                    format!("{}  {} items", item.title, item.child_count),
+                )
             })
             .collect(),
         Candidates::WikilinkNote(items) => items
@@ -1023,6 +1211,190 @@ mod tests {
         assert_eq!(task.status_symbol, '*');
         assert_eq!(task.status_type, "ON_HOLD");
         assert_eq!(task.child_count, 0);
+    }
+
+    #[test]
+    fn task_section_completion_lists_ranked_slugs_for_the_parent_task() {
+        let temp = TempDir::new("bob-cli-capture-complete-task-section");
+        write_settings(temp.path());
+        write_file(
+            &temp.path().join("foo.md"),
+            concat!(
+                "# Tasks\n",
+                "- [ ] #task Parent task ^bar\n",
+                "\t- REQUIREMENTS\n",
+                "\t\t- existing\n",
+                "\t- FUTURE WORKFLOW\n",
+                "\t- NOTES\n",
+                "\t- FUTURE WORK\n",
+            ),
+        );
+
+        let empty = result(temp.path(), "note @foo+bar#", 14);
+        assert_eq!(empty.context, Some(CompletionContext::TaskSection));
+        assert_eq!(empty.replacement, Replacement { start: 14, end: 14 });
+        let Candidates::TaskSection(all) = &empty.candidates else {
+            panic!("expected task section candidates");
+        };
+        let titles: Vec<&str> =
+            all.iter().map(|section| section.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["REQUIREMENTS", "FUTURE WORKFLOW", "NOTES", "FUTURE WORK"]
+        );
+        assert_eq!(all[0].replacement, "requirements");
+        assert_eq!(all[0].slug, "requirements");
+        assert_eq!(all[0].route, "foo");
+        assert_eq!(all[0].block_id.as_deref(), Some("bar"));
+        assert_eq!(all[0].text, "Parent task");
+        assert_eq!(all[0].line, 3);
+        assert_eq!(all[0].child_count, 1);
+        assert_eq!(all[3].replacement, "future-work");
+        assert_eq!(all[3].child_count, 0);
+        assert!(empty.warnings.is_empty());
+
+        let prefix = result(temp.path(), "note @foo+bar#future", 20);
+        let Candidates::TaskSection(prefixed) = &prefix.candidates else {
+            panic!("expected task section candidates");
+        };
+        let prefixed_titles: Vec<&str> = prefixed
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect();
+        assert_eq!(prefixed_titles, ["FUTURE WORKFLOW", "FUTURE WORK"]);
+
+        let exact = result(temp.path(), "note @foo+bar#future-work", 25);
+        let Candidates::TaskSection(exact_hits) = &exact.candidates else {
+            panic!("expected task section candidates");
+        };
+        let exact_titles: Vec<&str> = exact_hits
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect();
+        assert_eq!(exact_titles, ["FUTURE WORKFLOW", "FUTURE WORK"]);
+        let future_work = exact_hits
+            .iter()
+            .find(|section| section.title == "FUTURE WORK")
+            .expect("FUTURE WORK");
+        assert_eq!(future_work.replacement, "future-work");
+        assert_eq!(future_work.slug, "future-work");
+
+        let substring = result(temp.path(), "note @foo+bar#work", 18);
+        let Candidates::TaskSection(subs) = &substring.candidates else {
+            panic!("expected task section candidates");
+        };
+        let sub_titles: Vec<&str> =
+            subs.iter().map(|section| section.title.as_str()).collect();
+        assert_eq!(sub_titles, ["FUTURE WORKFLOW", "FUTURE WORK"]);
+    }
+
+    #[test]
+    fn three_component_marker_keeps_route_and_task_contexts() {
+        let temp = TempDir::new("bob-cli-capture-complete-three-component");
+        write_settings(temp.path());
+        write_file(
+            &temp.path().join("foo.md"),
+            concat!(
+                "---\ntype: [[area]]\n---\n",
+                "- [ ] #task Parent ^bar\n",
+                "\t- REQUIREMENTS\n",
+            ),
+        );
+
+        let raw = "note @foo+bar#req";
+        let at = raw.find('@').expect("at");
+        let plus = raw.find('+').expect("plus");
+        let hash = raw.find('#').expect("hash");
+
+        let route = result(temp.path(), raw, at + 3);
+        assert_eq!(route.context, Some(CompletionContext::Route));
+        let Candidates::Route(routes) = &route.candidates else {
+            panic!("expected route candidates");
+        };
+        assert!(
+            routes.iter().any(|candidate| candidate.route == "foo"),
+            "{routes:?}"
+        );
+
+        let task = result(temp.path(), raw, plus + 2);
+        assert_eq!(task.context, Some(CompletionContext::Task));
+        let Candidates::Task(tasks) = &task.candidates else {
+            panic!("expected task candidates");
+        };
+        assert_eq!(tasks[0].block_id.as_deref(), Some("bar"));
+
+        let section = result(temp.path(), raw, hash + 2);
+        assert_eq!(section.context, Some(CompletionContext::TaskSection));
+        let Candidates::TaskSection(sections) = &section.candidates else {
+            panic!("expected task section candidates");
+        };
+        assert_eq!(sections[0].replacement, "requirements");
+        assert_eq!(sections[0].title, "REQUIREMENTS");
+    }
+
+    #[test]
+    fn task_section_completion_empty_block_id_is_an_empty_success() {
+        let temp = TempDir::new("bob-cli-capture-complete-task-section-empty");
+        write_settings(temp.path());
+        write_file(
+            &temp.path().join("foo.md"),
+            "- [ ] #task Parent ^bar\n\t- REQUIREMENTS\n",
+        );
+
+        let value = result(temp.path(), "note @foo+#", 11);
+        assert_eq!(value.context, Some(CompletionContext::TaskSection));
+        assert_eq!(value.candidates.len(), 0);
+        assert!(value.warnings.is_empty());
+    }
+
+    #[test]
+    fn task_section_completion_warns_once_for_an_unresolvable_parent() {
+        let temp =
+            TempDir::new("bob-cli-capture-complete-task-section-warning");
+        write_settings(temp.path());
+        write_file(
+            &temp.path().join("foo.md"),
+            concat!(
+                "Plain heading ^plain-id\n",
+                "- [ ] #task Ready ^ready-id\n",
+                "- [ ] #task Dup ^dup-id\n",
+                "- [ ] #task Also dup ^dup-id\n",
+            ),
+        );
+
+        let missing = result(temp.path(), "note @foo+missing#", 18);
+        assert_eq!(missing.context, Some(CompletionContext::TaskSection));
+        assert_eq!(missing.candidates.len(), 0);
+        assert_eq!(missing.warnings.len(), 1);
+        assert_eq!(
+            missing.warnings[0],
+            "no task with block ID ^missing in foo.md"
+        );
+        assert!(!missing.warnings[0].contains("note @foo"));
+
+        let close = result(temp.path(), "note @foo+ready-i#", 18);
+        assert_eq!(close.warnings.len(), 1);
+        assert!(
+            close.warnings[0].contains("did you mean ^ready-id"),
+            "{}",
+            close.warnings[0]
+        );
+
+        let duplicate = result(temp.path(), "note @foo+dup-id#", 17);
+        assert_eq!(duplicate.warnings.len(), 1);
+        assert_eq!(
+            duplicate.warnings[0],
+            "block ID ^dup-id appears 2 times in foo.md"
+        );
+
+        let not_a_task = result(temp.path(), "note @foo+plain-id#", 19);
+        assert_eq!(not_a_task.warnings.len(), 1);
+        assert_eq!(not_a_task.warnings[0], "^plain-id in foo.md is not a task");
+        assert!(!not_a_task.warnings[0].contains("Plain heading"));
+
+        let missing_note = result(temp.path(), "note @absent+bar#", 17);
+        assert_eq!(missing_note.warnings.len(), 1);
+        assert_eq!(missing_note.warnings[0], "note does not exist: absent.md");
     }
 
     #[test]

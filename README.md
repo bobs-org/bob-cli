@@ -56,6 +56,7 @@ bob projects list
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
 | `capture-targets` | List inbox, area, and non-terminal project capture routes |
 | `capture-task-id` | Assign a user-authored block ID to an open capture task |
+| `capture-task-sections` | List the ALL-CAPS child sections of a capture task |
 | `capture-tasks` | List the open tasks in a routed note |
 | `highlights` | Synchronize Highlights PDF annotations with reference notes |
 | `move-done-tasks` | Archive done and canceled task blocks and repair their links |
@@ -747,7 +748,10 @@ body text yet is still completed on the parent line, even though
 Route completion covers a bare `@`, a still-typing `@fragment`, and the
 missing route portion of `@^...`, `@+...`, `@:...`, and `@#...`, backed by the same
 scan as `bob capture-targets`. Section completion covers `@route#prefix`,
-backed by the same scan as `bob capture-sections`. Pomodoro block-ID
+backed by the same scan as `bob capture-sections`. Task-section completion
+covers `@route+id#prefix` and a bare `@route+id#`, backed by the same scanner
+as `bob capture-task-sections`; the candidate `replacement` is the section
+slug (`future-work` for `FUTURE WORK`). Pomodoro block-ID
 completion covers `@route:prefix` and parent-task completion covers
 `@route+prefix`; both are backed by the same open-task scan as
 `bob capture-tasks`. By default both contexts only offer tasks that already
@@ -758,10 +762,14 @@ context. Pomodoro `@route:` completion stays identified-only even when
 plus-context-only.
 The right-hand side of `@route^block-id` is a new user-authored ID, so it has no
 completion context and returns an empty successful result while the caret is
-inside it.
+inside it. An empty block-ID component (`@route+#`) returns a successful empty
+task-section list. An unresolvable parent task returns a successful empty list
+plus one bounded `warnings` entry; the warning names the route and block ID
+without logging draft text or the task description.
 Route, section, and wikilink candidates rank exact prefix matches before
 substring matches, case-insensitively, while keeping each discovery source's
-stable order. Task candidates in `@route+` search block ID (when present),
+stable order. Task-section candidates rank slug-prefix matches first, then
+slug-substring matches, in document order inside each tier. Task candidates in `@route+` search block ID (when present),
 task text, section, and status name or symbol the same way, but identified
 tasks always stay ahead of unidentified tasks and prefix matches precede
 substring matches inside each of those two groups. A non-matching candidate
@@ -797,13 +805,16 @@ JSON output is a single versioned object:
 `replacement` is the half-open UTF-8 byte range a chosen candidate replaces in
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
-`context` is `route`, `section`, `pomodoro_block_id`, `task`, `wikilink_note`,
+`context` is `route`, `section`, `pomodoro_block_id`, `task`, `task_section`, `wikilink_note`,
 `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
 active. Each candidate's `replacement` is the exact text to insert; wikilink
 candidates also include `cursor_after`, the post-accept UTF-8 byte offset after
 deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
 `label`, `kind` (`inbox`, `area`, or `project`), and nullable `status`. A
-section candidate has `title` and `level`. A task candidate
+section candidate has `title` and `level`. A task-section candidate has
+`title` (the original ALL-CAPS body), `slug`, `route`, nullable `block_id`,
+`text` (the parent task description), `line`, and `child_count`; `replacement`
+is the slug. A task candidate
 (`pomodoro_block_id` or `task` context) has `ref`, nullable `block_id`,
 `route`, `requires_block_id`, `status_symbol`, `status_name`, `status_type`,
 `text`, nullable `section`, `depth`, and `child_count`. Identified tasks keep
@@ -822,6 +833,7 @@ JSON forms as the underlying scan would.
 ```bash
 bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-targets [-b|--bob-dir DIR] [-f|--format human|json] [-v|--verbose]
+bob capture-task-sections --route NAME (--block-id ID | --task-ref REF) [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-tasks --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 ```
 
@@ -836,7 +848,9 @@ normally uses the commands in this order:
    choose a heading. Task and sub-bullet captures skip this step.
 3. For a sub-bullet capture, run `capture-tasks` for the route and let the user
    choose an open task. Other capture modes skip this step.
-4. Run `bob capture --route NAME --section TITLE -- <text>` for a bullet, omit
+4. Optionally run `capture-task-sections` for that parent (`--block-id` or
+   `--task-ref`) and let the user choose a section title.
+5. Run `bob capture --route NAME --section TITLE -- <text>` for a bullet, omit
    `--section` for a task, or run
    `bob capture --route NAME --task-ref REF -- <text>` for a sub-bullet.
 
@@ -874,6 +888,19 @@ color escapes when piped. JSON output has `ok`, `route`, `relative_target`,
 the picker-safe value accepted by `bob capture --task-ref` and
 `bob capture-task-id --task-ref` and can recover when unrelated edits shift
 the task's line.
+
+`capture-task-sections` lists the ALL-CAPS direct-child section bullets of one
+parent task in document order. Exactly one of `--block-id`/`-i` or
+`--task-ref`/`-t` is required; the parent lookup and error messages match
+`bob capture` (missing ID with a close-match suggestion, duplicate ID, non-task
+block ID, stale or ambiguous ref). A resolved task with no sections returns a
+successful empty list so a picker can skip the chooser. Human output uses cyan
+titles and dim slugs plus child counts, with a `No task sections found.` empty
+state. JSON success is a single versioned object with `ok`, `schema_version`
+`1`, `route`, nullable `block_id` (null when the parent was resolved by
+`--task-ref` and still has no ID), `ref`, `count`, and an ordered `sections`
+array. Each section has `title`, `slug`, `line`, `child_count`, and `depth`
+(always `1` for a direct child). JSON failure is `{"ok": false, "error": "..."}`.
 
 ```bash
 bob capture-task-id --route NAME --task-ref REF --block-id ID [-b|--bob-dir DIR] [-f|--format human|json] [-d|--dry-run]
