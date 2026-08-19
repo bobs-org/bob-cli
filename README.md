@@ -405,6 +405,13 @@ already exist, block IDs must be unique, and non-task block IDs are rejected.
 Missing IDs include a close-match suggestion when possible and direct callers
 to `bob capture-tasks -r <route>`.
 
+The same marker accepts an optional trailing `#<section>` selector, as in
+`@cash+goog-exit#requirements` or `@foo+bar#future-work`. The selector names an
+ALL-CAPS child section of that task and may use A-Z, a-z, 0-9, and
+`& ' ( ) , . / -`. `@route+id#` with an empty selector is incomplete and
+reports need `task_section`; it does not mean "any section". A second `#`,
+or `#` before `+`, is not this family (`@foo#bar+baz` remains a note-bullet).
+
 Append a bare trailing `#` marker to capture the item as a plain-text
 sub-bullet on a Pomodoro instead of a task. For example,
 `bob capture remembered to bump the timeout #` writes:
@@ -437,7 +444,7 @@ destination:
 | `%`, `%<N>`, `%<header>`, `--clip[=HEADER]`                     | allowed  |
 | `s:<N>`                                                         | rejected |
 | `p:<N>`                                                         | rejected |
-| `@route`, `@route#Sec`, `@route:id`, `@route^id`, `@route+id`   | rejected |
+| `@route`, `@route#Sec`, `@route:id`, `@route^id`, `@route+id`, `@route+id#sec` | rejected |
 | `--route` / `--section` / `--task` / `--task-ref`               | rejected |
 
 Only a trailing bare `#` is recognized; a leading `#` or a `#` in the middle
@@ -610,7 +617,8 @@ first-level authored children, and later lines prefixed by exactly two ASCII
 spaces become nested authored children. Separator rows themselves have no
 marker completion or highlighting. Incomplete
 interactive markers are valid input rather than errors, so `@`, `@#`,
-`@#Ideas`, `@route#`, `@^`, `@route^`, `@+`, `@route+`, `@:`, `@route:`,
+`@#Ideas`, `@route#`, `@^`, `@route^`, `@+`, `@route+`, `@route+id#`,
+`@:`, `@route:`,
 and the legacy `@!` aliases all parse on any line. The retired
 `@route::...` spelling is a diagnostic directing users to `@route^...`;
 it is not an incomplete Pomodoro marker. Complete and in-progress Obsidian links such as `[[sase`,
@@ -651,9 +659,11 @@ first -- the parent's leading or trailing form, or else the first child line
 with a trailing marker. `route`, `section`, and `block_id` are the
 resolved components, or `null`; `block_id` carries the ID-only task, Pomodoro,
 or sub-bullet ID, whichever applies. `needs` lists what a picker still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `task`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `task`, `task_section`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
-needs `["section"]`.
+needs `["section"]`, while `@route+id#` reports mode `incomplete` and needs
+`["task_section"]`. A complete `@route+id#sec` sub-bullet populates `route`,
+`block_id`, and `section` together.
 
 `sub_bullets` is an optional array, omitted when empty, of every other valid
 physical line's normalized body -- its source `-`/`*`/`+` marker and any
@@ -678,11 +688,11 @@ continue to describe the first item so older clients retain a useful preview.
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
 `pomodoro_route`, `pomodoro_block_id`, `sub_bullet_route`,
-`sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
+`sub_bullet_block_id`, `sub_bullet_section`, `schedule`, `priority`, `clipboard`,
 `interactive_placeholder`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
-`@cash+`, or the whole `@+` when the route is still empty too. Wikilink spans
+`@cash+`, the trailing `#` in `@cash+id#`, or the whole `@+` when the route is still empty too. Wikilink spans
 cover syntax only; unresolved note targets are not errors.
 
 Each entry in `diagnostics` has `severity` (`error`, `warning`, or `info`), a
@@ -690,7 +700,7 @@ stable snake_case `code`, a `message` reusing `bob capture`'s exact wording,
 and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
-`invalid_sub_bullet_block_id`,
+`invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
 `invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `legacy_bullet_marker`,
 `invalid_child_line` (a later physical line is not blank, a column-zero
 authored bullet, or a two-space nested authored bullet),

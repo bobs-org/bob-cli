@@ -33,6 +33,7 @@ pub(crate) enum CaptureKind {
     },
     SubBullet {
         target: SubBulletTarget,
+        section: Option<TaskSectionSelector>,
     },
     PomodoroNote,
 }
@@ -41,6 +42,14 @@ pub(crate) enum CaptureKind {
 pub(crate) enum SubBulletTarget {
     BlockId(String),
     Ref { line: usize, digest: String },
+}
+
+/// Typed `@route+block-id#section` selector. A typed token is always
+/// prefix-capable (`exact: false`); the forced picker option sets `exact`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskSectionSelector {
+    pub(crate) text: String,
+    pub(crate) exact: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -860,36 +869,75 @@ fn parse_terminal_route_token(
 }
 
 fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
-    let marker = token.strip_prefix('@').ok_or_else(|| {
-        "sub-bullet capture markers must use @<route>+<block-id>".to_string()
-    })?;
-    let Some((route, block_id)) = marker.split_once('+') else {
-        return Err("sub-bullet capture markers must use @<route>+<block-id>"
-            .to_string());
+    let marker = token
+        .strip_prefix('@')
+        .ok_or_else(|| SUB_BULLET_SHAPE_ERROR.to_string())?;
+    let Some((route, rest)) = marker.split_once('+') else {
+        return Err(SUB_BULLET_SHAPE_ERROR.to_string());
+    };
+    let (block_id, section) = match rest.split_once('#') {
+        Some((block_id, section)) => (block_id, Some(section)),
+        None => (rest, None),
     };
     if route.is_empty() {
-        return Err("sub-bullet capture markers must use @<route>+<block-id>"
-            .to_string());
-    }
-    if block_id.is_empty() {
-        return Err(format!(
-            "sub-bullet capture requires a block ID: @<route>+<block-id> (run 'bob capture-tasks -r {}' to list task block IDs)",
-            route.to_ascii_lowercase()
-        ));
+        return Err(SUB_BULLET_SHAPE_ERROR.to_string());
     }
     if !is_route_token(route) {
         return Err(SUB_BULLET_ROUTE_ERROR.to_string());
     }
+    if block_id.is_empty() {
+        return Err(if section.is_some() {
+            format!(
+                "sub-bullet capture requires a block ID before the task section: @<route>+<block-id>#<section> (run 'bob capture-tasks -r {}' to list task block IDs)",
+                route.to_ascii_lowercase()
+            )
+        } else {
+            format!(
+                "sub-bullet capture requires a block ID: @<route>+<block-id> (run 'bob capture-tasks -r {}' to list task block IDs)",
+                route.to_ascii_lowercase()
+            )
+        });
+    }
     if !is_block_id(block_id) {
         return Err(SUB_BULLET_BLOCK_ID_ERROR.to_string());
     }
+    let section = match section {
+        None => None,
+        Some("") => {
+            return Err(format!(
+                "sub-bullet capture requires a task section: @<route>+<block-id>#<section> (run 'bob capture-task-sections -r {} -i {}' to list task sections)",
+                route.to_ascii_lowercase(),
+                block_id
+            ));
+        }
+        Some(selector) if !is_task_section_selector(selector) => {
+            return Err(SUB_BULLET_SECTION_ERROR.to_string());
+        }
+        Some(selector) => Some(TaskSectionSelector {
+            text: selector.to_string(),
+            exact: false,
+        }),
+    };
 
     Ok(RouteToken {
         route: Some(route.to_ascii_lowercase()),
         kind: CaptureKind::SubBullet {
             target: SubBulletTarget::BlockId(block_id.to_string()),
+            section,
         },
     })
+}
+
+fn is_task_section_selector(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(is_task_section_selector_byte)
+}
+
+fn is_task_section_selector_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'&' | b'\'' | b'(' | b')' | b',' | b'.' | b'/' | b'-'
+        )
 }
 
 fn is_sub_bullet_marker_candidate(token: &str) -> bool {
@@ -1280,10 +1328,14 @@ pub(crate) fn is_route_token(value: &str) -> bool {
         })
 }
 
+const SUB_BULLET_SHAPE_ERROR: &str =
+    "sub-bullet capture markers must use @<route>+<block-id> or @<route>+<block-id>#<section>";
 const SUB_BULLET_ROUTE_ERROR: &str =
     "sub-bullet capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 const SUB_BULLET_BLOCK_ID_ERROR: &str =
     "sub-bullet capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
+const SUB_BULLET_SECTION_ERROR: &str =
+    "sub-bullet capture section must contain only A-Z, a-z, 0-9 or & ' ( ) , . / -";
 const TASK_BLOCK_ID_ROUTE_ERROR: &str =
     "task block-ID capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 const TASK_BLOCK_ID_ERROR: &str =
@@ -1310,6 +1362,7 @@ pub(crate) enum SpanKind {
     PomodoroBlockId,
     SubBulletRoute,
     SubBulletBlockId,
+    SubBulletSection,
     PomodoroNote,
     Schedule,
     Priority,
@@ -1333,6 +1386,7 @@ impl SpanKind {
             Self::PomodoroBlockId => "pomodoro_block_id",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
+            Self::SubBulletSection => "sub_bullet_section",
             Self::PomodoroNote => "pomodoro_note",
             Self::Schedule => "schedule",
             Self::Priority => "priority",
@@ -1417,6 +1471,7 @@ pub(crate) enum Need {
     BlockId,
     PomodoroId,
     Task,
+    TaskSection,
 }
 
 impl Need {
@@ -1427,6 +1482,7 @@ impl Need {
             Self::BlockId => "block_id",
             Self::PomodoroId => "pomodoro_id",
             Self::Task => "task",
+            Self::TaskSection => "task_section",
         }
     }
 }
@@ -1947,8 +2003,12 @@ fn is_incomplete_pomodoro_marker_candidate(token: &str) -> bool {
 
 fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
     let marker = &token.text[1..];
-    let (route_part, block_part) =
+    let (route_part, rest) =
         marker.split_once('+').expect("sub-bullet candidate");
+    let (block_part, section_part) = match rest.split_once('#') {
+        Some((block, section)) => (block, Some(section)),
+        None => (rest, None),
+    };
 
     if !route_part.is_empty() && !is_route_token(route_part) {
         return TokenParse::Invalid(token_diagnostic(
@@ -1964,6 +2024,15 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
             SUB_BULLET_BLOCK_ID_ERROR,
         ));
     }
+    if section_part.is_some_and(|section| {
+        !section.is_empty() && !is_task_section_selector(section)
+    }) {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_sub_bullet_section",
+            SUB_BULLET_SECTION_ERROR,
+        ));
+    }
 
     TokenParse::Marker(marker_parse(
         token,
@@ -1976,6 +2045,12 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
             right_kind: SpanKind::SubBulletBlockId,
             complete_mode: EditorMode::SubBullet,
             right_need: Need::Task,
+            third: section_part.map(|part| MarkerThird {
+                separator_len: 1,
+                part,
+                kind: SpanKind::SubBulletSection,
+                need: Need::TaskSection,
+            }),
         },
     ))
 }
@@ -2011,6 +2086,7 @@ fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
             right_kind: SpanKind::TaskBlockId,
             complete_mode: EditorMode::Task,
             right_need: Need::BlockId,
+            third: None,
         },
     ))
 }
@@ -2067,6 +2143,7 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             right_kind: SpanKind::PomodoroBlockId,
             complete_mode: EditorMode::PomodoroTask,
             right_need: Need::PomodoroId,
+            third: None,
         },
     ))
 }
@@ -2127,11 +2204,13 @@ fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
             right_kind: SpanKind::Section,
             complete_mode: EditorMode::Bullet,
             right_need: Need::Section,
+            third: None,
         },
     ))
 }
 
-/// The shared shape of every `@<route><separator><right>` marker.
+/// The shared shape of every `@<route><separator><right>` marker, with an
+/// optional third component for `@route+block-id#section`.
 struct MarkerShape<'a> {
     sigil_len: usize,
     route_part: &'a str,
@@ -2141,6 +2220,14 @@ struct MarkerShape<'a> {
     right_kind: SpanKind,
     complete_mode: EditorMode,
     right_need: Need,
+    third: Option<MarkerThird<'a>>,
+}
+
+struct MarkerThird<'a> {
+    separator_len: usize,
+    part: &'a str,
+    kind: SpanKind,
+    need: Need,
 }
 
 /// Build the mode, needs, and spans for one marker from its component parts.
@@ -2151,9 +2238,19 @@ struct MarkerShape<'a> {
 /// position the user still has to fill in.
 fn marker_parse(token: &Token<'_>, shape: MarkerShape<'_>) -> MarkerParse {
     let route_end = token.start + shape.sigil_len + shape.route_part.len();
-    let right_start = token.end - shape.right_part.len();
     let has_route = !shape.route_part.is_empty();
     let has_right = !shape.right_part.is_empty();
+    let has_third_sep = shape.third.is_some();
+    let third_part = shape.third.as_ref().map(|third| third.part).unwrap_or("");
+    let third_sep_len = shape
+        .third
+        .as_ref()
+        .map(|third| third.separator_len)
+        .unwrap_or(0);
+    let has_third = has_third_sep && !third_part.is_empty();
+    let right_start = route_end + shape.separator_len;
+    let right_end = right_start + shape.right_part.len();
+    let third_start = right_end + third_sep_len;
 
     let mut spans = Vec::new();
     if has_route {
@@ -2165,7 +2262,7 @@ fn marker_parse(token: &Token<'_>, shape: MarkerShape<'_>) -> MarkerParse {
         if !has_right && shape.separator_len > 0 {
             spans.push(Span {
                 start: route_end,
-                end: route_end + shape.separator_len,
+                end: right_start,
                 kind: SpanKind::InteractivePlaceholder,
             });
         }
@@ -2180,16 +2277,34 @@ fn marker_parse(token: &Token<'_>, shape: MarkerShape<'_>) -> MarkerParse {
     if has_right {
         spans.push(Span {
             start: right_start,
-            end: token.end,
+            end: right_end,
             kind: shape.right_kind,
         });
+    }
+    if let Some(third) = shape.third.as_ref() {
+        if third.part.is_empty() {
+            spans.push(Span {
+                start: right_end,
+                end: third_start,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+        } else {
+            spans.push(Span {
+                start: third_start,
+                end: token.end,
+                kind: third.kind,
+            });
+        }
     }
 
     // A `@route#` bullet is executable today (it means "any non-Tasks
     // section"), so it keeps its complete mode while still reporting the
     // section it could still resolve. A section can only be offered once the
-    // route that owns its headings is known.
-    let section_is_optional = shape.right_need == Need::Section;
+    // route that owns its headings is known. A trailing `#` on a sub-bullet
+    // marker is required once typed: `@route+id#` is incomplete.
+    let section_is_optional =
+        shape.right_need == Need::Section && !has_third_sep;
+    let third_ok = !has_third_sep || has_third;
 
     let mut needs = Vec::new();
     if !has_route {
@@ -2198,18 +2313,30 @@ fn marker_parse(token: &Token<'_>, shape: MarkerShape<'_>) -> MarkerParse {
     if !has_right && (has_route || !section_is_optional) {
         needs.push(shape.right_need);
     }
+    if let Some(third) = shape.third.as_ref()
+        && third.part.is_empty()
+    {
+        needs.push(third.need);
+    }
 
-    let mode = if has_route && (has_right || section_is_optional) {
+    let mode = if has_route && (has_right || section_is_optional) && third_ok {
         shape.complete_mode
     } else {
         EditorMode::Incomplete
     };
 
+    let section = if has_third {
+        Some(third_part.to_string())
+    } else if shape.right_need == Need::Section && has_right {
+        Some(shape.right_part.to_string())
+    } else {
+        None
+    };
+
     MarkerParse {
         mode,
         route: has_route.then(|| shape.route_part.to_ascii_lowercase()),
-        section: (shape.right_need == Need::Section && has_right)
-            .then(|| shape.right_part.to_string()),
+        section,
         block_id: (shape.right_need != Need::Section && has_right)
             .then(|| shape.right_part.to_string()),
         needs,
@@ -2306,6 +2433,7 @@ pub(crate) enum CompletionContext {
     Section,
     PomodoroBlockId,
     Task,
+    TaskSection,
     WikilinkNote,
     WikilinkHeading,
     WikilinkBlock,
@@ -2317,14 +2445,33 @@ pub(crate) enum CompletionContext {
 pub(crate) struct CompletionField {
     pub(crate) context: CompletionContext,
     /// The already-resolved, lowercased route, when `context` needs one
-    /// (`section`, `pomodoro_block_id`, and `task`).
+    /// (`section`, `pomodoro_block_id`, `task`, and `task_section`).
     pub(crate) route: Option<String>,
+    /// The already-typed block ID of a three-component
+    /// `@route+id#section` marker. Set only when `context` is
+    /// `task_section`; always `None` for existing contexts.
+    pub(crate) block_id: Option<String>,
     /// The text already typed in this component, up to `cursor`.
     pub(crate) query: String,
     /// The half-open UTF-8 byte range of the whole component, which a
     /// completion replaces in full regardless of where the cursor sits
     /// inside it.
     pub(crate) replacement: (usize, usize),
+}
+
+struct CompletionThird<'a> {
+    separator_len: usize,
+    part: &'a str,
+    context: CompletionContext,
+}
+
+struct CompletionParts<'a> {
+    sigil_len: usize,
+    route_part: &'a str,
+    separator_len: usize,
+    right_part: &'a str,
+    right_context: Option<CompletionContext>,
+    third: Option<CompletionThird<'a>>,
 }
 
 /// Identify the completable marker component at `cursor`, reusing the same
@@ -2448,15 +2595,29 @@ fn marker_field_at_cursor(
 
     if is_sub_bullet_marker_candidate(text) {
         let marker = &text[1..];
-        let (route_part, block_part) =
+        let (route_part, rest) =
             marker.split_once('+').expect("sub-bullet candidate");
+        let (block_part, third) = match rest.split_once('#') {
+            Some((block, section)) => (
+                block,
+                Some(CompletionThird {
+                    separator_len: 1,
+                    part: section,
+                    context: CompletionContext::TaskSection,
+                }),
+            ),
+            None => (rest, None),
+        };
         return completion_field_from_parts(
             token,
-            1,
-            route_part,
-            1,
-            block_part,
-            Some(CompletionContext::Task),
+            CompletionParts {
+                sigil_len: 1,
+                route_part,
+                separator_len: 1,
+                right_part: block_part,
+                right_context: Some(CompletionContext::Task),
+                third,
+            },
             cursor,
         );
     }
@@ -2466,7 +2627,16 @@ fn marker_field_at_cursor(
         let (route_part, block_part) =
             marker.split_once('^').expect("task block-ID candidate");
         return completion_field_from_parts(
-            token, 1, route_part, 1, block_part, None, cursor,
+            token,
+            CompletionParts {
+                sigil_len: 1,
+                route_part,
+                separator_len: 1,
+                right_part: block_part,
+                right_context: None,
+                third: None,
+            },
+            cursor,
         );
     }
 
@@ -2486,11 +2656,14 @@ fn marker_field_at_cursor(
         };
         return completion_field_from_parts(
             token,
-            sigil_len,
-            route_part,
-            usize::from(separator),
-            block_part,
-            Some(CompletionContext::PomodoroBlockId),
+            CompletionParts {
+                sigil_len,
+                route_part,
+                separator_len: usize::from(separator),
+                right_part: block_part,
+                right_context: Some(CompletionContext::PomodoroBlockId),
+                third: None,
+            },
             cursor,
         );
     }
@@ -2499,11 +2672,14 @@ fn marker_field_at_cursor(
     if let Some((route_part, prefix)) = rest.split_once('#') {
         return completion_field_from_parts(
             token,
-            1,
-            route_part,
-            1,
-            prefix,
-            Some(CompletionContext::Section),
+            CompletionParts {
+                sigil_len: 1,
+                route_part,
+                separator_len: 1,
+                right_part: prefix,
+                right_context: Some(CompletionContext::Section),
+                third: None,
+            },
             cursor,
         );
     }
@@ -2513,11 +2689,14 @@ fn marker_field_at_cursor(
     // component to fall into.
     completion_field_from_parts(
         token,
-        1,
-        rest,
-        0,
-        "",
-        Some(CompletionContext::Route),
+        CompletionParts {
+            sigil_len: 1,
+            route_part: rest,
+            separator_len: 0,
+            right_part: "",
+            right_context: Some(CompletionContext::Route),
+            third: None,
+        },
         cursor,
     )
 }
@@ -2526,52 +2705,74 @@ fn marker_field_at_cursor(
 /// marker, given which side of the (possible) separator `cursor` lands on.
 /// The route component spans exactly the route text, excluding the leading
 /// sigil; the right component spans exactly its text, excluding the
-/// separator. Both stay well-defined -- and empty -- when their
-/// text has not been typed yet, so a bare `@` or a fresh `@route:` still
-/// reports a real, zero-length replacement range at the insertion point.
+/// separator. An optional third component is the same: `#` is never part of
+/// a replacement range, so a cursor after `#` on `@route+id#` is a
+/// zero-length `task_section` replacement at the insertion point. Each
+/// component stays well-defined -- and empty -- when its text has not been
+/// typed yet.
 fn completion_field_from_parts(
     token: &Token<'_>,
-    sigil_len: usize,
-    route_part: &str,
-    separator_len: usize,
-    right_part: &str,
-    right_context: Option<CompletionContext>,
+    parts: CompletionParts<'_>,
     cursor: usize,
 ) -> Option<CompletionField> {
-    let route_start = token.start + sigil_len;
-    let route_end = route_start + route_part.len();
+    let route_start = token.start + parts.sigil_len;
+    let route_end = route_start + parts.route_part.len();
 
-    if separator_len == 0 || cursor <= route_end {
+    if parts.separator_len == 0 || cursor <= route_end {
         let split = cursor.clamp(route_start, route_end) - route_start;
         return Some(CompletionField {
             context: CompletionContext::Route,
             route: None,
-            query: route_part[..split].to_string(),
+            block_id: None,
+            query: parts.route_part[..split].to_string(),
             replacement: (route_start, route_end),
         });
     }
 
-    let right_start = route_end + separator_len;
+    let right_start = route_end + parts.separator_len;
     if cursor < right_start {
         return None;
     }
 
-    // Past the separator: complete the right-hand component when that
-    // component is backed by a discovery source. Authored ID-only task block
-    // IDs intentionally have no right-hand completion source.
-    let right_context = right_context?;
-    // The right-hand component only makes sense once the route it belongs to
-    // already resolves.
-    if !is_route_token(route_part) {
+    let right_end = right_start + parts.right_part.len();
+    let in_right = parts.third.is_none() || cursor <= right_end;
+    if in_right {
+        // Past the first separator: complete the middle component when that
+        // component is backed by a discovery source. Authored ID-only task
+        // block IDs intentionally have no right-hand completion source.
+        let right_context = parts.right_context?;
+        // The right-hand component only makes sense once the route it
+        // belongs to already resolves.
+        if !is_route_token(parts.route_part) {
+            return None;
+        }
+        let split = cursor.clamp(right_start, right_end) - right_start;
+        return Some(CompletionField {
+            context: right_context,
+            route: Some(parts.route_part.to_ascii_lowercase()),
+            block_id: None,
+            query: parts.right_part[..split].to_string(),
+            replacement: (right_start, right_end),
+        });
+    }
+
+    let third = parts.third?;
+    let third_start = right_end + third.separator_len;
+    if cursor < third_start {
         return None;
     }
-    let right_end = right_start + right_part.len();
-    let split = cursor.clamp(right_start, right_end) - right_start;
+    if !is_route_token(parts.route_part) {
+        return None;
+    }
+    let third_end = third_start + third.part.len();
+    let split = cursor.clamp(third_start, third_end) - third_start;
     Some(CompletionField {
-        context: right_context,
-        route: Some(route_part.to_ascii_lowercase()),
-        query: right_part[..split].to_string(),
-        replacement: (right_start, right_end),
+        context: third.context,
+        route: Some(parts.route_part.to_ascii_lowercase()),
+        block_id: (!parts.right_part.is_empty())
+            .then(|| parts.right_part.to_string()),
+        query: third.part[..split].to_string(),
+        replacement: (third_start, third_end),
     })
 }
 
@@ -2757,6 +2958,62 @@ mod tests {
                 &[Need::Route, Need::Task],
             ),
             (
+                "Body @dev+focus-123#req",
+                EditorMode::SubBullet,
+                Some("dev"),
+                Some("req"),
+                Some("focus-123"),
+                &[],
+            ),
+            (
+                "Body @dev+focus-123#",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                Some("focus-123"),
+                &[Need::TaskSection],
+            ),
+            (
+                "Body @dev+#req",
+                EditorMode::Incomplete,
+                Some("dev"),
+                Some("req"),
+                None,
+                &[Need::Task],
+            ),
+            (
+                "Body @dev+#",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                None,
+                &[Need::Task, Need::TaskSection],
+            ),
+            (
+                "Body @+focus-123#req",
+                EditorMode::Incomplete,
+                None,
+                Some("req"),
+                Some("focus-123"),
+                &[Need::Route],
+            ),
+            (
+                "Body @+#req",
+                EditorMode::Incomplete,
+                None,
+                Some("req"),
+                None,
+                &[Need::Route, Need::Task],
+            ),
+            (
+                "Body @+#",
+                EditorMode::Incomplete,
+                None,
+                None,
+                None,
+                &[Need::Route, Need::Task, Need::TaskSection],
+            ),
+            (
                 "Body @dev^focus-123",
                 EditorMode::Task,
                 Some("dev"),
@@ -2924,6 +3181,57 @@ mod tests {
             ),
             ("Body @+", &[SpanKind::InteractivePlaceholder]),
             (
+                "Body @dev+focus-123#req",
+                &[
+                    SpanKind::SubBulletRoute,
+                    SpanKind::SubBulletBlockId,
+                    SpanKind::SubBulletSection,
+                ],
+            ),
+            (
+                "Body @dev+focus-123#",
+                &[
+                    SpanKind::SubBulletRoute,
+                    SpanKind::SubBulletBlockId,
+                    SpanKind::InteractivePlaceholder,
+                ],
+            ),
+            (
+                "Body @dev+#req",
+                &[
+                    SpanKind::SubBulletRoute,
+                    SpanKind::InteractivePlaceholder,
+                    SpanKind::SubBulletSection,
+                ],
+            ),
+            (
+                "Body @dev+#",
+                &[
+                    SpanKind::SubBulletRoute,
+                    SpanKind::InteractivePlaceholder,
+                    SpanKind::InteractivePlaceholder,
+                ],
+            ),
+            (
+                "Body @+focus-123#req",
+                &[
+                    SpanKind::InteractivePlaceholder,
+                    SpanKind::SubBulletBlockId,
+                    SpanKind::SubBulletSection,
+                ],
+            ),
+            (
+                "Body @+#req",
+                &[SpanKind::InteractivePlaceholder, SpanKind::SubBulletSection],
+            ),
+            (
+                "Body @+#",
+                &[
+                    SpanKind::InteractivePlaceholder,
+                    SpanKind::InteractivePlaceholder,
+                ],
+            ),
+            (
                 "Body @dev^focus-123",
                 &[SpanKind::TaskBlockIdRoute, SpanKind::TaskBlockId],
             ),
@@ -2996,6 +3304,31 @@ mod tests {
                 "Body @dev+bad.id",
                 "invalid_sub_bullet_block_id",
                 SUB_BULLET_BLOCK_ID_ERROR,
+            ),
+            (
+                "Body @dev+id#bad_id",
+                "invalid_sub_bullet_section",
+                SUB_BULLET_SECTION_ERROR,
+            ),
+            (
+                "Body @dev+id#req^x",
+                "invalid_sub_bullet_section",
+                SUB_BULLET_SECTION_ERROR,
+            ),
+            (
+                "Body @dev+id#req:x",
+                "invalid_sub_bullet_section",
+                SUB_BULLET_SECTION_ERROR,
+            ),
+            (
+                "Body @dev+id#req+x",
+                "invalid_sub_bullet_section",
+                SUB_BULLET_SECTION_ERROR,
+            ),
+            (
+                "Body @dev+id#req#x",
+                "invalid_sub_bullet_section",
+                SUB_BULLET_SECTION_ERROR,
             ),
             (
                 "Body @bad.route^id",
@@ -3082,6 +3415,12 @@ mod tests {
         assert_eq!(bullet_colons.section.as_deref(), Some("time::box"));
         assert!(bullet_colons.diagnostics.is_empty());
 
+        let plus_then_hash = editor("Add context @route+bad#section");
+        assert_eq!(plus_then_hash.mode, EditorMode::SubBullet);
+        assert_eq!(plus_then_hash.block_id.as_deref(), Some("bad"));
+        assert_eq!(plus_then_hash.section.as_deref(), Some("section"));
+        assert!(plus_then_hash.diagnostics.is_empty());
+
         let plus_then_colon = editor("Add context @route+bad:id");
         assert_eq!(
             codes(&plus_then_colon),
@@ -3162,6 +3501,7 @@ mod tests {
             ("@dev:id", EditorMode::PomodoroTask),
             ("@:", EditorMode::Incomplete),
             ("@dev+id", EditorMode::SubBullet),
+            ("@dev+id#req", EditorMode::SubBullet),
             ("@+", EditorMode::Incomplete),
             ("@dev^id", EditorMode::Task),
             ("@^", EditorMode::Incomplete),
@@ -3198,6 +3538,12 @@ mod tests {
             "Called today @Cash+Goog-Exit",
             "Called today %log @Cash+Goog-Exit",
             "Called today @Cash+Goog-Exit s:1",
+            "Postgres 17 minimum @foo+bar#requirements",
+            "@foo+bar#requirements Postgres 17 minimum",
+            "Postgres 17 minimum @foo+bar#requirements s:1",
+            "Postgres 17 minimum %log @foo+bar#requirements",
+            "Postgres 17 minimum @foo+bar#q-and-a",
+            "Postgres 17 minimum @foo+bar#Q&A",
             "Some note @foo#bar",
             "@foo#bar Some note",
             "Some note @foo#",
@@ -3238,9 +3584,15 @@ mod tests {
             }
             if let CaptureKind::SubBullet {
                 target: SubBulletTarget::BlockId(block_id),
+                section,
             } = &executed.kind
             {
                 assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
+                assert_eq!(
+                    parse.section.as_deref(),
+                    section.as_ref().map(|selector| selector.text.as_str()),
+                    "{raw}"
+                );
             }
             if let CaptureKind::Bullet { section_prefix, .. } = &executed.kind {
                 assert_eq!(parse.section, *section_prefix, "{raw}");
@@ -3283,6 +3635,10 @@ mod tests {
             "Body @+",
             "Body @dev+",
             "Body @+focus-123",
+            "Body @dev+id#",
+            "Body @dev+#req",
+            "Body @+#req",
+            "Body @+#",
             "Body @dev:",
             "Body @!",
             "Body @!dev",
@@ -3368,6 +3724,16 @@ mod tests {
 
         let needs_both = editor("Add context @+");
         assert_eq!(needs_both.needs, vec![Need::Route, Need::Task]);
+
+        let with_section = editor("Add context @Dev+focus-123#req");
+        assert_eq!(with_section.mode, EditorMode::SubBullet);
+        assert_eq!(with_section.block_id.as_deref(), Some("focus-123"));
+        assert_eq!(with_section.section.as_deref(), Some("req"));
+        assert!(with_section.needs.is_empty());
+
+        let needs_section = editor("Add context @Dev+focus-123#");
+        assert_eq!(needs_section.needs, vec![Need::TaskSection]);
+        assert_eq!(needs_section.block_id.as_deref(), Some("focus-123"));
     }
 
     #[test]
@@ -3412,6 +3778,7 @@ mod tests {
             ("Add context @bad.route+id", "invalid_sub_bullet_route"),
             ("Add context @route+bad.id", "invalid_sub_bullet_block_id"),
             ("Add context @route+bad_id", "invalid_sub_bullet_block_id"),
+            ("Add context @route+id#bad_id", "invalid_sub_bullet_section"),
             ("Do work @bad.route:id", "invalid_pomodoro_route"),
             ("Do work @route:bad.id", "invalid_pomodoro_block_id"),
             ("Do work @route:id:extra", "invalid_pomodoro_block_id"),
@@ -3567,6 +3934,14 @@ mod tests {
                 None,
                 None,
                 &[Need::Route, Need::Task],
+            ),
+            (
+                "@Dev+focus-123#req",
+                EditorMode::SubBullet,
+                Some("dev"),
+                Some("req"),
+                Some("focus-123"),
+                &[],
             ),
             (
                 "@Dev^focus-123",
@@ -4064,6 +4439,117 @@ mod tests {
         assert_eq!(task.route.as_deref(), Some("cash"));
         assert_eq!(task.query, "goog");
         assert_eq!(task.replacement, (17, 26));
+        assert_eq!(task.block_id, None);
+    }
+
+    #[test]
+    fn task_section_completes_after_hash_on_a_sub_bullet_marker() {
+        let raw = "note @Cash+goog#req";
+        let hash = raw.find('#').expect("hash");
+        let completion = field(raw, raw.len()).expect("task section");
+        assert_eq!(completion.context, CompletionContext::TaskSection);
+        assert_eq!(completion.route.as_deref(), Some("cash"));
+        assert_eq!(completion.block_id.as_deref(), Some("goog"));
+        assert_eq!(completion.query, "req");
+        assert_eq!(completion.replacement, (hash + 1, raw.len()));
+    }
+
+    #[test]
+    fn empty_selector_after_hash_is_a_zero_length_task_section_field() {
+        let raw = "note @Cash+goog#";
+        let completion = field(raw, raw.len()).expect("task section");
+        assert_eq!(completion.context, CompletionContext::TaskSection);
+        assert_eq!(completion.route.as_deref(), Some("cash"));
+        assert_eq!(completion.block_id.as_deref(), Some("goog"));
+        assert_eq!(completion.query, "");
+        assert_eq!(completion.replacement, (raw.len(), raw.len()));
+    }
+
+    #[test]
+    fn cursor_in_route_or_block_id_of_three_component_marker_keeps_existing_contexts(
+    ) {
+        let raw = "note @Cash+goog#req";
+        let at = raw.find('@').expect("at");
+        let plus = raw.find('+').expect("plus");
+        let hash = raw.find('#').expect("hash");
+
+        let route = field(raw, at + 3).expect("route");
+        assert_eq!(route.context, CompletionContext::Route);
+        assert_eq!(route.block_id, None);
+        assert_eq!(route.replacement, (at + 1, plus));
+
+        let task = field(raw, plus + 3).expect("task");
+        assert_eq!(task.context, CompletionContext::Task);
+        assert_eq!(task.block_id, None);
+        assert_eq!(task.query, "go");
+        assert_eq!(task.replacement, (plus + 1, hash));
+        assert_eq!(&raw[plus + 1..hash], "goog");
+    }
+
+    #[test]
+    fn hash_separator_is_not_part_of_block_id_or_section_replacement() {
+        let raw = "note @Cash+goog#";
+        let plus = raw.find('+').expect("plus");
+        let hash = raw.find('#').expect("hash");
+        let task = field(raw, hash).expect("cursor on hash stays task");
+        assert_eq!(task.context, CompletionContext::Task);
+        assert_eq!(task.replacement, (plus + 1, hash));
+
+        let section = field(raw, hash + 1).expect("cursor after hash");
+        assert_eq!(section.context, CompletionContext::TaskSection);
+        assert_eq!(section.replacement, (hash + 1, hash + 1));
+    }
+
+    #[test]
+    fn empty_block_id_with_section_still_yields_a_task_section_field() {
+        let raw = "note @Cash+#req";
+        let completion = field(raw, raw.len()).expect("task section");
+        assert_eq!(completion.context, CompletionContext::TaskSection);
+        assert_eq!(completion.route.as_deref(), Some("cash"));
+        assert_eq!(completion.block_id, None);
+        assert_eq!(completion.query, "req");
+    }
+
+    #[test]
+    fn three_component_right_side_without_a_resolved_route_has_no_completion() {
+        assert_eq!(field("@+#req", 6), None);
+        assert_eq!(field("@+id#req", 8), None);
+    }
+
+    #[test]
+    fn completion_field_stays_on_boundaries_of_a_three_component_marker() {
+        let raw = "caf\u{e9} \u{1f680} @Cash+goog-exit#req";
+        for cursor in
+            (0..=raw.len()).filter(|&index| raw.is_char_boundary(index))
+        {
+            let _ = field(raw, cursor);
+        }
+        let hash = raw.find('#').expect("hash");
+        let section = field(raw, raw.len()).expect("task section");
+        assert_eq!(section.context, CompletionContext::TaskSection);
+        assert_eq!(section.block_id.as_deref(), Some("goog-exit"));
+        assert_eq!(section.replacement, (hash + 1, raw.len()));
+    }
+
+    #[test]
+    fn leading_three_component_marker_completes_each_component() {
+        let raw = "@Cash+goog#req body";
+        let plus = raw.find('+').expect("plus");
+        let hash = raw.find('#').expect("hash");
+        let space = raw.find(' ').expect("space");
+
+        let route = field(raw, 3).expect("route");
+        assert_eq!(route.context, CompletionContext::Route);
+        assert_eq!(route.replacement, (1, plus));
+
+        let task = field(raw, plus + 2).expect("task");
+        assert_eq!(task.context, CompletionContext::Task);
+        assert_eq!(task.replacement, (plus + 1, hash));
+
+        let section = field(raw, hash + 2).expect("section");
+        assert_eq!(section.context, CompletionContext::TaskSection);
+        assert_eq!(section.replacement, (hash + 1, space));
+        assert_eq!(section.query, "r");
     }
 
     // -----------------------------------------------------------------
@@ -4454,12 +4940,149 @@ were removed"
             parsed.kind,
             CaptureKind::SubBullet {
                 target: SubBulletTarget::BlockId("focus-123".to_string()),
+                section: None,
             }
         );
         assert_eq!(
             sub_bullet_bodies(&parsed.sub_bullets),
             vec!["authored child", "second child"]
         );
+    }
+
+    #[test]
+    fn execution_parses_three_component_sub_bullet_markers() {
+        let cases = [
+            (
+                "Postgres 17 minimum @foo+bar#requirements",
+                "Postgres 17 minimum",
+                "requirements",
+                None,
+                None,
+            ),
+            (
+                "@foo+bar#requirements Postgres 17 minimum",
+                "Postgres 17 minimum",
+                "requirements",
+                None,
+                None,
+            ),
+            (
+                "note @foo+bar#future-work s:1",
+                "note",
+                "future-work",
+                Some(1),
+                None,
+            ),
+            (
+                "note s:1 @foo+bar#future-work",
+                "note",
+                "future-work",
+                Some(1),
+                None,
+            ),
+            ("note p:2 @foo+bar#Q&A", "note", "Q&A", None, Some(2)),
+            ("note @foo+bar#Q&A p:2", "note", "Q&A", None, Some(2)),
+            (
+                "note %log @foo+bar#non-goals",
+                "note",
+                "non-goals",
+                None,
+                None,
+            ),
+            (
+                "note @foo+bar#non-goals %log",
+                "note",
+                "non-goals",
+                None,
+                None,
+            ),
+        ];
+        for (raw, body, section, scheduled, priority) in cases {
+            let parsed =
+                execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+            assert_eq!(parsed.body, body, "{raw}");
+            assert_eq!(parsed.route.as_deref(), Some("foo"), "{raw}");
+            assert_eq!(parsed.scheduled_offset, scheduled, "{raw}");
+            assert_eq!(parsed.priority_level, priority, "{raw}");
+            assert_eq!(
+                parsed.kind,
+                CaptureKind::SubBullet {
+                    target: SubBulletTarget::BlockId("bar".to_string()),
+                    section: Some(TaskSectionSelector {
+                        text: section.to_string(),
+                        exact: false,
+                    }),
+                },
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_three_component_marker_composes_on_multiline_first_line_only()
+    {
+        let parsed = execute(
+            "@foo+bar#requirements parent line\n- first child\n- second child",
+        )
+        .expect("parse");
+        assert_eq!(parsed.body, "parent line");
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::SubBullet {
+                target: SubBulletTarget::BlockId("bar".to_string()),
+                section: Some(TaskSectionSelector {
+                    text: "requirements".to_string(),
+                    exact: false,
+                }),
+            }
+        );
+        assert_eq!(
+            sub_bullet_bodies(&parsed.sub_bullets),
+            vec!["first child", "second child"]
+        );
+
+        let parsed = execute(
+            "parent line\n- first child @foo+bar#requirements\n- second child",
+        )
+        .expect("trailing child marker");
+        assert_eq!(parsed.body, "parent line");
+        assert_eq!(parsed.route.as_deref(), Some("foo"));
+        assert_eq!(
+            sub_bullet_bodies(&parsed.sub_bullets),
+            vec!["first child", "second child"]
+        );
+
+        let parsed = execute("parent @foo+bar#req later\n- child")
+            .expect("mid-text stays literal");
+        assert_eq!(parsed.body, "parent @foo+bar#req later");
+        assert_eq!(parsed.kind, CaptureKind::Task);
+        assert_eq!(parsed.route, None);
+    }
+
+    #[test]
+    fn execution_keeps_pomodoro_note_and_other_families_unchanged() {
+        let parsed =
+            execute("remembered to bump the timeout #").expect("bare hash");
+        assert_eq!(parsed.kind, CaptureKind::PomodoroNote);
+        assert_eq!(parsed.body, "remembered to bump the timeout");
+
+        let parsed = execute("Some note @foo#Ideas").expect("note bullet");
+        assert!(matches!(
+            parsed.kind,
+            CaptureKind::Bullet {
+                section_prefix: Some(ref prefix),
+                exact: false,
+            } if prefix == "Ideas"
+        ));
+
+        let parsed = execute("Do thing @foo^id").expect("caret");
+        assert!(matches!(parsed.kind, CaptureKind::TaskWithBlockId { .. }));
+
+        let parsed = execute("Do thing @foo:id").expect("colon");
+        assert!(matches!(parsed.kind, CaptureKind::Pomodoro { .. }));
+
+        let error = execute("Do thing @foo::id").expect_err("retired");
+        assert_eq!(error, RETIRED_DOUBLE_COLON_ERROR);
     }
 
     #[test]

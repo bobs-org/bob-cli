@@ -161,7 +161,11 @@ new child is placed before the selected task's first direct-child Schedule Log o
 Work Log; if neither managed log exists, the child is appended at the end of the \
 task block. The note and task must already exist. Existing child indentation and \
 line endings are preserved; run 'bob capture-tasks -r <route>' to list eligible \
-task block IDs.\n\n\
+task block IDs. A trailing '#<section>' component, as in \
+'@<route>+<block-id>#<section>', names an ALL-CAPS child section of that task. \
+The selector may use A-Z, a-z, 0-9, and & ' ( ) , . / -. '@<route>+<block-id>#' \
+with an empty selector is incomplete and needs a task section; run \
+'bob capture-task-sections -r <route> -i <block-id>' to list them.\n\n\
 Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
 Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
 no '#task' marker, and no block ID. The daily note comes from BOB_DAY_FILE or \
@@ -187,7 +191,7 @@ headings; if no heading matches, the bullet falls back to the pre-heading \
 section.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -526,6 +530,7 @@ fn plan_capture_item(
     if let Some(target) = request.forced_sub_bullet_target.as_ref() {
         parsed.kind = CaptureKind::SubBullet {
             target: target.clone(),
+            section: None,
         };
     }
     if let Some(clip) = request.forced_clip.as_ref() {
@@ -697,6 +702,7 @@ fn plan_capture_item(
     let note_plan = match &parsed.kind {
         CaptureKind::SubBullet {
             target: sub_bullet_target,
+            section: None,
         } => {
             let route = parsed.route.as_deref().ok_or_else(|| {
                 CaptureError::io(
@@ -711,6 +717,13 @@ fn plan_capture_item(
                 sub_bullet_target,
                 &capture_block,
             )?
+        }
+        CaptureKind::SubBullet {
+            section: Some(_), ..
+        } => {
+            return Err(CaptureError::io(
+                "sub-bullet capture invariant failed: task-section insertion is not implemented",
+            ));
         }
         CaptureKind::Pomodoro { block_id } => {
             let route = parsed.route.as_deref().ok_or_else(|| {
@@ -3487,7 +3500,8 @@ mod tests {
             assert_eq!(
                 parsed.kind,
                 CaptureKind::SubBullet {
-                    target: SubBulletTarget::BlockId("Goog-Exit".to_string())
+                    target: SubBulletTarget::BlockId("Goog-Exit".to_string()),
+                    section: None,
                 },
                 "{raw}"
             );
@@ -3500,11 +3514,24 @@ mod tests {
             );
         }
 
-        for raw in ["body @foo+bad:id", "body @foo+bad#section"] {
-            let error = parse_capture_text(raw, None)
-                .expect_err("plus must take precedence");
-            assert!(error.message.contains("sub-bullet"), "{raw}: {error:?}");
-        }
+        let error = parse_capture_text("body @foo+bad:id", None)
+            .expect_err("colon stays inside the plus family");
+        assert!(
+            error.message.contains("sub-bullet"),
+            "body @foo+bad:id: {error:?}"
+        );
+        let parsed = parse_capture_text("body @foo+bad#section", None)
+            .expect("hash after plus is a task-section selector");
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::SubBullet {
+                target: SubBulletTarget::BlockId("bad".to_string()),
+                section: Some(capture_language::TaskSectionSelector {
+                    text: "section".to_string(),
+                    exact: false,
+                }),
+            }
+        );
         for raw in ["body @foo^bad:id", "body @foo^bad#section"] {
             let error = parse_capture_text(raw, None)
                 .expect_err("caret must take precedence");
@@ -3537,9 +3564,17 @@ mod tests {
         for (raw, expected) in [
             ("body @cash+", "requires a block ID"),
             ("body @+id", "must use @<route>+<block-id>"),
+            ("body @+id#req", "must use @<route>+<block-id>"),
             ("body @bad.route+id", "route must contain"),
             ("body @cash+bad.id", "block ID must be"),
             ("body @cash+bad:id", "block ID must be"),
+            (
+                "body @cash+#req",
+                "requires a block ID before the task section",
+            ),
+            ("body @cash+id#", "requires a task section"),
+            ("body @cash+id#bad_id", "section must contain"),
+            ("body @cash+id#req^x", "section must contain"),
             ("@cash+id", "task text is required"),
         ] {
             let error = parse_capture_text(raw, None)

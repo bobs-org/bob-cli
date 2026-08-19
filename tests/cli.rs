@@ -847,7 +847,9 @@ fn capture_help_lists_options_alphabetically() {
     );
     assert!(
         help.contains("@<route>+<block-id>")
+            && help.contains("@<route>+<block-id>#<section>")
             && help.contains("bob capture '@cash+goog-exit'")
+            && help.contains("bob capture 'Postgres 17 minimum @foo+bar#requirements'")
             && help.contains("first direct-child Schedule Log or Work Log")
             && help.contains("@<route>^<block-id>")
             && help.contains("bob capture '@dev^foobar'")
@@ -2675,7 +2677,10 @@ fn capture_parse_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("purely lexical and completely read-only"),
+        help.contains("purely lexical and completely read-only")
+            && help.contains("@route+id#")
+            && help.contains("task_section")
+            && help.contains("@foo+bar#req"),
         "expected capture-parse long help:\n{help}"
     );
     assert_text_order(&help, &["-f, --format", "-h, --help"]);
@@ -3056,6 +3061,122 @@ fn capture_parse_reports_utf8_byte_offsets() {
     );
     assert_eq!(&text[15..20], "@Cash");
     assert_eq!(&text[21..30], "goog-exit");
+}
+
+#[test]
+fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
+    let complete = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Postgres 17 minimum @foo+bar#req")
+        .output()
+        .expect("run complete three-component parse");
+    assert_success(&complete);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&complete).trim()).expect("json");
+    assert_eq!(json["mode"], "sub_bullet");
+    assert_eq!(json["body"], "Postgres 17 minimum");
+    assert_eq!(json["route"], "foo");
+    assert_eq!(json["block_id"], "bar");
+    assert_eq!(json["section"], "req");
+    assert_eq!(json["needs"], serde_json::json!([]));
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 20, "end": 24, "kind": "sub_bullet_route" },
+            { "start": 25, "end": 28, "kind": "sub_bullet_block_id" },
+            { "start": 29, "end": 32, "kind": "sub_bullet_section" },
+        ])
+    );
+
+    let incomplete = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Postgres 17 minimum @foo+bar#")
+        .output()
+        .expect("run incomplete section parse");
+    assert_success(&incomplete);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&incomplete).trim()).expect("json");
+    assert_eq!(json["mode"], "incomplete");
+    assert_eq!(json["route"], "foo");
+    assert_eq!(json["block_id"], "bar");
+    assert!(json["section"].is_null());
+    assert_eq!(json["needs"], serde_json::json!(["task_section"]));
+
+    let needs_task = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note @foo+#req")
+        .output()
+        .expect("run empty block-id parse");
+    assert_success(&needs_task);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&needs_task).trim()).expect("json");
+    assert_eq!(json["mode"], "incomplete");
+    assert_eq!(json["needs"], serde_json::json!(["task"]));
+    assert_eq!(json["section"], "req");
+
+    let both = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note @foo+#")
+        .output()
+        .expect("run empty block-id and section parse");
+    assert_success(&both);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&both).trim()).expect("json");
+    assert_eq!(json["mode"], "incomplete");
+    assert_eq!(json["needs"], serde_json::json!(["task", "task_section"]));
+
+    let invalid = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note @foo+bar#bad_id")
+        .output()
+        .expect("run invalid section parse");
+    assert_success(&invalid);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&invalid).trim()).expect("json");
+    assert_eq!(json["diagnostics"][0]["code"], "invalid_sub_bullet_section");
+
+    let note_bullet = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Some note @foo#Ideas")
+        .output()
+        .expect("run note-bullet parse");
+    assert_success(&note_bullet);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&note_bullet).trim()).expect("json");
+    assert_eq!(json["mode"], "bullet");
+    assert_eq!(json["section"], "Ideas");
+    assert!(json["block_id"].is_null());
+
+    let pomodoro_note = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("remembered to bump the timeout #")
+        .output()
+        .expect("run bare hash parse");
+    assert_success(&pomodoro_note);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&pomodoro_note).trim()).expect("json");
+    assert_eq!(json["mode"], "pomodoro_note");
 }
 
 #[test]

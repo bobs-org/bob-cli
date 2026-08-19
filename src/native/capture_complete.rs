@@ -372,7 +372,10 @@ fn build_result(
             CompletionContext::Route
             | CompletionContext::Section
             | CompletionContext::PomodoroBlockId
-            | CompletionContext::Task => unreachable!("link field context"),
+            | CompletionContext::Task
+            | CompletionContext::TaskSection => {
+                unreachable!("link field context")
+            }
         };
 
         return Ok(CaptureCompleteResult {
@@ -420,6 +423,7 @@ fn build_result(
                 TaskSearch::MultiField,
             )?
         }
+        CompletionContext::TaskSection => Candidates::Section(Vec::new()),
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock => {
@@ -804,6 +808,7 @@ fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::Section => "section",
         CompletionContext::PomodoroBlockId => "pomodoro_block_id",
         CompletionContext::Task => "task",
+        CompletionContext::TaskSection => "task_section",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",
         CompletionContext::WikilinkBlock => "wikilink_block",
