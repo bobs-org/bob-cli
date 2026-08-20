@@ -1,16 +1,29 @@
 # bob query
 
 `bob query` runs Dataview source expressions, Dataview DQL, and Obsidian Tasks
-queries from the shell. The default engine is `native`, which evaluates queries
-against the local Markdown vault without a running desktop Obsidian app. Use
-`--engine obsidian` when you need exact behavior from the live Dataview plugin
-in an open Obsidian vault. Tasks inputs are native-only; an env-gated test
-harness provides the live Tasks renderer oracle without making DOM scraping a
-public query engine.
+queries from the shell. Use it from scripts, smoke tests, and dashboards that
+need query results without opening an Obsidian query pane.
+
+The default engine is `native`, which evaluates queries against the local
+Markdown vault without a running desktop Obsidian app. Use `--engine obsidian`
+when you need exact behavior from the live Dataview plugin in an open Obsidian
+vault. Tasks inputs are native-only; an env-gated test harness provides the live
+Tasks renderer oracle without making DOM scraping a public query engine.
 
 Stdout is reserved for query results only. Paths, JSON, and rendered Markdown
 can be piped into scripts without sync logs, engine warnings, or diagnostics
-mixed in.
+mixed in. Date-sensitive Tasks filters follow `BOB_NOW` (then `DATE`, then the
+system clock), matching other Bob commands.
+
+## Contents
+
+- [Examples](#examples)
+- [Options](#options)
+- [JSON output](#json-output)
+- [Manual smoke test](#manual-smoke-test)
+- [Native Dataview queries](#native-dataview-queries)
+- [Live Obsidian engine](#live-obsidian-engine)
+- [Environment](#environment)
 
 ## Examples
 
@@ -324,3 +337,17 @@ bob query --engine obsidian --format markdown --origin Home.md --query 'TABLE fi
 Set `BOB_DATAVIEW_OBSIDIAN_COMMAND` to use a specific Obsidian CLI executable.
 Set `BOB_DATAVIEW_VAULT` or pass `--vault` to choose the vault name or ID
 forwarded to `obsidian eval`.
+
+## Environment
+
+| Variable | Role |
+| --- | --- |
+| `BOB_DIR` | Vault root; defaults to `~/bob`. Validated when `--bob-dir` is passed or the native engine is used. |
+| `BOB_NOW` | Date/time override for native Tasks date calculations and other Bob date logic. |
+| `DATE` | Legacy date override used when `BOB_NOW` is unset. |
+| `BOB_DATAVIEW_OBSIDIAN_COMMAND` | Executable for `--engine obsidian`. |
+| `BOB_DATAVIEW_VAULT` | Default vault name or ID forwarded to `obsidian eval`. |
+
+Parity harness variables (`BOB_DATAVIEW_PARITY_LIVE`, `BOB_DATAVIEW_PARITY_VAULT`,
+`BOB_TASKS_PARITY_LIVE`, `BOB_TASKS_PARITY_VAULT`, `BOB_TASKS_REAL_VAULT_PARITY`)
+are test-only and are documented in [Manual smoke test](#manual-smoke-test).

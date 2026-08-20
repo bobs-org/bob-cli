@@ -1,7 +1,10 @@
 # Task Status Hooks
 
 `bob task-status-hooks` makes the current Pomodoro ledger the source of truth
-for active Obsidian Tasks promotions and structural cleanup. It also uses the
+for active Obsidian Tasks promotions and structural cleanup. Run it after
+capturing or closing Pomodoro-linked work, after `bob projects sync` writes
+schedules, and as part of any vault maintenance that should leave Next, In
+Progress, and Blocked markers consistent with today's ledger. It also uses the
 latest existing earlier daily note as a read-only recent-activity source for
 deciding whether In Progress tasks in area and project notes remain active and
 which rank an otherwise-unblocked Blocked task should recover to. It
@@ -17,6 +20,15 @@ applicable Next (`[*]`) or In Progress (`[/]`) status. It independently
 reconciles the derived Blocked (`[?]`) marker from Tasks `[id:: ...]` /
 `[dependsOn:: ...]` metadata and valid task-level
 `[scheduled:: YYYY-MM-DD]` dates in the future.
+
+## Contents
+
+- [Usage](#usage)
+- [Sync rules](#sync-rules)
+- [Derived Blocked status](#derived-blocked-status)
+- [Pomodoro marker](#pomodoro-marker)
+- [Guard rails](#guard-rails)
+- [Output](#output)
 
 ## Usage
 

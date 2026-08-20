@@ -1,11 +1,23 @@
 # Project Task Sync
 
 `bob projects` manages Bob project notes through one completion-criteria task
-anchored with `^prj`.
+anchored with `^prj`. Run `projects list` to inspect the vault, `projects sync
+--dry-run` to preview reconciliation, and `projects sync` to apply it. After a
+sync that wrote schedules, run `bob task-status-hooks` so derived Blocked
+markers match the new dates.
 
 This mirrors the `bob highlights` `^ref` convention for `[[ref]]` notes: the
 task line is the interaction point, and the command reconciles frontmatter from
 that task instead of asking users to edit machine-facing metadata directly.
+
+## Contents
+
+- [Commands](#commands)
+- [Project notes](#project-notes)
+- [The `^prj` task](#the-prj-task)
+- [Sync rules](#sync-rules)
+- [Warnings](#warnings)
+- [Examples](#examples)
 
 ## Commands
 

@@ -6,9 +6,26 @@ Highlights app PDF annotations into Obsidian reference notes in the Bob vault.
 Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 `~/projects/bob-cli`; do not install from ad hoc scripts outside that checkout.
 
-## MVP Status
+## Contents
 
-The MVP implements marker/frontmatter synchronization, Markdown/TextBundle
+- [What it does](#what-it-does)
+- [MacBook validation notes](#macbook-validation-notes)
+- [Default paths](#default-paths)
+- [Marker note grammar](#marker-note-grammar)
+- [Required parent, type, and ref type](#required-parent-type-and-ref-type)
+- [Synced properties](#synced-properties)
+- [Scan, safety, and Git/ob behavior](#scan-safety-and-gitob-behavior)
+- [Generated body contract](#generated-body-contract)
+- [MacBook setup guide](#macbook-setup-guide)
+- [Scheduled scan](#scheduled-scan)
+- [Disable one PDF](#disable-one-pdf)
+- [Backup and rollback](#backup-and-rollback)
+- [Conflict resolution](#conflict-resolution)
+- [Expected failures](#expected-failures)
+
+## What it does
+
+`bob highlights` implements marker/frontmatter synchronization, Markdown/TextBundle
 sidecar parsing, generated note rendering, TextBundle image selection asset
 copying, recursive library scan with `xlib` intake, prerequisite checks, output
 collision detection, dirty-target refusal, and atomic note writes.
@@ -39,7 +56,7 @@ Available commands:
 bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
-bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
@@ -90,7 +107,8 @@ running pandoc or creating output directories. Without `--include-id`, manual
 
 Path configuration options are `-b, --bob-dir <PATH>`, `-l, --lib-dir <PATH>`,
 `-r, --ref-dir <PATH>`, and `-x, --xlib-dir <PATH>`. `scan` also accepts
-`-j, --jobs <N>`.
+`-j, --jobs <N>` and `-v, --verbose` (the detailed per-PDF plan report; the
+default scan report is concise).
 
 `sync <pdf> --dry-run` prints the resolved configuration and planned note/PDF
 actions without modifying either side. Without `--dry-run`, the command writes
@@ -100,15 +118,12 @@ For recursive scans, `--write-pdfs` is the bulk opt-in for marker write-back;
 `scan --dry-run --write-pdfs` remains read-only and previews the same marker
 updates.
 
-## Release Handoff Summary
+## MacBook validation notes
 
-The MVP is ready for Linux-side release checks and MacBook dry-run validation.
-It includes the native `bob highlights` command, synthetic PDF marker
-fixtures, frontmatter/marker conflict detection, generated highlight rendering,
-recursive scan preflights, dirty target refusal, MacBook setup guidance, and
-scheduled dry-run automation examples.
-
-Known risks to validate on the MacBook:
+Linux-side tests cover synthetic PDF markers, sidecar fixtures, conflict
+detection, generated highlight rendering, recursive scan preflights, and dirty
+target refusal. Validate the following against real Highlights-authored files
+on the MacBook before enabling PDF marker write-back:
 
 - Real Highlights sidecar Markdown may vary from the fixture-backed parser
   contract. Keep the documented Highlights Note Format settings fixed while
@@ -119,8 +134,6 @@ Known risks to validate on the MacBook:
   target PDFs.
 - Scheduled `scan` should stay dry-run or note-only unless bulk PDF marker
   writes are intentionally wanted and backed up.
-- `~/bob/lib` and `~/bob/ref` are the MVP defaults even though this Linux host
-  has an observed `~/bob/lit` path.
 
 ## Default Paths
 
@@ -341,8 +354,9 @@ writes so the apps do not race the CLI.
 ## Scan, Safety, and Git/ob Behavior
 
 `scan --dry-run` reports every discovered PDF, including PDFs that are still
-pending under `xlib`. It prints each planned `xlib/<rel> -> lib/<rel>` intake
-move, but does not move anything. Valid PDFs show their target reference note,
+pending under `xlib`. The default report is concise. `-v, --verbose` prints the
+detailed per-PDF plan, including each planned `xlib/<rel> -> lib/<rel>` intake
+move. Dry runs do not move anything. Valid PDFs show their target reference note,
 sidecar path if present, selected sync source, and note/PDF marker action.
 Invalid PDFs show a `plan_error`. Scan output also reports `write_pdfs:
 true|false` so bulk marker-write runs are auditable. Dry runs do not create
@@ -363,7 +377,7 @@ and checks Git status for existing vault files that successfully planned PDFs
 would modify. If a target ref note or PDF marker target is dirty, it fails
 before any note/PDF write, except for a tracked target ref note whose only body
 change is the exact generated `^ref` checkbox toggle, optionally combined with
-frontmatter edits. There is no force mode in the MVP; commit, stash, or clean
+frontmatter edits. There is no force mode for scan; commit, stash, or clean
 unrelated dirty files before rerunning.
 
 Image assets copied from TextBundle sidecars are treated as note-side writes.
@@ -744,8 +758,8 @@ Run these steps on the MacBook. The intended checkout is
 intake, `~/bob/lib` for archived PDFs, and `~/bob/ref` for generated reference
 notes.
 
-This Linux host currently has `~/bob/lit`, but the requested MVP defaults are
-still `~/bob/xlib`, `~/bob/lib`, and `~/bob/ref`. Do not infer `lit` as the
+This Linux host currently has `~/bob/lit`, but the defaults are still
+`~/bob/xlib`, `~/bob/lib`, and `~/bob/ref`. Do not infer `lit` as the
 production default. If a one-off test must use `lit`, pass `--lib-dir lit`
 explicitly.
 
@@ -901,7 +915,7 @@ not race the CLI.
 
 ## Scheduled Scan
 
-The MVP automation target is a scheduled `scan`, not a live recursive watcher.
+The intended automation is a scheduled `scan`, not a live recursive watcher.
 Start with a dry-run schedule. On the MacBook account, create this LaunchAgent:
 
 ```bash
@@ -974,7 +988,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-s
 
 ## Disable One PDF
 
-The MVP has no marker key such as `sync: false`. `scan` processes every `.pdf`
+There is no marker key such as `sync: false`. `scan` processes every `.pdf`
 under the configured library directory.
 
 To disable one PDF, move that PDF and its sidecar out of `~/bob/lib`:
