@@ -1,10 +1,19 @@
 # Project Task Sync
 
 `bob projects` manages Bob project notes through one completion-criteria task
-anchored with `^prj`. Run `projects list` to inspect the vault, `projects sync
---dry-run` to preview reconciliation, and `projects sync` to apply it. After a
-sync that wrote schedules, run `bob task-status-hooks` so derived Blocked
-markers match the new dates.
+anchored with `^prj`. Typical CLI order:
+
+1. `bob projects list` — inspect the vault
+2. `bob projects sync --dry-run` — preview reconciliation
+3. `bob projects sync` — apply it
+4. `bob task-status-hooks` — derive `[?]` Blocked markers for any schedules
+   just written
+
+`sync` writes frontmatter, `#hide`, Sub-projects lines, and inline
+`[scheduled::]` fields. It does not change checkboxes. The Bob Navigation
+Hotkeys picker in Obsidian can write schedules or priorities and reconcile
+Blocked in one editor transaction; those gestures are not part of the CLI
+command. See [Scheduling from the `^prj` task](#scheduling-from-the-prj-task).
 
 This mirrors the `bob highlights` `^ref` convention for `[[ref]]` notes: the
 task line is the interaction point, and the command reconciles frontmatter from
@@ -16,6 +25,10 @@ that task instead of asking users to edit machine-facing metadata directly.
 - [Project notes](#project-notes)
 - [The `^prj` task](#the-prj-task)
 - [Sync rules](#sync-rules)
+- [Scheduling from the `^prj` task](#scheduling-from-the-prj-task)
+- [Priority property and scheduled rolls](#priority-property-and-scheduled-rolls)
+- [Schedule-log reason prompt](#schedule-log-reason-prompt)
+- [Deferring a task prunes it from today's open Pomodoros](#deferring-a-task-prunes-it-from-todays-open-pomodoros)
 - [Warnings](#warnings)
 - [Examples](#examples)
 

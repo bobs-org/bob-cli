@@ -1,18 +1,17 @@
-# Bob CLI command contracts
+# Command guides
 
-These pages are the detailed user-facing contracts for `bob` commands that do
-not fit in the [root README](../README.md). Start there for installation, the
-command index, environment variables, and the daily workflow.
+These pages are the full command contracts. Start at the
+[root README](../README.md) for installation, the daily workflow, the command
+index, and environment variables.
 
-| Document | Command |
+| Guide | What it covers |
 | --- | --- |
-| [capture.md](capture.md) | `bob capture` and the capture-parse/complete/discovery family |
-| [dataview.md](dataview.md) | `bob query` |
-| [highlights-ref-sync.md](highlights-ref-sync.md) | `bob highlights` |
-| [plugins.md](plugins.md) | `bob plugins` |
-| [projects.md](projects.md) | `bob projects` |
-| [task-status-hooks.md](task-status-hooks.md) | `bob task-status-hooks` |
+| [capture.md](capture.md) | Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery) |
+| [dataview.md](dataview.md) | `bob query` Dataview and Tasks |
+| [highlights-ref-sync.md](highlights-ref-sync.md) | `bob highlights` PDF intake and reference notes |
+| [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
+| [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
+| [task-status-hooks.md](task-status-hooks.md) | `bob task-status-hooks` Pomodoro-driven task status |
 
-`bob --help` and `bob <command> --help` remain the concise usage source. When
-this documentation and a command's current help text disagree, the running
-command is authoritative.
+`bob --help` and `bob <command> --help` are the concise usage source. If this
+documentation and the running command disagree, trust the command.

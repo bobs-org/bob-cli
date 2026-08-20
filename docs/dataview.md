@@ -6,9 +6,10 @@ need query results without opening an Obsidian query pane.
 
 The default engine is `native`, which evaluates queries against the local
 Markdown vault without a running desktop Obsidian app. Use `--engine obsidian`
-when you need exact behavior from the live Dataview plugin in an open Obsidian
-vault. Tasks inputs are native-only; an env-gated test harness provides the live
-Tasks renderer oracle without making DOM scraping a public query engine.
+only when you need exact behavior from the live Dataview plugin; that mode
+requires desktop Obsidian to already have the target vault open, and it does
+not accept Tasks inputs. An env-gated test harness provides the live Tasks
+renderer oracle without making DOM scraping a public query engine.
 
 Stdout is reserved for query results only. Paths, JSON, and rendered Markdown
 can be piped into scripts without sync logs, engine warnings, or diagnostics

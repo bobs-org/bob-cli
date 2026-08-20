@@ -1,20 +1,21 @@
 # Bob CLI
 
-`bob-cli` installs the `bob` command and compatibility shims for the Bob
-Obsidian vault and Pomodoro workflow. Command implementations are native Rust by
-default. The Pomodoro, notification, and legacy `bob_sync` shell implementations
-remain embedded as a targeted rollback path; see
-[Compatibility shims](#compatibility-shims) for the exact mappings and fallback
-behavior.
+`bob-cli` installs the `bob` command for the Bob Obsidian vault and Pomodoro
+workflow. The preferred interface is `bob <subcommand>`; `bob --help` is the
+authoritative command index. Command implementations are native Rust by
+default.
 
-The preferred interface is `bob <subcommand>`. Legacy command names still exist
-as installed binaries for existing tmux, shell, and automation callers.
-`bob --help` is the authoritative command index.
+Legacy command names still exist as installed binaries for existing tmux,
+shell, and automation callers. The Pomodoro, notification, and legacy
+`bob_sync` shell implementations remain embedded as a targeted rollback path;
+see [Compatibility shims](#compatibility-shims) for the exact mappings and
+fallback behavior.
 
 ## Contents
 
 - [Installation](#installation)
-- [What Bob does](#what-bob-does)
+- [Terms](#terms)
+- [Daily workflow](#daily-workflow)
 - [Vault layout](#vault-layout)
 - [Commands](#commands)
 - [Capture](#capture)
@@ -67,26 +68,45 @@ bob capture-targets
 bob projects list
 ```
 
-Priority rolls (`p:<N>` and the matching Obsidian picker) read
-`~/.config/bob/config.yml`. Override the file with `BOB_CONFIG_FILE`, or set
-`XDG_CONFIG_HOME` so the default becomes `$XDG_CONFIG_HOME/bob/config.yml`.
+Priority rolls (`p:<N>`) read `~/.config/bob/config.yml`. Override that path with
+`BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`; see [Environment](#environment).
 
-## What Bob does
+## Terms
+
+These words show up across every command. They are vault conventions, not
+separate `bob` subcommands.
+
+| Term | Meaning |
+| --- | --- |
+| Vault | The Obsidian folder Bob operates on (`~/bob` by default; `BOB_DIR` to override) |
+| Route | The lowercase name of a top-level note; `@groceries` writes `groceries.md` |
+| Pomodoro | A checkbox in the daily note's `Pomodoros` section for one work session |
+| Block ID | The trailing `^id` on a task line, used to link or nest under that task |
+| Task link | A `[[note#^id]]` (or embed) pointing at a task. When that is the only content of a Pomodoro child bullet, it is that session's planned work |
+| Schedule Log | A managed `🗓️ **SCHEDULE LOG**` child that records each schedule change |
+| Work Log | A managed `🛠️ **WORK LOG**` child that records work summaries |
+
+## Daily workflow
 
 Bob tracks a daily Pomodoro ledger inside an Obsidian vault and keeps that vault
-synced through Git. A typical loop looks like this:
+synced through Git. Capture, linking, status, and nightly maintenance are
+separate steps:
 
-1. Capture work with `bob capture` (or Bob Mac Capture, which calls the same
-   commands). Tasks land in `mac_inbox.md` or a routed note.
-2. Link work onto today's Pomodoro entries. `bob pomodoro`,
-   `bob tmux-pomodoro`, and `bob notify` read that ledger.
-3. Run `bob task-status-hooks` so Next / In Progress / Blocked statuses and
-   Pomodoro links follow the ledger.
-4. Run `bob nightly` to sync Obsidian, archive done and canceled tasks, and
-   commit plus push the vault.
+1. **Capture** with `bob capture` or Bob Mac Capture (the macOS panel that
+   calls the same commands). Tasks land in `mac_inbox.md` unless an `@route`
+   token sends them to another note.
+2. **Link today's work** onto a Pomodoro in the daily note. That happens when
+   you capture with `@route:id` (which also marks the task Next), or when you
+   add a task link under a Pomodoro in Obsidian. `bob pomodoro`,
+   `bob tmux-pomodoro`, and `bob notify` only *read* that ledger; they do not
+   create links.
+3. **Reconcile statuses** with `bob task-status-hooks` so Next, In Progress, and
+   Blocked markers follow the ledger and any new schedules.
+4. **Nightly**, run `bob nightly` to sync Obsidian, archive done and canceled
+   tasks, and commit plus push the vault.
 
-Read-only inspection commands (`bob query`, `bob projects list`,
-`bob plugins list`, `bob highlights doctor`) do not need that full loop.
+Read-only inspection (`bob query`, `bob projects list`, `bob plugins list`,
+`bob highlights doctor`) can run at any time.
 
 ## Vault layout
 
@@ -154,19 +174,28 @@ The whole batch is planned before anything is written.
 | Marker | Meaning |
 | --- | --- |
 | `@route` | Task in `<route>.md` |
-| `@route#Section` | Ordinary bullet in a matching non-`Tasks` heading |
+| `@route#Section` | Ordinary bullet under a matching non-`Tasks` heading |
+| `@route#` | Ordinary bullet under any non-`Tasks` heading |
 | `@route^id` | Ordinary task with a user-authored block ID |
 | `@route:id` | Next-status task plus a Pomodoro task link |
 | `@route+id` | Child bullet under an existing task |
-| `@route+id#section` | Child bullet under an ALL-CAPS task section |
-| trailing `#` | Plain-text note on a Pomodoro |
+| `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
+| trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
 | `s:<N>` | Schedule N days from today |
 | `p:<N>` | Write priority level N and roll a date in that window |
 | `%`, `%N`, `%header` | Attach clipboard content |
 
+`#` is not one marker. A trailing bare `#` is a Pomodoro note; `@route#…` selects
+a heading in that note; `@route+id#…` selects an ALL-CAPS child section of that
+task. A `#` in the middle of the body stays ordinary text. The retired
+`@route::id` spelling is not accepted; use `@route^id` for an ordinary task
+with a block ID.
+
 ```bash
 bob capture buy milk @groceries
+bob capture '@dev^foobar' 'Some ordinary task.'
 bob capture '@dev:foobar' 'Some foobar task.'
+bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'
 bob capture remembered to bump the timeout #
 ```
 
@@ -215,9 +244,11 @@ The full command contract and live smoke-test steps live in
 bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
 ```
 
-Makes the current Pomodoro ledger the source of truth for active task statuses
-and structural cleanup, and uses the latest existing earlier daily note as a
-read-only recent-activity source.
+Run this after capturing or closing Pomodoro-linked work, and after
+`bob projects sync` writes schedules. It makes today's Pomodoro ledger the
+source of truth for Next / In Progress promotions and structural cleanup, and
+uses the latest existing earlier daily note as a read-only recent-activity
+source.
 
 Direct block links under open Pomodoros promote Ready tasks to Next (`[*]`) and
 leave In Progress (`[/]`) alone. Sole transcluded dependencies inherit the
@@ -252,10 +283,12 @@ manages `#hide` so `^prj` surfaces on `dash.md` only when nothing else is open,
 maintains the machine-owned Sub-projects ledger, and propagates optional
 `scheduled: YYYY-MM-DD` frontmatter onto ordinary open tasks.
 
-Run `bob task-status-hooks` after `projects sync` to derive or recover `[?]`
-Blocked markers. The property picker in Bob Navigation Hotkeys performs
-propagation and status reconciliation immediately. The full project task
-contract lives in [`docs/projects.md`](docs/projects.md).
+`sync` writes frontmatter, `#hide`, Sub-projects lines, and inline schedules;
+it does not change checkboxes. Run `bob task-status-hooks` afterward to derive
+or recover `[?]` Blocked markers. The property picker in Bob Navigation
+Hotkeys can propagate schedules and reconcile Blocked in the same editor
+transaction. The full project task contract lives in
+[`docs/projects.md`](docs/projects.md).
 
 ## Plugins
 
@@ -323,8 +356,8 @@ bob nightly
 ```
 
 Runs the nightly Bob maintenance path. It acquires the shared lock used with
-`bob bulk-git-commit` (default `$XDG_RUNTIME_DIR/bob_sync.lock`, or
-`/tmp/bob_sync.lock` when that runtime directory is unset), then:
+`bob bulk-git-commit` (default `$XDG_RUNTIME_DIR/bob_sync.lock` when that
+variable names an existing directory, otherwise `/tmp/bob_sync.lock`), then:
 
 1. Runs the shared `ob sync --path <vault>` gate once. A missing `ob` binary or
    an "already running" Obsidian sync is skipped rather than treated as
@@ -428,9 +461,12 @@ Polls Pomodoro status until the current entry is overdue, then sends a desktop
 notification when `notify-send` is available and rings the terminal bell three
 times. `PRE_CHECK_SLEEP` is the seconds to wait between status checks;
 `POST_NOTIFY_SLEEP` is the seconds to wait after a notification before polling
-again. Loop status messages always go to stderr. `-v` / `--verbose` may be
-repeated; extra debug tracing is emitted at `-vv`. Help text still uses the
-legacy binary name `bob_notify`.
+again. Polling uses the same default status as `bob pomodoro` without
+`--show-stale`: an entry more than nine minutes overdue looks like no open
+Pomodoro, so start `bob notify` while the session is still running or only
+recently overdue. Loop status messages always go to stderr. `-v` / `--verbose`
+may be repeated; extra debug tracing is emitted at `-vv`. Help text still uses
+the legacy binary name `bob_notify`.
 
 ```bash
 bob tmux-pomodoro
@@ -494,8 +530,8 @@ Rust binaries, and the binaries carry the script assets they need.
 
 `BOB_BULK_GIT_COMMIT_LOCK_FILE` overrides the lock path used by
 `bob bulk-git-commit` and `bob nightly`. The default is
-`$XDG_RUNTIME_DIR/bob_sync.lock` when that directory exists, otherwise
-`/tmp/bob_sync.lock`.
+`$XDG_RUNTIME_DIR/bob_sync.lock` when that variable names an existing
+directory, otherwise `/tmp/bob_sync.lock`.
 
 `BOB_BULK_GIT_COMMIT_MESSAGE` overrides the commit message used by
 `bob bulk-git-commit`.
@@ -539,7 +575,8 @@ priority rolls. When unset, Bob uses `$XDG_CONFIG_HOME/bob/config.yml`, then
 `obsidian eval` by `bob query --engine obsidian`.
 
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`,
-Pomodoro-linked `bob capture` requests, and `bob task-status-hooks`.
+`bob tmux-pomodoro`, `bob notify` (via the same status reader), Pomodoro-linked
+and Pomodoro-note `bob capture` requests, and `bob task-status-hooks`.
 
 `BOB_DIR` sets the Bob vault directory. It defaults to `~/bob`.
 
@@ -604,7 +641,7 @@ Obsidian sync gate.
 `$XDG_CONFIG_HOME/bob/config.yml` path used when `BOB_CONFIG_FILE` is unset.
 
 `XDG_RUNTIME_DIR` is the preferred directory for the default
-`bob_sync.lock` maintenance lock.
+`bob_sync.lock` maintenance lock when that path exists as a directory.
 
 ## Migration notes
 

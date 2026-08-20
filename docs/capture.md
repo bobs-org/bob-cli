@@ -51,6 +51,18 @@ anything is written, and any failure rolls the whole batch back.
 | `p:<N>` | Write priority level N and roll a date in that level's window |
 | `%`, `%N`, `%header` | Capture clipboard content as child bullets |
 
+`#` is not one marker. Read it by what it is attached to:
+
+| You typed | Meaning |
+| --- | --- |
+| `remembered the timeout #` | Pomodoro note |
+| `@notes#Ideas` | Bullet under a heading in `notes.md` |
+| `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
+| `@cash+id#requirements` | Child under that task's `REQUIREMENTS` section |
+
+A `#` in the middle of the body stays ordinary text. `@route::id` is retired;
+use `@route^id` for an ordinary task with a block ID.
+
 Leading `@route text` is accepted only on an item's first physical line. Later
 lines in the same item take trailing markers only. Terminal `s:<N>`, `p:<N>`,
 `%...`, and `@...` markers configure the whole item no matter which of its
@@ -64,7 +76,7 @@ bob capture [OPTIONS] [--] [TEXT]...
 
 Captures one task, ordinary Markdown bullet, or task sub-bullet into the Bob vault without
 requiring desktop Obsidian to be open. `TEXT` is one or more physical lines: the
-first line is the captured parent, and whitespace within each line is
+first nonblank line is the captured parent, and whitespace within each line is
 normalized, but line breaks are meaningful -- see "Authored sub-bullets"
 below for the bounded hierarchy later lines accept. Task mode writes
 `- [ ] #task <text> [created::YYYY-MM-DD]` and routes to `mac_inbox.md` by
@@ -92,10 +104,11 @@ side of a trailing route marker. The token is removed from the body and adds
 `[scheduled::YYYY-MM-DD]` after the created stamp.
 
 Append a lowercase `p:<N>` token to write a priority level, where `N` selects
-the Nth level configured in `~/.config/bob/config.yml`, `bob capture` looks
-for `BOB_CONFIG_FILE`, then `$XDG_CONFIG_HOME/bob/config.yml`, then
-`~/.config/bob/config.yml` — the same file the Obsidian picker reads. Today
-that file configures four levels:
+the Nth level in the bullet-property config file. Bob looks for that file at
+`BOB_CONFIG_FILE`, then `$XDG_CONFIG_HOME/bob/config.yml`, then
+`~/.config/bob/config.yml` — the same file the Obsidian picker reads. A missing
+or unreadable file is an error; `p:<N>` has no built-in default levels. The
+currently deployed file uses four levels:
 
 | N | Label | Value    | Day window |
 | - | ----- | -------- | ---------- |
@@ -380,9 +393,11 @@ parent task. For example,
 When the selected task already has a direct-child Schedule Log or Work Log, the
 complete new child — including any authored children, clipboard children, or a
 `p:<N>`-generated Schedule Log nested under that child — is inserted immediately
-before the earliest of those managed logs. Nested or lookalike log markers do
-not move the insertion point. Tasks with neither managed log still append at
-the end of the task block.
+before the earliest of those managed logs. A Schedule Log is the
+`🗓️ **SCHEDULE LOG**` child that records schedule changes; a Work Log is the
+`🛠️ **WORK LOG**` child that records work summaries. Nested or lookalike log
+markers do not move the insertion point. Tasks with neither managed log still
+append at the end of the task block.
 
 The marker composes with terminal `s:<N>`, `p:<N>`, and clipboard markers in
 either order. Scheduled properties are still rendered for consistency even
@@ -501,7 +516,9 @@ keep the prefix-matching behavior described above. Without `--section`,
 With `--route`, `-t, --task BLOCK-ID` selects sub-bullet mode while keeping
 every `@token` in the text literal. Add `-S, --task-section TITLE` to nest the
 new bullet under an ALL-CAPS child section of that task whose title matches
-`TITLE` exactly, compared case insensitively. This exact path is the picker
+`TITLE` exactly, compared case insensitively. `--task-section` also works with
+the hidden `--task-ref` option below; the command requires `--route` and
+either `--task` or `--task-ref`. This exact path is the picker
 counterpart to `--section`; typed `@route+id#prefix` tokens keep the
 slug/prefix matching described above, so `--task-section future-work` does
 **not** match `FUTURE WORK` while `--task-section "Future Work"` does. Picker
@@ -521,8 +538,11 @@ Useful options:
 - `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
 - `-s, --section TITLE`: with `--route`, force a bullet into the exact section
 - `-t, --task BLOCK-ID`: with `--route`, append beneath the identified task
-- `-S, --task-section TITLE`: with `--route` and `--task`, nest under the exact
-  ALL-CAPS child section; conflicts with `--section`
+- `--task-ref LINE:DIGEST`: hidden picker option; with `--route`, append beneath
+  the task identified by that stale-safe ref from `capture-tasks` or
+  `capture-complete`. Conflicts with `--task`. Not listed in `--help`.
+- `-S, --task-section TITLE`: with `--route` and `--task` or `--task-ref`, nest
+  under the exact ALL-CAPS child section; conflicts with `--section`
 
 ### Input, stdin, and JSON output
 
@@ -662,7 +682,8 @@ interactive markers are valid input rather than errors, so `@`, `@#`,
 `@:`, `@route:`,
 and the legacy `@!` aliases all parse on any line. The retired
 `@route::...` spelling is a diagnostic directing users to `@route^...`;
-it is not an incomplete Pomodoro marker. Complete and in-progress Obsidian links such as `[[sase`,
+it is not an incomplete Pomodoro marker. A trailing bare `#` is a complete
+`pomodoro_note`, not an incomplete section marker. Complete and in-progress Obsidian links such as `[[sase`,
 `![[sase]]`, `[[sase#Design|Spec]]`, and `[[#^block-id]]` also parse for
 semantic highlighting. An invalid marker component, a malformed continuation
 line, an orphaned nested bullet, an item emptied by marker removal, or a
@@ -694,10 +715,14 @@ JSON output is a single versioned object:
 `input` is the raw text as received, before whitespace normalization. `body` is
 the normalized capture body after terminal `s:<N>`, `p:<N>`, and `%...` markers
 and the recognized `@...` token are removed, matching what `bob capture` would
-write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
+write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`, `pomodoro_note`,
 `sub_bullet`, or `incomplete`, describing whichever line resolved a marker
 first -- the parent's leading or trailing form, or else the first child line
-with a trailing marker. `route`, `section`, and `block_id` are the
+with a trailing marker. A bare trailing `#` reports `pomodoro_note` with
+`route`, `section`, and `block_id` all `null` and an empty `needs` list. Combining
+that marker with `@route`, `s:<N>`, or `p:<N>` on the same item still reports
+mode `pomodoro_note` plus a `pomodoro_note_conflict` diagnostic; `bob capture`
+rejects the same input. `route`, `section`, and `block_id` are the
 resolved components, or `null`; `block_id` carries the ID-only task, Pomodoro,
 or sub-bullet ID, whichever applies. `needs` lists what a picker still has to supply, in the
 order `route`, `section`, `block_id`, `pomodoro_id`, `task`, `task_section`; it is an independent
@@ -728,7 +753,7 @@ continue to describe the first item so older clients retain a useful preview.
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
-`pomodoro_route`, `pomodoro_block_id`, `sub_bullet_route`,
+`pomodoro_route`, `pomodoro_block_id`, `pomodoro_note`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `schedule`, `priority`, `clipboard`,
 `interactive_placeholder`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
@@ -743,6 +768,8 @@ Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
 `invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `legacy_bullet_marker`,
+`pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
+`s:<N>`, or `p:<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
 authored bullet, or a two-space nested authored bullet),
 `orphaned_nested_bullet` (a nonempty nested item has no preceding first-level
@@ -767,9 +794,10 @@ shares the phase-grammar tokenizer and `@token` classification with
 `bob capture-parse`, so a completion can never disagree with the marker
 highlighting derived from that command; it never independently reparses marker
 prefixes. `--cursor`/`-c` is required and must be a UTF-8 byte offset on a
-character boundary within `TEXT`; a missing `TEXT` defaults to an empty draft
-rather than an error, since cursor `0` against an empty draft is an ordinary
-interactive state, not a mistake.
+character boundary within `TEXT`. It is not the same flag as `bob capture -c` /
+`--clip`. A missing `TEXT` defaults to an empty draft rather than an error,
+since cursor `0` against an empty draft is an ordinary interactive state, not a
+mistake.
 
 For a blank-line-separated batch draft, completion always scopes to the item
 and physical line the cursor is on: only that item's first (parent) line
@@ -885,13 +913,15 @@ These read-only discovery commands support interactive capture pickers. A
 *route* is the canonical lowercase name for a `<route>.md` note at the vault
 root; for example, route `cash` selects `cash.md`. The command-line route
 options accept ASCII uppercase too and normalize it to lowercase. A picker
-normally uses the commands in this order:
+normally uses the commands in this order. Pomodoro notes (`text #`) skip this
+list and call `bob capture` directly:
 
 1. Run `capture-targets` and let the user choose a route.
-2. For a bullet capture, run `capture-sections` for that route and let the user
-   choose a heading. Task and sub-bullet captures skip this step.
-3. For a sub-bullet capture, run `capture-tasks` for the route and let the user
-   choose an open task. Other capture modes skip this step.
+2. For a bullet capture (`@route#`), run `capture-sections` for that route and
+   let the user choose a heading. Task, sub-bullet, and Pomodoro-note captures
+   skip this step.
+3. For a sub-bullet capture (`@route+`), run `capture-tasks` for the route and
+   let the user choose an open task. Other capture modes skip this step.
 4. Optionally run `capture-task-sections` for that parent (`--block-id` or
    `--task-ref`) and let the user choose a section title, then pass
    `--task-section TITLE` to nest under that ALL-CAPS child section.

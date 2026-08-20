@@ -4,22 +4,28 @@
 for active Obsidian Tasks promotions and structural cleanup. Run it after
 capturing or closing Pomodoro-linked work, after `bob projects sync` writes
 schedules, and as part of any vault maintenance that should leave Next, In
-Progress, and Blocked markers consistent with today's ledger. It also uses the
-latest existing earlier daily note as a read-only recent-activity source for
-deciding whether In Progress tasks in area and project notes remain active and
-which rank an otherwise-unblocked Blocked task should recover to. It
-keeps references to completed tasks retired as struck, non-embedded links
-beneath their Pomodoros. Live non-transcluded links beneath completed Pomodoros carry
-the machine-owned Pomodoro marker (`🍅`); embedded and provenance-unknown
-retired links do not. Links beneath open Pomodoros are unmarked, and a link to
-an unambiguously canceled Tasks task removes its complete Markdown list-item
-subtree from an open Pomodoro without changing the canceled task itself. It
-also follows transcluded
-dependency bullets recursively, promoting each target to the strongest
-applicable Next (`[*]`) or In Progress (`[/]`) status. It independently
-reconciles the derived Blocked (`[?]`) marker from Tasks `[id:: ...]` /
-`[dependsOn:: ...]` metadata and valid task-level
-`[scheduled:: YYYY-MM-DD]` dates in the future.
+Progress, and Blocked markers consistent with today's ledger.
+
+In practice it:
+
+- Promotes tasks linked under today's open Pomodoros to Next (`[*]`), leaving
+  In Progress (`[/]`) alone
+- Follows transcluded dependency bullets (`![[note#^id]]` as the entire child)
+  and promotes those too
+- Marks a task Blocked (`[?]`) when it has an open Dataview dependency or a
+  future `[scheduled:: YYYY-MM-DD]` date
+- Cleans the ledger: de-duplicates links across open Pomodoros, retires
+  completed references, removes canceled-task bullets, and repairs `🍅` markers
+
+The latest existing earlier daily note is a read-only recent-activity source:
+it can keep an area/project In Progress task active and can supply the rank an
+otherwise-unblocked Blocked task recovers to, but it never promotes a Ready
+task and is never written. Completed-task references are retired as struck,
+non-embedded links. Live non-transcluded links beneath completed Pomodoros
+carry the machine-owned `🍅` marker; embedded and provenance-unknown retired
+links do not. Links beneath open Pomodoros are unmarked. A link to an
+unambiguously canceled Tasks task removes its complete Markdown list-item
+subtree from an open Pomodoro without changing the canceled task itself.
 
 ## Contents
 

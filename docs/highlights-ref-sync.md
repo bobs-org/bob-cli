@@ -3,6 +3,11 @@
 `bob highlights` creates Highlights-ready PDFs from Markdown and turns
 Highlights app PDF annotations into Obsidian reference notes in the Bob vault.
 
+Typical order on a new PDF: `create` writes into `xlib/`, `scan --dry-run`
+previews the intake move and note plan, then `scan` (without `--write-pdfs`)
+moves the PDF into `lib/` and writes the reference note. Marker write-back to
+the PDF is a separate opt-in (`sync --write-pdf` or `scan --write-pdfs`).
+
 Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 `~/projects/bob-cli`; do not install from ad hoc scripts outside that checkout.
 
@@ -758,10 +763,10 @@ Run these steps on the MacBook. The intended checkout is
 intake, `~/bob/lib` for archived PDFs, and `~/bob/ref` for generated reference
 notes.
 
-This Linux host currently has `~/bob/lit`, but the defaults are still
-`~/bob/xlib`, `~/bob/lib`, and `~/bob/ref`. Do not infer `lit` as the
-production default. If a one-off test must use `lit`, pass `--lib-dir lit`
-explicitly.
+Some vaults also have a `lit/` folder from an older layout. That is not the
+production library path. The defaults remain `~/bob/xlib` (intake), `~/bob/lib`
+(archived PDFs), and `~/bob/ref` (generated notes). For a one-off test against
+`lit`, pass `--lib-dir lit` explicitly.
 
 Install prerequisites if needed:
 

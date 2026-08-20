@@ -2,13 +2,13 @@
 
 `bob plugins` manages Bryan's custom Bob Obsidian plugins from the
 [`bobs-org/bob-plugins`](https://github.com/bobs-org/bob-plugins) repo, which
-is the source of truth for the custom plain-JavaScript community plugins. Run
-`bob plugins` (or `bob plugins list`) to see repo versions versus the vault,
-and `bob plugins sync --dry-run` before deploying. The repo holds one folder
-per plugin under `plugins/<id>/`, each with a `manifest.json`, a `main.js`,
-and an optional `styles.css`. Do not edit installed copies under
-`~/bob/.obsidian/plugins/` as the source of truth — those files are overwritten
-on the next sync.
+is the source of truth for the custom plain-JavaScript community plugins.
+Typical order: `bob plugins` (or `bob plugins list`) to see repo versions
+versus the vault, `bob plugins sync --dry-run` to preview, then
+`bob plugins sync` to deploy. The repo holds one folder per plugin under
+`plugins/<id>/`, each with a `manifest.json`, a `main.js`, and an optional
+`styles.css`. Do not edit installed copies under `~/bob/.obsidian/plugins/` as
+the source of truth — those files are overwritten on the next sync.
 
 ## Contents
 
