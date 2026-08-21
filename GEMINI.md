@@ -177,7 +177,12 @@ memory files directly.
 
 Read anytime new CLI subcommands or options are added.
 
-### 2.2 `sase/memory/sase_beads.md`
+### 2.2 `sase/memory/sase_artifacts.md`
+
+Read before creating, consuming, resolving, linking, or managing retention for SASE
+artifact references and indexed files.
+
+### 2.3 `sase/memory/sase_beads.md`
 
 Read before creating, updating, closing, or querying sase beads — bead types and tiers,
 the status lifecycle agents must never hand-edit, task-bead triage, phase-bead
