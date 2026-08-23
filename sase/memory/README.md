@@ -73,8 +73,8 @@ always-loaded notes from detailed reference notes that agents read only when rel
 - Type: `short`
 - Description: No description set.
 - Parent: `AGENTS.md`
-- Lines: 62
-- Approx. tokens: 815
+- Lines: 63
+- Approx. tokens: 863
 
 ### `sase/memory/task_types.md`
 
@@ -126,8 +126,8 @@ always-loaded notes from detailed reference notes that agents read only when rel
 - Total notes: 8
 - Short notes: 4
 - Long notes: 4
-- Total lines: 473
-- Total approx. tokens: 5397
+- Total lines: 474
+- Total approx. tokens: 5445
 
 ## Commands
 
