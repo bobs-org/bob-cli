@@ -55,6 +55,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::CaptureParse,
     },
     Subcommand {
+        name: "capture-rewrite",
+        script_command: None,
+        about: "Apply the capture grammar's automatic draft rewrites",
+        native_command: NativeCommand::CaptureRewrite,
+    },
+    Subcommand {
         name: "capture-sections",
         script_command: None,
         about: "List the non-Tasks sections of a capture note",

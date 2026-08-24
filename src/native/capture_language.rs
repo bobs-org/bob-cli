@@ -1944,6 +1944,27 @@ pub(crate) struct EditorItemParse {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
     pub(crate) has_local_destination: bool,
+    /// Every *complete* (non-incomplete) local destination marker this item
+    /// owns, in source order, across every one of its lines. `rewrite_draft`
+    /// uses the length of this list to tell "no local marker" from "one" from
+    /// "more than one" (Rule A6), and the sole entry's span to build the
+    /// absorb-local-marker edit (Rule A1).
+    pub(crate) local_destination_markers: Vec<LocalDestinationMarker>,
+}
+
+/// One complete local destination marker token an item owns, with the span
+/// the marker text (`@route`, `@route+block-id`, `@route#Section`,
+/// `@route^block-id`, `@route:block-id`, or a trailing bare `#`) occupies in
+/// the original draft.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LocalDestinationMarker {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) text: String,
+    pub(crate) mode: EditorMode,
+    pub(crate) route: Option<String>,
+    pub(crate) block_id: Option<String>,
+    pub(crate) section: Option<String>,
 }
 
 /// One `@...` token resolved for the editor. `requires_body` marks the plain
@@ -2326,6 +2347,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
     let mut seen = SeenMarkers::default();
     let mut declarations = Vec::new();
     let mut local_destination_marker = None;
+    let mut local_destination_markers = Vec::new();
 
     let parent_item_line = item.lines.first().expect("nonempty item");
     let parent_line = parent_item_line.raw;
@@ -2343,6 +2365,12 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
     let mut has_local_destination = parent_parse.has_destination_marker;
     if local_destination_marker.is_none() {
         local_destination_marker = parent_parse.marker_text.clone();
+    }
+    if let Some(marker) = complete_local_destination_marker(
+        parent_parse.marker_text.as_deref(),
+        parent_parse.marker.as_ref(),
+    ) {
+        local_destination_markers.push(marker);
     }
     let (mut mode, mut route, mut section, mut block_id, mut needs) =
         match &parent_parse.marker {
@@ -2412,6 +2440,12 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
             if local_destination_marker.is_none() {
                 local_destination_marker = child_parse.marker_text.clone();
             }
+        }
+        if let Some(marker) = complete_local_destination_marker(
+            child_parse.marker_text.as_deref(),
+            child_parse.marker.as_ref(),
+        ) {
+            local_destination_markers.push(marker);
         }
         if let Some(marker) = &child_parse.marker {
             spans.extend(marker.spans.clone());
@@ -2491,9 +2525,37 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
             diagnostics,
             sub_bullets,
             has_local_destination,
+            local_destination_markers,
         },
         declarations,
     }
+}
+
+/// Build a [`LocalDestinationMarker`] from one line's resolved marker, when
+/// that marker is a real, fully-typed destination. An incomplete marker
+/// (still being typed, e.g. a bare `@`) is not one of the six local
+/// destination marker forms `rewrite_draft` reasons about, so it is filtered
+/// out here rather than at every call site.
+fn complete_local_destination_marker(
+    marker_text: Option<&str>,
+    marker: Option<&MarkerParse>,
+) -> Option<LocalDestinationMarker> {
+    let marker = marker?;
+    if marker.mode == EditorMode::Incomplete {
+        return None;
+    }
+    let text = marker_text?;
+    let first = marker.spans.first()?;
+    let last = marker.spans.last()?;
+    Some(LocalDestinationMarker {
+        start: first.start,
+        end: last.end,
+        text: text.to_string(),
+        mode: marker.mode,
+        route: marker.route.clone(),
+        block_id: marker.block_id.clone(),
+        section: marker.section.clone(),
+    })
 }
 
 pub(crate) fn editor_item_at(
@@ -3537,6 +3599,498 @@ fn completion_field_from_parts(
         query: third.part[..split].to_string(),
         replacement: (third_start, third_end),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Rule A1-A6: `bob capture-rewrite`'s bare `@@` absorption
+// ---------------------------------------------------------------------------
+
+/// The result of applying the capture grammar's automatic draft rewrites to
+/// `raw_text`. See [`rewrite_draft`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DraftRewrite {
+    /// `None` when nothing changed.
+    pub(crate) rule: Option<RewriteRule>,
+    /// Sorted, non-overlapping edits into the original `raw_text`.
+    pub(crate) edits: Vec<TextEdit>,
+    /// `raw_text` with every edit applied; equals `raw_text` when `rule` is
+    /// `None`.
+    pub(crate) text: String,
+    /// `Some` exactly when a cursor was supplied, mapped through the edits.
+    pub(crate) cursor: Option<usize>,
+    /// A short human sentence describing what changed; `None` when `rule` is
+    /// `None`.
+    pub(crate) summary: Option<String>,
+    /// Rule A5 (and future) explanations for why no rewrite happened.
+    pub(crate) notices: Vec<String>,
+}
+
+/// One `[start, end)` replacement into the original `raw_text`. Applying
+/// every edit left-to-right yields [`DraftRewrite::text`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TextEdit {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) replacement: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RewriteRule {
+    AbsorbLocalMarker,
+    AbsorbDeclaration,
+}
+
+impl RewriteRule {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::AbsorbLocalMarker => "absorb_local_marker",
+            Self::AbsorbDeclaration => "absorb_declaration",
+        }
+    }
+}
+
+/// Apply Rule A1's absorption to the bare `@@` at (or before, when no cursor
+/// is given, the last one in source order at) `cursor`: claim the item's own
+/// absorbable local destination marker, or else the draft's one other
+/// declaration token, rewriting the bare token to `@@<payload>` and deleting
+/// the token(s) it absorbed. Never fails; an input with no eligible bare
+/// `@@` -- or whose local marker cannot be expressed as a declaration
+/// (Rule A5), or whose item already has more than one local marker
+/// (Rule A6) -- returns `rule: None` with `text` unchanged.
+pub(crate) fn rewrite_draft(
+    raw_text: &str,
+    cursor: Option<usize>,
+) -> DraftRewrite {
+    let draft = split_capture_draft(raw_text);
+    let item_outcomes: Vec<EditorItemOutcome<'_>> =
+        draft.items.iter().map(parse_editor_item).collect();
+
+    let mut occurrences: Vec<DeclarationOccurrence<'_>> = draft
+        .declarations
+        .iter()
+        .map(|declaration| DeclarationOccurrence {
+            token: declaration.token,
+            owner_item: None,
+        })
+        .collect();
+    for (item_index, outcome) in item_outcomes.iter().enumerate() {
+        for declaration in &outcome.declarations {
+            occurrences.push(DeclarationOccurrence {
+                token: declaration.token,
+                owner_item: Some(item_index),
+            });
+        }
+    }
+    occurrences.sort_by_key(|occurrence| occurrence.token.start);
+
+    let Some(selected_index) = select_bare_declaration(&occurrences, cursor)
+    else {
+        return unchanged_rewrite(raw_text, cursor, Vec::new());
+    };
+
+    if let Some(item_index) = occurrences[selected_index].owner_item {
+        match item_outcomes[item_index]
+            .item
+            .local_destination_markers
+            .as_slice()
+        {
+            [] => {}
+            [marker] => {
+                return match classify_local_marker(marker) {
+                    LocalMarkerAbsorbability::Absorbable(payload) => {
+                        finish_absorption(
+                            raw_text,
+                            cursor,
+                            &draft,
+                            &occurrences,
+                            selected_index,
+                            RewriteRule::AbsorbLocalMarker,
+                            &payload,
+                            Some((marker.start, marker.end)),
+                            absorb_local_marker_summary(&marker.text, &payload),
+                        )
+                    }
+                    LocalMarkerAbsorbability::NonAbsorbable => {
+                        unchanged_rewrite(
+                            raw_text,
+                            cursor,
+                            vec![non_absorbable_marker_notice(marker)],
+                        )
+                    }
+                };
+            }
+            // Rule A6: two or more local markers already put the draft in a
+            // duplicate-marker error state that `capture-parse` reports.
+            _ => return unchanged_rewrite(raw_text, cursor, Vec::new()),
+        }
+    }
+
+    // Source 2: the draft's one other declaration token, when it carries a
+    // payload of its own.
+    let others: Vec<usize> = (0..occurrences.len())
+        .filter(|&index| index != selected_index)
+        .collect();
+    if let [other_index] = others[..] {
+        let other_token = occurrences[other_index].token;
+        if other_token.text != "@@" {
+            let payload = other_token.text["@@".len()..].to_string();
+            return finish_absorption(
+                raw_text,
+                cursor,
+                &draft,
+                &occurrences,
+                selected_index,
+                RewriteRule::AbsorbDeclaration,
+                &payload,
+                None,
+                absorb_declaration_summary(&payload),
+            );
+        }
+    }
+
+    unchanged_rewrite(raw_text, cursor, Vec::new())
+}
+
+fn unchanged_rewrite(
+    raw_text: &str,
+    cursor: Option<usize>,
+    notices: Vec<String>,
+) -> DraftRewrite {
+    DraftRewrite {
+        rule: None,
+        edits: Vec::new(),
+        text: raw_text.to_string(),
+        cursor,
+        summary: None,
+        notices,
+    }
+}
+
+/// One `@@...` declaration token found anywhere in the draft, tagged with
+/// the item it sits inside when it is not on a declaration-only line.
+struct DeclarationOccurrence<'a> {
+    token: Token<'a>,
+    owner_item: Option<usize>,
+}
+
+/// Select the bare `@@` Rule A1 absorbs into: the one containing or ending
+/// at `cursor` when a cursor is given, otherwise the last one in source
+/// order. Returns an index into `occurrences`.
+fn select_bare_declaration(
+    occurrences: &[DeclarationOccurrence<'_>],
+    cursor: Option<usize>,
+) -> Option<usize> {
+    let bare_indices = occurrences
+        .iter()
+        .enumerate()
+        .filter(|(_, occurrence)| occurrence.token.text == "@@")
+        .map(|(index, _)| index);
+
+    match cursor {
+        Some(position) => bare_indices.into_iter().find(|&index| {
+            let token = occurrences[index].token;
+            position >= token.start && position <= token.end
+        }),
+        None => bare_indices.into_iter().next_back(),
+    }
+}
+
+enum LocalMarkerAbsorbability {
+    Absorbable(String),
+    NonAbsorbable,
+}
+
+/// Classify Rule A1's ordered payload source 1: `mode`/`block_id`/`section`
+/// close over the six local destination marker forms the Vocabulary section
+/// defines, so this match is exhaustive over real (non-incomplete) markers.
+fn classify_local_marker(
+    marker: &LocalDestinationMarker,
+) -> LocalMarkerAbsorbability {
+    match marker.mode {
+        EditorMode::Task if marker.block_id.is_none() => {
+            LocalMarkerAbsorbability::Absorbable(
+                marker.route.clone().unwrap_or_default(),
+            )
+        }
+        EditorMode::SubBullet if marker.section.is_none() => {
+            let mut payload = marker.route.clone().unwrap_or_default();
+            if let Some(block_id) = &marker.block_id {
+                payload.push('+');
+                payload.push_str(block_id);
+            }
+            LocalMarkerAbsorbability::Absorbable(payload)
+        }
+        EditorMode::Task
+        | EditorMode::SubBullet
+        | EditorMode::Bullet
+        | EditorMode::PomodoroTask
+        | EditorMode::PomodoroNote => LocalMarkerAbsorbability::NonAbsorbable,
+        EditorMode::Incomplete => {
+            unreachable!("complete_local_destination_marker filters these out")
+        }
+    }
+}
+
+/// Rule A5: explain why `@@` cannot take this item's single local marker.
+fn non_absorbable_marker_notice(marker: &LocalDestinationMarker) -> String {
+    let route = marker.route.as_deref().unwrap_or("route");
+    match marker.mode {
+        EditorMode::Bullet | EditorMode::SubBullet => format!(
+            "@@ cannot take a section: leave {} on this item, or delete it and declare @@{route}",
+            marker.text
+        ),
+        EditorMode::Task => format!(
+            "@@ cannot take a block ID: leave {} on this item, or delete it and declare @@{route}",
+            marker.text
+        ),
+        EditorMode::PomodoroTask => format!(
+            "@@ cannot take a Pomodoro link: leave {} on this item, or delete it and declare @@{route}",
+            marker.text
+        ),
+        EditorMode::PomodoroNote => format!(
+            "@@ cannot take a Pomodoro note: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::Incomplete => {
+            unreachable!("complete_local_destination_marker filters these out")
+        }
+    }
+}
+
+fn absorb_local_marker_summary(marker_text: &str, payload: &str) -> String {
+    format!("Moved {marker_text} into @@{payload}")
+}
+
+fn absorb_declaration_summary(payload: &str) -> String {
+    format!("Moved the @@{payload} declaration here")
+}
+
+/// Build every edit Rule A1's absorption needs: the bare `@@` becomes
+/// `@@<payload>`, every other declaration token in the draft is deleted, and
+/// -- for `AbsorbLocalMarker` only -- `extra_deletion` (the local marker's
+/// own span, which is not itself a declaration token) is deleted too.
+#[allow(clippy::too_many_arguments)]
+fn finish_absorption(
+    raw_text: &str,
+    cursor: Option<usize>,
+    draft: &CaptureDraft<'_>,
+    occurrences: &[DeclarationOccurrence<'_>],
+    selected_index: usize,
+    rule: RewriteRule,
+    payload: &str,
+    extra_deletion: Option<(usize, usize)>,
+    summary: String,
+) -> DraftRewrite {
+    let selected_token = occurrences[selected_index].token;
+    let replacement = format!("@@{payload}");
+
+    let mut edits = vec![TextEdit {
+        start: selected_token.start,
+        end: selected_token.end,
+        replacement: replacement.clone(),
+    }];
+
+    for (index, occurrence) in occurrences.iter().enumerate() {
+        if index == selected_index {
+            continue;
+        }
+        edits.extend(deletion_edits_for_token(
+            raw_text,
+            draft,
+            (occurrence.token.start, occurrence.token.end),
+        ));
+    }
+    if let Some(span) = extra_deletion {
+        edits.extend(deletion_edits_for_token(raw_text, draft, span));
+    }
+
+    edits.sort_by_key(|edit| edit.start);
+    debug_assert!(
+        edits.windows(2).all(|pair| pair[0].end <= pair[1].start),
+        "rewrite_draft edits must not overlap: {edits:?}"
+    );
+
+    let text = apply_text_edits(raw_text, &edits);
+    let cursor = cursor.map(|_| {
+        mapped_cursor_after(&edits, selected_token.start, replacement.len())
+    });
+
+    DraftRewrite {
+        rule: Some(rule),
+        edits,
+        text,
+        cursor,
+        summary: Some(summary),
+        notices: Vec::new(),
+    }
+}
+
+fn apply_text_edits(raw_text: &str, edits: &[TextEdit]) -> String {
+    let mut result = String::with_capacity(raw_text.len());
+    let mut cursor = 0usize;
+    for edit in edits {
+        result.push_str(&raw_text[cursor..edit.start]);
+        result.push_str(&edit.replacement);
+        cursor = edit.end;
+    }
+    result.push_str(&raw_text[cursor..]);
+    result
+}
+
+/// Map `replace_start` (the position of the replaced bare `@@` in the
+/// original text) through every edit that lands before it, then add
+/// `replacement_len` so the result sits just past the rewritten
+/// `@@<payload>` token, per Rule A1's cursor contract.
+fn mapped_cursor_after(
+    edits: &[TextEdit],
+    replace_start: usize,
+    replacement_len: usize,
+) -> usize {
+    let mut delta: i64 = 0;
+    for edit in edits {
+        if edit.end <= replace_start {
+            delta +=
+                edit.replacement.len() as i64 - (edit.end - edit.start) as i64;
+        }
+    }
+    (replace_start as i64 + delta) as usize + replacement_len
+}
+
+/// One physical line's byte bounds, plus the `[content_start, content_end)`
+/// sub-range `deletion_edits_for_token` tokenizes: the whole line for a
+/// parent or declaration-only line, or the authored body after its bullet
+/// marker for a child line.
+struct DeletionLineContext<'a> {
+    physical: RawLine<'a>,
+    content_start: usize,
+    content_end: usize,
+}
+
+fn deletion_line_context<'a>(
+    raw_text: &'a str,
+    draft: &CaptureDraft<'a>,
+    target: (usize, usize),
+) -> DeletionLineContext<'a> {
+    let physical = *split_physical_lines(raw_text)
+        .iter()
+        .find(|line| line.start <= target.0 && target.1 <= line.end)
+        .expect("deleted token must sit on some physical line");
+
+    let is_declaration_only_line =
+        draft.declarations.iter().any(|declaration| {
+            (declaration.token.start, declaration.token.end) == target
+        });
+    if is_declaration_only_line {
+        return DeletionLineContext {
+            physical,
+            content_start: physical.start,
+            content_end: physical.end,
+        };
+    }
+
+    for item in &draft.items {
+        let Some((position, item_line)) =
+            item.lines.iter().enumerate().find(|(_, line)| {
+                line.raw.start <= target.0 && target.1 <= line.raw.end
+            })
+        else {
+            continue;
+        };
+        if position == 0 {
+            return DeletionLineContext {
+                physical,
+                content_start: physical.start,
+                content_end: physical.end,
+            };
+        }
+        return match classify_authored_line(item_line.raw) {
+            AuthoredLineClass::Item(authored) => DeletionLineContext {
+                physical,
+                content_start: authored.body_start,
+                content_end: item_line.raw.end,
+            },
+            _ => DeletionLineContext {
+                physical,
+                content_start: physical.start,
+                content_end: physical.end,
+            },
+        };
+    }
+
+    DeletionLineContext {
+        physical,
+        content_start: physical.start,
+        content_end: physical.end,
+    }
+}
+
+/// Delete one token per the whitespace rule: the whole physical line
+/// (terminator included) when it is the only token in its content region,
+/// otherwise the token plus whichever adjacent whitespace run keeps no
+/// double space behind -- the preceding run when the token ends its content
+/// region, otherwise the following run.
+fn deletion_edits_for_token(
+    raw_text: &str,
+    draft: &CaptureDraft<'_>,
+    target: (usize, usize),
+) -> Vec<TextEdit> {
+    let context = deletion_line_context(raw_text, draft, target);
+    let region_text = &raw_text[context.content_start..context.content_end];
+    let tokens: Vec<Token<'_>> = tokenize_with_spans(region_text)
+        .into_iter()
+        .map(|token| Token {
+            text: token.text,
+            start: token.start + context.content_start,
+            end: token.end + context.content_start,
+        })
+        .collect();
+    let index = tokens
+        .iter()
+        .position(|token| (token.start, token.end) == target)
+        .expect("deleted token must appear in its own content region");
+
+    if tokens.len() == 1 {
+        let (start, end) = whole_line_deletion_span(raw_text, context.physical);
+        return vec![TextEdit {
+            start,
+            end,
+            replacement: String::new(),
+        }];
+    }
+
+    let (start, end) = if index == tokens.len() - 1 {
+        (tokens[index - 1].end, target.1)
+    } else {
+        (target.0, tokens[index + 1].start)
+    };
+    vec![TextEdit {
+        start,
+        end,
+        replacement: String::new(),
+    }]
+}
+
+/// The span of `line` plus its own trailing line terminator (zero-length
+/// when `line` is the draft's last physical line). Always claiming the
+/// *trailing* terminator, never the preceding one, keeps adjacent whole-line
+/// deletions from fighting over the same terminator bytes.
+fn whole_line_deletion_span(
+    raw_text: &str,
+    line: RawLine<'_>,
+) -> (usize, usize) {
+    let bytes = raw_text.as_bytes();
+    let terminator_len = match bytes.get(line.end) {
+        Some(b'\r') => {
+            if bytes.get(line.end + 1) == Some(&b'\n') {
+                2
+            } else {
+                1
+            }
+        }
+        Some(b'\n') => 1,
+        _ => 0,
+    };
+    (line.start, line.end + terminator_len)
 }
 
 #[cfg(test)]
@@ -6344,5 +6898,163 @@ were removed"
         let item = editor_item_at(raw, raw.len()).expect("item");
         assert_eq!(item.route.as_deref(), Some("sase"));
         assert!(!item.has_local_destination);
+    }
+
+    // -----------------------------------------------------------------------
+    // `rewrite_draft` (Rules A1-A6)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rewrite_draft_absorbs_a_trailing_local_marker() {
+        let raw = "Buy milk @dev @@";
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbLocalMarker));
+        assert_eq!(rewrite.text, "Buy milk @@dev");
+        assert_eq!(rewrite.cursor, Some(14));
+        assert_eq!(rewrite.summary.as_deref(), Some("Moved @dev into @@dev"));
+        assert_eq!(
+            rewrite.edits,
+            vec![
+                TextEdit {
+                    start: 9,
+                    end: 14,
+                    replacement: String::new(),
+                },
+                TextEdit {
+                    start: 14,
+                    end: 16,
+                    replacement: "@@dev".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn rewrite_draft_absorbs_a_leading_local_marker() {
+        let raw = "@dev Buy milk @@";
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbLocalMarker));
+        assert_eq!(rewrite.text, "Buy milk @@dev");
+    }
+
+    #[test]
+    fn rewrite_draft_absorbs_a_parent_lines_marker_from_a_child_lines_bare_at_at(
+    ) {
+        let raw = "Buy milk @dev\n- more detail @@";
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbLocalMarker));
+        assert_eq!(rewrite.text, "Buy milk\n- more detail @@dev");
+    }
+
+    #[test]
+    fn rewrite_draft_absorbs_a_sub_bullet_local_marker() {
+        let raw = "Buy stock @cash+goog-exit @@";
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbLocalMarker));
+        assert_eq!(rewrite.text, "Buy stock @@cash+goog-exit");
+    }
+
+    #[test]
+    fn rewrite_draft_absorbs_a_declaration_only_line_into_a_later_items_bare_at_at(
+    ) {
+        let raw = "@@foo\nBuy milk @@";
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbDeclaration));
+        assert_eq!(rewrite.text, "Buy milk @@foo");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Moved the @@foo declaration here")
+        );
+    }
+
+    #[test]
+    fn rewrite_draft_reports_rule_a5_notices_for_non_absorbable_markers() {
+        for (raw, needle) in [
+            ("note @notes#Ideas @@", "cannot take a section"),
+            ("note @dev^id @@", "cannot take a block ID"),
+            ("note @dev:id @@", "cannot take a Pomodoro link"),
+            ("note this # @@", "cannot take a Pomodoro note"),
+        ] {
+            let rewrite = rewrite_draft(raw, None);
+            assert_eq!(rewrite.rule, None, "{raw}");
+            assert_eq!(rewrite.text, raw, "{raw}");
+            assert_eq!(rewrite.notices.len(), 1, "{raw}");
+            assert!(
+                rewrite.notices[0].contains(needle),
+                "{raw}: {}",
+                rewrite.notices[0]
+            );
+        }
+    }
+
+    #[test]
+    fn rewrite_draft_declines_when_the_item_has_two_local_markers() {
+        let raw = "Buy milk @dev @@\n- child @notes#Ideas";
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, None);
+        assert_eq!(rewrite.text, raw);
+        assert!(rewrite.notices.is_empty());
+    }
+
+    #[test]
+    fn rewrite_draft_is_a_no_op_without_a_bare_at_at() {
+        let raw = "Buy milk @dev";
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, None);
+        assert_eq!(rewrite.text, raw);
+        assert_eq!(rewrite.cursor, None);
+        assert!(rewrite.edits.is_empty());
+    }
+
+    #[test]
+    fn rewrite_draft_selects_the_bare_at_at_under_the_cursor_else_the_last() {
+        let raw = "Buy milk @dev @@ @@";
+        let claimed_start = |rewrite: &DraftRewrite| {
+            rewrite
+                .edits
+                .iter()
+                .find(|edit| edit.replacement == "@@dev")
+                .map(|edit| edit.start)
+                .expect("replace edit")
+        };
+
+        assert_eq!(claimed_start(&rewrite_draft(raw, Some(15))), 14);
+        assert_eq!(claimed_start(&rewrite_draft(raw, Some(18))), 17);
+        assert_eq!(claimed_start(&rewrite_draft(raw, None)), 17);
+    }
+
+    #[test]
+    fn rewrite_draft_is_idempotent() {
+        let raw = "Buy milk @dev @@";
+        let first = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(first.rule, Some(RewriteRule::AbsorbLocalMarker));
+
+        let second = rewrite_draft(&first.text, first.cursor);
+        assert_eq!(second.rule, None);
+        assert_eq!(second.text, first.text);
+    }
+
+    #[test]
+    fn rewrite_draft_avoids_double_spaces_and_the_result_parses_cleanly() {
+        let raw = "@dev note @@ more text";
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbLocalMarker));
+        assert_eq!(rewrite.text, "note @@dev more text");
+        assert!(!rewrite.text.contains("  "), "{}", rewrite.text);
+
+        let parsed = parse_for_editor(&rewrite.text);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    }
+
+    #[test]
+    fn rewrite_draft_keeps_offsets_on_char_boundaries_with_multibyte_input() {
+        let raw = "caf\u{e9} \u{1f680} @dev @@";
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbLocalMarker));
+        for edit in &rewrite.edits {
+            assert!(raw.is_char_boundary(edit.start));
+            assert!(raw.is_char_boundary(edit.end));
+        }
+        assert_eq!(rewrite.text, "caf\u{e9} \u{1f680} @@dev");
     }
 }

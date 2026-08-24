@@ -467,6 +467,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture", "--help"], "bob capture"),
         (&["capture-complete", "--help"], "bob capture-complete"),
         (&["capture-parse", "--help"], "bob capture-parse"),
+        (&["capture-rewrite", "--help"], "bob capture-rewrite"),
         (&["capture-sections", "--help"], "bob capture-sections"),
         (&["capture-targets", "--help"], "bob capture-targets"),
         (&["capture-task-id", "--help"], "bob capture-task-id"),
@@ -518,6 +519,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             "bob capture-complete --help",
         ),
         (&["capture-parse", "--help"], "bob capture-parse --help"),
+        (&["capture-rewrite", "--help"], "bob capture-rewrite --help"),
         (
             &["capture-sections", "--help"],
             "bob capture-sections --help",
@@ -3295,6 +3297,236 @@ fn capture_parse_never_touches_the_vault_or_clipboard() {
         !captured.status.success(),
         "expected bob capture to fail without clipboard access:\n{}",
         format_output(&captured)
+    );
+}
+
+#[test]
+fn capture_rewrite_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-rewrite --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("purely lexical and completely read-only")
+            && help.contains("absorb")
+            && help.contains("no-op"),
+        "expected capture-rewrite long help:\n{help}"
+    );
+    assert_text_order(&help, &["-c, --cursor", "-f, --format", "-h, --help"]);
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_rewrite_human_output_is_plain_and_concise() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("16")
+        .arg("--")
+        .arg("Buy milk @dev @@")
+        .output()
+        .expect("run bob capture-rewrite human");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected capture-rewrite stderr:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert_text_order(
+        &out,
+        &[
+            "absorb_local_marker",
+            "before",
+            "after",
+            "Moved @dev into @@dev",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_rewrite_json_absorbs_a_local_marker() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("16")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Buy milk @dev @@")
+        .output()
+        .expect("run bob capture-rewrite json");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected capture-rewrite stderr:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], "Buy milk @dev @@");
+    assert_eq!(json["text"], "Buy milk @@dev");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 14);
+    assert_eq!(json["rule"], "absorb_local_marker");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 9, "end": 14 }, "replacement": "" },
+            { "range": { "start": 14, "end": 16 }, "replacement": "@@dev" },
+        ])
+    );
+    assert_eq!(json["summary"], "Moved @dev into @@dev");
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_rewrite_json_reports_a_rule_a5_notice_without_changing_text() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("note @notes#Ideas @@")
+        .output()
+        .expect("run bob capture-rewrite notice");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["changed"], false);
+    assert_eq!(json["text"], "note @notes#Ideas @@");
+    assert!(json.get("rule").is_none(), "{json}");
+    assert_eq!(json["notices"].as_array().expect("notices").len(), 1);
+    assert!(json["notices"][0]
+        .as_str()
+        .expect("notice")
+        .contains("cannot take a section"));
+}
+
+#[test]
+fn capture_rewrite_json_reports_no_rewrite_without_a_bare_at_at() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Buy milk @dev")
+        .output()
+        .expect("run bob capture-rewrite no-op");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["changed"], false);
+    assert_eq!(json["text"], "Buy milk @dev");
+    assert!(json.get("cursor").is_none(), "{json}");
+    assert_eq!(json["edits"], serde_json::json!([]));
+}
+
+#[test]
+fn capture_rewrite_reads_stdin_when_text_is_omitted() {
+    let output = run_with_stdin(
+        bob_command().arg("capture-rewrite").arg("-f").arg("json"),
+        "Buy milk @dev @@",
+    );
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["text"], "Buy milk @@dev");
+}
+
+#[test]
+fn capture_rewrite_missing_text_is_a_usage_error() {
+    let human = run_with_stdin(bob_command().arg("capture-rewrite"), "   \n");
+    assert_eq!(human.status.code(), Some(2));
+    assert!(
+        stdout(&human).is_empty()
+            && stderr(&human).contains("task text is required"),
+        "unexpected capture-rewrite missing-text output:\n{}",
+        format_output(&human)
+    );
+
+    let json_output = run_with_stdin(
+        bob_command().arg("capture-rewrite").arg("-f").arg("json"),
+        "   \n",
+    );
+    assert_eq!(json_output.status.code(), Some(2));
+    assert!(
+        stderr(&json_output).is_empty(),
+        "JSON failures keep stderr clean:\n{}",
+        format_output(&json_output)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&json_output).trim())
+            .expect("capture-rewrite failure JSON");
+    assert_eq!(json["ok"], false);
+    assert!(
+        json["error"]
+            .as_str()
+            .expect("error string")
+            .contains("task text is required"),
+        "unexpected capture-rewrite failure JSON: {json}"
+    );
+}
+
+#[test]
+fn capture_rewrite_rejects_a_cursor_off_a_char_boundary() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("2")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("\u{1f680} @dev @@")
+        .output()
+        .expect("run bob capture-rewrite bad cursor");
+
+    assert_eq!(output.status.code(), Some(2));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite failure JSON");
+    assert_eq!(json["ok"], false);
+    assert!(
+        json["error"]
+            .as_str()
+            .expect("error string")
+            .contains("UTF-8 byte boundary"),
+        "unexpected capture-rewrite failure JSON: {json}"
+    );
+}
+
+#[test]
+fn capture_rewrite_never_touches_the_vault_or_clipboard() {
+    let temp = TempDir::new("bob-cli-capture-rewrite-no-io");
+    let missing = temp.path().join("missing-vault");
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Buy milk @dev @@")
+        .env("BOB_DIR", &missing)
+        .output()
+        .expect("run bob capture-rewrite without a vault");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert!(
+        !missing.exists(),
+        "capture-rewrite must not create the vault directory"
     );
 }
 

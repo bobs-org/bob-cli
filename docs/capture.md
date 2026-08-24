@@ -28,6 +28,7 @@ workflow guide.
   - [Input, stdin, and JSON output](#input-stdin-and-json-output)
   - [Interactive editor markers](#interactive-editor-markers)
 - [`bob capture-parse`](#bob-capture-parse)
+- [`bob capture-rewrite`](#bob-capture-rewrite)
 - [`bob capture-complete`](#bob-capture-complete)
 - [Discovery commands](#discovery-commands)
 - [`bob capture-task-id`](#bob-capture-task-id)
@@ -895,6 +896,104 @@ prints the same information without color escapes when piped, plus a
 `sub_bullet_depths` when it is nonempty. On a missing `TEXT`, JSON mode prints
 a single `{"ok": false, "error": "..."}` object on stdout and keeps stderr
 clean.
+
+## `bob capture-rewrite`
+
+```bash
+bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
+```
+
+Applies the capture grammar's automatic draft rewrites -- today, the bare
+`@@` absorption rule -- and reports the resulting edits, cursor, and a human
+summary. Like `bob capture-parse` it is purely lexical and completely
+read-only: it never opens the vault, never reads the clipboard, never
+touches the filesystem, and takes no `--bob-dir`. If `TEXT` is omitted and
+stdin is piped, it reads the complete piped stdin stream. Only a missing
+`TEXT` or a bad flag is an error (exit 2); every other input succeeds, with
+`changed: false` when nothing needed to change.
+
+Typing a bare `@@` inside an item that already carries a local destination
+marker moves that marker onto the `@@` and deletes it, so the item ends up
+declaring its own existing destination instead of shadowing it:
+
+```text
+Buy milk @dev @@
+```
+
+becomes `Buy milk @@dev`, with the cursor placed just past the rewritten
+token. The absorbed marker can be on any of the item's lines, not only the
+one the `@@` was typed on:
+
+```text
+Buy milk @dev
+- more detail @@
+```
+
+becomes `Buy milk\n- more detail @@dev`. When the item has no local marker
+of its own but the draft already carries exactly one other `@@` declaration,
+that declaration's payload moves onto the bare token instead:
+
+```text
+@@foo
+Buy milk @@
+```
+
+becomes `Buy milk @@foo`, and the now-empty declaration-only line is
+deleted, terminator included. Either way, every *other* `@@` declaration
+token still left in the draft is also deleted, so a rewritten draft never
+ends up with more than one declaration. Deleting a token also consumes one
+adjacent whitespace run so no double space is left behind, and deleting a
+line's only token deletes the whole physical line.
+
+**Which bare `@@` claims the rewrite:** the one containing or ending at
+`--cursor`, when a cursor is given; otherwise the last bare `@@` in source
+order. A rewrite is idempotent: running it again on its own output is a
+no-op, because the claiming token is no longer bare.
+
+An item's single local marker that cannot be expressed as a declaration --
+`@route#Section`, `@route^block-id`, `@route:block-id`, or a trailing bare
+`#` -- is left untouched; the result reports `changed: false` plus a
+`notices` entry naming the marker and why, e.g.
+`@@ cannot take a section: leave @notes#Ideas on this item, or delete it and declare @@notes`.
+An item with more than one local marker is also left untouched, with no
+notice, because `bob capture-parse` already reports that duplicate as a
+`duplicate_capture_marker` diagnostic.
+
+Absorption is an editor typing assist, not a grammar rule: `bob capture`
+still executes exactly the text it is given, so a bare `@@` there is still
+an incomplete declaration and still fails. Run `bob capture-rewrite` first
+and feed its `text` back through `bob capture` (or into the draft the user
+is editing) to apply the assist.
+
+JSON output is a single versioned object:
+
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "input": "Buy milk @dev @@",
+  "text": "Buy milk @@dev",
+  "changed": true,
+  "cursor": 14,
+  "rule": "absorb_local_marker",
+  "edits": [
+    { "range": { "start": 9, "end": 14 }, "replacement": "" },
+    { "range": { "start": 14, "end": 16 }, "replacement": "@@dev" }
+  ],
+  "summary": "Moved @dev into @@dev",
+  "notices": []
+}
+```
+
+`rule` is `absorb_local_marker` or `absorb_declaration`, omitted when nothing
+changed. `cursor` is present only when `--cursor` was supplied, mapped
+through every edit so it lands just past the rewritten `@@<payload>` token.
+`edits` index `input`, are sorted by `start`, never overlap, and applying
+them left-to-right yields `text`; `text` always equals `input` when
+`changed` is `false`. `summary` is omitted when nothing changed; `notices`
+is omitted when empty. Human output prints a header naming the rule, the
+before/after draft, the summary, and any notices; when nothing changed it
+prints a dim `no rewrite` line plus the notices.
 
 ## `bob capture-complete`
 

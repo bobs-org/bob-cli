@@ -136,6 +136,7 @@ Bob's workflow commands are:
 | [`capture`](#capture) | Capture a task or section bullet, optionally with clipboard content |
 | `capture-complete` | Complete capture marker or wikilink syntax at the cursor |
 | `capture-parse` | Preview what in-progress capture text and wikilinks mean |
+| `capture-rewrite` | Apply the capture grammar's automatic draft rewrites (bare `@@` absorption) |
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
 | `capture-targets` | List inbox, area, and non-terminal project capture routes |
 | `capture-task-id` | Assign a user-authored block ID to an open capture task |
@@ -206,7 +207,10 @@ printf '@@foo\nFirst task\n\nSecond task @bar\n' | bob capture
 ```
 
 Editor clients such as Bob Mac Capture call `bob capture --format json`,
-`bob capture-parse`, and `bob capture-complete`. Discovery helpers
+`bob capture-parse`, `bob capture-rewrite`, and `bob capture-complete`.
+`bob capture-rewrite` turns a bare `@@` typed inside an item that already has
+a `@route` (or `@route+id`) marker into `@@route` (or `@@route+id`),
+deleting the marker it absorbed. Discovery helpers
 (`capture-targets`, `capture-sections`, `capture-tasks`,
 `capture-task-sections`) feed those pickers. `capture-task-id` assigns a
 user-authored block ID to an open task that still lacks one.

@@ -15,6 +15,7 @@ mod capture_complete;
 mod capture_language;
 mod capture_links;
 mod capture_parse;
+mod capture_rewrite;
 mod capture_schedule_log;
 mod capture_sections;
 mod capture_targets;
@@ -44,6 +45,7 @@ pub(crate) enum NativeCommand {
     Capture,
     CaptureComplete,
     CaptureParse,
+    CaptureRewrite,
     CaptureSections,
     CaptureTargets,
     CaptureTaskId,
@@ -79,6 +81,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Capture => capture::run(args),
         NativeCommand::CaptureComplete => capture_complete::run(args),
         NativeCommand::CaptureParse => capture_parse::run(args),
+        NativeCommand::CaptureRewrite => capture_rewrite::run(args),
         NativeCommand::CaptureSections => capture_sections::run(args),
         NativeCommand::CaptureTargets => capture_targets::run(args),
         NativeCommand::CaptureTaskId => capture_task_id::run(args),
