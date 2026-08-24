@@ -50,7 +50,7 @@ repos:
       plans:
         auto_clone: true
         ref:
-          use: plan
+          use: builtin@plan
       beads:
         auto_clone: true
       agents:
