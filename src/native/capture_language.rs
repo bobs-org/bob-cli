@@ -304,15 +304,6 @@ pub(crate) fn split_physical_lines(raw: &str) -> Vec<RawLine<'_>> {
     lines
 }
 
-/// Split a draft into capture items. One or more blank/whitespace-only
-/// physical lines separate items; leading, trailing, and repeated separator
-/// runs are ignored. Item ranges and line numbers always refer back to the
-/// complete original draft.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn split_capture_items(raw: &str) -> Vec<CaptureItem<'_>> {
-    split_items_from_physical_lines(&split_physical_lines(raw), 0)
-}
-
 /// Split a draft into an optional `@@` header and the real capture items
 /// that follow it. The header is the first nonblank physical line whose
 /// first token starts with `@@`; it is never itself a capture item. Item
@@ -544,22 +535,6 @@ pub(crate) fn parse_capture_text_with_clip_control(
         inherit_global_destination(&mut parsed, global);
     }
     Ok(parsed)
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn parse_capture_items_with_clip_control(
-    raw_text: &str,
-    forced_route: Option<&str>,
-    forced_section: Option<&str>,
-    parse_clip_markers: bool,
-) -> Result<Vec<ParsedCaptureItem>, String> {
-    Ok(parse_capture_draft_with_clip_control(
-        raw_text,
-        forced_route,
-        forced_section,
-        parse_clip_markers,
-    )?
-    .items)
 }
 
 pub(crate) fn parse_capture_draft_with_clip_control(
@@ -5135,9 +5110,9 @@ mod tests {
     }
 
     #[test]
-    fn split_capture_items_reports_ranges_and_ignores_separator_runs() {
+    fn split_capture_draft_reports_ranges_and_ignores_separator_runs() {
         let raw = " \nfirst\n- child\n\n\nsecond @work\r\n\r\nthird";
-        let items = split_capture_items(raw);
+        let items = split_capture_draft(raw).items;
         let summaries = items
             .iter()
             .map(|item| {
@@ -5320,7 +5295,7 @@ mod tests {
 
     #[test]
     fn execution_batch_parser_prefixes_item_and_line_context() {
-        let error = parse_capture_items_with_clip_control(
+        let error = parse_capture_draft_with_clip_control(
             "parent\n\nsecond\n  - orphan",
             None,
             None,
