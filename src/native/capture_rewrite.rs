@@ -84,8 +84,9 @@ absorbed, and deletes every other declaration token in the draft, so the \
 result always carries at most one declaration. Only the bare '@@' at \
 --cursor (or, when --cursor is omitted, the last bare '@@' in source order) \
 is a candidate. An item whose single local marker cannot be expressed as a \
-declaration -- '@route#Section', '@route^block-id', '@route:block-id', or a \
-trailing bare '#' -- is left untouched with a notice explaining why; an item \
+declaration -- '@route#Section', '@route+block-id#section', \
+'@route^block-id', '@route:block-id', or a trailing bare '#' -- is left \
+untouched with a notice explaining why; an item \
 with more than one local marker is left untouched with no notice, since \
 'bob capture-parse' already reports that duplicate. Feeding a rewrite's own \
 output back in is a no-op, because the claiming token is no longer bare.\n\n\
@@ -94,7 +95,7 @@ with 'changed: false' when nothing needed to change. If TEXT is omitted and \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -f json -- '@@foo\\nBuy milk @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())

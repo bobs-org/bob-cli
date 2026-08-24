@@ -951,8 +951,8 @@ order. A rewrite is idempotent: running it again on its own output is a
 no-op, because the claiming token is no longer bare.
 
 An item's single local marker that cannot be expressed as a declaration --
-`@route#Section`, `@route^block-id`, `@route:block-id`, or a trailing bare
-`#` -- is left untouched; the result reports `changed: false` plus a
+`@route#Section`, `@route+block-id#section`, `@route^block-id`,
+`@route:block-id`, or a trailing bare `#` -- is left untouched; the result reports `changed: false` plus a
 `notices` entry naming the marker and why, e.g.
 `@@ cannot take a section: leave @notes#Ideas on this item, or delete it and declare @@notes`.
 An item with more than one local marker is also left untouched, with no
