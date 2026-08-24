@@ -14,7 +14,7 @@ workflow guide.
 - [Grammar at a glance](#grammar-at-a-glance)
 - [`bob capture`](#bob-capture)
   - [Routing and insertion](#routing-and-insertion)
-  - [Global destination header](#global-destination-header)
+  - [Global destination declaration](#global-destination-declaration)
   - [Scheduling and priority](#scheduling-and-priority)
   - [Multi-item capture](#multi-item-capture)
   - [Authored sub-bullets](#authored-sub-bullets)
@@ -40,8 +40,8 @@ anything is written, and any failure rolls the whole batch back.
 
 | Marker | Meaning |
 | --- | --- |
-| `@@route` | Shared task destination for otherwise-unrouted items in the draft |
-| `@@route+block-id` | Shared parent-task destination for otherwise-unrouted items |
+| `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items |
+| `@@route+block-id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@route` | Write a task to `<route>.md` (default route is `mac_inbox`) |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
@@ -67,9 +67,10 @@ A `#` in the middle of the body stays ordinary text. `@route::id` is retired;
 use `@route^id` for an ordinary task with a block ID.
 
 Leading `@route text` is accepted only on an item's first physical line. Later
-lines in the same item take trailing markers only. Terminal `s:<N>`, `p:<N>`,
-`%...`, and `@...` markers configure the whole item no matter which of its
-lines they appear on.
+lines in the same item take trailing markers only. `@@...` has no such
+restriction: a declaration token may appear on any parent or authored child
+line. Terminal `s:<N>`, `p:<N>`, `%...`, and `@...` markers configure the whole
+item no matter which of its lines they appear on.
 
 ## `bob capture`
 
@@ -91,8 +92,8 @@ system clock.
 
 Automatic routing uses a leading `@route text` prefix when present; otherwise a
 trailing `text @route` suffix is used. A draft-wide `@@route` or
-`@@route+block-id` header, described below, supplies the same destination to
-every item that has no local route or mode marker.
+`@@route+block-id` declaration, described below, supplies the same destination
+to every item that has no local route or mode marker.
 Route names use `A-Z`, `a-z`, `0-9`, `_`, and `-`, are lower-cased, and write
 to `<route>.md` at the vault root. Existing target files, including
 `mac_inbox.md`, prefer a Markdown `Tasks` section: new captures insert after
@@ -101,11 +102,31 @@ the `Tasks` heading when the section has no tasks yet. Files without a `Tasks`
 section keep the older fallback of inserting after the last top-level `#task`
 block and its indented continuation lines, or appending at EOF.
 
-### Global destination header
+### Global destination declaration
 
-A global declaration is exactly one whitespace-free token on the first nonblank
-physical line of the draft. Leading blank lines are harmless. The first capture
-item may start on the next line or after any run of blank separator lines:
+A global declaration is a whitespace-free `@@<route>` or
+`@@<route>+<block-id>` token anywhere in the draft. It may sit at the end of an
+item, on an authored child line, in the middle of a line, or on a line by
+itself:
+
+```text
+Buy milk @@groceries
+```
+
+```text
+Parent task
+- child detail @@work
+```
+
+```text
+First task
+
+Second task @@foo
+```
+
+A physical line whose tokens are all `@@...` declarations is metadata only. It
+is removed before blank-line item splitting, so the historical top-of-draft
+spelling still behaves the same:
 
 ```text
 @@foo
@@ -128,16 +149,34 @@ child beneath that task, in source order; authored children stay nested under
 their own capture parent. Route and block-ID validation match `@route` and
 `@route+block-id`.
 
-The header is metadata, never a capture item: it is absent from item counts,
+The declaration is metadata, never capture text: it is absent from item counts,
 semantic capture text, preview bodies, and note contents. A draft that contains
-only a header fails with an actionable "add a capture item" error. `@@` is
-reserved for this grammar. A second declaration, a declaration after capture
-content, extra text on the declaration line, or unsupported forms such as
-`@@foo#Ideas`, `@@foo^id`, and `@@foo:id` are errors rather than literal task
-text. Wrap `@@...` in inline code to keep it literal.
+only a declaration fails with an actionable "add a capture item" error. `@@` is
+reserved for this grammar. A second declaration fails with a duplicate global
+destination error naming both lines:
 
-Do not combine a textual `@@` header with `--route`, `--section`, `--task`, or
-`--task-section`. Clipboard, scheduling, priority, dry-run, formatting, and
+```text
+@@foo
+Buy milk @@bar
+```
+
+Unsupported forms such as `@@foo#Ideas`, `@@foo^id`, and `@@foo:id` are errors
+rather than literal task text. Wrap `@@...` in inline code to keep it literal.
+
+An item-local marker still wins for that item. If the same item also owns the
+declaration, `bob capture-parse` reports a `global_destination_shadowed`
+warning and `bob capture` surfaces the same warning:
+
+```text
+Buy milk @dev @@groceries
+
+Other task
+```
+
+Here `Buy milk` routes to `dev.md`; `Other task` inherits `groceries.md`.
+
+Do not combine a textual `@@` declaration with `--route`, `--section`, `--task`,
+or `--task-section`. Clipboard, scheduling, priority, dry-run, formatting, and
 stdin remain composable.
 
 Each real item resolves in this order:
@@ -147,7 +186,7 @@ Each real item resolves in this order:
 2. Otherwise inherit the complete `@@...` declaration.
 3. Otherwise keep today's `mac_inbox.md` task default.
 
-A local override is not a duplicate-route diagnostic merely because a header
+A local override is not a duplicate-route diagnostic merely because a declaration
 exists. Later items still see earlier staged edits to the same note or parent,
 and any failure rolls every target back.
 
@@ -217,12 +256,12 @@ state. `--dry-run` uses the same planner with the commit step disabled.
 
 Single-item success JSON keeps the legacy shape. A multi-item success keeps
 the first result in the legacy top-level fields and adds an ordered
-`captures` array containing every per-item result. When a `@@` header is
+`captures` array containing every per-item result. When a `@@` declaration is
 present, success JSON also adds an optional top-level `global_destination`
-object with `mode`, `route`, and optional `block_id`. The header never
+object with `mode`, `route`, and optional `block_id`. The declaration never
 creates an extra result. Human output numbers batch items as `1/N`, `2/N`,
 and so on, and prints a compact `global  foo.md` (or `global  foo.md · under
-^a-id`) summary when a header was used.
+^a-id`) summary when a declaration was used.
 
 ### Authored sub-bullets
 
@@ -807,15 +846,15 @@ single item. Each entry has a one-based `index`, a `range` with global UTF-8
 `start`/`end` offsets into `input`, `line_start`/`line_end` physical line
 numbers, the item's `body`, `mode`, `route`, `section`, `block_id`, `needs`,
 and optional `sub_bullets`/`sub_bullet_depths`. Real item indices and ranges
-exclude a `@@` header but still index the original draft. Top-level and
+exclude declaration-only `@@` lines but still index the original draft. Top-level and
 per-item `route`, `mode`, and `block_id` are the item's effective destination
 after inheritance. The legacy top-level fields continue to describe the first
 item so older clients retain a useful preview.
 
-When the draft starts with a `@@` header, `global_destination` is an optional
-object with the declaration `range`, effective `mode`, `route`, `block_id`,
-and `needs`. It is omitted when no header is present, so schema version 1
-stays additive.
+When the draft has a `@@` declaration, `global_destination` is an optional
+object with the declaration `range`, one-based physical `line`, effective
+`mode`, `route`, `block_id`, and `needs`. It is omitted when no declaration is
+present, so schema version 1 stays additive.
 
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
@@ -846,9 +885,11 @@ authored owner), `empty_child_after_markers` (an authored bullet has no text
 left once its capture markers are removed),
 `duplicate_capture_marker` (a later line in the same item resolves a route,
 schedule, priority, or clipboard marker a prior line already resolved),
-`invalid_global_destination` (unsupported or malformed `@@` header),
-`misplaced_global_destination` (a `@@` token after the first nonblank line),
-and `missing_capture_item` (a header with no capture item). Human output
+`invalid_global_destination` (unsupported or malformed `@@` declaration),
+`duplicate_global_destination` (a later `@@` declaration after the first),
+`global_destination_shadowed` (warning: an item-local marker overrides the
+declaration token on that same item), and `missing_capture_item` (a declaration
+with no capture item). Human output
 prints the same information without color escapes when piped, plus a
 `Sub-bullets` section listing `sub_bullets` with indentation from
 `sub_bullet_depths` when it is nonempty. On a missing `TEXT`, JSON mode prints
@@ -889,8 +930,9 @@ body text yet is still completed on the parent line, even though
 
 Route completion covers a bare `@`, a still-typing `@fragment`, and the
 missing route portion of `@^...`, `@+...`, `@:...`, and `@#...`, plus the route
-component of a leading `@@`, `@@fragment`, or `@@route+...` header. Replacement
-ranges for that header exclude both `@` sigils and the `+`. Parent-task
+component of a `@@`, `@@fragment`, or `@@route+...` declaration anywhere in the
+draft. Replacement ranges for that declaration exclude both `@` sigils and the
+`+`. Parent-task
 completion covers `@@route+fragment` the same way it covers `@route+fragment`,
 including `--all-tasks` missing-ID candidates. An inherited global route also
 becomes the current note for same-note wikilink heading/block completion unless

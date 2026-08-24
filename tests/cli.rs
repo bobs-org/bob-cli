@@ -4939,6 +4939,80 @@ fn capture_global_destination_routes_unmarked_items_and_keeps_overrides() {
 }
 
 #[test]
+fn capture_global_destination_can_be_declared_at_the_end_of_any_item() {
+    let temp = TempDir::new("bob-cli-capture-global-trailing");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let draft = concat!("First task\n", "\n", "Second task s:2 @@foo\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run trailing global destination capture");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["global_destination"]["route"], "foo");
+    assert_eq!(json["captures"][0]["route"], "foo");
+    assert_eq!(json["captures"][1]["route"], "foo");
+    assert_eq!(json["captures"][1]["text"], "Second task");
+    assert_eq!(json["captures"][1]["scheduled"], "2026-06-17");
+    assert_eq!(
+        fs::read_to_string(vault.join("foo.md")).expect("foo"),
+        concat!(
+            "- [ ] #task First task [created::2026-06-15]\n",
+            "- [ ] #task Second task [created::2026-06-15] [scheduled::2026-06-17]\n",
+        )
+    );
+}
+
+#[test]
+fn capture_global_destination_on_authored_child_line_applies_draft_wide() {
+    let temp = TempDir::new("bob-cli-capture-global-child-line");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let draft = concat!("Parent\n", "- child @@foo\n", "\n", "Other\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run child-line global destination capture");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["global_destination"]["route"], "foo");
+    assert_eq!(json["captures"][0]["route"], "foo");
+    assert_eq!(json["captures"][0]["sub_bullets"][0], "\t- child");
+    assert!(!json["captures"][0]["sub_bullets"][0]
+        .as_str()
+        .unwrap()
+        .contains("@@"));
+    assert_eq!(json["captures"][1]["route"], "foo");
+    assert_eq!(
+        fs::read_to_string(vault.join("foo.md")).expect("foo"),
+        concat!(
+            "- [ ] #task Parent [created::2026-06-15]\n",
+            "\t- child\n",
+            "- [ ] #task Other [created::2026-06-15]\n",
+        )
+    );
+}
+
+#[test]
 fn capture_global_sub_bullet_inserts_ordered_siblings_and_keeps_authored_children(
 ) {
     let temp = TempDir::new("bob-cli-capture-global-sub-bullet");
@@ -5015,7 +5089,7 @@ fn capture_global_sub_bullet_inserts_ordered_siblings_and_keeps_authored_childre
 }
 
 #[test]
-fn capture_global_destination_conflict_and_header_only_are_usage_errors() {
+fn capture_global_destination_conflict_and_declaration_only_are_usage_errors() {
     let temp = TempDir::new("bob-cli-capture-global-errors");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -5046,24 +5120,24 @@ fn capture_global_destination_conflict_and_header_only_are_usage_errors() {
     assert!(!vault.join("foo.md").exists());
     assert!(!vault.join("bar.md").exists());
 
-    let header_only = bob_command()
+    let declaration_only = bob_command()
         .arg("capture")
         .arg("-b")
         .arg(&vault)
         .arg("@@foo")
         .env("BOB_NOW", "2026-06-15")
         .output()
-        .expect("run header-only capture");
+        .expect("run declaration-only capture");
     assert_eq!(
-        header_only.status.code(),
+        declaration_only.status.code(),
         Some(2),
         "{}",
-        format_output(&header_only)
+        format_output(&declaration_only)
     );
     assert!(
-        stderr(&header_only).contains("add a capture item"),
+        stderr(&declaration_only).contains("add a capture item"),
         "{}",
-        format_output(&header_only)
+        format_output(&declaration_only)
     );
 }
 
@@ -5097,7 +5171,7 @@ fn capture_parse_reports_global_destination_metadata() {
         .arg("capture-parse")
         .arg("-f")
         .arg("json")
-        .arg("@@foo\nFirst task\n\nSecond @bar")
+        .arg("First task\n\nSecond @@foo\n\nThird @bar")
         .output()
         .expect("run global capture-parse");
     assert_success(&output);
@@ -5107,17 +5181,123 @@ fn capture_parse_reports_global_destination_metadata() {
     assert_eq!(json["route"], "foo");
     assert_eq!(json["global_destination"]["route"], "foo");
     assert_eq!(json["global_destination"]["mode"], "task");
+    assert_eq!(json["global_destination"]["line"], 3);
     assert_eq!(json["items"][0]["route"], "foo");
-    assert_eq!(json["items"][1]["route"], "bar");
+    assert_eq!(json["items"][1]["route"], "foo");
+    assert_eq!(json["items"][1]["body"], "Second");
+    assert_eq!(json["items"][2]["route"], "bar");
     assert_eq!(json["spans"][0]["kind"], "global_route");
 }
 
 #[test]
-fn capture_complete_global_header_replaces_only_the_route_component() {
+fn capture_parse_reports_duplicate_global_destination_diagnostics() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("@@foo\nFirst @@bar\n\nSecond @@baz")
+        .output()
+        .expect("run duplicate global capture-parse");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    assert_eq!(json["global_destination"]["route"], "foo");
+    let diagnostics = json["diagnostics"].as_array().expect("diagnostics");
+    let duplicate_diagnostics: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic["code"] == "duplicate_global_destination"
+        })
+        .collect();
+    assert_eq!(duplicate_diagnostics.len(), 2, "{json}");
+    assert_eq!(duplicate_diagnostics[0]["severity"], "error");
+    assert!(duplicate_diagnostics[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("line 2"));
+    assert!(duplicate_diagnostics[1]["message"]
+        .as_str()
+        .unwrap()
+        .contains("line 4"));
+}
+
+#[test]
+fn capture_parse_and_capture_report_shadowed_global_destination_warnings() {
+    let draft = "Buy milk @dev @@groceries\n\nOther";
+
+    let parse_output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .output()
+        .expect("run shadowed global capture-parse");
+    assert_success(&parse_output);
+    let parse_json: serde_json::Value =
+        serde_json::from_str(stdout(&parse_output).trim()).expect("parse JSON");
+    assert_eq!(parse_json["items"][0]["route"], "dev");
+    assert_eq!(parse_json["items"][1]["route"], "groceries");
+    let diagnostic = parse_json["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "global_destination_shadowed")
+        .expect("shadow warning");
+    assert_eq!(diagnostic["severity"], "warning");
+    assert!(diagnostic["message"].as_str().unwrap().contains("@dev"));
+    assert!(diagnostic["message"]
+        .as_str()
+        .unwrap()
+        .contains("@@groceries"));
+
+    let temp = TempDir::new("bob-cli-capture-global-shadowed");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let json_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run shadowed global capture json");
+    assert_success(&json_output);
+    assert!(
+        stderr(&json_output).is_empty(),
+        "json capture should keep warnings in JSON:\n{}",
+        format_output(&json_output)
+    );
+    let capture_json: serde_json::Value =
+        serde_json::from_str(stdout(&json_output).trim())
+            .expect("capture JSON");
+    assert_eq!(capture_json["warnings"][0], diagnostic["message"]);
+
+    let human_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg(draft)
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run shadowed global capture human");
+    assert_success(&human_output);
+    assert!(stderr(&human_output).contains("warning"));
+    assert!(stderr(&human_output).contains("@@groceries"));
+}
+
+#[test]
+fn capture_complete_global_declaration_replaces_only_the_active_component() {
     let temp = TempDir::new("bob-cli-capture-complete-global-route");
     let vault = temp.path().join("vault");
     write_file(&vault.join("food.md"), "# Food\n");
     write_file(&vault.join("foo.md"), "# Foo\n");
+    write_file(
+        &vault.join("cash.md"),
+        "- [ ] #task Existing trade [created::2026-06-01] ^goog-exit\n",
+    );
 
     let output = bob_command()
         .arg("capture-complete")
@@ -5138,6 +5318,53 @@ fn capture_complete_global_header_replaces_only_the_route_component() {
     assert_eq!(
         json["replacement"],
         serde_json::json!({ "start": 2, "end": 4 })
+    );
+
+    let trailing = "Buy milk @@fo";
+    let trailing_output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(trailing.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(trailing)
+        .output()
+        .expect("run trailing global route completion");
+    assert_success(&trailing_output);
+    let trailing_json: serde_json::Value =
+        serde_json::from_str(stdout(&trailing_output).trim())
+            .expect("complete JSON");
+    assert_eq!(trailing_json["context"], "route");
+    assert_eq!(
+        trailing_json["replacement"],
+        serde_json::json!({ "start": 11, "end": 13 })
+    );
+
+    let child = "Parent\n- child @@cash+go";
+    let child_output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(child.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(child)
+        .output()
+        .expect("run child-line global task completion");
+    assert_success(&child_output);
+    let child_json: serde_json::Value =
+        serde_json::from_str(stdout(&child_output).trim())
+            .expect("complete JSON");
+    assert_eq!(child_json["context"], "task");
+    assert_eq!(child_json["candidates"][0]["route"], "cash");
+    assert_eq!(
+        child_json["replacement"],
+        serde_json::json!({ "start": 22, "end": 24 })
     );
 }
 
@@ -5170,7 +5397,7 @@ fn capture_global_destination_human_and_stdin_and_dry_run() {
 }
 
 #[test]
-fn capture_complete_all_tasks_works_on_a_global_sub_bullet_header() {
+fn capture_complete_all_tasks_works_on_a_global_sub_bullet_declaration() {
     let temp = TempDir::new("bob-cli-capture-complete-global-all-tasks");
     let vault = temp.path().join("vault");
     write_file(

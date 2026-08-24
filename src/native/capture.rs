@@ -76,16 +76,16 @@ fn build_cli() -> ClapCommand {
         .long_about(
             "Capture one or more tasks or bullets into the Bob Obsidian vault.\n\n\
 TEXT is split into ordered capture items by one or more blank or whitespace-only \
-physical lines; leading, trailing, and repeated separators are ignored. An optional \
-'@@<route>' or '@@<route>+<block-id>' declaration on the first nonblank physical \
-line is draft metadata, not a capture item: every otherwise-unrouted item inherits \
-that destination, while an item-local @route, @route+id, @route#..., @route^..., \
-@route:..., or trailing '#' marker still wins for that item. A header-only draft \
-fails. Do not combine a textual @@ header with --route, --section, --task, \
+physical lines; leading, trailing, and repeated separators are ignored. A \
+'@@<route>' or '@@<route>+<block-id>' declaration token anywhere in the draft \
+is metadata, not a capture item: every otherwise-unrouted item inherits that \
+destination, while an item-local @route, @route+id, @route#..., @route^..., \
+@route:..., or trailing '#' marker still wins for that item. A declaration-only draft \
+fails. Do not combine a textual @@ declaration with --route, --section, --task, \
 or --task-section. Each item's first nonblank line is normalized and \
 becomes that item's parent, formatted as a #task with a [created::] stamp unless a \
 bullet or sub-bullet route is selected, and written to mac_inbox.md unless an \
-@route token, @@ header, or --route target is provided. Existing target files \
+@route token, @@ declaration, or --route target is provided. Existing target files \
 prefer a Tasks section, then fall back to the last top-level task block. Missing \
 target files are created when needed.\n\n\
 Within each item, every later physical line must be either a column-zero \
@@ -546,6 +546,7 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     Ok(CaptureResult::from_items(
         batch.items.into_iter().map(|item| item.result).collect(),
         batch.global_destination,
+        batch.warnings,
     ))
 }
 
@@ -553,6 +554,7 @@ struct PlannedCaptureBatch {
     items: Vec<PlannedCaptureItem>,
     text_files: Vec<StagedTextFile>,
     global_destination: Option<GlobalDestinationSummary>,
+    warnings: Vec<String>,
 }
 
 struct PlannedCaptureItem {
@@ -578,6 +580,7 @@ fn plan_capture_batch(
         )));
     }
     let parsed_items = parsed_draft.items;
+    let warnings = parsed_draft.warnings;
     let global_destination =
         parsed_draft.global.map(|global| GlobalDestinationSummary {
             mode: global.mode_label(),
@@ -617,6 +620,7 @@ fn plan_capture_batch(
         items,
         text_files: planner.into_staged_files(),
         global_destination,
+        warnings,
     })
 }
 
@@ -2851,6 +2855,8 @@ struct CaptureResult {
     captures: Vec<CaptureItemResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     global_destination: Option<GlobalDestinationSummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2865,6 +2871,7 @@ impl CaptureResult {
     fn from_items(
         items: Vec<CaptureItemResult>,
         global_destination: Option<GlobalDestinationSummary>,
+        warnings: Vec<String>,
     ) -> Self {
         let item = items
             .first()
@@ -2875,6 +2882,7 @@ impl CaptureResult {
             item,
             captures,
             global_destination,
+            warnings,
         }
     }
 }
@@ -2934,8 +2942,21 @@ struct CaptureItemResult {
 
 fn print_success(result: &CaptureResult, output_format: OutputFormat) {
     match output_format {
-        OutputFormat::Human => print_human_success(result),
+        OutputFormat::Human => {
+            print_capture_warnings(result);
+            print_human_success(result);
+        }
         OutputFormat::Json => println!("{}", success_json(result)),
+    }
+}
+
+fn print_capture_warnings(result: &CaptureResult) {
+    if result.warnings.is_empty() {
+        return;
+    }
+    let styler = Styler::detect();
+    for warning in &result.warnings {
+        eprintln!("{COMMAND_NAME}: {}: {warning}", styler.warning_prefix());
     }
 }
 
@@ -4886,6 +4907,7 @@ mod tests {
                 parent_status_name: None,
             }],
             None,
+            Vec::new(),
         );
 
         let value: serde_json::Value =

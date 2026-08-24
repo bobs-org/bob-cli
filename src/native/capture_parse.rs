@@ -73,8 +73,8 @@ vault, never reads the clipboard, never touches the filesystem, and takes no \
 still succeeds.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
-global_destination object for a leading @@<route> or @@<route>+<block-id> \
-header, ordered blank-line-separated item summaries and ranges after \
+global_destination object for a @@<route> or @@<route>+<block-id> \
+declaration token anywhere in the draft, ordered blank-line-separated item summaries and ranges after \
 inheritance, the UTF-8 byte spans of every recognized token, Obsidian wikilink \
 component spans, every authored sub-bullet's normalized body plus depth, and \
 structured diagnostics. \
@@ -102,6 +102,10 @@ An invalid marker component, a malformed \
 continuation line, an orphaned nested bullet, an item emptied by marker removal, or a duplicate \
 item-wide marker across lines becomes a diagnostic, so live editors keep \
 a usable parse while 'bob capture' keeps its strict execution errors.\n\n\
+A second @@ declaration reports 'duplicate_global_destination' on every later \
+declaration token while keeping the first declaration effective. An item that \
+has both a local destination marker and the @@ declaration it owns reports a \
+'global_destination_shadowed' warning because the local marker wins for that item.\n\n\
 Complete and in-progress Obsidian wikilinks such as '[[note', '![[note]]', \
 '[[note#Heading|Alias]]', and '[[#^block-id]]' add semantic delimiter, target, \
 heading, block, and alias spans without changing capture routing.\n\n\
@@ -225,6 +229,7 @@ struct CaptureParseResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct GlobalDestinationParse {
     range: SourceRange,
+    line: usize,
     mode: EditorMode,
     route: Option<String>,
     block_id: Option<String>,
@@ -294,6 +299,7 @@ fn global_destination_parse(
             start: global.start,
             end: global.end,
         },
+        line: global.line,
         mode: global.mode,
         route: global.route.clone(),
         block_id: global.block_id.clone(),
@@ -741,6 +747,7 @@ mod tests {
         assert_eq!(value["route"], "foo");
         assert_eq!(value["global_destination"]["mode"], "task");
         assert_eq!(value["global_destination"]["route"], "foo");
+        assert_eq!(value["global_destination"]["line"], 1);
         assert!(value["global_destination"]["block_id"].is_null());
         assert_eq!(
             value["global_destination"]["range"],
@@ -756,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_a_global_sub_bullet_header_and_local_override() {
+    fn json_reports_a_global_sub_bullet_declaration_and_local_override() {
         let raw = "@@foo+a-id\nNote one\n\nIndependent @bar";
         let value = json(raw);
         assert_eq!(value["mode"], "sub_bullet");
@@ -773,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_a_header_only_draft_as_a_diagnostic() {
+    fn json_reports_a_declaration_only_draft_as_a_diagnostic() {
         let value = json("@@foo");
         assert_eq!(value["ok"], true);
         assert_eq!(value["global_destination"]["route"], "foo");

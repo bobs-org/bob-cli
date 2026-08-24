@@ -167,16 +167,17 @@ bob capture [OPTIONS] [--] [TEXT]...
 
 Captures one task, ordinary Markdown bullet, or task sub-bullet into the vault
 without opening desktop Obsidian. The default destination is `mac_inbox.md`.
-`TEXT` may be several physical lines: the first nonblank line is the parent,
-later authored bullets become children, and blank lines split a batch of items.
-A leading `@@route` or `@@route+id` line is a draft-wide destination header,
-not an item; item-local `@...` markers still win. The whole batch is planned
-before anything is written.
+`TEXT` may be several physical lines: each item’s first nonblank line is the
+parent, later authored bullets become children, and blank lines split a batch
+of items. A `@@route` or `@@route+id` token anywhere in the draft is a
+draft-wide destination declaration, not body text; item-local `@...` markers
+still win, and `bob capture` warns when a local marker shadows the declaration
+typed on that same item. The whole batch is planned before anything is written.
 
 | Marker | Meaning |
 | --- | --- |
-| `@@route` | Shared task destination for otherwise-unrouted items |
-| `@@route+id` | Shared parent-task destination for otherwise-unrouted items |
+| `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items |
+| `@@route+id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@route` | Task in `<route>.md` |
 | `@route#Section` | Ordinary bullet under a matching non-`Tasks` heading |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading |
