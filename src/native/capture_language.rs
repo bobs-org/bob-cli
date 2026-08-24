@@ -1,11 +1,12 @@
 //! The capture grammar shared by `bob capture` and `bob capture-parse`.
 //!
 //! This module owns every position-agnostic classification rule for capture
-//! text: whitespace normalization, terminal marker extraction, and `@token`
-//! routing. `capture.rs` layers execution (files, clipboard, note mutation)
-//! on top of it, and `capture_parse.rs` layers a span-aware, read-only
-//! editor view on the same functions. There is exactly one grammar here; the
-//! editor path never re-implements token classification.
+//! text: the optional `@@` draft header, whitespace normalization, terminal
+//! marker extraction, and `@token` routing. `capture.rs` layers execution
+//! (files, clipboard, note mutation) on top of it, and `capture_parse.rs`
+//! layers a span-aware, read-only editor view on the same functions. There
+//! is exactly one grammar here; the editor path never re-implements token
+//! classification.
 //!
 //! Fallible functions return `Result<T, String>` because this module has no
 //! file I/O and therefore no use for `capture.rs`'s `CaptureError` kinds.
@@ -214,6 +215,46 @@ pub(crate) struct ParsedCaptureItem {
     pub(crate) parsed: ParsedCaptureText,
 }
 
+/// One optional `@@` header plus the real capture items that follow it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CaptureDraft<'a> {
+    pub(crate) header: Option<GlobalHeaderLine<'a>>,
+    pub(crate) items: Vec<CaptureItem<'a>>,
+}
+
+/// The first nonblank physical line when it is a `@@` destination declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GlobalHeaderLine<'a> {
+    pub(crate) line: ItemLine<'a>,
+    pub(crate) token: Token<'a>,
+}
+
+/// A strict, executable global destination inherited by items with no local
+/// route/mode marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedGlobalDestination {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) route: String,
+    pub(crate) block_id: Option<String>,
+    pub(crate) kind: CaptureKind,
+}
+
+impl ParsedGlobalDestination {
+    pub(crate) fn mode_label(&self) -> &'static str {
+        match self.kind {
+            CaptureKind::SubBullet { .. } => "sub_bullet",
+            _ => "task",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedCaptureDraft {
+    pub(crate) global: Option<ParsedGlobalDestination>,
+    pub(crate) items: Vec<ParsedCaptureItem>,
+}
+
 /// Split `raw` into physical lines on LF, CRLF, and bare CR alike, so pasted
 /// Windows and classic-Mac text behaves exactly like LF text. Byte offsets
 /// index the original, un-normalized `raw` string. A trailing line
@@ -267,12 +308,55 @@ pub(crate) fn split_physical_lines(raw: &str) -> Vec<RawLine<'_>> {
 /// physical lines separate items; leading, trailing, and repeated separator
 /// runs are ignored. Item ranges and line numbers always refer back to the
 /// complete original draft.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn split_capture_items(raw: &str) -> Vec<CaptureItem<'_>> {
+    split_items_from_physical_lines(&split_physical_lines(raw), 0)
+}
+
+/// Split a draft into an optional `@@` header and the real capture items
+/// that follow it. The header is the first nonblank physical line whose
+/// first token starts with `@@`; it is never itself a capture item. Item
+/// ranges and line numbers always refer back to the complete original draft.
+pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
+    let lines = split_physical_lines(raw);
+    for (index, line) in lines.iter().enumerate() {
+        if line.text.trim().is_empty() {
+            continue;
+        }
+        let tokens = tokenize_line_with_spans(line);
+        if let Some(&token) = tokens.first()
+            && token.text.starts_with("@@")
+        {
+            return CaptureDraft {
+                header: Some(GlobalHeaderLine {
+                    line: ItemLine {
+                        raw: *line,
+                        line_number: index + 1,
+                    },
+                    token,
+                }),
+                items: split_items_from_physical_lines(
+                    &lines[index + 1..],
+                    index + 1,
+                ),
+            };
+        }
+        break;
+    }
+    CaptureDraft {
+        header: None,
+        items: split_items_from_physical_lines(&lines, 0),
+    }
+}
+
+fn split_items_from_physical_lines<'a>(
+    lines: &[RawLine<'a>],
+    line_offset: usize,
+) -> Vec<CaptureItem<'a>> {
     let mut items = Vec::new();
     let mut current: Vec<ItemLine<'_>> = Vec::new();
 
-    for (offset, raw_line) in split_physical_lines(raw).into_iter().enumerate()
-    {
+    for (offset, raw_line) in lines.iter().copied().enumerate() {
         if raw_line.text.trim().is_empty() {
             push_capture_item(&mut items, &mut current);
             continue;
@@ -280,7 +364,7 @@ pub(crate) fn split_capture_items(raw: &str) -> Vec<CaptureItem<'_>> {
 
         current.push(ItemLine {
             raw: raw_line,
-            line_number: offset + 1,
+            line_number: line_offset + offset + 1,
         });
     }
 
@@ -430,36 +514,75 @@ pub(crate) fn parse_capture_text_with_clip_control(
     forced_section: Option<&str>,
     parse_clip_markers: bool,
 ) -> Result<ParsedCaptureText, String> {
-    let items = split_capture_items(raw_text);
-    if items.is_empty() {
-        return Err(missing_text_error());
+    let draft = split_capture_draft(raw_text);
+    let global = match draft.header {
+        Some(header) => Some(parse_global_header_strict(&header)?),
+        None => None,
+    };
+    if draft.items.is_empty() {
+        return Err(if global.is_some() {
+            missing_capture_item_error()
+        } else {
+            missing_text_error()
+        });
     }
-    if items.len() > 1 {
+    if draft.items.len() > 1 {
         return Err(
             "capture text contains multiple blank-line-separated items"
                 .to_string(),
         );
     }
-    parse_capture_item(
-        &items[0],
+    let mut parsed = parse_capture_item(
+        &draft.items[0],
         forced_route,
         forced_section,
         parse_clip_markers,
-    )
+    )?;
+    if forced_route.is_none()
+        && let Some(global) = &global
+    {
+        inherit_global_destination(&mut parsed, global);
+    }
+    Ok(parsed)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_capture_items_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     parse_clip_markers: bool,
 ) -> Result<Vec<ParsedCaptureItem>, String> {
-    let items = split_capture_items(raw_text);
-    if items.is_empty() {
-        return Err(missing_text_error());
+    Ok(parse_capture_draft_with_clip_control(
+        raw_text,
+        forced_route,
+        forced_section,
+        parse_clip_markers,
+    )?
+    .items)
+}
+
+pub(crate) fn parse_capture_draft_with_clip_control(
+    raw_text: &str,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    parse_clip_markers: bool,
+) -> Result<ParsedCaptureDraft, String> {
+    let draft = split_capture_draft(raw_text);
+    let global = match draft.header {
+        Some(header) => Some(parse_global_header_strict(&header)?),
+        None => None,
+    };
+    if draft.items.is_empty() {
+        return Err(if global.is_some() {
+            missing_capture_item_error()
+        } else {
+            missing_text_error()
+        });
     }
 
-    items
+    let items = draft
+        .items
         .iter()
         .map(|item| {
             parse_capture_item(
@@ -468,13 +591,20 @@ pub(crate) fn parse_capture_items_with_clip_control(
                 forced_section,
                 parse_clip_markers,
             )
-            .map(|parsed| ParsedCaptureItem {
-                index: item.index,
-                start: item.start,
-                end: item.end,
-                line_start: item.line_start,
-                line_end: item.line_end,
-                parsed,
+            .map(|mut parsed| {
+                if forced_route.is_none()
+                    && let Some(global) = &global
+                {
+                    inherit_global_destination(&mut parsed, global);
+                }
+                ParsedCaptureItem {
+                    index: item.index,
+                    start: item.start,
+                    end: item.end,
+                    line_start: item.line_start,
+                    line_end: item.line_end,
+                    parsed,
+                }
             })
             .map_err(|message| {
                 format!(
@@ -484,7 +614,101 @@ pub(crate) fn parse_capture_items_with_clip_control(
                 )
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(ParsedCaptureDraft { global, items })
+}
+
+fn parse_global_header_strict(
+    header: &GlobalHeaderLine<'_>,
+) -> Result<ParsedGlobalDestination, String> {
+    if tokenize_line_with_spans(&header.line.raw).len() != 1 {
+        return Err(GLOBAL_DESTINATION_EXTRA_TEXT_ERROR.to_string());
+    }
+    parse_global_destination_token(
+        header.token.text,
+        header.token.start,
+        header.token.end,
+    )
+}
+
+fn parse_global_destination_token(
+    token: &str,
+    start: usize,
+    end: usize,
+) -> Result<ParsedGlobalDestination, String> {
+    let rest = token
+        .strip_prefix("@@")
+        .ok_or_else(|| GLOBAL_DESTINATION_SHAPE_ERROR.to_string())?;
+    if rest.contains('#') || rest.contains('^') || rest.contains(':') {
+        return Err(unsupported_global_destination_error(token));
+    }
+    match rest.split_once('+') {
+        Some((route, block_id)) => {
+            if route.is_empty() || !is_route_token(route) {
+                return Err(if route.is_empty() {
+                    GLOBAL_DESTINATION_SHAPE_ERROR.to_string()
+                } else {
+                    GLOBAL_DESTINATION_ROUTE_ERROR.to_string()
+                });
+            }
+            if block_id.is_empty() {
+                return Err(format!(
+                    "global destination requires a block ID: @@<route>+<block-id> (run 'bob capture-tasks -r {}' to list task block IDs)",
+                    route.to_ascii_lowercase()
+                ));
+            }
+            if !is_block_id(block_id) {
+                return Err(GLOBAL_DESTINATION_BLOCK_ID_ERROR.to_string());
+            }
+            Ok(ParsedGlobalDestination {
+                start,
+                end,
+                route: route.to_ascii_lowercase(),
+                block_id: Some(block_id.to_string()),
+                kind: CaptureKind::SubBullet {
+                    target: SubBulletTarget::BlockId(block_id.to_string()),
+                    section: None,
+                },
+            })
+        }
+        None => {
+            if rest.is_empty() {
+                return Err(GLOBAL_DESTINATION_SHAPE_ERROR.to_string());
+            }
+            if !is_route_token(rest) {
+                return Err(GLOBAL_DESTINATION_ROUTE_ERROR.to_string());
+            }
+            Ok(ParsedGlobalDestination {
+                start,
+                end,
+                route: rest.to_ascii_lowercase(),
+                block_id: None,
+                kind: CaptureKind::Task,
+            })
+        }
+    }
+}
+
+fn inherit_global_destination(
+    parsed: &mut ParsedCaptureText,
+    global: &ParsedGlobalDestination,
+) {
+    if parsed.route.is_some() || !matches!(parsed.kind, CaptureKind::Task) {
+        return;
+    }
+    parsed.route = Some(global.route.clone());
+    parsed.kind = global.kind.clone();
+}
+
+fn reject_embedded_global_declarations<T: ParseToken>(
+    tokens: &[T],
+) -> Result<(), String> {
+    if tokens.iter().any(|token| token.text().starts_with("@@")) {
+        Err(MISPLACED_GLOBAL_DESTINATION_ERROR.to_string())
+    } else {
+        Ok(())
+    }
 }
 
 fn parse_capture_item(
@@ -634,6 +858,7 @@ fn resolve_line(
         });
     }
 
+    reject_embedded_global_declarations(&tokens)?;
     reject_legacy_bullet_markers(&tokens, detect_route)?;
 
     // The bare `#` Pomodoro-note marker claims the route/mode slot from the
@@ -797,6 +1022,14 @@ first-level authored bullet to attach to"
 
 pub(crate) fn missing_text_error() -> String {
     "task text is required; pass TEXT or pipe it on stdin".to_string()
+}
+
+fn missing_capture_item_error() -> String {
+    MISSING_CAPTURE_ITEM_ERROR.to_string()
+}
+
+fn unsupported_global_destination_error(token: &str) -> String {
+    format!("{GLOBAL_DESTINATION_SHAPE_ERROR}; {token} is not supported")
 }
 
 fn legacy_marker_error() -> String {
@@ -1328,6 +1561,18 @@ pub(crate) fn is_route_token(value: &str) -> bool {
         })
 }
 
+const GLOBAL_DESTINATION_SHAPE_ERROR: &str =
+    "global destination must be @@<route> or @@<route>+<block-id>";
+const GLOBAL_DESTINATION_ROUTE_ERROR: &str =
+    "global destination route must contain only A-Z, a-z, 0-9, '_' or '-'";
+const GLOBAL_DESTINATION_BLOCK_ID_ERROR: &str =
+    "global destination block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
+const GLOBAL_DESTINATION_EXTRA_TEXT_ERROR: &str =
+    "global destination declaration must be the only token on the first nonblank line";
+const MISPLACED_GLOBAL_DESTINATION_ERROR: &str =
+    "a @@ global destination declaration must be the first nonblank line of the draft";
+const MISSING_CAPTURE_ITEM_ERROR: &str =
+    "global destination declaration has no capture item; add a capture item after the header";
 const SUB_BULLET_SHAPE_ERROR: &str =
     "sub-bullet capture markers must use @<route>+<block-id> or @<route>+<block-id>#<section>";
 const SUB_BULLET_ROUTE_ERROR: &str =
@@ -1363,6 +1608,9 @@ pub(crate) enum SpanKind {
     SubBulletRoute,
     SubBulletBlockId,
     SubBulletSection,
+    GlobalRoute,
+    GlobalSubBulletRoute,
+    GlobalSubBulletBlockId,
     PomodoroNote,
     Schedule,
     Priority,
@@ -1387,6 +1635,9 @@ impl SpanKind {
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
             Self::SubBulletSection => "sub_bullet_section",
+            Self::GlobalRoute => "global_route",
+            Self::GlobalSubBulletRoute => "global_sub_bullet_route",
+            Self::GlobalSubBulletBlockId => "global_sub_bullet_block_id",
             Self::PomodoroNote => "pomodoro_note",
             Self::Schedule => "schedule",
             Self::Priority => "priority",
@@ -1503,6 +1754,18 @@ pub(crate) struct EditorParse {
     /// diagnostic instead and excluded here.
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
     pub(crate) items: Vec<EditorItemParse>,
+    pub(crate) global_destination: Option<EditorGlobalDestination>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EditorGlobalDestination {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) mode: EditorMode,
+    pub(crate) route: Option<String>,
+    pub(crate) block_id: Option<String>,
+    pub(crate) needs: Vec<Need>,
+    pub(crate) inherit: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1521,6 +1784,7 @@ pub(crate) struct EditorItemParse {
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
+    pub(crate) has_local_destination: bool,
 }
 
 /// One `@...` token resolved for the editor. `requires_body` marks the plain
@@ -1565,6 +1829,7 @@ struct LineEditorParse {
     marker: Option<MarkerParse>,
     terminal_spans: Vec<Span>,
     diagnostics: Vec<Diagnostic>,
+    has_destination_marker: bool,
 }
 
 /// Resolve one line's already offset-tagged tokens exactly like
@@ -1582,6 +1847,16 @@ fn parse_editor_line(
         .collect();
 
     let mut diagnostics = Vec::new();
+    for token in &tokens {
+        if token.text.starts_with("@@") {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "misplaced_global_destination",
+                message: MISPLACED_GLOBAL_DESTINATION_ERROR.to_string(),
+                range: Some((token.start, token.end)),
+            });
+        }
+    }
     if let Some(diagnostic) = legacy_bullet_marker_diagnostic(&tokens) {
         diagnostics.push(diagnostic);
     }
@@ -1594,6 +1869,7 @@ fn parse_editor_line(
     // The recognized `@...` token leaves the body exactly like execution
     // drops it before joining the remaining tokens with single spaces.
     let selected = select_marker_token(&tokens, leading);
+    let has_destination_marker = selected.is_some();
     let marker_index = selected.as_ref().map(|(index, _)| *index);
     let body = tokens
         .iter()
@@ -1617,6 +1893,7 @@ fn parse_editor_line(
         marker,
         terminal_spans,
         diagnostics,
+        has_destination_marker,
     }
 }
 
@@ -1696,7 +1973,7 @@ fn duplicate_capture_marker_diagnostic(
 ///
 /// Unlike [`parse_capture_text_with_clip_control`] this never fails: an
 /// incomplete interactive marker (`@`, `@#`, `@route#`, `@:`, `@route:`,
-/// `@^`, `@route^`, `@+`, `@route+`, and their legacy `@!` aliases) is a valid editing state,
+/// `@^`, `@route^`, `@+`, `@route+`, `@@`, `@@route+`, and their legacy `@!` aliases) is a valid editing state,
 /// and an invalid marker component -- or line shape -- becomes a diagnostic
 /// instead of an error. Tokenization, terminal marker extraction, and
 /// marker classification all run through the same functions `bob capture`
@@ -1704,24 +1981,68 @@ fn duplicate_capture_marker_diagnostic(
 /// whichever line resolved a marker first, exactly like `bob capture`
 /// prefers the first line's leading form and later lines only compose
 /// trailing markers, while `sub_bullets` reports every other authored
-/// child's normalized body in source order.
+/// child's normalized body in source order. A `@@` header is metadata, not
+/// an item; items inherit it unless they have a local destination marker.
 pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
-    let items = split_capture_items(raw_text)
+    let draft = split_capture_draft(raw_text);
+    let mut header_spans = Vec::new();
+    let mut header_diagnostics = Vec::new();
+    let global_destination = draft.header.as_ref().map(|header| {
+        parse_editor_global_header(
+            header,
+            &mut header_spans,
+            &mut header_diagnostics,
+        )
+    });
+    if draft.header.is_some() && draft.items.is_empty() {
+        header_diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "missing_capture_item",
+            message: missing_capture_item_error(),
+            range: draft
+                .header
+                .map(|header| (header.token.start, header.token.end)),
+        });
+    }
+
+    let mut items = draft
+        .items
         .iter()
         .map(parse_editor_item)
         .collect::<Vec<_>>();
+    if let Some(global) =
+        global_destination.as_ref().filter(|global| global.inherit)
+    {
+        for item in &mut items {
+            inherit_editor_global_destination(item, global);
+        }
+    }
+
     let Some(first) = items.first() else {
+        let mut spans = header_spans;
+        spans.sort_by_key(|span| (span.start, span.end));
         return EditorParse {
             body: String::new(),
-            mode: EditorMode::Task,
-            route: None,
+            mode: global_destination
+                .as_ref()
+                .map(|global| global.mode)
+                .unwrap_or(EditorMode::Task),
+            route: global_destination
+                .as_ref()
+                .and_then(|global| global.route.clone()),
             section: None,
-            block_id: None,
-            needs: Vec::new(),
-            spans: Vec::new(),
-            diagnostics: Vec::new(),
+            block_id: global_destination
+                .as_ref()
+                .and_then(|global| global.block_id.clone()),
+            needs: global_destination
+                .as_ref()
+                .map(|global| global.needs.clone())
+                .unwrap_or_default(),
+            spans,
+            diagnostics: header_diagnostics,
             sub_bullets: Vec::new(),
             items,
+            global_destination,
         };
     };
 
@@ -1732,14 +2053,14 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
     let block_id = first.block_id.clone();
     let needs = first.needs.clone();
     let sub_bullets = first.sub_bullets.clone();
-    let mut spans = items
-        .iter()
-        .flat_map(|item| item.spans.iter().copied())
-        .collect::<Vec<_>>();
-    let diagnostics = items
-        .iter()
-        .flat_map(|item| item.diagnostics.iter().cloned())
-        .collect::<Vec<_>>();
+    let mut spans = header_spans;
+    spans.extend(items.iter().flat_map(|item| item.spans.iter().copied()));
+    let mut diagnostics = header_diagnostics;
+    diagnostics.extend(
+        items
+            .iter()
+            .flat_map(|item| item.diagnostics.iter().cloned()),
+    );
     spans.sort_by_key(|span| (span.start, span.end));
 
     EditorParse {
@@ -1753,7 +2074,68 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         diagnostics,
         sub_bullets,
         items,
+        global_destination,
     }
+}
+
+fn parse_editor_global_header(
+    header: &GlobalHeaderLine<'_>,
+    spans: &mut Vec<Span>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> EditorGlobalDestination {
+    let tokens = tokenize_line_with_spans(&header.line.raw);
+    if tokens.len() != 1 {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "invalid_global_destination",
+            message: GLOBAL_DESTINATION_EXTRA_TEXT_ERROR.to_string(),
+            range: tokens
+                .get(1)
+                .map(|token| (token.start, token.end))
+                .or(Some((header.line.raw.start, header.line.raw.end))),
+        });
+    }
+
+    match classify_global_token(&header.token) {
+        TokenParse::Marker(marker) => {
+            spans.extend(marker.spans);
+            EditorGlobalDestination {
+                start: header.token.start,
+                end: header.token.end,
+                mode: marker.mode,
+                route: marker.route,
+                block_id: marker.block_id,
+                needs: marker.needs,
+                inherit: true,
+            }
+        }
+        TokenParse::Invalid(diagnostic) => {
+            diagnostics.push(diagnostic);
+            EditorGlobalDestination {
+                start: header.token.start,
+                end: header.token.end,
+                mode: EditorMode::Task,
+                route: None,
+                block_id: None,
+                needs: Vec::new(),
+                inherit: false,
+            }
+        }
+    }
+}
+
+fn inherit_editor_global_destination(
+    item: &mut EditorItemParse,
+    global: &EditorGlobalDestination,
+) {
+    if item.has_local_destination {
+        return;
+    }
+    item.mode = global.mode;
+    item.route = global.route.clone();
+    item.section = None;
+    item.block_id = global.block_id.clone();
+    item.needs = global.needs.clone();
 }
 
 fn parse_editor_item(item: &CaptureItem<'_>) -> EditorItemParse {
@@ -1769,6 +2151,7 @@ fn parse_editor_item(item: &CaptureItem<'_>) -> EditorItemParse {
     diagnostics.extend(parent_parse.diagnostics);
 
     let body = parent_parse.body;
+    let mut has_local_destination = parent_parse.has_destination_marker;
     let (mut mode, mut route, mut section, mut block_id, mut needs) =
         match &parent_parse.marker {
             Some(marker) => {
@@ -1828,6 +2211,9 @@ fn parse_editor_item(item: &CaptureItem<'_>) -> EditorItemParse {
         spans.extend(child_parse.terminal_spans);
         diagnostics.extend(child_parse.diagnostics);
 
+        if child_parse.has_destination_marker {
+            has_local_destination = true;
+        }
         if let Some(marker) = &child_parse.marker {
             spans.extend(marker.spans.clone());
             let range = marker.spans.first().map(|span| (span.start, span.end));
@@ -1890,6 +2276,7 @@ fn parse_editor_item(item: &CaptureItem<'_>) -> EditorItemParse {
         spans,
         diagnostics,
         sub_bullets,
+        has_local_destination,
     }
 }
 
@@ -1897,14 +2284,20 @@ pub(crate) fn editor_item_at(
     raw_text: &str,
     cursor: usize,
 ) -> Option<EditorItemParse> {
-    split_capture_items(raw_text)
-        .into_iter()
+    let draft = split_capture_draft(raw_text);
+    let index = draft
+        .items
+        .iter()
         .find(|item| {
             item.lines
                 .iter()
                 .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
-        })
-        .map(|item| parse_editor_item(&item))
+        })?
+        .index;
+    parse_for_editor(raw_text)
+        .items
+        .into_iter()
+        .find(|item| item.index == index)
 }
 
 /// Mirror `parse_capture_text_with_clip_control`'s precedence: the leading
@@ -1967,9 +2360,94 @@ fn pomodoro_note_marker_parse(token: &Token<'_>) -> MarkerParse {
 
 /// Classify one `@...` token, returning `None` when the token is not
 /// route-shaped at all and therefore stays literal body text.
+fn classify_global_token(token: &Token<'_>) -> TokenParse {
+    let rest = match token.text.strip_prefix("@@") {
+        Some(rest) => rest,
+        None => {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_global_destination",
+                GLOBAL_DESTINATION_SHAPE_ERROR,
+            ));
+        }
+    };
+    if rest.contains('#') || rest.contains('^') || rest.contains(':') {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_global_destination",
+            &unsupported_global_destination_error(token.text),
+        ));
+    }
+    if let Some((route_part, block_part)) = rest.split_once('+') {
+        if !route_part.is_empty() && !is_route_token(route_part) {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_global_destination",
+                GLOBAL_DESTINATION_ROUTE_ERROR,
+            ));
+        }
+        if !block_part.is_empty() && !is_block_id(block_part) {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_global_destination",
+                GLOBAL_DESTINATION_BLOCK_ID_ERROR,
+            ));
+        }
+        return TokenParse::Marker(marker_parse(
+            token,
+            MarkerShape {
+                sigil_len: 2,
+                route_part,
+                separator_len: 1,
+                right_part: block_part,
+                route_kind: SpanKind::GlobalSubBulletRoute,
+                right_kind: SpanKind::GlobalSubBulletBlockId,
+                complete_mode: EditorMode::SubBullet,
+                right_need: Need::Task,
+                third: None,
+            },
+        ));
+    }
+    if rest.is_empty() {
+        return TokenParse::Marker(MarkerParse {
+            mode: EditorMode::Incomplete,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: vec![Need::Route],
+            spans: vec![Span {
+                start: token.start,
+                end: token.end,
+                kind: SpanKind::InteractivePlaceholder,
+            }],
+            requires_body: false,
+        });
+    }
+    if !is_route_token(rest) {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_global_destination",
+            GLOBAL_DESTINATION_ROUTE_ERROR,
+        ));
+    }
+    TokenParse::Marker(MarkerParse {
+        mode: EditorMode::Task,
+        route: Some(rest.to_ascii_lowercase()),
+        section: None,
+        block_id: None,
+        needs: Vec::new(),
+        spans: vec![Span {
+            start: token.start,
+            end: token.end,
+            kind: SpanKind::GlobalRoute,
+        }],
+        requires_body: false,
+    })
+}
+
 fn classify_editor_token(token: &Token<'_>) -> Option<TokenParse> {
     let text = token.text;
-    if !text.starts_with('@') {
+    if !text.starts_with('@') || text.starts_with("@@") {
         return None;
     }
     if is_sub_bullet_marker_candidate(text) {
@@ -2490,7 +2968,14 @@ pub(crate) fn completion_field_at(
     raw_text: &str,
     cursor: usize,
 ) -> Option<CompletionField> {
-    let items = split_capture_items(raw_text);
+    let draft = split_capture_draft(raw_text);
+    if let Some(header) = draft.header.as_ref()
+        && cursor >= header.line.raw.start
+        && cursor <= header.line.raw.end
+    {
+        return global_completion_field_at(header, cursor);
+    }
+    let items = draft.items;
     let (item, line_index, line) = items.iter().find_map(|item| {
         item.lines
             .iter()
@@ -2691,6 +3176,60 @@ fn marker_field_at_cursor(
         token,
         CompletionParts {
             sigil_len: 1,
+            route_part: rest,
+            separator_len: 0,
+            right_part: "",
+            right_context: Some(CompletionContext::Route),
+            third: None,
+        },
+        cursor,
+    )
+}
+
+fn global_completion_field_at(
+    header: &GlobalHeaderLine<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let token = header.token;
+    if cursor < token.start || cursor > token.end {
+        return None;
+    }
+    let rest = token.text.strip_prefix("@@")?;
+    if let Some(cut) = rest.find(['#', '^', ':']) {
+        if cursor > token.start + 2 + cut {
+            return None;
+        }
+        return completion_field_from_parts(
+            &token,
+            CompletionParts {
+                sigil_len: 2,
+                route_part: &rest[..cut],
+                separator_len: 0,
+                right_part: "",
+                right_context: Some(CompletionContext::Route),
+                third: None,
+            },
+            cursor,
+        );
+    }
+    if let Some((route_part, block_part)) = rest.split_once('+') {
+        return completion_field_from_parts(
+            &token,
+            CompletionParts {
+                sigil_len: 2,
+                route_part,
+                separator_len: 1,
+                right_part: block_part,
+                right_context: Some(CompletionContext::Task),
+                third: None,
+            },
+            cursor,
+        );
+    }
+    completion_field_from_parts(
+        &token,
+        CompletionParts {
+            sigil_len: 2,
             route_part: rest,
             separator_len: 0,
             right_part: "",
@@ -5297,5 +5836,245 @@ were removed"
         // not completable at all.
         let raw = "parent\n- @ca";
         assert_eq!(field(raw, raw.len()), None);
+    }
+
+    // -----------------------------------------------------------------
+    // Global @@ destination header.
+    // -----------------------------------------------------------------
+
+    fn draft_items(raw: &str) -> Vec<(usize, usize, &str)> {
+        split_capture_draft(raw)
+            .items
+            .iter()
+            .map(|item| {
+                (item.index, item.line_start, &raw[item.start..item.end])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn split_capture_draft_strips_a_header_with_or_without_a_blank_line() {
+        assert_eq!(
+            draft_items("@@foo\nFirst task\n\nSecond task"),
+            vec![(0, 2, "First task"), (1, 4, "Second task")]
+        );
+        assert_eq!(
+            draft_items("@@foo\n\nFirst task\n\nSecond task"),
+            vec![(0, 3, "First task"), (1, 5, "Second task")]
+        );
+    }
+
+    #[test]
+    fn split_capture_draft_ignores_leading_blanks_and_crlf() {
+        let raw = "\r\n\n@@foo\r\nFirst";
+        let draft = split_capture_draft(raw);
+        let header = draft.header.expect("header");
+        assert_eq!(header.token.text, "@@foo");
+        assert_eq!(&raw[header.token.start..header.token.end], "@@foo");
+        assert_eq!(draft_items(raw), vec![(0, 4, "First")]);
+    }
+
+    #[test]
+    fn execution_inherits_a_global_task_route_unless_an_item_overrides() {
+        let draft = parse_capture_draft_with_clip_control(
+            "@@Foo\nFirst task\n\nSecond task @bar\n\nThird task",
+            None,
+            None,
+            true,
+        )
+        .expect("parse");
+        let global = draft.global.expect("global");
+        assert_eq!(global.route, "foo");
+        assert_eq!(global.block_id, None);
+        assert_eq!(draft.items[0].parsed.body, "First task");
+        assert_eq!(draft.items[0].parsed.route.as_deref(), Some("foo"));
+        assert_eq!(draft.items[0].parsed.kind, CaptureKind::Task);
+        assert_eq!(draft.items[1].parsed.body, "Second task");
+        assert_eq!(draft.items[1].parsed.route.as_deref(), Some("bar"));
+        assert_eq!(draft.items[2].parsed.body, "Third task");
+        assert_eq!(draft.items[2].parsed.route.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn execution_inherits_a_global_sub_bullet_and_keeps_authored_children() {
+        let draft = parse_capture_draft_with_clip_control(
+            "@@foo+a-id\nFirst note\n- authored detail\n\nSecond note",
+            None,
+            None,
+            true,
+        )
+        .expect("parse");
+        assert_eq!(
+            draft.global.as_ref().unwrap().block_id.as_deref(),
+            Some("a-id")
+        );
+        assert_eq!(
+            draft.items[0].parsed.kind,
+            CaptureKind::SubBullet {
+                target: SubBulletTarget::BlockId("a-id".to_string()),
+                section: None,
+            }
+        );
+        assert_eq!(
+            sub_bullet_bodies(&draft.items[0].parsed.sub_bullets),
+            vec!["authored detail"]
+        );
+        assert_eq!(
+            draft.items[1].parsed.kind,
+            CaptureKind::SubBullet {
+                target: SubBulletTarget::BlockId("a-id".to_string()),
+                section: None,
+            }
+        );
+    }
+
+    #[test]
+    fn execution_local_markers_override_a_global_header() {
+        let draft = parse_capture_draft_with_clip_control(
+            "@@foo+a-id\nKeep\n\nBullet @bar#Ideas\n\nId @bar^b-id\n\nPomo @bar:p-id\n\nChild @bar+b-id\n\nNote #",
+            None,
+            None,
+            true,
+        )
+        .expect("parse");
+        assert!(matches!(
+            draft.items[0].parsed.kind,
+            CaptureKind::SubBullet { .. }
+        ));
+        assert!(matches!(
+            draft.items[1].parsed.kind,
+            CaptureKind::Bullet { .. }
+        ));
+        assert_eq!(draft.items[1].parsed.route.as_deref(), Some("bar"));
+        assert!(matches!(
+            draft.items[2].parsed.kind,
+            CaptureKind::TaskWithBlockId { .. }
+        ));
+        assert!(matches!(
+            draft.items[3].parsed.kind,
+            CaptureKind::Pomodoro { .. }
+        ));
+        assert!(matches!(
+            draft.items[4].parsed.kind,
+            CaptureKind::SubBullet { .. }
+        ));
+        assert_eq!(draft.items[4].parsed.route.as_deref(), Some("bar"));
+        assert_eq!(draft.items[5].parsed.kind, CaptureKind::PomodoroNote);
+        assert_eq!(draft.items[5].parsed.route, None);
+    }
+
+    #[test]
+    fn execution_rejects_a_header_only_draft() {
+        let error =
+            parse_capture_draft_with_clip_control("@@foo", None, None, true)
+                .unwrap_err();
+        assert_eq!(error, MISSING_CAPTURE_ITEM_ERROR);
+    }
+
+    #[test]
+    fn execution_rejects_extra_text_and_unsupported_global_forms() {
+        assert_eq!(
+            parse_capture_draft_with_clip_control(
+                "@@foo extra\nTask",
+                None,
+                None,
+                true
+            )
+            .unwrap_err(),
+            GLOBAL_DESTINATION_EXTRA_TEXT_ERROR
+        );
+        for (raw, needle) in [
+            ("@@foo#Ideas\nTask", "not supported"),
+            ("@@foo^id\nTask", "not supported"),
+            ("@@foo:id\nTask", "not supported"),
+            ("@@foo+id#sec\nTask", "not supported"),
+        ] {
+            let error =
+                parse_capture_draft_with_clip_control(raw, None, None, true)
+                    .unwrap_err();
+            assert!(error.contains(needle), "{raw}: {error}");
+        }
+    }
+
+    #[test]
+    fn execution_rejects_a_misplaced_global_declaration() {
+        let error = parse_capture_draft_with_clip_control(
+            "First task\n\n@@foo\nSecond",
+            None,
+            None,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(MISPLACED_GLOBAL_DESTINATION_ERROR),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn editor_inherits_global_destination_and_keeps_local_overrides() {
+        let parse = editor("@@foo\nFirst\n\nSecond @bar");
+        let global = parse.global_destination.as_ref().expect("global");
+        assert_eq!(global.route.as_deref(), Some("foo"));
+        assert_eq!(parse.route.as_deref(), Some("foo"));
+        assert_eq!(parse.items[0].route.as_deref(), Some("foo"));
+        assert_eq!(parse.items[1].route.as_deref(), Some("bar"));
+        assert!(parse.items[1].has_local_destination);
+        assert_eq!(ranges(&parse)[0], (0, 5, SpanKind::GlobalRoute));
+    }
+
+    #[test]
+    fn editor_reports_incomplete_and_header_only_global_headers() {
+        let incomplete = editor("@@");
+        assert_eq!(incomplete.mode, EditorMode::Incomplete);
+        assert_eq!(incomplete.needs, vec![Need::Route]);
+        assert_eq!(codes(&incomplete), vec!["missing_capture_item"]);
+
+        let header_only = editor("@@foo");
+        assert_eq!(
+            header_only
+                .global_destination
+                .as_ref()
+                .unwrap()
+                .route
+                .as_deref(),
+            Some("foo")
+        );
+        assert_eq!(codes(&header_only), vec!["missing_capture_item"]);
+    }
+
+    #[test]
+    fn completion_on_a_global_header_excludes_both_sigils_and_plus() {
+        let route = field("@@fo", 4).expect("route");
+        assert_eq!(route.context, CompletionContext::Route);
+        assert_eq!(route.query, "fo");
+        assert_eq!(route.replacement, (2, 4));
+
+        let raw = "@@Cash+goog\nnote";
+        let plus = raw.find('+').expect("plus");
+        let task = field(raw, plus + 2).expect("task");
+        assert_eq!(task.context, CompletionContext::Task);
+        assert_eq!(task.route.as_deref(), Some("cash"));
+        assert_eq!(task.query, "g");
+        assert_eq!(task.replacement, (plus + 1, plus + 5));
+    }
+
+    #[test]
+    fn completion_inside_an_item_stays_item_local_with_a_global_header() {
+        let raw = "@@foo\nFirst @ba";
+        let at = raw.rfind('@').expect("local at");
+        let completion = field(raw, raw.len()).expect("local route");
+        assert_eq!(completion.context, CompletionContext::Route);
+        assert_eq!(completion.replacement, (at + 1, raw.len()));
+        assert_eq!(field(raw, 3).unwrap().context, CompletionContext::Route);
+        assert_eq!(field(raw, 3).unwrap().replacement, (2, 5));
+    }
+
+    #[test]
+    fn editor_item_at_uses_the_inherited_global_route() {
+        let raw = "@@sase\nSee [[#De";
+        let item = editor_item_at(raw, raw.len()).expect("item");
+        assert_eq!(item.route.as_deref(), Some("sase"));
+        assert!(!item.has_local_destination);
     }
 }

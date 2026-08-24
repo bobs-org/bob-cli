@@ -887,6 +887,9 @@ fn capture_help_lists_options_alphabetically() {
             && help.contains("first direct-child Schedule Log or Work Log")
             && help.contains("@<route>^<block-id>")
             && help.contains("bob capture '@dev^foobar'")
+            && help.contains("@@<route>")
+            && help.contains("@@<route>+<block-id>")
+            && help.contains("printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n'")
             && !help.contains("--task-ref"),
         "expected public sub-bullet and ID-only help without hidden task ref:\n{help}"
     );
@@ -4881,6 +4884,362 @@ fn capture_batch_duplicate_block_id_failure_leaves_no_partial_write() {
         format_output(&output)
     );
     assert!(!vault.join("work.md").exists());
+}
+
+#[test]
+fn capture_global_destination_routes_unmarked_items_and_keeps_overrides() {
+    let temp = TempDir::new("bob-cli-capture-global-destination");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let draft = concat!(
+        "@@foo\n",
+        "First task\n",
+        "\n",
+        "Second task @bar\n",
+        "\n",
+        "Third task\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run global destination capture");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["text"], "First task");
+    assert_eq!(json["route"], "foo");
+    assert_eq!(json["global_destination"]["mode"], "task");
+    assert_eq!(json["global_destination"]["route"], "foo");
+    assert!(json["global_destination"].get("block_id").is_none());
+    let captures = json["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 3);
+    assert_eq!(captures[0]["route"], "foo");
+    assert_eq!(captures[1]["route"], "bar");
+    assert_eq!(captures[2]["route"], "foo");
+    assert_eq!(
+        fs::read_to_string(vault.join("foo.md")).expect("foo"),
+        concat!(
+            "- [ ] #task First task [created::2026-06-15]\n",
+            "- [ ] #task Third task [created::2026-06-15]\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("bar.md")).expect("bar"),
+        "- [ ] #task Second task [created::2026-06-15]\n"
+    );
+}
+
+#[test]
+fn capture_global_sub_bullet_inserts_ordered_siblings_and_keeps_authored_children(
+) {
+    let temp = TempDir::new("bob-cli-capture-global-sub-bullet");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("foo.md"),
+        concat!(
+            "## Tasks\n",
+            "- [ ] #task Parent [created::2026-06-01] ^a-id\n",
+            "\t- existing\n",
+        ),
+    );
+    write_file(
+        &vault.join("bar.md"),
+        concat!(
+            "## Tasks\n",
+            "- [ ] #task Other [created::2026-06-01] ^b-id\n",
+        ),
+    );
+
+    let draft = concat!(
+        "@@foo+a-id\n",
+        "First note\n",
+        "- authored detail\n",
+        "\n",
+        "Second note\n",
+        "\n",
+        "Independent task @bar\n",
+        "\n",
+        "Different parent @bar+b-id\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg(draft)
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run global sub-bullet capture");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["global_destination"]["mode"], "sub_bullet");
+    assert_eq!(json["global_destination"]["route"], "foo");
+    assert_eq!(json["global_destination"]["block_id"], "a-id");
+    assert_eq!(json["captures"].as_array().expect("captures").len(), 4);
+    assert_eq!(json["captures"][0]["kind"], "sub_bullet");
+    assert_eq!(json["captures"][1]["kind"], "sub_bullet");
+    assert_eq!(json["captures"][2]["kind"], "task");
+    assert_eq!(json["captures"][2]["route"], "bar");
+    assert_eq!(json["captures"][3]["kind"], "sub_bullet");
+    assert_eq!(json["captures"][3]["route"], "bar");
+    assert_eq!(
+        fs::read_to_string(vault.join("foo.md")).expect("foo"),
+        concat!(
+            "## Tasks\n",
+            "- [ ] #task Parent [created::2026-06-01] ^a-id\n",
+            "\t- existing\n",
+            "\t- First note\n",
+            "\t\t- authored detail\n",
+            "\t- Second note\n",
+        )
+    );
+    let bar = fs::read_to_string(vault.join("bar.md")).expect("bar");
+    assert!(bar.contains("- [ ] #task Independent task [created::2026-06-15]"));
+    assert!(
+        bar.contains("\t- Different parent")
+            || bar.contains("  - Different parent"),
+        "{bar}"
+    );
+}
+
+#[test]
+fn capture_global_destination_conflict_and_header_only_are_usage_errors() {
+    let temp = TempDir::new("bob-cli-capture-global-errors");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let conflict = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--route")
+        .arg("bar")
+        .arg("@@foo\nTask")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run competing destination capture");
+    assert_eq!(
+        conflict.status.code(),
+        Some(2),
+        "{}",
+        format_output(&conflict)
+    );
+    assert!(
+        stderr(&conflict)
+            .contains("competing document-wide destination controls")
+            && stderr(&conflict).contains("--route"),
+        "{}",
+        format_output(&conflict)
+    );
+    assert!(!vault.join("foo.md").exists());
+    assert!(!vault.join("bar.md").exists());
+
+    let header_only = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("@@foo")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run header-only capture");
+    assert_eq!(
+        header_only.status.code(),
+        Some(2),
+        "{}",
+        format_output(&header_only)
+    );
+    assert!(
+        stderr(&header_only).contains("add a capture item"),
+        "{}",
+        format_output(&header_only)
+    );
+}
+
+#[test]
+fn capture_global_batch_failure_leaves_every_fixture_unchanged() {
+    let temp = TempDir::new("bob-cli-capture-global-rollback");
+    let vault = temp.path().join("vault");
+    let foo =
+        concat!("## Tasks\n", "- [ ] #task Keep [created::2026-06-01]\n",);
+    write_file(&vault.join("foo.md"), foo);
+    let bar = "- [ ] #task Existing [created::2026-06-01]\n";
+    write_file(&vault.join("bar.md"), bar);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("@@foo\nFirst\n\nSecond @bar\n\nThird @foo^dup\n\nFourth @foo^dup")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run failing global batch");
+
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert_eq!(fs::read_to_string(vault.join("foo.md")).expect("foo"), foo);
+    assert_eq!(fs::read_to_string(vault.join("bar.md")).expect("bar"), bar);
+}
+
+#[test]
+fn capture_parse_reports_global_destination_metadata() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("@@foo\nFirst task\n\nSecond @bar")
+        .output()
+        .expect("run global capture-parse");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["route"], "foo");
+    assert_eq!(json["global_destination"]["route"], "foo");
+    assert_eq!(json["global_destination"]["mode"], "task");
+    assert_eq!(json["items"][0]["route"], "foo");
+    assert_eq!(json["items"][1]["route"], "bar");
+    assert_eq!(json["spans"][0]["kind"], "global_route");
+}
+
+#[test]
+fn capture_complete_global_header_replaces_only_the_route_component() {
+    let temp = TempDir::new("bob-cli-capture-complete-global-route");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("food.md"), "# Food\n");
+    write_file(&vault.join("foo.md"), "# Foo\n");
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("4")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@@fo\nTask")
+        .output()
+        .expect("run global route completion");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
+    assert_eq!(json["context"], "route");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({ "start": 2, "end": 4 })
+    );
+}
+
+#[test]
+fn capture_global_destination_human_and_stdin_and_dry_run() {
+    let temp = TempDir::new("bob-cli-capture-global-human");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let draft = "@@foo\n\nFirst task\n\nSecond task";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("--dry-run")
+            .env("BOB_NOW", "2026-06-15"),
+        draft,
+    );
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("global  foo.md")
+            && out.contains("would capture  1/2  foo.md")
+            && out.contains("would capture  2/2  foo.md"),
+        "{out}"
+    );
+    assert!(!vault.join("foo.md").exists());
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_complete_all_tasks_works_on_a_global_sub_bullet_header() {
+    let temp = TempDir::new("bob-cli-capture-complete-global-all-tasks");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("file.md"),
+        concat!(
+            "- [ ] #task identified [created::2026-06-01] ^has-id\n",
+            "- [ ] #task needs id [created::2026-06-01]\n",
+        ),
+    );
+    let draft = "@@file+\nnote";
+    let cursor = draft.find('+').expect("plus") + 1;
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-a")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run global all-tasks completion");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
+    assert_eq!(json["context"], "task");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({ "start": cursor, "end": cursor })
+    );
+    let ids = task_block_ids(&json);
+    assert!(ids.contains(&Some("has-id")), "{json}");
+    assert!(ids.contains(&None), "{json}");
+}
+
+#[test]
+fn capture_complete_inherited_route_is_the_same_note_for_wikilinks() {
+    let temp = TempDir::new("bob-cli-capture-complete-global-wikilink");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "# Design\n# Decision Log\n");
+
+    let draft = "@@sase\nSee [[#De";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run inherited wikilink completion");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
+    assert_eq!(json["context"], "wikilink_heading");
+    let candidates = json["candidates"].as_array().expect("candidates");
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate["heading"].as_str().expect("heading"))
+            .collect::<Vec<_>>(),
+        vec!["Design", "Decision Log"]
+    );
+    assert_eq!(candidates[0]["path"], "sase.md");
 }
 
 #[test]

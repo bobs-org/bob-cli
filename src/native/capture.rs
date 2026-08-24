@@ -76,13 +76,18 @@ fn build_cli() -> ClapCommand {
         .long_about(
             "Capture one or more tasks or bullets into the Bob Obsidian vault.\n\n\
 TEXT is split into ordered capture items by one or more blank or whitespace-only \
-physical lines; leading, trailing, and repeated separators are ignored. Each \
-item's first nonblank line is normalized and becomes that item's parent, \
-formatted as a #task with a [created::] stamp unless a bullet or sub-bullet \
-route is selected, and written to mac_inbox.md unless an @route token or \
---route target is provided. Existing target files prefer a Tasks section, \
-then fall back to the last top-level task block. Missing target files are \
-created when needed.\n\n\
+physical lines; leading, trailing, and repeated separators are ignored. An optional \
+'@@<route>' or '@@<route>+<block-id>' declaration on the first nonblank physical \
+line is draft metadata, not a capture item: every otherwise-unrouted item inherits \
+that destination, while an item-local @route, @route+id, @route#..., @route^..., \
+@route:..., or trailing '#' marker still wins for that item. A header-only draft \
+fails. Do not combine a textual @@ header with --route, --section, --task, \
+or --task-section. Each item's first nonblank line is normalized and \
+becomes that item's parent, formatted as a #task with a [created::] stamp unless a \
+bullet or sub-bullet route is selected, and written to mac_inbox.md unless an \
+@route token, @@ header, or --route target is provided. Existing target files \
+prefer a Tasks section, then fall back to the last top-level task block. Missing \
+target files are created when needed.\n\n\
 Within each item, every later physical line must be either a column-zero \
 Markdown bullet or a nested bullet prefixed by exactly two ASCII spaces. At \
 either depth, '-', '*', or '+' must be followed by a space or tab; the source \
@@ -200,7 +205,7 @@ case insensitively; unlike a typed #<section> selector, it is not slug- or \
 prefix-matched, so --task-section future-work does not match FUTURE WORK.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -351,6 +356,7 @@ struct CaptureRequest {
     bob_dir: PathBuf,
     dry_run: bool,
     forced_clip: Option<ClipRequest>,
+    forced_destination_flags: Vec<&'static str>,
     forced_route: Option<String>,
     forced_section: Option<String>,
     forced_sub_bullet_target: Option<SubBulletTarget>,
@@ -405,6 +411,7 @@ impl CaptureRequest {
             bob_dir: bob_dir_from_matches(matches),
             dry_run: matches.get_flag("dry-run"),
             forced_clip,
+            forced_destination_flags: forced_destination_flags(matches),
             forced_route,
             forced_section,
             forced_sub_bullet_target,
@@ -456,6 +463,41 @@ fn forced_section_from_matches(
     Ok(Some(section.clone()))
 }
 
+fn forced_destination_flags(matches: &ArgMatches) -> Vec<&'static str> {
+    let mut flags = Vec::new();
+    if matches.contains_id("route") {
+        flags.push("--route");
+    }
+    if matches.contains_id("section") {
+        flags.push("--section");
+    }
+    if matches.contains_id("task") {
+        flags.push("--task");
+    }
+    if matches.contains_id("task-ref") {
+        flags.push("--task-ref");
+    }
+    if matches.contains_id("task-section") {
+        flags.push("--task-section");
+    }
+    flags
+}
+
+fn competing_destination_error(flags: &[&str]) -> String {
+    let listed = match flags {
+        [] => "--route".to_string(),
+        [one] => (*one).to_string(),
+        [first, second] => format!("{first} or {second}"),
+        _ => {
+            let (last, rest) = flags.split_last().expect("nonempty flags");
+            format!("{} or {last}", rest.join(", "))
+        }
+    };
+    format!(
+        "a @@ global destination declaration cannot be combined with {listed}; they are competing document-wide destination controls"
+    )
+}
+
 fn forced_task_section_from_matches(
     matches: &ArgMatches,
 ) -> Result<Option<String>, CaptureError> {
@@ -503,12 +545,14 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     }
     Ok(CaptureResult::from_items(
         batch.items.into_iter().map(|item| item.result).collect(),
+        batch.global_destination,
     ))
 }
 
 struct PlannedCaptureBatch {
     items: Vec<PlannedCaptureItem>,
     text_files: Vec<StagedTextFile>,
+    global_destination: Option<GlobalDestinationSummary>,
 }
 
 struct PlannedCaptureItem {
@@ -520,12 +564,26 @@ fn plan_capture_batch(
     request: &CaptureRequest,
 ) -> Result<PlannedCaptureBatch, CaptureError> {
     let parse_clip_markers = request.forced_clip.is_none() && !request.no_clip;
-    let parsed_items = parse_capture_items_with_clip_control(
+    let parsed_draft = parse_capture_draft_with_clip_control(
         &request.raw_text,
         request.forced_route.as_deref(),
         request.forced_section.as_deref(),
         parse_clip_markers,
     )?;
+    if parsed_draft.global.is_some()
+        && !request.forced_destination_flags.is_empty()
+    {
+        return Err(CaptureError::usage(competing_destination_error(
+            &request.forced_destination_flags,
+        )));
+    }
+    let parsed_items = parsed_draft.items;
+    let global_destination =
+        parsed_draft.global.map(|global| GlobalDestinationSummary {
+            mode: global.mode_label(),
+            route: global.route,
+            block_id: global.block_id,
+        });
     let now = bob_env::current_datetime();
     let today = now.date();
     let roll_seed = config::roll_seed();
@@ -558,6 +616,7 @@ fn plan_capture_batch(
     Ok(PlannedCaptureBatch {
         items,
         text_files: planner.into_staged_files(),
+        global_destination,
     })
 }
 
@@ -2262,13 +2321,13 @@ fn parse_capture_text_with_clip_control(
     .map_err(CaptureError::usage)
 }
 
-fn parse_capture_items_with_clip_control(
+fn parse_capture_draft_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     parse_clip_markers: bool,
-) -> Result<Vec<ParsedCaptureItem>, CaptureError> {
-    capture_language::parse_capture_items_with_clip_control(
+) -> Result<capture_language::ParsedCaptureDraft, CaptureError> {
+    capture_language::parse_capture_draft_with_clip_control(
         raw_text,
         forced_route,
         forced_section,
@@ -2790,16 +2849,33 @@ struct CaptureResult {
     item: CaptureItemResult,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     captures: Vec<CaptureItemResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    global_destination: Option<GlobalDestinationSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct GlobalDestinationSummary {
+    mode: &'static str,
+    route: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block_id: Option<String>,
 }
 
 impl CaptureResult {
-    fn from_items(items: Vec<CaptureItemResult>) -> Self {
+    fn from_items(
+        items: Vec<CaptureItemResult>,
+        global_destination: Option<GlobalDestinationSummary>,
+    ) -> Self {
         let item = items
             .first()
             .cloned()
             .expect("capture batch always contains at least one item");
         let captures = if items.len() > 1 { items } else { Vec::new() };
-        Self { item, captures }
+        Self {
+            item,
+            captures,
+            global_destination,
+        }
     }
 }
 
@@ -2864,6 +2940,9 @@ fn print_success(result: &CaptureResult, output_format: OutputFormat) {
 }
 
 fn print_human_success(result: &CaptureResult) {
+    if let Some(global) = &result.global_destination {
+        print_global_destination_summary(global);
+    }
     if result.captures.is_empty() {
         print_human_item_success(result, None);
         return;
@@ -2875,6 +2954,22 @@ fn print_human_success(result: &CaptureResult) {
             println!();
         }
         print_human_item_success(item, Some((index + 1, total)));
+    }
+}
+
+fn print_global_destination_summary(global: &GlobalDestinationSummary) {
+    let styler = Styler::detect();
+    let route_label = format!("{}.md", global.route);
+    match global.block_id.as_deref() {
+        Some(block_id) => println!(
+            "{}  {} · under {}",
+            styler.dim("global"),
+            styler.cyan(&route_label),
+            styler.cyan(&format!("^{block_id}")),
+        ),
+        None => {
+            println!("{}  {}", styler.dim("global"), styler.cyan(&route_label),)
+        }
     }
 }
 
@@ -4759,35 +4854,39 @@ mod tests {
 
     #[test]
     fn json_success_shape_is_stable() {
-        let result = CaptureResult::from_items(vec![CaptureItemResult {
-            ok: true,
-            dry_run: false,
-            routed: true,
-            route: Some("groceries".to_string()),
-            route_label: "groceries.md".to_string(),
-            relative_target: "groceries.md".to_string(),
-            target: "/tmp/bob/groceries.md".to_string(),
-            text: "buy milk".to_string(),
-            task_line: "- [ ] #task buy milk [created::2026-06-15]".to_string(),
-            kind: "task",
-            created: "2026-06-15".to_string(),
-            scheduled: None,
-            priority: None,
-            priority_label: None,
-            placement: Placement::Inserted,
-            sub_bullets: Vec::new(),
-            clip: None,
-            schedule_log: None,
-            block_id: None,
-            day_file: None,
-            block_link: None,
-            pomodoro_link_placement: None,
-            parent_line: None,
-            parent_text: None,
-            parent_section: None,
-            parent_status_symbol: None,
-            parent_status_name: None,
-        }]);
+        let result = CaptureResult::from_items(
+            vec![CaptureItemResult {
+                ok: true,
+                dry_run: false,
+                routed: true,
+                route: Some("groceries".to_string()),
+                route_label: "groceries.md".to_string(),
+                relative_target: "groceries.md".to_string(),
+                target: "/tmp/bob/groceries.md".to_string(),
+                text: "buy milk".to_string(),
+                task_line: "- [ ] #task buy milk [created::2026-06-15]"
+                    .to_string(),
+                kind: "task",
+                created: "2026-06-15".to_string(),
+                scheduled: None,
+                priority: None,
+                priority_label: None,
+                placement: Placement::Inserted,
+                sub_bullets: Vec::new(),
+                clip: None,
+                schedule_log: None,
+                block_id: None,
+                day_file: None,
+                block_link: None,
+                pomodoro_link_placement: None,
+                parent_line: None,
+                parent_text: None,
+                parent_section: None,
+                parent_status_symbol: None,
+                parent_status_name: None,
+            }],
+            None,
+        );
 
         let value: serde_json::Value =
             serde_json::from_str(&success_json(&result)).expect("json");
@@ -4810,6 +4909,7 @@ mod tests {
         assert!(value.get("clip").is_none(), "{value}");
         assert!(value.get("sub_bullets").is_none(), "{value}");
         assert!(value.get("captures").is_none(), "{value}");
+        assert!(value.get("global_destination").is_none(), "{value}");
         for special_field in [
             "priority",
             "priority_label",

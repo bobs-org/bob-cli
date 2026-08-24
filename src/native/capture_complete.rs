@@ -99,7 +99,13 @@ a cursor in plain body text, a cursor on an authored line's indentation or \
 bullet marker itself, an orphaned nested line, or a cursor on a token in the middle of a line all return a \
 successful empty result rather than an error.\n\n\
 Route completion covers a bare '@', a still-typing '@fragment', and the \
-missing route portion of '@^...', '@+...', '@:...', and '@#...', backed by the same \
+missing route portion of '@^...', '@+...', '@:...', and '@#...', plus the route \
+component of a leading '@@', '@@fragment', or '@@route+...' header. Replacement \
+ranges for that header exclude both '@' sigils and the '+'. Parent-task \
+completion covers '@@route+fragment' the same way it covers '@route+fragment', \
+including -a/--all-tasks missing-ID candidates. An inherited global route also \
+becomes the current note for same-note wikilink heading/block completion unless \
+that item overrides it. Route completion is backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
 backed by the same scan as `bob capture-sections`. Task-section completion \
 covers '@route+id#prefix' and a bare '@route+id#', backed by the same \
@@ -134,7 +140,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, task_section, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, task_section, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())

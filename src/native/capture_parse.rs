@@ -13,8 +13,8 @@ use serde_json::json;
 
 use super::{
     capture_language::{
-        self, AuthoredSubBullet, Diagnostic, EditorItemParse, EditorMode, Need,
-        Severity, Span,
+        self, AuthoredSubBullet, Diagnostic, EditorGlobalDestination,
+        EditorItemParse, EditorMode, Need, Severity, Span,
     },
     capture_links,
     style::Styler,
@@ -72,10 +72,12 @@ vault, never reads the clipboard, never touches the filesystem, and takes no \
 --bob-dir. Running it with a nonexistent BOB_DIR and a '%' clipboard marker \
 still succeeds.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
-section, and block ID, which parts a picker still has to supply, ordered \
-blank-line-separated item summaries and ranges, the UTF-8 byte spans of every \
-recognized token, Obsidian wikilink component spans, every authored \
-sub-bullet's normalized body plus depth, and structured diagnostics. \
+section, and block ID, which parts a picker still has to supply, an optional \
+global_destination object for a leading @@<route> or @@<route>+<block-id> \
+header, ordered blank-line-separated item summaries and ranges after \
+inheritance, the UTF-8 byte spans of every recognized token, Obsidian wikilink \
+component spans, every authored sub-bullet's normalized body plus depth, and \
+structured diagnostics. \
 Wikilink highlighting is syntax-only and never touches the vault. Byte \
 offsets index the original TEXT before whitespace normalization, are \
 half-open [start, end), never overlap, and always land on a character \
@@ -108,7 +110,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task, task_section",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task, task_section",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -216,6 +218,17 @@ struct CaptureParseResult {
     sub_bullet_depths: Vec<u8>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     items: Vec<CaptureParseItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    global_destination: Option<GlobalDestinationParse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct GlobalDestinationParse {
+    range: SourceRange,
+    mode: EditorMode,
+    route: Option<String>,
+    block_id: Option<String>,
+    needs: Vec<Need>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -265,7 +278,26 @@ impl CaptureParseResult {
             sub_bullets: sub_bullet_bodies(&sub_bullets),
             sub_bullet_depths,
             items,
+            global_destination: parse
+                .global_destination
+                .as_ref()
+                .map(global_destination_parse),
         }
+    }
+}
+
+fn global_destination_parse(
+    global: &EditorGlobalDestination,
+) -> GlobalDestinationParse {
+    GlobalDestinationParse {
+        range: SourceRange {
+            start: global.start,
+            end: global.end,
+        },
+        mode: global.mode,
+        route: global.route.clone(),
+        block_id: global.block_id.clone(),
+        needs: global.needs.clone(),
     }
 }
 
@@ -345,6 +377,18 @@ fn print_human_success_with_styler(
     );
     println!();
     print_field(styler, "body", &result.body);
+    if let Some(global) = &result.global_destination {
+        let mut summary = global
+            .route
+            .as_deref()
+            .unwrap_or("(incomplete)")
+            .to_string();
+        if let Some(block_id) = global.block_id.as_deref() {
+            summary.push_str(" +");
+            summary.push_str(block_id);
+        }
+        print_field(styler, "global", &summary);
+    }
     if let Some(route) = result.route.as_deref() {
         print_field(styler, "route", route);
     }
@@ -522,6 +566,7 @@ mod tests {
         assert_eq!(value["spans"][1]["kind"], "interactive_placeholder");
         assert_eq!(value["diagnostics"].as_array().expect("array").len(), 0);
         assert!(value.get("items").is_none(), "{value}");
+        assert!(value.get("global_destination").is_none(), "{value}");
     }
 
     #[test]
@@ -683,5 +728,56 @@ mod tests {
         for pair in result.spans.windows(2) {
             assert!(pair[0].end <= pair[1].start);
         }
+    }
+
+    #[test]
+    fn json_reports_an_inherited_global_destination_without_bumping_schema() {
+        let raw = "@@Foo\nFirst task\n\nSecond task @bar";
+        let value = json(raw);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["body"], "First task");
+        assert_eq!(value["mode"], "task");
+        assert_eq!(value["route"], "foo");
+        assert_eq!(value["global_destination"]["mode"], "task");
+        assert_eq!(value["global_destination"]["route"], "foo");
+        assert!(value["global_destination"]["block_id"].is_null());
+        assert_eq!(
+            value["global_destination"]["range"],
+            json!({ "start": 0, "end": 5 })
+        );
+        assert_eq!(value["items"].as_array().expect("items").len(), 2);
+        assert_eq!(value["items"][0]["index"], 1);
+        assert_eq!(value["items"][0]["route"], "foo");
+        assert_eq!(value["items"][0]["body"], "First task");
+        assert_eq!(value["items"][1]["index"], 2);
+        assert_eq!(value["items"][1]["route"], "bar");
+        assert_eq!(value["spans"][0]["kind"], "global_route", "{value}");
+    }
+
+    #[test]
+    fn json_reports_a_global_sub_bullet_header_and_local_override() {
+        let raw = "@@foo+a-id\nNote one\n\nIndependent @bar";
+        let value = json(raw);
+        assert_eq!(value["mode"], "sub_bullet");
+        assert_eq!(value["route"], "foo");
+        assert_eq!(value["block_id"], "a-id");
+        assert_eq!(value["global_destination"]["mode"], "sub_bullet");
+        assert_eq!(value["global_destination"]["route"], "foo");
+        assert_eq!(value["global_destination"]["block_id"], "a-id");
+        assert_eq!(value["items"][0]["mode"], "sub_bullet");
+        assert_eq!(value["items"][0]["block_id"], "a-id");
+        assert_eq!(value["items"][1]["mode"], "task");
+        assert_eq!(value["items"][1]["route"], "bar");
+        assert!(value["items"][1]["block_id"].is_null());
+    }
+
+    #[test]
+    fn json_reports_a_header_only_draft_as_a_diagnostic() {
+        let value = json("@@foo");
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["global_destination"]["route"], "foo");
+        assert_eq!(value["diagnostics"][0]["code"], "missing_capture_item");
+        assert!(value.get("items").is_none(), "{value}");
     }
 }
