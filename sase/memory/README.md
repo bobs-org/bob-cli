@@ -9,7 +9,7 @@ when relevant.
 ## How Memory Files Are Used
 
 - Non-README Markdown files live directly under `sase/memory/` and use YAML frontmatter
-  for `type`, `parent`, and `description`.
+  for `type`, `parent`, `priority`, and `description`.
 - `type: core` notes are Tier 1 context. `sase memory init` inlines them into
   `AGENTS.md`, then copies that exact content to each provider instruction shim.
 - `type: reference` notes are detailed reference material for Tier 2. They require a
@@ -28,6 +28,9 @@ when relevant.
   legacy values `short` and `long` are still accepted and mean the same thing.
 - `parent`: `AGENTS.md` for top-level notes, or `sase/memory/<note>.md` when a reference
   note belongs under another reference note.
+- `priority`: optional non-negative integer for core notes. The default is `20`; lower
+  values render earlier in Tier 1, with ties broken by path. The generated
+  `sase/memory/sase.md` note uses `priority: 10`.
 - `description`: required for reference notes and used in generated agent instructions
   and this README. Reference-note descriptions may be Markdown blocks authored as YAML
   literal block scalars; Tier 2 sections render those blocks verbatim, while single-line
@@ -71,24 +74,24 @@ memory.
 - Type: `core`
 - Description: No description set.
 - Parent: `AGENTS.md`
-- Lines: 15
-- Approx. tokens: 143
+- Lines: 18
+- Approx. tokens: 169
 
 ### `sase/memory/sase.md`
 
 - Type: `core`
 - Description: No description set.
 - Parent: `AGENTS.md`
-- Lines: 67
-- Approx. tokens: 932
+- Lines: 68
+- Approx. tokens: 936
 
 ### `sase/memory/task_types.md`
 
 - Type: `core`
 - Description: No description set.
 - Parent: `AGENTS.md`
-- Lines: 83
-- Approx. tokens: 820
+- Lines: 47
+- Approx. tokens: 515
 
 ### `sase/memory/cli_rules.md`
 
@@ -132,8 +135,8 @@ memory.
 - Total notes: 8
 - Core notes: 4
 - Reference notes: 4
-- Total lines: 478
-- Total approx. tokens: 5517
+- Total lines: 446
+- Total approx. tokens: 5242
 
 ## Commands
 
