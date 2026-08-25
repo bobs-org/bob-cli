@@ -100,11 +100,7 @@ depend on. Pass every term you need in one command — one batched read costs fa
 tokens than one read per term, because terms shared between definitions are printed
 once. Terms are separated by semicolons; aliases follow in parentheses.
 
-<!-- sase:strands -->
-
 **GLOSSARY TERMS:** Pomodoro; Schedule Log; Task Link (task block link); Work Log
-
-<!-- /sase:strands -->
 
 ### 1.3 Task Bead Types (task_types)
 
@@ -113,8 +109,6 @@ Every task bead can carry a `task_type` drawn from this project's catalog.
 `sase memory read task_types:<slug> -r "<why>"` for one generated type in full. This
 note is the generated, always-current snapshot of the agent-creatable types below.
 
-<!-- sase:strands -->
-
 - **Bug** (`bug`) - A defect an agent found while doing unrelated work, not an external
   tracker bug.
 - **CI failure** (`ci`) - A confirmed true test or lint failure, not a flake.
@@ -122,8 +116,6 @@ note is the generated, always-current snapshot of the agent-creatable types belo
   list.
 - **Flaky test** (`flake`) - A test that fails and then passes on an unchanged tree.
 - **Memory** (`memory`) - A sase memory note or skill that is out of date.
-
-<!-- /sase:strands -->
 
 #### 1.3.1 File Discovered Work As Task Beads
 
