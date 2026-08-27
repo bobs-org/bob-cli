@@ -9,7 +9,7 @@ index, and environment variables.
 | [capture.md](capture.md) | Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery) |
 | [dataview.md](dataview.md) | `bob query` Dataview and Tasks |
 | [highlights-ref-sync.md](highlights-ref-sync.md) | `bob highlights` PDF intake and reference notes |
-| [obsidian-sync-exclusions.md](obsidian-sync-exclusions.md) | Runbook for removing a folder from Obsidian Sync while preserving the local vault copy |
+| [obsidian-sync-exclusions.md](obsidian-sync-exclusions.md) | Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only |
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task-status-hooks` Pomodoro-driven task status |

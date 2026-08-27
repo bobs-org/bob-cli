@@ -1,5 +1,17 @@
 # Obsidian Sync folder exclusions
 
+> **Historical.** Obsidian Sync is no longer the Bob vault's sync channel. The vault
+> syncs through git only; see [vault-git-sync.md](vault-git-sync.md) for the live
+> runbook. `ob-sync-bob.service` is disabled and the Obsidian Sync core plugin is off,
+> so nothing here runs as part of normal operation. This page is kept because the
+> exclusion semantics it records are not documented anywhere else and are easy to get
+> wrong if Sync is ever relinked.
+>
+> **Exactly one sync engine may run against `~/bob`.** With both git sync and Obsidian
+> Sync live, a delete propagated by one is resurrected by the other, indefinitely. Stop
+> `bob-vault-sync.service` and the MacBook LaunchAgent before re-enabling Sync for any
+> reason.
+
 This runbook covers removing an already-synced folder from Obsidian Sync while
 preserving the local copy in the Bob vault.
 
@@ -33,9 +45,14 @@ Do not write `/old_lib`, `old_lib/`, or `Old_lib`.
 
 1. Confirm that the folder is fully backed up outside Obsidian Sync. For
    `old_lib/`, the required durable backup is the vault Git repo; keep a second
-   independent copy during any destructive sync window.
-2. Stop automated sync processes, including `ob-sync-bob.service` and any cron
-   job that can run `bob nightly`.
+   independent copy during any destructive sync window. Note that the vault Git
+   repo does not cover every path: `lit_review/` and `xlib/` are gitignored by
+   policy, and paths outside `.gitignore`'s extension allowlist are untracked.
+2. Stop automated sync processes. Today that means `bob-vault-sync.service` on
+   athena, the `com.bbugyi.bob-vault-sync` LaunchAgent on the MacBook, the 03:30
+   `bob nightly` crontab line, and `ob-sync-bob.service` if it has been re-enabled.
+   `bob nightly` no longer gates on `ob sync`; it runs `vault-sync`,
+   `move-done-tasks`, `vault-sync`.
 3. Move the target folder out of the sync client's view without copying bytes,
    for example by staging it under a dot-prefixed vault directory:
 
@@ -71,7 +88,7 @@ Do not write `/old_lib`, `old_lib/`, or `Old_lib`.
    mkdir -p ~/bob/old_lib
    mv ~/bob/.old_lib_migrating/* ~/bob/old_lib/
    rmdir ~/bob/.old_lib_migrating
-   systemctl --user start ob-sync-bob.service
+   systemctl --user start ob-sync-bob.service  # only if Sync is the live channel
    tail -f ~/.config/obsidian-headless/sync/8a259ad922718b6d8400c1f0e3ba8abe/sync.log | grep -i old_lib
    ```
 
