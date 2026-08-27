@@ -13,6 +13,7 @@ use std::{
 };
 
 use chrono::Local;
+use fs2::FileExt;
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::{
@@ -21703,8 +21704,538 @@ fn legacy_bob_sync_binary_runs_bulk_git_commit_native_path() {
 }
 
 #[test]
+fn vault_sync_help_is_native_only_and_defaults_to_run() {
+    let temp = TempDir::new("bob-cli-vault-sync-native-help");
+    let help = bob_command()
+        .arg("vault-sync")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run native-only bob vault-sync --help");
+
+    assert_success(&help);
+    assert!(
+        stdout(&help).contains("bob vault-sync")
+            && stdout(&help).contains("run")
+            && stdout(&help).contains("status"),
+        "expected vault-sync help text:\n{}",
+        format_output(&help)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only vault-sync should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&help);
+
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    let implicit = vault_sync_command(&vault, &temp)
+        .arg("--dry-run")
+        .output()
+        .expect("run implicit vault-sync dry-run");
+    let explicit = vault_sync_command(&vault, &temp)
+        .arg("run")
+        .arg("--dry-run")
+        .output()
+        .expect("run explicit vault-sync dry-run");
+
+    assert_success(&implicit);
+    assert_success(&explicit);
+    assert!(
+        stdout(&implicit).contains("would push after reconcile"),
+        "implicit run should parse run options:\n{}",
+        format_output(&implicit)
+    );
+}
+
+#[test]
+fn vault_sync_no_change_cycle_writes_status_without_committing() {
+    let temp = TempDir::new("bob-cli-vault-sync-no-change");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    let head_before = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run no-change vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-parse", "HEAD"])),
+        head_before,
+        "no-change cycle should not create a commit"
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["status", "--porcelain"])),
+        "",
+        "vault should stay clean"
+    );
+
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["files_committed"], 0);
+    assert_eq!(status["last_error"], serde_json::Value::Null);
+    assert!(
+        status["last_success_at"].is_string(),
+        "successful cycle should set last_success_at:\n{status}"
+    );
+
+    let status_output = vault_sync_command(&vault, &temp)
+        .arg("status")
+        .arg("--json")
+        .output()
+        .expect("run vault-sync status --json");
+    assert_success(&status_output);
+    let printed_status: serde_json::Value =
+        serde_json::from_str(&stdout(&status_output))
+            .expect("status --json should print JSON");
+    assert_eq!(printed_status["last_error"], serde_json::Value::Null);
+}
+
+#[test]
+fn vault_sync_local_only_change_commits_and_pushes() {
+    let temp = TempDir::new("bob-cli-vault-sync-local");
+    let (vault, remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("extra.md"), "- [ ] local #task\n");
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "Athena Test")
+        .output()
+        .expect("run local-only vault-sync");
+
+    assert_success(&output);
+    let subject = stdout(&git_in(&vault, ["log", "-1", "--format=%s"]));
+    assert!(
+        subject.starts_with("vault(athena-test): 1 file - extra.md"),
+        "generated commit subject should summarize paths:\n{subject}"
+    );
+    assert_eq!(
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            "master:extra.md"
+        ])),
+        "- [ ] local #task\n",
+        "push should update remote"
+    );
+
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["files_committed"], 1);
+}
+
+#[test]
+fn vault_sync_remote_only_change_fast_forwards() {
+    let temp = TempDir::new("bob-cli-vault-sync-remote");
+    let (vault, remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&peer.join("remote.md"), "- [ ] remote #task\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote change"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run remote-only vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("remote.md"))
+            .expect("read fast-forwarded file"),
+        "- [ ] remote #task\n"
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-parse", "HEAD"])),
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "rev-parse",
+            "master"
+        ])),
+        "local HEAD should match remote after fast-forward"
+    );
+}
+
+#[test]
+fn vault_sync_non_overlapping_edits_merge_cleanly() {
+    let temp = TempDir::new("bob-cli-vault-sync-clean-merge");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("shared.md"), "one\nmiddle\ntwo\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add shared"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+
+    write_file(&vault.join("shared.md"), "local one\nmiddle\ntwo\n");
+    write_file(&peer.join("shared.md"), "one\nmiddle\nremote two\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote shared"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run clean-merge vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("shared.md")).expect("read merged file"),
+        "local one\nmiddle\nremote two\n"
+    );
+    assert!(
+        quarantined_conflict_files(&vault).is_empty(),
+        "clean merge should not create conflict copies"
+    );
+}
+
+#[test]
+fn vault_sync_same_line_edit_quarantines_local_copy_and_keeps_remote() {
+    let temp = TempDir::new("bob-cli-vault-sync-text-conflict");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("note.md"), "base\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add note"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+
+    write_file(&vault.join("note.md"), "local\n");
+    write_file(&peer.join("note.md"), "remote\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote note"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "athena")
+        .output()
+        .expect("run text-conflict vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read remote winner"),
+        "remote\n"
+    );
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read_to_string(&copies[0]).expect("read conflict copy"),
+        "local\n"
+    );
+    assert_no_conflict_markers(&vault);
+
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(
+        status["conflicts"]
+            .as_array()
+            .expect("conflicts array")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn vault_sync_both_added_file_quarantines_local_copy() {
+    let temp = TempDir::new("bob-cli-vault-sync-both-added");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("2026/20260827.md"), "local daily\n");
+    write_file(&peer.join("2026/20260827.md"), "remote daily\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote daily"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run both-added vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("2026/20260827.md"))
+            .expect("read remote winner"),
+        "remote daily\n"
+    );
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read_to_string(&copies[0]).expect("read conflict copy"),
+        "local daily\n"
+    );
+}
+
+#[test]
+fn vault_sync_delete_modify_conflict_keeps_the_file() {
+    let temp = TempDir::new("bob-cli-vault-sync-delete-modify");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("keep.md"), "base\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add keep"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+
+    write_file(&vault.join("keep.md"), "local edit\n");
+    fs::remove_file(peer.join("keep.md")).expect("delete peer file");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote delete"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run delete-modify vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("keep.md")).expect("read kept file"),
+        "local edit\n",
+        "delete/modify conflict should keep the file"
+    );
+}
+
+#[test]
+fn vault_sync_binary_conflict_quarantines_uncorrupted_local_copy() {
+    let temp = TempDir::new("bob-cli-vault-sync-binary-conflict");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    write_bytes(&vault.join("image.bin"), b"base\0bytes\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add binary"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+
+    write_bytes(&vault.join("image.bin"), b"local\0bytes\n");
+    write_bytes(&peer.join("image.bin"), b"remote\0bytes\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote binary"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run binary-conflict vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read(vault.join("image.bin")).expect("read binary winner"),
+        b"remote\0bytes\n"
+    );
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read(&copies[0]).expect("read binary conflict copy"),
+        b"local\0bytes\n"
+    );
+}
+
+#[test]
+fn vault_sync_refuses_95_mib_file_before_staging() {
+    let temp = TempDir::new("bob-cli-vault-sync-large-file");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    let large = vault.join("large.bin");
+    let file = fs::File::create(&large).expect("create sparse large file");
+    file.set_len(95 * 1024 * 1024)
+        .expect("size sparse large file");
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run large-file vault-sync");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "large file should fail locally:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["diff", "--cached", "--name-only"])),
+        "",
+        "large file must not be staged"
+    );
+    let status = read_vault_sync_status(&temp);
+    assert!(
+        status["last_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("refusing to stage large.bin")),
+        "status should record large-file preflight error:\n{status}"
+    );
+}
+
+#[test]
+fn vault_sync_recovers_interrupted_merge_and_finishes_cycle() {
+    let temp = TempDir::new("bob-cli-vault-sync-interrupted-merge");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("note.md"), "base\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add note"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+
+    write_file(&vault.join("note.md"), "local after interrupted merge\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "local note"]);
+    write_file(&peer.join("note.md"), "remote after interrupted merge\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote note"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+    git_in(&vault, ["fetch", "-q", "origin", "master"]);
+
+    let merge = git_maybe_in(&vault, ["merge", "--no-edit", "origin/master"]);
+    assert!(
+        !merge.status.success(),
+        "manual merge should leave conflict state:\n{}",
+        format_output(&merge)
+    );
+    assert!(vault.join(".git/MERGE_HEAD").exists());
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run interrupted-merge vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read resolved note"),
+        "remote after interrupted merge\n"
+    );
+    assert!(
+        !vault.join(".git/MERGE_HEAD").exists(),
+        "cycle should clear interrupted merge state"
+    );
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["interrupted_merge_recovered"], true);
+}
+
+#[test]
+fn vault_sync_push_race_retries_and_succeeds() {
+    let temp = TempDir::new("bob-cli-vault-sync-push-race");
+    let (vault, remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("local.md"), "local\n");
+    let marker = temp.path().join("race-marker");
+    write_executable(
+        &vault.join(".git/hooks/pre-push"),
+        r#"#!/bin/sh
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+if [ ! -f "$RACE_MARKER" ]; then
+  : > "$RACE_MARKER"
+  printf 'race\n' > "$RACE_PEER/race.md"
+  git -C "$RACE_PEER" add race.md
+  git -C "$RACE_PEER" commit -q -m "race remote"
+  git -C "$RACE_PEER" push -q origin master
+  printf 'non-fast-forward race\n' >&2
+  exit 1
+fi
+exit 0
+"#,
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("RACE_MARKER", &marker)
+        .env("RACE_PEER", &peer)
+        .output()
+        .expect("run push-race vault-sync");
+
+    assert_success(&output);
+    assert_eq!(
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            "master:local.md"
+        ])),
+        "local\n"
+    );
+    assert_eq!(
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            "master:race.md"
+        ])),
+        "race\n"
+    );
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["push_retries"], 1);
+}
+
+#[test]
+fn vault_sync_concurrent_invocation_exits_zero_silently() {
+    let temp = TempDir::new("bob-cli-vault-sync-lock");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    let lock_path = vault_sync_lock_file(&temp);
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open lock");
+    lock.try_lock_exclusive().expect("hold lock");
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run locked vault-sync");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "", "locked run should be silent on stdout");
+    assert_eq!(stderr(&output), "", "locked run should be silent on stderr");
+}
+
+#[test]
+fn conflict_directory_is_skipped_by_vault_walkers() {
+    let temp = TempDir::new("bob-cli-conflicts-excluded");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(
+        &vault.join("_conflicts/bad.md"),
+        &format!("{}\n#project\n", done_tasks_source(12)),
+    );
+
+    let output = bob_command()
+        .arg("move-done-tasks")
+        .arg("--threshold")
+        .arg("10")
+        .env("BOB_DIR", &vault)
+        .env("HOME", temp.path().join("home"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run move-done-tasks against conflict-only vault");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("markdown files: 0"),
+        "_conflicts markdown files should not be scanned:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !vault.join("done").exists(),
+        "_conflicts tasks must not be archived"
+    );
+
+    let dataview = bob_command()
+        .arg("query")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-S")
+        .arg("-q")
+        .arg("LIST FROM #project")
+        .output()
+        .expect("run native Dataview query against conflict-only vault");
+    assert_success(&dataview);
+    assert_eq!(
+        stdout(&dataview),
+        "",
+        "_conflicts notes must not be visible to native Dataview"
+    );
+
+    let tasks = bob_command()
+        .arg("query")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--tasks")
+        .arg("")
+        .output()
+        .expect("run native Tasks query against conflict-only vault");
+    assert_success(&tasks);
+    assert_eq!(
+        stdout(&tasks),
+        "",
+        "_conflicts tasks must not be visible to native Tasks"
+    );
+}
+
+#[test]
 fn renamed_old_top_level_commands_are_unknown() {
-    for command in ["move-done-tasks", "bulk-git-commit", "query"] {
+    for command in ["move-done-tasks", "bulk-git-commit", "query", "vault-sync"]
+    {
         let output = bob_command()
             .arg(command)
             .arg("--help")
@@ -21768,6 +22299,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "query",
         "task-status-hooks",
         "tmux-pomodoro",
+        "vault-sync",
     ];
     let mut last = 0;
     for command in order {
@@ -21798,7 +22330,8 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
             && help.contains("bob task-status-hooks --dry-run")
             && help.contains("bob move-done-tasks --threshold 10")
             && help.contains("bob nightly")
-            && help.contains("bob pomodoro"),
+            && help.contains("bob pomodoro")
+            && help.contains("bob vault-sync status --json"),
         "expected an Examples section:\n{help}"
     );
     assert!(
@@ -22321,6 +22854,166 @@ fn init_git_vault_with_remote(temp: &TempDir) -> (PathBuf, PathBuf) {
     git_in(&vault, ["config", "user.email", "test@example.com"]);
     git_in(&vault, ["remote", "add", "origin", path_str(&remote)]);
     (vault, remote)
+}
+
+fn init_vault_sync_pair(temp: &TempDir) -> (PathBuf, PathBuf, PathBuf) {
+    let vault = temp.path().join("vault");
+    let remote = temp.path().join("remote.git");
+    let peer = temp.path().join("peer");
+    fs::create_dir_all(&vault).expect("create vault");
+    git(["init", "-q", "--bare", path_str(&remote)]);
+    git([
+        "--git-dir",
+        path_str(&remote),
+        "symbolic-ref",
+        "HEAD",
+        "refs/heads/master",
+    ]);
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["symbolic-ref", "HEAD", "refs/heads/master"]);
+    configure_test_git_identity(&vault);
+    git_in(&vault, ["remote", "add", "origin", path_str(&remote)]);
+    write_file(&vault.join("initial.md"), "- [ ] initial #task\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "master"]);
+    git(["clone", "-q", path_str(&remote), path_str(&peer)]);
+    configure_test_git_identity(&peer);
+    (vault, remote, peer)
+}
+
+fn vault_sync_command(vault: &Path, temp: &TempDir) -> Command {
+    let home = temp.path().join("home");
+    let stub_bin = temp.path().join("vault-sync-bin");
+    fs::create_dir_all(&home).expect("create vault-sync home");
+    fs::create_dir_all(&stub_bin).expect("create vault-sync stub bin");
+    write_executable(&stub_bin.join("bob"), "#!/bin/sh\nexit 0\n");
+
+    let mut command = bob_command();
+    command
+        .arg("vault-sync")
+        .env("BOB_DIR", vault)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(temp))
+        .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(temp))
+        .env("HOME", home)
+        .env("NO_COLOR", "1")
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"));
+    command
+}
+
+fn vault_sync_lock_file(temp: &TempDir) -> PathBuf {
+    temp.path().join("vault-sync.lock")
+}
+
+fn vault_sync_state_file(temp: &TempDir) -> PathBuf {
+    temp.path().join("vault-sync.json")
+}
+
+fn read_vault_sync_status(temp: &TempDir) -> serde_json::Value {
+    let path = vault_sync_state_file(temp);
+    let contents = fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("read status {}: {error}", path.display())
+    });
+    serde_json::from_str(&contents).unwrap_or_else(|error| {
+        panic!("parse status {}: {error}\n{contents}", path.display())
+    })
+}
+
+fn git_maybe_in<I, S>(directory: &Path, args: I) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    Command::new("git")
+        .arg("-c")
+        .arg("color.ui=false")
+        .arg("-c")
+        .arg("color.status=false")
+        .arg("-C")
+        .arg(directory)
+        .args(args)
+        .output()
+        .expect("run git")
+}
+
+fn write_bytes(path: &Path, contents: &[u8]) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap_or_else(|error| {
+            panic!("create parent {}: {error}", parent.display())
+        });
+    }
+    fs::write(path, contents)
+        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+fn quarantined_conflict_files(vault: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_quarantined_conflict_files(&vault.join("_conflicts"), &mut files);
+    files.sort();
+    files
+}
+
+fn collect_quarantined_conflict_files(
+    directory: &Path,
+    files: &mut Vec<PathBuf>,
+) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries {
+        let entry = entry.expect("read conflict entry");
+        let path = entry.path();
+        let file_type = entry.file_type().expect("read conflict file type");
+        if file_type.is_dir() {
+            collect_quarantined_conflict_files(&path, files);
+        } else if file_type.is_file()
+            && path.file_name().and_then(OsStr::to_str)
+                != Some("sync_conflicts.md")
+        {
+            files.push(path);
+        }
+    }
+}
+
+fn assert_no_conflict_markers(vault: &Path) {
+    let mut files = Vec::new();
+    collect_vault_files(vault, vault, &mut files);
+    for path in files {
+        let contents = fs::read(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(
+            !contents
+                .windows(b"<<<<<<<".len())
+                .any(|window| window == b"<<<<<<<"),
+            "conflict marker found in {}",
+            path.display()
+        );
+    }
+}
+
+fn collect_vault_files(
+    vault: &Path,
+    directory: &Path,
+    files: &mut Vec<PathBuf>,
+) {
+    let entries = fs::read_dir(directory).unwrap_or_else(|error| {
+        panic!("read {}: {error}", directory.display())
+    });
+    for entry in entries {
+        let entry = entry.expect("read vault entry");
+        if entry.file_name() == OsStr::new(".git") {
+            continue;
+        }
+        let path = entry.path();
+        let file_type = entry.file_type().expect("read vault file type");
+        if file_type.is_dir() {
+            collect_vault_files(vault, &path, files);
+        } else if file_type.is_file() {
+            let _ = path.strip_prefix(vault).expect("vault file path");
+            files.push(path);
+        }
+    }
 }
 
 fn write_successful_ob_stub(stub_bin: &Path) {

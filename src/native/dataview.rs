@@ -5417,7 +5417,10 @@ fn collect_native_markdown_paths(
             }
         })?;
         if file_type.is_dir() {
-            if !is_hidden_path_component(&entry.file_name()) {
+            let name = entry.file_name();
+            if !is_hidden_path_component(&name)
+                && name != OsStr::new("_conflicts")
+            {
                 collect_native_markdown_paths(&path, paths)?;
             }
         } else if file_type.is_file() && has_markdown_extension(&path) {

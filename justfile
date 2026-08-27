@@ -64,6 +64,7 @@ install-smoke:
     "${root}/bin/bob" projects --help >/dev/null
     "${root}/bin/bob" projects sync --help >/dev/null
     "${root}/bin/bob" tmux-pomodoro --help >/dev/null
+    "${root}/bin/bob" vault-sync --help >/dev/null
     "${root}/bin/bob_notify" --help >/dev/null
     "${root}/bin/bob_pomodoro" --help >/dev/null
     "${root}/bin/bob_sync" --help >/dev/null

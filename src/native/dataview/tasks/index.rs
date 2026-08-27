@@ -86,7 +86,10 @@ fn collect_markdown_paths(
             }
         })?;
         if file_type.is_dir() {
-            if !entry.file_name().to_string_lossy().starts_with('.') {
+            let name = entry.file_name();
+            if !name.to_string_lossy().starts_with('.')
+                && name != OsStr::new("_conflicts")
+            {
                 collect_markdown_paths(&path, paths)?;
             }
         } else if file_type.is_file() && is_markdown(&path) {

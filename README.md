@@ -25,6 +25,7 @@ fallback behavior.
 - [Plugins](#plugins)
 - [Highlights](#highlights)
 - [Nightly maintenance](#nightly-maintenance)
+- [Vault sync](#vault-sync)
 - [Move done tasks](#move-done-tasks)
 - [Pomodoro status](#pomodoro-status)
 - [Compatibility shims](#compatibility-shims)
@@ -154,6 +155,7 @@ Bob's workflow commands are:
 | [`query`](#query) | Run headless Dataview or Tasks queries, or live Dataview queries |
 | [`task-status-hooks`](#task-status-hooks) | Reconcile Pomodoro links, task ranks, and derived Blocked state |
 | [`tmux-pomodoro`](#pomodoro-status) | Print Pomodoro status for a tmux status line |
+| [`vault-sync`](#vault-sync) | Reconcile the Bob vault through Git |
 
 Use `bob <command> --help` for concise usage. The sections below summarize each
 workflow and link to the detailed command contract where one exists.
@@ -393,6 +395,30 @@ that syncs Obsidian first. It mutates the vault repository and should only be
 run when its Git remote and required credentials are ready. It uses the same
 shared lock as `bob nightly`.
 
+## Vault sync
+
+```bash
+bob vault-sync [run] [-n|--dry-run] [-m|--message MESSAGE] [-q|--quiet]
+bob vault-sync status [-j|--json]
+```
+
+Runs one Git reconcile cycle for the Bob vault. The default subcommand is
+`run`, so `bob vault-sync --dry-run` is accepted. A cycle acquires the shared
+maintenance lock, recovers interrupted merge/rebase/cherry-pick state, commits
+local vault changes when present, fetches and merges `origin/master`, resolves
+supported conflicts by writing local conflict copies under `_conflicts/`, and
+pushes with bounded non-fast-forward retries.
+
+The command refuses to stage any file at or above 95 MiB, warns for files at or
+above 50 MiB, and writes a status record after each non-dry-run cycle. Use
+`bob vault-sync status --json` for the machine-readable record containing the
+last attempt/success timestamps, local and remote SHAs, committed-file count,
+push retries, duration, conflict-copy paths, interrupted-merge recovery flag,
+and last error.
+
+If another maintenance command already holds the lock, `bob vault-sync run`
+exits 0 silently.
+
 ## Move done tasks
 
 ```bash
@@ -549,6 +575,15 @@ directory, otherwise `/tmp/bob_sync.lock`.
 `BOB_BULK_GIT_COMMIT_MESSAGE` overrides the commit message used by
 `bob bulk-git-commit`.
 
+`BOB_VAULT_SYNC_LOCK_FILE` overrides the lock path used by `bob vault-sync`.
+The default path is the same shared `bob_sync.lock` path used by nightly
+maintenance.
+
+`BOB_VAULT_SYNC_STATE_FILE` overrides the JSON status record written and read
+by `bob vault-sync`. The default is
+`$XDG_STATE_HOME/bob-cli/vault-sync.json`, or
+`$HOME/.local/state/bob-cli/vault-sync.json` when `XDG_STATE_HOME` is unset.
+
 `BOB_CLI_USE_SCRIPT=1` selects an embedded shell implementation where one is
 available. See [Compatibility shims](#compatibility-shims) for the exact command
 coverage and cache location.
@@ -664,9 +699,10 @@ Obsidian sync gate.
 
 ## Migration notes
 
-Use `bob pomodoro`, `bob notify`, `bob bulk-git-commit`, and
-`bob tmux-pomodoro` for new integrations, and run `bob move-done-tasks` when
-done and canceled task blocks should be archived from the vault.
+Use `bob pomodoro`, `bob notify`, `bob vault-sync`,
+`bob bulk-git-commit`, and `bob tmux-pomodoro` for new integrations, and run
+`bob move-done-tasks` when done and canceled task blocks should be archived
+from the vault.
 
 The old top-level commands were renamed: `bob collect-done` is now
 `bob move-done-tasks`, `bob dataview` is now `bob query`, `bob highlights-ref`

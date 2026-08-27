@@ -1,9 +1,14 @@
 use std::ffi::{OsStr, OsString};
 
-const ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES: &[&str] =
-    &[".git", ".obsidian", "_generated", "_templates"];
+const ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES: &[&str] = &[
+    ".git",
+    ".obsidian",
+    "_conflicts",
+    "_generated",
+    "_templates",
+];
 
-fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
+pub(crate) fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
     name.to_str().is_some_and(|name| {
         ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES.contains(&name)
     })
@@ -38,6 +43,7 @@ mod projects;
 mod style;
 mod sync;
 mod task_status_hooks;
+mod vault_sync;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {
@@ -61,6 +67,7 @@ pub(crate) enum NativeCommand {
     Projects,
     TaskStatusHooks,
     TmuxPomodoro,
+    VaultSync,
 }
 
 pub(crate) fn command_for_script(
@@ -97,6 +104,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Projects => projects::run(args),
         NativeCommand::TaskStatusHooks => task_status_hooks::run(args),
         NativeCommand::TmuxPomodoro => pomodoro::run_tmux(args),
+        NativeCommand::VaultSync => vault_sync::run(args),
     }
 }
 

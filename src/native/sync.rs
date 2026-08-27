@@ -86,7 +86,7 @@ pub(crate) fn commit_and_push_vault(
     0
 }
 
-fn verify_bob_worktree(
+pub(crate) fn verify_bob_worktree(
     bob_dir: &Path,
     child_env: &ChildEnv,
 ) -> Result<(), String> {

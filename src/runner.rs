@@ -150,6 +150,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         about: "Print Pomodoro status for tmux",
         native_command: NativeCommand::TmuxPomodoro,
     },
+    Subcommand {
+        name: "vault-sync",
+        script_command: None,
+        about: "Reconcile the Bob vault through Git",
+        native_command: NativeCommand::VaultSync,
+    },
 ];
 
 const HIDDEN_SUBCOMMAND_ALIASES: &[Subcommand] = &[
@@ -333,6 +339,7 @@ Examples:
   bob plugins list               List Bob plugins and their vault sync state
   bob pomodoro                   Show today's Pomodoro status
   bob projects list              List project notes and ^prj task states
+  bob vault-sync status --json   Print the last vault Git sync status
 
 Run 'bob <command> --help' for more information on a command.";
 

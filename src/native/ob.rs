@@ -248,6 +248,14 @@ env -0
 /// run), `Err(0)` when another run already holds the lock, and `Err(1)` on an
 /// unexpected I/O error.
 pub(crate) fn acquire_lock() -> Result<Option<File>, i32> {
+    acquire_lock_impl(false)
+}
+
+pub(crate) fn acquire_lock_quiet_if_held() -> Result<Option<File>, i32> {
+    acquire_lock_impl(true)
+}
+
+fn acquire_lock_impl(quiet_if_held: bool) -> Result<Option<File>, i32> {
     let lock_file = lock_file_from_env().unwrap_or_else(default_lock_file);
 
     let file = match OpenOptions::new()
@@ -270,10 +278,12 @@ pub(crate) fn acquire_lock() -> Result<Option<File>, i32> {
     match file.try_lock_exclusive() {
         Ok(()) => Ok(Some(file)),
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-            eprintln!(
-                "bob: another Bob vault maintenance run is already active; \
-                 exiting."
-            );
+            if !quiet_if_held {
+                eprintln!(
+                    "bob: another Bob vault maintenance run is already active; \
+                     exiting."
+                );
+            }
             Err(0)
         }
         Err(error) => {
@@ -287,8 +297,12 @@ pub(crate) fn acquire_lock() -> Result<Option<File>, i32> {
 }
 
 fn lock_file_from_env() -> Option<PathBuf> {
-    env::var_os("BOB_BULK_GIT_COMMIT_LOCK_FILE")
+    env::var_os("BOB_VAULT_SYNC_LOCK_FILE")
         .filter(|value| !value.is_empty())
+        .or_else(|| {
+            env::var_os("BOB_BULK_GIT_COMMIT_LOCK_FILE")
+                .filter(|value| !value.is_empty())
+        })
         .or_else(|| {
             env::var_os("BOB_SYNC_LOCK_FILE").filter(|value| !value.is_empty())
         })
