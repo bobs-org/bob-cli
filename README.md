@@ -121,6 +121,7 @@ Paths below are relative to `BOB_DIR` (`~/bob` by default):
 | `.obsidian/plugins/` | Installed community plugins, including Bob's custom plugins |
 | `xlib/` | Highlights intake PDFs from `bob highlights create` |
 | `lib/` | Highlights library PDFs after `bob highlights scan` |
+| `old_lib/` | Archival predecessor of `lib/`; excluded from Obsidian Sync on athena and backed up through the vault Git repo |
 | `ref/` | Generated Highlights reference notes |
 
 Daily-note selection uses `BOB_DAY_FILE` when set, otherwise
@@ -721,6 +722,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Capture grammar, JSON, and picker protocol | [`docs/capture.md`](docs/capture.md) |
 | `bob query` Dataview and Tasks | [`docs/dataview.md`](docs/dataview.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
+| Obsidian Sync folder exclusion runbook | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Custom plugin list and vault deploy | [`docs/plugins.md`](docs/plugins.md) |
 | Project `^prj` lifecycle and schedules | [`docs/projects.md`](docs/projects.md) |
 | Pomodoro-driven task status sync | [`docs/task-status-hooks.md`](docs/task-status-hooks.md) |
