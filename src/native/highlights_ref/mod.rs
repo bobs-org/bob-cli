@@ -23,7 +23,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::{
-    env as bob_env, ob,
+    config as bob_config, env as bob_env, ob,
     style::{display_width, pad_right, Styler},
 };
 
@@ -35,6 +35,7 @@ const DEFAULT_REF_DIR: &str = "ref";
 const DEFAULT_XLIB_DIR: &str = "xlib";
 
 const ENV_LIB_DIR: &str = "BOB_HIGHLIGHTS_LIB_DIR";
+const ENV_PRE_SCAN_COMMAND: &str = "BOB_HIGHLIGHTS_PRE_SCAN_COMMAND";
 const ENV_REF_DIR: &str = "BOB_HIGHLIGHTS_REF_DIR";
 const ENV_XLIB_DIR: &str = "BOB_HIGHLIGHTS_XLIB_DIR";
 
@@ -118,6 +119,17 @@ struct Config {
     lib_dir: PathBuf,
     ref_dir: PathBuf,
     xlib_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreScanCommand {
+    command: OsString,
+}
+
+impl PreScanCommand {
+    fn display(&self) -> String {
+        self.command.to_string_lossy().into_owned()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -650,6 +662,165 @@ fn report_result(result: Result<()>) -> i32 {
     }
 }
 
+fn configured_pre_scan_command() -> Result<Option<PreScanCommand>> {
+    if let Some(command) = env::var_os(ENV_PRE_SCAN_COMMAND) {
+        return Ok(pre_scan_command_from_os(command));
+    }
+
+    let config = bob_config::load_highlights_config(&bob_config::config_path())
+        .map_err(config_error)?;
+    Ok(config.pre_scan_command().map(|command| PreScanCommand {
+        command: OsString::from(command),
+    }))
+}
+
+fn pre_scan_command_from_os(command: OsString) -> Option<PreScanCommand> {
+    (!command.to_string_lossy().trim().is_empty())
+        .then_some(PreScanCommand { command })
+}
+
+fn config_error(error: bob_config::ConfigError) -> CommandError {
+    match error {
+        bob_config::ConfigError::Read(message)
+        | bob_config::ConfigError::Invalid(message) => {
+            CommandError::new(message)
+        }
+    }
+}
+
+fn run_pre_scan_command(
+    config: &Config,
+    command: Option<&PreScanCommand>,
+    dry_run: bool,
+) -> Result<()> {
+    let Some(command) = command else {
+        return Ok(());
+    };
+
+    if dry_run {
+        println!("pre_scan_command: would-run {}", command.display());
+        return Ok(());
+    }
+
+    println!("pre_scan_command: run {}", command.display());
+    let status = process::Command::new("sh")
+        .arg("-c")
+        .arg(&command.command)
+        .current_dir(&config.bob_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| {
+            CommandError::new(format!(
+                "run pre-scan command {}: {error}",
+                command.display()
+            ))
+        })?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CommandError::new(format!(
+            "pre-scan command failed with {}: {}",
+            exit_status_label(&status),
+            command.display()
+        )))
+    }
+}
+
+fn exit_status_label(status: &process::ExitStatus) -> String {
+    status
+        .code()
+        .map(|code| format!("exit {code}"))
+        .unwrap_or_else(|| status.to_string())
+}
+
+fn check_pre_scan_command(
+    command: Option<&PreScanCommand>,
+    failures: &mut Vec<String>,
+) {
+    let Some(command) = command else {
+        println!("pre_scan_command: none");
+        return;
+    };
+
+    let Some(program) = pre_scan_program(command) else {
+        println!(
+            "pre_scan_command: fail ({}; executable not found)",
+            command.display()
+        );
+        failures.push(format!(
+            "pre-scan command has no executable word: {}",
+            command.display()
+        ));
+        return;
+    };
+
+    match shell_command_available(&program) {
+        Ok(true) => {
+            println!(
+                "pre_scan_command: ok ({}; executable: {})",
+                command.display(),
+                program.to_string_lossy()
+            );
+        }
+        Ok(false) => {
+            println!(
+                "pre_scan_command: fail ({}; executable not found: {})",
+                command.display(),
+                program.to_string_lossy()
+            );
+            failures.push(format!(
+                "pre-scan command executable not found: {}",
+                program.to_string_lossy()
+            ));
+        }
+        Err(error) => {
+            println!(
+                "pre_scan_command: fail ({}; executable check failed: {error})",
+                command.display()
+            );
+            failures.push(format!(
+                "pre-scan command executable check failed: {error}"
+            ));
+        }
+    }
+}
+
+fn pre_scan_program(command: &PreScanCommand) -> Option<OsString> {
+    command
+        .display()
+        .split_whitespace()
+        .filter(|word| !looks_like_env_assignment(word))
+        .map(|word| word.trim_matches(['\'', '"']))
+        .find(|word| !word.is_empty())
+        .map(OsString::from)
+}
+
+fn looks_like_env_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_'
+        })
+}
+
+fn shell_command_available(program: &OsStr) -> io::Result<bool> {
+    process::Command::new("sh")
+        .arg("-c")
+        .arg("command -v \"$1\" >/dev/null 2>&1")
+        .arg("sh")
+        .arg(program)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+}
+
 fn sync_pdf(config: &Config, pdf: &Path, options: SyncOptions) -> Result<()> {
     let mut plan = plan_pdf_sync(config, pdf, options)?;
     finalize_annotation_task_plans(config, &mut [&mut plan])?;
@@ -682,6 +853,8 @@ fn scan_library(
     verbose: bool,
 ) -> Result<()> {
     validate_library_layout(config)?;
+    let pre_scan_command = configured_pre_scan_command()?;
+    run_pre_scan_command(config, pre_scan_command.as_ref(), options.dry_run)?;
     let intake = plan_xlib_intake(config)?;
     if !options.dry_run {
         execute_xlib_intake(&intake)?;
@@ -2215,6 +2388,15 @@ fn doctor_vault(config: &Config) -> Result<()> {
     print_config_report("doctor", config);
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
+    match configured_pre_scan_command() {
+        Ok(pre_scan_command) => {
+            check_pre_scan_command(pre_scan_command.as_ref(), &mut failures);
+        }
+        Err(error) => {
+            println!("pre_scan_command: fail ({error})");
+            failures.push(error.to_string());
+        }
+    }
     let layout_valid = match validate_library_layout(config) {
         Ok(()) => true,
         Err(error) => {

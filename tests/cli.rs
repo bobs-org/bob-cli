@@ -27,6 +27,8 @@ const BOB_NOTIFY_BIN: &str = env!("CARGO_BIN_EXE_bob_notify");
 const BOB_POMODORO_BIN: &str = env!("CARGO_BIN_EXE_bob_pomodoro");
 const BOB_SYNC_BIN: &str = env!("CARGO_BIN_EXE_bob_sync");
 const TMUX_BOB_POMODORO_BIN: &str = env!("CARGO_BIN_EXE_tmux_bob_pomodoro");
+const TEST_MISSING_CONFIG_FILE: &str =
+    "/definitely/missing/bob-cli-test-config.yml";
 
 struct LegacyHelpCase {
     command: fn() -> Command,
@@ -16364,6 +16366,279 @@ fn highlights_ref_scan_intakes_xlib_pdf_and_writes_note_in_same_run() {
 }
 
 #[test]
+fn highlights_ref_scan_runs_configured_pre_scan_before_xlib_intake() {
+    let temp = TempDir::new("bob-cli-highlights-ref-pre-scan");
+    let vault = temp.path().join("vault");
+    let seed_pdf = temp.path().join("seed.pdf");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    let pre_scan_log = temp.path().join("pre-scan.log");
+    let destination_pdf = vault.join("lib/chat/from-hook.pdf");
+    let note = vault.join("ref/chat/from-hook.md");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_highlights_pdf(
+        &seed_pdf,
+        "- status: wip\n- parent: obsidian\n- title: From Hook\n",
+    );
+    write_executable(
+        &script,
+        "#!/bin/sh\n\
+         set -eu\n\
+         printf 'pre-scan stdout from %s\\n' \"$PWD\"\n\
+         printf 'pre-scan stderr\\n' >&2\n\
+         mkdir -p xlib/chat\n\
+         cp \"$SOURCE_PDF\" xlib/chat/from-hook.pdf\n\
+         printf '%s\\n' \"$PWD\" > \"$PRE_SCAN_LOG\"\n",
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_command: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("SOURCE_PDF", &seed_pdf)
+        .env("PRE_SCAN_LOG", &pre_scan_log)
+        .output()
+        .expect("scan with pre-scan hook");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("pre_scan_command: run")
+            && report.contains("pre-scan stdout from")
+            && report.contains(
+                "intake: moved xlib/chat/from-hook.pdf -> lib/chat/from-hook.pdf"
+            )
+            && report.contains("notes_created: 1"),
+        "expected pre-scan hook to populate xlib before intake:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("pre-scan stderr"),
+        "pre-scan stderr should be inherited:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&pre_scan_log).expect("read pre-scan pwd log"),
+        format!("{}\n", path_str(&vault)),
+        "pre-scan command must run from BOB_DIR"
+    );
+    assert!(destination_pdf.is_file(), "pre-scan PDF was not intaked");
+    assert!(
+        !vault.join("xlib/chat/from-hook.pdf").exists(),
+        "pre-scan PDF should be moved out of xlib"
+    );
+    assert!(note.is_file(), "scan should write the note after intake");
+}
+
+#[test]
+fn highlights_ref_scan_dry_run_reports_env_pre_scan_without_executing() {
+    let temp = TempDir::new("bob-cli-highlights-ref-pre-scan-dry-run");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/dry-run.pdf");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    let sentinel = temp.path().join("pre-scan-ran");
+    let command = shell_single_quote(path_str(&script));
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Dry Run\n",
+    );
+    write_file(
+        &config,
+        "highlights:\n  pre_scan_command: should-not-use-file-config\n",
+    );
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf ran > {}\n",
+            shell_single_quote(path_str(&sentinel))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--dry-run")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_HIGHLIGHTS_PRE_SCAN_COMMAND", &command)
+        .output()
+        .expect("dry-run scan with pre-scan hook");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(&format!("pre_scan_command: would-run {command}")),
+        "dry-run should report the env override hook:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !report.contains("should-not-use-file-config"),
+        "env override should replace file config:\n{report}"
+    );
+    assert!(
+        !sentinel.exists(),
+        "dry-run must not execute the pre-scan hook"
+    );
+    assert!(
+        !vault.join("ref/chat/dry-run.md").exists(),
+        "dry-run must not write the reference note"
+    );
+}
+
+#[test]
+fn highlights_ref_scan_empty_env_disables_configured_pre_scan() {
+    let temp = TempDir::new("bob-cli-highlights-ref-pre-scan-empty-env");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/disabled.pdf");
+    let note = vault.join("ref/chat/disabled.md");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    let sentinel = temp.path().join("pre-scan-ran");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Disabled Hook\n",
+    );
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf ran > {}\nexit 29\n",
+            shell_single_quote(path_str(&sentinel))
+        ),
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_command: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_HIGHLIGHTS_PRE_SCAN_COMMAND", "")
+        .output()
+        .expect("scan with empty pre-scan override");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        !report.contains("pre_scan_command:"),
+        "empty env override should disable the configured hook:\n{report}"
+    );
+    assert!(
+        !sentinel.exists(),
+        "disabled pre-scan hook must not execute"
+    );
+    assert!(note.is_file(), "scan should still process existing PDFs");
+}
+
+#[test]
+fn highlights_ref_scan_fails_when_pre_scan_command_fails() {
+    let temp = TempDir::new("bob-cli-highlights-ref-pre-scan-fail");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(
+        &script,
+        "#!/bin/sh\n\
+         printf 'pre-scan stdout before failure\\n'\n\
+         printf 'pre-scan stderr before failure\\n' >&2\n\
+         exit 17\n",
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_command: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("scan with failing pre-scan hook");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "failing pre-scan hook should abort scan:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stdout(&output).contains("pre-scan stdout before failure"),
+        "pre-scan stdout should be inherited:\n{}",
+        format_output(&output)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("pre-scan stderr before failure")
+            && diagnostic.contains("pre-scan command failed with exit 17"),
+        "expected failing pre-scan diagnostics:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !vault.join("lib").exists(),
+        "scan should abort before intake or library inspection"
+    );
+}
+
+#[test]
+fn highlights_ref_doctor_reports_configured_pre_scan_executable() {
+    let temp = TempDir::new("bob-cli-highlights-ref-pre-scan-doctor");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    fs::create_dir_all(vault.join("lib")).expect("create lib");
+    fs::create_dir_all(vault.join("ref")).expect("create ref");
+    fs::create_dir_all(vault.join("xlib")).expect("create xlib");
+    git_in(&vault, ["init", "-q"]);
+    configure_test_git_identity(&vault);
+    write_executable(&script, "#!/bin/sh\nexit 0\n");
+    write_file(
+        &config,
+        &format!("highlights:\n  pre_scan_command: {}\n", path_str(&script)),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("doctor")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("doctor with pre-scan hook");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("pre_scan_command: ok")
+            && report.contains(path_str(&script))
+            && report.contains("result: ok"),
+        "doctor should report the configured executable hook:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
 fn highlights_ref_scan_dry_run_previews_xlib_intake_without_writes() {
     let temp = TempDir::new("bob-cli-highlights-ref-xlib-dry-run");
     let vault = temp.path().join("vault");
@@ -16907,6 +17182,7 @@ fn highlights_ref_scan_continues_after_write_failure() {
         )
         .env("BOB_BIN", BOB_BIN)
         .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE)
         .env("FAIL_PARENT", fail_parent)
         .env("FAIL_NAME", fail_name)
         .output()
@@ -21920,7 +22196,9 @@ fn done_tasks_source(count: usize) -> String {
 }
 
 fn bob_command() -> Command {
-    Command::new(BOB_BIN)
+    let mut command = Command::new(BOB_BIN);
+    command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
+    command
 }
 
 fn write_capture_task_settings(vault: &Path) {

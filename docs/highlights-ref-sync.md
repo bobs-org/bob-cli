@@ -43,17 +43,18 @@ sidecar when one is present. Top-level library PDFs and explicit out-of-library
 syncs keep the legacy `ref/<pdf-basename>.md` target. `marker <pdf>` inspects
 the same marker without writing.
 
-`scan` first moves pending PDFs from the configured intake directory into the
-mirrored library path, then recursively finds PDFs under the configured library
-directory and processes them in stable path order. Per-PDF validation or write
-failures are reported without stopping unrelated PDFs; the final command status
-is still non-zero when any PDF fails. It refuses intake destinations that already
-exist and duplicate output paths such as two PDFs that would both write the same
+`scan` runs the configured pre-scan hook on writing runs, then moves pending
+PDFs from the configured intake directory into the mirrored library path,
+recursively finds PDFs under the configured library directory, and processes
+them in stable path order. Per-PDF validation or write failures are reported
+without stopping unrelated PDFs; the final command status is still non-zero when
+any PDF fails. It refuses intake destinations that already exist and duplicate
+output paths such as two PDFs that would both write the same
 `ref/<ref_type>/<basename>.md` target.
 
 `doctor` checks vault paths, library/ref/xlib directories, pending intake,
-sidecar presence, marker readability, Git worktree status, and optional `ob`
-availability. It never writes files.
+the configured pre-scan command, sidecar presence, marker readability, Git
+worktree status, and optional `ob` availability. It never writes files.
 
 Available commands:
 
@@ -161,6 +162,21 @@ Reference notes are written under:
 ```text
 BOB_HIGHLIGHTS_REF_DIR=ref
 ```
+
+Writing scans can run a pre-scan command before xlib intake:
+
+```yaml
+highlights:
+  # Runs from the vault root before `bob highlights scan` inspects the library.
+  # Use it to deliver PDFs that do not travel on the git sync channel.
+  pre_scan_command: bob_xlib_pull
+```
+
+`BOB_HIGHLIGHTS_PRE_SCAN_COMMAND` overrides the config file value. Set it to an
+empty value to disable a configured hook. The command runs as `sh -c <command>`
+from `BOB_DIR` and inherits stdout/stderr, so scheduled logs include its output.
+If it exits non-zero, `scan` reports the exit code and aborts before intake.
+`scan --dry-run` reports the command it would run without executing it.
 
 Relative `BOB_HIGHLIGHTS_LIB_DIR`, `BOB_HIGHLIGHTS_XLIB_DIR`, and
 `BOB_HIGHLIGHTS_REF_DIR` values are resolved under `BOB_DIR`. Absolute paths
@@ -359,23 +375,24 @@ writes so the apps do not race the CLI.
 ## Scan, Safety, and Git/ob Behavior
 
 `scan --dry-run` reports every discovered PDF, including PDFs that are still
-pending under `xlib`. The default report is concise. `-v, --verbose` prints the
-detailed per-PDF plan, including each planned `xlib/<rel> -> lib/<rel>` intake
-move. Dry runs do not move anything. Valid PDFs show their target reference note,
-sidecar path if present, selected sync source, and note/PDF marker action.
-Invalid PDFs show a `plan_error`. Scan output also reports `write_pdfs:
-true|false` so bulk marker-write runs are auditable. Dry runs do not create
-directories, move intake files, write notes, or write PDFs, even when combined
-with `--write-pdfs`.
+pending under `xlib`. If a pre-scan hook is configured, the dry run reports that
+it would run and the exact command, but does not execute it. The default report
+is concise. `-v, --verbose` prints the detailed per-PDF plan, including each
+planned `xlib/<rel> -> lib/<rel>` intake move. Dry runs do not move anything.
+Valid PDFs show their target reference note, sidecar path if present, selected
+sync source, and note/PDF marker action. Invalid PDFs show a `plan_error`. Scan
+output also reports `write_pdfs: true|false` so bulk marker-write runs are
+auditable. Dry runs do not create directories, move intake files, write notes,
+write PDFs, or run the pre-scan command, even when combined with `--write-pdfs`.
 
-Before planning notes, `scan` preflights intake. It moves each PDF under
-`xlib` to the mirrored `lib` path and moves same-stem Markdown sidecars and
-TextBundle directories with the PDF, so annotation text and image assets are
-not orphaned. If any destination PDF or sidecar already exists, the whole scan
-aborts before moving or writing anything. Intake runs before the dirty-target
-Git check because a newly rendered intake PDF is normally untracked, and the
-move never overwrites an existing path; a tracked synced PDF behaves as an
-ordinary Git rename.
+Before planning notes, writing scans run the optional pre-scan command and then
+preflight intake. Intake moves each PDF under `xlib` to the mirrored `lib` path
+and moves same-stem Markdown sidecars and TextBundle directories with the PDF,
+so annotation text and image assets are not orphaned. If any destination PDF or
+sidecar already exists, the whole scan aborts before moving or writing anything.
+Intake runs before the dirty-target Git check because a newly rendered intake
+PDF is normally untracked, and the move never overwrites an existing path; a
+tracked synced PDF behaves as an ordinary Git rename.
 
 After intake, the command rejects duplicate output paths, builds per-PDF plans,
 and checks Git status for existing vault files that successfully planned PDFs

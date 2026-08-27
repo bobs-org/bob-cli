@@ -68,8 +68,9 @@ bob capture-targets
 bob projects list
 ```
 
-Priority rolls (`p:<N>`) read `~/.config/bob/config.yml`. Override that path with
-`BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`; see [Environment](#environment).
+Priority rolls (`p:<N>`) and Highlights pre-scan hooks read
+`~/.config/bob/config.yml`. Override that path with `BOB_CONFIG_FILE` or
+`XDG_CONFIG_HOME`; see [Environment](#environment).
 
 ## Terms
 
@@ -342,10 +343,11 @@ Obsidian reference notes.
   `xlib/chat/<basename>.pdf` (override the subdirectory with `--ref-type`) and
   embeds the page-1 marker `scan` needs. `--include-id` adds marker `id` from
   the Markdown filename stem.
-- `scan` first moves pending PDFs from `xlib/<rel>` to `lib/<rel>`, then
-  recursively syncs the library. By default it does not write PDF markers; use
-  `scan --dry-run --write-pdfs`, review, then `scan --write-pdfs`. `-v, --verbose`
-  prints the detailed per-PDF plan instead of the concise report.
+- `scan` runs the configured pre-scan hook on writing runs, then moves pending
+  PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs the library. By
+  default it does not write PDF markers; use `scan --dry-run --write-pdfs`,
+  review, then `scan --write-pdfs`. `-v, --verbose` prints the detailed per-PDF
+  plan instead of the concise report.
 - `sync <pdf>` updates one reference note from the page-1 marker and sidecar.
 - `marker <pdf>` inspects that marker without writing.
 - `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, and
@@ -595,6 +597,12 @@ and Pomodoro-note `bob capture` requests, and `bob task-status-hooks`.
 `bob highlights`. It defaults to `lib` under `BOB_DIR`. Relative values are
 resolved under the Bob vault; absolute paths and `~/...` paths are used as
 configured.
+
+`BOB_HIGHLIGHTS_PRE_SCAN_COMMAND` overrides
+`highlights.pre_scan_command` from `~/.config/bob/config.yml` for
+`bob highlights scan`. Non-empty values run with `sh -c` from `BOB_DIR` before
+intake; an empty value disables a configured hook. `scan --dry-run` reports the
+hook it would run without executing it.
 
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
 `bob highlights`. It defaults to `ref` under `BOB_DIR`.

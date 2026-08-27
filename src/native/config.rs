@@ -61,6 +61,11 @@ pub(crate) struct PriorityProperty {
     levels: Vec<PriorityLevel>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct HighlightsConfig {
+    pre_scan_command: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PriorityLevel {
     label: String,
@@ -104,6 +109,12 @@ impl PriorityProperty {
             .map(|level| level.label.as_str())
             .collect::<Vec<_>>()
             .join(", ")
+    }
+}
+
+impl HighlightsConfig {
+    pub(crate) fn pre_scan_command(&self) -> Option<&str> {
+        self.pre_scan_command.as_deref()
     }
 }
 
@@ -171,10 +182,30 @@ pub(crate) fn load_priority_property(
     parse_priority_property(&text, path)
 }
 
+pub(crate) fn load_highlights_config(
+    path: &Path,
+) -> Result<HighlightsConfig, ConfigError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(HighlightsConfig::default());
+        }
+        Err(error) => {
+            return Err(ConfigError::Read(format!(
+                "read {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    parse_highlights_config(&text, path)
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     #[serde(default)]
     properties: Vec<RawProperty>,
+    #[serde(default)]
+    highlights: Option<RawHighlights>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,6 +230,12 @@ struct RawLevel {
     min_days: Option<i64>,
     #[serde(default)]
     max_days: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawHighlights {
+    #[serde(default)]
+    pre_scan_command: Option<String>,
 }
 
 fn parse_priority_property(
@@ -255,6 +292,23 @@ fn parse_priority_property(
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(PriorityProperty { name, levels })
+}
+
+fn parse_highlights_config(
+    text: &str,
+    path: &Path,
+) -> Result<HighlightsConfig, ConfigError> {
+    let config: RawConfig = serde_yaml::from_str(text).map_err(|error| {
+        ConfigError::Invalid(format!("parse {}: {error}", path.display()))
+    })?;
+
+    let pre_scan_command = config
+        .highlights
+        .and_then(|highlights| highlights.pre_scan_command)
+        .map(|command| command.trim().to_string())
+        .filter(|command| !command.is_empty());
+
+    Ok(HighlightsConfig { pre_scan_command })
 }
 
 fn parse_priority_level(
@@ -404,6 +458,53 @@ properties:
         }
         assert!(property.level(5).is_none());
         assert!(property.level(0).is_none());
+    }
+
+    #[test]
+    fn parses_highlights_pre_scan_command() {
+        let config = parse_highlights_config(
+            r#"
+unused_top_level: ignored
+properties:
+  - name: priority
+    values: priority
+highlights:
+  pre_scan_command: " bob_xlib_pull "
+"#,
+            Path::new("/config.yml"),
+        )
+        .expect("valid highlights config");
+
+        assert_eq!(config.pre_scan_command(), Some("bob_xlib_pull"));
+    }
+
+    #[test]
+    fn parses_absent_highlights_config_as_none() {
+        let config = parse_highlights_config(
+            r#"
+properties:
+  - name: priority
+    values: priority
+"#,
+            Path::new("/config.yml"),
+        )
+        .expect("valid config without highlights block");
+
+        assert_eq!(config.pre_scan_command(), None);
+    }
+
+    #[test]
+    fn blank_highlights_pre_scan_command_disables_file_hook() {
+        let config = parse_highlights_config(
+            r#"
+highlights:
+  pre_scan_command: "   "
+"#,
+            Path::new("/config.yml"),
+        )
+        .expect("valid blank highlights config");
+
+        assert_eq!(config.pre_scan_command(), None);
     }
 
     fn parse(text: &str) -> Result<PriorityProperty, ConfigError> {
