@@ -407,6 +407,9 @@ and last error.
 If another maintenance command already holds the lock, `bob vault-sync run`
 exits 0 silently.
 
+The operational runbook for the two-machine Bob vault sync channel lives in
+[`docs/vault-git-sync.md`](docs/vault-git-sync.md).
+
 ## Move done tasks
 
 ```bash
@@ -733,6 +736,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | `bob query` Dataview and Tasks | [`docs/dataview.md`](docs/dataview.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | Obsidian Sync folder exclusion runbook | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
+| Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |
 | Custom plugin list and vault deploy | [`docs/plugins.md`](docs/plugins.md) |
 | Project `^prj` lifecycle and schedules | [`docs/projects.md`](docs/projects.md) |
 | Pomodoro-driven task status sync | [`docs/task-status-hooks.md`](docs/task-status-hooks.md) |

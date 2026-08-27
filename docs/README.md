@@ -13,6 +13,7 @@ index, and environment variables.
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task-status-hooks` Pomodoro-driven task status |
+| [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, and bridge policy |
 
 `bob --help` and `bob <command> --help` are the concise usage source. If this
 documentation and the running command disagree, trust the command.
