@@ -1,9 +1,6 @@
 //! `bob nightly` — the single nightly entry point.
 //!
-//! Performs the once-nightly Obsidian sync up front (the shared gate), then
-//! runs a sequence of wrapped steps (`move-done-tasks`, then
-//! `bulk-git-commit`). The wrapped steps keep ownership of their own git
-//! commits/pushes but no longer run `ob sync` themselves. Output is laid out in
+//! Runs a lock-held sequence of vault maintenance steps. Output is laid out in
 //! clearly-labeled sections so the cron log always makes it obvious which step
 //! is talking.
 
@@ -17,8 +14,8 @@ use chrono::Local;
 
 use super::{
     collect_done, env as bob_env,
-    ob::{self, ChildEnv, SyncOutcome},
-    sync,
+    ob::{self, ChildEnv},
+    vault_sync,
 };
 
 /// One wrapped command in the nightly sequence. Adding a future step is a
@@ -31,14 +28,19 @@ struct Step {
 
 const STEPS: &[Step] = &[
     Step {
+        name: "vault-sync",
+        blurb: "Pull and reconcile the vault",
+        run: run_vault_sync_step,
+    },
+    Step {
         name: "move-done-tasks",
         blurb: "Archive done & canceled tasks",
         run: run_collect_done_step,
     },
     Step {
-        name: "bulk-git-commit",
-        blurb: "Commit and push the vault",
-        run: run_sync_step,
+        name: "vault-sync",
+        blurb: "Publish maintenance changes",
+        run: run_vault_sync_step,
     },
 ];
 
@@ -69,16 +71,6 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
     let child_env = ob::child_env();
 
-    // Gate: the shared Obsidian sync. A failure here aborts the whole run
-    // before any wrapped step touches the vault.
-    let sync_label = match run_sync_gate(&styler, &vault, &child_env) {
-        Ok(label) => label,
-        Err(code) => {
-            print_abort_summary(&styler);
-            return code;
-        }
-    };
-
     // Wrapped steps run in order; a failing step does not stop later steps.
     let mut results = Vec::with_capacity(STEPS.len());
     for (index, step) in STEPS.iter().enumerate() {
@@ -88,7 +80,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         results.push((step.name, code));
     }
 
-    print_summary(&styler, sync_label, &results);
+    print_summary(&styler, &results);
 
     results
         .iter()
@@ -127,24 +119,22 @@ fn print_help() {
 usage: bob nightly
 
 Run the nightly Bob maintenance path. The command acquires the shared lock,
-runs the shared `ob sync --path <vault>` gate once, then runs
-`move-done-tasks` and `bulk-git-commit` in order.
+runs `vault-sync`, `move-done-tasks`, and `vault-sync` in order.
 
 workflow:
   1. acquire the shared Bob maintenance lock
-  2. run the shared Obsidian sync gate
+  2. run vault-sync against the vault
   3. run move-done-tasks against the vault
-  4. run bulk-git-commit against the vault
+  4. run vault-sync against the vault
 
 environment:
-  BOB_BULK_GIT_COMMIT_LOCK_FILE  override the shared lock path
-  BOB_BULK_GIT_COMMIT_MESSAGE    override the bulk-git-commit message
   BOB_DIR                        Bob vault root; defaults to ~/bob
   BOB_NOW                        override the date used by wrapped commands
-  BOB_SYNC_COMMIT_MESSAGE        deprecated compatibility alias
-  BOB_SYNC_LOCK_FILE             deprecated compatibility alias
+  BOB_VAULT_SYNC_LOCK_FILE       override the shared lock path
+  BOB_VAULT_SYNC_STATE_FILE      override the vault-sync status JSON path
   NO_COLOR                       disable color even when stdout is a TTY
-  OB_COMMAND                     override the ob executable
+
+Legacy BOB_BULK_GIT_COMMIT_* and BOB_SYNC_* environment variables are no longer recognized; use BOB_VAULT_SYNC_*.
 
 options:
   -h, --help                     show this help message and exit
@@ -157,51 +147,8 @@ fn run_collect_done_step(child_env: &ChildEnv) -> i32 {
     collect_done::run_collection(collect_done::DEFAULT_THRESHOLD, child_env)
 }
 
-fn run_sync_step(child_env: &ChildEnv) -> i32 {
-    let vault = bob_env::bob_dir();
-    sync::commit_and_push_vault(&vault, child_env)
-}
-
-/// Run the shared `ob sync` gate and print its section. Returns the summary
-/// label describing the outcome, or the exit code on a hard sync failure.
-fn run_sync_gate(
-    styler: &Styler,
-    vault: &Path,
-    child_env: &ChildEnv,
-) -> Result<&'static str, i32> {
-    println!();
-    println!(
-        "{} Obsidian sync (shared, runs once)",
-        styler.cyan("\u{25b8}")
-    );
-
-    match ob::sync_vault(vault, child_env) {
-        Ok(SyncOutcome::Ran) => {
-            println!("  {} vault synced", styler.green("\u{2713}"));
-            Ok("synced")
-        }
-        Ok(SyncOutcome::SkippedMissingCommand) => {
-            println!(
-                "  {} ob command not found; sync skipped",
-                styler.yellow("\u{2713}")
-            );
-            Ok("skipped (no ob)")
-        }
-        Ok(SyncOutcome::AlreadyRunning) => {
-            println!(
-                "  {} ob sync already running; continuing",
-                styler.yellow("\u{2713}")
-            );
-            Ok("already running")
-        }
-        Err(code) => {
-            println!(
-                "  {} vault sync failed (exit {code})",
-                styler.red("\u{2717}")
-            );
-            Err(code)
-        }
-    }
+fn run_vault_sync_step(child_env: &ChildEnv) -> i32 {
+    vault_sync::run_cycle_with_existing_lock(child_env)
 }
 
 fn print_header(styler: &Styler, vault: &Path) {
@@ -247,14 +194,13 @@ fn print_step_footer(styler: &Styler, step: &Step, code: i32) {
     }
 }
 
-fn print_summary(styler: &Styler, sync_label: &str, results: &[(&str, i32)]) {
+fn print_summary(styler: &Styler, results: &[(&str, i32)]) {
     println!();
     println!(
         "{}",
         styler.cyan(&top_summary_rule("\u{2501}\u{2501} Summary"))
     );
 
-    print_summary_row(styler, "obsidian-sync", true, sync_label);
     let mut failures = 0;
     for (name, code) in results {
         let ok = *code == 0;
@@ -277,20 +223,6 @@ fn print_summary(styler: &Styler, sync_label: &str, results: &[(&str, i32)]) {
         format!("{failures} steps failed \u{b7} {}", timestamp())
     };
     println!("  {footer}");
-    println!("{}", styler.cyan(&"\u{2501}".repeat(RULE_WIDTH)));
-}
-
-fn print_abort_summary(styler: &Styler) {
-    println!();
-    println!(
-        "{}",
-        styler.cyan(&top_summary_rule("\u{2501}\u{2501} Summary"))
-    );
-    print_summary_row(styler, "obsidian-sync", false, "failed");
-    println!(
-        "  Aborted: vault sync failed; no wrapped steps ran \u{b7} {}",
-        timestamp()
-    );
     println!("{}", styler.cyan(&"\u{2501}".repeat(RULE_WIDTH)));
 }
 
@@ -369,10 +301,6 @@ impl Styler {
 
     fn green(&self, text: &str) -> String {
         self.paint("32", text)
-    }
-
-    fn yellow(&self, text: &str) -> String {
-        self.paint("33", text)
     }
 
     fn red(&self, text: &str) -> String {

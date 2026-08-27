@@ -139,8 +139,8 @@ Obsidian CLI. It can only be used with `--engine obsidian`. If omitted in Obsidi
 Exactly one of `-s|--source`, `-q|--query`, `-Q|--query-file`, `-t|--tasks`,
 `-T|--tasks-file`, and `-n|--tasks-note` is required.
 
-`bob query` does not run `ob sync` or `ob sync-status`. Vault freshness is
-owned by the external background or cron sync path.
+`bob query` does not reconcile the vault. Vault freshness is owned by
+`bob vault-sync` and the configured background or cron path.
 
 ## JSON Output
 

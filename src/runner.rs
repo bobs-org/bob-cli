@@ -31,12 +31,6 @@ struct Subcommand {
 // the invariant.
 const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
-        name: "bulk-git-commit",
-        script_command: None,
-        about: "Commit and push Bob vault Git changes",
-        native_command: NativeCommand::BulkGitCommit,
-    },
-    Subcommand {
         name: "capture",
         script_command: None,
         about: "Capture a task or bullet into the Bob vault",
@@ -306,7 +300,6 @@ const HELP_TEMPLATE: &str = "\
 
 const AFTER_HELP: &str = "\
 Examples:
-  bob bulk-git-commit             Commit and push Bob vault Git changes
   bob capture buy milk @groceries
                                  Capture a task into groceries.md
   bob capture '@dev:foobar' 'Some foobar task.'

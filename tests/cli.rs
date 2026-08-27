@@ -26,7 +26,6 @@ static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 const BOB_BIN: &str = env!("CARGO_BIN_EXE_bob");
 const BOB_NOTIFY_BIN: &str = env!("CARGO_BIN_EXE_bob_notify");
 const BOB_POMODORO_BIN: &str = env!("CARGO_BIN_EXE_bob_pomodoro");
-const BOB_SYNC_BIN: &str = env!("CARGO_BIN_EXE_bob_sync");
 const TMUX_BOB_POMODORO_BIN: &str = env!("CARGO_BIN_EXE_tmux_bob_pomodoro");
 const TEST_MISSING_CONFIG_FILE: &str =
     "/definitely/missing/bob-cli-test-config.yml";
@@ -51,12 +50,7 @@ fn cache_extraction_writes_expected_files_and_modes() {
     assert_success(&output);
 
     let script_dir = single_script_cache_dir(temp.path());
-    let executable_assets = [
-        "bob_pomodoro",
-        "bob_notify",
-        "bob_sync",
-        "tmux_bob_pomodoro",
-    ];
+    let executable_assets = ["bob_pomodoro", "bob_notify", "tmux_bob_pomodoro"];
 
     for asset in executable_assets {
         let path = script_dir.join(asset);
@@ -143,29 +137,6 @@ fn task_status_hooks_help_is_native_only() {
     assert!(
         !temp.path().join("bob-cli/scripts").exists(),
         "task-status-hooks and its compatibility aliases must stay native-only"
-    );
-}
-
-#[test]
-fn bulk_git_commit_help_is_native_only() {
-    let temp = TempDir::new("bob-cli-bulk-git-commit-native-help");
-    let output = bob_command()
-        .arg("bulk-git-commit")
-        .arg("--help")
-        .env("BOB_CLI_USE_SCRIPT", "1")
-        .env("XDG_CACHE_HOME", temp.path())
-        .output()
-        .expect("run native-only bob bulk-git-commit --help");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains("usage: bob bulk-git-commit"),
-        "expected bulk-git-commit help text:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        !temp.path().join("bob-cli/scripts").exists(),
-        "native-only bulk-git-commit should not extract script assets"
     );
 }
 
@@ -466,7 +437,6 @@ fn highlights_ref_subcommand_help_works() {
 #[test]
 fn all_top_level_subcommand_help_is_safe_and_plain() {
     let cases: &[(&[&str], &str)] = &[
-        (&["bulk-git-commit", "--help"], "usage: bob bulk-git-commit"),
         (&["capture", "--help"], "bob capture"),
         (&["capture-complete", "--help"], "bob capture-complete"),
         (&["capture-parse", "--help"], "bob capture-parse"),
@@ -515,7 +485,6 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
 fn public_help_surfaces_do_not_list_long_only_options() {
     let bob_cases: &[(&[&str], &str)] = &[
         (&["--help"], "bob --help"),
-        (&["bulk-git-commit", "--help"], "bob bulk-git-commit --help"),
         (&["capture", "--help"], "bob capture --help"),
         (
             &["capture-complete", "--help"],
@@ -586,7 +555,6 @@ fn public_help_surfaces_do_not_list_long_only_options() {
     let legacy_cases = [
         (bob_pomodoro_command as fn() -> Command, "bob_pomodoro"),
         (bob_notify_command as fn() -> Command, "bob_notify"),
-        (bob_sync_command as fn() -> Command, "bob_sync"),
         (
             tmux_bob_pomodoro_command as fn() -> Command,
             "tmux_bob_pomodoro",
@@ -619,11 +587,6 @@ fn legacy_binary_help_is_safe_and_plain() {
             command: bob_notify_command,
             name: "bob_notify",
             marker: "Notify me when",
-        },
-        LegacyHelpCase {
-            command: bob_sync_command,
-            name: "bob_sync",
-            marker: "Stage all Bob vault changes",
         },
         LegacyHelpCase {
             command: tmux_bob_pomodoro_command,
@@ -744,44 +707,6 @@ fn pomodoro_help_documents_show_stale_option() {
 }
 
 #[test]
-fn script_fallback_bob_sync_help_exits_before_work() {
-    let temp = TempDir::new("bob-cli-script-bob-sync-help");
-    let stub_bin = temp.path().join("bin");
-    let log = temp.path().join("commands.log");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    write_executable(
-        &stub_bin.join("git"),
-        "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"$STUB_LOG\"\nexit 99\n",
-    );
-    write_executable(
-        &stub_bin.join("ob"),
-        "#!/bin/sh\nprintf 'ob %s\\n' \"$*\" >> \"$STUB_LOG\"\nexit 99\n",
-    );
-
-    let output = bob_sync_command()
-        .arg("--help")
-        .env("BOB_CLI_USE_SCRIPT", "1")
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("STUB_LOG", &log)
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run script fallback bob_sync --help");
-
-    assert_success(&output);
-    assert!(
-        stdout(&output).contains("usage: bob_sync"),
-        "expected bob_sync script help:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        !log.exists(),
-        "bob_sync --help must not run ob or git:\n{}",
-        fs::read_to_string(&log).unwrap_or_default()
-    );
-    assert_stdout_has_no_ansi(&output);
-}
-
-#[test]
 fn nightly_help_exits_before_operational_work() {
     let temp = TempDir::new("bob-cli-nightly-help");
     let stub_bin = temp.path().join("bin");
@@ -802,7 +727,10 @@ fn nightly_help_exits_before_operational_work() {
         .arg("nightly")
         .arg("--help")
         .env("BOB_DIR", &vault)
-        .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
         .env("OB_COMMAND", stub_bin.join("ob"))
         .env("PATH", path_with_prefix(&stub_bin))
         .env("STUB_LOG", &log)
@@ -17457,7 +17385,7 @@ fn highlights_ref_sync_allows_dirty_tracked_frontmatter_writeback() {
 }
 
 #[test]
-fn highlights_ref_doctor_checks_vault_git_and_ob_without_writes() {
+fn highlights_ref_doctor_checks_vault_git_without_writes() {
     let temp = TempDir::new("bob-cli-highlights-ref-doctor");
     let stub_bin = temp.path().join("bin");
     let vault = temp.path().join("vault");
@@ -17465,8 +17393,8 @@ fn highlights_ref_doctor_checks_vault_git_and_ob_without_writes() {
     let sidecar = pdf.with_extension("md");
     fs::create_dir_all(vault.join("ref")).expect("create ref dir");
     fs::create_dir_all(&stub_bin).expect("create stub bin");
-    let ob_stub = stub_bin.join("ob");
-    write_executable(&ob_stub, "#!/bin/sh\nexit 0\n");
+    let pandoc_stub = stub_bin.join("pandoc");
+    write_executable(&pandoc_stub, "#!/bin/sh\nexit 0\n");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
     write_file(
         &sidecar,
@@ -17486,8 +17414,7 @@ Note: marker note
         .arg("highlights")
         .arg("doctor")
         .env("BOB_DIR", &vault)
-        .env("BOB_PANDOC_COMMAND", &ob_stub)
-        .env("OB_COMMAND", &ob_stub)
+        .env("BOB_PANDOC_COMMAND", &pandoc_stub)
         .output()
         .expect("run highlights doctor");
 
@@ -17501,7 +17428,6 @@ Note: marker note
     assert!(report.contains("sidecars_found: 1"), "{report}");
     assert!(report.contains("pdf_markers_readable: 1"), "{report}");
     assert!(report.contains("git: ok (clean worktree)"), "{report}");
-    assert!(report.contains("ob: available"), "{report}");
     assert!(report.contains("pandoc: available"), "{report}");
     assert!(report.contains("writes: none"), "{report}");
     assert!(report.contains("result: ok"), "{report}");
@@ -21580,130 +21506,6 @@ fn pomodoro_missing_day_file_is_a_successful_noop() {
 }
 
 #[test]
-fn bulk_git_commit_commits_and_pushes_without_running_ob() {
-    let temp = TempDir::new("bob-cli-bulk-git-commit");
-    let stub_bin = temp.path().join("bin");
-    let vault = temp.path().join("vault");
-    let home = temp.path().join("home");
-    let log = temp.path().join("commands.log");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    fs::create_dir_all(&vault).expect("create vault");
-    fs::create_dir_all(&home).expect("create home");
-
-    // An `ob` stub that fails loudly if invoked: standalone
-    // `bob bulk-git-commit` must not touch Obsidian (that moved up to
-    // `bob nightly`).
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-printf 'ob %s\n' "$*" >> "$STUB_LOG"
-exit 99
-"#,
-    );
-    write_executable(
-        &stub_bin.join("git"),
-        r#"#!/bin/sh
-printf 'git %s\n' "$*" >> "$STUB_LOG"
-if [ "$1" = "-C" ]; then
-  shift 2
-fi
-case "$1" in
-  rev-parse)
-    printf 'true\n'
-    exit 0
-    ;;
-  add)
-    exit 0
-    ;;
-  diff)
-    exit 0
-    ;;
-  push)
-    exit 0
-    ;;
-esac
-exit 64
-"#,
-    );
-
-    let output = bob_command()
-        .arg("bulk-git-commit")
-        .env("BOB_DIR", &vault)
-        .env(
-            "BOB_BULK_GIT_COMMIT_LOCK_FILE",
-            temp.path().join("bob_bulk_git_commit.lock"),
-        )
-        .env_remove("OB_COMMAND")
-        .env("HOME", &home)
-        .env("PATH", path_with_prefix(&stub_bin))
-        .env("STUB_LOG", &log)
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob bulk-git-commit");
-
-    assert_success(&output);
-    let log_contents = fs::read_to_string(&log).expect("read stub command log");
-    assert!(
-        !log_contents.contains("ob "),
-        "standalone bulk-git-commit must not invoke ob:\n{log_contents}"
-    );
-    assert!(log_contents.contains(&format!(
-        "git -C {} rev-parse --is-inside-work-tree",
-        vault.display()
-    )));
-    assert!(
-        log_contents.contains(&format!("git -C {} add -A .", vault.display()))
-    );
-    assert!(log_contents.contains(&format!(
-        "git -C {} diff --cached --quiet --exit-code",
-        vault.display()
-    )));
-    assert!(log_contents.contains(&format!("git -C {} push", vault.display())));
-    assert!(
-        !log_contents.contains(" commit "),
-        "no-change bulk-git-commit should not commit"
-    );
-}
-
-#[test]
-fn legacy_bob_sync_binary_runs_bulk_git_commit_native_path() {
-    let temp = TempDir::new("bob-cli-legacy-bob-sync");
-    let (vault, remote) = init_git_vault_with_remote(&temp);
-    let home = temp.path().join("home");
-    fs::create_dir_all(&home).expect("create home");
-    write_file(&vault.join("initial.md"), "- [ ] initial #task\n");
-    git_in(&vault, ["add", "."]);
-    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
-    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
-    write_file(&vault.join("extra.md"), "- [ ] extra #task\n");
-
-    let output = bob_sync_command()
-        .env("BOB_DIR", &vault)
-        .env("BOB_BULK_GIT_COMMIT_MESSAGE", "legacy binary commit")
-        .env(
-            "BOB_BULK_GIT_COMMIT_LOCK_FILE",
-            temp.path().join("bob_bulk_git_commit.lock"),
-        )
-        .env_remove("BOB_CLI_USE_SCRIPT")
-        .env_remove("OB_COMMAND")
-        .env("HOME", &home)
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run legacy bob_sync binary");
-
-    assert_success(&output);
-    assert_eq!(
-        stdout(&git_in(&vault, ["log", "-1", "--format=%s"])).trim(),
-        "legacy binary commit",
-        "legacy bob_sync should use the native bulk-git-commit implementation"
-    );
-    let remote_head =
-        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
-    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
-    assert_eq!(remote_head, local_head, "push should update bare remote");
-}
-
-#[test]
 fn vault_sync_help_is_native_only_and_defaults_to_run() {
     let temp = TempDir::new("bob-cli-vault-sync-native-help");
     let help = bob_command()
@@ -22234,8 +22036,7 @@ fn conflict_directory_is_skipped_by_vault_walkers() {
 
 #[test]
 fn renamed_old_top_level_commands_are_unknown() {
-    for command in ["move-done-tasks", "bulk-git-commit", "query", "vault-sync"]
-    {
+    for command in ["move-done-tasks", "query", "vault-sync"] {
         let output = bob_command()
             .arg(command)
             .arg("--help")
@@ -22247,6 +22048,7 @@ fn renamed_old_top_level_commands_are_unknown() {
     }
 
     for command in [
+        "bulk-git-commit",
         "collect-done",
         "cronjob",
         "dataview",
@@ -22282,7 +22084,6 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
     let help = stdout(&output);
 
     let order = [
-        "bulk-git-commit",
         "capture",
         "capture-sections",
         "capture-targets",
@@ -22316,7 +22117,6 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
 
     assert!(
         help.contains("Examples:")
-            && help.contains("bob bulk-git-commit")
             && help.contains("bob capture-sections --route cash --format json")
             && help.contains("bob capture-targets --format json")
             && help.contains(
@@ -22333,6 +22133,10 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
             && help.contains("bob pomodoro")
             && help.contains("bob vault-sync status --json"),
         "expected an Examples section:\n{help}"
+    );
+    assert!(
+        !help.contains("bulk-git-commit"),
+        "top-level help should not advertise retired bulk-git-commit:\n{help}"
     );
     assert!(
         !help.contains("bob dataview"),
@@ -22366,58 +22170,32 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
 }
 
 #[test]
-fn nightly_runs_shared_sync_once_then_wrapped_steps_in_order() {
+fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
     let temp = TempDir::new("bob-cli-nightly-happy");
-    let stub_bin = temp.path().join("bin");
-    let (vault, remote) = init_git_vault_with_remote(&temp);
+    let (vault, remote, _peer) = init_vault_sync_pair(&temp);
     let home = temp.path().join("home");
     let source = vault.join("obsidian.md");
     let archive = vault.join("done/obsidian_done.md");
     let extra = vault.join("extra.md");
-    let log = temp.path().join("commands.log");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
     fs::create_dir_all(&home).expect("create home");
     write_file(&source, &done_tasks_source(12));
-    git_in(&vault, ["add", "."]);
-    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
-    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
-    // Untracked file the wrapped `bulk-git-commit` step should commit
-    // wholesale.
     write_file(&extra, "- [ ] extra #task\n");
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-printf 'ob %s\n' "$*" >> "$STUB_LOG"
-if [ "$1" = "sync" ]; then
-  if [ -f "$ARCHIVE_FILE" ]; then
-    printf 'archive-exists-before-sync\n' >> "$STUB_LOG"
-  else
-    printf 'archive-missing-before-sync\n' >> "$STUB_LOG"
-  fi
-fi
-case "$1" in
-  sync|sync-status) exit 0 ;;
-esac
-exit 64
-"#,
-    );
 
     let output = bob_command()
         .arg("nightly")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env(
-            "BOB_BULK_GIT_COMMIT_MESSAGE",
-            "bob bulk-git-commit 2026-06-02",
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
         )
         .env(
-            "BOB_BULK_GIT_COMMIT_LOCK_FILE",
-            temp.path().join("bob_bulk_git_commit.lock"),
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
         )
         .env("HOME", &home)
-        .env("OB_COMMAND", stub_bin.join("ob"))
-        .env("ARCHIVE_FILE", &archive)
-        .env("STUB_LOG", &log)
+        .env("HOSTNAME", "Athena Test")
+        .env("NO_COLOR", "1")
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
         .expect("run bob nightly");
@@ -22425,53 +22203,40 @@ exit 64
     assert_success(&output);
     let out = stdout(&output);
 
-    // The shared Obsidian sync ran exactly once, before any wrapped step
-    // mutated the vault.
-    let log_contents = fs::read_to_string(&log).expect("read stub log");
-    let sync_calls = log_contents
-        .lines()
-        .filter(|line| line.starts_with("ob sync --path"))
-        .count();
-    assert_eq!(
-        sync_calls, 1,
-        "shared sync should run once:\n{log_contents}"
-    );
-    assert!(
-        log_contents.contains("archive-missing-before-sync"),
-        "wrapped steps must run after the shared sync:\n{log_contents}"
-    );
-
-    // move-done-tasks committed first, then bulk-git-commit
-    // (bulk-git-commit is the newest commit).
     let subjects = stdout(&git_in(&vault, ["log", "--format=%s"]));
     let lines: Vec<&str> = subjects.lines().collect();
     assert_eq!(
         lines.first().copied(),
-        Some("bob bulk-git-commit 2026-06-02"),
-        "bulk-git-commit should be the most recent commit:\n{subjects}"
-    );
-    assert_eq!(
-        lines.get(1).copied(),
         Some("bob move-done-tasks 2026-06-02"),
-        "move-done-tasks should be committed before bulk-git-commit:\n{subjects}"
+        "move-done-tasks should be the newest commit:\n{subjects}"
     );
-
-    // The wrapped bulk-git-commit step committed the untracked file wholesale.
-    let bulk_show = stdout(&git_in(
-        &vault,
-        ["show", "--name-only", "--format=", "HEAD"],
-    ));
     assert!(
-        bulk_show.contains("extra.md"),
-        "bulk-git-commit step should commit the untracked file:\n{bulk_show}"
+        lines
+            .get(1)
+            .is_some_and(|subject| subject.starts_with(
+                "vault(athena-test): 2 files - extra.md, obsidian.md"
+            )),
+        "leading vault-sync should commit loose vault changes first:\n{subjects}"
     );
 
+    assert_eq!(
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            "master:extra.md"
+        ])),
+        "- [ ] extra #task\n",
+        "vault-sync should publish the loose extra file"
+    );
     let remote_head =
         stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
     let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
-    assert_eq!(remote_head, local_head, "push should update bare remote");
+    assert_eq!(
+        remote_head, local_head,
+        "nightly should leave remote current"
+    );
 
-    // move-done-tasks archived the done tasks and linked the source.
     let archive_contents = fs::read_to_string(&archive).expect("read archive");
     assert!(
         archive_contents.contains("parent: \"[[obsidian]]\"")
@@ -22486,14 +22251,20 @@ exit 64
         source.display()
     );
 
-    // The summary reports every step passing, in plain text.
     assert!(
         out.contains("bob nightly")
-            && out.contains("Obsidian sync (shared, runs once)")
+            && out.contains("step 1/3")
+            && out.contains("step 2/3")
+            && out.contains("step 3/3")
+            && out.contains("vault-sync")
             && out.contains("move-done-tasks")
             && out.contains("All steps passed"),
         "expected a structured nightly summary:\n{}",
         format_output(&output)
+    );
+    assert!(
+        !out.contains("Obsidian sync") && !out.contains("ob sync"),
+        "nightly output must not mention the retired Obsidian sync gate:\n{out}"
     );
     assert!(
         !output.stdout.contains(&0x1b),
@@ -22502,83 +22273,13 @@ exit 64
 }
 
 #[test]
-fn nightly_failing_shared_sync_aborts_before_wrapped_steps() {
-    let temp = TempDir::new("bob-cli-nightly-sync-fail");
-    let stub_bin = temp.path().join("bin");
-    let (vault, _remote) = init_git_vault_with_remote(&temp);
-    let home = temp.path().join("home");
-    let source = vault.join("obsidian.md");
-    let archive = vault.join("done/obsidian_done.md");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
-    fs::create_dir_all(&home).expect("create home");
-    write_file(&source, &done_tasks_source(12));
-    git_in(&vault, ["add", "."]);
-    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
-    let head_before = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
-    write_executable(
-        &stub_bin.join("ob"),
-        r#"#!/bin/sh
-if [ "$1" = "sync" ]; then
-  printf 'sync failed\n' >&2
-  exit 42
-fi
-exit 64
-"#,
-    );
-
-    let output = bob_command()
-        .arg("nightly")
-        .env("BOB_DIR", &vault)
-        .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
-        .env("HOME", &home)
-        .env("OB_COMMAND", stub_bin.join("ob"))
-        .env("XDG_CACHE_HOME", temp.path().join("cache"))
-        .output()
-        .expect("run bob nightly with failing sync");
-
-    assert_eq!(
-        output.status.code(),
-        Some(42),
-        "expected gate sync failure exit code:\n{}",
-        format_output(&output)
-    );
-    let out = stdout(&output);
-    assert!(
-        out.contains("Aborted") && out.contains("obsidian-sync"),
-        "expected an abort summary:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        !out.contains("Move done tasks") && !out.contains("step 1/2"),
-        "no wrapped step should run after a failed gate sync:\n{}",
-        format_output(&output)
-    );
-    assert_eq!(
-        stdout(&git_in(&vault, ["rev-parse", "HEAD"])),
-        head_before,
-        "a failed gate sync must not create commits"
-    );
-    assert!(
-        !archive.exists(),
-        "archive must not be created after a failed gate sync"
-    );
-    assert_eq!(
-        fs::read_to_string(&source).expect("read source"),
-        done_tasks_source(12),
-        "source must be untouched after a failed gate sync"
-    );
-}
-
-#[test]
 fn nightly_failed_step_still_runs_later_steps_and_exits_nonzero() {
     let temp = TempDir::new("bob-cli-nightly-step-fail");
-    let stub_bin = temp.path().join("bin");
-    let (vault, remote) = init_git_vault_with_remote(&temp);
+    let (vault, remote, _peer) = init_vault_sync_pair(&temp);
     let home = temp.path().join("home");
     let source = vault.join("obsidian.md");
     let blocking_done_path = vault.join("done");
     let extra = vault.join("extra.md");
-    fs::create_dir_all(&stub_bin).expect("create stub bin");
     fs::create_dir_all(&home).expect("create home");
     write_file(&source, &done_tasks_source(12));
     write_file(
@@ -22586,22 +22287,25 @@ fn nightly_failed_step_still_runs_later_steps_and_exits_nonzero() {
         "regular file blocking done/ archive directory\n",
     );
     git_in(&vault, ["add", "."]);
-    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
-    git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
-    // The regular file at `done` makes the archive target
-    // `done/obsidian_done.md` impossible to read or write, so
-    // move-done-tasks fails while the later bulk-git-commit step can still
-    // commit unrelated vault changes.
+    git_in(&vault, ["commit", "-q", "-m", "blocked archive"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
     write_file(&extra, "- [ ] later step still runs #task\n");
-    write_successful_ob_stub(&stub_bin);
 
     let output = bob_command()
         .arg("nightly")
         .env("BOB_DIR", &vault)
-        .env("BOB_SYNC_COMMIT_MESSAGE", "legacy fallback commit")
-        .env("BOB_SYNC_LOCK_FILE", temp.path().join("bob_sync.lock"))
+        .env("BOB_NOW", "2026-06-02")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
         .env("HOME", &home)
-        .env("OB_COMMAND", stub_bin.join("ob"))
+        .env("HOSTNAME", "Athena Test")
+        .env("NO_COLOR", "1")
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
         .expect("run bob nightly with a failing wrapped step");
@@ -22619,32 +22323,25 @@ fn nightly_failed_step_still_runs_later_steps_and_exits_nonzero() {
         format_output(&output)
     );
     assert!(
-        out.contains("1 step failed"),
-        "expected a failure count in the summary:\n{}",
+        out.contains("step 3/3") && out.contains("1 step failed"),
+        "expected the trailing vault-sync step and failure count:\n{}",
         format_output(&output)
     );
 
-    // The bulk-git-commit step still ran: the unrelated vault change was
-    // committed and pushed.
-    assert_eq!(
-        stdout(&git_in(&vault, ["log", "-1", "--format=%s"])).trim(),
-        "legacy fallback commit",
-        "the later bulk-git-commit step should commit despite the earlier failure"
-    );
-    let bulk_show = stdout(&git_in(
-        &vault,
-        ["show", "--name-only", "--format=", "HEAD"],
-    ));
     assert!(
-        bulk_show.contains("extra.md"),
-        "bulk-git-commit step should commit the unrelated file:\n{bulk_show}"
+        stdout(&git_in(&vault, ["log", "-1", "--format=%s"]))
+            .starts_with("vault(athena-test): 1 file - extra.md"),
+        "leading vault-sync should commit the unrelated file"
     );
-    let remote_head =
-        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
-    let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
     assert_eq!(
-        remote_head, local_head,
-        "bulk-git-commit step should push to the remote"
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            "master:extra.md"
+        ])),
+        "- [ ] later step still runs #task\n",
+        "vault-sync should push the unrelated file"
     );
 }
 
@@ -22789,10 +22486,6 @@ fn run_with_stdin(command: &mut Command, input: &str) -> Output {
 
 fn bob_pomodoro_command() -> Command {
     Command::new(BOB_POMODORO_BIN)
-}
-
-fn bob_sync_command() -> Command {
-    Command::new(BOB_SYNC_BIN)
 }
 
 fn tmux_bob_pomodoro_command() -> Command {

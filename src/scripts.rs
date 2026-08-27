@@ -47,13 +47,6 @@ pub const SCRIPT_ASSETS: &[ScriptAsset] = &[
         contents: include_bytes!("../scripts/bob_notify"),
     },
     ScriptAsset {
-        command: "bob_sync",
-        source_path: "scripts/bob_sync",
-        install_path: "bob_sync",
-        kind: ScriptKind::Bash,
-        contents: include_bytes!("../scripts/bob_sync"),
-    },
-    ScriptAsset {
         command: "tmux_bob_pomodoro",
         source_path: "scripts/tmux_bob_pomodoro",
         install_path: "tmux_bob_pomodoro",

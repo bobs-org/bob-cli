@@ -2525,17 +2525,6 @@ fn doctor_vault(config: &Config) -> Result<()> {
         }
     }
 
-    match ob::load_ob_command() {
-        Some(command) => {
-            println!("ob: available ({})", command.to_string_lossy());
-        }
-        None => {
-            println!("ob: warn (command not found)");
-            warnings.push("ob command not found; Obsidian Sync integration is unavailable".to_string());
-        }
-    }
-    println!("ob_sync: not-run");
-
     match create::pandoc_command() {
         Some(command) => {
             println!("pandoc: available ({})", command.to_string_lossy());

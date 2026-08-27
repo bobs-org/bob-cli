@@ -417,10 +417,9 @@ Reference note writes and image asset copies are atomic temporary-file renames
 and are skipped when the rendered note or content-addressed asset is
 byte-identical to the existing file.
 
-`bob highlights` does not run `ob sync` before or after writes. The existing
-`bob nightly` sync gate owns `ob sync` orchestration, while this command only
-reports whether `ob` is available through `doctor`. `source_pdf` is a
-pipeline-owned field rewritten on every sync, so a direct
+`bob highlights` does not reconcile the vault before or after writes. `bob
+nightly` runs `vault-sync` before and after the maintenance commands. The
+`source_pdf` field is rewritten on every sync, so a direct
 `bob highlights sync ~/bob/xlib/...` dry run or one-off sync self-heals to the
 library-relative path on the next scan after intake.
 

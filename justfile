@@ -29,7 +29,7 @@ _banner color icon label:
     fi
 
 check-scripts:
-    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/bob_sync scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh
+    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh
 
 package-list:
     cargo package --list
@@ -40,7 +40,6 @@ install-smoke:
     root="$(mktemp -d)"
     cargo install --path . --locked --root "${root}"
     "${root}/bin/bob" --help >/dev/null
-    "${root}/bin/bob" bulk-git-commit --help >/dev/null
     "${root}/bin/bob" capture --help >/dev/null
     "${root}/bin/bob" capture-complete --help >/dev/null
     "${root}/bin/bob" capture-parse --help >/dev/null
@@ -67,5 +66,4 @@ install-smoke:
     "${root}/bin/bob" vault-sync --help >/dev/null
     "${root}/bin/bob_notify" --help >/dev/null
     "${root}/bin/bob_pomodoro" --help >/dev/null
-    "${root}/bin/bob_sync" --help >/dev/null
     "${root}/bin/tmux_bob_pomodoro" --help >/dev/null

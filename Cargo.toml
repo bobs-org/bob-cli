@@ -51,9 +51,5 @@ name = "bob_notify"
 path = "src/bin/bob_notify.rs"
 
 [[bin]]
-name = "bob_sync"
-path = "src/bin/bob_sync.rs"
-
-[[bin]]
 name = "tmux_bob_pomodoro"
 path = "src/bin/tmux_bob_pomodoro.rs"

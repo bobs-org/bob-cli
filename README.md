@@ -6,10 +6,10 @@ authoritative command index. Command implementations are native Rust by
 default.
 
 Legacy command names still exist as installed binaries for existing tmux,
-shell, and automation callers. The Pomodoro, notification, and legacy
-`bob_sync` shell implementations remain embedded as a targeted rollback path;
-see [Compatibility shims](#compatibility-shims) for the exact mappings and
-fallback behavior.
+shell, and automation callers. The Pomodoro and notification shell
+implementations remain embedded as a targeted rollback path; see
+[Compatibility shims](#compatibility-shims) for the exact mappings and fallback
+behavior.
 
 ## Contents
 
@@ -104,8 +104,8 @@ separate steps:
    create links.
 3. **Reconcile statuses** with `bob task-status-hooks` so Next, In Progress, and
    Blocked markers follow the ledger and any new schedules.
-4. **Nightly**, run `bob nightly` to sync Obsidian, archive done and canceled
-   tasks, and commit plus push the vault.
+4. **Nightly**, run `bob nightly` to reconcile the vault through Git, archive
+   done and canceled tasks, and reconcile the vault again.
 
 Read-only inspection (`bob query`, `bob projects list`, `bob plugins list`,
 `bob highlights doctor`) can run at any time.
@@ -135,7 +135,6 @@ Bob's workflow commands are:
 
 | Command | Purpose |
 | --- | --- |
-| [`bulk-git-commit`](#nightly-maintenance) | Stage, commit, and push all Bob vault changes |
 | [`capture`](#capture) | Capture a task or section bullet, optionally with clipboard content |
 | `capture-complete` | Complete capture marker or wikilink syntax at the cursor |
 | `capture-parse` | Preview what in-progress capture text and wikilinks mean |
@@ -147,7 +146,7 @@ Bob's workflow commands are:
 | `capture-tasks` | List the open tasks in a routed note |
 | [`highlights`](#highlights) | Synchronize Highlights PDF annotations with reference notes |
 | [`move-done-tasks`](#move-done-tasks) | Archive done and canceled task blocks and repair their links |
-| [`nightly`](#nightly-maintenance) | Run the Obsidian sync and maintenance workflow |
+| [`nightly`](#nightly-maintenance) | Run the Git sync and maintenance workflow |
 | [`notify`](#pomodoro-status) | Notify when the current Pomodoro finishes |
 | [`plugins`](#plugins) | List and deploy Bob's custom Obsidian plugins |
 | [`pomodoro`](#pomodoro-status) | Print the current Pomodoro status |
@@ -244,8 +243,9 @@ layout instructions, Query File Defaults, placeholders, and rendered Markdown.
 `--tasks-note` runs every fenced Tasks block with its note context and identifies
 each result by heading.
 
-This command does not run `ob sync`; vault freshness is handled by the external
-background or cron sync path. Use `--engine obsidian` when you want exact
+This command does not reconcile the vault; freshness is handled by
+`bob vault-sync` and the configured background or cron sync path. Use
+`--engine obsidian` when you want exact
 behavior from the live Dataview plugin in an open Obsidian vault. Tasks inputs
 remain native-only, with an env-gated live renderer harness for parity checks.
 
@@ -370,30 +370,18 @@ The full contract and MacBook setup guide live in
 bob nightly
 ```
 
-Runs the nightly Bob maintenance path. It acquires the shared lock used with
-`bob bulk-git-commit` (default `$XDG_RUNTIME_DIR/bob_sync.lock` when that
-variable names an existing directory, otherwise `/tmp/bob_sync.lock`), then:
+Runs the nightly Bob maintenance path. It acquires the shared vault-sync lock
+(default `$XDG_RUNTIME_DIR/bob_sync.lock` when that variable names an existing
+directory, otherwise `/tmp/bob_sync.lock`), then:
 
-1. Runs the shared `ob sync --path <vault>` gate once. A missing `ob` binary or
-   an "already running" Obsidian sync is skipped rather than treated as
-   failure. A genuine sync failure aborts before later steps touch the vault.
+1. Runs `bob vault-sync` against the vault.
 2. Runs `bob move-done-tasks` against the vault.
-3. Runs `bob bulk-git-commit` against the vault.
+3. Runs `bob vault-sync` against the vault again.
 
-A failed wrapped step is reported but does not prevent later wrapped steps from
-running. If another Bob maintenance run already holds the lock, the command
-exits 0 after printing that it is already active. `bob nightly` accepts no
-options other than `-h, --help`.
-
-```bash
-bob bulk-git-commit
-```
-
-Stages all Bob vault changes, commits them when anything changed, and pushes
-via Git. This command does not run `ob sync`; use `bob nightly` for the path
-that syncs Obsidian first. It mutates the vault repository and should only be
-run when its Git remote and required credentials are ready. It uses the same
-shared lock as `bob nightly`.
+A failed step is reported but does not prevent later steps from running. If
+another Bob maintenance run already holds the lock, the command exits 0 after
+printing that it is already active. `bob nightly` accepts no options other than
+`-h, --help`.
 
 ## Vault sync
 
@@ -464,8 +452,8 @@ block link. A task at `projects/foo.md#^abc123` uses
 path/final block ID and repairs exact dependency tokens across all planned
 files. Metadata and link repair share the same atomic preview/write plan.
 
-The command itself does not run `ob sync`; `bob nightly` runs the shared
-Obsidian sync gate before invoking it. In a Git worktree, the command stages
+The command itself does not reconcile the full vault; `bob nightly` runs
+`vault-sync` before and after invoking it. In a Git worktree, the command stages
 only the files it touches, commits with a `bob move-done-tasks YYYY-MM-DD`
 message, and pushes. Existing uncommitted changes in touched source, archive,
 or link-repair files are included in that scoped commit after the command
@@ -522,15 +510,12 @@ The installed legacy binaries map to the preferred interface as follows:
 | --- | --- |
 | `bob_notify` | `bob notify` |
 | `bob_pomodoro` | `bob pomodoro` |
-| `bob_sync` | `bob bulk-git-commit` |
 | `tmux_bob_pomodoro` | `bob tmux-pomodoro` |
 
 By default they call the same native Rust implementations as the preferred
 commands. With `BOB_CLI_USE_SCRIPT=1`, the notification and Pomodoro commands
-and their shims delegate to their embedded shell assets. The `bob_sync` shim
-also delegates to its embedded script, but `bob bulk-git-commit` remains native.
-Native-only commands ignore the fallback setting. Extracted assets are cached
-in a version-and-content-specific subdirectory of
+and their shims delegate to their embedded shell assets. Native-only commands
+ignore the fallback setting. Extracted assets are cached in a version-and-content-specific subdirectory of
 `$XDG_CACHE_HOME/bob-cli/scripts/`. If `XDG_CACHE_HOME` is unset or empty, the
 base is `$HOME/.cache`; if neither variable is available, Bob uses the system
 temporary directory.
@@ -543,13 +528,11 @@ scripts also require Perl.
 
 The documented workflows use these external-tool integrations:
 
-- `ob` from obsidian-headless for the shared `bob nightly` Obsidian sync gate;
-  the gate is skipped when `ob` is unavailable
 - `obsidian` CLI plus a running desktop Obsidian vault with the Dataview plugin
   only when using `bob query --engine obsidian`
-- `git` for `bob bulk-git-commit`, Git-backed `bob move-done-tasks`, plugin
-  dirty-file checks, and the default `bob plugins` repository refresh; remote
-  operations also need the credentials required by the configured remote
+- `git` for `bob vault-sync`, Git-backed `bob move-done-tasks`, plugin dirty-file
+  checks, and the default `bob plugins` repository refresh; remote operations
+  also need the credentials required by the configured remote
 - `notify-send` for desktop notifications from `bob notify`; Bob also rings the
   terminal bell whether or not `notify-send` is available
 - platform clipboard tools for `bob capture` clipboard input: `pbpaste` on
@@ -558,24 +541,16 @@ The documented workflows use these external-tool integrations:
   fallback order)
 - `pandoc` and `xelatex` for `bob highlights create`; override pandoc with
   `BOB_PANDOC_COMMAND`
-- `bash` for the embedded shell fallback, for loading `ob` through the NVM
-  fallback, or for sourcing `~/.ssh-agent-thing`; the Pomodoro shell fallback
-  additionally uses `perl`
+- `bash` for the embedded shell fallback and for sourcing
+  `~/.ssh-agent-thing`; the Pomodoro shell fallback additionally uses `perl`
 
 No old chezmoi script files are required after installation. Cargo installs the
 Rust binaries, and the binaries carry the script assets they need.
 
 ## Environment
 
-`BOB_BULK_GIT_COMMIT_LOCK_FILE` overrides the lock path used by
-`bob bulk-git-commit` and `bob nightly`. The default is
-`$XDG_RUNTIME_DIR/bob_sync.lock` when that variable names an existing
-directory, otherwise `/tmp/bob_sync.lock`.
-
-`BOB_BULK_GIT_COMMIT_MESSAGE` overrides the commit message used by
-`bob bulk-git-commit`.
-
-`BOB_VAULT_SYNC_LOCK_FILE` overrides the lock path used by `bob vault-sync`.
+`BOB_VAULT_SYNC_LOCK_FILE` overrides the lock path used by `bob vault-sync` and
+`bob nightly`.
 The default path is the same shared `bob_sync.lock` path used by nightly
 maintenance.
 
@@ -672,21 +647,12 @@ to `~/projects/github/bobs-org/bob-plugins`.
 integer seed so a `--dry-run` preview matches a real capture. Unset means each
 capture rolls independently.
 
-`BOB_SYNC_LOCK_FILE` is a deprecated compatibility alias for
-`BOB_BULK_GIT_COMMIT_LOCK_FILE`.
-
-`BOB_SYNC_COMMIT_MESSAGE` is a deprecated compatibility alias for
-`BOB_BULK_GIT_COMMIT_MESSAGE`.
-
 `DATE` preserves the legacy date override behavior, including the date used by
 `bob capture` when `BOB_NOW` is unset. It can be a date command prefix such as
 `date --utc`, or a timestamp in the same formats accepted by `BOB_NOW`.
 
 `NO_COLOR` disables ANSI color in native human-readable output that would
 otherwise be styled when stdout is a terminal.
-
-`OB_COMMAND` overrides the `ob` executable used by the shared `bob nightly`
-Obsidian sync gate.
 
 `XDG_CACHE_HOME` is the cache root for extracted shell-fallback assets. See
 [Compatibility shims](#compatibility-shims).
@@ -699,16 +665,16 @@ Obsidian sync gate.
 
 ## Migration notes
 
-Use `bob pomodoro`, `bob notify`, `bob vault-sync`,
-`bob bulk-git-commit`, and `bob tmux-pomodoro` for new integrations, and run
+Use `bob pomodoro`, `bob notify`, `bob vault-sync`, and
+`bob tmux-pomodoro` for new integrations, and run
 `bob move-done-tasks` when done and canceled task blocks should be archived
 from the vault.
 
 The old top-level commands were renamed: `bob collect-done` is now
 `bob move-done-tasks`, `bob dataview` is now `bob query`, `bob highlights-ref`
-is now `bob highlights`, and `bob sync` is now `bob bulk-git-commit`. The old
-top-level names are no longer registered. Legacy installed binaries such as
-`bob_sync` remain compatibility shims for existing callers.
+is now `bob highlights`. `bob sync`, `bob bulk-git-commit`, and the `bob_sync`
+binary have been retired in favor of `bob vault-sync`. The old top-level names
+are no longer registered.
 
 The original script implementations remain embedded only as a rollback path.
 New integrations should rely on the native Rust command behavior.
@@ -740,9 +706,9 @@ Run a tmux status smoke test after installing locally:
 tmux display-message -p '#(bob tmux-pomodoro)'
 ```
 
-Before running `bob bulk-git-commit` in a release smoke test, verify that
-`BOB_DIR` points at the intended vault and that its Git remote can be pushed
-without prompts. Before running `bob move-done-tasks` against the real vault,
+Before running `bob vault-sync` in a release smoke test, verify that `BOB_DIR`
+points at the intended vault and that its Git remote can be pushed without
+prompts. Before running `bob move-done-tasks` against the real vault,
 verify that `~/bob` is the intended vault, inspect `git -C ~/bob status --short`,
 and review any local edits that may be included when touched candidate files are
 rewritten.

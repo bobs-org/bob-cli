@@ -22,7 +22,6 @@ use super::{
     env as bob_env,
     ob::{self, ChildEnv},
     style::Styler,
-    sync,
 };
 
 const COMMAND_NAME: &str = "bob vault-sync";
@@ -93,7 +92,8 @@ fn build_cli() -> ClapCommand {
 Environment:\n  BOB_DIR                    Bob vault root; defaults to ~/bob\n  \
 BOB_VAULT_SYNC_LOCK_FILE   lock file; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n  \
 BOB_VAULT_SYNC_STATE_FILE  status JSON path; defaults to ${XDG_STATE_HOME:-$HOME/.local/state}/bob-cli/vault-sync.json\n  \
-NO_COLOR                   disable color even when stdout is a TTY",
+NO_COLOR                   disable color even when stdout is a TTY\n\n\
+Legacy BOB_BULK_GIT_COMMIT_* and BOB_SYNC_* environment variables are no longer recognized; use BOB_VAULT_SYNC_*.",
         )
 }
 
@@ -143,6 +143,16 @@ struct RunOptions {
     quiet: bool,
 }
 
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            message: None,
+            quiet: false,
+        }
+    }
+}
+
 impl RunOptions {
     fn from_matches(matches: &ArgMatches) -> Self {
         Self {
@@ -168,16 +178,23 @@ struct StatusRecord {
 }
 
 fn run_cycle(options: RunOptions) -> i32 {
-    let vault = bob_env::bob_dir();
-    let state_file = state_file_path();
-    let styler = Styler::detect();
-
     let _lock = match ob::acquire_lock_quiet_if_held() {
         Ok(lock) => lock,
         Err(code) => return code,
     };
-
     let child_env = ob::child_env();
+    run_cycle_with_env(options, &child_env)
+}
+
+pub(crate) fn run_cycle_with_existing_lock(child_env: &ChildEnv) -> i32 {
+    run_cycle_with_env(RunOptions::default(), child_env)
+}
+
+fn run_cycle_with_env(options: RunOptions, child_env: &ChildEnv) -> i32 {
+    let vault = bob_env::bob_dir();
+    let state_file = state_file_path();
+    let styler = Styler::detect();
+
     let started = Instant::now();
     let mut status = read_status_record(&state_file)
         .unwrap_or_default()
@@ -191,9 +208,9 @@ fn run_cycle(options: RunOptions) -> i32 {
     status.last_error = None;
 
     let outcome =
-        run_cycle_inner(&vault, &child_env, &options, &styler, &mut status);
+        run_cycle_inner(&vault, child_env, &options, &styler, &mut status);
     status.duration_ms = elapsed_ms(started);
-    refresh_status_shas(&vault, &child_env, &mut status);
+    refresh_status_shas(&vault, child_env, &mut status);
 
     match outcome {
         Ok(()) => {
@@ -240,7 +257,7 @@ fn run_cycle_inner(
     styler: &Styler,
     status: &mut StatusRecord,
 ) -> Result<(), CycleError> {
-    sync::verify_bob_worktree(vault, child_env).map_err(CycleError::fatal)?;
+    ob::verify_bob_worktree(vault, child_env).map_err(CycleError::fatal)?;
     print_log(
         options,
         &format!("reconciling Bob vault at {}", vault.display()),

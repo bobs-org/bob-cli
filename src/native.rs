@@ -41,13 +41,11 @@ mod plugins;
 mod pomodoro;
 mod projects;
 mod style;
-mod sync;
 mod task_status_hooks;
 mod vault_sync;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {
-    BulkGitCommit,
     Capture,
     CaptureComplete,
     CaptureParse,
@@ -76,7 +74,6 @@ pub(crate) fn command_for_script(
     match script_command {
         "bob_pomodoro" => Some(NativeCommand::Pomodoro),
         "bob_notify" => Some(NativeCommand::Notify),
-        "bob_sync" => Some(NativeCommand::BulkGitCommit),
         "tmux_bob_pomodoro" => Some(NativeCommand::TmuxPomodoro),
         _ => None,
     }
@@ -84,7 +81,6 @@ pub(crate) fn command_for_script(
 
 pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
     match command {
-        NativeCommand::BulkGitCommit => sync::run(args),
         NativeCommand::Capture => capture::run(args),
         NativeCommand::CaptureComplete => capture_complete::run(args),
         NativeCommand::CaptureParse => capture_parse::run(args),
