@@ -81,6 +81,17 @@ links and heading links do not. Targets resolve by an exact vault-relative
 path first and then by a unique, case-insensitive note basename. Ambiguous or
 missing targets produce warnings and are not guessed.
 
+The normal resolver is backed by the active vault scan described in
+[Guard rails](#guard-rails). As a narrow archive exception, a current or
+previous Pomodoro ledger link that names an exact normalized vault-relative
+Markdown target beneath the top-level `done/` directory, such as
+`[[done/dev_done#^finished]]`, may load that one archive note read-only. This
+lets collection-rewritten terminal task links be struck, moved, removed when
+canceled, or normalized for recent-activity identity without adding the
+archive to active synchronization. Basename links do not search `done/`, and
+parent traversal, missing archive files, missing task blocks, and conflicting
+block IDs still warn.
+
 The Bob Navigation Hotkeys `Ctrl+Shift+P` picker already removes a task's live
 links from today's open Pomodoros the moment that task is given a future
 `scheduled` date (see
@@ -453,10 +464,14 @@ A task must have a trailing `^block-id` to be linked. The edit changes only
 the status character, preserving indentation, list markers, descriptions,
 block IDs, and line endings.
 
-The vault scan skips dot-prefixed directories, `done/`, `_generated/`, and
-`_templates/`, so archived tasks and templates are never synchronized.
-Consequently, a dependency link into `done/` is reported as unresolved; the
-archived task itself remains untouched.
+The active vault scan skips dot-prefixed directories, `done/`, `_generated/`,
+and `_templates/`, so archived tasks and templates are never synchronized.
+Exact `done/...` Pomodoro-reference targets from the current or previous
+ledger may be loaded as a read-only supplemental catalog, but they are not
+counted as scanned files, never receive status writes, and never participate
+in dependency propagation or derived Blocked state. Consequently, a dependency
+link into `done/` is still reported as unresolved; the archived task itself
+remains untouched.
 
 ## Guard Rails
 
@@ -633,11 +648,13 @@ JSON mode prints one object on stdout with these stable fields:
 }
 ```
 
-`references` retains its input-count contract and counts unique raw direct
-Pomodoro block links before structural cleanup; consumers do not need to
-reinterpret that older field. A canceled reference removed during this run
-therefore remains part of `references`, while the post-rewrite graph excludes
-it. `dependency_references` counts additional unique task blocks reached
+`scanned_files` counts only Markdown notes included in the active vault scan;
+it does not include read-only archive notes loaded only for exact `done/...`
+Pomodoro references. `references` retains its input-count contract and counts
+unique raw direct Pomodoro block links before structural cleanup; consumers do
+not need to reinterpret that older field. A canceled reference removed during
+this run therefore remains part of `references`, while the post-rewrite graph
+excludes it. `dependency_references` counts additional unique task blocks reached
 through dependency edges in the final rewritten ledger.
 `previous_daily_file` is the optional vault-relative selected historical path;
 it is `null` when no earlier canonical daily exists.

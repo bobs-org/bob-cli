@@ -443,6 +443,30 @@ struct ResolvedReference {
     statuses: Vec<char>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct ArchiveReferenceCatalog {
+    note_paths: BTreeSet<PathBuf>,
+    load_failures: BTreeMap<PathBuf, String>,
+    task_blocks: BTreeMap<(PathBuf, String), Vec<char>>,
+}
+
+struct TaskReferenceResolver<'a> {
+    note_index: &'a NoteIndex,
+    task_blocks: &'a BTreeMap<(PathBuf, String), Vec<char>>,
+    archive_catalog: &'a ArchiveReferenceCatalog,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ReferenceContext {
+    CurrentDaily,
+    PreviousDaily,
+}
+
+enum ResolvePathError {
+    Unresolved,
+    ArchiveUnavailable(String),
+}
+
 #[derive(Debug, Clone)]
 struct StructuralPlan {
     token_edits: BTreeMap<usize, Vec<TokenEdit>>,
@@ -665,80 +689,35 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
             Some(scan_pomodoros(&lines, section).recent_references)
         })
         .unwrap_or_default();
+    let archive_catalog = archive_reference_catalog(
+        &request.bob_dir,
+        &settings,
+        pomodoro_model
+            .all_references
+            .iter()
+            .chain(previous_daily_references.iter()),
+    )?;
+    let reference_resolver = TaskReferenceResolver {
+        note_index: &note_index,
+        task_blocks: &task_blocks,
+        archive_catalog: &archive_catalog,
+    };
     let mut unresolved = Vec::new();
     let dependency_edges =
         dependency_edges(&files, &note_index, &task_blocks, &mut unresolved);
     let mut resolved_references = BTreeMap::new();
     for reference in &pomodoro_model.all_references {
-        let resolved =
-            note_index.resolve(daily_relative, reference.target.trim());
-        let Some(path) = resolved else {
-            unresolved.push(UnresolvedReference {
-                target: reference.target.clone(),
-                block_id: reference.block_id.clone(),
-                reason: "note target did not resolve uniquely".to_string(),
-            });
+        let Some(resolved) = resolve_task_reference(
+            reference,
+            daily_relative,
+            &reference_resolver,
+            ReferenceContext::CurrentDaily,
+            &settings,
+            &mut unresolved,
+        ) else {
             continue;
         };
-        let key = (path.clone(), reference.block_id.clone());
-        let statuses = task_blocks.get(&key).cloned().unwrap_or_default();
-        if statuses.is_empty() {
-            unresolved.push(UnresolvedReference {
-                target: reference.target.clone(),
-                block_id: reference.block_id.clone(),
-                reason: format!(
-                    "{} has no matching task block",
-                    display_path(&path)
-                ),
-            });
-            continue;
-        }
-        if statuses.len() > 1 {
-            let has_done = statuses
-                .iter()
-                .any(|status| is_done_status(*status, &settings.done_statuses));
-            let has_not_done = statuses.iter().any(|status| {
-                !is_done_status(*status, &settings.done_statuses)
-            });
-            let has_canceled = statuses.iter().any(|status| {
-                is_canceled_status(*status, &settings.status_types)
-            });
-            let has_not_canceled = statuses.iter().any(|status| {
-                !is_canceled_status(*status, &settings.status_types)
-            });
-            let reason = if has_done && has_not_done && has_canceled {
-                format!(
-                    "{} has {} tasks with conflicting statuses; completed-link normalization and canceled-reference list-item removal were skipped",
-                    display_path(&path),
-                    statuses.len()
-                )
-            } else if has_done && has_not_done {
-                format!(
-                    "{} has {} tasks with conflicting statuses; completed-link normalization was skipped",
-                    display_path(&path),
-                    statuses.len()
-                )
-            } else if has_canceled && has_not_canceled {
-                format!(
-                    "{} has {} tasks with conflicting statuses; canceled-reference list-item removal was skipped",
-                    display_path(&path),
-                    statuses.len()
-                )
-            } else {
-                format!(
-                    "{} has {} tasks with this block id; all were matched",
-                    display_path(&path),
-                    statuses.len()
-                )
-            };
-            unresolved.push(UnresolvedReference {
-                target: reference.target.clone(),
-                block_id: reference.block_id.clone(),
-                reason,
-            });
-        }
-        resolved_references
-            .insert(reference.clone(), ResolvedReference { path, statuses });
+        resolved_references.insert(reference.clone(), resolved);
     }
 
     let removed_duplicate_lines = plan_duplicate_line_removals(
@@ -795,8 +774,8 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
     recent_activity_roots.extend(resolve_recent_references(
         &previous_daily_references,
         previous_daily_relative.as_deref(),
-        &note_index,
-        &task_blocks,
+        &reference_resolver,
+        &settings,
         &mut unresolved,
     ));
     let recent_activity_references = recent_activity_roots.len();
@@ -2338,6 +2317,278 @@ fn task_blocks(files: &[FileScan]) -> BTreeMap<(PathBuf, String), Vec<char>> {
     blocks
 }
 
+fn archive_reference_catalog<'a, I>(
+    vault: &Path,
+    settings: &TasksSettings,
+    references: I,
+) -> Result<ArchiveReferenceCatalog, SyncError>
+where
+    I: IntoIterator<Item = &'a RawReference>,
+{
+    let mut catalog = ArchiveReferenceCatalog::default();
+    let targets = references
+        .into_iter()
+        .filter_map(|reference| {
+            explicit_archive_reference_path(reference.target.trim())
+        })
+        .collect::<BTreeSet<_>>();
+    let canonical_vault = vault.canonicalize().ok();
+
+    for relative_path in targets {
+        let display = display_path(&relative_path);
+        let path = vault.join(&relative_path);
+        if !path.exists() {
+            catalog.load_failures.insert(
+                relative_path.clone(),
+                format!("archive target {display} does not exist"),
+            );
+            continue;
+        }
+        if !path.is_file() {
+            catalog.load_failures.insert(
+                relative_path.clone(),
+                format!("archive target {display} is not a file"),
+            );
+            continue;
+        }
+        if let Some(canonical_vault) = &canonical_vault {
+            match path.canonicalize() {
+                Ok(canonical_path)
+                    if canonical_path.starts_with(canonical_vault) => {}
+                Ok(_) => {
+                    catalog.load_failures.insert(
+                        relative_path.clone(),
+                        format!(
+                            "archive target {display} is outside the vault root"
+                        ),
+                    );
+                    continue;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    catalog.load_failures.insert(
+                        relative_path.clone(),
+                        format!("archive target {display} does not exist"),
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    return Err(SyncError::io(
+                        "inspect archive note",
+                        &path,
+                        error,
+                    ));
+                }
+            }
+        }
+
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                catalog.load_failures.insert(
+                    relative_path.clone(),
+                    format!("archive target {display} does not exist"),
+                );
+                continue;
+            }
+            Err(error) => {
+                return Err(SyncError::io("read archive note", &path, error));
+            }
+        };
+        catalog.note_paths.insert(relative_path.clone());
+        for task in parse_tasks(&contents, settings) {
+            if let Some(block_id) = task.block_id {
+                catalog
+                    .task_blocks
+                    .entry((relative_path.clone(), block_id))
+                    .or_insert_with(Vec::new)
+                    .push(task.status);
+            }
+        }
+    }
+
+    Ok(catalog)
+}
+
+fn explicit_archive_reference_path(target: &str) -> Option<PathBuf> {
+    let path = target_to_markdown_path(target)?;
+    let mut components = path.components();
+    let Some(Component::Normal(first)) = components.next() else {
+        return None;
+    };
+    if first != OsStr::new("done") {
+        return None;
+    }
+    let Some(Component::Normal(_)) = components.next() else {
+        return None;
+    };
+    Some(path)
+}
+
+impl<'a> TaskReferenceResolver<'a> {
+    fn resolve_path(
+        &self,
+        current_path: Option<&Path>,
+        target: &str,
+    ) -> Result<PathBuf, ResolvePathError> {
+        if let Some(path) = self.note_index.resolve(current_path, target) {
+            return Ok(path);
+        }
+        let Some(path) = explicit_archive_reference_path(target) else {
+            return Err(ResolvePathError::Unresolved);
+        };
+        if self.archive_catalog.note_paths.contains(&path) {
+            return Ok(path);
+        }
+        if let Some(reason) = self.archive_catalog.load_failures.get(&path) {
+            return Err(ResolvePathError::ArchiveUnavailable(reason.clone()));
+        }
+        Err(ResolvePathError::Unresolved)
+    }
+
+    fn statuses(&self, identity: &(PathBuf, String)) -> Option<&Vec<char>> {
+        self.task_blocks
+            .get(identity)
+            .or_else(|| self.archive_catalog.task_blocks.get(identity))
+    }
+}
+
+impl ReferenceContext {
+    fn unresolved_reason(self, error: ResolvePathError) -> String {
+        match (self, error) {
+            (Self::CurrentDaily, ResolvePathError::Unresolved) => {
+                "note target did not resolve uniquely".to_string()
+            }
+            (Self::PreviousDaily, ResolvePathError::Unresolved) => {
+                "previous daily note target did not resolve uniquely"
+                    .to_string()
+            }
+            (
+                Self::CurrentDaily,
+                ResolvePathError::ArchiveUnavailable(reason),
+            ) => reason,
+            (
+                Self::PreviousDaily,
+                ResolvePathError::ArchiveUnavailable(reason),
+            ) => {
+                format!("previous daily note {reason}")
+            }
+        }
+    }
+
+    fn missing_block_reason(self, path: &Path) -> String {
+        match self {
+            Self::CurrentDaily => {
+                format!("{} has no matching task block", display_path(path))
+            }
+            Self::PreviousDaily => format!(
+                "previous daily note target {} has no matching task block",
+                display_path(path)
+            ),
+        }
+    }
+
+    fn duplicate_block_reason(
+        self,
+        path: &Path,
+        statuses: &[char],
+        settings: &TasksSettings,
+    ) -> String {
+        match self {
+            Self::PreviousDaily => format!(
+                "previous daily note target {} has {} tasks with this block id; all were matched",
+                display_path(path),
+                statuses.len()
+            ),
+            Self::CurrentDaily => current_duplicate_block_reason(
+                path, statuses, settings,
+            ),
+        }
+    }
+}
+
+fn current_duplicate_block_reason(
+    path: &Path,
+    statuses: &[char],
+    settings: &TasksSettings,
+) -> String {
+    let has_done = statuses
+        .iter()
+        .any(|status| is_done_status(*status, &settings.done_statuses));
+    let has_not_done = statuses
+        .iter()
+        .any(|status| !is_done_status(*status, &settings.done_statuses));
+    let has_canceled = statuses
+        .iter()
+        .any(|status| is_canceled_status(*status, &settings.status_types));
+    let has_not_canceled = statuses
+        .iter()
+        .any(|status| !is_canceled_status(*status, &settings.status_types));
+    if has_done && has_not_done && has_canceled {
+        format!(
+            "{} has {} tasks with conflicting statuses; completed-link normalization and canceled-reference list-item removal were skipped",
+            display_path(path),
+            statuses.len()
+        )
+    } else if has_done && has_not_done {
+        format!(
+            "{} has {} tasks with conflicting statuses; completed-link normalization was skipped",
+            display_path(path),
+            statuses.len()
+        )
+    } else if has_canceled && has_not_canceled {
+        format!(
+            "{} has {} tasks with conflicting statuses; canceled-reference list-item removal was skipped",
+            display_path(path),
+            statuses.len()
+        )
+    } else {
+        format!(
+            "{} has {} tasks with this block id; all were matched",
+            display_path(path),
+            statuses.len()
+        )
+    }
+}
+
+fn resolve_task_reference(
+    reference: &RawReference,
+    source_path: Option<&Path>,
+    resolver: &TaskReferenceResolver<'_>,
+    context: ReferenceContext,
+    settings: &TasksSettings,
+    unresolved: &mut Vec<UnresolvedReference>,
+) -> Option<ResolvedReference> {
+    let path = match resolver.resolve_path(source_path, reference.target.trim())
+    {
+        Ok(path) => path,
+        Err(error) => {
+            unresolved.push(UnresolvedReference {
+                target: reference.target.clone(),
+                block_id: reference.block_id.clone(),
+                reason: context.unresolved_reason(error),
+            });
+            return None;
+        }
+    };
+    let identity = (path.clone(), reference.block_id.clone());
+    let Some(statuses) = resolver.statuses(&identity).cloned() else {
+        unresolved.push(UnresolvedReference {
+            target: reference.target.clone(),
+            block_id: reference.block_id.clone(),
+            reason: context.missing_block_reason(&path),
+        });
+        return None;
+    };
+    if statuses.len() > 1 {
+        unresolved.push(UnresolvedReference {
+            target: reference.target.clone(),
+            block_id: reference.block_id.clone(),
+            reason: context.duplicate_block_reason(&path, &statuses, settings),
+        });
+    }
+    Some(ResolvedReference { path, statuses })
+}
+
 fn dependency_edges(
     files: &[FileScan],
     note_index: &NoteIndex,
@@ -2419,47 +2670,23 @@ fn dependency_edges(
 fn resolve_recent_references(
     references: &BTreeSet<RawReference>,
     source_path: Option<&Path>,
-    note_index: &NoteIndex,
-    task_blocks: &BTreeMap<(PathBuf, String), Vec<char>>,
+    resolver: &TaskReferenceResolver<'_>,
+    settings: &TasksSettings,
     unresolved: &mut Vec<UnresolvedReference>,
 ) -> BTreeSet<(PathBuf, String)> {
     let mut resolved_identities = BTreeSet::new();
     for reference in references {
-        let Some(path) =
-            note_index.resolve(source_path, reference.target.trim())
-        else {
-            unresolved.push(UnresolvedReference {
-                target: reference.target.clone(),
-                block_id: reference.block_id.clone(),
-                reason: "previous daily note target did not resolve uniquely"
-                    .to_string(),
-            });
-            continue;
-        };
-        let identity = (path.clone(), reference.block_id.clone());
-        let Some(statuses) = task_blocks.get(&identity) else {
-            unresolved.push(UnresolvedReference {
-                target: reference.target.clone(),
-                block_id: reference.block_id.clone(),
-                reason: format!(
-                    "previous daily note target {} has no matching task block",
-                    display_path(&path)
-                ),
-            });
-            continue;
-        };
-        if statuses.len() > 1 {
-            unresolved.push(UnresolvedReference {
-                target: reference.target.clone(),
-                block_id: reference.block_id.clone(),
-                reason: format!(
-                    "previous daily note target {} has {} tasks with this block id; all were matched",
-                    display_path(&path),
-                    statuses.len()
-                ),
-            });
+        if let Some(resolved) = resolve_task_reference(
+            reference,
+            source_path,
+            resolver,
+            ReferenceContext::PreviousDaily,
+            settings,
+            unresolved,
+        ) {
+            resolved_identities
+                .insert((resolved.path, reference.block_id.clone()));
         }
-        resolved_identities.insert(identity);
     }
     resolved_identities
 }
@@ -3338,19 +3565,26 @@ mod tests {
                 vec!['/'],
             ),
         ]);
+        let archive_catalog = ArchiveReferenceCatalog::default();
+        let resolver = TaskReferenceResolver {
+            note_index: &index,
+            task_blocks: &blocks,
+            archive_catalog: &archive_catalog,
+        };
+        let settings = test_settings();
 
         let previous = resolve_recent_references(
             &references,
             Some(Path::new("2026/20260710.md")),
-            &index,
-            &blocks,
+            &resolver,
+            &settings,
             &mut Vec::new(),
         );
         let current = resolve_recent_references(
             &references,
             Some(Path::new("2026/20260721.md")),
-            &index,
-            &blocks,
+            &resolver,
+            &settings,
             &mut Vec::new(),
         );
 

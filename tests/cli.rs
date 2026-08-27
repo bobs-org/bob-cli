@@ -1962,6 +1962,331 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
 }
 
 #[test]
+fn task_status_hooks_resolves_archive_references_read_only() {
+    let temp =
+        TempDir::new("bob-cli-task-status-hooks-archive-references-readonly");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260827.md");
+    let previous = vault.join("2026/20260826.md");
+    let archive = vault.join("done/dev/dev_done.md");
+    let daily_before = concat!(
+        "## Pomodoros\n\n",
+        "- [x] Done (0900-0930)\n",
+        "  - ~~[[done/dev/dev_done#^lower-athena-disk-use]]~~\n",
+    );
+    let previous_before = concat!(
+        "## Pomodoros\n\n",
+        "- [x] Previous (0900-0930)\n",
+        "  - [[done/dev/dev_done#^lower-athena-disk-use]]\n",
+    );
+    let archive_before =
+        "- [x] #task Lower Athena disk use ^lower-athena-disk-use\n";
+    write_file(&daily, daily_before);
+    write_file(&previous, previous_before);
+    write_file(&archive, archive_before);
+
+    let dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run archived Pomodoro references");
+    assert_success(&dry_run);
+    assert_eq!(
+        fs::read_to_string(&daily).unwrap(),
+        daily_before,
+        "dry-run changed current daily"
+    );
+    assert_eq!(
+        fs::read_to_string(&previous).unwrap(),
+        previous_before,
+        "dry-run changed previous daily"
+    );
+    assert_eq!(
+        fs::read_to_string(&archive).unwrap(),
+        archive_before,
+        "dry-run changed archive"
+    );
+    assert!(
+        stderr(&dry_run).is_empty(),
+        "unexpected archive warning:\n{}",
+        format_output(&dry_run)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    assert_eq!(json["scanned_files"], 2);
+    assert_eq!(json["previous_daily_file"], "2026/20260826.md");
+    assert_eq!(json["previous_daily_references"], 1);
+    assert_eq!(json["recent_activity_references"], 1);
+    assert!(
+        json["unresolved_references"].as_array().unwrap().is_empty(),
+        "unexpected unresolved references: {}",
+        json["unresolved_references"]
+    );
+
+    let human = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("human dry-run archived Pomodoro references");
+    assert_success(&human);
+    assert!(
+        stderr(&human).is_empty(),
+        "unexpected human warning:\n{}",
+        format_output(&human)
+    );
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply archived Pomodoro references");
+    assert_success(&applied);
+    assert!(
+        stderr(&applied).is_empty(),
+        "unexpected apply warning:\n{}",
+        format_output(&applied)
+    );
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    assert_eq!(fs::read_to_string(&previous).unwrap(), previous_before);
+    assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
+
+    let second = bob_command()
+        .arg("task-status-hooks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun archived Pomodoro references");
+    assert_success(&second);
+    let second_json: serde_json::Value =
+        serde_json::from_str(stdout(&second).trim()).unwrap();
+    assert!(second_json["unresolved_references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    assert_eq!(fs::read_to_string(&previous).unwrap(), previous_before);
+    assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
+}
+
+#[test]
+fn task_status_hooks_normalizes_live_archive_terminal_references() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-archive-terminal-links");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260827.md");
+    let tasks = vault.join("tasks.md");
+    let archive = vault.join("done/dev_done.md");
+    let daily_before = concat!(
+        "## Pomodoros\n\n",
+        "- [ ] Current (0900-0930)\n",
+        "  - complete ![[done/dev_done#^archived-done|done alias]]\n",
+        "  - cancel [[done/dev_done#^archived-cancel]]\n",
+        "    - child removed with canceled reference\n",
+        "  - active [[tasks#^active]]\n",
+    );
+    let tasks_before = "- [ ] #task Active work ^active\n";
+    let archive_before = concat!(
+        "- [x] #task Archived done ^archived-done\n",
+        "- [-] #task Archived canceled ^archived-cancel\n",
+    );
+    write_file(&daily, daily_before);
+    write_file(&tasks, tasks_before);
+    write_file(&archive, archive_before);
+
+    let dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run live archived terminal links");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
+    assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    assert_eq!(json["scanned_files"], 2);
+    assert!(json["unresolved_references"].as_array().unwrap().is_empty());
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
+    assert_eq!(json["marked_next"][0]["path"], "tasks.md");
+    assert_eq!(
+        json["struck_completed_references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        json["struck_completed_references"][0]["target"],
+        "done/dev_done"
+    );
+    assert_eq!(
+        json["struck_completed_references"][0]["removed_embed"],
+        true
+    );
+    assert_eq!(
+        json["removed_canceled_references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        json["removed_canceled_references"][0]["target"],
+        "done/dev_done"
+    );
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply live archived terminal links");
+    assert_success(&applied);
+    assert_eq!(
+        fs::read_to_string(&daily).unwrap(),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - complete ~~[[done/dev_done#^archived-done|done alias]]~~\n",
+            "  - active [[tasks#^active]]\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        "- [*] #task Active work ^active\n"
+    );
+    assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
+
+    let second = bob_command()
+        .arg("task-status-hooks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun live archived terminal links");
+    assert_success(&second);
+    let second_json: serde_json::Value =
+        serde_json::from_str(stdout(&second).trim()).unwrap();
+    assert!(second_json["marked_next"].as_array().unwrap().is_empty());
+    assert!(second_json["struck_completed_references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(second_json["removed_canceled_references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(second_json["unresolved_references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
+}
+
+#[test]
+fn task_status_hooks_keeps_archive_out_of_active_dependency_sync() {
+    let temp =
+        TempDir::new("bob-cli-task-status-hooks-archive-dependency-scope");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260827.md");
+    let tasks = vault.join("tasks.md");
+    let archive = vault.join("done/dev_done.md");
+    let daily_before = concat!(
+        "## Pomodoros\n\n",
+        "- [ ] Current (0900-0930)\n",
+        "  - active [[tasks#^root]]\n",
+        "  - archived [[done/dev_done#^archived-open]]\n",
+        "  - missing [[done/missing#^ghost]]\n",
+        "  - invalid [[done/../dev_done#^bad]]\n",
+    );
+    let tasks_before =
+        "- [ ] #task Active root ^root\n  - ![[done/dev_done#^archived-open]]\n";
+    let archive_before = "- [ ] #task Archived open ^archived-open\n";
+    write_file(&daily, daily_before);
+    write_file(&tasks, tasks_before);
+    write_file(&archive, archive_before);
+
+    let dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run archive dependency scope");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    assert_eq!(json["scanned_files"], 2);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
+    assert_eq!(json["marked_next"][0]["path"], "tasks.md");
+    let unresolved = json["unresolved_references"].as_array().unwrap();
+    assert_eq!(
+        unresolved.len(),
+        3,
+        "unexpected unresolved: {unresolved:#?}"
+    );
+    assert!(unresolved.iter().any(|item| {
+        item["target"] == "done/dev_done"
+            && item["block_id"] == "archived-open"
+            && item["reason"]
+                .as_str()
+                .unwrap()
+                .contains("dependency from tasks.md:1 did not resolve uniquely")
+    }));
+    assert!(unresolved.iter().any(|item| {
+        item["target"] == "done/missing"
+            && item["block_id"] == "ghost"
+            && item["reason"]
+                .as_str()
+                .unwrap()
+                .contains("archive target done/missing.md does not exist")
+    }));
+    assert!(unresolved.iter().any(|item| {
+        item["target"] == "done/../dev_done"
+            && item["block_id"] == "bad"
+            && item["reason"] == "note target did not resolve uniquely"
+    }));
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply archive dependency scope");
+    assert_success(&applied);
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        "- [*] #task Active root ^root\n  - ![[done/dev_done#^archived-open]]\n"
+    );
+    assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
+}
+
+#[test]
 fn task_status_hooks_strikes_in_place_when_no_relocation_target_exists() {
     let temp = TempDir::new("bob-cli-task-status-hooks-no-target");
     let vault = temp.path().join("vault");
