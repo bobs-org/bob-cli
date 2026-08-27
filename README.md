@@ -121,7 +121,7 @@ Paths below are relative to `BOB_DIR` (`~/bob` by default):
 | `.obsidian/plugins/` | Installed community plugins, including Bob's custom plugins |
 | `xlib/` | Highlights intake PDFs from `bob highlights create` |
 | `lib/` | Highlights library PDFs after `bob highlights scan` |
-| `old_lib/` | Archival predecessor of `lib/`; excluded from Obsidian Sync on athena and backed up through the vault Git repo |
+| `old_lib/` | Archival predecessor of `lib/`; excluded from Obsidian Sync on every device and backed up through the vault Git repo |
 | `ref/` | Generated Highlights reference notes |
 
 Daily-note selection uses `BOB_DAY_FILE` when set, otherwise
