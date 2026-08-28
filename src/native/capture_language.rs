@@ -1221,6 +1221,20 @@ pub(crate) fn normalize_task_text(raw_text: &str) -> String {
     raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Canonical whitespace-free selector slug for task-section and Pomodoro-name
+/// third components: trim, collapse internal whitespace to one space,
+/// ASCII-lowercase, then replace each remaining space with `-`.
+pub(crate) fn selector_slug(text: &str) -> String {
+    let mut result = String::new();
+    for word in text.split_whitespace() {
+        if !result.is_empty() {
+            result.push('-');
+        }
+        result.push_str(&word.to_ascii_lowercase());
+    }
+    result
+}
+
 /// Parse one whitespace-free token as an `@route` token, returning `None` when
 /// it does not begin with `@` or its route part is not a valid route name. A
 /// `#` suffix selects bullet mode and is split off before route validation.
@@ -1305,7 +1319,7 @@ fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
                 block_id
             ));
         }
-        Some(selector) if !is_task_section_selector(selector) => {
+        Some(selector) if !is_selector_component(selector) => {
             return Err(SUB_BULLET_SECTION_ERROR.to_string());
         }
         Some(selector) => Some(TaskSectionSelector {
@@ -1323,11 +1337,15 @@ fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
     })
 }
 
-fn is_task_section_selector(value: &str) -> bool {
-    !value.is_empty() && value.bytes().all(is_task_section_selector_byte)
+/// Return whether one already-whitespace-free selector component is typeable.
+///
+/// This is the shared third-component grammar for `@route+id#section` and
+/// `@route:id#pomodoro`: ASCII alphanumerics plus `& ' ( ) , . / -`.
+pub(crate) fn is_selector_component(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(is_selector_byte)
 }
 
-fn is_task_section_selector_byte(byte: u8) -> bool {
+fn is_selector_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric()
         || matches!(
             byte,
@@ -2781,7 +2799,7 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
         ));
     }
     if section_part.is_some_and(|section| {
-        !section.is_empty() && !is_task_section_selector(section)
+        !section.is_empty() && !is_selector_component(section)
     }) {
         return TokenParse::Invalid(token_diagnostic(
             token,

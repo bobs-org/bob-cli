@@ -1125,6 +1125,7 @@ JSON forms as the underlying scan would.
 ## Discovery commands
 
 ```bash
+bob capture-pomodoros [-a|--all] [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-targets [-b|--bob-dir DIR] [-f|--format human|json] [-v|--verbose]
 bob capture-task-sections --route NAME (--block-id ID | --task-ref REF) [-b|--bob-dir DIR] [-f|--format human|json]
@@ -1186,6 +1187,30 @@ color escapes when piped. JSON output has `ok`, `route`, `relative_target`,
 the picker-safe value accepted by `bob capture --task-ref` and
 `bob capture-task-id --task-ref` and can recover when unrelated edits shift
 the task's line.
+
+`capture-pomodoros` lists Pomodoro ledger entries from today's daily note. The
+daily note is selected exactly as `bob capture` selects it: `BOB_DAY_FILE` when
+set and nonempty, otherwise `<bob-dir>/YYYY/YYYYMMDD.md` from `BOB_NOW` or the
+local date. Open entries are listed by default; `--all` includes completed
+entries. A missing daily note or a missing `## Pomodoros` section returns a
+successful empty list with one warning naming the file, so picker callers can
+degrade to "nothing to choose" without showing an error dialog. When the day
+has more than one open timed Pomodoro, no entry is marked current and the
+result includes a warning.
+
+Human output shows one row per entry with the name, selector slug, time range
+or `planned`, and `current`, `completed`, child-link-count, or `empty` badges,
+without emitting color escapes when piped. JSON success is a single versioned
+object with `ok`, `schema_version` `1`, `day_file`, `relative_day_file`,
+`count`, `warnings`, and an ordered `pomodoros` array. Each Pomodoro has `ref`
+(`<line>:<digest>`), `line`, `state` (`open` or `completed`), `status_symbol`,
+nullable `name`, `slug`, `selectable`, nullable `time_range`, `placeholder`,
+`is_current`, and `child_count`. The ref is stale-safe: a later write command
+can resolve exact line plus digest first, then a unique shifted digest match.
+Named Pomodoros use the same selector slug grammar as task sections:
+ASCII-lowercase, whitespace collapsed to `-`, with whole-slug matching before
+the first slug-prefix match. Entries whose names produce untypeable slugs stay
+in the list with `selectable: false`.
 
 `capture-task-sections` lists the ALL-CAPS direct-child section bullets of one
 parent task in document order. Exactly one of `--block-id`/`-i` or

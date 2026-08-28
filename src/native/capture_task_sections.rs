@@ -1,7 +1,8 @@
 //! Task-section scanner and read-only `bob capture-task-sections` CLI.
 //!
-//! This module is the single owner of the title predicate, checkbox detection,
-//! slug, direct-child enumeration, selector matching, and insertion geometry.
+//! This module owns the title predicate, checkbox detection, direct-child
+//! enumeration, selector matching, and insertion geometry. The shared
+//! selector slug grammar lives in `capture_language`.
 
 use std::{ffi::OsString, fs, io, iter, path::PathBuf};
 
@@ -50,19 +51,6 @@ pub(crate) struct TaskSectionInsertion {
     pub(crate) indentation: String,
 }
 
-/// Canonical whitespace-free slug: trim, collapse internal whitespace to one
-/// space, ASCII-lowercase, then replace each remaining space with `-`.
-pub(crate) fn slug(text: &str) -> String {
-    let mut result = String::new();
-    for word in text.split_whitespace() {
-        if !result.is_empty() {
-            result.push('-');
-        }
-        result.push_str(&word.to_ascii_lowercase());
-    }
-    result
-}
-
 /// Enumerate qualifying section bullets that are direct children of `task`.
 pub(crate) fn task_sections(
     contents: &str,
@@ -91,7 +79,7 @@ pub(crate) fn task_sections(
             direct_child_list_indexes(&lines, line_index, block_end).len();
         sections.push(TaskSection {
             title: title.to_string(),
-            slug: slug(title),
+            slug: capture_language::selector_slug(title),
             line: line_index + 1,
             indentation: leading_whitespace(line.text).to_string(),
             block_end,
@@ -106,7 +94,7 @@ pub(crate) fn select_section<'a>(
     sections: &'a [TaskSection],
     selector: &str,
 ) -> Option<&'a TaskSection> {
-    let needle = slug(selector);
+    let needle = capture_language::selector_slug(selector);
     if needle.is_empty() {
         return None;
     }
@@ -157,7 +145,7 @@ pub(crate) fn suggest_section<'a>(
     let requested = if exact {
         selector.to_ascii_lowercase()
     } else {
-        slug(selector)
+        capture_language::selector_slug(selector)
     };
     if requested.is_empty() {
         return None;
@@ -226,7 +214,7 @@ fn parse_task_section_title(body: &str) -> Option<&str> {
     is_section_title(title).then_some(title)
 }
 
-fn is_section_title(title: &str) -> bool {
+pub(crate) fn is_section_title(title: &str) -> bool {
     let mut chars = title.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -801,13 +789,25 @@ mod tests {
 
     #[test]
     fn slug_trims_collapses_whitespace_and_lowercases() {
-        assert_eq!(slug("REQUIREMENTS"), "requirements");
-        assert_eq!(slug("FUTURE WORK"), "future-work");
-        assert_eq!(slug("FUTURE  WORK"), "future-work");
-        assert_eq!(slug("  Q&A  "), "q&a");
-        assert_eq!(slug("NON-GOALS"), "non-goals");
-        assert_eq!(slug("WHAT'S NEXT"), "what's-next");
-        assert_eq!(slug(""), "");
+        assert_eq!(
+            capture_language::selector_slug("REQUIREMENTS"),
+            "requirements"
+        );
+        assert_eq!(
+            capture_language::selector_slug("FUTURE WORK"),
+            "future-work"
+        );
+        assert_eq!(
+            capture_language::selector_slug("FUTURE  WORK"),
+            "future-work"
+        );
+        assert_eq!(capture_language::selector_slug("  Q&A  "), "q&a");
+        assert_eq!(capture_language::selector_slug("NON-GOALS"), "non-goals");
+        assert_eq!(
+            capture_language::selector_slug("WHAT'S NEXT"),
+            "what's-next"
+        );
+        assert_eq!(capture_language::selector_slug(""), "");
     }
 
     #[test]

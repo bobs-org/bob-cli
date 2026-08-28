@@ -240,7 +240,7 @@ pub(crate) fn scan(
                 section: section.clone(),
                 child_count,
                 block_end,
-                digest: task_digest(line.text),
+                digest: line_digest(line.text),
             });
             task_index
         });
@@ -320,7 +320,7 @@ fn clean_description(
         .join(" ")
 }
 
-fn task_digest(line: &str) -> String {
+pub(crate) fn line_digest(line: &str) -> String {
     let digest = Sha256::digest(line.trim_end().as_bytes());
     hex::encode(digest)[..8].to_string()
 }

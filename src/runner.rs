@@ -49,6 +49,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::CaptureParse,
     },
     Subcommand {
+        name: "capture-pomodoros",
+        script_command: None,
+        about: "List today's Pomodoro ledger entries",
+        native_command: NativeCommand::CapturePomodoros,
+    },
+    Subcommand {
         name: "capture-rewrite",
         script_command: None,
         about: "Apply the capture grammar's automatic draft rewrites",
@@ -308,6 +314,8 @@ Examples:
                                  Complete the capture marker at the cursor
   bob capture-parse --format json -- 'Call bank @cash+'
                                  Explain in-progress capture text
+  bob capture-pomodoros --format json
+                                 List today's Pomodoro picker entries
   bob capture-sections --route cash --format json
                                  List picker sections for one capture target
   bob capture-targets --format json

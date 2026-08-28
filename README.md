@@ -139,6 +139,7 @@ Bob's workflow commands are:
 | [`capture`](#capture) | Capture a task or section bullet, optionally with clipboard content |
 | `capture-complete` | Complete capture marker or wikilink syntax at the cursor |
 | `capture-parse` | Preview what in-progress capture text and wikilinks mean |
+| `capture-pomodoros` | List today's Pomodoro ledger entries |
 | `capture-rewrite` | Apply the capture grammar's automatic draft rewrites (bare `@@` absorption) |
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
 | `capture-targets` | List inbox, area, and non-terminal project capture routes |
@@ -216,8 +217,9 @@ Editor clients such as Bob Mac Capture call `bob capture --format json`,
 a `@route` (or `@route+id`) marker into `@@route` (or `@@route+id`),
 deleting the marker it absorbed. Discovery helpers
 (`capture-targets`, `capture-sections`, `capture-tasks`,
-`capture-task-sections`) feed those pickers. `capture-task-id` assigns a
-user-authored block ID to an open task that still lacks one.
+`capture-task-sections`, `capture-pomodoros`) feed those pickers.
+`capture-task-id` assigns a user-authored block ID to an open task that still
+lacks one.
 
 The full grammar, JSON contracts, and picker protocol live in
 [`docs/capture.md`](docs/capture.md).

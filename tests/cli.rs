@@ -213,6 +213,30 @@ fn capture_parse_help_is_native_only() {
 }
 
 #[test]
+fn capture_pomodoros_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-capture-pomodoros-native-help");
+    let output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob capture-pomodoros --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob capture-pomodoros"),
+        "expected capture-pomodoros help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only capture-pomodoros should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_sections_help_is_native_only() {
     let temp = TempDir::new("bob-cli-capture-sections-native-help");
     let output = bob_command()
@@ -440,6 +464,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture", "--help"], "bob capture"),
         (&["capture-complete", "--help"], "bob capture-complete"),
         (&["capture-parse", "--help"], "bob capture-parse"),
+        (&["capture-pomodoros", "--help"], "bob capture-pomodoros"),
         (&["capture-rewrite", "--help"], "bob capture-rewrite"),
         (&["capture-sections", "--help"], "bob capture-sections"),
         (&["capture-targets", "--help"], "bob capture-targets"),
@@ -491,6 +516,10 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             "bob capture-complete --help",
         ),
         (&["capture-parse", "--help"], "bob capture-parse --help"),
+        (
+            &["capture-pomodoros", "--help"],
+            "bob capture-pomodoros --help",
+        ),
         (&["capture-rewrite", "--help"], "bob capture-rewrite --help"),
         (
             &["capture-sections", "--help"],
@@ -3011,6 +3040,28 @@ fn capture_parse_help_lists_options_alphabetically() {
         "expected capture-parse long help:\n{help}"
     );
     assert_text_order(&help, &["-f, --format", "-h, --help"]);
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_pomodoros_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-pomodoros --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Pomodoro entries from today's Bob daily note")
+            && help.contains("successful empty list with a warning"),
+        "expected capture-pomodoros long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &["-a, --all", "-b, --bob-dir", "-f, --format", "-h, --help"],
+    );
     assert_stdout_has_no_ansi(&output);
 }
 
@@ -10657,6 +10708,184 @@ fn capture_tasks_json_lists_open_tasks_with_stable_picker_shape() {
     assert_eq!(json["tasks"][1]["status_name"], "In Progress");
     assert_eq!(json["tasks"][1]["depth"], 1);
     assert_eq!(json["tasks"][2]["status_name"], "Blocked");
+}
+
+#[test]
+fn capture_pomodoros_json_lists_open_entries_with_stable_picker_shape() {
+    let temp = TempDir::new("bob-cli-capture-pomodoros-json");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Pomodoros\n",
+            "- [x] (0800-0830) — DONE\n",
+            "\t- [[done#^task]]\n",
+            "- [ ] (**09:00 - 09:30** [t:: 30m]) — MEMORY\n",
+            "\t- [[sase#^deep-fix]]\n",
+            "- [ ] () — FUTURE WORK\n",
+            "- [ ] plain range-less item\n",
+            "## Notes\n",
+            "- [ ] (1000-1030) — OUTSIDE\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run bob capture-pomodoros json");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "capture-pomodoros json should keep stderr clean:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["day_file"], day_file.display().to_string());
+    assert_eq!(json["relative_day_file"], "2026/20260828.md");
+    assert_eq!(json["count"], 3);
+    assert_eq!(json["warnings"].as_array().expect("warnings").len(), 0);
+    assert_eq!(json["pomodoros"][0]["line"], 5);
+    assert_eq!(json["pomodoros"][0]["state"], "open");
+    assert_eq!(json["pomodoros"][0]["status_symbol"], " ");
+    assert_eq!(json["pomodoros"][0]["name"], "MEMORY");
+    assert_eq!(json["pomodoros"][0]["slug"], "memory");
+    assert_eq!(json["pomodoros"][0]["selectable"], true);
+    assert_eq!(json["pomodoros"][0]["time_range"], "0900-0930");
+    assert_eq!(json["pomodoros"][0]["placeholder"], false);
+    assert_eq!(json["pomodoros"][0]["is_current"], true);
+    assert_eq!(json["pomodoros"][0]["child_count"], 1);
+    let pomodoro_ref =
+        json["pomodoros"][0]["ref"].as_str().expect("pomodoro ref");
+    let (line, digest) = pomodoro_ref.split_once(':').expect("ref separator");
+    assert_eq!(line, "5");
+    assert_eq!(digest.len(), 8);
+    assert!(digest
+        .chars()
+        .all(|character| character.is_ascii_hexdigit()));
+    assert_eq!(json["pomodoros"][1]["line"], 7);
+    assert_eq!(json["pomodoros"][1]["name"], "FUTURE WORK");
+    assert_eq!(json["pomodoros"][1]["slug"], "future-work");
+    assert_eq!(json["pomodoros"][1]["time_range"], serde_json::Value::Null);
+    assert_eq!(json["pomodoros"][1]["placeholder"], true);
+    assert_eq!(json["pomodoros"][2]["line"], 8);
+    assert_eq!(json["pomodoros"][2]["name"], serde_json::Value::Null);
+    assert_eq!(json["pomodoros"][2]["slug"], "");
+    assert_eq!(json["pomodoros"][2]["selectable"], false);
+
+    let all = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-a")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run bob capture-pomodoros --all json");
+    assert_success(&all);
+    let all_json: serde_json::Value =
+        serde_json::from_str(stdout(&all).trim()).expect("all json");
+    assert_eq!(all_json["count"], 4);
+    assert_eq!(all_json["pomodoros"][0]["state"], "completed");
+    assert_eq!(all_json["pomodoros"][0]["name"], "DONE");
+}
+
+#[test]
+fn capture_pomodoros_human_output_is_plain_when_piped() {
+    let temp = TempDir::new("bob-cli-capture-pomodoros-human");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — MEMORY\n",
+            "\t- [[sase#^deep-fix]]\n",
+            "- [ ] ()\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run bob capture-pomodoros human");
+
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("Capture Pomodoros - 2026/20260828.md"),
+        "{human}"
+    );
+    assert!(human.contains("MEMORY"), "{human}");
+    assert!(human.contains("memory"), "{human}");
+    assert!(human.contains("0900-0930"), "{human}");
+    assert!(human.contains("current 1 link"), "{human}");
+    assert!(human.contains("unnamed"), "{human}");
+    assert!(human.contains("planned"), "{human}");
+    assert!(human.contains("empty"), "{human}");
+    assert!(human.contains("2 Pomodoros"), "{human}");
+}
+
+#[test]
+fn capture_pomodoros_missing_note_and_section_warn_in_json() {
+    let temp = TempDir::new("bob-cli-capture-pomodoros-warnings");
+    let vault = temp.path().join("vault");
+    let missing_day = vault.join("2026/20260828.md");
+
+    let missing = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &missing_day)
+        .output()
+        .expect("run missing bob capture-pomodoros");
+    assert_success(&missing);
+    let missing_json: serde_json::Value =
+        serde_json::from_str(stdout(&missing).trim()).expect("missing json");
+    assert_eq!(missing_json["ok"], true);
+    assert_eq!(missing_json["count"], 0);
+    assert!(missing_json["warnings"][0]
+        .as_str()
+        .is_some_and(|warning| warning.contains("does not exist")));
+
+    write_file(&missing_day, "# Day\n## Notes\n- no ledger\n");
+    let sectionless = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &missing_day)
+        .output()
+        .expect("run sectionless bob capture-pomodoros");
+    assert_success(&sectionless);
+    let sectionless_json: serde_json::Value =
+        serde_json::from_str(stdout(&sectionless).trim())
+            .expect("sectionless json");
+    assert_eq!(sectionless_json["ok"], true);
+    assert_eq!(sectionless_json["count"], 0);
+    assert!(sectionless_json["warnings"][0]
+        .as_str()
+        .is_some_and(|warning| warning.contains("no Pomodoros section")));
 }
 
 #[test]
@@ -22493,6 +22722,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
 
     let order = [
         "capture",
+        "capture-pomodoros",
         "capture-sections",
         "capture-targets",
         "capture-task-id",
@@ -22525,6 +22755,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
 
     assert!(
         help.contains("Examples:")
+            && help.contains("bob capture-pomodoros --format json")
             && help.contains("bob capture-sections --route cash --format json")
             && help.contains("bob capture-targets --format json")
             && help.contains(
