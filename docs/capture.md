@@ -1072,7 +1072,17 @@ scan as `bob capture-targets`. Section completion covers `@route#prefix`,
 backed by the same scan as `bob capture-sections`. Task-section completion
 covers `@route+id#prefix` and a bare `@route+id#`, backed by the same scanner
 as `bob capture-task-sections`; the candidate `replacement` is the section
-slug (`future-work` for `FUTURE WORK`). Pomodoro block-ID
+slug (`future-work` for `FUTURE WORK`). Pomodoro-name completion covers
+`@route:id#prefix`, a bare `@route:id#`, and `@route:#prefix`; only the route
+must already resolve because the Pomodoro list does not depend on the block
+ID. It is backed by the same scan as `bob capture-pomodoros`, offers only open
+entries, and returns Pomodoros in picker order: named rows first, then
+nameable rows. Named rows rank by slug prefix, then slug substring, and open
+entries with the same slug collapse to the first row with `match_count`
+reporting how many open Pomodoros share it. Nameable rows represent unnamed or
+named-but-untypeable entries, set `requires_name: true`, use an empty
+`replacement`, and are never filtered out by the query. Updated clients must
+prompt for a name rather than inserting that empty replacement. Pomodoro block-ID
 completion covers `@route:prefix` and parent-task completion covers
 `@route+prefix`; both are backed by the same open-task scan as
 `bob capture-tasks`. By default both contexts only offer tasks that already
@@ -1126,8 +1136,8 @@ JSON output is a single versioned object:
 `replacement` is the half-open UTF-8 byte range a chosen candidate replaces in
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
-`context` is `route`, `section`, `pomodoro_block_id`, `task`, `task_section`, `wikilink_note`,
-`wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+`context` is `route`, `section`, `pomodoro_block_id`, `pomodoro_name`, `task`,
+`task_section`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
 active. Each candidate's `replacement` is the exact text to insert; wikilink
 candidates also include `cursor_after`, the post-accept UTF-8 byte offset after
 deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
@@ -1135,7 +1145,11 @@ deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
 section candidate has `title` and `level`. A task-section candidate has
 `title` (the original ALL-CAPS body), `slug`, `route`, nullable `block_id`,
 `text` (the parent task description), `line`, and `child_count`; `replacement`
-is the slug. A task candidate
+is the slug. A Pomodoro-name candidate has `ref`, nullable `name`,
+`requires_name`, `line`, `state`, `status_symbol`, nullable `time_range`,
+`placeholder`, `is_current`, `child_count`, and `match_count`; selectable named
+rows use the slug as `replacement`, while nameable rows use an empty
+replacement that clients must not insert. A task candidate
 (`pomodoro_block_id` or `task` context) has `ref`, nullable `block_id`,
 `route`, `requires_block_id`, `status_symbol`, `status_name`, `status_type`,
 `text`, nullable `section`, `depth`, and `child_count`. Identified tasks keep

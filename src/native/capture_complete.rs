@@ -20,9 +20,11 @@ use super::{
         self, WikilinkBlockCandidate, WikilinkHeadingCandidate,
         WikilinkNoteCandidate,
     },
+    capture_pomodoros::{self, PomodoroEntry, PomodoroState},
     capture_targets::{self, CaptureTargetKind},
     capture_task_sections, capture_tasks, env as bob_env,
     note_tasks::{self, BlockIdLookup},
+    pomodoro,
     style::Styler,
 };
 
@@ -110,7 +112,12 @@ scan as `bob capture-targets`. Section completion covers '@route#prefix', \
 backed by the same scan as `bob capture-sections`. Task-section completion \
 covers '@route+id#prefix' and a bare '@route+id#', backed by the same \
 scanner as `bob capture-task-sections`; replacement text is the section \
-slug. Pomodoro block-ID \
+slug. Pomodoro-name completion covers '@route:id#prefix', a bare \
+'@route:id#', and '@route:#prefix'; it is backed by `bob \
+capture-pomodoros`, offers only open entries, collapses duplicate named \
+slugs, and keeps nameable rows after named rows even when the query is \
+nonempty. Nameable rows set requires_name and use an empty replacement that \
+updated clients must not insert. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
 `bob capture-tasks` and, by default, only offer tasks that already carry a \
@@ -317,9 +324,20 @@ struct TaskSectionCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[allow(dead_code)]
 struct PomodoroNameCandidate {
     replacement: String,
+    #[serde(rename = "ref")]
+    pomodoro_ref: capture_pomodoros::PomodoroRef,
+    name: Option<String>,
+    requires_name: bool,
+    line: usize,
+    state: PomodoroState,
+    status_symbol: char,
+    time_range: Option<String>,
+    placeholder: bool,
+    is_current: bool,
+    child_count: usize,
+    match_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -482,7 +500,7 @@ fn build_result(
             )?
         }
         CompletionContext::PomodoroName => {
-            (Candidates::PomodoroName(Vec::new()), Vec::new())
+            pomodoro_name_candidates(bob_dir, &field.query)?
         }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
@@ -768,6 +786,122 @@ fn task_section_candidates(
     ))
 }
 
+fn pomodoro_name_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let day_file = pomodoro::day_file_for(bob_dir);
+    pomodoro_name_candidates_at(&day_file, query)
+}
+
+fn pomodoro_name_candidates_at(
+    day_file: &Path,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let contents = match fs::read_to_string(day_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok((
+                Candidates::PomodoroName(Vec::new()),
+                vec![bounded_warning(format!(
+                    "Bob daily note does not exist: {}",
+                    day_file.display()
+                ))],
+            ));
+        }
+        Err(error) => {
+            return Err(CompleteError::io(format!(
+                "read daily note {}: {error}",
+                day_file.display()
+            )));
+        }
+    };
+
+    let scan = capture_pomodoros::scan(&contents);
+    let mut warnings = Vec::new();
+    if !scan.has_section {
+        warnings.push(bounded_warning(format!(
+            "Bob daily note has no Pomodoros section: {}",
+            day_file.display()
+        )));
+    }
+    warnings.extend(scan.warnings.iter().cloned());
+    let candidates =
+        pomodoro_name_candidates_from_entries(&scan.entries, query);
+
+    Ok((Candidates::PomodoroName(candidates), warnings))
+}
+
+fn pomodoro_name_candidates_from_entries(
+    entries: &[PomodoroEntry],
+    query: &str,
+) -> Vec<PomodoroNameCandidate> {
+    let open_entries = entries
+        .iter()
+        .filter(|entry| entry.state == PomodoroState::Open)
+        .collect::<Vec<_>>();
+    let mut seen_slugs = Vec::<&str>::new();
+    let mut named = Vec::new();
+    for entry in &open_entries {
+        if !entry.selectable || seen_slugs.contains(&entry.slug.as_str()) {
+            continue;
+        }
+        let match_count = open_entries
+            .iter()
+            .filter(|candidate| {
+                candidate.selectable && candidate.slug == entry.slug
+            })
+            .count();
+        seen_slugs.push(&entry.slug);
+        named.push(pomodoro_name_candidate(entry, false, match_count));
+    }
+
+    let mut candidates =
+        rank(named, query, |candidate| candidate.replacement.as_str());
+    candidates.extend(
+        open_entries
+            .into_iter()
+            .filter(|entry| !entry.selectable)
+            .map(|entry| pomodoro_name_candidate(entry, true, 1)),
+    );
+    candidates
+}
+
+fn pomodoro_name_candidate(
+    entry: &PomodoroEntry,
+    requires_name: bool,
+    match_count: usize,
+) -> PomodoroNameCandidate {
+    PomodoroNameCandidate {
+        replacement: if requires_name {
+            String::new()
+        } else {
+            entry.slug.clone()
+        },
+        pomodoro_ref: entry.pomodoro_ref.clone(),
+        name: entry.name.clone(),
+        requires_name,
+        line: entry.line,
+        state: entry.state,
+        status_symbol: entry.status_symbol,
+        time_range: entry.time_range.clone(),
+        placeholder: entry.placeholder,
+        is_current: entry.is_current,
+        child_count: entry.child_count,
+        match_count,
+    }
+}
+
+fn bounded_warning(message: String) -> String {
+    const LIMIT: usize = 300;
+    if message.chars().count() <= LIMIT {
+        return message;
+    }
+    let mut truncated = message.chars().take(LIMIT - 3).collect::<String>();
+    truncated.push_str("...");
+    truncated
+}
+
 enum TaskSectionLookupFailure {
     MissingNote,
     Missing { suggestion: Option<String> },
@@ -974,7 +1108,23 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
             .collect(),
         Candidates::PomodoroName(items) => items
             .iter()
-            .map(|item| (item.replacement.clone(), String::new()))
+            .map(|item| {
+                let name =
+                    item.name.clone().unwrap_or_else(|| "unnamed".to_string());
+                let slug = if item.replacement.is_empty() {
+                    "-"
+                } else {
+                    &item.replacement
+                };
+                let time = item.time_range.as_deref().unwrap_or("planned");
+                let badges = pomodoro_name_badges(item).join(" ");
+                let detail = if badges.is_empty() {
+                    format!("{slug}  {time}")
+                } else {
+                    format!("{slug}  {time}  {badges}")
+                };
+                (name, detail)
+            })
             .collect(),
         Candidates::WikilinkNote(items) => items
             .iter()
@@ -1010,6 +1160,20 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
             })
             .collect(),
     }
+}
+
+fn pomodoro_name_badges(item: &PomodoroNameCandidate) -> Vec<String> {
+    let mut badges = Vec::new();
+    if item.is_current {
+        badges.push("current".to_string());
+    }
+    if item.match_count > 1 {
+        badges.push(format!("{} matches", item.match_count));
+    }
+    if item.requires_name {
+        badges.push("name it".to_string());
+    }
+    badges
 }
 
 fn context_label(context: CompletionContext) -> &'static str {
@@ -1421,6 +1585,138 @@ mod tests {
     }
 
     #[test]
+    fn pomodoro_name_completion_lists_named_then_nameable_rows() {
+        let scan = capture_pomodoros::scan(concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — MEMORY\n",
+            "\t- [[dev#^focus]]\n",
+            "- [ ] () — BUGS\n",
+            "- [ ] () — MEMORY\n",
+            "- [ ] ()\n",
+            "- [ ] () — SNAKE_CASE\n",
+            "- [x] () — DONE\n",
+        ));
+
+        let candidates =
+            pomodoro_name_candidates_from_entries(&scan.entries, "");
+        let rows = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.replacement.as_str(),
+                    candidate.name.as_deref(),
+                    candidate.requires_name,
+                    candidate.line,
+                    candidate.is_current,
+                    candidate.child_count,
+                    candidate.match_count,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rows,
+            vec![
+                ("memory", Some("MEMORY"), false, 2, true, 1, 2),
+                ("bugs", Some("BUGS"), false, 4, false, 0, 1),
+                ("", None, true, 6, false, 0, 1),
+                ("", Some("SNAKE_CASE"), true, 7, false, 0, 1),
+            ]
+        );
+        assert_eq!(candidates[0].time_range.as_deref(), Some("0900-0930"));
+        assert!(!candidates[0].placeholder);
+        assert!(candidates[2].placeholder);
+    }
+
+    #[test]
+    fn pomodoro_name_completion_keeps_nameable_rows_for_a_query() {
+        let scan = capture_pomodoros::scan(concat!(
+            "## Pomodoros\n",
+            "- [ ] () — MEMORY\n",
+            "- [ ] () — BUGS\n",
+            "- [ ] ()\n",
+            "- [ ] () — SNAKE_CASE\n",
+            "- [x] () — BUGS DONE\n",
+        ));
+
+        let candidates =
+            pomodoro_name_candidates_from_entries(&scan.entries, "bu");
+        let rows = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.replacement.as_str(),
+                    candidate.name.as_deref(),
+                    candidate.requires_name,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rows,
+            vec![
+                ("bugs", Some("BUGS"), false),
+                ("", None, true),
+                ("", Some("SNAKE_CASE"), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn pomodoro_name_completion_works_without_a_block_id() {
+        let temp = TempDir::new("bob-cli-capture-complete-pomodoro-name");
+        write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
+        let day_file = temp.path().join("2026/20260828.md");
+        write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n- [ ] ()\n");
+
+        let raw = "note @dev:#bu";
+        let value = with_env("BOB_DAY_FILE", &day_file, || {
+            result(temp.path(), raw, raw.len())
+        });
+
+        assert_eq!(value.context, Some(CompletionContext::PomodoroName));
+        assert_eq!(
+            value.replacement,
+            Replacement {
+                start: raw.find('#').expect("hash") + 1,
+                end: raw.len(),
+            }
+        );
+        let Candidates::PomodoroName(candidates) = &value.candidates else {
+            panic!("expected Pomodoro-name candidates");
+        };
+        assert_eq!(candidates[0].replacement, "bugs");
+        assert_eq!(candidates[0].name.as_deref(), Some("BUGS"));
+        assert!(!candidates[0].requires_name);
+        assert!(candidates[1].requires_name);
+    }
+
+    #[test]
+    fn pomodoro_name_completion_missing_daily_note_warns() {
+        let temp =
+            TempDir::new("bob-cli-capture-complete-pomodoro-name-missing");
+        let missing_day = temp.path().join("2026/20260828.md");
+
+        let (candidates, warnings) =
+            pomodoro_name_candidates_at(&missing_day, "")
+                .expect("warning success");
+
+        assert_eq!(candidates.len(), 0);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("does not exist"));
+
+        let sectionless = temp.path().join("2026/20260829.md");
+        write_file(&sectionless, "# Day\n");
+        let (candidates, warnings) =
+            pomodoro_name_candidates_at(&sectionless, "")
+                .expect("warning success");
+
+        assert_eq!(candidates.len(), 0);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("no Pomodoros section"));
+    }
+
+    #[test]
     fn default_task_completion_stays_identified_only() {
         let temp = TempDir::new("bob-cli-capture-complete-identified-only");
         write_settings(temp.path());
@@ -1659,6 +1955,40 @@ mod tests {
 
     #[test]
     fn json_shape_is_stable() {
+        let scan = capture_pomodoros::scan(
+            "## Pomodoros\n- [ ] (1205-1230) — MEMORY\n",
+        );
+        let pomodoro_name =
+            pomodoro_name_candidates_from_entries(&scan.entries, "mem")
+                .remove(0);
+        let pomodoro_json = serde_json::to_value(CaptureCompleteResult {
+            ok: true,
+            schema_version: SCHEMA_VERSION,
+            cursor: 10,
+            replacement: Replacement { start: 9, end: 10 },
+            context: Some(CompletionContext::PomodoroName),
+            candidates: Candidates::PomodoroName(vec![pomodoro_name]),
+            warnings: Vec::new(),
+        })
+        .expect("pomodoro json");
+
+        assert_eq!(pomodoro_json["context"], "pomodoro_name");
+        assert_eq!(pomodoro_json["candidates"][0]["replacement"], "memory");
+        assert_eq!(pomodoro_json["candidates"][0]["name"], "MEMORY");
+        assert_eq!(pomodoro_json["candidates"][0]["requires_name"], false);
+        assert_eq!(pomodoro_json["candidates"][0]["line"], 2);
+        assert_eq!(pomodoro_json["candidates"][0]["state"], "open");
+        assert_eq!(pomodoro_json["candidates"][0]["status_symbol"], " ");
+        assert_eq!(pomodoro_json["candidates"][0]["time_range"], "1205-1230");
+        assert_eq!(pomodoro_json["candidates"][0]["placeholder"], false);
+        assert_eq!(pomodoro_json["candidates"][0]["is_current"], true);
+        assert_eq!(pomodoro_json["candidates"][0]["child_count"], 0);
+        assert_eq!(pomodoro_json["candidates"][0]["match_count"], 1);
+        assert!(pomodoro_json["candidates"][0]["ref"]
+            .as_str()
+            .expect("ref")
+            .contains(':'));
+
         let value = serde_json::to_value(CaptureCompleteResult {
             ok: true,
             schema_version: SCHEMA_VERSION,
@@ -1724,6 +2054,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pomodoro_name_human_rows_include_time_and_badges() {
+        let scan = capture_pomodoros::scan(concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — MEMORY\n",
+            "- [ ] () — MEMORY\n",
+            "- [ ] ()\n",
+        ));
+        let candidates = Candidates::PomodoroName(
+            pomodoro_name_candidates_from_entries(&scan.entries, ""),
+        );
+
+        let lines = candidate_lines(&candidates);
+
+        assert_eq!(lines[0].0, "MEMORY");
+        assert_eq!(lines[0].1, "memory  0900-0930  current 2 matches");
+        assert_eq!(lines[1].0, "unnamed");
+        assert_eq!(lines[1].1, "-  planned  name it");
+    }
+
     fn write_settings(root: &Path) {
         write_file(
             &root.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
@@ -1751,6 +2101,25 @@ mod tests {
         fs::write(path, contents).unwrap_or_else(|error| {
             panic!("write {}: {error}", path.display())
         });
+    }
+
+    fn with_env<T>(
+        key: &str,
+        value: impl Into<OsString>,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        let old = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value.into());
+        }
+        let result = f();
+        unsafe {
+            match old {
+                Some(old) => std::env::set_var(key, old),
+                None => std::env::remove_var(key),
+            }
+        }
+        result
     }
 
     struct TempDir {

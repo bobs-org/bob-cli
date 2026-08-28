@@ -11956,6 +11956,84 @@ fn capture_complete_all_tasks_is_opt_in_and_plus_context_only() {
 }
 
 #[test]
+fn capture_complete_pomodoro_name_json_lists_named_and_nameable_rows() {
+    let temp = TempDir::new("bob-cli-capture-complete-pomodoro-name");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("dev.md"), "---\ntype: [[area]]\n---\n");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — MEMORY\n",
+            "\t- [[dev#^focus]]\n",
+            "- [ ] () — BUGS\n",
+            "- [ ] () — MEMORY\n",
+            "- [ ] ()\n",
+            "- [x] () — DONE\n",
+        ),
+    );
+
+    let draft = "x @dev:some-id#";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run Pomodoro-name completion");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "unexpected capture-complete stderr:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["context"], "pomodoro_name");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({
+            "start": draft.find('#').expect("hash") + 1,
+            "end": draft.len()
+        })
+    );
+    let candidates = json["candidates"].as_array().expect("candidates");
+    assert_eq!(candidates.len(), 3, "{json}");
+
+    assert_eq!(candidates[0]["replacement"], "memory");
+    assert_eq!(candidates[0]["name"], "MEMORY");
+    assert_eq!(candidates[0]["requires_name"], false);
+    assert_eq!(candidates[0]["line"], 2);
+    assert_eq!(candidates[0]["state"], "open");
+    assert_eq!(candidates[0]["status_symbol"], " ");
+    assert_eq!(candidates[0]["time_range"], "0900-0930");
+    assert_eq!(candidates[0]["placeholder"], false);
+    assert_eq!(candidates[0]["is_current"], true);
+    assert_eq!(candidates[0]["child_count"], 1);
+    assert_eq!(candidates[0]["match_count"], 2);
+    assert!(candidates[0]["ref"].as_str().expect("ref").contains(':'));
+
+    assert_eq!(candidates[1]["replacement"], "bugs");
+    assert_eq!(candidates[1]["name"], "BUGS");
+    assert_eq!(candidates[1]["match_count"], 1);
+
+    assert_eq!(candidates[2]["replacement"], "");
+    assert!(candidates[2]["name"].is_null());
+    assert_eq!(candidates[2]["requires_name"], true);
+    assert_eq!(candidates[2]["placeholder"], true);
+    assert_eq!(candidates[2]["match_count"], 1);
+    assert!(json.get("warnings").is_none(), "{json}");
+}
+
+#[test]
 fn capture_task_id_assigns_and_dry_runs_lf_and_crlf_notes() {
     let temp = TempDir::new("bob-cli-capture-task-id-write");
     let vault = temp.path().join("vault");
