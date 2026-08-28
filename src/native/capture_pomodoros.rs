@@ -349,7 +349,6 @@ pub(crate) enum PomodoroState {
     Completed,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NamedSelection<'a> {
     Found(&'a PomodoroEntry),
@@ -438,7 +437,6 @@ pub(crate) fn scan(contents: &str) -> PomodoroScan {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn select_named<'a>(
     scan: &'a PomodoroScan,
     selector: &str,
@@ -479,7 +477,6 @@ pub(crate) fn select_named<'a>(
     NamedSelection::Missing { suggestion }
 }
 
-#[allow(dead_code)]
 fn select_by_slug<'a>(
     entries: &[&'a PomodoroEntry],
     selector: &str,

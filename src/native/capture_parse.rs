@@ -91,7 +91,8 @@ become nested authored children. Separator rows have no spans, diagnostics, \
 or completion fields. Incomplete interactive \
 markers are valid input, \
 not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@^', \
-'@route^', '@+', '@route+', '@route+id#', '@:', '@route:', and the legacy '@!' aliases \
+'@route^', '@+', '@route+', '@route+id#', '@:', '@route:', '@route:id#', \
+'@route:#name', and the legacy '@!' aliases \
 all report mode 'incomplete' plus what they still need. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \
@@ -114,7 +115,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, task, task_section",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -610,6 +611,8 @@ mod tests {
         assert_eq!(json("buy milk")["mode"], "task");
         assert_eq!(json("jot idea @notes#Ideas")["mode"], "bullet");
         assert_eq!(json("do work @dev:focus-1")["mode"], "pomodoro_task");
+        assert_eq!(json("do work @dev:focus-1#bugs")["mode"], "pomodoro_task");
+        assert_eq!(json("do work @dev:focus-1#")["mode"], "incomplete");
         assert_eq!(json("note @dev+focus-1")["mode"], "sub_bullet");
         assert_eq!(json("note @dev+")["mode"], "incomplete");
         assert_eq!(json("note @dev^focus-1")["mode"], "task");
@@ -671,6 +674,45 @@ mod tests {
                 "wikilink_delimiter",
             ]
         );
+    }
+
+    #[test]
+    fn json_reports_pomodoro_name_spans_needs_and_diagnostics() {
+        let complete = json("Do work @dev:id#bugs");
+        assert_eq!(complete["mode"], "pomodoro_task");
+        assert_eq!(complete["route"], "dev");
+        assert_eq!(complete["block_id"], "id");
+        assert_eq!(complete["section"], "bugs");
+        assert_eq!(
+            complete["spans"]
+                .as_array()
+                .expect("array")
+                .iter()
+                .map(|span| span["kind"].as_str().expect("kind"))
+                .collect::<Vec<_>>(),
+            vec!["pomodoro_route", "pomodoro_block_id", "pomodoro_name"]
+        );
+
+        let incomplete = json("Do work @dev:id#");
+        assert_eq!(incomplete["mode"], "incomplete");
+        assert_eq!(incomplete["needs"][0], "pomodoro_name");
+        assert_eq!(
+            incomplete["spans"]
+                .as_array()
+                .expect("array")
+                .last()
+                .expect("span")["kind"],
+            "interactive_placeholder"
+        );
+
+        let missing_id = json("Do work @dev:#bugs");
+        assert_eq!(missing_id["mode"], "incomplete");
+        assert_eq!(missing_id["needs"][0], "pomodoro_id");
+        assert_eq!(missing_id["section"], "bugs");
+
+        let invalid = json("Do work @dev:id#bad_id");
+        assert_eq!(invalid["diagnostics"][0]["code"], "invalid_pomodoro_name");
+        assert_eq!(invalid["mode"], "task");
     }
 
     #[test]

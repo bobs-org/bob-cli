@@ -48,6 +48,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
 | `@route^block-id` | Ordinary open task with a user-authored block ID |
 | `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; scheduled tasks start Blocked (`[?]`) |
+| `@route:block-id#pomodoro` | Same, linked under the named open Pomodoro instead of the implicit current-or-future one |
 | `@route+block-id` | Ordinary child bullet under an existing task |
 | `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
@@ -63,6 +64,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@notes#Ideas` | Bullet under a heading in `notes.md` |
 | `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
 | `@cash+id#requirements` | Child under that task's `REQUIREMENTS` section |
+| `@sase:deep-fix#bugs` | Pomodoro-linked task under the open Pomodoro named `BUGS` |
 
 A `#` in the middle of the body stays ordinary text. `@route::id` is retired;
 use `@route^id` for an ordinary task with a block ID.
@@ -470,13 +472,33 @@ The daily note is selected from `BOB_DAY_FILE` when set, otherwise from
 `Pomodoros` section, capture prefers the single open top-level entry with a
 recognized bold or legacy time range; when there is no timed entry, it uses the
 first open top-level entry. Completed and nested entries are ignored. Multiple
-open timed entries are treated as an invariant error. The link is inserted
-after the selected entry's existing children and reuses their indentation when
-possible.
+open timed entries are treated as an invariant error for this implicit
+selection. The link is inserted after the selected entry's existing children
+and reuses their indentation when possible.
+
+An optional `#<pomodoro>` component names the target: `@sase:deep-fix#bugs`
+links under the open Pomodoro named `BUGS` and leaves the current Pomodoro
+alone. The selector is a slug — ASCII-lowercase, internal whitespace collapsed
+to `-` — using the same character set as a task-section selector (`A-Z`,
+`a-z`, `0-9`, and `& ' ( ) , . / -`). Matching is a whole-slug match in
+document order, else the first slug-prefix match, so `#bugs` and `#bug` both
+reach `BUGS`, and `#memory` still reaches `MEMORY` when `MEMORY WORK` appears
+first. Duplicate names resolve to the first open match; give the second a
+distinct name to target it. Only open (unchecked) top-level entries are
+targetable. A selector that matches only a completed entry reports that fact
+instead of a generic miss. A typed `#` with an empty name is incomplete — it
+never falls back to "any Pomodoro". An explicit name is unambiguous, so it
+resolves even when the ledger has more than one open timed entry.
+
+When the name does not match: no open entries keep today's "no eligible open
+Pomodoro" error; open entries with none named point at
+`bob capture-pomodoro-name`; a unique close slug is suggested; otherwise the
+error lists at most eight open slugs.
 
 The routed note and daily note are both parsed and validated before either is
 replaced. A missing daily note or Pomodoros section, no eligible entry, timed
-ambiguity, malformed marker, or duplicate block ID leaves both notes unchanged.
+ambiguity (unnamed captures only), unknown or completed Pomodoro name,
+malformed marker, or duplicate block ID leaves both notes unchanged.
 `--dry-run` performs the same validation and reports both planned edits without
 writing either file.
 
@@ -580,7 +602,7 @@ destination:
 | `%`, `%<N>`, `%<header>`, `--clip[=HEADER]`                     | allowed  |
 | `s:<N>`                                                         | rejected |
 | `p:<N>`                                                         | rejected |
-| `@route`, `@route#Sec`, `@route:id`, `@route^id`, `@route+id`, `@route+id#sec` | rejected |
+| `@route`, `@route#Sec`, `@route:id`, `@route:id#name`, `@route^id`, `@route+id`, `@route+id#sec` | rejected |
 | `--route` / `--section` / `--task` / `--task-ref` / `--task-section` | rejected |
 
 Only a trailing bare `#` is recognized; a leading `#` or a `#` in the middle
@@ -781,7 +803,7 @@ spaces become nested authored children. Separator rows themselves have no
 marker completion or highlighting. Incomplete
 interactive markers are valid input rather than errors, so `@`, `@#`,
 `@#Ideas`, `@route#`, `@^`, `@route^`, `@+`, `@route+`, `@route+id#`,
-`@:`, `@route:`,
+`@:`, `@route:`, `@route:id#`, `@route:#name`,
 and the legacy `@!` aliases all parse on any line. The retired
 `@route::...` spelling is a diagnostic directing users to `@route^...`;
 it is not an incomplete Pomodoro marker. A trailing bare `#` is a complete
@@ -826,12 +848,17 @@ that marker with `@route`, `s:<N>`, or `p:<N>` on the same item still reports
 mode `pomodoro_note` plus a `pomodoro_note_conflict` diagnostic; `bob capture`
 rejects the same input. `route`, `section`, and `block_id` are the
 resolved components, or `null`; `block_id` carries the ID-only task, Pomodoro,
-or sub-bullet ID, whichever applies. `needs` lists what a picker still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `task`, `task_section`; it is an independent
+or sub-bullet ID, whichever applies. For a Pomodoro marker, `section` carries
+the Pomodoro name when one was typed — the same "whichever applies" reuse
+`block_id` already has, and `mode` disambiguates. `needs` lists what a picker
+still has to supply, in the
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` reports mode `incomplete` and needs
-`["task_section"]`. A complete `@route+id#sec` sub-bullet populates `route`,
-`block_id`, and `section` together.
+`["task_section"]` and `@route:id#` reports mode `incomplete` and needs
+`["pomodoro_name"]`. A complete `@route+id#sec` sub-bullet populates `route`,
+`block_id`, and `section` together. A complete `@route:id#name` Pomodoro marker
+populates `route`, `block_id`, and `section` the same way.
 
 `sub_bullets` is an optional array, omitted when empty, of every other valid
 physical line's normalized body -- its source `-`/`*`/`+` marker and any
@@ -863,7 +890,7 @@ present, so schema version 1 stays additive.
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
-`pomodoro_route`, `pomodoro_block_id`, `pomodoro_note`, `sub_bullet_route`,
+`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_note`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
 `interactive_placeholder`, `wikilink_delimiter`, `wikilink_target`,
@@ -879,7 +906,7 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `legacy_bullet_marker`,
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `legacy_bullet_marker`,
 `pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
 `s:<N>`, or `p:<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero

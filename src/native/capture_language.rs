@@ -31,6 +31,7 @@ pub(crate) enum CaptureKind {
     },
     Pomodoro {
         block_id: String,
+        pomodoro_name: Option<String>,
     },
     SubBullet {
         target: SubBulletTarget,
@@ -1441,25 +1442,46 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
     let marker = token
         .strip_prefix("@!")
         .or_else(|| token.strip_prefix('@'))
-        .ok_or_else(|| {
-            "Pomodoro capture markers must use @<route>:<block-id>".to_string()
-        })?;
-    let Some((route, block_id)) = marker.split_once(':') else {
-        return Err(
-            "Pomodoro capture markers must use @<route>:<block-id>".to_string()
-        );
+        .ok_or_else(|| POMODORO_SHAPE_ERROR.to_string())?;
+    let Some((route, rest)) = marker.split_once(':') else {
+        return Err(POMODORO_SHAPE_ERROR.to_string());
     };
     if !is_route_token(route) {
         return Err(POMODORO_ROUTE_ERROR.to_string());
     }
+    let (block_id, pomodoro_name) = match rest.split_once('#') {
+        Some((block_id, name)) => (block_id, Some(name)),
+        None => (rest, None),
+    };
+    if block_id.is_empty() {
+        return Err(if pomodoro_name.is_some() {
+            format!(
+                "Pomodoro capture requires a block ID before the Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-tasks -r {}` to list task block IDs)",
+                route.to_ascii_lowercase()
+            )
+        } else {
+            POMODORO_BLOCK_ID_ERROR.to_string()
+        });
+    }
     if !is_block_id(block_id) {
         return Err(POMODORO_BLOCK_ID_ERROR.to_string());
     }
+    let pomodoro_name = match pomodoro_name {
+        None => None,
+        Some("") => {
+            return Err(POMODORO_NAME_REQUIRED_ERROR.to_string());
+        }
+        Some(name) if !is_selector_component(name) => {
+            return Err(POMODORO_NAME_ERROR.to_string());
+        }
+        Some(name) => Some(name.to_string()),
+    };
 
     Ok(RouteToken {
         route: Some(route.to_ascii_lowercase()),
         kind: CaptureKind::Pomodoro {
             block_id: block_id.to_string(),
+            pomodoro_name,
         },
     })
 }
@@ -1763,10 +1785,16 @@ const TASK_BLOCK_ID_ERROR: &str =
     "task block-ID capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
 const RETIRED_DOUBLE_COLON_ERROR: &str =
     "'@<route>::<block-id>' is no longer accepted; use '@<route>^<block-id>' to create an ordinary task with an authored block ID";
+const POMODORO_SHAPE_ERROR: &str =
+    "Pomodoro capture markers must use @<route>:<block-id> or @<route>:<block-id>#<pomodoro>";
 const POMODORO_ROUTE_ERROR: &str =
     "Pomodoro capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 const POMODORO_BLOCK_ID_ERROR: &str =
     "Pomodoro capture block ID must be non-empty and contain only A-Z, a-z, 0-9, '_' or '-'";
+const POMODORO_NAME_ERROR: &str =
+    "Pomodoro capture name must contain only A-Z, a-z, 0-9 or `& ' ( ) , . / -`";
+const POMODORO_NAME_REQUIRED_ERROR: &str =
+    "Pomodoro capture requires a Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)";
 
 // ---------------------------------------------------------------------------
 // Editor-facing parse
@@ -1781,6 +1809,7 @@ pub(crate) enum SpanKind {
     TaskBlockId,
     PomodoroRoute,
     PomodoroBlockId,
+    PomodoroName,
     SubBulletRoute,
     SubBulletBlockId,
     SubBulletSection,
@@ -1808,6 +1837,7 @@ impl SpanKind {
             Self::TaskBlockId => "task_block_id",
             Self::PomodoroRoute => "pomodoro_route",
             Self::PomodoroBlockId => "pomodoro_block_id",
+            Self::PomodoroName => "pomodoro_name",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
             Self::SubBulletSection => "sub_bullet_section",
@@ -1897,6 +1927,7 @@ pub(crate) enum Need {
     Section,
     BlockId,
     PomodoroId,
+    PomodoroName,
     Task,
     TaskSection,
 }
@@ -1908,6 +1939,7 @@ impl Need {
             Self::Section => "section",
             Self::BlockId => "block_id",
             Self::PomodoroId => "pomodoro_id",
+            Self::PomodoroName => "pomodoro_name",
             Self::Task => "task",
             Self::TaskSection => "task_section",
         }
@@ -1972,8 +2004,8 @@ pub(crate) struct EditorItemParse {
 
 /// One complete local destination marker token an item owns, with the span
 /// the marker text (`@route`, `@route+block-id`, `@route#Section`,
-/// `@route^block-id`, `@route:block-id`, or a trailing bare `#`) occupies in
-/// the original draft.
+/// `@route^block-id`, `@route:block-id`, `@route:block-id#pomodoro`, or a
+/// trailing bare `#`) occupies in the original draft.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalDestinationMarker {
     pub(crate) start: usize,
@@ -2171,7 +2203,8 @@ fn duplicate_capture_marker_diagnostic(
 ///
 /// Unlike [`parse_capture_text_with_clip_control`] this never fails: an
 /// incomplete interactive marker (`@`, `@#`, `@route#`, `@:`, `@route:`,
-/// `@^`, `@route^`, `@+`, `@route+`, `@@`, `@@route+`, and their legacy `@!` aliases) is a valid editing state,
+/// `@route:id#`, `@route:#name`, `@^`, `@route^`, `@+`, `@route+`, `@@`,
+/// `@@route+`, and their legacy `@!` aliases) is a valid editing state,
 /// and an invalid marker component -- or line shape -- becomes a diagnostic
 /// instead of an error. Tokenization, terminal marker extraction, and
 /// marker classification all run through the same functions `bob capture`
@@ -2877,9 +2910,13 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
     let legacy = token.text.starts_with("@!");
     let sigil_len = if legacy { 2 } else { 1 };
     let marker = &token.text[sigil_len..];
-    let (route_part, block_part, separator) = match marker.split_once(':') {
-        Some((route, block_id)) => (route, block_id, true),
+    let (route_part, rest, separator) = match marker.split_once(':') {
+        Some((route, rest)) => (route, rest, true),
         None => (marker, "", false),
+    };
+    let (block_part, name_part) = match rest.split_once('#') {
+        Some((block, name)) => (block, Some(name)),
+        None => (rest, None),
     };
 
     if legacy && separator && route_part.is_empty() {
@@ -2905,6 +2942,15 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             POMODORO_BLOCK_ID_ERROR,
         ));
     }
+    if name_part
+        .is_some_and(|name| !name.is_empty() && !is_selector_component(name))
+    {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_pomodoro_name",
+            POMODORO_NAME_ERROR,
+        ));
+    }
 
     TokenParse::Marker(marker_parse(
         token,
@@ -2917,7 +2963,12 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             right_kind: SpanKind::PomodoroBlockId,
             complete_mode: EditorMode::PomodoroTask,
             right_need: Need::PomodoroId,
-            third: None,
+            third: name_part.map(|part| MarkerThird {
+                separator_len: 1,
+                part,
+                kind: SpanKind::PomodoroName,
+                need: Need::PomodoroName,
+            }),
         },
     ))
 }
@@ -2984,7 +3035,8 @@ fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
 }
 
 /// The shared shape of every `@<route><separator><right>` marker, with an
-/// optional third component for `@route+block-id#section`.
+/// optional third component for `@route+block-id#section` and
+/// `@route:id#pomodoro`.
 struct MarkerShape<'a> {
     sigil_len: usize,
     route_part: &'a str,
@@ -3206,6 +3258,7 @@ pub(crate) enum CompletionContext {
     Route,
     Section,
     PomodoroBlockId,
+    PomodoroName,
     Task,
     TaskSection,
     WikilinkNote,
@@ -3219,11 +3272,13 @@ pub(crate) enum CompletionContext {
 pub(crate) struct CompletionField {
     pub(crate) context: CompletionContext,
     /// The already-resolved, lowercased route, when `context` needs one
-    /// (`section`, `pomodoro_block_id`, `task`, and `task_section`).
+    /// (`section`, `pomodoro_block_id`, `pomodoro_name`, `task`, and
+    /// `task_section`).
     pub(crate) route: Option<String>,
     /// The already-typed block ID of a three-component
-    /// `@route+id#section` marker. Set only when `context` is
-    /// `task_section`; always `None` for existing contexts.
+    /// `@route+id#section` or `@route:id#pomodoro` marker. Set only when
+    /// `context` is `task_section` or `pomodoro_name`; always `None` for
+    /// two-component contexts.
     pub(crate) block_id: Option<String>,
     /// The text already typed in this component, up to `cursor`.
     pub(crate) query: String,
@@ -3440,9 +3495,20 @@ fn marker_field_at_cursor(
         let legacy = text.starts_with("@!");
         let sigil_len = if legacy { 2 } else { 1 };
         let marker = &text[sigil_len..];
-        let (route_part, block_part, separator) = match marker.split_once(':') {
-            Some((route, block_id)) => (route, block_id, true),
+        let (route_part, rest, separator) = match marker.split_once(':') {
+            Some((route, rest)) => (route, rest, true),
             None => (marker, "", false),
+        };
+        let (block_part, third) = match rest.split_once('#') {
+            Some((block, name)) => (
+                block,
+                Some(CompletionThird {
+                    separator_len: 1,
+                    part: name,
+                    context: CompletionContext::PomodoroName,
+                }),
+            ),
+            None => (rest, None),
         };
         return completion_field_from_parts(
             token,
@@ -3452,7 +3518,7 @@ fn marker_field_at_cursor(
                 separator_len: usize::from(separator),
                 right_part: block_part,
                 right_context: Some(CompletionContext::PomodoroBlockId),
-                third: None,
+                third,
             },
             cursor,
         );
@@ -4389,10 +4455,50 @@ mod tests {
                 &[],
             ),
             (
+                "Body @dev:focus-123#bugs",
+                EditorMode::PomodoroTask,
+                Some("dev"),
+                Some("bugs"),
+                Some("focus-123"),
+                &[],
+            ),
+            (
+                "Body @dev:focus-123#",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                Some("focus-123"),
+                &[Need::PomodoroName],
+            ),
+            (
+                "Body @dev:#bugs",
+                EditorMode::Incomplete,
+                Some("dev"),
+                Some("bugs"),
+                None,
+                &[Need::PomodoroId],
+            ),
+            (
+                "Body @dev:#",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                None,
+                &[Need::PomodoroId, Need::PomodoroName],
+            ),
+            (
                 "Body @!dev:focus-123",
                 EditorMode::PomodoroTask,
                 Some("dev"),
                 None,
+                Some("focus-123"),
+                &[],
+            ),
+            (
+                "Body @!dev:focus-123#bugs",
+                EditorMode::PomodoroTask,
+                Some("dev"),
+                Some("bugs"),
                 Some("focus-123"),
                 &[],
             ),
@@ -4584,6 +4690,38 @@ mod tests {
                 &[SpanKind::PomodoroRoute, SpanKind::PomodoroBlockId],
             ),
             (
+                "Body @dev:focus-123#bugs",
+                &[
+                    SpanKind::PomodoroRoute,
+                    SpanKind::PomodoroBlockId,
+                    SpanKind::PomodoroName,
+                ],
+            ),
+            (
+                "Body @dev:focus-123#",
+                &[
+                    SpanKind::PomodoroRoute,
+                    SpanKind::PomodoroBlockId,
+                    SpanKind::InteractivePlaceholder,
+                ],
+            ),
+            (
+                "Body @dev:#bugs",
+                &[
+                    SpanKind::PomodoroRoute,
+                    SpanKind::InteractivePlaceholder,
+                    SpanKind::PomodoroName,
+                ],
+            ),
+            (
+                "Body @dev:#",
+                &[
+                    SpanKind::PomodoroRoute,
+                    SpanKind::InteractivePlaceholder,
+                    SpanKind::InteractivePlaceholder,
+                ],
+            ),
+            (
                 "Body @!dev:focus-123",
                 &[SpanKind::PomodoroRoute, SpanKind::PomodoroBlockId],
             ),
@@ -4684,6 +4822,16 @@ mod tests {
                 "Body @dev:bad.id",
                 "invalid_pomodoro_block_id",
                 POMODORO_BLOCK_ID_ERROR,
+            ),
+            (
+                "Body @dev:id#bad_id",
+                "invalid_pomodoro_name",
+                POMODORO_NAME_ERROR,
+            ),
+            (
+                "Body @dev:id#req^x",
+                "invalid_pomodoro_name",
+                POMODORO_NAME_ERROR,
             ),
         ];
 
@@ -4870,6 +5018,9 @@ mod tests {
             "Do thing @Dev:Foo-Bar",
             "@Dev:Foo-Bar Do thing s:2",
             "Do thing @!Dev:Foo-Bar s:2",
+            "Do thing @Dev:Foo-Bar#bugs",
+            "@Dev:Foo-Bar#bugs Do thing s:2",
+            "Do thing @!Dev:Foo-Bar#bugs s:2",
             "Called today @Cash+Goog-Exit",
             "Called today %log @Cash+Goog-Exit",
             "Called today @Cash+Goog-Exit s:1",
@@ -4914,8 +5065,17 @@ mod tests {
             if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {
                 assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
             }
-            if let CaptureKind::Pomodoro { block_id } = &executed.kind {
+            if let CaptureKind::Pomodoro {
+                block_id,
+                pomodoro_name,
+            } = &executed.kind
+            {
                 assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
+                assert_eq!(
+                    parse.section.as_deref(),
+                    pomodoro_name.as_deref(),
+                    "{raw}"
+                );
             }
             if let CaptureKind::SubBullet {
                 target: SubBulletTarget::BlockId(block_id),
@@ -4975,6 +5135,8 @@ mod tests {
             "Body @+#req",
             "Body @+#",
             "Body @dev:",
+            "Body @dev:id#",
+            "Body @dev:#bugs",
             "Body @!",
             "Body @!dev",
         ] {
@@ -5006,6 +5168,15 @@ mod tests {
         assert_eq!(complete.route.as_deref(), Some("dev"));
         assert_eq!(complete.block_id.as_deref(), Some("focus-123"));
         assert!(complete.needs.is_empty());
+
+        let named = editor("Do work @Dev:focus-123#bugs");
+        assert_eq!(named.mode, EditorMode::PomodoroTask);
+        assert_eq!(named.section.as_deref(), Some("bugs"));
+        assert!(named.needs.is_empty());
+
+        let needs_name = editor("Do work @Dev:focus-123#");
+        assert_eq!(needs_name.needs, vec![Need::PomodoroName]);
+        assert_eq!(needs_name.block_id.as_deref(), Some("focus-123"));
 
         let needs_id = editor("Do work @Dev:");
         assert_eq!(needs_id.route.as_deref(), Some("dev"));
@@ -5117,6 +5288,7 @@ mod tests {
             ("Do work @bad.route:id", "invalid_pomodoro_route"),
             ("Do work @route:bad.id", "invalid_pomodoro_block_id"),
             ("Do work @route:id:extra", "invalid_pomodoro_block_id"),
+            ("Do work @route:id#bad_id", "invalid_pomodoro_name"),
             ("Do work @!:id", "invalid_pomodoro_route"),
         ];
 
@@ -5663,6 +5835,55 @@ mod tests {
         assert_eq!(completion.route.as_deref(), Some("dev"));
         assert_eq!(completion.query, "foc");
         assert_eq!(completion.replacement, (13, 16));
+    }
+
+    #[test]
+    fn pomodoro_name_completes_after_hash_even_without_a_block_id() {
+        let raw = "Do work @Dev:id#bu";
+        let hash = raw.find('#').expect("hash");
+        let completion = field(raw, raw.len()).expect("pomodoro name");
+        assert_eq!(completion.context, CompletionContext::PomodoroName);
+        assert_eq!(completion.route.as_deref(), Some("dev"));
+        assert_eq!(completion.block_id.as_deref(), Some("id"));
+        assert_eq!(completion.query, "bu");
+        assert_eq!(completion.replacement, (hash + 1, raw.len()));
+
+        let empty = "Do work @Dev:id#";
+        let empty_hash = empty.find('#').expect("hash");
+        let empty_field = field(empty, empty.len()).expect("empty name");
+        assert_eq!(empty_field.context, CompletionContext::PomodoroName);
+        assert_eq!(empty_field.query, "");
+        assert_eq!(empty_field.replacement, (empty_hash + 1, empty_hash + 1));
+
+        let no_id = "x @dev:#bu";
+        let no_id_hash = no_id.find('#').expect("hash");
+        let no_id_field = field(no_id, no_id.len()).expect("name without id");
+        assert_eq!(no_id_field.context, CompletionContext::PomodoroName);
+        assert_eq!(no_id_field.route.as_deref(), Some("dev"));
+        assert_eq!(no_id_field.block_id, None);
+        assert_eq!(no_id_field.query, "bu");
+        assert_eq!(no_id_field.replacement, (no_id_hash + 1, no_id.len()));
+    }
+
+    #[test]
+    fn pomodoro_name_completion_keeps_route_and_id_contexts() {
+        let raw = "Do work @Dev:id#bu";
+        let at = raw.find('@').expect("at");
+        let colon = raw.find(':').expect("colon");
+        let hash = raw.find('#').expect("hash");
+
+        let route = field(raw, at + 3).expect("route");
+        assert_eq!(route.context, CompletionContext::Route);
+        assert_eq!(route.replacement, (at + 1, colon));
+
+        let id = field(raw, colon + 2).expect("block id");
+        assert_eq!(id.context, CompletionContext::PomodoroBlockId);
+        assert_eq!(id.replacement, (colon + 1, hash));
+        assert_eq!(&raw[colon + 1..hash], "id");
+
+        let on_hash = field(raw, hash).expect("cursor on hash stays id");
+        assert_eq!(on_hash.context, CompletionContext::PomodoroBlockId);
+        assert_eq!(on_hash.replacement, (colon + 1, hash));
     }
 
     #[test]
@@ -6991,6 +7212,7 @@ were removed"
             ("note @notes#Ideas @@", "cannot take a section"),
             ("note @dev^id @@", "cannot take a block ID"),
             ("note @dev:id @@", "cannot take a Pomodoro link"),
+            ("note @dev:id#bugs @@", "cannot take a Pomodoro link"),
             ("note this # @@", "cannot take a Pomodoro note"),
         ] {
             let rewrite = rewrite_draft(raw, None);

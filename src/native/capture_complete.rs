@@ -140,7 +140,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, task, task_section, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, pomodoro_name, task, task_section, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -317,12 +317,19 @@ struct TaskSectionCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[allow(dead_code)]
+struct PomodoroNameCandidate {
+    replacement: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 enum Candidates {
     Route(Vec<RouteCandidate>),
     Section(Vec<SectionCandidate>),
     Task(Vec<TaskCandidate>),
     TaskSection(Vec<TaskSectionCandidate>),
+    PomodoroName(Vec<PomodoroNameCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
@@ -335,6 +342,7 @@ impl Candidates {
             Self::Section(items) => items.len(),
             Self::Task(items) => items.len(),
             Self::TaskSection(items) => items.len(),
+            Self::PomodoroName(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
@@ -401,6 +409,7 @@ fn build_result(
             CompletionContext::Route
             | CompletionContext::Section
             | CompletionContext::PomodoroBlockId
+            | CompletionContext::PomodoroName
             | CompletionContext::Task
             | CompletionContext::TaskSection => {
                 unreachable!("link field context")
@@ -471,6 +480,9 @@ fn build_result(
                 field.block_id.as_deref(),
                 &field.query,
             )?
+        }
+        CompletionContext::PomodoroName => {
+            (Candidates::PomodoroName(Vec::new()), Vec::new())
         }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
@@ -960,6 +972,10 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
                 )
             })
             .collect(),
+        Candidates::PomodoroName(items) => items
+            .iter()
+            .map(|item| (item.replacement.clone(), String::new()))
+            .collect(),
         Candidates::WikilinkNote(items) => items
             .iter()
             .map(|item| {
@@ -1001,6 +1017,7 @@ fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::Route => "route",
         CompletionContext::Section => "section",
         CompletionContext::PomodoroBlockId => "pomodoro_block_id",
+        CompletionContext::PomodoroName => "pomodoro_name",
         CompletionContext::Task => "task",
         CompletionContext::TaskSection => "task_section",
         CompletionContext::WikilinkNote => "wikilink_note",

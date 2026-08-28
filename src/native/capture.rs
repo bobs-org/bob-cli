@@ -22,8 +22,8 @@ use super::{
         is_block_id, AuthoredSubBullet, CaptureKind, ClipRequest,
         ParsedCaptureItem, SubBulletTarget, TaskSectionSelector,
     },
-    capture_schedule_log, capture_task_sections, collect_done, config,
-    env as bob_env, markdown, note_tasks,
+    capture_pomodoros, capture_schedule_log, capture_task_sections,
+    collect_done, config, env as bob_env, markdown, note_tasks,
     note_tasks::{BlockIdLookup, RefLookup},
     pomodoro,
     style::Styler,
@@ -147,11 +147,16 @@ Use '@<route>:<block-id>' in the same leading or trailing position to create \
 a next-status task and link it from today's Pomodoro ledger. The routed task \
 renders as '- [*] #task <body> [created::YYYY-MM-DD] ^<block-id>' when \
 unscheduled, or '[?]' with any scheduled property before the final block ID. \
-The daily note comes from \
+An optional '#<pomodoro>' slug, as in '@<route>:<block-id>#<pomodoro>', \
+targets a named open Pomodoro instead of the implicit current-or-future \
+choice; whole-slug matches beat earlier prefix matches, and a typed '#' with \
+an empty name is incomplete. The daily note comes from \
 BOB_DAY_FILE or <bob-dir>/YYYY/YYYYMMDD.md. Capture prefers the single open \
 timed entry in its Pomodoros section and otherwise uses the first open entry. \
+A named selector skips the multiple-open-timed guard. \
 Both notes are fully validated before either is replaced; duplicate block IDs, \
-missing ledger structure, no open entry, and multiple open timed entries fail \
+missing ledger structure, no open entry, an unknown or completed Pomodoro \
+name, and multiple open timed entries (for unnamed captures) fail \
 without a partial capture.\n\n\
 Use '@<route>^<block-id>' in the same leading or trailing position to create \
 an ordinary open task with the requested trailing Obsidian block ID, without \
@@ -208,7 +213,7 @@ case insensitively; unlike a typed #<section> selector, it is not slug- or \
 prefix-matched, so --task-section future-work does not match FUTURE WORK.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -719,7 +724,7 @@ fn plan_capture_item(
             priority_field,
             scheduled.as_deref(),
         ),
-        CaptureKind::Pomodoro { block_id } => format_pomodoro_task_line(
+        CaptureKind::Pomodoro { block_id, .. } => format_pomodoro_task_line(
             &parsed.body,
             &created,
             priority_field,
@@ -844,7 +849,10 @@ fn plan_capture_item(
                 &capture_block,
             )?
         }
-        CaptureKind::Pomodoro { block_id } => {
+        CaptureKind::Pomodoro {
+            block_id,
+            pomodoro_name,
+        } => {
             let route = parsed.route.as_deref().ok_or_else(|| {
                 CaptureError::io(
                     "Pomodoro capture invariant failed: route is missing",
@@ -856,6 +864,7 @@ fn plan_capture_item(
                 &target,
                 route,
                 block_id,
+                pomodoro_name.as_deref(),
                 &capture_block,
             )?
         }
@@ -1344,12 +1353,14 @@ struct PomodoroNoteDetails {
     pomodoro_text: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plan_capture_with_pomodoro_link(
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
     target: &Path,
     route: &str,
     block_id: &str,
+    pomodoro_name: Option<&str>,
     capture_block: &str,
 ) -> Result<CaptureWritePlan, CaptureError> {
     let target_existed = planner.currently_exists(target)?;
@@ -1384,7 +1395,7 @@ fn plan_capture_with_pomodoro_link(
         )));
     }
     let (updated_day, pomodoro_link_placement) =
-        insert_pomodoro_block_link(&original_day, &block_link)?;
+        insert_pomodoro_block_link(&original_day, &block_link, pomodoro_name)?;
     let day_file_label = day_file.display().to_string();
     planner.stage(target, updated_target)?;
     planner.stage(&day_file, updated_day)?;
@@ -2049,19 +2060,22 @@ fn paths_refer_to_same_file(first: &Path, second: &Path) -> bool {
 
 /// Which ledger entry a daily-note child insertion attaches to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PomodoroSelection {
+enum PomodoroSelection<'a> {
     /// Current Pomodoro, else the first future one. Used by `@<route>:<id>`
     /// ledger links, which must attach to a Pomodoro that is still open.
     CurrentOrFuture,
     /// Current Pomodoro, else the last completed one, else the first future
     /// one. Used by the bare `#` Pomodoro-note marker.
     CurrentOrLastCompleted,
+    /// Explicit named selector from `@<route>:<id>#<pomodoro>`. Resolves
+    /// without the multiple-open-timed guard that protects implicit choice.
+    Named(&'a str),
 }
 
-impl PomodoroSelection {
+impl PomodoroSelection<'_> {
     fn no_entry_message(self) -> &'static str {
         match self {
-            Self::CurrentOrFuture => {
+            Self::CurrentOrFuture | Self::Named(_) => {
                 "Bob daily note has no eligible open Pomodoro"
             }
             Self::CurrentOrLastCompleted => {
@@ -2074,11 +2088,16 @@ impl PomodoroSelection {
 fn insert_pomodoro_block_link(
     contents: &str,
     block_link: &str,
+    pomodoro_name: Option<&str>,
 ) -> Result<(String, Placement), CaptureError> {
+    let selection = match pomodoro_name {
+        Some(name) => PomodoroSelection::Named(name),
+        None => PomodoroSelection::CurrentOrFuture,
+    };
     let (updated, placement, _, _) = insert_pomodoro_child_block(
         contents,
         &format!("- {block_link}"),
-        PomodoroSelection::CurrentOrFuture,
+        selection,
     )?;
     Ok((updated, placement))
 }
@@ -2090,13 +2109,15 @@ fn insert_pomodoro_block_link(
 /// `CurrentOrFuture` prefers the single open timed entry, else the first
 /// open entry. `CurrentOrLastCompleted` prefers the single open timed
 /// entry, else the last completed entry, else the first open entry.
+/// `Named` resolves an explicit slug against open named entries and skips
+/// the multiple-open-timed guard that protects implicit choice.
 /// Returns the updated contents, the placement, the selected entry's
 /// 0-based line index, and its ledger task text (trimmed of the leading
 /// checkbox but not of its `(start-end)` time range or bracket fields).
 fn insert_pomodoro_child_block(
     contents: &str,
     block: &str,
-    selection: PomodoroSelection,
+    selection: PomodoroSelection<'_>,
 ) -> Result<(String, Placement, usize, String), CaptureError> {
     let lines = line_spans(contents);
     let line_text = lines.iter().map(|line| line.text).collect::<Vec<_>>();
@@ -2127,19 +2148,30 @@ fn insert_pomodoro_child_block(
         }
     }
 
-    if timed.len() > 1 {
-        return Err(CaptureError::io(
-            "Bob daily note has multiple open timed Pomodoros",
-        ));
-    }
     let (selected, selected_text) = match selection {
-        PomodoroSelection::CurrentOrFuture => timed.first().or(open.first()),
-        PomodoroSelection::CurrentOrLastCompleted => {
-            timed.first().or(completed.last()).or(open.first())
+        PomodoroSelection::Named(selector) => {
+            select_named_pomodoro(contents, &lines, selector)?
         }
-    }
-    .copied()
-    .ok_or_else(|| CaptureError::io(selection.no_entry_message()))?;
+        PomodoroSelection::CurrentOrFuture
+        | PomodoroSelection::CurrentOrLastCompleted => {
+            if timed.len() > 1 {
+                return Err(CaptureError::io(
+                    "Bob daily note has multiple open timed Pomodoros",
+                ));
+            }
+            match selection {
+                PomodoroSelection::CurrentOrFuture => {
+                    timed.first().or(open.first())
+                }
+                PomodoroSelection::CurrentOrLastCompleted => {
+                    timed.first().or(completed.last()).or(open.first())
+                }
+                PomodoroSelection::Named(_) => unreachable!("named handled"),
+            }
+            .copied()
+            .ok_or_else(|| CaptureError::io(selection.no_entry_message()))?
+        }
+    };
     let pomodoro_text = selected_text.to_string();
     let insertion_index = task_block_end(&lines, selected);
     let indentation =
@@ -2172,6 +2204,87 @@ fn insert_pomodoro_child_block(
         placement,
         selected,
         pomodoro_text,
+    ))
+}
+
+fn select_named_pomodoro<'a>(
+    contents: &str,
+    lines: &'a [LineSpan<'a>],
+    selector: &str,
+) -> Result<(usize, &'a str), CaptureError> {
+    let scan = capture_pomodoros::scan(contents);
+    match capture_pomodoros::select_named(&scan, selector) {
+        capture_pomodoros::NamedSelection::Found(entry) => {
+            let index = entry.line.checked_sub(1).ok_or_else(|| {
+                CaptureError::io(
+                    "Pomodoro capture invariant failed: named entry has no line",
+                )
+            })?;
+            let text = pomodoro::open_ledger_task(lines[index].text)
+                .ok_or_else(|| {
+                    CaptureError::io(
+                        "Pomodoro capture invariant failed: named entry is not an open ledger task",
+                    )
+                })?;
+            Ok((index, text))
+        }
+        capture_pomodoros::NamedSelection::CompletedOnly(entry) => {
+            let name = entry.name.as_deref().unwrap_or(selector);
+            Err(CaptureError::io(format!(
+                "Pomodoro `{name}` is already completed; a Pomodoro-linked task needs an open Pomodoro"
+            )))
+        }
+        capture_pomodoros::NamedSelection::Missing { suggestion } => {
+            Err(missing_named_pomodoro_error(&scan, selector, suggestion))
+        }
+    }
+}
+
+fn missing_named_pomodoro_error(
+    scan: &capture_pomodoros::PomodoroScan,
+    selector: &str,
+    suggestion: Option<&capture_pomodoros::PomodoroEntry>,
+) -> CaptureError {
+    let open = scan
+        .entries
+        .iter()
+        .filter(|entry| entry.state == capture_pomodoros::PomodoroState::Open)
+        .collect::<Vec<_>>();
+    if open.is_empty() {
+        return CaptureError::io(
+            "Bob daily note has no eligible open Pomodoro",
+        );
+    }
+    let named = open
+        .iter()
+        .copied()
+        .filter(|entry| entry.selectable)
+        .collect::<Vec<_>>();
+    if named.is_empty() {
+        return CaptureError::io(
+            "Bob daily note has no named open Pomodoro; name one with `bob capture-pomodoro-name`",
+        );
+    }
+    if let Some(suggestion) = suggestion {
+        return CaptureError::io(format!(
+            "Bob daily note has no open Pomodoro named `{selector}`; did you mean `{}`? (run `bob capture-pomodoros` to list them)",
+            suggestion.slug
+        ));
+    }
+    const SLUG_LIMIT: usize = 8;
+    let listed = named
+        .iter()
+        .take(SLUG_LIMIT)
+        .map(|entry| format!("`{}`", entry.slug))
+        .collect::<Vec<_>>();
+    let ellipsis = if named.len() > SLUG_LIMIT {
+        ", …"
+    } else {
+        ""
+    };
+    CaptureError::io(format!(
+        "Bob daily note has no open Pomodoro named `{selector}` (open Pomodoros: {}{ellipsis}; run `bob capture-pomodoros` to list them)",
+        listed.join(", ")
     ))
 }
 
@@ -3722,9 +3835,79 @@ mod tests {
                 parsed.kind,
                 CaptureKind::Pomodoro {
                     block_id: "Foo-Bar".to_string(),
+                    pomodoro_name: None,
                 },
                 "{raw}"
             );
+        }
+    }
+
+    #[test]
+    fn parses_named_pomodoro_routes_in_terminal_positions() {
+        let cases = [
+            ("@Dev:Foo-Bar#bugs Do thing", "Do thing", None, "bugs"),
+            ("Do thing @Dev:Foo-Bar#bugs", "Do thing", None, "bugs"),
+            (
+                "Do thing s:2 @Dev:Foo-Bar#bugs",
+                "Do thing",
+                Some(2),
+                "bugs",
+            ),
+            (
+                "Do thing @Dev:Foo-Bar#bugs s:2",
+                "Do thing",
+                Some(2),
+                "bugs",
+            ),
+            ("Do thing p:2 @Dev:Foo-Bar#bugs", "Do thing", None, "bugs"),
+            (
+                "Do thing @!Dev:Foo-Bar#after-tui-fix",
+                "Do thing",
+                None,
+                "after-tui-fix",
+            ),
+            ("Do thing %log @Dev:Foo-Bar#Q&A", "Do thing", None, "Q&A"),
+        ];
+
+        for (raw, body, scheduled_offset, name) in cases {
+            let parsed = parse_capture_text(raw, None)
+                .unwrap_or_else(|error| panic!("{raw}: {error:?}"));
+            assert_eq!(parsed.body, body, "{raw}");
+            assert_eq!(parsed.route.as_deref(), Some("dev"), "{raw}");
+            assert_eq!(parsed.scheduled_offset, scheduled_offset, "{raw}");
+            assert_eq!(
+                parsed.kind,
+                CaptureKind::Pomodoro {
+                    block_id: "Foo-Bar".to_string(),
+                    pomodoro_name: Some(name.to_string()),
+                },
+                "{raw}"
+            );
+        }
+
+        let parsed = parse_capture_text("body @foo#sec:x", None)
+            .expect("hash before colon stays a bullet");
+        assert!(matches!(parsed.kind, CaptureKind::Bullet { .. }));
+        let parsed = parse_capture_text("body @foo+id#sec", None)
+            .expect("plus family keeps the section");
+        assert!(matches!(parsed.kind, CaptureKind::SubBullet { .. }));
+    }
+
+    #[test]
+    fn malformed_named_pomodoro_markers_are_usage_errors() {
+        for (raw, expected) in [
+            (
+                "body @dev:#bugs",
+                "requires a block ID before the Pomodoro name",
+            ),
+            ("body @dev:id#", "requires a Pomodoro name"),
+            ("body @dev:id#bad_id", "name must contain"),
+            ("@dev:id#bugs", "task text is required"),
+        ] {
+            let error = parse_capture_text(raw, None)
+                .expect_err(&format!("{raw} should fail"));
+            assert_eq!(error.kind, CaptureErrorKind::Usage, "{raw}");
+            assert!(error.message.contains(expected), "{raw}: {error:?}");
         }
     }
 
@@ -4289,7 +4472,7 @@ mod tests {
             "- [ ] Outside (1000-1030)\n",
         );
         let (updated, placement) =
-            insert_pomodoro_block_link(contents, "[[dev#^foobar]]")
+            insert_pomodoro_block_link(contents, "[[dev#^foobar]]", None)
                 .expect("select timed Pomodoro");
         assert_eq!(placement, Placement::Inserted);
         assert_eq!(
@@ -4317,7 +4500,7 @@ mod tests {
             "- [ ] Second open\n",
         );
         let (updated, placement) =
-            insert_pomodoro_block_link(contents, "[[dev#^fallback]]")
+            insert_pomodoro_block_link(contents, "[[dev#^fallback]]", None)
                 .expect("select first open Pomodoro");
         assert_eq!(placement, Placement::Inserted);
         assert_eq!(
@@ -4334,6 +4517,185 @@ mod tests {
     }
 
     #[test]
+    fn named_pomodoro_link_selects_placeholder_and_timed_entries() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
+            "  - current child\n",
+            "- [ ] () — BUGS\n",
+        );
+        let (updated, placement, selected, text) = insert_pomodoro_child_block(
+            contents,
+            "- [[dev#^fix]]",
+            PomodoroSelection::Named("bugs"),
+        )
+        .expect("select named placeholder");
+        assert_eq!(placement, Placement::Appended);
+        assert_eq!(selected, 3);
+        assert_eq!(text, "() — BUGS");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
+                "  - current child\n",
+                "- [ ] () — BUGS\n",
+                "  - [[dev#^fix]]\n",
+            )
+        );
+
+        let (updated, _, selected, text) = insert_pomodoro_child_block(
+            contents,
+            "- [[dev#^now]]",
+            PomodoroSelection::Named("current"),
+        )
+        .expect("select named timed entry");
+        assert_eq!(selected, 1);
+        assert_eq!(text, "(**0900-0930** [t:: 30m]) — CURRENT");
+        assert!(updated.contains("  - current child\n  - [[dev#^now]]\n"));
+        assert!(!updated.contains("BUGS\n  - [[dev#^now]]"));
+    }
+
+    #[test]
+    fn named_pomodoro_link_first_duplicate_wins() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] () — MEMORY\n",
+            "- [ ] () — MEMORY\n",
+        );
+        let (updated, _, selected, _) = insert_pomodoro_child_block(
+            contents,
+            "- [[dev#^dup]]",
+            PomodoroSelection::Named("memory"),
+        )
+        .expect("first duplicate wins");
+        assert_eq!(selected, 1);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] () — MEMORY\n",
+                "  - [[dev#^dup]]\n",
+                "- [ ] () — MEMORY\n",
+            )
+        );
+    }
+
+    #[test]
+    fn named_pomodoro_link_rejects_completed_only_unknown_and_unnamed() {
+        let completed = concat!(
+            "## Pomodoros\n",
+            "- [x] () — BUGS\n",
+            "- [ ] () — MEMORY\n",
+        );
+        let error = insert_pomodoro_child_block(
+            completed,
+            "- [[dev#^id]]",
+            PomodoroSelection::Named("bugs"),
+        )
+        .expect_err("completed-only match");
+        assert!(
+            error
+                .message
+                .contains("Pomodoro `BUGS` is already completed"),
+            "{error:?}"
+        );
+
+        let error = insert_pomodoro_child_block(
+            completed,
+            "- [[dev#^id]]",
+            PomodoroSelection::Named("memry"),
+        )
+        .expect_err("unique close match");
+        assert!(
+            error.message.contains("did you mean `memory`?"),
+            "{error:?}"
+        );
+
+        let unnamed = "## Pomodoros\n- [ ] ()\n- [ ] (**0900-0930**)\n";
+        let error = insert_pomodoro_child_block(
+            unnamed,
+            "- [[dev#^id]]",
+            PomodoroSelection::Named("bugs"),
+        )
+        .expect_err("no named open");
+        assert!(
+            error
+                .message
+                .contains("Bob daily note has no named open Pomodoro"),
+            "{error:?}"
+        );
+
+        let closed = "## Pomodoros\n- [x] () — DONE\n";
+        let error = insert_pomodoro_child_block(
+            closed,
+            "- [[dev#^id]]",
+            PomodoroSelection::Named("bugs"),
+        )
+        .expect_err("no open entries");
+        assert!(
+            error.message.contains("no eligible open Pomodoro"),
+            "{error:?}"
+        );
+
+        let listed = concat!(
+            "## Pomodoros\n",
+            "- [ ] () — ALPHA\n",
+            "- [ ] () — BRAVO\n",
+            "- [ ] () — CHARLIE\n",
+        );
+        let error = insert_pomodoro_child_block(
+            listed,
+            "- [[dev#^id]]",
+            PomodoroSelection::Named("zzzz"),
+        )
+        .expect_err("list open slugs");
+        assert!(
+            error.message.contains("`alpha`")
+                && error.message.contains("`bravo`")
+                && error.message.contains("`charlie`"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn named_pomodoro_link_bypasses_multiple_open_timed_guard() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (0800-0830) — ONE\n",
+            "- [ ] (**0900-0930**) — TWO\n",
+        );
+        let error = insert_pomodoro_child_block(
+            contents,
+            "- [[dev#^id]]",
+            PomodoroSelection::CurrentOrFuture,
+        )
+        .expect_err("implicit stays ambiguous");
+        assert!(
+            error.message.contains("multiple open timed Pomodoros"),
+            "{error:?}"
+        );
+
+        let (updated, _, selected, text) = insert_pomodoro_child_block(
+            contents,
+            "- [[dev#^id]]",
+            PomodoroSelection::Named("two"),
+        )
+        .expect("named selector is explicit");
+        assert_eq!(selected, 2);
+        assert_eq!(text, "(**0900-0930**) — TWO");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (0800-0830) — ONE\n",
+                "- [ ] (**0900-0930**) — TWO\n",
+                "  - [[dev#^id]]\n",
+            )
+        );
+    }
+
+    #[test]
     fn pomodoro_link_rejects_missing_section_target_and_timed_ambiguity() {
         for (contents, expected) in [
             ("## Notes\n- [ ] (0800-0830) Outside\n", "no Pomodoros"),
@@ -4343,8 +4705,9 @@ mod tests {
                 "multiple open timed",
             ),
         ] {
-            let error = insert_pomodoro_block_link(contents, "[[dev#^id]]")
-                .expect_err("invalid ledger should fail");
+            let error =
+                insert_pomodoro_block_link(contents, "[[dev#^id]]", None)
+                    .expect_err("invalid ledger should fail");
             assert!(error.message.contains(expected), "{error:?}");
         }
     }
@@ -4358,7 +4721,7 @@ mod tests {
             "- [ ] Next\r\n",
         );
         let (updated, placement) =
-            insert_pomodoro_block_link(contents, "[[dev#^id]]")
+            insert_pomodoro_block_link(contents, "[[dev#^id]]", None)
                 .expect("insert CRLF link");
         assert_eq!(placement, Placement::Appended);
         assert_eq!(
@@ -4384,7 +4747,7 @@ mod tests {
             "- [ ] Real\n",
         );
         let (updated, _) =
-            insert_pomodoro_block_link(contents, "[[dev#^real]]")
+            insert_pomodoro_block_link(contents, "[[dev#^real]]", None)
                 .expect("find real section");
         assert!(updated.ends_with("- [ ] Real\n  - [[dev#^real]]\n"));
         assert!(!updated.contains("Example\n  - [[dev#^real]]"));
