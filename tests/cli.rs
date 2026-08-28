@@ -18777,6 +18777,11 @@ Note: marker note mirrored from the PDF
         "#task Final same-note intake.",
     );
     assert!(
+        contents.contains("## Tasks\n\n- [ ]"),
+        "same-note task should sit under ## Tasks:\n{contents}"
+    );
+    assert_annotation_tasks_in_tasks_section(&contents, &[&same_note_task]);
+    assert!(
         same_note_task.contains("[[#^h-")
             && same_note_task.contains("[h:: ")
             && same_note_task.contains("[created::"),
@@ -18792,6 +18797,15 @@ Note: marker note mirrored from the PDF
     let routed_task = find_created_annotation_task(
         &route_contents,
         "#task Ask Alice about closing order",
+    );
+    assert!(
+        !route_contents.contains("## Tasks"),
+        "routed notes should not grow a ## Tasks section:\n{route_contents}"
+    );
+    assert!(
+        route_contents.ends_with(&format!("{routed_task}\n"))
+            || route_contents.contains(&format!("{routed_task}\n")),
+        "routed task should still be appended to the routed note:\n{route_contents}"
     );
     assert!(!routed_task.contains("@alice"), "{routed_task}");
     assert!(
@@ -19939,6 +19953,15 @@ Note:
         "#task Capture the second standalone task.",
     );
 
+    assert!(
+        contents.contains("## Tasks\n\n- [ ]"),
+        "first annotation task should sit one blank line below ## Tasks:\n{contents}"
+    );
+    assert_annotation_tasks_in_tasks_section(
+        &contents,
+        &[&reconcile_line, &ask_line, &capture_line],
+    );
+
     // Each created task carries a same-note annotation backlink, the short
     // durable processed marker, and a created date.
     for line in [&reconcile_line, &ask_line, &capture_line] {
@@ -20020,6 +20043,21 @@ Note:
         1,
         "{contents}"
     );
+    assert_eq!(contents.matches("## Tasks").count(), 1, "{contents}");
+    assert_annotation_tasks_in_tasks_section(
+        &contents,
+        &[
+            &find_created_task(&contents, "#task Reconcile with chapter 3."),
+            &find_created_task(
+                &contents,
+                "#task Ask about the standalone note.",
+            ),
+            &find_created_task(
+                &contents,
+                "#task Capture the second standalone task.",
+            ),
+        ],
+    );
 
     // Complete the comment task and cancel a standalone task, keeping their
     // links; a later sync preserves them verbatim and never duplicates them.
@@ -20069,6 +20107,18 @@ Note:
         1,
         "{updated}"
     );
+    assert_eq!(updated.matches("## Tasks").count(), 1, "{updated}");
+    let tasks_heading = updated.find("## Tasks\n").expect("## Tasks");
+    let highlights = updated.find("## Highlights\n").expect("## Highlights");
+    for line in [&reconcile_completed, &ask_cancelled] {
+        let pos = updated.find(line).unwrap_or_else(|| {
+            panic!("missing preserved task {line}:\n{updated}")
+        });
+        assert!(
+            pos > tasks_heading && pos < highlights,
+            "preserved task should remain under ## Tasks: {line}\n{updated}"
+        );
+    }
 }
 
 #[test]
@@ -23157,6 +23207,36 @@ fn created_annotation_task_count(contents: &str, prose: &str) -> usize {
         .lines()
         .filter(|line| line.starts_with("- [") && line.contains(prose))
         .count()
+}
+
+fn assert_annotation_tasks_in_tasks_section(
+    contents: &str,
+    task_lines: &[&str],
+) {
+    let heading = contents
+        .find("## Tasks\n")
+        .unwrap_or_else(|| panic!("missing ## Tasks heading:\n{contents}"));
+    let highlights = contents.find("## Highlights\n").unwrap_or_else(|| {
+        panic!("missing ## Highlights heading:\n{contents}")
+    });
+    assert!(
+        heading < highlights,
+        "## Tasks should precede ## Highlights:\n{contents}"
+    );
+    assert_eq!(
+        contents.matches("## Tasks").count(),
+        1,
+        "should not create a duplicate Tasks heading:\n{contents}"
+    );
+    for line in task_lines {
+        let pos = contents
+            .find(*line)
+            .unwrap_or_else(|| panic!("missing task line {line}:\n{contents}"));
+        assert!(
+            pos > heading && pos < highlights,
+            "task should sit under ## Tasks and before ## Highlights: {line}\n{contents}"
+        );
+    }
 }
 
 fn annotation_task_source_link_id(line: &str) -> String {

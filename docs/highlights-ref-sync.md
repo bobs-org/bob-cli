@@ -578,7 +578,9 @@ Manual content outside those markers must be preserved. User edits inside the
 generated region may be overwritten.
 
 New generated notes include a title, a PDF wikilink Obsidian task line with
-the `#hide` tag and the stable `^ref` block ID, and `## Highlights`.
+the `#hide` tag and the stable `^ref` block ID, and `## Highlights`. `## Tasks`
+is not part of that skeleton; the section is created later, directly below the
+`^ref` task, when the first annotation task is imported.
 Existing notes must already contain the managed begin/end markers; otherwise
 `sync` fails instead of guessing where generated content belongs.
 
@@ -702,17 +704,23 @@ whitespace-delimited token is copied to an unchecked task:
 - #task Send the quote to Alice @alice
 ```
 
-By default, created tasks are top-level siblings immediately under the
-generated PDF `^ref` line:
+Created tasks go into the note's `## Tasks` section. If the note has no `Tasks`
+heading, one is created as `## Tasks` directly below the generated PDF `^ref`
+task, separated from it by a blank line. An existing `Tasks` heading at any
+level is reused. New tasks are appended after the tasks already in the section:
 
 ```md
+## Tasks
+
 - [ ] #task Compare this claim with the appendix. [[#^h-2b91f0a4c7de|🔖]] [h:: 4c0a13d2...] [created::2026-06-07]
 - [ ] #task Email the citation to Alex. [[#^h-2b91f0a4c7de|🔖]] [h:: 910f6ce7...] [created::2026-06-07]
 ```
 
 If the final whitespace-delimited token is a strict `@name` route suffix, the
-suffix is removed from the created task text and the task is appended to
-existing root-level note `~/bob/name.md` instead. Route names must match
+suffix is removed from the created task text and the task is appended to the
+end of existing root-level note `~/bob/name.md` instead. Routed tasks keep that
+append-at-end behavior; this command does not create a `## Tasks` section on
+the routed note. Route names must match
 `@([A-Za-z0-9][A-Za-z0-9_-]*)`; tokens with punctuation, dots, slashes, empty
 names, or path traversal content are ordinary task text. Routed target notes
 must already exist and must not be directories, because new root notes need

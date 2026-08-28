@@ -23,7 +23,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::{
-    config as bob_config, env as bob_env, ob,
+    config as bob_config, env as bob_env, markdown, ob,
     style::{display_width, pad_right, Styler},
 };
 
@@ -66,6 +66,8 @@ const MARKER_REQUIRED_KEYS: &[&str] = &[FIELD_STATUS, FIELD_PARENT];
 const COMMAND_MANAGED_FIELDS: &[&str] = &[FIELD_NOTE_TYPE, FIELD_REF_TYPE];
 const MANAGED_BODY_BEGIN: &str = "<!-- highlights:begin -->";
 const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
+const TASKS_SECTION_TITLE: &str = "Tasks";
+const TASKS_SECTION_HEADING: &str = "## Tasks";
 const PDF_TASK_BLOCK_ID: &str = "^ref";
 const PDF_TASK_HIDE_TAG: &str = "#hide";
 const PDF_TASK_TAG: &str = "#task";
@@ -1247,10 +1249,11 @@ fn finalize_annotation_task_plans(
         }
 
         if !reference_task_lines.is_empty() {
-            plan.rendered_body = insert_annotation_task_lines_after_pdf_task(
-                &plan.rendered_body,
-                &reference_task_lines,
-            )?;
+            plan.rendered_body =
+                insert_annotation_task_lines_into_tasks_section(
+                    &plan.rendered_body,
+                    &reference_task_lines,
+                )?;
             refresh_stable_rendered_note(plan);
         }
     }
@@ -6194,14 +6197,6 @@ fn insert_missing_annotation_tasks(
         return Ok(body.to_string());
     }
 
-    let task_line = match parse_pdf_task_line(body)? {
-        PdfTaskLineState::Present(task_line) => task_line,
-        PdfTaskLineState::Missing => {
-            return Err(CommandError::new(
-                "reference note is missing the generated PDF task line with ^ref; cannot create annotation tasks",
-            ));
-        }
-    };
     let mut existing = existing_annotation_task_identities(body);
     let mut missing = Vec::new();
     for candidate in candidates {
@@ -6218,10 +6213,218 @@ fn insert_missing_annotation_tasks(
         return Ok(body.to_string());
     }
 
-    Ok(insert_lines_after(body, task_line.line_index, &missing))
+    insert_annotation_task_lines_into_tasks_section(body, &missing)
 }
 
-fn insert_annotation_task_lines_after_pdf_task(
+/// Line index of the note's `Tasks` heading, ignoring fenced code and the
+/// managed Highlights region.
+fn tasks_heading_line_index(body: &str) -> Option<usize> {
+    let mut managed = false;
+    let mut open_fence = None;
+    for (index, line) in body.lines().enumerate() {
+        let skip_managed = if managed {
+            if line.contains(MANAGED_BODY_END) {
+                managed = false;
+            }
+            true
+        } else if line.contains(MANAGED_BODY_BEGIN) {
+            managed = !line.contains(MANAGED_BODY_END);
+            true
+        } else {
+            false
+        };
+
+        let skip_fence = if let Some(marker) = open_fence {
+            if markdown::closes_fence(line, marker) {
+                open_fence = None;
+            }
+            true
+        } else if let Some(marker) = markdown::fence_marker(line) {
+            open_fence = Some(marker);
+            true
+        } else {
+            false
+        };
+
+        if skip_managed || skip_fence {
+            continue;
+        }
+
+        if let Some((_, title)) = markdown::atx_heading(line)
+            && title == TASKS_SECTION_TITLE
+        {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// Exclusive end line index of the `Tasks` section that starts at
+/// `heading_line_index`.
+fn tasks_section_end_line_index(
+    body: &str,
+    heading_line_index: usize,
+) -> usize {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut open_fence = None;
+    for (index, line) in lines.iter().enumerate().skip(heading_line_index + 1) {
+        if let Some(marker) = open_fence {
+            if markdown::closes_fence(line, marker) {
+                open_fence = None;
+            }
+            continue;
+        }
+        if let Some(marker) = markdown::fence_marker(line) {
+            open_fence = Some(marker);
+            continue;
+        }
+        if markdown::atx_heading(line).is_some()
+            || line.contains(MANAGED_BODY_BEGIN)
+        {
+            return index;
+        }
+    }
+    lines.len()
+}
+
+/// Ensure the body has a `Tasks` section, creating `## Tasks` one blank line
+/// below the generated `^ref` task. Returns the body and the heading's line
+/// index.
+fn ensure_tasks_section(
+    body: &str,
+    pdf_task_line_index: usize,
+) -> (String, usize) {
+    if let Some(index) = tasks_heading_line_index(body) {
+        return (body.to_string(), index);
+    }
+    let body = insert_lines_after(
+        body,
+        pdf_task_line_index,
+        &[String::new(), TASKS_SECTION_HEADING.to_string()],
+    );
+    (body, pdf_task_line_index + 2)
+}
+
+fn insert_lines_into_tasks_section(
+    body: &str,
+    heading_line_index: usize,
+    lines: &[String],
+) -> String {
+    let body_lines: Vec<&str> = body.lines().collect();
+    let section_end = tasks_section_end_line_index(body, heading_line_index);
+    let (anchor, leading_blank) = match last_task_block_line_index(
+        &body_lines,
+        heading_line_index,
+        section_end,
+    ) {
+        Some(index) => (index, false),
+        None if body_lines.get(heading_line_index + 1).is_some_and(
+            |line| heading_line_index + 1 < section_end && is_blank_line(line),
+        ) =>
+        {
+            (heading_line_index + 1, false)
+        }
+        None => (heading_line_index, true),
+    };
+
+    let mut payload = Vec::with_capacity(lines.len() + 2);
+    if leading_blank {
+        payload.push(String::new());
+    }
+    payload.extend(lines.iter().cloned());
+    if body_lines
+        .get(anchor + 1)
+        .is_some_and(|line| !is_blank_line(line))
+    {
+        payload.push(String::new());
+    }
+    insert_lines_after(body, anchor, &payload)
+}
+
+fn last_task_block_line_index(
+    lines: &[&str],
+    heading_line_index: usize,
+    section_end: usize,
+) -> Option<usize> {
+    let fenced =
+        markdown::fenced_lines(lines, heading_line_index + 1..section_end);
+    let mut last_task = None;
+    for (index, line) in lines
+        .iter()
+        .enumerate()
+        .take(section_end)
+        .skip(heading_line_index + 1)
+    {
+        if fenced.contains(&index) {
+            continue;
+        }
+        if is_top_level_task_line(line) {
+            last_task = Some(index);
+        }
+    }
+    last_task.map(|task_index| {
+        task_block_end_line_index(lines, task_index, section_end)
+    })
+}
+
+fn task_block_end_line_index(
+    lines: &[&str],
+    task_index: usize,
+    section_end: usize,
+) -> usize {
+    let end = section_end.min(lines.len());
+    let mut index = task_index + 1;
+    while index < end {
+        let line = lines[index];
+        if is_indented_line(line)
+            || (is_blank_line(line)
+                && next_nonblank_is_indented(lines, index + 1, end))
+        {
+            index += 1;
+            continue;
+        }
+        break;
+    }
+    index.saturating_sub(1)
+}
+
+fn next_nonblank_is_indented(
+    lines: &[&str],
+    start_index: usize,
+    end: usize,
+) -> bool {
+    lines[start_index..end.min(lines.len())]
+        .iter()
+        .copied()
+        .find(|line| !is_blank_line(line))
+        .is_some_and(is_indented_line)
+}
+
+fn is_top_level_task_line(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("- [") else {
+        return false;
+    };
+    let mut chars = rest.chars();
+    if chars.next().is_none() || chars.next() != Some(']') {
+        return false;
+    }
+    let after_checkbox = chars.as_str();
+    after_checkbox
+        .chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+        && after_checkbox.contains("#task")
+}
+
+fn is_indented_line(line: &str) -> bool {
+    line.starts_with(' ') || line.starts_with('\t')
+}
+
+fn is_blank_line(line: &str) -> bool {
+    line.trim().is_empty()
+}
+
+fn insert_annotation_task_lines_into_tasks_section(
     body: &str,
     lines: &[String],
 ) -> Result<String> {
@@ -6237,7 +6440,13 @@ fn insert_annotation_task_lines_after_pdf_task(
             ));
         }
     };
-    Ok(insert_lines_after(body, task_line.line_index, lines))
+    let (body, heading_line_index) =
+        ensure_tasks_section(body, task_line.line_index);
+    Ok(insert_lines_into_tasks_section(
+        &body,
+        heading_line_index,
+        lines,
+    ))
 }
 
 fn append_task_lines(contents: &str, lines: &[String]) -> String {
@@ -8718,17 +8927,20 @@ Keep me here.
         .expect("insert annotation tasks");
 
         // The created task carries a same-file source backlink followed by the
-        // durable processed marker and created date.
+        // durable processed marker and created date. Legacy tasks that already
+        // sat under ^ref become the Tasks section's existing content; the new
+        // task is appended below them.
         let new_line = format!(
             "- [ ] #task New follow-up [due::2026-06-08] [[#^{block_id}|{alias}]] [h:: {}] [created::2026-06-07]",
             candidates[2].processed_id
         );
         assert!(
             updated.contains(&format!(
-                "- [ ] #task [[lib/example.pdf]] #hide ^ref\n{new_line}\n"
+                "- [ ] #task [[lib/example.pdf]] #hide ^ref\n\n## Tasks\n- [x] #task Existing done [created::2026-06-01] [completion::2026-06-02]\n- [-] #task Existing cancelled [created::2026-06-01] [cancelled::2026-06-02] [due::2026-06-03]\n{new_line}\n"
             )),
             "{updated}"
         );
+        assert_eq!(updated.matches("## Tasks").count(), 1, "{updated}");
         assert!(
             !updated.contains("[highlight_task:: "),
             "new tasks must not render legacy processed markers:\n{updated}"
@@ -8769,6 +8981,193 @@ Keep me here.
         )
         .expect("rerun completed linked annotation task insertion");
         assert_eq!(rerun_completed, completed_linked);
+    }
+
+    fn annotation_task_ref_body(between_ref_and_highlights: &str) -> String {
+        format!(
+            "\
+# Example
+
+- [ ] #task [[lib/example.pdf]] #hide ^ref
+{between_ref_and_highlights}## Highlights
+
+<!-- highlights:begin -->
+
+<!-- highlights:end -->
+"
+        )
+    }
+
+    fn insert_annotation_tasks(body: &str, lines: &[&str]) -> String {
+        super::insert_annotation_task_lines_into_tasks_section(
+            body,
+            &lines
+                .iter()
+                .map(|line| (*line).to_string())
+                .collect::<Vec<_>>(),
+        )
+        .expect("insert annotation tasks")
+    }
+
+    #[test]
+    fn annotation_tasks_append_to_existing_tasks_section() {
+        let body = annotation_task_ref_body(
+            "
+## Tasks
+
+- [ ] #task First
+- [ ] #task Second
+
+",
+        );
+        let updated = insert_annotation_tasks(&body, &["- [ ] #task Third"]);
+        assert!(
+            updated.contains(
+                "## Tasks\n\n- [ ] #task First\n- [ ] #task Second\n- [ ] #task Third\n\n## Highlights"
+            ),
+            "{updated}"
+        );
+        assert_eq!(updated.matches("## Tasks").count(), 1, "{updated}");
+    }
+
+    #[test]
+    fn annotation_tasks_reuse_h1_or_closed_atx_tasks_heading() {
+        let h1_body = annotation_task_ref_body(
+            "
+# Tasks
+
+- [ ] #task First
+
+",
+        );
+        let h1_updated =
+            insert_annotation_tasks(&h1_body, &["- [ ] #task Second"]);
+        assert!(
+            h1_updated.contains(
+                "# Tasks\n\n- [ ] #task First\n- [ ] #task Second\n\n## Highlights"
+            ),
+            "{h1_updated}"
+        );
+        assert!(!h1_updated.contains("## Tasks"), "{h1_updated}");
+
+        let closed_body = annotation_task_ref_body(
+            "
+## Tasks ##
+
+- [ ] #task First
+
+",
+        );
+        let closed_updated =
+            insert_annotation_tasks(&closed_body, &["- [ ] #task Second"]);
+        assert!(
+            closed_updated.contains(
+                "## Tasks ##\n\n- [ ] #task First\n- [ ] #task Second\n\n## Highlights"
+            ),
+            "{closed_updated}"
+        );
+        assert_eq!(
+            closed_updated.matches("## Tasks").count(),
+            1,
+            "{closed_updated}"
+        );
+    }
+
+    #[test]
+    fn annotation_tasks_ignore_fenced_and_managed_tasks_headings() {
+        let body = annotation_task_ref_body(
+            "
+```
+## Tasks
+```
+
+",
+        )
+        .replace(
+            "<!-- highlights:begin -->\n\n<!-- highlights:end -->",
+            "<!-- highlights:begin -->\n\n### Tasks\n\n<!-- highlights:end -->",
+        );
+        let updated = insert_annotation_tasks(&body, &["- [ ] #task New"]);
+        assert!(
+            updated.contains(
+                "- [ ] #task [[lib/example.pdf]] #hide ^ref\n\n## Tasks\n\n- [ ] #task New\n"
+            ),
+            "{updated}"
+        );
+        assert!(updated.contains("```\n## Tasks\n```"), "{updated}");
+        assert!(
+            updated.contains("<!-- highlights:begin -->\n\n### Tasks\n"),
+            "{updated}"
+        );
+        assert_eq!(
+            updated.lines().filter(|line| *line == "## Tasks").count(),
+            2,
+            "{updated}"
+        );
+    }
+
+    #[test]
+    fn annotation_tasks_fill_empty_tasks_section_with_blank_lines() {
+        let body = annotation_task_ref_body(
+            "
+## Tasks
+
+",
+        );
+        let updated = insert_annotation_tasks(&body, &["- [ ] #task New"]);
+        assert!(
+            updated.contains("## Tasks\n\n- [ ] #task New\n\n## Highlights"),
+            "{updated}"
+        );
+        assert_eq!(updated.matches("## Tasks").count(), 1, "{updated}");
+    }
+
+    #[test]
+    fn annotation_task_insertion_preserves_crlf_line_endings() {
+        let body = annotation_task_ref_body("\n").replace('\n', "\r\n");
+        let updated = insert_annotation_tasks(&body, &["- [ ] #task New"]);
+        assert!(
+            !updated.replace("\r\n", "").contains('\n'),
+            "inserted a bare LF:\n{updated:?}"
+        );
+        assert!(
+            updated.contains(
+                "- [ ] #task [[lib/example.pdf]] #hide ^ref\r\n\r\n## Tasks\r\n\r\n- [ ] #task New\r\n"
+            ),
+            "{updated:?}"
+        );
+        assert!(
+            updated.contains("- [ ] #task New\r\n\r\n## Highlights\r\n"),
+            "{updated:?}"
+        );
+    }
+
+    #[test]
+    fn annotation_tasks_create_section_after_unterminated_ref_line() {
+        let body = "- [ ] #task [[lib/example.pdf]] #hide ^ref";
+        let updated = insert_annotation_tasks(body, &["- [ ] #task New"]);
+        assert_eq!(
+            updated,
+            "- [ ] #task [[lib/example.pdf]] #hide ^ref\n\n## Tasks\n\n- [ ] #task New\n"
+        );
+    }
+
+    #[test]
+    fn annotation_task_batches_append_in_insertion_order() {
+        let body = annotation_task_ref_body("\n");
+        let first = insert_annotation_tasks(&body, &["- [ ] #task First"]);
+        let second = insert_annotation_tasks(&first, &["- [ ] #task Second"]);
+        assert!(
+            second.contains(
+                "## Tasks\n\n- [ ] #task First\n- [ ] #task Second\n\n## Highlights"
+            ),
+            "{second}"
+        );
+        assert_eq!(second.matches("## Tasks").count(), 1, "{second}");
+        let first_pos = second.find("- [ ] #task First").expect("first task");
+        let second_pos =
+            second.find("- [ ] #task Second").expect("second task");
+        assert!(first_pos < second_pos, "{second}");
     }
 
     #[test]
