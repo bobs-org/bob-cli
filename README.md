@@ -96,14 +96,15 @@ separate steps:
 
 1. **Capture** with `bob capture` or Bob Mac Capture (the macOS panel that
    calls the same commands). Tasks land in `mac_inbox.md` unless an `@route`
-   token sends them to another note.
+   token sends them to another note; scheduled checkbox-bearing captures start
+   Blocked (`[?]`).
 2. **Link today's work** onto a Pomodoro in the daily note. That happens when
    you capture with `@route:id` (which also marks the task Next), or when you
    add a task link under a Pomodoro in Obsidian. `bob pomodoro`,
    `bob tmux-pomodoro`, and `bob notify` only *read* that ledger; they do not
    create links.
 3. **Reconcile statuses** with `bob task-status-hooks` so Next, In Progress, and
-   Blocked markers follow the ledger and any new schedules.
+   Blocked markers follow the ledger and any schedules changed outside capture.
 4. **Nightly**, run `bob nightly` to reconcile the vault through Git, archive
    done and canceled tasks, and reconcile the vault again.
 
@@ -186,12 +187,12 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route#Section` | Ordinary bullet under a matching non-`Tasks` heading |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading |
 | `@route^id` | Ordinary task with a user-authored block ID |
-| `@route:id` | Next-status task plus a Pomodoro task link |
+| `@route:id` | Next-status task plus a Pomodoro task link; scheduled tasks start Blocked |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
-| `s:<N>` | Schedule N days from today |
-| `p:<N>` | Write priority level N and roll a date in that window |
+| `s:<N>` | Schedule N days from today; checkbox-bearing captures start Blocked, including `s:0` |
+| `p:<N>` | Write priority level N and roll a scheduled date, so checkbox-bearing captures start Blocked |
 | `%`, `%N`, `%header` | Attach clipboard content |
 
 `#` is not one marker. A trailing bare `#` is a Pomodoro note; `@route#…` selects

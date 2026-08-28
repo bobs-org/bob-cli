@@ -47,12 +47,12 @@ anything is written, and any failure rolls the whole batch back.
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
 | `@route^block-id` | Ordinary open task with a user-authored block ID |
-| `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link |
+| `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; scheduled tasks start Blocked (`[?]`) |
 | `@route+block-id` | Ordinary child bullet under an existing task |
 | `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
-| `s:<N>` | `[scheduled::]` N days from today |
-| `p:<N>` | Write priority level N and roll a date in that level's window |
+| `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
+| `p:<N>` | Write priority level N and roll a scheduled date in that level's window |
 | `%`, `%N`, `%header` | Capture clipboard content as child bullets |
 
 `#` is not one marker. Read it by what it is attached to:
@@ -84,10 +84,10 @@ requiring desktop Obsidian to be open. `TEXT` is one or more physical lines: the
 first nonblank line is the captured parent, and whitespace within each line is
 normalized, but line breaks are meaningful -- see "Authored sub-bullets"
 below for the bounded hierarchy later lines accept. Task mode writes
-`- [ ] #task <text> [created::YYYY-MM-DD]` and routes to `mac_inbox.md` by
-default; bullet mode writes into a selected non-`Tasks` section as described
-below. The created date uses the local date from `BOB_NOW`, `DATE`, or the
-system clock.
+`- [ ] #task <text> [created::YYYY-MM-DD]` when unscheduled, or `[?]` when a
+scheduled property is resolved, and routes to `mac_inbox.md` by default; bullet
+mode writes into a selected non-`Tasks` section as described below. The created
+date uses the local date from `BOB_NOW`, `DATE`, or the system clock.
 
 ### Routing and insertion
 
@@ -196,7 +196,9 @@ and any failure rolls every target back.
 Append a lowercase `s:<N>` token to schedule the capture `N` days from today.
 It is recognized only in the terminal token region and may appear on either
 side of a trailing route marker. The token is removed from the body and adds
-`[scheduled::YYYY-MM-DD]` after the created stamp.
+`[scheduled::YYYY-MM-DD]` after the created stamp. Checkbox-bearing captures
+with a resolved scheduled property start Blocked (`[?]`), including `s:0`.
+Ordinary bullet and sub-bullet captures still render without a checkbox.
 
 Append a lowercase `p:<N>` token to write a priority level, where `N` selects
 the Nth level in the bullet-property config file. Bob looks for that file at
@@ -223,7 +225,7 @@ entry recording why, byte-for-byte matching what the Obsidian
 `Ctrl+Shift+P` picker writes for the same level with no reason prompt:
 
 ```markdown
-- [ ] #task someday idea [created::2026-08-07] [priority::lowest] [scheduled::2026-11-06]
+- [?] #task someday idea [created::2026-08-07] [priority::lowest] [scheduled::2026-11-06]
 	- 🗓️ **SCHEDULE LOG**
 		- *2026-11-06* — 🎲 P0 → P4 · in **91** (91–365) days
 ```
@@ -233,9 +235,9 @@ date. The parenthesized range is the configured priority window.
 
 A `p:<N> s:<N>` capture writes no entry, since `s:<N>` wins the scheduled date
 and no roll happened. An out-of-range `p:<N>` fails with a usage error naming
-the configured levels instead of staying literal. Capture always writes
-`[ ]`; `bob task-status-hooks` is what later marks a future-scheduled task
-Blocked.
+the configured levels instead of staying literal. Any resolved scheduled
+property makes a checkbox-bearing capture start Blocked (`[?]`); `bob
+task-status-hooks` still reconciles tasks whose schedules are edited later.
 
 ### Multi-item capture
 
@@ -436,9 +438,10 @@ Pomodoro task link. For example,
 
 The route is lower-cased, and the destination may be an existing note or a
 missing note that can be created like any ordinary routed task. The task
-remains an ordinary `[ ]` task: priority and scheduled properties render before
-the final `^block-id`, and the JSON `kind` stays `"task"`. The block ID uses
-the same validator as other Bob task block IDs (letters, digits, and `-`).
+remains an ordinary `[ ]` task when unscheduled, or starts `[?]` when scheduled:
+priority and scheduled properties render before the final `^block-id`, and the
+JSON `kind` stays `"task"`. The block ID uses the same validator as other Bob
+task block IDs (letters, digits, and `-`).
 Before a real capture or `--dry-run` reports success, Bob rejects an ID that
 already appears anywhere in the destination note, leaving the note unchanged.
 This form never reads, validates, creates, or writes today's daily note; an
@@ -459,8 +462,8 @@ Pomodoro-linked next task. For example,
 It also adds `[[dev#^foobar]]` as a child bullet of an eligible open Pomodoro
 in today's daily note. The route is lower-cased; route and block-ID characters
 are limited to letters, digits, `_`, and `-`. Scheduled offsets work in either
-terminal order, and the block ID remains the final task token after any
-`[scheduled::YYYY-MM-DD]` property.
+terminal order; a scheduled Pomodoro-linked task starts `[?]`, and the block ID
+remains the final task token after any `[scheduled::YYYY-MM-DD]` property.
 
 The daily note is selected from `BOB_DAY_FILE` when set, otherwise from
 `<bob-dir>/YYYY/YYYYMMDD.md` using `BOB_NOW` or the local date. Within its
@@ -1223,7 +1226,8 @@ metadata as `capture-tasks` after the assignment. JSON failure is
 `{"ok": false, "error": "..."}` and is write-free, as are stale, ambiguous,
 terminal, already-identified, duplicate, missing, and unreadable-note errors.
 
-A `p:<N>` capture writes `[ ]`; `bob task-status-hooks` is what later marks a
-future-scheduled task Blocked. Project notes and their `^prj` lifecycle tasks
-are covered in [projects.md](projects.md). The command index and environment
-variables live in the [root README](../README.md).
+A `p:<N>` capture writes `[?]` when it rolls a scheduled date; unscheduled task
+captures remain `[ ]`, and unscheduled Pomodoro-linked tasks remain `[*]`.
+Project notes and their `^prj` lifecycle tasks are covered in
+[projects.md](projects.md). The command index and environment variables live in
+the [root README](../README.md).

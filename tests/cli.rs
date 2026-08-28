@@ -3840,7 +3840,7 @@ fn capture_unrouted_scheduled_offset_appends_property() {
 
     assert_success(&output);
     let expected =
-        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]";
+        "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]";
     assert!(
         stdout(&output).contains(expected),
         "unexpected capture output:\n{}",
@@ -3872,7 +3872,7 @@ fn capture_scheduled_zero_uses_created_date() {
     assert_success(&output);
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
-        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-15]\n"
+        "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-15]\n"
     );
 }
 
@@ -3988,13 +3988,13 @@ fn capture_scheduled_offset_routes_in_either_order() {
     assert_eq!(schedule_then_route, route_then_schedule);
     assert_eq!(
         schedule_then_route,
-        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-17]\n"
+        "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-17]\n"
     );
 
     let leading_route = render(&["@groceries", "buy", "milk", "s:3"]);
     assert_eq!(
         leading_route,
-        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-18]\n"
+        "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-18]\n"
     );
 }
 
@@ -4054,9 +4054,9 @@ fn capture_priority_level_one_rolls_scheduled_date_in_window() {
 
     assert_success(&output);
     let task_line =
-        "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]";
+        "- [?] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]";
     let expected = concat!(
-        "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]\n",
+        "- [?] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]\n",
         "\t- 🗓️ **SCHEDULE LOG**\n",
         "\t\t- *2026-06-22* — 🎲 P0 → P1 · in **7** (2–7) days\n",
     );
@@ -4113,7 +4113,7 @@ fn capture_priority_level_four_rolls_scheduled_date_in_window() {
     );
 
     let expected = concat!(
-        "- [ ] #task someday idea [created::2026-06-15] [priority::lowest] [scheduled::2027-05-12]\n",
+        "- [?] #task someday idea [created::2026-06-15] [priority::lowest] [scheduled::2027-05-12]\n",
         "\t- 🗓️ **SCHEDULE LOG**\n",
         "\t\t- *2027-05-12* — 🎲 P0 → P4 · in **331** (91–365) days\n",
     );
@@ -4145,7 +4145,7 @@ fn capture_priority_with_explicit_schedule_skips_roll() {
         .expect("run p:2 s:1 capture");
 
     assert_success(&output);
-    let expected = "- [ ] #task buy milk [created::2026-06-15] [priority::medium] [scheduled::2026-06-16]";
+    let expected = "- [?] #task buy milk [created::2026-06-15] [priority::medium] [scheduled::2026-06-16]";
     assert!(
         stdout(&output).contains(expected),
         "unexpected capture output:\n{}",
@@ -4350,7 +4350,7 @@ fn capture_priority_renders_before_scheduled_and_before_pomodoro_block_id() {
             "# Dev\n",
             "## Tasks\n",
             "- [ ] #task Existing\n",
-            "- [*] #task Some foobar task. [created::2026-07-10] [priority::medium] [scheduled::2026-07-21] ^foobar\n",
+            "- [?] #task Some foobar task. [created::2026-07-10] [priority::medium] [scheduled::2026-07-21] ^foobar\n",
             "\t- 🗓️ **SCHEDULE LOG**\n",
             "\t\t- *2026-07-21* — 🎲 P0 → P2 · in **11** (8–30) days\n",
         )
@@ -4389,7 +4389,7 @@ fn capture_priority_schedule_log_uses_the_target_notes_indent_unit() {
         fs::read_to_string(vault.join("spaced.md"))
             .expect("read spaced note")
             .contains(concat!(
-                "- [ ] #task buy milk [created::2026-07-10] [priority::medium] [scheduled::2026-07-21]\n",
+                "- [?] #task buy milk [created::2026-07-10] [priority::medium] [scheduled::2026-07-21]\n",
                 "  - 🗓️ **SCHEDULE LOG**\n",
                 "    - *2026-07-21* — 🎲 P0 → P2 · in **11** (8–30) days\n",
             )),
@@ -4428,7 +4428,7 @@ fn capture_priority_with_clip_orders_clip_children_before_schedule_log() {
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
         concat!(
-            "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]\n",
+            "- [?] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-22]\n",
             "\t- clipped note\n",
             "\t- 🗓️ **SCHEDULE LOG**\n",
             "\t\t- *2026-06-22* — 🎲 P0 → P1 · in **7** (2–7) days\n",
@@ -4526,6 +4526,39 @@ fn capture_task_block_id_marker_writes_ordinary_task_and_ignores_daily_note() {
     assert_eq!(
         fs::read_to_string(&day_file).expect("read untouched daily note"),
         "## Notes\n- not a Pomodoro ledger\n"
+    );
+
+    let scheduled_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .args(["Do", "later", "s:0", "@Dev^scheduled-id"])
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run scheduled ID-only capture");
+
+    assert_success(&scheduled_output);
+    let scheduled_json: serde_json::Value =
+        serde_json::from_str(stdout(&scheduled_output).trim())
+            .expect("scheduled capture JSON");
+    assert_eq!(scheduled_json["scheduled"], "2026-07-10");
+    assert_eq!(scheduled_json["block_id"], "scheduled-id");
+    assert_eq!(
+        scheduled_json["task_line"],
+        "- [?] #task Do later [created::2026-07-10] [scheduled::2026-07-10] ^scheduled-id"
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("read routed note"),
+        concat!(
+            "# Dev\n",
+            "## Tasks\n",
+            "- [ ] #task Existing\n",
+            "- [ ] #task Do work [created::2026-07-10] ^id-only\n",
+            "- [?] #task Do later [created::2026-07-10] [scheduled::2026-07-10] ^scheduled-id\n",
+        )
     );
 }
 
@@ -5173,7 +5206,7 @@ fn capture_scheduled_dry_run_reports_without_writing() {
     assert!(
         out.contains("[dry-run] ok would capture  groceries.md")
             && out.contains(
-                "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
+                "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
             ),
         "unexpected dry-run output:\n{out}"
     );
@@ -5456,7 +5489,7 @@ fn capture_global_destination_can_be_declared_at_the_end_of_any_item() {
         fs::read_to_string(vault.join("foo.md")).expect("foo"),
         concat!(
             "- [ ] #task First task [created::2026-06-15]\n",
-            "- [ ] #task Second task [created::2026-06-15] [scheduled::2026-06-17]\n",
+            "- [?] #task Second task [created::2026-06-15] [scheduled::2026-06-17]\n",
         )
     );
 }
@@ -5986,7 +6019,7 @@ fn capture_json_output_includes_scheduled_date() {
     assert_eq!(json["scheduled"], "2026-06-16");
     assert_eq!(
         json["task_line"],
-        "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
+        "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
     );
 }
 
@@ -6035,7 +6068,7 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
             "# Work\n",
             "## Tasks\n",
             "- [ ] #task Existing\n",
-            "- [ ] #task do thing [created::2026-07-15] [scheduled::2026-07-16]\n",
+            "- [?] #task do thing [created::2026-07-15] [scheduled::2026-07-16]\n",
             "\t- **BUILD LOG:** hello from clipboard\n",
         )
     );
@@ -6374,7 +6407,7 @@ fn capture_history_is_headerless_structured_and_composes_with_routes() {
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
         concat!(
-            "- [ ] #task research links [created::2026-07-15] [scheduled::2026-07-16]\n",
+            "- [?] #task research links [created::2026-07-15] [scheduled::2026-07-16]\n",
             "\t- live value\n",
             "\t- older one\n",
             "\t- older two\n",
@@ -7304,7 +7337,7 @@ fn capture_authored_bullet_marker_on_child_line_configures_whole_capture() {
         fs::read_to_string(vault.join("work.md")).expect("read work route");
     assert!(
         content.starts_with(
-            "- [ ] #task Prepare the launch review [created::2026-06-15] [scheduled::2026-06-18]"
+            "- [?] #task Prepare the launch review [created::2026-06-15] [scheduled::2026-06-18]"
         ),
         "unexpected content:\n{content}"
     );

@@ -115,7 +115,9 @@ Append a trailing lowercase 's:<N>' token, where N is a non-negative integer, \
 to schedule the capture N days from today. The token is removed from the task \
 text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It \
 may appear before or after a trailing @route token and is recognized only at \
-the very end of the input.\n\n\
+the very end of the input. Checkbox-bearing captures with a resolved scheduled \
+property start Blocked as '[?]', including s:0; ordinary bullet and sub-bullet \
+forms stay checkbox-free.\n\n\
 Append a trailing lowercase 'p:<N>' token, where N selects the Nth priority \
 level configured in ~/.config/bob/config.yml (1-4 today: P1-P4), to write \
 [priority::<value>] and roll a random [scheduled::YYYY-MM-DD] inside that \
@@ -143,8 +145,9 @@ genuine trailing '%...' token literal. Clipboard failures abort before the note 
 or attachment files are changed.\n\n\
 Use '@<route>:<block-id>' in the same leading or trailing position to create \
 a next-status task and link it from today's Pomodoro ledger. The routed task \
-renders as '- [*] #task <body> [created::YYYY-MM-DD] ^<block-id>' (with any \
-scheduled property before the final block ID). The daily note comes from \
+renders as '- [*] #task <body> [created::YYYY-MM-DD] ^<block-id>' when \
+unscheduled, or '[?]' with any scheduled property before the final block ID. \
+The daily note comes from \
 BOB_DAY_FILE or <bob-dir>/YYYY/YYYYMMDD.md. Capture prefers the single open \
 timed entry in its Pomodoros section and otherwise uses the first open entry. \
 Both notes are fully validated before either is replaced; duplicate block IDs, \
@@ -153,8 +156,8 @@ without a partial capture.\n\n\
 Use '@<route>^<block-id>' in the same leading or trailing position to create \
 an ordinary open task with the requested trailing Obsidian block ID, without \
 creating or modifying a Pomodoro ledger link. It renders as '- [ ] #task \
-<body> [created::YYYY-MM-DD] ^<block-id>' (with priority and scheduled \
-properties before the final block ID). Duplicate block IDs in the destination \
+<body> [created::YYYY-MM-DD] ^<block-id>' when unscheduled, or '[?]' with \
+priority and scheduled properties before the final block ID. Duplicate block IDs in the destination \
 note fail before the note is replaced; a missing destination note may still be \
 created like any ordinary routed task. This form never reads or requires the \
 daily note. The retired '@<route>::<block-id>' spelling is no longer accepted; \
@@ -1064,7 +1067,8 @@ fn format_task_line(
     priority: Option<(&str, &str)>,
     scheduled: Option<&str>,
 ) -> String {
-    let mut line = format!("- [ ] #task {body} [created::{created}]");
+    let status = capture_task_status(" ", scheduled);
+    let mut line = format!("- [{status}] #task {body} [created::{created}]");
     append_priority_property(&mut line, priority);
     append_scheduled_property(&mut line, scheduled);
     line
@@ -1112,11 +1116,23 @@ fn format_pomodoro_task_line(
     scheduled: Option<&str>,
     block_id: &str,
 ) -> String {
-    let mut line = format!("- [*] #task {body} [created::{created}]");
+    let status = capture_task_status("*", scheduled);
+    let mut line = format!("- [{status}] #task {body} [created::{created}]");
     append_priority_property(&mut line, priority);
     append_scheduled_property(&mut line, scheduled);
     append_block_id(&mut line, block_id);
     line
+}
+
+fn capture_task_status<'a>(
+    default: &'a str,
+    scheduled: Option<&str>,
+) -> &'a str {
+    if scheduled.is_some() {
+        "?"
+    } else {
+        default
+    }
 }
 
 fn append_priority_property(line: &mut String, priority: Option<(&str, &str)>) {
@@ -4003,7 +4019,7 @@ mod tests {
 
     #[test]
     fn assembles_capture_block_with_clip_children_then_schedule_log() {
-        let capture_line = "- [ ] #task someday idea [created::2026-08-07] [priority::lowest] [scheduled::2026-11-02]";
+        let capture_line = "- [?] #task someday idea [created::2026-08-07] [priority::lowest] [scheduled::2026-11-02]";
         let clip_lines = vec![
             "\t- clip child one".to_string(),
             "\t- clip child two".to_string(),
@@ -4181,7 +4197,7 @@ mod tests {
                 None,
                 Some("2026-06-16")
             ),
-            "- [ ] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
+            "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
         );
         assert_eq!(
             format_task_line(
@@ -4199,7 +4215,7 @@ mod tests {
                 Some(("priority", "high")),
                 Some("2026-06-16"),
             ),
-            "- [ ] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-16]"
+            "- [?] #task buy milk [created::2026-06-15] [priority::high] [scheduled::2026-06-16]"
         );
     }
 
@@ -4223,7 +4239,7 @@ mod tests {
                 Some("2026-07-12"),
                 "foobar",
             ),
-            "- [ ] #task Some foobar task. [created::2026-07-10] [priority::lowest] [scheduled::2026-07-12] ^foobar"
+            "- [?] #task Some foobar task. [created::2026-07-10] [priority::lowest] [scheduled::2026-07-12] ^foobar"
         );
     }
 
@@ -4247,7 +4263,7 @@ mod tests {
                 Some("2026-07-12"),
                 "foobar",
             ),
-            "- [*] #task Some foobar task. [created::2026-07-10] [scheduled::2026-07-12] ^foobar"
+            "- [?] #task Some foobar task. [created::2026-07-10] [scheduled::2026-07-12] ^foobar"
         );
         assert_eq!(
             format_pomodoro_task_line(
@@ -4257,7 +4273,7 @@ mod tests {
                 Some("2026-07-12"),
                 "foobar",
             ),
-            "- [*] #task Some foobar task. [created::2026-07-10] [priority::lowest] [scheduled::2026-07-12] ^foobar"
+            "- [?] #task Some foobar task. [created::2026-07-10] [priority::lowest] [scheduled::2026-07-12] ^foobar"
         );
     }
 
