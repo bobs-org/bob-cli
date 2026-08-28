@@ -49,6 +49,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::CaptureParse,
     },
     Subcommand {
+        name: "capture-pomodoro-name",
+        script_command: None,
+        about: "Assign a name to an open unnamed Pomodoro",
+        native_command: NativeCommand::CapturePomodoroName,
+    },
+    Subcommand {
         name: "capture-pomodoros",
         script_command: None,
         about: "List today's Pomodoro ledger entries",
@@ -314,6 +320,8 @@ Examples:
                                  Complete the capture marker at the cursor
   bob capture-parse --format json -- 'Call bank @cash+'
                                  Explain in-progress capture text
+  bob capture-pomodoro-name -p 38:0b1c2d3e -n 'deep work'
+                                 Name an unnamed Pomodoro in today's daily note
   bob capture-pomodoros --format json
                                  List today's Pomodoro picker entries
   bob capture-sections --route cash --format json

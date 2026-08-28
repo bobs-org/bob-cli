@@ -139,6 +139,7 @@ Bob's workflow commands are:
 | [`capture`](#capture) | Capture a task or section bullet, optionally with clipboard content |
 | `capture-complete` | Complete capture marker or wikilink syntax at the cursor |
 | `capture-parse` | Preview what in-progress capture text and wikilinks mean |
+| `capture-pomodoro-name` | Assign a canonical name to an unnamed Pomodoro |
 | `capture-pomodoros` | List today's Pomodoro ledger entries |
 | `capture-rewrite` | Apply the capture grammar's automatic draft rewrites (bare `@@` absorption) |
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
@@ -222,7 +223,8 @@ deleting the marker it absorbed. Discovery helpers
 (`capture-targets`, `capture-sections`, `capture-tasks`,
 `capture-task-sections`, `capture-pomodoros`) feed those pickers.
 `capture-task-id` assigns a user-authored block ID to an open task that still
-lacks one.
+lacks one. `capture-pomodoro-name` assigns a canonical ALL-CAPS name to an
+unnamed Pomodoro in today's daily note.
 
 The full grammar, JSON contracts, and picker protocol live in
 [`docs/capture.md`](docs/capture.md).

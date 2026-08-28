@@ -213,6 +213,30 @@ fn capture_parse_help_is_native_only() {
 }
 
 #[test]
+fn capture_pomodoro_name_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-name-native-help");
+    let output = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("--help")
+        .env("BOB_CLI_USE_SCRIPT", "1")
+        .env("XDG_CACHE_HOME", temp.path())
+        .output()
+        .expect("run native-only bob capture-pomodoro-name --help");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("bob capture-pomodoro-name"),
+        "expected capture-pomodoro-name help text:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp.path().join("bob-cli/scripts").exists(),
+        "native-only capture-pomodoro-name should not extract script assets"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_pomodoros_help_is_native_only() {
     let temp = TempDir::new("bob-cli-capture-pomodoros-native-help");
     let output = bob_command()
@@ -464,6 +488,10 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture", "--help"], "bob capture"),
         (&["capture-complete", "--help"], "bob capture-complete"),
         (&["capture-parse", "--help"], "bob capture-parse"),
+        (
+            &["capture-pomodoro-name", "--help"],
+            "bob capture-pomodoro-name",
+        ),
         (&["capture-pomodoros", "--help"], "bob capture-pomodoros"),
         (&["capture-rewrite", "--help"], "bob capture-rewrite"),
         (&["capture-sections", "--help"], "bob capture-sections"),
@@ -516,6 +544,10 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             "bob capture-complete --help",
         ),
         (&["capture-parse", "--help"], "bob capture-parse --help"),
+        (
+            &["capture-pomodoro-name", "--help"],
+            "bob capture-pomodoro-name --help",
+        ),
         (
             &["capture-pomodoros", "--help"],
             "bob capture-pomodoros --help",
@@ -3042,6 +3074,36 @@ fn capture_parse_help_lists_options_alphabetically() {
         "expected capture-parse long help:\n{help}"
     );
     assert_text_order(&help, &["-f, --format", "-h, --help"]);
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_pomodoro_name_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-pomodoro-name --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("canonical ALL-CAPS name")
+            && help.contains("named-but-untypeable")
+            && help.contains("same-directory temporary file"),
+        "expected capture-pomodoro-name long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+            "-n, --name",
+            "-p, --pomodoro-ref",
+        ],
+    );
     assert_stdout_has_no_ansi(&output);
 }
 
@@ -11081,6 +11143,267 @@ fn capture_pomodoros_missing_note_and_section_warn_in_json() {
     assert!(sectionless_json["warnings"][0]
         .as_str()
         .is_some_and(|warning| warning.contains("no Pomodoros section")));
+}
+
+#[test]
+fn capture_pomodoro_name_assigns_and_dry_runs_lf_and_crlf_notes() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-name-write");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    let original = concat!(
+        "# Day\n",
+        "## Pomodoros\n",
+        "- [ ] ()\n",
+        "- [ ] () — MEMORY\n",
+        "- keep this line\n",
+    );
+    write_file(&day_file, original);
+    let unnamed_ref = capture_pomodoro_ref("- [ ] ()", 3);
+
+    let dry = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&unnamed_ref)
+        .arg("-n")
+        .arg("  deep   work  ")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("dry-run capture-pomodoro-name");
+    assert_success(&dry);
+    let dry_json: serde_json::Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("json");
+    assert_eq!(dry_json["ok"], true);
+    assert_eq!(dry_json["schema_version"], 1);
+    assert_eq!(dry_json["dry_run"], true);
+    assert_eq!(dry_json["name"], "DEEP WORK");
+    assert_eq!(dry_json["slug"], "deep-work");
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), original);
+
+    let written = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&unnamed_ref)
+        .arg("-n")
+        .arg("  deep   work  ")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("write capture-pomodoro-name");
+    assert_success(&written);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&written).trim()).expect("json");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["dry_run"], false);
+    assert_eq!(json["day_file"], day_file.display().to_string());
+    assert_eq!(json["relative_day_file"], "2026/20260828.md");
+    assert_eq!(json["name"], "DEEP WORK");
+    assert_eq!(json["slug"], "deep-work");
+    assert_eq!(json["line"], 3);
+    assert_eq!(json["pomodoro"]["name"], "DEEP WORK");
+    assert_eq!(json["pomodoro"]["slug"], "deep-work");
+    assert_eq!(json["pomodoro"]["selectable"], true);
+    assert_eq!(json["pomodoro"]["placeholder"], true);
+    let expected = concat!(
+        "# Day\n",
+        "## Pomodoros\n",
+        "- [ ] () — DEEP WORK\n",
+        "- [ ] () — MEMORY\n",
+        "- keep this line\n",
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), expected);
+    assert_eq!(json["ref"], capture_pomodoro_ref("- [ ] () — DEEP WORK", 3));
+
+    let listed = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("list after naming");
+    assert_success(&listed);
+    let listed_json: serde_json::Value =
+        serde_json::from_str(stdout(&listed).trim()).expect("list json");
+    assert_eq!(listed_json["pomodoros"][0]["name"], "DEEP WORK");
+    assert_eq!(listed_json["pomodoros"][0]["slug"], "deep-work");
+
+    let human_day = vault.join("2026/20260829.md");
+    write_file(&human_day, "## Pomodoros\n- [ ] ()\n");
+    let human_ref = capture_pomodoro_ref("- [ ] ()", 2);
+    let human_ok = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&human_ref)
+        .arg("-n")
+        .arg("bugs")
+        .env("BOB_DAY_FILE", &human_day)
+        .output()
+        .expect("human capture-pomodoro-name");
+    assert_success(&human_ok);
+    assert_stdout_has_no_ansi(&human_ok);
+    let human_out = stdout(&human_ok);
+    assert!(human_out.contains("named BUGS"), "{human_out}");
+    assert!(human_out.contains("type #bugs"), "{human_out}");
+    assert!(human_out.contains("2026/20260829.md"), "{human_out}");
+
+    let crlf = concat!(
+        "# Day  \r\n",
+        "## Pomodoros\r\n",
+        "- [ ] (**09:20 - 09:50** [t:: 30m])  \r\n",
+        "- ordinary\r\n",
+    );
+    let crlf_day = vault.join("2026/20260830.md");
+    write_file(&crlf_day, crlf);
+    let crlf_ref =
+        capture_pomodoro_ref("- [ ] (**09:20 - 09:50** [t:: 30m])  ", 3);
+    let crlf_out = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&crlf_ref)
+        .arg("-n")
+        .arg("FOCUS")
+        .env("BOB_DAY_FILE", &crlf_day)
+        .output()
+        .expect("CRLF capture-pomodoro-name");
+    assert_success(&crlf_out);
+    assert_eq!(
+        fs::read_to_string(&crlf_day).expect("read"),
+        concat!(
+            "# Day  \r\n",
+            "## Pomodoros\r\n",
+            "- [ ] (**09:20 - 09:50** [t:: 30m]) — FOCUS\r\n",
+            "- ordinary\r\n",
+        )
+    );
+}
+
+#[test]
+fn capture_pomodoro_name_rejects_write_free_failures() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-name-errors");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    let original = concat!(
+        "## Pomodoros\n",
+        "- [ ] () — SAME\n",
+        "- [ ] () — SAME\n",
+        "- [ ] () — MEMORY\n",
+        "- [x] () — DONE\n",
+        "- [ ] ()\n",
+    );
+    write_file(&day_file, original);
+    let unnamed_ref = capture_pomodoro_ref("- [ ] ()", 6);
+    let named_ref = capture_pomodoro_ref("- [ ] () — MEMORY", 4);
+    let done_ref = capture_pomodoro_ref("- [x] () — DONE", 5);
+    let same_digest = &capture_pomodoro_ref("- [ ] () — SAME", 2)[2..];
+    let ambiguous_ref = format!("99:{same_digest}");
+
+    let cases: &[(&str, i32, &str, &[&str])] = &[
+        (
+            "invalid-name",
+            2,
+            "Pomodoro name must contain only",
+            &["-p", &unnamed_ref, "-n", "snake_case"],
+        ),
+        (
+            "invalid-ref",
+            2,
+            "--pomodoro-ref must use",
+            &["-p", "nope", "-n", "DEEP WORK"],
+        ),
+        (
+            "already-named",
+            1,
+            "already named MEMORY; target it with `#memory`",
+            &["-p", &named_ref, "-n", "DEEP WORK"],
+        ),
+        (
+            "completed",
+            1,
+            "is completed; only an open Pomodoro can be named",
+            &["-p", &done_ref, "-n", "DEEP WORK"],
+        ),
+        (
+            "stale",
+            1,
+            "no longer in 2026/20260828.md",
+            &["-p", "99:deadbeef", "-n", "DEEP WORK"],
+        ),
+        (
+            "ambiguous",
+            1,
+            "matches more than one line",
+            &["-p", &ambiguous_ref, "-n", "DEEP WORK"],
+        ),
+    ];
+
+    for (name, exit, expected, extra) in cases {
+        let output = bob_command()
+            .arg("capture-pomodoro-name")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .args(*extra)
+            .output()
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(
+            output.status.code(),
+            Some(*exit),
+            "{name}: {}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|_| {
+                panic!("{name}: {}", format_output(&output))
+            });
+        assert_eq!(json["ok"], false, "{name}");
+        assert!(
+            json["error"].as_str().expect("error").contains(expected),
+            "{name}: {json}"
+        );
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("read"),
+            original,
+            "{name} mutated the note"
+        );
+    }
+
+    let missing = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&unnamed_ref)
+        .arg("-n")
+        .arg("DEEP WORK")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", vault.join("missing.md"))
+        .output()
+        .expect("missing daily note");
+    assert_eq!(missing.status.code(), Some(1));
+    let missing_json: serde_json::Value =
+        serde_json::from_str(stdout(&missing).trim()).expect("missing json");
+    assert_eq!(missing_json["ok"], false);
+    assert!(missing_json["error"]
+        .as_str()
+        .expect("error")
+        .contains("does not exist"));
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), original);
 }
 
 #[test]
@@ -22917,6 +23240,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
 
     let order = [
         "capture",
+        "capture-pomodoro-name",
         "capture-pomodoros",
         "capture-sections",
         "capture-targets",
@@ -22950,6 +23274,9 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
 
     assert!(
         help.contains("Examples:")
+            && help.contains(
+                "bob capture-pomodoro-name -p 38:0b1c2d3e -n 'deep work'"
+            )
             && help.contains("bob capture-pomodoros --format json")
             && help.contains("bob capture-sections --route cash --format json")
             && help.contains("bob capture-targets --format json")
@@ -23284,8 +23611,12 @@ fn write_capture_task_settings(vault: &Path) {
 }
 
 fn capture_task_ref(line: &str) -> String {
+    capture_pomodoro_ref(line, 1)
+}
+
+fn capture_pomodoro_ref(line: &str, line_number: usize) -> String {
     let digest = hex::encode(Sha256::digest(line.trim_end().as_bytes()));
-    format!("1:{}", &digest[..8])
+    format!("{line_number}:{}", &digest[..8])
 }
 
 fn task_block_ids(json: &serde_json::Value) -> Vec<Option<&str>> {

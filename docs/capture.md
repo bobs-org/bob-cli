@@ -2,9 +2,10 @@
 
 `bob capture` writes tasks and bullets into the Bob vault without opening
 desktop Obsidian. Companion commands parse in-progress drafts, complete markers
-and wikilinks, list routes and tasks, and assign block IDs. Bob Mac Capture is
-the macOS menu-bar frontend: it owns the hotkey and panel, then delegates
-grammar, preview, completion, and vault writes to these `bob` commands.
+and wikilinks, list routes and tasks, assign block IDs, and name Pomodoros.
+Bob Mac Capture is the macOS menu-bar frontend: it owns the hotkey and panel,
+then delegates grammar, preview, completion, and vault writes to these `bob`
+commands.
 
 `bob capture --help` is the concise usage contract. This page is the full
 workflow guide.
@@ -32,6 +33,7 @@ workflow guide.
 - [`bob capture-complete`](#bob-capture-complete)
 - [Discovery commands](#discovery-commands)
 - [`bob capture-task-id`](#bob-capture-task-id)
+- [`bob capture-pomodoro-name`](#bob-capture-pomodoro-name)
 
 ## Grammar at a glance
 
@@ -1277,6 +1279,46 @@ one-based `line`, the updated `ref`, and a `task` object with the same picker
 metadata as `capture-tasks` after the assignment. JSON failure is
 `{"ok": false, "error": "..."}` and is write-free, as are stale, ambiguous,
 terminal, already-identified, duplicate, missing, and unreadable-note errors.
+
+## `bob capture-pomodoro-name`
+
+```bash
+bob capture-pomodoro-name --pomodoro-ref REF --name NAME [-b|--bob-dir DIR] [-f|--format human|json] [-d|--dry-run]
+```
+
+Assigns a canonical ALL-CAPS name to one open, unnamed Pomodoro in today's
+daily note. This is the only write needed to turn a nameable Pomodoro picker
+candidate into a selectable named Pomodoro. The command canonicalizes `--name`
+by trimming, collapsing internal whitespace to a single space, and
+ASCII-uppercasing, then requires the same title grammar as task sections
+(`A-Z`, `0-9`, spaces, and `& ' ( ) , . / -`, starting with a letter or digit).
+Uppercasing is deliberate: the vault's named-Pomodoro convention is ALL-CAPS,
+and case cannot affect the selector slug.
+
+The daily note is selected exactly as `bob capture` selects it: `BOB_DAY_FILE`
+when set and nonempty, otherwise `<bob-dir>/YYYY/YYYYMMDD.md` from `BOB_NOW` or
+the local date. `--pomodoro-ref` uses the same stale-safe `<line>:<digest>`
+recovery as `bob capture-pomodoros`. The selected entry must still be open. An
+entry that already has a selectable name is refused so callers type `#<slug>`
+instead of renaming. A named-but-untypeable entry is the exception: naming it
+is the repair, and the command replaces the existing em-dash tail rather than
+appending a second one.
+
+Success appends ` — NAME` to the resolved physical line after trimming that
+line's trailing spaces, preserves that line's ending and every unrelated byte,
+and replaces the note with one same-directory temporary file rename. The write
+is observable only after that rename completes. The command re-scans the
+written contents and refuses to report success unless the entry now parses with
+the expected name and slug. `--dry-run` returns the same success shape without
+writing.
+
+JSON success is a single versioned object with `ok`, `schema_version` `1`,
+`dry_run`, `day_file`, `relative_day_file`, the canonical `name`, the `slug` to
+type, the updated one-based `line`, the updated `ref`, and a `pomodoro` object
+with the same picker metadata as `capture-pomodoros` after the assignment.
+JSON failure is `{"ok": false, "error": "..."}` and is write-free, as are
+stale, ambiguous, completed, already-named, missing-note, missing-section, and
+unreadable-note errors.
 
 A `p:<N>` capture writes `[?]` when it rolls a scheduled date; unscheduled task
 captures remain `[ ]`, and unscheduled Pomodoro-linked tasks remain `[*]`.

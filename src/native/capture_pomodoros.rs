@@ -227,7 +227,7 @@ fn list_capture_pomodoros(
     })
 }
 
-fn relative_day_file(day_file: &Path, bob_dir: &Path) -> String {
+pub(crate) fn relative_day_file(day_file: &Path, bob_dir: &Path) -> String {
     day_file
         .strip_prefix(bob_dir)
         .unwrap_or(day_file)
@@ -254,7 +254,6 @@ pub(crate) struct PomodoroScan {
 
 impl PomodoroScan {
     /// Resolve a Pomodoro ref whose line component is one-based.
-    #[allow(dead_code)]
     pub(crate) fn by_ref(
         &self,
         pomodoro_ref: &PomodoroRef,
@@ -281,7 +280,6 @@ impl PomodoroScan {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PomodoroRefLookup<'a> {
     Found(&'a PomodoroEntry),
@@ -312,7 +310,6 @@ pub(crate) struct PomodoroRef {
 }
 
 impl PomodoroRef {
-    #[allow(dead_code)]
     pub(crate) fn parse(value: &str) -> Option<Self> {
         let (line, digest) = value.split_once(':')?;
         let line = line.parse::<usize>().ok().filter(|line| *line > 0)?;
@@ -565,6 +562,21 @@ fn parse_name_tail(remaining_body: &str) -> Option<String> {
     let rest = trimmed.strip_prefix('—')?;
     let name = rest.trim_start_matches([' ', '\t']).trim();
     (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Strip a parsed em-dash name tail from a physical Pomodoro line.
+pub(crate) fn without_name_tail(line: &str) -> &str {
+    let Some((_, _, body)) = parse_ledger_task(line) else {
+        return line;
+    };
+    let Some(range_len) = leading_range(body).range_len else {
+        return line;
+    };
+    let remaining = &body[range_len..];
+    if parse_name_tail(remaining).is_none() {
+        return line;
+    }
+    line.strip_suffix(remaining).unwrap_or(line)
 }
 
 fn parse_ledger_task(line: &str) -> Option<(PomodoroState, char, &str)> {
