@@ -339,7 +339,7 @@ The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 ## Highlights
 
 ```bash
-bob highlights create <md-file> [-d|--dry-run] [-f|--force] [-i|--include-id] [-P|--parent NOTE] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights create <md-file> [-d|--dry-run] [-f|--force] [-i|--include-id] [-o|--output PDF] [-P|--parent NOTE] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob highlights doctor [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-x|--xlib-dir PATH]
 bob highlights scan [-d|--dry-run] [-j|--jobs N] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -351,8 +351,13 @@ Obsidian reference notes.
 
 - `create <md-file>` renders through pandoc and xelatex into
   `xlib/chat/<basename>.pdf` (override the subdirectory with `--ref-type`) and
-  embeds the page-1 marker `scan` needs. `--include-id` adds marker `id` from
-  the Markdown filename stem.
+  embeds the page-1 marker `scan` needs. `-o, --output` writes the complete PDF
+  path instead, including the filename, and cannot be combined with
+  `--ref-type`. Relative output paths are resolved from the current directory
+  and a leading `~` is expanded. `--include-id` adds marker `id` from the
+  Markdown filename stem. Intake targets still go through `scan`; a PDF written
+  directly into the library is also found by `scan`; a PDF outside both
+  directories needs `bob highlights sync <PDF>`.
 - `scan` runs the configured pre-scan hook on writing runs, then moves pending
   PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs the library. By
   default it does not write PDF markers; use `scan --dry-run --write-pdfs`,

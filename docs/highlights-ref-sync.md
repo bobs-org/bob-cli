@@ -59,7 +59,7 @@ worktree status, and optional `ob` availability. It never writes files.
 Available commands:
 
 ```bash
-bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -68,9 +68,27 @@ bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH]
 
 `create` accepts an existing `.md` file and writes
 `<xlib-dir>/<ref-type>/<basename>.pdf` (by default
-`~/bob/xlib/chat/<basename>.pdf`). The next `scan` moves that PDF to
+`~/bob/xlib/chat/<basename>.pdf`) unless `-o, --output <PDF>` selects the
+complete output path. `--output` keeps the supplied filename and requires a
+nonempty name with a case-insensitive `.pdf` extension. Relative output values
+are resolved from the current working directory; a leading `~` is expanded the
+same way as other Bob path options. `--output` cannot be combined with an
+explicit `--ref-type`, because `--ref-type` only participates in default target
+derivation.
+
+When `--output` is omitted, the next `scan` moves the default intake PDF to
 `<lib-dir>/<ref-type>/<basename>.pdf`, refusing to create when that archived
-library PDF or sidecar already exists. It uses the frontmatter `title`, first
+library PDF or sidecar already exists. An exact path inside the configured
+intake directory keeps the same intake workflow: the mirrored library
+destination is `<lib-dir>/<intake-relative-path>`, including any nested
+directories, and that occupied library PDF or Markdown/TextBundle sidecar is
+still refused even with `--force`. An exact path already inside the configured
+library treats the selected PDF as the library destination: an existing file
+requires `--force`, and there is no second mirrored-destination check. An exact
+path outside both managed directories does not invent or check an unrelated
+library destination.
+
+It uses the frontmatter `title`, first
 H1, or file stem in that order, asks pandoc/xelatex for a hyperlinked
 three-level table of contents and PDF outline bookmarks, and embeds a page-1
 `/Text` annotation containing:
@@ -84,9 +102,13 @@ three-level table of contents and PDF outline bookmarks, and embeds a page-1
 The marker parent is deliberately bare; generated Obsidian frontmatter turns
 it into a wikilink later. `-P, --parent`, `-s, --status`, and `-t, --ref-type`
 override those defaults. `-d, --dry-run` prints the resolved paths and marker
-with `writes: none`. An existing intake target requires `-f, --force`; a
-same-stem Markdown file beside the intake target PDF is always refused because
-the scanner would interpret it as a Highlights sidecar. `BOB_PANDOC_COMMAND`
+with `writes: none`. An existing target PDF requires `-f, --force`; a
+same-stem Markdown file beside the target PDF is always refused because
+Highlights would interpret it as a sidecar. Dry-run and success output show a
+mirrored `library_destination` only for intake targets. Intake and direct
+library targets recommend `bob highlights scan`; a PDF outside both managed
+directories states that recursive scan will not discover it and recommends
+`bob highlights sync <PDF>`. `BOB_PANDOC_COMMAND`
 overrides the pandoc executable, and a render failure includes pandoc's
 diagnostic output.
 `-i, --include-id` opts into a stable marker ID derived from the Markdown
