@@ -1090,7 +1090,17 @@ entries with the same slug collapse to the first row with `match_count`
 reporting how many open Pomodoros share it. Nameable rows represent unnamed or
 named-but-untypeable entries, set `requires_name: true`, use an empty
 `replacement`, and are never filtered out by the query. Updated clients must
-prompt for a name rather than inserting that empty replacement. Pomodoro block-ID
+prompt for a name rather than inserting that empty replacement. When the query
+is a nonempty valid name that would not select an open exact or prefix match,
+and today's ledger can uniquely place a new future entry, a create action is
+inserted before substring-only named suggestions and before nameable rows:
+`creates_pomodoro: true`, canonical selector `replacement`, canonical visible
+`name`, and no `ref`. Accepting that row only canonicalizes the marker; the
+later `bob capture` transaction creates the named placeholder. Exact or prefix
+open-name matches stay first and do not receive a create row. Empty queries
+stay the existing discovery list. A missing daily note, a missing Pomodoros
+section, and multiple open timed Pomodoros stay write-free warnings without a
+create row. Pomodoro block-ID
 completion covers `@route:prefix` and parent-task completion covers
 `@route+prefix`; both are backed by the same open-task scan as
 `bob capture-tasks`. By default both contexts only offer tasks that already
@@ -1153,11 +1163,14 @@ deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
 section candidate has `title` and `level`. A task-section candidate has
 `title` (the original ALL-CAPS body), `slug`, `route`, nullable `block_id`,
 `text` (the parent task description), `line`, and `child_count`; `replacement`
-is the slug. A Pomodoro-name candidate has `ref`, nullable `name`,
-`requires_name`, `line`, `state`, `status_symbol`, nullable `time_range`,
+is the slug. A Pomodoro-name candidate has nullable `ref`, nullable `name`,
+`requires_name`, optional `creates_pomodoro` (absent or false on existing
+rows), nullable `line`, `state`, `status_symbol`, nullable `time_range`,
 `placeholder`, `is_current`, `child_count`, and `match_count`; selectable named
 rows use the slug as `replacement`, while nameable rows use an empty
-replacement that clients must not insert. A task candidate
+replacement that clients must not insert. A create row omits `ref` and `line`,
+sets `creates_pomodoro: true`, and uses the canonical selector as
+`replacement`. Older clients may treat that row as an ordinary replacement. A task candidate
 (`pomodoro_block_id` or `task` context) has `ref`, nullable `block_id`,
 `route`, `requires_block_id`, `status_symbol`, `status_name`, `status_type`,
 `text`, nullable `section`, `depth`, and `child_count`. Identified tasks keep

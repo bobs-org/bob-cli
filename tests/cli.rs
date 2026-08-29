@@ -2912,7 +2912,9 @@ fn capture_complete_help_lists_options_alphabetically() {
     assert!(
         help.contains("cursor-aware completion candidates")
             && help.contains("task_section")
-            && help.contains("capture-task-sections"),
+            && help.contains("capture-task-sections")
+            && help.contains("creates_pomodoro")
+            && help.contains("creates the named placeholder later"),
         "expected capture-complete long help:\n{help}"
     );
     assert_text_order(
@@ -12104,6 +12106,7 @@ fn capture_complete_pomodoro_name_json_lists_named_and_nameable_rows() {
     assert_eq!(candidates[0]["replacement"], "memory");
     assert_eq!(candidates[0]["name"], "MEMORY");
     assert_eq!(candidates[0]["requires_name"], false);
+    assert!(candidates[0].get("creates_pomodoro").is_none());
     assert_eq!(candidates[0]["line"], 2);
     assert_eq!(candidates[0]["state"], "open");
     assert_eq!(candidates[0]["status_symbol"], " ");
@@ -12123,7 +12126,244 @@ fn capture_complete_pomodoro_name_json_lists_named_and_nameable_rows() {
     assert_eq!(candidates[2]["requires_name"], true);
     assert_eq!(candidates[2]["placeholder"], true);
     assert_eq!(candidates[2]["match_count"], 1);
+    assert!(candidates[2].get("creates_pomodoro").is_none());
     assert!(json.get("warnings").is_none(), "{json}");
+}
+
+#[test]
+fn capture_complete_pomodoro_name_json_offers_a_create_row() {
+    let temp = TempDir::new("bob-cli-capture-complete-pomodoro-create");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("dev.md"), "---\ntype: [[area]]\n---\n");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — MEMORY\n",
+            "- [ ] () — NETWORK\n",
+            "- [ ] ()\n",
+            "- [x] () — BUGS\n",
+        ),
+    );
+
+    let complete = |draft: &str| {
+        bob_command()
+            .arg("capture-complete")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-c")
+            .arg(draft.len().to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .env("BOB_DAY_FILE", &day_file)
+            .output()
+            .expect("run Pomodoro-name completion")
+    };
+
+    let novel = complete("x @dev:some-id#future");
+    assert_success(&novel);
+    let novel_json: serde_json::Value =
+        serde_json::from_str(stdout(&novel).trim()).expect("json");
+    assert_eq!(novel_json["schema_version"], 1);
+    assert_eq!(novel_json["context"], "pomodoro_name");
+    let novel_rows = novel_json["candidates"].as_array().expect("candidates");
+    assert_eq!(novel_rows[0]["replacement"], "future");
+    assert_eq!(novel_rows[0]["name"], "FUTURE");
+    assert_eq!(novel_rows[0]["creates_pomodoro"], true);
+    assert_eq!(novel_rows[0]["requires_name"], false);
+    assert_eq!(novel_rows[0]["placeholder"], true);
+    assert!(novel_rows[0].get("ref").is_none(), "{novel_json}");
+    assert!(novel_rows[0].get("line").is_none(), "{novel_json}");
+    assert!(
+        novel_rows.iter().any(|row| row["requires_name"] == true),
+        "{novel_json}"
+    );
+
+    let completed_only = complete("x @dev:some-id#bugs");
+    assert_success(&completed_only);
+    let completed_json: serde_json::Value =
+        serde_json::from_str(stdout(&completed_only).trim()).expect("json");
+    assert_eq!(completed_json["candidates"][0]["creates_pomodoro"], true);
+    assert_eq!(completed_json["candidates"][0]["replacement"], "bugs");
+    assert_eq!(completed_json["candidates"][0]["name"], "BUGS");
+
+    let substring = complete("x @dev:some-id#work");
+    assert_success(&substring);
+    let substring_json: serde_json::Value =
+        serde_json::from_str(stdout(&substring).trim()).expect("json");
+    assert_eq!(substring_json["candidates"][0]["creates_pomodoro"], true);
+    assert_eq!(substring_json["candidates"][0]["replacement"], "work");
+    assert_eq!(substring_json["candidates"][1]["replacement"], "network");
+    assert!(substring_json["candidates"][1]
+        .get("creates_pomodoro")
+        .is_none());
+    assert_eq!(substring_json["candidates"][2]["requires_name"], true);
+
+    for query in ["memory", "mem"] {
+        let draft = format!("x @dev:some-id#{query}");
+        let matched = complete(&draft);
+        assert_success(&matched);
+        let matched_json: serde_json::Value =
+            serde_json::from_str(stdout(&matched).trim()).expect("json");
+        assert_eq!(matched_json["candidates"][0]["replacement"], "memory");
+        assert!(
+            matched_json["candidates"]
+                .as_array()
+                .expect("candidates")
+                .iter()
+                .all(|row| row.get("creates_pomodoro").is_none()),
+            "{query}: {matched_json}"
+        );
+    }
+
+    let empty = complete("x @dev:some-id#");
+    assert_success(&empty);
+    let empty_json: serde_json::Value =
+        serde_json::from_str(stdout(&empty).trim()).expect("json");
+    assert!(
+        empty_json["candidates"]
+            .as_array()
+            .expect("candidates")
+            .iter()
+            .all(|row| row.get("creates_pomodoro").is_none()),
+        "{empty_json}"
+    );
+
+    let invalid = complete("x @dev:some-id#bad_id");
+    assert_success(&invalid);
+    let invalid_json: serde_json::Value =
+        serde_json::from_str(stdout(&invalid).trim()).expect("json");
+    assert!(
+        invalid_json["candidates"]
+            .as_array()
+            .expect("candidates")
+            .iter()
+            .all(|row| row.get("creates_pomodoro").is_none()),
+        "{invalid_json}"
+    );
+
+    let later = "Plan café @dev\n\nFix startup @dev:some-id#future";
+    let later_output = complete(later);
+    assert_success(&later_output);
+    let later_json: serde_json::Value =
+        serde_json::from_str(stdout(&later_output).trim()).expect("json");
+    let hash = later.rfind('#').expect("hash");
+    assert_eq!(
+        later_json["replacement"],
+        serde_json::json!({
+            "start": hash + 1,
+            "end": later.len()
+        })
+    );
+    assert_eq!(later_json["candidates"][0]["creates_pomodoro"], true);
+    assert_eq!(later_json["candidates"][0]["replacement"], "future");
+}
+
+#[test]
+fn capture_complete_pomodoro_name_json_skips_create_when_ledger_cannot_place_it(
+) {
+    let temp = TempDir::new("bob-cli-capture-complete-pomodoro-create-blocked");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("dev.md"), "---\ntype: [[area]]\n---\n");
+    let draft = "x @dev:some-id#future";
+
+    let missing_day = vault.join("2026/20260828.md");
+    let missing = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DAY_FILE", &missing_day)
+        .output()
+        .expect("run missing-day Pomodoro completion");
+    assert_success(&missing);
+    let missing_json: serde_json::Value =
+        serde_json::from_str(stdout(&missing).trim()).expect("json");
+    assert_eq!(missing_json["candidates"], serde_json::json!([]));
+    assert!(
+        missing_json["warnings"][0]
+            .as_str()
+            .expect("warning")
+            .contains("does not exist"),
+        "{missing_json}"
+    );
+
+    let sectionless = vault.join("2026/20260829.md");
+    write_file(&sectionless, "# Day\n");
+    let no_section = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DAY_FILE", &sectionless)
+        .output()
+        .expect("run sectionless Pomodoro completion");
+    assert_success(&no_section);
+    let no_section_json: serde_json::Value =
+        serde_json::from_str(stdout(&no_section).trim()).expect("json");
+    assert_eq!(no_section_json["candidates"], serde_json::json!([]));
+    assert!(
+        no_section_json["warnings"][0]
+            .as_str()
+            .expect("warning")
+            .contains("no Pomodoros section"),
+        "{no_section_json}"
+    );
+
+    let ambiguous_day = vault.join("2026/20260830.md");
+    write_file(
+        &ambiguous_day,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — MEMORY\n",
+            "- [ ] (1000-1030) — BUGS\n",
+            "- [ ] ()\n",
+        ),
+    );
+    let ambiguous = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DAY_FILE", &ambiguous_day)
+        .output()
+        .expect("run ambiguous Pomodoro completion");
+    assert_success(&ambiguous);
+    let ambiguous_json: serde_json::Value =
+        serde_json::from_str(stdout(&ambiguous).trim()).expect("json");
+    assert!(
+        ambiguous_json["candidates"]
+            .as_array()
+            .expect("candidates")
+            .iter()
+            .all(|row| row.get("creates_pomodoro").is_none()),
+        "{ambiguous_json}"
+    );
+    assert!(
+        ambiguous_json["warnings"][0]
+            .as_str()
+            .expect("warning")
+            .contains("multiple open timed Pomodoros"),
+        "{ambiguous_json}"
+    );
 }
 
 #[test]

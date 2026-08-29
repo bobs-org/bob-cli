@@ -487,6 +487,40 @@ pub(crate) fn select_named<'a>(
     NamedSelection::Missing { suggestion }
 }
 
+/// Canonical name for a future Pomodoro `bob capture` would create for
+/// `selector`, if that selector is valid and today's ledger can uniquely
+/// place the new entry. `None` when an open exact/prefix name would win,
+/// the name is empty or invalid, the Pomodoros section is missing, or
+/// multiple open timed Pomodoros make the insertion anchor ambiguous.
+pub(crate) fn named_creation_name(
+    scan: &PomodoroScan,
+    selector: &str,
+) -> Option<String> {
+    if selector.is_empty() {
+        return None;
+    }
+    let name = canonicalize_pomodoro_name(selector)?;
+    if !scan.has_section {
+        return None;
+    }
+    let timed_open = scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == PomodoroState::Open && entry.time_range.is_some()
+        })
+        .count();
+    if timed_open > 1 {
+        return None;
+    }
+    match select_named(scan, selector) {
+        NamedSelection::Found(_) => None,
+        NamedSelection::CompletedOnly(_) | NamedSelection::Missing { .. } => {
+            Some(name)
+        }
+    }
+}
+
 fn select_by_slug<'a>(
     entries: &[&'a PomodoroEntry],
     selector: &str,
@@ -978,6 +1012,11 @@ mod tests {
             select_named(&scan, "zzzz"),
             NamedSelection::Missing { suggestion: None }
         ));
+        assert_eq!(named_creation_name(&scan, "bugs").as_deref(), Some("BUGS"));
+        assert_eq!(named_creation_name(&scan, "zzzz").as_deref(), Some("ZZZZ"));
+        assert_eq!(named_creation_name(&scan, "mem"), None);
+        assert_eq!(named_creation_name(&scan, ""), None);
+        assert_eq!(named_creation_name(&scan, "bad_id"), None);
     }
 
     #[test]
