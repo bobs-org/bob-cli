@@ -247,12 +247,14 @@ name. Inbound `#^prj` links are repointed at the restored task and the
 project note is moved to the trash. Content outside that expected format
 fails with a notice and changes nothing.
 
-A managed source-task schedule log, written as `🗓️ **SCHEDULE LOG**`,
-`**SCHEDULE LOG**`, or legacy `**Schedule log:**`, moves with the source task
+A managed source-task log of either kind — schedule (`🗓️ **SCHEDULE LOG**`,
+`**SCHEDULE LOG**`, or legacy `**Schedule log:**`) or work (`🛠️ **WORK LOG**`,
+`**WORK LOG**`, or legacy `**Work log:**`) — moves with the source task
 instead. It lands as a direct child of the new project's `^prj` task rather
 than a new `## Tasks` task line, preserving its marker spelling and nested
-entries. Later `Ctrl+Shift+P` schedule or priority edits on the `^prj` task
-continue appending to that same log.
+entries, and keeping source order when both kinds are present. Later
+`Ctrl+Shift+P` and `Ctrl+Shift+Enter` edits on the `^prj` task continue
+appending to the matching log.
 
 ### Scheduling from the `^prj` task
 
