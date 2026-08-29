@@ -18,7 +18,7 @@ use super::{
     capture_pomodoros::{
         self, PomodoroEntry, PomodoroRef, PomodoroRefLookup, PomodoroState,
     },
-    capture_task_sections, collect_done, env as bob_env, pomodoro,
+    collect_done, env as bob_env, pomodoro,
     style::Styler,
 };
 
@@ -27,9 +27,6 @@ const COMMAND_NAME: &str = "bob capture-pomodoro-name";
 /// Bump only for a breaking change to the JSON object below; new optional
 /// fields keep version 1.
 const SCHEMA_VERSION: u32 = 1;
-
-const NAME_USAGE: &str = "Pomodoro name must contain only A-Z, 0-9 or \
-`& ' ( ) , . / -` and must start with a letter or digit";
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
@@ -217,18 +214,9 @@ fn name_from_matches(
     matches: &ArgMatches,
 ) -> Result<String, CapturePomodoroNameError> {
     let name = matches.get_one::<String>("name").expect("required");
-    canonicalize_pomodoro_name(name)
-}
-
-fn canonicalize_pomodoro_name(
-    raw: &str,
-) -> Result<String, CapturePomodoroNameError> {
-    let name = capture_language::normalize_task_text(raw).to_ascii_uppercase();
-    if capture_task_sections::is_section_title(&name) {
-        Ok(name)
-    } else {
-        Err(CapturePomodoroNameError::usage(NAME_USAGE))
-    }
+    capture_pomodoros::canonicalize_pomodoro_name(name).ok_or_else(|| {
+        CapturePomodoroNameError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -565,24 +553,34 @@ mod tests {
     #[test]
     fn canonicalizes_names_and_rejects_invalid_ones() {
         assert_eq!(
-            canonicalize_pomodoro_name("  deep   work  ").expect("valid"),
+            capture_pomodoros::canonicalize_pomodoro_name("  deep   work  ")
+                .expect("valid"),
             "DEEP WORK"
         );
         assert_eq!(
-            canonicalize_pomodoro_name("after-tui-fix").expect("hyphen"),
+            capture_pomodoros::canonicalize_pomodoro_name("after-tui-fix")
+                .expect("hyphen"),
             "AFTER-TUI-FIX"
         );
         assert_eq!(
-            canonicalize_pomodoro_name("q&a (draft), v2.0/ok-go")
-                .expect("punctuation"),
+            capture_pomodoros::canonicalize_pomodoro_name(
+                "q&a (draft), v2.0/ok-go"
+            )
+            .expect("punctuation"),
             "Q&A (DRAFT), V2.0/OK-GO"
         );
-        assert_eq!(canonicalize_pomodoro_name("bugs").expect("lower"), "BUGS");
+        assert_eq!(
+            capture_pomodoros::canonicalize_pomodoro_name("bugs")
+                .expect("lower"),
+            "BUGS"
+        );
 
         for invalid in ["", "   ", "123", "snake_case", "hello!", "— DASH"] {
-            let error = canonicalize_pomodoro_name(invalid).expect_err(invalid);
-            assert_eq!(error.kind, CapturePomodoroNameErrorKind::Usage);
-            assert_eq!(error.message, NAME_USAGE);
+            assert!(
+                capture_pomodoros::canonicalize_pomodoro_name(invalid)
+                    .is_none(),
+                "{invalid}"
+            );
         }
     }
 

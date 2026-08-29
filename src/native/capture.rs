@@ -148,15 +148,21 @@ a next-status task and link it from today's Pomodoro ledger. The routed task \
 renders as '- [*] #task <body> [created::YYYY-MM-DD] ^<block-id>' when \
 unscheduled, or '[?]' with any scheduled property before the final block ID. \
 An optional '#<pomodoro>' slug, as in '@<route>:<block-id>#<pomodoro>', \
-targets a named open Pomodoro instead of the implicit current-or-future \
+first targets a named open Pomodoro instead of the implicit current-or-future \
 choice; whole-slug matches beat earlier prefix matches, and a typed '#' with \
-an empty name is incomplete. The daily note comes from \
-BOB_DAY_FILE or <bob-dir>/YYYY/YYYYMMDD.md. Capture prefers the single open \
+an empty name is incomplete. If no open name matches, capture creates a \
+canonical named future entry as '- [ ] () — NAME' and puts the task link \
+beneath it. The daily note comes from \
+BOB_DAY_FILE or <bob-dir>/YYYY/YYYYMMDD.md. Unnamed capture prefers the single open \
 timed entry in its Pomodoros section and otherwise uses the first open entry. \
-A named selector skips the multiple-open-timed guard. \
+Named creation inserts after the current Pomodoro's complete block, else after \
+the last completed Pomodoro's complete block, else before the first Pomodoro. \
+Existing named matches skip the multiple-open-timed guard; named creation uses \
+that guard because it needs an unambiguous current anchor. \
 Both notes are fully validated before either is replaced; duplicate block IDs, \
-missing ledger structure, no open entry, an unknown or completed Pomodoro \
-name, and multiple open timed entries (for unnamed captures) fail \
+duplicate Pomodoro links, missing ledger structure, no eligible unnamed target, \
+invalid Pomodoro names, and multiple open timed entries for implicit or named \
+creation fail \
 without a partial capture.\n\n\
 Use '@<route>^<block-id>' in the same leading or trailing position to create \
 an ordinary open task with the requested trailing Obsidian block ID, without \
@@ -2068,14 +2074,15 @@ enum PomodoroSelection<'a> {
     /// one. Used by the bare `#` Pomodoro-note marker.
     CurrentOrLastCompleted,
     /// Explicit named selector from `@<route>:<id>#<pomodoro>`. Resolves
-    /// without the multiple-open-timed guard that protects implicit choice.
-    Named(&'a str),
+    /// an open match first, otherwise creates a named future entry using the
+    /// current/last-completed/first insertion anchor.
+    NamedOrCreate(&'a str),
 }
 
 impl PomodoroSelection<'_> {
     fn no_entry_message(self) -> &'static str {
         match self {
-            Self::CurrentOrFuture | Self::Named(_) => {
+            Self::CurrentOrFuture | Self::NamedOrCreate(_) => {
                 "Bob daily note has no eligible open Pomodoro"
             }
             Self::CurrentOrLastCompleted => {
@@ -2091,7 +2098,7 @@ fn insert_pomodoro_block_link(
     pomodoro_name: Option<&str>,
 ) -> Result<(String, Placement), CaptureError> {
     let selection = match pomodoro_name {
-        Some(name) => PomodoroSelection::Named(name),
+        Some(name) => PomodoroSelection::NamedOrCreate(name),
         None => PomodoroSelection::CurrentOrFuture,
     };
     let (updated, placement, _, _) = insert_pomodoro_child_block(
@@ -2109,8 +2116,10 @@ fn insert_pomodoro_block_link(
 /// `CurrentOrFuture` prefers the single open timed entry, else the first
 /// open entry. `CurrentOrLastCompleted` prefers the single open timed
 /// entry, else the last completed entry, else the first open entry.
-/// `Named` resolves an explicit slug against open named entries and skips
-/// the multiple-open-timed guard that protects implicit choice.
+/// `NamedOrCreate` resolves an explicit slug against open named entries and
+/// skips the multiple-open-timed guard when it finds one. If no open name
+/// matches, it creates a new named placeholder after the current entry, else
+/// after the last completed entry, else before the first Pomodoro.
 /// Returns the updated contents, the placement, the selected entry's
 /// 0-based line index, and its ledger task text (trimmed of the leading
 /// checkbox but not of its `(start-end)` time range or bracket fields).
@@ -2149,8 +2158,16 @@ fn insert_pomodoro_child_block(
     }
 
     let (selected, selected_text) = match selection {
-        PomodoroSelection::Named(selector) => {
-            select_named_pomodoro(contents, &lines, selector)?
+        PomodoroSelection::NamedOrCreate(selector) => {
+            match select_named_pomodoro(contents, &lines, selector)? {
+                NamedPomodoroResolution::Found(selected) => selected,
+                NamedPomodoroResolution::Create => {
+                    return insert_named_pomodoro_child_block(
+                        contents, block, selector, &lines, &section, &timed,
+                        &completed, &open,
+                    );
+                }
+            }
         }
         PomodoroSelection::CurrentOrFuture
         | PomodoroSelection::CurrentOrLastCompleted => {
@@ -2166,7 +2183,9 @@ fn insert_pomodoro_child_block(
                 PomodoroSelection::CurrentOrLastCompleted => {
                     timed.first().or(completed.last()).or(open.first())
                 }
-                PomodoroSelection::Named(_) => unreachable!("named handled"),
+                PomodoroSelection::NamedOrCreate(_) => {
+                    unreachable!("named handled")
+                }
             }
             .copied()
             .ok_or_else(|| CaptureError::io(selection.no_entry_message()))?
@@ -2207,11 +2226,16 @@ fn insert_pomodoro_child_block(
     ))
 }
 
+enum NamedPomodoroResolution<'a> {
+    Found((usize, &'a str)),
+    Create,
+}
+
 fn select_named_pomodoro<'a>(
     contents: &str,
     lines: &'a [LineSpan<'a>],
     selector: &str,
-) -> Result<(usize, &'a str), CaptureError> {
+) -> Result<NamedPomodoroResolution<'a>, CaptureError> {
     let scan = capture_pomodoros::scan(contents);
     match capture_pomodoros::select_named(&scan, selector) {
         capture_pomodoros::NamedSelection::Found(entry) => {
@@ -2226,66 +2250,127 @@ fn select_named_pomodoro<'a>(
                         "Pomodoro capture invariant failed: named entry is not an open ledger task",
                     )
                 })?;
-            Ok((index, text))
+            Ok(NamedPomodoroResolution::Found((index, text)))
         }
-        capture_pomodoros::NamedSelection::CompletedOnly(entry) => {
-            let name = entry.name.as_deref().unwrap_or(selector);
-            Err(CaptureError::io(format!(
-                "Pomodoro `{name}` is already completed; a Pomodoro-linked task needs an open Pomodoro"
-            )))
-        }
-        capture_pomodoros::NamedSelection::Missing { suggestion } => {
-            Err(missing_named_pomodoro_error(&scan, selector, suggestion))
+        capture_pomodoros::NamedSelection::CompletedOnly(_)
+        | capture_pomodoros::NamedSelection::Missing { .. } => {
+            Ok(NamedPomodoroResolution::Create)
         }
     }
 }
 
-fn missing_named_pomodoro_error(
-    scan: &capture_pomodoros::PomodoroScan,
+fn insert_named_pomodoro_child_block(
+    contents: &str,
+    block: &str,
     selector: &str,
-    suggestion: Option<&capture_pomodoros::PomodoroEntry>,
-) -> CaptureError {
-    let open = scan
-        .entries
-        .iter()
-        .filter(|entry| entry.state == capture_pomodoros::PomodoroState::Open)
-        .collect::<Vec<_>>();
-    if open.is_empty() {
-        return CaptureError::io(
-            "Bob daily note has no eligible open Pomodoro",
-        );
-    }
-    let named = open
-        .iter()
-        .copied()
-        .filter(|entry| entry.selectable)
-        .collect::<Vec<_>>();
-    if named.is_empty() {
-        return CaptureError::io(
-            "Bob daily note has no named open Pomodoro; name one with `bob capture-pomodoro-name`",
-        );
-    }
-    if let Some(suggestion) = suggestion {
-        return CaptureError::io(format!(
-            "Bob daily note has no open Pomodoro named `{selector}`; did you mean `{}`? (run `bob capture-pomodoros` to list them)",
-            suggestion.slug
+    lines: &[LineSpan<'_>],
+    section: &std::ops::Range<usize>,
+    timed: &[(usize, &str)],
+    completed: &[(usize, &str)],
+    open: &[(usize, &str)],
+) -> Result<(String, Placement, usize, String), CaptureError> {
+    if timed.len() > 1 {
+        return Err(CaptureError::io(
+            "Bob daily note has multiple open timed Pomodoros",
         ));
     }
-    const SLUG_LIMIT: usize = 8;
-    let listed = named
-        .iter()
-        .take(SLUG_LIMIT)
-        .map(|entry| format!("`{}`", entry.slug))
-        .collect::<Vec<_>>();
-    let ellipsis = if named.len() > SLUG_LIMIT {
-        ", …"
+
+    let name = capture_pomodoros::canonicalize_pomodoro_name(selector)
+        .ok_or_else(|| {
+            CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
+        })?;
+    let anchor = timed
+        .first()
+        .or_else(|| completed.last())
+        .map(|(index, _)| *index);
+    let insertion_index = anchor
+        .map(|index| task_block_end(lines, index))
+        .or_else(|| open.first().map(|(index, _)| line_start(lines, *index)))
+        .unwrap_or_else(|| line_start(lines, section.start));
+    let indentation = anchor
+        .and_then(|index| {
+            child_bullet_indentation(
+                lines,
+                index + 1,
+                task_block_end(lines, index),
+            )
+        })
+        .or_else(|| {
+            nearby_child_bullet_indentation(lines, section.start, section.end)
+        })
+        .unwrap_or_else(|| "  ".to_string());
+    let ledger_line = capture_pomodoros::format_named_placeholder_line(&name);
+    let indented_block = block
+        .split('\n')
+        .map(|line| format!("{indentation}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let entry_block = format!("{ledger_line}\n{indented_block}");
+    let addition = insertion_text_preserving_line_endings(
+        contents,
+        insertion_index,
+        &entry_block,
+    );
+    let placement = if insertion_index >= contents.len() {
+        Placement::Appended
     } else {
-        ""
+        Placement::Inserted
     };
-    CaptureError::io(format!(
-        "Bob daily note has no open Pomodoro named `{selector}` (open Pomodoros: {}{ellipsis}; run `bob capture-pomodoros` to list them)",
-        listed.join(", ")
-    ))
+    let updated = insert_at(contents, insertion_index, &addition);
+    let created_line = line_index_at_offset(lines, insertion_index);
+    verify_created_named_pomodoro(&updated, created_line, &name, block)?;
+    Ok((updated, placement, created_line, format!("() — {name}")))
+}
+
+fn verify_created_named_pomodoro(
+    contents: &str,
+    created_line: usize,
+    name: &str,
+    block: &str,
+) -> Result<(), CaptureError> {
+    let slug = capture_language::selector_slug(name);
+    let scan = capture_pomodoros::scan(contents);
+    let entry = scan
+        .entries
+        .iter()
+        .find(|entry| entry.line == created_line + 1)
+        .ok_or_else(|| {
+            CaptureError::io(
+                "Pomodoro capture invariant failed: created Pomodoro disappeared",
+            )
+        })?;
+    if entry.state != capture_pomodoros::PomodoroState::Open
+        || entry.name.as_deref() != Some(name)
+        || entry.slug != slug
+        || !entry.placeholder
+        || !entry.selectable
+    {
+        return Err(CaptureError::io(format!(
+            "Pomodoro capture invariant failed: created Pomodoro `{name}` is not selectable"
+        )));
+    }
+
+    let lines = line_spans(contents);
+    let block_start = lines[created_line].end;
+    let block_end = task_block_end(&lines, created_line);
+    if !contents[block_start..block_end].contains(block) {
+        return Err(CaptureError::io(format!(
+            "Pomodoro capture invariant failed: created Pomodoro `{name}` does not own the new child block"
+        )));
+    }
+    Ok(())
+}
+
+fn line_start(lines: &[LineSpan<'_>], index: usize) -> usize {
+    if index == 0 {
+        0
+    } else {
+        lines[index - 1].end
+    }
+}
+
+fn line_index_at_offset(lines: &[LineSpan<'_>], offset: usize) -> usize {
+    lines.iter().take_while(|line| line.end <= offset).count()
 }
 
 fn child_bullet_indentation(
@@ -4527,7 +4612,7 @@ mod tests {
         let (updated, placement, selected, text) = insert_pomodoro_child_block(
             contents,
             "- [[dev#^fix]]",
-            PomodoroSelection::Named("bugs"),
+            PomodoroSelection::NamedOrCreate("bugs"),
         )
         .expect("select named placeholder");
         assert_eq!(placement, Placement::Appended);
@@ -4547,7 +4632,7 @@ mod tests {
         let (updated, _, selected, text) = insert_pomodoro_child_block(
             contents,
             "- [[dev#^now]]",
-            PomodoroSelection::Named("current"),
+            PomodoroSelection::NamedOrCreate("current"),
         )
         .expect("select named timed entry");
         assert_eq!(selected, 1);
@@ -4566,7 +4651,7 @@ mod tests {
         let (updated, _, selected, _) = insert_pomodoro_child_block(
             contents,
             "- [[dev#^dup]]",
-            PomodoroSelection::Named("memory"),
+            PomodoroSelection::NamedOrCreate("memory"),
         )
         .expect("first duplicate wins");
         assert_eq!(selected, 1);
@@ -4582,60 +4667,80 @@ mod tests {
     }
 
     #[test]
-    fn named_pomodoro_link_rejects_completed_only_unknown_and_unnamed() {
+    fn named_pomodoro_link_creates_placeholder_on_no_open_match() {
         let completed = concat!(
             "## Pomodoros\n",
             "- [x] () — BUGS\n",
+            "  - old bug\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - current child\n",
             "- [ ] () — MEMORY\n",
         );
-        let error = insert_pomodoro_child_block(
+        let (updated, placement, selected, text) = insert_pomodoro_child_block(
             completed,
             "- [[dev#^id]]",
-            PomodoroSelection::Named("bugs"),
+            PomodoroSelection::NamedOrCreate("bugs"),
         )
-        .expect_err("completed-only match");
-        assert!(
-            error
-                .message
-                .contains("Pomodoro `BUGS` is already completed"),
-            "{error:?}"
+        .expect("completed-only match seeds a future Pomodoro");
+        assert_eq!(placement, Placement::Inserted);
+        assert_eq!(selected, 5);
+        assert_eq!(text, "() — BUGS");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] () — BUGS\n",
+                "  - old bug\n",
+                "- [ ] (**0900-0930**) — CURRENT\n",
+                "  - current child\n",
+                "- [ ] () — BUGS\n",
+                "  - [[dev#^id]]\n",
+                "- [ ] () — MEMORY\n",
+            )
         );
 
-        let error = insert_pomodoro_child_block(
+        let (updated, _, selected, text) = insert_pomodoro_child_block(
             completed,
             "- [[dev#^id]]",
-            PomodoroSelection::Named("memry"),
+            PomodoroSelection::NamedOrCreate("memry"),
         )
-        .expect_err("unique close match");
-        assert!(
-            error.message.contains("did you mean `memory`?"),
-            "{error:?}"
-        );
+        .expect("nearby name creates rather than suggesting");
+        assert_eq!(selected, 5);
+        assert_eq!(text, "() — MEMRY");
+        assert!(updated.contains("- [ ] () — MEMRY\n  - [[dev#^id]]\n"));
 
         let unnamed = "## Pomodoros\n- [ ] ()\n- [ ] (**0900-0930**)\n";
-        let error = insert_pomodoro_child_block(
+        let (updated, _, selected, text) = insert_pomodoro_child_block(
             unnamed,
             "- [[dev#^id]]",
-            PomodoroSelection::Named("bugs"),
+            PomodoroSelection::NamedOrCreate("bugs"),
         )
-        .expect_err("no named open");
-        assert!(
-            error
-                .message
-                .contains("Bob daily note has no named open Pomodoro"),
-            "{error:?}"
+        .expect("unnamed open Pomodoros still allow creation");
+        assert_eq!(selected, 3);
+        assert_eq!(text, "() — BUGS");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] ()\n",
+                "- [ ] (**0900-0930**)\n",
+                "- [ ] () — BUGS\n",
+                "  - [[dev#^id]]\n",
+            )
         );
 
         let closed = "## Pomodoros\n- [x] () — DONE\n";
-        let error = insert_pomodoro_child_block(
+        let (updated, _, selected, text) = insert_pomodoro_child_block(
             closed,
             "- [[dev#^id]]",
-            PomodoroSelection::Named("bugs"),
+            PomodoroSelection::NamedOrCreate("bugs"),
         )
-        .expect_err("no open entries");
-        assert!(
-            error.message.contains("no eligible open Pomodoro"),
-            "{error:?}"
+        .expect("last completed anchors a new Pomodoro");
+        assert_eq!(selected, 2);
+        assert_eq!(text, "() — BUGS");
+        assert_eq!(
+            updated,
+            "## Pomodoros\n- [x] () — DONE\n- [ ] () — BUGS\n  - [[dev#^id]]\n"
         );
 
         let listed = concat!(
@@ -4644,18 +4749,104 @@ mod tests {
             "- [ ] () — BRAVO\n",
             "- [ ] () — CHARLIE\n",
         );
-        let error = insert_pomodoro_child_block(
+        let (updated, _, selected, text) = insert_pomodoro_child_block(
             listed,
             "- [[dev#^id]]",
-            PomodoroSelection::Named("zzzz"),
+            PomodoroSelection::NamedOrCreate("zzzz"),
         )
-        .expect_err("list open slugs");
-        assert!(
-            error.message.contains("`alpha`")
-                && error.message.contains("`bravo`")
-                && error.message.contains("`charlie`"),
-            "{error:?}"
+        .expect("novel name inserts before first future entry");
+        assert_eq!(selected, 1);
+        assert_eq!(text, "() — ZZZZ");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] () — ZZZZ\n",
+                "  - [[dev#^id]]\n",
+                "- [ ] () — ALPHA\n",
+                "- [ ] () — BRAVO\n",
+                "- [ ] () — CHARLIE\n",
+            )
         );
+    }
+
+    #[test]
+    fn named_pomodoro_link_creates_in_empty_and_crlf_sections() {
+        let empty = concat!("## Pomodoros\n", "## Later\n");
+        let (updated, placement, selected, text) = insert_pomodoro_child_block(
+            empty,
+            "- [[dev#^deep]]",
+            PomodoroSelection::NamedOrCreate("deep-work"),
+        )
+        .expect("create in an empty Pomodoros section");
+        assert_eq!(placement, Placement::Inserted);
+        assert_eq!(selected, 1);
+        assert_eq!(text, "() — DEEP-WORK");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] () — DEEP-WORK\n",
+                "  - [[dev#^deep]]\n",
+                "## Later\n",
+            )
+        );
+
+        let crlf = concat!(
+            "## Pomodoros\r\n",
+            "- [x] Done\r\n",
+            "\t- old child\r\n",
+            "## Later\r\n",
+        );
+        let (updated, placement, selected, text) = insert_pomodoro_child_block(
+            crlf,
+            "- [[dev#^crlf]]",
+            PomodoroSelection::NamedOrCreate("crlf-name"),
+        )
+        .expect("create after completed CRLF block");
+        assert_eq!(placement, Placement::Inserted);
+        assert_eq!(selected, 3);
+        assert_eq!(text, "() — CRLF-NAME");
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\r\n",
+                "- [x] Done\r\n",
+                "\t- old child\r\n",
+                "- [ ] () — CRLF-NAME\r\n",
+                "\t- [[dev#^crlf]]\r\n",
+                "## Later\r\n",
+            )
+        );
+    }
+
+    #[test]
+    fn named_pomodoro_creation_ignores_cancelled_nested_and_fenced_entries() {
+        let contents = concat!(
+            "```md\n",
+            "## Pomodoros\n",
+            "- [x] Fenced done\n",
+            "```\n",
+            "## Pomodoros\n",
+            "- [-] Cancelled ()\n",
+            "  - [x] Nested done (0800-0830)\n",
+            "- [ ] Future ()\n",
+        );
+        let (updated, _, selected, text) = insert_pomodoro_child_block(
+            contents,
+            "- [[dev#^real]]",
+            PomodoroSelection::NamedOrCreate("real"),
+        )
+        .expect("ignored lookalikes do not anchor creation");
+        assert_eq!(selected, 7);
+        assert_eq!(text, "() — REAL");
+        assert!(updated.ends_with(concat!(
+            "- [-] Cancelled ()\n",
+            "  - [x] Nested done (0800-0830)\n",
+            "- [ ] () — REAL\n",
+            "  - [[dev#^real]]\n",
+            "- [ ] Future ()\n",
+        )));
     }
 
     #[test]
@@ -4679,7 +4870,7 @@ mod tests {
         let (updated, _, selected, text) = insert_pomodoro_child_block(
             contents,
             "- [[dev#^id]]",
-            PomodoroSelection::Named("two"),
+            PomodoroSelection::NamedOrCreate("two"),
         )
         .expect("named selector is explicit");
         assert_eq!(selected, 2);
@@ -4692,6 +4883,17 @@ mod tests {
                 "- [ ] (**0900-0930**) — TWO\n",
                 "  - [[dev#^id]]\n",
             )
+        );
+
+        let error = insert_pomodoro_child_block(
+            contents,
+            "- [[dev#^new]]",
+            PomodoroSelection::NamedOrCreate("three"),
+        )
+        .expect_err("named creation needs an unambiguous current anchor");
+        assert!(
+            error.message.contains("multiple open timed Pomodoros"),
+            "{error:?}"
         );
     }
 

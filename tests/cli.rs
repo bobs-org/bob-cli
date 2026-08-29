@@ -5267,7 +5267,7 @@ fn capture_named_pomodoro_dry_run_and_failures_leave_notes_untouched() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@dev:preview#bugs")
+        .arg("@dev:preview#new-name")
         .arg("Preview")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
@@ -5287,9 +5287,9 @@ fn capture_named_pomodoro_dry_run_and_failures_leave_notes_untouched() {
         day_before
     );
 
-    for (name, marker, expected) in [
-        ("unknown", "@dev:new-id#zzzz", "no open Pomodoro named"),
-        ("completed", "@dev:new-id#done", "already completed"),
+    for (name, marker, created_name) in [
+        ("unknown", "@dev:new-id#zzzz", "ZZZZ"),
+        ("completed", "@dev:new-id#done", "DONE"),
     ] {
         let case_dir = TempDir::new(&format!("bob-cli-capture-named-{name}"));
         let vault = case_dir.path().join("vault");
@@ -5317,38 +5317,131 @@ fn capture_named_pomodoro_dry_run_and_failures_leave_notes_untouched() {
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-07-10 13:40:00")
             .output()
-            .expect("run failing named capture");
-        assert_eq!(
-            output.status.code(),
-            Some(1),
-            "{name}: {}",
-            format_output(&output)
-        );
+            .expect("run named capture with new future Pomodoro");
+        assert_success(&output);
         let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
-        assert_eq!(json["ok"], false, "{name}");
-        assert!(
-            json["error"]
-                .as_str()
-                .is_some_and(|error| error.contains(expected)),
-            "{name}: {json}"
-        );
+            serde_json::from_str(stdout(&output).trim()).expect("success JSON");
+        assert_eq!(json["ok"], true, "{name}");
+        assert_eq!(json["block_link"], "[[dev#^new-id]]", "{name}");
         assert_eq!(
             fs::read_to_string(&target).expect("untouched target"),
-            target_before,
+            concat!(
+                "## Tasks\n",
+                "- [ ] #task Existing\n",
+                "- [*] #task Do work [created::2026-07-10] ^new-id\n",
+            ),
             "{name}"
         );
         assert_eq!(
             fs::read_to_string(&day_file).expect("untouched day"),
-            concat!(
-                "## Pomodoros\n",
-                "- [x] () — DONE\n",
-                "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
-                "- [ ] () — BUGS\n",
+            format!(
+                concat!(
+                    "## Pomodoros\n",
+                    "- [x] () — DONE\n",
+                    "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
+                    "- [ ] () — {}\n",
+                    "  - [[dev#^new-id]]\n",
+                    "- [ ] () — BUGS\n",
+                ),
+                created_name
             ),
             "{name}"
         );
     }
+
+    let ambiguous_dir =
+        TempDir::new("bob-cli-capture-named-pomodoro-ambiguous-current");
+    let vault = ambiguous_dir.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    let target_before = "## Tasks\n- [ ] #task Existing\n";
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
+        "- [ ] (**1400-1430** [t:: 30m]) — OTHER\n",
+    );
+    write_file(&target, target_before);
+    write_file(&day_file, day_before);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@dev:new-id#zzzz")
+        .arg("Do work")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("run ambiguous-current named capture");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
+    assert_eq!(json["ok"], false);
+    assert!(
+        json["error"].as_str().is_some_and(
+            |error| error.contains("multiple open timed Pomodoros")
+        ),
+        "{json}"
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("untouched target"),
+        target_before
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("untouched day"),
+        day_before
+    );
+}
+
+#[test]
+fn capture_named_pomodoro_batch_reuses_new_placeholder() {
+    let temp = TempDir::new("bob-cli-capture-named-pomodoro-batch");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "## Tasks\n");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
+            "  - existing context\n",
+        ),
+    );
+
+    let input =
+        "First @dev:first#after-tui-fix\n\nSecond @dev:second#after-tui-fix\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 13:40:00"),
+        input,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
+    let captures = json["captures"].as_array().expect("captures array");
+    assert_eq!(captures.len(), 2);
+    assert_eq!(captures[0]["block_link"], "[[dev#^first]]");
+    assert_eq!(captures[1]["block_link"], "[[dev#^second]]");
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read daily note"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
+            "  - existing context\n",
+            "- [ ] () — AFTER-TUI-FIX\n",
+            "  - [[dev#^first]]\n",
+            "  - [[dev#^second]]\n",
+        )
+    );
 }
 
 #[test]

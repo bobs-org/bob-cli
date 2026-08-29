@@ -190,7 +190,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route#` | Ordinary bullet under any non-`Tasks` heading |
 | `@route^id` | Ordinary task with a user-authored block ID |
 | `@route:id` | Next-status task plus a Pomodoro task link; scheduled tasks start Blocked |
-| `@route:id#pomodoro` | Same, linked under the named open Pomodoro |
+| `@route:id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
@@ -200,8 +200,8 @@ typed on that same item. The whole batch is planned before anything is written.
 
 `#` is not one marker. A trailing bare `#` is a Pomodoro note; `@route#…` selects
 a heading in that note; `@route+id#…` selects an ALL-CAPS child section of that
-task; `@route:id#…` selects a named open Pomodoro. A `#` in the middle of the
-body stays ordinary text. The retired
+task; `@route:id#…` selects a matching named open Pomodoro or creates a named
+future Pomodoro. A `#` in the middle of the body stays ordinary text. The retired
 `@route::id` spelling is not accepted; use `@route^id` for an ordinary task
 with a block ID.
 
@@ -698,7 +698,7 @@ New integrations should rely on the native Rust command behavior.
 The retired `@<route>::<block-id>` capture spelling is no longer accepted; use
 `@<route>^<block-id>` for an ordinary task with a requested block ID, and
 `@<route>:<block-id>` for a Pomodoro-linked next task, optionally with
-`#<pomodoro>` to name the open Pomodoro. Sub-bullet capture uses
+`#<pomodoro>` to select or create a named Pomodoro. Sub-bullet capture uses
 `@<route>+<block-id>`.
 
 ## Release checklist

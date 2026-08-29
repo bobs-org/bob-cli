@@ -19,11 +19,15 @@ use super::{
         leading_spaces_or_tabs_len, line_spans, list_item_body,
         nearest_shallower_list_item_parent, LineSpan,
     },
-    capture_language, env as bob_env, markdown, note_tasks, pomodoro,
+    capture_language, capture_task_sections, env as bob_env, markdown,
+    note_tasks, pomodoro,
     style::{display_width, pad_right, Styler},
 };
 
 const COMMAND_NAME: &str = "bob capture-pomodoros";
+pub(crate) const POMODORO_NAME_USAGE: &str =
+    "Pomodoro name must contain only A-Z, 0-9 or \
+`& ' ( ) , . / -` and must start with a letter or digit";
 
 /// Bump only for a breaking change to the JSON object below; new optional
 /// fields keep version 1.
@@ -243,6 +247,15 @@ fn bounded_warning(message: String) -> String {
     let mut truncated = message.chars().take(LIMIT - 3).collect::<String>();
     truncated.push_str("...");
     truncated
+}
+
+pub(crate) fn canonicalize_pomodoro_name(raw: &str) -> Option<String> {
+    let name = capture_language::normalize_task_text(raw).to_ascii_uppercase();
+    capture_task_sections::is_section_title(&name).then_some(name)
+}
+
+pub(crate) fn format_named_placeholder_line(name: &str) -> String {
+    format!("- [ ] () — {name}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -50,7 +50,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
 | `@route^block-id` | Ordinary open task with a user-authored block ID |
 | `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; scheduled tasks start Blocked (`[?]`) |
-| `@route:block-id#pomodoro` | Same, linked under the named open Pomodoro instead of the implicit current-or-future one |
+| `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route+block-id` | Ordinary child bullet under an existing task |
 | `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
@@ -66,7 +66,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@notes#Ideas` | Bullet under a heading in `notes.md` |
 | `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
 | `@cash+id#requirements` | Child under that task's `REQUIREMENTS` section |
-| `@sase:deep-fix#bugs` | Pomodoro-linked task under the open Pomodoro named `BUGS` |
+| `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
 
 A `#` in the middle of the body stays ordinary text. `@route::id` is retired;
 use `@route^id` for an ordinary task with a block ID.
@@ -486,23 +486,31 @@ to `-` — using the same character set as a task-section selector (`A-Z`,
 document order, else the first slug-prefix match, so `#bugs` and `#bug` both
 reach `BUGS`, and `#memory` still reaches `MEMORY` when `MEMORY WORK` appears
 first. Duplicate names resolve to the first open match; give the second a
-distinct name to target it. Only open (unchecked) top-level entries are
-targetable. A selector that matches only a completed entry reports that fact
-instead of a generic miss. A typed `#` with an empty name is incomplete — it
-never falls back to "any Pomodoro". An explicit name is unambiguous, so it
+distinct name to target it. A typed `#` with an empty name is incomplete — it
+never falls back to "any Pomodoro". An existing open match is explicit, so it
 resolves even when the ledger has more than one open timed entry.
 
-When the name does not match: no open entries keep today's "no eligible open
-Pomodoro" error; open entries with none named point at
-`bob capture-pomodoro-name`; a unique close slug is suggested; otherwise the
-error lists at most eight open slugs.
+When the selector has no matching open entry, capture treats the authored
+component as the name of a new future Pomodoro. The visible name uses the same
+canonicalization as `bob capture-pomodoro-name`: whitespace is collapsed,
+ASCII letters are uppercased, and allowed punctuation is preserved, so
+`#after-tui-fix` creates `AFTER-TUI-FIX`. The new entry renders as
+`- [ ] () — NAME` followed by the captured task link as its child. It is
+inserted after the current Pomodoro's complete block when there is one,
+otherwise after the last completed Pomodoro's complete block, otherwise before
+the first Pomodoro in the section. Completed-only matches create a new future
+Pomodoro with the same canonical name; completed history is not modified.
+Cancelled, nested, and fenced lookalikes are not anchors. Multiple open timed
+entries remain an invariant error when a new named entry would need the
+current-Pomodoro anchor.
 
 The routed note and daily note are both parsed and validated before either is
-replaced. A missing daily note or Pomodoros section, no eligible entry, timed
-ambiguity (unnamed captures only), unknown or completed Pomodoro name,
-malformed marker, or duplicate block ID leaves both notes unchanged.
-`--dry-run` performs the same validation and reports both planned edits without
-writing either file.
+replaced. A missing daily note or Pomodoros section, no eligible unnamed target,
+timed ambiguity for implicit or named-creation captures, invalid Pomodoro name,
+malformed marker, duplicate block ID, or duplicate Pomodoro link leaves both
+notes unchanged. `--dry-run` and multi-item batches use the same staged
+daily-note snapshot as a real capture, so a later batch item can reuse a
+Pomodoro created by an earlier item without creating a duplicate.
 
 ### Sub-bullets under existing tasks
 
