@@ -1,7 +1,8 @@
 # Bob vault Git sync runbook
 
-This runbook covers the Bob vault's git-only sync channel between athena and
-the MacBook. Obsidian Sync is no longer the automation path for `~/bob`.
+This runbook covers the Bob vault's git-only sync channel between athena,
+apollo, and the MacBook. Obsidian Sync is no longer the automation path for
+`~/bob`.
 
 ## Sync cycle
 
@@ -43,8 +44,9 @@ to clear the vault.
 
 ## Credentials
 
-athena uses a repository-scoped deploy key at `~/.ssh/id_bob_vault` and the
-vault remote points at the `github-bob` host alias:
+athena and apollo each use a repository-scoped read-write deploy key at
+`~/.ssh/id_bob_vault` (`bob-vault-sync@athena` and `bob-vault-sync@apollo`)
+and point the vault remote at the `github-bob` host alias:
 
 ```sshconfig
 Host github-bob
@@ -64,12 +66,13 @@ settings. Verify unattended access without a warm shell environment:
 
 ```bash
 env -i HOME=/home/bryan PATH=/usr/bin:/bin git -C ~/bob ls-remote origin master
+ssh apollo 'env -i HOME=/home/bryan PATH=/usr/bin:/bin git -C ~/bob ls-remote origin master'
 ssh mac 'env -i HOME=/Users/bbugyi PATH=/usr/bin:/bin:/usr/local/bin git -C ~/bob ls-remote origin master'
 ```
 
 ## Background triggers
 
-athena runs a user systemd service:
+athena and apollo each run the same user systemd service. On athena:
 
 ```bash
 systemctl --user status bob-vault-sync.service
@@ -78,8 +81,20 @@ systemctl --user disable --now bob-vault-sync.service
 journalctl --user -u bob-vault-sync.service -n 80
 ```
 
+On apollo, prefix the same commands with `ssh apollo`:
+
+```bash
+ssh apollo 'systemctl --user status bob-vault-sync.service'
+ssh apollo 'systemctl --user enable --now bob-vault-sync.service'
+ssh apollo 'systemctl --user disable --now bob-vault-sync.service'
+ssh apollo 'journalctl --user -u bob-vault-sync.service -n 80'
+```
+
 The unit executes `~/bin/bob_vault_sync_watch`, which waits on inotify with a
-15-second timeout, debounces briefly, then runs `bob vault-sync -q`.
+15-second timeout, debounces briefly, then runs `bob vault-sync -q`. That
+inotify wait requires `inotify-tools`. When `inotifywait` is missing, the
+watch script silences the error and the loop degrades to a roughly 5-second
+poll that still runs `bob vault-sync -q` each pass.
 
 The MacBook runs the LaunchAgent at
 `~/Library/LaunchAgents/com.bbugyi.bob-vault-sync.plist`:
@@ -109,7 +124,9 @@ blocks and pushes the maintenance commit afterwards.
 `lit_review/` and `xlib/` are gitignored. `lit_review/` is out-of-band storage:
 copy it explicitly when a second machine needs the PDFs.
 
-`xlib/` is the Highlights intake bridge. The managed Bob config sets:
+`xlib/` is the Highlights intake bridge. apollo's `~/bob` is a full git clone,
+and its gitignored `xlib/` continues to serve as the rendezvous intake for
+`bob_xlib_pull`. The managed Bob config sets:
 
 ```yaml
 highlights:
