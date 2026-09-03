@@ -481,8 +481,8 @@ and reuses their indentation when possible.
 An optional `#<pomodoro>` component names the target: `@sase:deep-fix#bugs`
 links under the open Pomodoro named `BUGS` and leaves the current Pomodoro
 alone. The selector is a slug — ASCII-lowercase, internal whitespace collapsed
-to `-` — using the same character set as a task-section selector (`A-Z`,
-`a-z`, `0-9`, and `& ' ( ) , . / -`). Matching is a whole-slug match in
+to `-` — using `A-Z`, `a-z`, `0-9`, and `& ' ( ) + , . / -`. That is the
+task-section selector character set plus `+`. Matching is a whole-slug match in
 document order, else the first slug-prefix match, so `#bugs` and `#bug` both
 reach `BUGS`, and `#memory` still reaches `MEMORY` when `MEMORY WORK` appears
 first. Duplicate names resolve to the first open match; give the second a
@@ -1271,10 +1271,10 @@ object with `ok`, `schema_version` `1`, `day_file`, `relative_day_file`,
 nullable `name`, `slug`, `selectable`, nullable `time_range`, `placeholder`,
 `is_current`, and `child_count`. The ref is stale-safe: a later write command
 can resolve exact line plus digest first, then a unique shifted digest match.
-Named Pomodoros use the same selector slug grammar as task sections:
-ASCII-lowercase, whitespace collapsed to `-`, with whole-slug matching before
-the first slug-prefix match. Entries whose names produce untypeable slugs stay
-in the list with `selectable: false`.
+Named Pomodoros use the same slug rules as task sections — ASCII-lowercase,
+whitespace collapsed to `-`, whole-slug matching before the first slug-prefix
+match — with `+` also allowed in the selector. Entries whose names produce
+untypeable slugs stay in the list with `selectable: false`.
 
 `capture-task-sections` lists the ALL-CAPS direct-child section bullets of one
 parent task in document order. Exactly one of `--block-id`/`-i` or
@@ -1325,8 +1325,10 @@ Assigns a canonical ALL-CAPS name to one open, unnamed Pomodoro in today's
 daily note. This is the only write needed to turn a nameable Pomodoro picker
 candidate into a selectable named Pomodoro. The command canonicalizes `--name`
 by trimming, collapsing internal whitespace to a single space, and
-ASCII-uppercasing, then requires the same title grammar as task sections
-(`A-Z`, `0-9`, spaces, and `& ' ( ) , . / -`, starting with a letter or digit).
+ASCII-uppercasing, then requires the task-section title grammar plus `+`
+(`A-Z`, `0-9`, spaces, and `& ' ( ) + , . / -`, starting with a letter or
+digit). `+` is allowed in the rest of a Pomodoro name, not as the first
+character.
 Uppercasing is deliberate: the vault's named-Pomodoro convention is ALL-CAPS,
 and case cannot affect the selector slug.
 

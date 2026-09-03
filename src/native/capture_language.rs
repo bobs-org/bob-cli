@@ -1338,12 +1338,22 @@ fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
     })
 }
 
-/// Return whether one already-whitespace-free selector component is typeable.
+/// Return whether one already-whitespace-free selector component is typeable
+/// as a task-section third component (`@route+id#section`).
 ///
-/// This is the shared third-component grammar for `@route+id#section` and
-/// `@route:id#pomodoro`: ASCII alphanumerics plus `& ' ( ) , . / -`.
+/// ASCII alphanumerics plus `& ' ( ) , . / -`. The Pomodoro-name third
+/// component (`@route:id#pomodoro`) is this grammar plus `+`; see
+/// [`is_pomodoro_selector_component`].
 pub(crate) fn is_selector_component(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(is_selector_byte)
+}
+
+/// Return whether one already-whitespace-free selector component is typeable
+/// as a Pomodoro-name third component (`@route:id#pomodoro`).
+///
+/// Same bytes as [`is_selector_component`], plus `+`.
+pub(crate) fn is_pomodoro_selector_component(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(is_pomodoro_selector_byte)
 }
 
 fn is_selector_byte(byte: u8) -> bool {
@@ -1352,6 +1362,10 @@ fn is_selector_byte(byte: u8) -> bool {
             byte,
             b'&' | b'\'' | b'(' | b')' | b',' | b'.' | b'/' | b'-'
         )
+}
+
+fn is_pomodoro_selector_byte(byte: u8) -> bool {
+    is_selector_byte(byte) || byte == b'+'
 }
 
 fn is_sub_bullet_marker_candidate(token: &str) -> bool {
@@ -1471,7 +1485,7 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
         Some("") => {
             return Err(POMODORO_NAME_REQUIRED_ERROR.to_string());
         }
-        Some(name) if !is_selector_component(name) => {
+        Some(name) if !is_pomodoro_selector_component(name) => {
             return Err(POMODORO_NAME_ERROR.to_string());
         }
         Some(name) => Some(name.to_string()),
@@ -1792,7 +1806,8 @@ const POMODORO_ROUTE_ERROR: &str =
 const POMODORO_BLOCK_ID_ERROR: &str =
     "Pomodoro capture block ID must be non-empty and contain only A-Z, a-z, 0-9, '_' or '-'";
 const POMODORO_NAME_ERROR: &str =
-    "Pomodoro capture name must contain only A-Z, a-z, 0-9 or `& ' ( ) , . / -`";
+    "Pomodoro capture name must contain only A-Z, a-z, 0-9 or \
+`& ' ( ) + , . / -`";
 const POMODORO_NAME_REQUIRED_ERROR: &str =
     "Pomodoro capture requires a Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)";
 
@@ -2942,9 +2957,9 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             POMODORO_BLOCK_ID_ERROR,
         ));
     }
-    if name_part
-        .is_some_and(|name| !name.is_empty() && !is_selector_component(name))
-    {
+    if name_part.is_some_and(|name| {
+        !name.is_empty() && !is_pomodoro_selector_component(name)
+    }) {
         return TokenParse::Invalid(token_diagnostic(
             token,
             "invalid_pomodoro_name",
@@ -5021,6 +5036,9 @@ mod tests {
             "Do thing @Dev:Foo-Bar#bugs",
             "@Dev:Foo-Bar#bugs Do thing s:2",
             "Do thing @!Dev:Foo-Bar#bugs s:2",
+            "Do work @sase:deep-fix#c++",
+            "@sase:deep-fix#c++ Do work",
+            "Do work @sase:deep-fix#bob+sase",
             "Called today @Cash+Goog-Exit",
             "Called today %log @Cash+Goog-Exit",
             "Called today @Cash+Goog-Exit s:1",
@@ -5276,6 +5294,107 @@ mod tests {
         let pomodoro = editor("Do work @route:id");
         assert_eq!(pomodoro.mode, EditorMode::PomodoroTask);
         assert_eq!(pomodoro.block_id.as_deref(), Some("id"));
+    }
+
+    #[test]
+    fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
+        assert!(is_pomodoro_selector_component("c++"));
+        assert!(is_pomodoro_selector_component("bob+sase"));
+        assert!(is_pomodoro_selector_component("a+b"));
+        assert!(!is_selector_component("c++"));
+        assert!(!is_selector_component("a+b"));
+
+        let parsed = parse_capture_text_with_clip_control(
+            "Do work @sase:deep-fix#c++",
+            None,
+            None,
+            true,
+        )
+        .expect("pomodoro with plus name");
+        assert_eq!(parsed.route.as_deref(), Some("sase"));
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::Pomodoro {
+                block_id: "deep-fix".to_string(),
+                pomodoro_name: Some("c++".to_string()),
+            }
+        );
+
+        let infix = parse_capture_text_with_clip_control(
+            "Do work @sase:deep-fix#bob+sase",
+            None,
+            None,
+            true,
+        )
+        .expect("pomodoro with infix plus");
+        assert_eq!(
+            infix.kind,
+            CaptureKind::Pomodoro {
+                block_id: "deep-fix".to_string(),
+                pomodoro_name: Some("bob+sase".to_string()),
+            }
+        );
+
+        let sub_bullet = parse_capture_text_with_clip_control(
+            "Add context @sase+goog-exit#a+b",
+            None,
+            None,
+            true,
+        );
+        assert_eq!(sub_bullet, Err(SUB_BULLET_SECTION_ERROR.to_string()));
+
+        let parse = editor("Do work @sase:deep-fix#c++");
+        assert_eq!(parse.mode, EditorMode::PomodoroTask);
+        assert_eq!(parse.section.as_deref(), Some("c++"));
+        assert!(parse.diagnostics.is_empty());
+        assert_eq!(
+            span_kinds(&parse),
+            vec![
+                SpanKind::PomodoroRoute,
+                SpanKind::PomodoroBlockId,
+                SpanKind::PomodoroName,
+            ]
+        );
+        let name_span = parse
+            .spans
+            .iter()
+            .find(|span| span.kind == SpanKind::PomodoroName)
+            .expect("pomodoro_name span");
+        assert_eq!(
+            &"Do work @sase:deep-fix#c++"[name_span.start..name_span.end],
+            "c++"
+        );
+
+        let rejected = editor("Add context @sase+goog-exit#a+b");
+        assert_eq!(codes(&rejected), vec!["invalid_sub_bullet_section"]);
+
+        let incomplete = editor("Body @:#a+b");
+        assert_eq!(incomplete.mode, EditorMode::Incomplete);
+        assert_eq!(incomplete.section.as_deref(), Some("a+b"));
+        assert!(incomplete.diagnostics.is_empty());
+        assert_eq!(incomplete.needs, vec![Need::Route, Need::PomodoroId]);
+
+        let raw = "Do work @sase:deep-fix#c+";
+        let hash = raw.find('#').expect("hash");
+        let completion = field(raw, raw.len()).expect("pomodoro name");
+        assert_eq!(completion.context, CompletionContext::PomodoroName);
+        assert_eq!(completion.query, "c+");
+        assert_eq!(completion.replacement, (hash + 1, raw.len()));
+
+        let inside = "Do work @sase:deep-fix#c++";
+        let inside_hash = inside.find('#').expect("hash");
+        let inside_field =
+            field(inside, inside_hash + 2).expect("cursor inside c++");
+        assert_eq!(inside_field.context, CompletionContext::PomodoroName);
+        assert_eq!(inside_field.query, "c");
+        assert_eq!(
+            inside_field.replacement,
+            (inside_hash + 1, inside.len())
+        );
+        assert_eq!(
+            &inside[inside_field.replacement.0..inside_field.replacement.1],
+            "c++"
+        );
     }
 
     #[test]

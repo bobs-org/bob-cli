@@ -27,7 +27,7 @@ use super::{
 const COMMAND_NAME: &str = "bob capture-pomodoros";
 pub(crate) const POMODORO_NAME_USAGE: &str =
     "Pomodoro name must contain only A-Z, 0-9 or \
-`& ' ( ) , . / -` and must start with a letter or digit";
+`& ' ( ) + , . / -` and must start with a letter or digit";
 
 /// Bump only for a breaking change to the JSON object below; new optional
 /// fields keep version 1.
@@ -251,7 +251,7 @@ fn bounded_warning(message: String) -> String {
 
 pub(crate) fn canonicalize_pomodoro_name(raw: &str) -> Option<String> {
     let name = capture_language::normalize_task_text(raw).to_ascii_uppercase();
-    capture_task_sections::is_section_title(&name).then_some(name)
+    capture_task_sections::is_pomodoro_name(&name).then_some(name)
 }
 
 pub(crate) fn format_named_placeholder_line(name: &str) -> String {
@@ -399,7 +399,7 @@ pub(crate) fn scan(contents: &str) -> PomodoroScan {
             .map(capture_language::selector_slug)
             .unwrap_or_default();
         let selectable = parts.name.is_some()
-            && capture_language::is_selector_component(&slug);
+            && capture_language::is_pomodoro_selector_component(&slug);
         entries.push(PomodoroEntry {
             pomodoro_ref: PomodoroRef {
                 line: index + 1,
@@ -972,6 +972,43 @@ mod tests {
         assert!(!entries[2].selectable);
         assert_eq!(entries[3].slug, "");
         assert!(!entries[3].selectable);
+    }
+
+    #[test]
+    fn plus_names_are_selectable_and_prefix_matched() {
+        let existing = scan(concat!(
+            "## Pomodoros\n",
+            "- [ ] () — C++\n",
+            "- [ ] () — BOB+SASE\n",
+        ));
+        assert_eq!(existing.entries[0].slug, "c++");
+        assert!(existing.entries[0].selectable);
+        assert_eq!(existing.entries[1].slug, "bob+sase");
+        assert!(existing.entries[1].selectable);
+        assert!(matches!(
+            select_named(&existing, "c++"),
+            NamedSelection::Found(entry) if entry.name.as_deref() == Some("C++")
+        ));
+        assert!(matches!(
+            select_named(&existing, "c+"),
+            NamedSelection::Found(entry) if entry.name.as_deref() == Some("C++")
+        ));
+        assert!(matches!(
+            select_named(&existing, "bob+sase"),
+            NamedSelection::Found(entry)
+                if entry.name.as_deref() == Some("BOB+SASE")
+        ));
+        assert_eq!(named_creation_name(&existing, "c++"), None);
+
+        let novel = scan("## Pomodoros\n- [ ] () — MEMORY\n");
+        assert_eq!(
+            named_creation_name(&novel, "c++").as_deref(),
+            Some("C++")
+        );
+        assert_eq!(
+            named_creation_name(&novel, "bob+sase").as_deref(),
+            Some("BOB+SASE")
+        );
     }
 
     #[test]

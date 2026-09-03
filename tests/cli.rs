@@ -11386,6 +11386,101 @@ fn capture_pomodoro_name_assigns_and_dry_runs_lf_and_crlf_notes() {
 }
 
 #[test]
+fn capture_pomodoro_name_plus_is_selectable_and_targetable() {
+    let help = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-pomodoro-name --help");
+    assert_success(&help);
+    let help_text = stdout(&help);
+    assert!(
+        help_text.contains("& ' ( ) + , . / -"),
+        "expected + in Pomodoro name charset:\n{help_text}"
+    );
+
+    let temp = TempDir::new("bob-cli-capture-pomodoro-name-plus");
+    let vault = temp.path().join("vault");
+    let target = vault.join("sase.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# Sase\n## Tasks\n- [ ] #task Existing\n");
+    write_file(
+        &day_file,
+        concat!(
+            "# 2026-09-03\n",
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
+            "  - existing context\n",
+            "- [ ] ()\n",
+        ),
+    );
+    let unnamed_ref = capture_pomodoro_ref("- [ ] ()", 5);
+
+    let named = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&unnamed_ref)
+        .arg("-n")
+        .arg("c++")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("write capture-pomodoro-name c++");
+    assert_success(&named);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&named).trim()).expect("json");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["name"], "C++");
+    assert_eq!(json["slug"], "c++");
+    assert_eq!(json["pomodoro"]["selectable"], true);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read"),
+        concat!(
+            "# 2026-09-03\n",
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
+            "  - existing context\n",
+            "- [ ] () — C++\n",
+        )
+    );
+
+    let captured = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@sase:deep-fix#c++")
+        .arg("Some")
+        .arg("plus")
+        .arg("task.")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-03 09:15:00")
+        .output()
+        .expect("capture into named C++ pomodoro");
+    assert_success(&captured);
+    let captured_json: serde_json::Value =
+        serde_json::from_str(stdout(&captured).trim()).expect("capture json");
+    assert_eq!(captured_json["ok"], true);
+    assert_eq!(captured_json["kind"], "pomodoro_task");
+    assert_eq!(captured_json["block_id"], "deep-fix");
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read daily note"),
+        concat!(
+            "# 2026-09-03\n",
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
+            "  - existing context\n",
+            "- [ ] () — C++\n",
+            "  - [[sase#^deep-fix]]\n",
+        )
+    );
+}
+
+#[test]
 fn capture_pomodoro_name_rejects_write_free_failures() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-name-errors");
     let vault = temp.path().join("vault");

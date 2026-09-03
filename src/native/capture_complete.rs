@@ -1839,6 +1839,42 @@ mod tests {
     }
 
     #[test]
+    fn pomodoro_name_completion_treats_plus_names_as_named_not_nameable() {
+        let existing = capture_pomodoros::scan(concat!(
+            "## Pomodoros\n",
+            "- [ ] () — C++\n",
+            "- [ ] ()\n",
+            "- [ ] () — SNAKE_CASE\n",
+        ));
+        let candidates = pomodoro_name_candidates_from_scan(&existing, "c+");
+        assert_eq!(candidates[0].replacement, "c++");
+        assert_eq!(candidates[0].name.as_deref(), Some("C++"));
+        assert!(!candidates[0].requires_name);
+        assert!(!candidates[0].creates_pomodoro);
+        assert!(candidates.iter().any(|row| row.requires_name));
+        assert!(candidates
+            .iter()
+            .filter(|row| row.replacement == "c++")
+            .all(|row| !row.requires_name));
+
+        let novel = capture_pomodoros::scan(concat!(
+            "## Pomodoros\n",
+            "- [ ] () — MEMORY\n",
+            "- [ ] ()\n",
+        ));
+        let created = pomodoro_name_candidates_from_scan(&novel, "c++");
+        assert_eq!(created[0].replacement, "c++");
+        assert_eq!(created[0].name.as_deref(), Some("C++"));
+        assert!(created[0].creates_pomodoro);
+        assert!(!created[0].requires_name);
+
+        let infix = pomodoro_name_candidates_from_scan(&novel, "bob+sase");
+        assert_eq!(infix[0].replacement, "bob+sase");
+        assert_eq!(infix[0].name.as_deref(), Some("BOB+SASE"));
+        assert!(infix[0].creates_pomodoro);
+    }
+
+    #[test]
     fn pomodoro_name_completion_skips_creation_when_the_ledger_cannot_place_it()
     {
         let missing_section = capture_pomodoros::scan("# Day\n");

@@ -139,7 +139,7 @@ fn name_arg() -> Arg {
         .short('n')
         .value_name("NAME")
         .required(true)
-        .help("Pomodoro name; letters, numbers, spaces, and & ' ( ) , . / -")
+        .help("Pomodoro name; letters, numbers, spaces, and & ' ( ) + , . / -")
 }
 
 fn pomodoro_ref_arg() -> Arg {
@@ -575,13 +575,56 @@ mod tests {
             "BUGS"
         );
 
-        for invalid in ["", "   ", "123", "snake_case", "hello!", "— DASH"] {
+        assert_eq!(
+            capture_pomodoros::canonicalize_pomodoro_name("c++").expect("plus"),
+            "C++"
+        );
+        assert_eq!(
+            capture_pomodoros::canonicalize_pomodoro_name("bob+sase")
+                .expect("infix plus"),
+            "BOB+SASE"
+        );
+
+        for invalid in [
+            "",
+            "   ",
+            "123",
+            "snake_case",
+            "hello!",
+            "— DASH",
+            "+",
+            "+A",
+            "++",
+        ] {
             assert!(
                 capture_pomodoros::canonicalize_pomodoro_name(invalid)
                     .is_none(),
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn names_a_placeholder_with_a_plus_and_returns_a_selectable_slug() {
+        let temp = TempDir::new("bob-cli-capture-pomodoro-name-plus");
+        let day_file = temp.path().join("2026/20260828.md");
+        let original = "## Pomodoros\n- [ ] ()\n";
+        write_file(&day_file, original);
+        let pomodoro_ref = pomodoro_ref_for(original, 2);
+
+        let result = assign_at(
+            &day_file,
+            request(temp.path(), pomodoro_ref, "C++", false),
+        )
+        .expect("assign");
+
+        assert_eq!(result.name, "C++");
+        assert_eq!(result.slug, "c++");
+        assert!(result.pomodoro.selectable);
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("read"),
+            "## Pomodoros\n- [ ] () — C++\n"
+        );
     }
 
     #[test]

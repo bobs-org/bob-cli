@@ -1,8 +1,9 @@
 //! Task-section scanner and read-only `bob capture-task-sections` CLI.
 //!
-//! This module owns the title predicate, checkbox detection, direct-child
-//! enumeration, selector matching, and insertion geometry. The shared
-//! selector slug grammar lives in `capture_language`.
+//! This module owns the title predicates (task-section titles and the
+//! Pomodoro-name sibling that additionally allows `+`), checkbox detection,
+//! direct-child enumeration, selector matching, and insertion geometry. The
+//! shared selector slug grammar lives in `capture_language`.
 
 use std::{ffi::OsString, fs, io, iter, path::PathBuf};
 
@@ -214,7 +215,29 @@ fn parse_task_section_title(body: &str) -> Option<&str> {
     is_section_title(title).then_some(title)
 }
 
+/// Whether `title` is a task-section title.
+///
+/// Task-section titles do not allow `+`. The Pomodoro-name grammar is this
+/// predicate plus `+` in the non-leading position; `+` is excluded here
+/// because [`parse_task_section_title`] uses this predicate to decide
+/// whether an ordinary child bullet is a section.
 pub(crate) fn is_section_title(title: &str) -> bool {
+    is_title(title, false)
+}
+
+/// Whether `name` is a canonical Pomodoro name.
+///
+/// The Pomodoro name is the task-section title grammar plus `+` in the
+/// non-leading position. A name must still start with an ASCII uppercase
+/// letter or digit and must still contain at least one letter. `+` is
+/// deliberately excluded from section titles because
+/// [`parse_task_section_title`] uses that predicate to decide whether an
+/// ordinary child bullet is a section.
+pub(crate) fn is_pomodoro_name(name: &str) -> bool {
+    is_title(name, true)
+}
+
+fn is_title(title: &str, allow_plus: bool) -> bool {
     let mut chars = title.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -224,7 +247,7 @@ pub(crate) fn is_section_title(title: &str) -> bool {
     }
     let mut has_letter = first.is_ascii_uppercase();
     for character in chars {
-        if !is_section_title_rest(character) {
+        if !is_title_rest(character, allow_plus) {
             return false;
         }
         has_letter |= character.is_ascii_uppercase();
@@ -236,12 +259,13 @@ fn is_section_title_first(character: char) -> bool {
     character.is_ascii_uppercase() || character.is_ascii_digit()
 }
 
-fn is_section_title_rest(character: char) -> bool {
+fn is_title_rest(character: char, allow_plus: bool) -> bool {
     is_section_title_first(character)
         || matches!(
             character,
             ' ' | '\t' | '&' | '\'' | '(' | ')' | ',' | '.' | '/' | '-'
         )
+        || (allow_plus && character == '+')
 }
 
 /// Plugin `PROJECT_CHILD_LIST_ITEM_RE` checkbox: `[x]` plus following
@@ -845,8 +869,22 @@ mod tests {
             "`CODE`",
             "FOO_BAR",
             "A_B",
+            "A+B",
+            "C++",
+            "BOB+SASE",
         ] {
             assert_eq!(parse_task_section_title(body), None, "{body:?}");
+        }
+
+        assert!(is_pomodoro_name("C++"));
+        assert!(is_pomodoro_name("BOB+SASE"));
+        assert!(is_pomodoro_name("A+B"));
+        assert!(!is_section_title("C++"));
+        assert!(!is_section_title("BOB+SASE"));
+        assert!(!is_section_title("A+B"));
+        for invalid in ["+", "+A", "++"] {
+            assert!(!is_pomodoro_name(invalid), "{invalid}");
+            assert!(!is_section_title(invalid), "{invalid}");
         }
 
         let contents = concat!(
@@ -861,6 +899,7 @@ mod tests {
             "\t- #TODO\n",
             "\t- REQUIREMENTS ^abc\n",
             "\t- `CODE`\n",
+            "\t- A+B\n",
             "\t- NOTES\n",
         );
         assert_eq!(
