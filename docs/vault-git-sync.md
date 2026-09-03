@@ -117,10 +117,13 @@ highlights:
 ```
 
 On the MacBook, the 15-minute `~/bin/maybe_bob_highlights_sync -w` cron job runs
-`bob highlights scan`. The pre-scan command pulls `home:bob/xlib/` into the
-MacBook's `~/bob/xlib/` with `rsync --remove-source-files`, removes empty source
-directories on athena, and lets `bob highlights scan` move the PDFs into `lib/`
-and write the matching `ref/` notes.
+`bob highlights scan`. The pre-scan command picks the first reachable source from
+`xhome` (athena over Tailscale) and `apollo` (the rendezvous host), pulls that
+host's `bob/xlib/` into the MacBook's `~/bob/xlib/` with
+`rsync --remove-source-files`, removes empty source directories on that host, and
+lets `bob highlights scan` move the PDFs into `lib/` and write the matching
+`ref/` notes. When no candidate answers, the hook exits 0 and the scan proceeds
+with whatever is already local.
 
 Useful checks:
 
