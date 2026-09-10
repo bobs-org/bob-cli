@@ -110,9 +110,11 @@ Route names use `A-Z`, `a-z`, `0-9`, `_`, and `-`, are lower-cased, and write
 to `<route>.md` at the vault root. Existing target files, including
 `mac_inbox.md`, prefer a Markdown `Tasks` section: new captures insert after
 the last top-level `#task` block in that section, or after one blank line below
-the `Tasks` heading when the section has no tasks yet. Files without a `Tasks`
-section keep the older fallback of inserting after the last top-level `#task`
-block and its indented continuation lines, or appending at EOF.
+the `Tasks` heading when the section has no tasks yet. When
+`bob task-status-hooks` has generated a status-count badge row directly below
+the heading, the empty-section insertion point is below that row. Files without
+a `Tasks` section keep the older fallback of inserting after the last top-level
+`#task` block and its indented continuation lines, or appending at EOF.
 
 ### Global destination declaration
 

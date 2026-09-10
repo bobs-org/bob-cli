@@ -1,4 +1,6 @@
 ## Tasks
+<!-- bob:task-status-badges:v1 -->
+[`⚪ 1 open`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Tasks#Blocked) · [`🟢 2 done/canceled`](#Tasks#Done%20&%20Canceled)
 
 Short context for this project.
 

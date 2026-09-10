@@ -1306,6 +1306,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         project_group["heading_ancestry"],
         serde_json::json!(["Alpha", "Tasks"])
     );
+    assert_eq!(project_group["open"], 2);
     assert_eq!(project_group["next_and_in_progress"], 1);
     assert_eq!(project_group["blocked"], 1);
     assert_eq!(project_group["done_and_canceled"], 2);
@@ -1339,6 +1340,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     assert!(
         human.contains("would group task sections")
             && human.contains("alpha.md")
+            && human.contains("open 2 · next/in progress 1")
             && human.contains("Summary:")
             && !human.contains("already in sync, no changes"),
         "unexpected grouping human dry-run:\n{}",
@@ -1376,6 +1378,8 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         &project_after,
         &[
             "## Tasks",
+            "<!-- bob:task-status-badges:v1 -->",
+            "[`⚪ 2 open`](#Alpha#Tasks)",
             "Project context.",
             "- [ ] #task Keep in intake ^ready",
             "- [ ] #task Stale work clears ^stale",
@@ -1396,6 +1400,8 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         &area_after,
         &[
             "## Tasks",
+            "<!-- bob:task-status-badges:v1 -->",
+            "[`⚪ 0 open`](#Home#Tasks)",
             "### Next & In Progress",
             "- [*] #task Already next ^already",
             "- [/] #task Keep working ^working",
@@ -1404,7 +1410,8 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     for path in [&daily, &ordinary, &archived, &generated, &template] {
         let contents = fs::read_to_string(path).unwrap();
         assert!(
-            !contents.contains("bob:task-status-group"),
+            !contents.contains("bob:task-status-group")
+                && !contents.contains("bob:task-status-badges"),
             "{} should not receive generated groups",
             path.display()
         );
@@ -1444,6 +1451,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     assert_text_order(
         &project_after_capture,
         &[
+            "[`⚪ 2 open`](#Alpha#Tasks)",
             "- [ ] #task Stale work clears ^stale",
             "- [ ] #task Captured ready [created::2026-07-10] ^captured",
             "### Next & In Progress",
@@ -1460,11 +1468,14 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         .output()
         .expect("rerun after ready capture");
     assert_success(&after_ready_capture);
+    let after_ready_capture_report = stdout(&after_ready_capture);
     assert!(
-        stdout(&after_ready_capture).contains("already in sync, no changes"),
-        "Ready capture should remain in intake:\n{}",
+        after_ready_capture_report.contains("open 3 · next/in progress 1"),
+        "Ready capture should refresh the open badge:\n{}",
         format_output(&after_ready_capture)
     );
+    let project_after_badge_refresh = fs::read_to_string(&project).unwrap();
+    assert!(project_after_badge_refresh.contains("[`⚪ 3 open`](#Alpha#Tasks)"));
 
     let daily_with_captured = fs::read_to_string(&daily).unwrap().replace(
         "  - [[Areas/Home#^working]]\n\n## Tasks",
@@ -1485,6 +1496,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     assert_text_order(
         &project_after_promotion,
         &[
+            "[`⚪ 2 open`](#Alpha#Tasks)",
             "### Next & In Progress",
             "- [*] #task Captured ready [created::2026-07-10] ^captured",
             "- [*] #task Promote from Pomodoro ^promote",
@@ -1498,6 +1510,7 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260710.md");
     let area = vault.join("area.md");
+    let duplicate_badges = vault.join("badges.md");
 
     write_file(
         &daily,
@@ -1514,6 +1527,19 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
             "- [x] #task Cannot have generated child groups ^done\n",
         ),
     );
+    let duplicate_badges_original = concat!(
+        "---\n",
+        "type: [[area]]\n",
+        "---\n",
+        "# Badges\n\n",
+        "## Tasks\n",
+        "<!-- bob:task-status-badges:v1 -->\n",
+        "[`stale`](#Badges#Tasks)\n",
+        "<!-- bob:task-status-badges:v1 -->\n",
+        "\n",
+        "- [*] #task Next task ^next\n",
+    );
+    write_file(&duplicate_badges, duplicate_badges_original);
 
     let json_output = bob_command()
         .arg("task-status-hooks")
@@ -1530,13 +1556,28 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
         serde_json::from_str(stdout(&json_output).trim())
             .expect("grouping warning JSON");
     assert_eq!(json["grouped_task_sections"], serde_json::json!([]));
-    assert_eq!(json["grouping_warnings"].as_array().unwrap().len(), 1);
-    assert_eq!(json["grouping_warnings"][0]["path"], "area.md");
-    assert_eq!(json["grouping_warnings"][0]["code"], "h6_container");
+    assert_eq!(json["grouping_warnings"].as_array().unwrap().len(), 2);
+    assert!(json["grouping_warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["path"] == "area.md"
+            && warning["code"] == "h6_container"));
+    assert!(json["grouping_warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["path"] == "badges.md"
+            && warning["code"] == "malformed_badge_marker"));
     assert!(
-        stderr(&json_output).contains("H6 heading"),
+        stderr(&json_output).contains("H6 heading")
+            && stderr(&json_output).contains("task-status-badges"),
         "expected stderr warning:\n{}",
         format_output(&json_output)
+    );
+    assert_eq!(
+        fs::read_to_string(&duplicate_badges).unwrap(),
+        duplicate_badges_original
     );
 
     let human_output = bob_command()
@@ -1554,7 +1595,8 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
         format_output(&human_output)
     );
     assert!(
-        stderr(&human_output).contains("H6 heading"),
+        stderr(&human_output).contains("H6 heading")
+            && stderr(&human_output).contains("task-status-badges"),
         "expected human stderr warning:\n{}",
         format_output(&human_output)
     );

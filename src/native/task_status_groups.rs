@@ -6,6 +6,7 @@
 //! exercise the API until then.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::ops::Range;
 
 use super::markdown;
@@ -22,6 +23,8 @@ pub(crate) const MARKER_CLOSED: &str =
     "<!-- bob:task-status-group:v1:closed -->";
 
 const MARKER_PREFIX: &str = "bob:task-status-group:v1:";
+pub(crate) const BADGE_MARKER: &str = "<!-- bob:task-status-badges:v1 -->";
+const BADGE_MARKER_PREFIX: &str = "bob:task-status-badges:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatusBucket {
@@ -118,6 +121,7 @@ pub(crate) enum GroupingSkipCode {
     DuplicateGroupHeading,
     RenamedMarkedHeading,
     AuthoredHeadingInGroup,
+    MalformedBadgeMarker,
     NestedUnderOrdinaryItem,
     UnsupportedOrderedList,
 }
@@ -132,6 +136,7 @@ impl GroupingSkipCode {
             Self::DuplicateGroupHeading => "duplicate_group_heading",
             Self::RenamedMarkedHeading => "renamed_marked_heading",
             Self::AuthoredHeadingInGroup => "authored_heading_in_group",
+            Self::MalformedBadgeMarker => "malformed_badge_marker",
             Self::NestedUnderOrdinaryItem => "nested_under_ordinary_item",
             Self::UnsupportedOrderedList => "unsupported_ordered_list",
         }
@@ -160,6 +165,9 @@ impl GroupingSkipCode {
             Self::AuthoredHeadingInGroup => format!(
                 "authored child heading inside a managed status group in {title:?} at line {line}"
             ),
+            Self::MalformedBadgeMarker => format!(
+                "malformed task-status-badges marker in {title:?} at line {line}"
+            ),
             Self::NestedUnderOrdinaryItem => format!(
                 "task nested under an ordinary list item in {title:?} at line {line} is structurally ineligible"
             ),
@@ -174,6 +182,7 @@ impl GroupingSkipCode {
 pub(crate) struct GroupedSection {
     pub original_heading_line: usize,
     pub heading_ancestry: Vec<String>,
+    pub open: usize,
     pub next_and_in_progress: usize,
     pub blocked: usize,
     pub done_and_canceled: usize,
@@ -480,8 +489,9 @@ fn rewrite_container(
     warnings.extend(parsed.item_warnings.iter().cloned());
 
     let newline = section_newline(node, ctx.lines);
-    let should_group = parsed.has_groupable() || classified.has_groups();
-    if !should_group {
+    let should_decorate = parsed.has_groupable() || classified.has_groups();
+    let should_rewrite = should_decorate || parsed.has_badges;
+    if !should_rewrite {
         let mut section = original;
         apply_child_rewrites(&mut section, node, &child_rewrites);
         return ContainerRewrite {
@@ -499,15 +509,18 @@ fn rewrite_container(
         &plan,
         &child_rewrites,
         newline,
+        should_decorate,
+        heading_raw.ends_with('\n'),
     );
     let section = format!("{heading_raw}{body}");
     let grouping_changed = section != original;
-    if grouping_changed {
+    if grouping_changed && should_decorate {
         grouped_sections.insert(
             0,
             GroupedSection {
                 original_heading_line: node.heading_line,
                 heading_ancestry: node.ancestry.clone(),
+                open: plan.open_count,
                 next_and_in_progress: plan.counts[0],
                 blocked: plan.counts[1],
                 done_and_canceled: plan.counts[2],
@@ -626,6 +639,9 @@ fn classify_children<'a>(
     if let Some(code) = stray_marker_in_exclusive(node, ctx.lines) {
         fail = Some(code);
     }
+    if let Some(code) = badge_marker_audit(node, ctx.lines) {
+        fail = Some(code);
+    }
 
     for child in &node.children {
         if is_tasks_title(&child.title) {
@@ -634,6 +650,9 @@ fn classify_children<'a>(
         }
 
         if let Some(kind) = GroupKind::from_title(&child.title) {
+            if badge_marker_in_span(ctx.lines, child.body_span.clone()) {
+                fail = Some(GroupingSkipCode::MalformedBadgeMarker);
+            }
             if !child.children.is_empty() {
                 fail = Some(GroupingSkipCode::AuthoredHeadingInGroup);
                 items.push(ClassifiedChild::Authored(child));
@@ -727,6 +746,16 @@ fn parse_group_marker(line: &str) -> Option<Result<GroupKind, ()>> {
     }
 }
 
+fn parse_badge_marker(line: &str) -> Option<Result<(), ()>> {
+    let inner = markdown::standalone_html_comment(line)?;
+    let rest = inner.strip_prefix(BADGE_MARKER_PREFIX)?;
+    if rest == "v1" {
+        Some(Ok(()))
+    } else {
+        Some(Err(()))
+    }
+}
+
 fn first_nonblank_line_index(
     node: &HeadingNode,
     lines: &[SourceLine<'_>],
@@ -752,6 +781,42 @@ fn stray_marker_in_exclusive(
     None
 }
 
+fn badge_marker_audit(
+    node: &HeadingNode,
+    lines: &[SourceLine<'_>],
+) -> Option<GroupingSkipCode> {
+    let exclusive = exclusive_spans(node);
+    let allowed_span = exclusive.first().map(|span| (span.start, span.end));
+    let mut badge_count = 0usize;
+
+    for span in exclusive {
+        let line_range = line_range_for_bytes(lines, span);
+        for index in line_range {
+            let Some(state) = parse_badge_marker(lines[index].content) else {
+                continue;
+            };
+            let allowed = allowed_span.is_some_and(|(start, end)| {
+                lines[index].byte_range.start >= start
+                    && lines[index].byte_range.start < end
+            });
+            if !allowed || state.is_err() {
+                return Some(GroupingSkipCode::MalformedBadgeMarker);
+            }
+            badge_count += 1;
+            if badge_count > 1 {
+                return Some(GroupingSkipCode::MalformedBadgeMarker);
+            }
+        }
+    }
+
+    None
+}
+
+fn badge_marker_in_span(lines: &[SourceLine<'_>], span: Range<usize>) -> bool {
+    line_range_for_bytes(lines, span)
+        .any(|index| parse_badge_marker(lines[index].content).is_some())
+}
+
 fn adoptable_group_body(node: &HeadingNode, ctx: &TransformCtx<'_>) -> bool {
     if !node.children.is_empty() {
         return false;
@@ -762,12 +827,14 @@ fn adoptable_group_body(node: &HeadingNode, ctx: &TransformCtx<'_>) -> bool {
         node,
         &mut Vec::new(),
         false,
+        false,
     ) else {
         return false;
     };
     pieces.iter().all(|piece| match piece {
         DirectPiece::Task(task) => task.movable,
         DirectPiece::Other { raw, .. } => raw.chars().all(char::is_whitespace),
+        DirectPiece::Badges { .. } => false,
     })
 }
 
@@ -790,6 +857,7 @@ struct ParsedContainer<'a> {
     intake: Vec<DirectPiece<'a>>,
     groups: BTreeMap<GroupKind, ParsedGroup<'a>>,
     item_warnings: Vec<GroupingWarning>,
+    has_badges: bool,
 }
 
 struct ParsedGroup<'a> {
@@ -821,10 +889,19 @@ fn parse_container_regions<'a>(
     let mut item_warnings = Vec::new();
     let mut intake = Vec::new();
     for span in exclusive_spans(node) {
-        let mut pieces =
-            parse_direct_pieces(ctx, span, node, &mut item_warnings, true)?;
+        let mut pieces = parse_direct_pieces(
+            ctx,
+            span,
+            node,
+            &mut item_warnings,
+            true,
+            true,
+        )?;
         intake.append(&mut pieces);
     }
+    let has_badges = intake
+        .iter()
+        .any(|piece| matches!(piece, DirectPiece::Badges { .. }));
 
     let mut groups = BTreeMap::new();
     for item in &classified.items {
@@ -842,6 +919,7 @@ fn parse_container_regions<'a>(
             node,
             &mut item_warnings,
             true,
+            false,
         )?;
         let (leading, trailing) = split_group_prose(ctx.contents, &pieces);
         groups.insert(
@@ -858,6 +936,7 @@ fn parse_container_regions<'a>(
         intake,
         groups,
         item_warnings,
+        has_badges,
     })
 }
 
@@ -878,7 +957,7 @@ fn split_group_prose<'a>(
 ) -> (&'a str, &'a str) {
     let first_task = pieces.iter().find_map(|piece| match piece {
         DirectPiece::Task(task) => Some(task.byte_range.start),
-        DirectPiece::Other { .. } => None,
+        DirectPiece::Other { .. } | DirectPiece::Badges { .. } => None,
     });
     let Some(first_task) = first_task else {
         if pieces.is_empty() {
@@ -920,6 +999,7 @@ fn piece_start(piece: &DirectPiece<'_>) -> usize {
     match piece {
         DirectPiece::Task(task) => task.byte_range.start,
         DirectPiece::Other { byte_range, .. } => byte_range.start,
+        DirectPiece::Badges { byte_range } => byte_range.start,
     }
 }
 
@@ -927,6 +1007,7 @@ fn piece_end(piece: &DirectPiece<'_>) -> usize {
     match piece {
         DirectPiece::Task(task) => task.byte_range.end,
         DirectPiece::Other { byte_range, .. } => byte_range.end,
+        DirectPiece::Badges { byte_range } => byte_range.end,
     }
 }
 
@@ -937,13 +1018,16 @@ enum DirectPiece<'a> {
         raw: &'a str,
         byte_range: Range<usize>,
     },
+    Badges {
+        byte_range: Range<usize>,
+    },
 }
 
 impl<'a> DirectPiece<'a> {
     fn task(&self) -> Option<&TaskBlock<'a>> {
         match self {
             Self::Task(task) => Some(task),
-            Self::Other { .. } => None,
+            Self::Other { .. } | Self::Badges { .. } => None,
         }
     }
 }
@@ -963,6 +1047,7 @@ fn parse_direct_pieces<'a>(
     container: &HeadingNode,
     warnings: &mut Vec<GroupingWarning>,
     fail_on_ambiguous: bool,
+    allow_badges: bool,
 ) -> Result<Vec<DirectPiece<'a>>, GroupingSkipCode> {
     if span.start >= span.end {
         return Ok(Vec::new());
@@ -984,6 +1069,26 @@ fn parse_direct_pieces<'a>(
         }
         if line.byte_range.start >= span.end {
             break;
+        }
+
+        if let Some(marker) = parse_badge_marker(line.content) {
+            if !allow_badges || marker.is_err() {
+                return Err(GroupingSkipCode::MalformedBadgeMarker);
+            }
+            flush_other(
+                contents,
+                &mut pieces,
+                &mut cursor,
+                line.byte_range.start,
+            );
+            let (end, next_index) =
+                badge_piece_end(lines, index, line_range.end, span.end);
+            pieces.push(DirectPiece::Badges {
+                byte_range: line.byte_range.start..end,
+            });
+            cursor = end;
+            index = next_index;
+            continue;
         }
 
         if mask.contains(&index)
@@ -1065,6 +1170,24 @@ fn parse_direct_pieces<'a>(
 
     flush_other(contents, &mut pieces, &mut cursor, span.end);
     Ok(pieces)
+}
+
+fn badge_piece_end(
+    lines: &[SourceLine<'_>],
+    marker_index: usize,
+    limit: usize,
+    span_end: usize,
+) -> (usize, usize) {
+    let mut end = lines[marker_index].byte_range.end.min(span_end);
+    let mut next_index = marker_index + 1;
+    if next_index < limit
+        && lines[next_index].byte_range.start < span_end
+        && !lines[next_index].content.trim().is_empty()
+    {
+        end = lines[next_index].byte_range.end.min(span_end);
+        next_index += 1;
+    }
+    (end, next_index)
 }
 
 fn matching_task(
@@ -1247,6 +1370,7 @@ struct GroupingPlan<'a> {
     groups: BTreeMap<GroupKind, Vec<&'a TaskBlock<'a>>>,
     group_leading: BTreeMap<GroupKind, &'a str>,
     group_trailing: BTreeMap<GroupKind, &'a str>,
+    open_count: usize,
     counts: [usize; 3],
     moved_blocks: Vec<MovedBlock>,
 }
@@ -1308,6 +1432,7 @@ fn grouping_plan<'a>(parsed: &'a ParsedContainer<'a>) -> GroupingPlan<'a> {
             DirectPiece::Task(_) | DirectPiece::Other { .. } => {
                 intake_staying.push(piece.clone());
             }
+            DirectPiece::Badges { .. } => {}
         }
     }
 
@@ -1325,6 +1450,9 @@ fn grouping_plan<'a>(parsed: &'a ParsedContainer<'a>) -> GroupingPlan<'a> {
         groups.get(&GroupKind::Blocked).map_or(0, Vec::len),
         groups.get(&GroupKind::Closed).map_or(0, Vec::len),
     ];
+    let open_count =
+        intake_staying.iter().filter_map(DirectPiece::task).count()
+            + recovered.len();
 
     GroupingPlan {
         intake_staying,
@@ -1332,6 +1460,7 @@ fn grouping_plan<'a>(parsed: &'a ParsedContainer<'a>) -> GroupingPlan<'a> {
         groups,
         group_leading,
         group_trailing,
+        open_count,
         counts,
         moved_blocks,
     }
@@ -1354,11 +1483,21 @@ fn emit_grouped_body(
     plan: &GroupingPlan<'_>,
     child_rewrites: &BTreeMap<usize, ContainerRewrite>,
     newline: &str,
+    emit_decorations: bool,
+    heading_has_line_ending: bool,
 ) -> String {
     let mut body = String::new();
     let intake = emit_intake(plan, newline);
+    if emit_decorations {
+        body.push_str(&render_badges(node, plan, newline));
+    }
     if !intake.trim().is_empty() {
-        body.push_str(&intake);
+        let intake = if emit_decorations {
+            trim_leading_blank_edges(&intake, newline)
+        } else {
+            intake.as_str()
+        };
+        push_block(&mut body, intake, newline);
     }
 
     for child in classified.authored() {
@@ -1372,13 +1511,18 @@ fn emit_grouped_body(
         push_block(&mut body, &part, newline);
     }
 
-    for kind in GroupKind::ALL {
-        let group = emit_group(node.level + 1, kind, plan, newline);
-        push_block(&mut body, &group, newline);
+    if emit_decorations {
+        for kind in GroupKind::ALL {
+            let group = emit_group(node.level + 1, kind, plan, newline);
+            push_block(&mut body, &group, newline);
+        }
     }
 
     if body.is_empty() {
         return String::new();
+    }
+    if emit_decorations && heading_has_line_ending {
+        return body;
     }
     if !body.starts_with('\n') && !body.starts_with("\r\n") {
         let mut prefixed = String::from(newline);
@@ -1386,6 +1530,83 @@ fn emit_grouped_body(
         body = prefixed;
     }
     body
+}
+
+fn render_badges(
+    node: &HeadingNode,
+    plan: &GroupingPlan<'_>,
+    newline: &str,
+) -> String {
+    let counts = [
+        ("⚪", plan.open_count, "open", None),
+        ("🔵", plan.counts[0], "next/wip", Some(GroupKind::Active)),
+        ("🔴", plan.counts[1], "blocked", Some(GroupKind::Blocked)),
+        (
+            "🟢",
+            plan.counts[2],
+            "done/canceled",
+            Some(GroupKind::Closed),
+        ),
+    ];
+    let linked = !node.ancestry.iter().any(|segment| segment.contains('#'));
+    let row = counts
+        .iter()
+        .map(|(emoji, count, label, group)| {
+            let label = format!("`{emoji} {count} {label}`");
+            if !linked {
+                return label;
+            }
+            let anchor = match group {
+                Some(kind) => {
+                    let mut ancestry = node.ancestry.clone();
+                    ancestry.push(kind.title().to_string());
+                    render_anchor(&ancestry)
+                }
+                None => render_anchor(&node.ancestry),
+            };
+            format!("[{label}]({anchor})")
+        })
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ");
+
+    format!("{BADGE_MARKER}{newline}{row}{newline}{newline}")
+}
+
+fn render_anchor(segments: &[String]) -> String {
+    let mut anchor = String::new();
+    for segment in segments {
+        anchor.push('#');
+        anchor.push_str(&encode_anchor_segment(segment));
+    }
+    anchor
+}
+
+fn encode_anchor_segment(segment: &str) -> String {
+    let mut encoded = String::new();
+    for character in segment.chars() {
+        let should_encode = character.is_ascii()
+            && (character.is_control()
+                || matches!(
+                    character,
+                    ' ' | '(' | ')' | '<' | '>' | '"' | '%' | '\\'
+                ));
+        if should_encode {
+            let mut bytes = [0; 4];
+            for byte in character.encode_utf8(&mut bytes).as_bytes() {
+                write!(&mut encoded, "%{byte:02X}").expect("write to string");
+            }
+        } else {
+            encoded.push(character);
+        }
+    }
+    encoded
+}
+
+fn trim_leading_blank_edges<'a>(mut raw: &'a str, newline: &str) -> &'a str {
+    while let Some(stripped) = raw.strip_prefix(newline) {
+        raw = stripped;
+    }
+    raw
 }
 
 fn emit_intake(plan: &GroupingPlan<'_>, newline: &str) -> String {
@@ -1412,6 +1633,7 @@ fn emit_intake(plan: &GroupingPlan<'_>, newline: &str) -> String {
                 push_task(&mut buf, task.raw, newline);
                 last_was_task = true;
             }
+            DirectPiece::Badges { .. } => {}
         }
     }
     if !inserted_recovered {
@@ -1819,6 +2041,16 @@ mod tests {
         assert_eq!(input_prefix, output_prefix);
     }
 
+    fn assert_text_order(contents: &str, needles: &[&str]) {
+        let mut cursor = 0;
+        for needle in needles {
+            let offset = contents[cursor..].find(needle).unwrap_or_else(|| {
+                panic!("missing {needle:?} in:\n{contents}")
+            });
+            cursor += offset + needle.len();
+        }
+    }
+
     fn root_task_lines(contents: &str) -> Vec<String> {
         contents
             .lines()
@@ -1846,6 +2078,8 @@ Short context for this project.
 
     const GOLDEN_OUTPUT: &str = "\
 ## Tasks
+<!-- bob:task-status-badges:v1 -->
+[`⚪ 1 open`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Tasks#Blocked) · [`🟢 2 done/canceled`](#Tasks#Done%20&%20Canceled)
 
 Short context for this project.
 
@@ -1889,6 +2123,7 @@ Short context for this project.
         let section = &result.grouped_sections[0];
         assert_eq!(section.original_heading_line, 1);
         assert_eq!(section.heading_ancestry, ["Tasks"]);
+        assert_eq!(section.open, 1);
         assert_eq!(section.next_and_in_progress, 2);
         assert_eq!(section.blocked, 1);
         assert_eq!(section.done_and_canceled, 2);
@@ -1908,6 +2143,232 @@ Short context for this project.
             ]
         );
         assert_idempotent(GOLDEN_INPUT);
+    }
+
+    #[test]
+    fn badge_counts_refresh_when_membership_changes() {
+        let grouped_once = grouped(GOLDEN_INPUT).contents;
+        let reopened = grouped_once.replace(
+            "- [*] #task Review the implementation ^review",
+            "- [ ] #task Review the implementation ^review",
+        );
+
+        let result = grouped(&reopened);
+
+        assert!(result.changed);
+        assert!(result.contents.contains("[`⚪ 2 open`](#Tasks)"));
+        assert!(result
+            .contents
+            .contains("[`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress)"));
+        let intake = result.contents.split("### Next").next().unwrap();
+        assert!(
+            intake.contains("- [ ] #task Review the implementation ^review")
+        );
+    }
+
+    #[test]
+    fn authored_child_containers_get_independent_badges_and_anchors() {
+        let input = "\
+# Alpha
+
+## Tasks
+
+### Backend
+
+- [*] #task API
+- [ ] #task Later
+
+### Frontend
+
+- [?] #task UI
+";
+        let result = grouped(input);
+
+        assert_eq!(result.grouped_sections.len(), 2);
+        assert!(result.contents.contains(
+            "[`⚪ 1 open`](#Alpha#Tasks#Backend) · [`🔵 1 next/wip`](#Alpha#Tasks#Backend#Next%20&%20In%20Progress)"
+        ));
+        assert!(result.contents.contains(
+            "[`⚪ 0 open`](#Alpha#Tasks#Frontend) · [`🔵 0 next/wip`](#Alpha#Tasks#Frontend#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Alpha#Tasks#Frontend#Blocked)"
+        ));
+        assert_idempotent(input);
+    }
+
+    #[test]
+    fn badge_marker_in_intake_is_relocated_to_the_slot() {
+        let input = "\
+## Tasks
+
+Intro.
+
+- [ ] #task ready
+
+<!-- bob:task-status-badges:v1 -->
+[`stale`](#Tasks)
+
+### Next & In Progress
+<!-- bob:task-status-group:v1:active -->
+
+- [*] #task next
+
+### Blocked
+<!-- bob:task-status-group:v1:blocked -->
+
+### Done & Canceled
+<!-- bob:task-status-group:v1:closed -->
+";
+        let result = grouped(input);
+
+        assert!(result.changed);
+        assert_text_order(
+            &result.contents,
+            &[
+                "## Tasks",
+                "<!-- bob:task-status-badges:v1 -->",
+                "[`⚪ 1 open`](#Tasks)",
+                "Intro.",
+                "- [ ] #task ready",
+                "### Next & In Progress",
+            ],
+        );
+        assert!(!result.contents.contains("[`stale`](#Tasks)"));
+        assert_idempotent(&result.contents);
+    }
+
+    #[test]
+    fn badge_row_is_not_a_task_or_ambiguous_boundary() {
+        let input = "\
+## Tasks
+<!-- bob:task-status-badges:v1 -->
+[`stale`](#Tasks)
+
+- [*] #task next
+";
+        let result = grouped(input);
+
+        assert!(result.changed);
+        assert!(result.warnings.is_empty());
+        assert!(result.contents.contains("[`⚪ 0 open`](#Tasks)"));
+        let active = result.contents.split(TITLE_ACTIVE).nth(1).unwrap();
+        assert!(active.contains("- [*] #task next"));
+    }
+
+    #[test]
+    fn orphaned_badge_block_is_removed_without_creating_groups() {
+        let input = "\
+## Tasks
+<!-- bob:task-status-badges:v1 -->
+[`⚪ 1 open`](#Tasks)
+
+- [ ] #task ready
+";
+        let result = grouped(input);
+
+        assert!(result.changed);
+        assert_eq!(result.grouped_sections, Vec::new());
+        assert!(!result.contents.contains("task-status-badges"));
+        assert!(!result.contents.contains("Next & In Progress"));
+        assert!(result.contents.contains("- [ ] #task ready"));
+    }
+
+    #[test]
+    fn malformed_badge_markers_fail_closed() {
+        let duplicate = "\
+## Tasks
+<!-- bob:task-status-badges:v1 -->
+[`stale`](#Tasks)
+<!-- bob:task-status-badges:v1 -->
+
+- [*] #task next
+";
+        let result = grouped(duplicate);
+        assert_eq!(result.contents, duplicate);
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(
+            result.warnings[0].code,
+            GroupingSkipCode::MalformedBadgeMarker
+        );
+
+        let in_group = "\
+## Tasks
+
+### Next & In Progress
+<!-- bob:task-status-group:v1:active -->
+
+<!-- bob:task-status-badges:v1 -->
+[`stale`](#Tasks)
+
+- [*] #task next
+
+### Blocked
+<!-- bob:task-status-group:v1:blocked -->
+
+### Done & Canceled
+<!-- bob:task-status-group:v1:closed -->
+";
+        let result = grouped(in_group);
+        assert_eq!(result.contents, in_group);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.code
+                == GroupingSkipCode::MalformedBadgeMarker));
+
+        let wrong_version = "\
+## Tasks
+
+<!-- bob:task-status-badges:v2 -->
+
+- [*] #task next
+";
+        let result = grouped(wrong_version);
+        assert_eq!(result.contents, wrong_version);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.code
+                == GroupingSkipCode::MalformedBadgeMarker));
+    }
+
+    #[test]
+    fn heading_hash_in_ancestry_renders_unlinked_badges() {
+        let input = "\
+# Alpha #1
+
+## Tasks
+
+- [*] #task next
+";
+        let result = grouped(input);
+        let row = result
+            .contents
+            .lines()
+            .find(|line| line.contains("next/wip"))
+            .expect("badge row");
+
+        assert!(row.contains("`⚪ 0 open`"));
+        assert!(row.contains("`🔵 1 next/wip`"));
+        assert!(!row.contains("]("));
+    }
+
+    #[test]
+    fn badge_anchors_percent_encode_the_obsidian_path_segments() {
+        assert_eq!(
+            encode_anchor_segment(r#"A B(50%) <tag> "quote" \ slash café &"#),
+            "A%20B%2850%25%29%20%3Ctag%3E%20%22quote%22%20%5C%20slash%20café%20&"
+        );
+
+        let input = "\
+# Alpha (50%)
+
+## Tasks
+
+- [*] #task next
+";
+        let result = grouped(input);
+        assert!(result
+            .contents
+            .contains("#Alpha%20%2850%25%29#Tasks#Next%20&%20In%20Progress"));
     }
 
     #[test]
@@ -2210,6 +2671,9 @@ title: note
         let result = grouped(input);
         assert!(result.contents.contains("café 日本語 ^id"));
         assert!(result.contents.contains("\r\n"));
+        assert!(result.contents.contains(
+            "<!-- bob:task-status-badges:v1 -->\r\n[`⚪ 0 open`](#Tasks)"
+        ));
         assert!(!result.contents.ends_with('\n') || input.ends_with('\n'));
         assert!(!result.contents.ends_with('\n'));
         assert!(result.contents.contains("- [*] #task café 日本語 ^id\n"));
@@ -2369,6 +2833,7 @@ details
             "",
         );
         let result = grouped(&input);
+        assert!(result.contents.contains("[`🔴 0 blocked`](#Tasks#Blocked)"));
         assert!(result.contents.contains(
             "### Blocked\n<!-- bob:task-status-group:v1:blocked -->"
         ));
@@ -2463,6 +2928,10 @@ Intro.
         assert_eq!(
             GroupingSkipCode::AmbiguousBoundary.as_str(),
             "ambiguous_boundary"
+        );
+        assert_eq!(
+            GroupingSkipCode::MalformedBadgeMarker.as_str(),
+            "malformed_badge_marker"
         );
     }
 

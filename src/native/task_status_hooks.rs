@@ -115,8 +115,9 @@ After final checkbox and daily structural changes are composed, eligible \
 area/project Tasks sections are grouped into generated child headings: \
 Next & In Progress, Blocked, and Done & Canceled. Ready [ ] tasks and \
 introductory prose stay in the unheaded intake where ordinary capture adds \
-new tasks. Authored topic headings keep their local context, generated groups \
-use hidden ownership comments, and unsupported containers are warned and left \
+new tasks. Decorated containers carry a linked status-count badge row, authored \
+topic headings keep their local context, generated groups use hidden ownership \
+comments, and unsupported containers are warned and left \
 unchanged. Grouping excludes daily notes, the selected previous daily, \
 ordinary notes, archives, generated notes, and templates.\n\n\
 Only Markdown checkbox lines allowed by the Obsidian Tasks globalFilter are \
@@ -286,6 +287,7 @@ struct GroupedTaskSectionReport {
     path: String,
     original_heading_line: usize,
     heading_ancestry: Vec<String>,
+    open: usize,
     next_and_in_progress: usize,
     blocked: usize,
     done_and_canceled: usize,
@@ -3209,6 +3211,7 @@ fn grouped_section_report(
         path: display_path(&file.relative_path),
         original_heading_line: section.original_heading_line,
         heading_ancestry: section.heading_ancestry.clone(),
+        open: section.open,
         next_and_in_progress: section.next_and_in_progress,
         blocked: section.blocked,
         done_and_canceled: section.done_and_canceled,
@@ -3503,9 +3506,10 @@ fn print_grouped_task_sections(styler: &Styler, result: &SyncResult) {
     for section in &result.grouped_task_sections {
         let heading = section.heading_ancestry.join(" > ");
         println!(
-            "    {}  {}  next/in progress {} \u{b7} blocked {} \u{b7} done/canceled {} \u{b7} moved {}",
+            "    {}  {}  open {} \u{b7} next/in progress {} \u{b7} blocked {} \u{b7} done/canceled {} \u{b7} moved {}",
             styler.cyan(&section.path),
             heading,
+            section.open,
             section.next_and_in_progress,
             section.blocked,
             section.done_and_canceled,

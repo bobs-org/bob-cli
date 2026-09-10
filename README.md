@@ -296,7 +296,8 @@ also retires completed references, moves stray bullets onto the current
 Pomodoro, repairs Pomodoro markers, de-duplicates the same task under later
 open Pomodoros, removes list items that only point at canceled tasks, and
 groups area/project `Tasks` sections into `Next & In Progress`, `Blocked`, and
-`Done & Canceled` child headings while keeping Ready tasks in the intake.
+`Done & Canceled` child headings with a linked status-count badge row while
+keeping Ready tasks in the intake.
 
 ```bash
 bob task-status-hooks --dry-run

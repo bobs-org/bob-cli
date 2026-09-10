@@ -400,11 +400,16 @@ same run lands in the group matching its final status. Area/project notes with
 no checkbox edits are still grouped when their current layout needs it.
 
 Ready `[ ]` tasks remain in the unheaded intake directly under `Tasks`, along
-with introductory prose and new ordinary captures. The generated groups are
-plain child headings with hidden ownership comments:
+with introductory prose and new ordinary captures. Decorated containers also
+get a generated status-count badge row before the intake. The generated groups
+are plain child headings with hidden ownership comments:
 
 ```markdown
+# Project
+
 ## Tasks
+<!-- bob:task-status-badges:v1 -->
+[`⚪ 1 open`](#Project#Tasks) · [`🔵 2 next/wip`](#Project#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Project#Tasks#Blocked) · [`🟢 2 done/canceled`](#Project#Tasks#Done%20&%20Canceled)
 
 Project context.
 
@@ -427,6 +432,30 @@ Project context.
 - [x] #task Agreed scope ^scope
 - [-] #task Superseded option
 ```
+
+The badge row has four fixed-order chips: open, next/wip, blocked, and
+done/canceled. Counts are per-container and non-recursive: the open chip counts
+root task blocks that remain in that container's intake, while the other chips
+count that container's three generated status groups. Empty buckets still show
+`0` so the row keeps stable link targets. Each chip links to the counted
+heading using Obsidian's nested heading path form, such as
+`#Project#Tasks#Blocked`; if any heading segment in the container ancestry
+contains `#`, the row is rendered as unlinked code-span chips because that
+path cannot be represented safely.
+
+The badge marker owns its own line and the immediately following non-blank row
+line. On every grouping rewrite, the row is regenerated and moved back to the
+slot directly beneath the `Tasks` or authored-topic heading, so a capture that
+temporarily lands above it is self-healed on the next run. An orphaned badge
+block in a container with no generated groups and no groupable tasks is
+removed. Duplicate badge markers, badge markers inside managed group bodies or
+outside the container intake, and unrecognized `bob:task-status-badges:*`
+comments fail closed with `malformed_badge_marker`; the affected container's
+bytes are left unchanged.
+
+Badge counts are a written snapshot, not a live Obsidian view. `bob capture`,
+manual checkbox edits, and `bob move-done-tasks` can make them stale; the next
+`bob task-status-hooks` run reconciles the row idempotently.
 
 The command preserves authored topic headings under a `Tasks` section. Direct
 task blocks are grouped locally inside the container where they already live,
@@ -610,7 +639,7 @@ identities. Marker additions and removals have their own
 carry a `(dependency)` suffix. Next and In-Progress promotions have separate
 sections and summary counts. Grouping changes appear under
 `grouped task sections` or `would group task sections`, with the note path,
-heading ancestry, per-group root-task counts, and moved-block count. A
+heading ancestry, open intake count, per-group root-task counts, and moved-block count. A
 successful live write that changed notes also prints the recovery-copy
 directory. Dry-run uses the same planning path and reports what would happen
 without changing any file. Warnings go to stderr. A no-op prints a single
@@ -743,6 +772,7 @@ JSON mode prints one object on stdout with these stable fields:
       "path": "Projects/Alpha.md",
       "original_heading_line": 12,
       "heading_ancestry": ["Alpha", "Tasks"],
+      "open": 1,
       "next_and_in_progress": 2,
       "blocked": 1,
       "done_and_canceled": 1,
@@ -812,8 +842,11 @@ contains `target`, `block_id`, and `reason`; marker-reference entries contain
 `target`, `block_id`, and the owning `pomodoro` line.
 `grouped_task_sections` contains only containers whose bytes changed for
 grouping, with original source heading lines and moved-block destinations
-reported from the pre-move source. `grouping_warnings` contains safe-to-report
-container diagnostics; warnings do not by themselves make `ok` false.
+reported from the pre-move source. Its `open` count is the number of root task
+blocks emitted into that container's intake after the transform, including
+recovered or structurally ineligible tasks that remain there.
+`grouping_warnings` contains safe-to-report container diagnostics; warnings do
+not by themselves make `ok` false.
 `applied_files`, `deferred_files`, and `recovery_directory` describe live
 application. On dry-run and live no-op, `applied_files` and `deferred_files`
 are empty and `recovery_directory` is `null`; on a successful live write,

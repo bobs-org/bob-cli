@@ -29,6 +29,7 @@ use super::{
     note_tasks::{BlockIdLookup, RefLookup},
     pomodoro,
     style::Styler,
+    task_status_groups,
 };
 
 pub(crate) use super::capture_language::is_route_token;
@@ -3381,10 +3382,30 @@ fn tasks_section(lines: &[LineSpan<'_>]) -> Option<TasksSection> {
         .map(|heading| heading.line_index)
         .unwrap_or(lines.len());
     Some(TasksSection {
-        heading_end: lines[heading_index].end,
+        heading_end: tasks_heading_end_after_badges(lines, heading_index),
         start_line: heading_index + 1,
         end_line,
     })
+}
+
+fn tasks_heading_end_after_badges(
+    lines: &[LineSpan<'_>],
+    heading_index: usize,
+) -> usize {
+    let mut heading_end = lines[heading_index].end;
+    let marker_index = heading_index + 1;
+    if marker_index >= lines.len()
+        || lines[marker_index].text.trim() != task_status_groups::BADGE_MARKER
+    {
+        return heading_end;
+    }
+
+    heading_end = lines[marker_index].end;
+    let row_index = marker_index + 1;
+    if row_index < lines.len() && !is_blank_line(lines[row_index].text) {
+        heading_end = lines[row_index].end;
+    }
+    heading_end
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -6070,6 +6091,42 @@ mod tests {
             insert_task_line(contents, TASK),
             (
                 format!("## Tasks\n\n{TASK}\n### Later\n- [ ] #task later\n"),
+                Placement::Inserted,
+            )
+        );
+    }
+
+    #[test]
+    fn tasks_section_inserts_below_generated_status_badges() {
+        let contents = concat!(
+            "## Tasks\n",
+            "<!-- bob:task-status-badges:v1 -->\n",
+            "[`⚪ 0 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 0 done/canceled`](#Tasks#Done%20&%20Canceled)\n",
+            "\n",
+            "### Next & In Progress\n",
+            "<!-- bob:task-status-group:v1:active -->\n",
+            "\n",
+            "- [*] #task active\n",
+        );
+
+        assert_eq!(
+            insert_task_line(contents, TASK),
+            (
+                format!(
+                    "{}\n{TASK}\n{}",
+                    concat!(
+                        "## Tasks\n",
+                        "<!-- bob:task-status-badges:v1 -->\n",
+                        "[`⚪ 0 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 0 done/canceled`](#Tasks#Done%20&%20Canceled)\n",
+                    ),
+                    concat!(
+                        "\n",
+                        "### Next & In Progress\n",
+                        "<!-- bob:task-status-group:v1:active -->\n",
+                        "\n",
+                        "- [*] #task active\n",
+                    )
+                ),
                 Placement::Inserted,
             )
         );
