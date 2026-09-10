@@ -44,6 +44,7 @@ mod pomodoro;
 mod projects;
 mod style;
 mod task_status_hooks;
+mod task_status_hooks_write;
 mod vault_sync;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

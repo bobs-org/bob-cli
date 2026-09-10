@@ -2900,6 +2900,128 @@ fn task_status_hooks_blocked_status_guard_writes_nothing() {
 }
 
 #[test]
+fn task_status_hooks_dry_run_creates_no_lock_or_recovery() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-dry-lock");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let tasks = vault.join("tasks.md");
+    let lock = temp.path().join("bob_sync.lock");
+    let state = temp.path().join("state");
+    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(&tasks, "- [*] #task Stale next ^stale\n");
+
+    let output = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("dry-run guarded write");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("dry-run JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["dry_run"], true);
+    assert!(!json["cleared"].as_array().unwrap().is_empty());
+    assert!(
+        !lock.exists(),
+        "dry-run must not create the maintenance lock"
+    );
+    assert!(
+        !state.join("bob-cli/task-status-hooks").exists(),
+        "dry-run must not write recovery records"
+    );
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        "- [*] #task Stale next ^stale\n"
+    );
+}
+
+#[test]
+fn task_status_hooks_live_noop_may_lock_but_creates_no_recovery() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-live-noop");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let tasks = vault.join("tasks.md");
+    let lock = temp.path().join("bob_sync.lock");
+    let state = temp.path().join("state");
+    write_file(&daily, "## Pomodoros\n");
+    write_file(&tasks, "- [ ] #task Ready intake ^ready\n");
+
+    let output = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("live no-op guarded write");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("already in sync"),
+        "expected no-op report:\n{}",
+        format_output(&output)
+    );
+    assert!(lock.exists(), "live no-op may create the maintenance lock");
+    assert!(
+        !state.join("bob-cli/task-status-hooks").exists(),
+        "live no-op must not write recovery records"
+    );
+}
+
+#[test]
+fn task_status_hooks_defers_when_maintenance_lock_is_held() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-lock-held");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let tasks = vault.join("tasks.md");
+    let lock_path = temp.path().join("bob_sync.lock");
+    write_file(&daily, "## Pomodoros\n");
+    write_file(&tasks, "- [*] #task Stale next ^stale\n");
+
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open lock");
+    lock.try_lock_exclusive().expect("hold lock");
+
+    let output = bob_command()
+        .arg("task-status-hooks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .output()
+        .expect("run contended task-status-hooks");
+    assert_eq!(output.status.code(), Some(1));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("lock JSON");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["reason"], "lock_contention");
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("another Bob vault maintenance run"));
+    assert_eq!(json["applied_files"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        "- [*] #task Stale next ^stale\n"
+    );
+}
+
+#[test]
 fn capture_complete_help_lists_options_alphabetically() {
     let output = bob_command()
         .arg("capture-complete")
@@ -24377,6 +24499,12 @@ fn done_tasks_source(count: usize) -> String {
 fn bob_command() -> Command {
     let mut command = Command::new(BOB_BIN);
     command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
+    let nonce = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let isolation = std::env::temp_dir()
+        .join(format!("bob-cli-test-iso-{}-{nonce}", std::process::id()));
+    let _ = fs::create_dir_all(&isolation);
+    command.env("BOB_VAULT_SYNC_LOCK_FILE", isolation.join("bob_sync.lock"));
+    command.env("XDG_STATE_HOME", isolation.join("state"));
     command
 }
 

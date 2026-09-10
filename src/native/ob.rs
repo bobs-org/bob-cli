@@ -120,42 +120,71 @@ pub(crate) fn verify_bob_worktree(
     }
 }
 
+/// Outcome of acquiring the shared vault-maintenance lock without printing.
+#[derive(Debug)]
+pub(crate) enum LockAcquireError {
+    Contended {
+        #[allow(dead_code)]
+        path: PathBuf,
+    },
+    Open {
+        path: PathBuf,
+        error: io::Error,
+    },
+    Acquire {
+        path: PathBuf,
+        error: io::Error,
+    },
+}
+
 /// Acquire the exclusive run lock shared by vault maintenance commands.
 ///
 /// Returns `Ok(Some(file))` on success (hold the guard for the duration of the
 /// run), `Err(0)` when another run already holds the lock, and `Err(1)` on an
 /// unexpected I/O error.
 pub(crate) fn acquire_lock() -> Result<Option<File>, i32> {
-    acquire_lock_impl(false)
+    report_lock(try_acquire_lock(), false)
 }
 
 pub(crate) fn acquire_lock_quiet_if_held() -> Result<Option<File>, i32> {
-    acquire_lock_impl(true)
+    report_lock(try_acquire_lock(), true)
 }
 
-fn acquire_lock_impl(quiet_if_held: bool) -> Result<Option<File>, i32> {
+/// Acquire the shared lock without printing so callers can format contention
+/// in their own output. `BOB_VAULT_SYNC_LOCK_FILE` is still honored.
+pub(crate) fn try_acquire_lock() -> Result<File, LockAcquireError> {
     let lock_file = lock_file_from_env().unwrap_or_else(default_lock_file);
 
-    let file = match OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(&lock_file)
-    {
-        Ok(file) => file,
-        Err(error) => {
-            eprintln!(
-                "bob: could not open lock file {}: {error}",
-                lock_file.display()
-            );
-            return Err(1);
-        }
-    };
+        .map_err(|error| LockAcquireError::Open {
+            path: lock_file.clone(),
+            error,
+        })?;
 
     match file.try_lock_exclusive() {
-        Ok(()) => Ok(Some(file)),
+        Ok(()) => Ok(file),
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(LockAcquireError::Contended { path: lock_file })
+        }
+        Err(error) => Err(LockAcquireError::Acquire {
+            path: lock_file,
+            error,
+        }),
+    }
+}
+
+fn report_lock(
+    result: Result<File, LockAcquireError>,
+    quiet_if_held: bool,
+) -> Result<Option<File>, i32> {
+    match result {
+        Ok(file) => Ok(Some(file)),
+        Err(LockAcquireError::Contended { .. }) => {
             if !quiet_if_held {
                 eprintln!(
                     "bob: another Bob vault maintenance run is already active; \
@@ -164,10 +193,17 @@ fn acquire_lock_impl(quiet_if_held: bool) -> Result<Option<File>, i32> {
             }
             Err(0)
         }
-        Err(error) => {
+        Err(LockAcquireError::Open { path, error }) => {
+            eprintln!(
+                "bob: could not open lock file {}: {error}",
+                path.display()
+            );
+            Err(1)
+        }
+        Err(LockAcquireError::Acquire { path, error }) => {
             eprintln!(
                 "bob: could not acquire lock file {}: {error}",
-                lock_file.display()
+                path.display()
             );
             Err(1)
         }

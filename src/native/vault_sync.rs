@@ -1376,19 +1376,7 @@ fn state_file_path() -> PathBuf {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .map(|path| bob_env::expand_tilde(&path))
-        .unwrap_or_else(|| state_home().join("bob-cli").join("vault-sync.json"))
-}
-
-fn state_home() -> PathBuf {
-    env::var_os("XDG_STATE_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::var_os("HOME")
-                .filter(|value| !value.is_empty())
-                .map(|home| PathBuf::from(home).join(".local/state"))
-        })
-        .unwrap_or_else(|| env::temp_dir().join("bob-cli-state"))
+        .unwrap_or_else(|| bob_env::bob_cli_state_dir().join("vault-sync.json"))
 }
 
 fn read_status_record(path: &Path) -> Result<Option<StatusRecord>, String> {

@@ -4,7 +4,6 @@ use std::{
     fs, io, iter,
     ops::Range,
     path::{Component, Path, PathBuf},
-    process,
 };
 
 use chrono::{Datelike, NaiveDate};
@@ -21,6 +20,11 @@ use super::{
     collect_done, env as bob_env, is_always_excluded_note_directory_name,
     pomodoro, projects,
     style::{display_width, pad_right, Styler},
+    task_status_hooks_write::{
+        acquire_maintenance_lock, apply_plan, capture_optional,
+        capture_required, planned_write, snapshot_for_path, ApplyError,
+        ApplySession, CaptureError, InputKind, InputSnapshot, WritePlan,
+    },
 };
 
 const COMMAND_NAME: &str = "bob task-status-hooks";
@@ -598,17 +602,28 @@ fn note_kind(contents: &str) -> NoteKind {
 }
 
 fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
+    let _lock = if request.dry_run {
+        None
+    } else {
+        Some(acquire_maintenance_lock().map_err(SyncError::from_apply)?)
+    };
+
     let daily_path = pomodoro::day_file_for(&request.bob_dir);
-    let daily_contents = fs::read_to_string(&daily_path).map_err(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            SyncError::new(format!(
+    let daily_snapshot = match capture_required(&daily_path, InputKind::Daily) {
+        Ok(snapshot) => snapshot,
+        Err(CaptureError::NotFound(_)) => {
+            return Err(SyncError::new(format!(
                 "daily note does not exist: {}",
                 daily_path.display()
-            ))
-        } else {
-            SyncError::io("read daily note", &daily_path, error)
+            )));
         }
-    })?;
+        Err(error) => {
+            return Err(capture_to_sync("read daily note", error));
+        }
+    };
+    let daily_contents = required_utf8(&daily_snapshot)
+        .map_err(|error| capture_to_sync("read daily note", error))?;
+    let mut inputs = vec![daily_snapshot.clone()];
     let daily_lines = logical_lines(&daily_contents);
     let section =
         pomodoro::pomodoros_section_range(&daily_lines).ok_or_else(|| {
@@ -629,10 +644,22 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         ));
     }
 
-    let settings = read_tasks_settings(&request.bob_dir);
+    let settings_path = request.bob_dir.join(TASKS_SETTINGS);
+    let settings_snapshot =
+        capture_optional(&settings_path, InputKind::TasksSettings)
+            .map_err(|error| capture_to_sync("read Tasks settings", error))?;
+    let settings = parse_tasks_settings(
+        &settings_path,
+        settings_snapshot
+            .utf8_contents()
+            .map_err(|error| capture_to_sync("read Tasks settings", error))?
+            .as_deref(),
+    );
+    push_unique_input(&mut inputs, settings_snapshot);
     let markdown_files = markdown_files(&request.bob_dir).map_err(|error| {
         SyncError::io("scan vault", &request.bob_dir, error)
     })?;
+    let scan_paths = markdown_files.clone();
     let anchor =
         daily_anchor_date(&daily_path, bob_env::current_datetime().date());
     let previous_daily_path =
@@ -640,14 +667,19 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
     let canonical_daily_path = daily_path.canonicalize().ok();
     let mut files = Vec::with_capacity(markdown_files.len());
     for path in markdown_files {
-        let contents = if path == daily_path
+        let same_as_daily = path == daily_path
             || canonical_daily_path.as_ref().is_some_and(|daily| {
                 path.canonicalize().ok().as_ref() == Some(daily)
-            }) {
+            });
+        let contents = if same_as_daily {
             daily_contents.clone()
         } else {
-            fs::read_to_string(&path)
-                .map_err(|error| SyncError::io("read note", &path, error))?
+            let snapshot = capture_required(&path, InputKind::Note)
+                .map_err(|error| capture_to_sync("read note", error))?;
+            let contents = required_utf8(&snapshot)
+                .map_err(|error| capture_to_sync("read note", error))?;
+            push_unique_input(&mut inputs, snapshot);
+            contents
         };
         let relative_path = path
             .strip_prefix(&request.bob_dir)
@@ -689,6 +721,19 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
             Some(scan_pomodoros(&lines, section).recent_references)
         })
         .unwrap_or_default();
+    if let Some(path) = &previous_daily_path {
+        if let Some(existing) =
+            inputs.iter_mut().find(|input| input.path == *path)
+        {
+            existing.kind = InputKind::PreviousDaily;
+        } else {
+            let snapshot = capture_required(path, InputKind::PreviousDaily)
+                .map_err(|error| {
+                    capture_to_sync("read previous daily note", error)
+                })?;
+            push_unique_input(&mut inputs, snapshot);
+        }
+    }
     let archive_catalog = archive_reference_catalog(
         &request.bob_dir,
         &settings,
@@ -696,6 +741,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
             .all_references
             .iter()
             .chain(previous_daily_references.iter()),
+        &mut inputs,
     )?;
     let reference_resolver = TaskReferenceResolver {
         note_index: &note_index,
@@ -949,7 +995,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         &structural_plan,
     );
     if !request.dry_run {
-        apply_outputs(&outputs)?;
+        apply_guarded_outputs(&request.bob_dir, &inputs, &scan_paths, outputs)?;
     }
 
     Ok(SyncResult {
@@ -1384,6 +1430,14 @@ fn strikethrough_spans(line: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 pub(crate) fn read_tasks_settings(vault: &Path) -> TasksSettings {
+    let path = vault.join(TASKS_SETTINGS);
+    match fs::read_to_string(&path) {
+        Ok(contents) => parse_tasks_settings(&path, Some(&contents)),
+        Err(_) => parse_tasks_settings(&path, None),
+    }
+}
+
+fn parse_tasks_settings(path: &Path, contents: Option<&str>) -> TasksSettings {
     let mut settings = TasksSettings {
         global_filter: DEFAULT_GLOBAL_FILTER.to_string(),
         done_statuses: BTreeSet::from(['x', 'X']),
@@ -1398,13 +1452,12 @@ pub(crate) fn read_tasks_settings(vault: &Path) -> TasksSettings {
         status_definitions: Vec::new(),
         status_settings_error: None,
     };
-    let path = vault.join(TASKS_SETTINGS);
-    let Ok(contents) = fs::read_to_string(&path) else {
+    let Some(contents) = contents else {
         settings.status_settings_error =
             Some(format!("Tasks settings are missing at {}", path.display()));
         return settings;
     };
-    let Ok(value) = serde_json::from_str::<Value>(&contents) else {
+    let Ok(value) = serde_json::from_str::<Value>(contents) else {
         settings.status_settings_error = Some(format!(
             "Tasks settings are not valid JSON at {}",
             path.display()
@@ -2321,6 +2374,7 @@ fn archive_reference_catalog<'a, I>(
     vault: &Path,
     settings: &TasksSettings,
     references: I,
+    inputs: &mut Vec<InputSnapshot>,
 ) -> Result<ArchiveReferenceCatalog, SyncError>
 where
     I: IntoIterator<Item = &'a RawReference>,
@@ -2341,6 +2395,10 @@ where
             catalog.load_failures.insert(
                 relative_path.clone(),
                 format!("archive target {display} does not exist"),
+            );
+            push_unique_input(
+                inputs,
+                InputSnapshot::missing(&path, InputKind::Archive),
             );
             continue;
         }
@@ -2381,19 +2439,42 @@ where
             }
         }
 
-        let contents = match fs::read_to_string(&path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        let snapshot = match capture_optional(&path, InputKind::Archive) {
+            Ok(snapshot) => snapshot,
+            Err(CaptureError::Unsupported { .. }) => {
                 catalog.load_failures.insert(
                     relative_path.clone(),
-                    format!("archive target {display} does not exist"),
+                    format!("archive target {display} is not a file"),
                 );
                 continue;
             }
             Err(error) => {
-                return Err(SyncError::io("read archive note", &path, error));
+                return Err(capture_to_sync("read archive note", error));
             }
         };
+        if snapshot.is_missing() {
+            catalog.load_failures.insert(
+                relative_path.clone(),
+                format!("archive target {display} does not exist"),
+            );
+            push_unique_input(inputs, snapshot);
+            continue;
+        }
+        let contents = match snapshot.utf8_contents() {
+            Ok(Some(contents)) => contents,
+            Ok(None) => {
+                catalog.load_failures.insert(
+                    relative_path.clone(),
+                    format!("archive target {display} does not exist"),
+                );
+                push_unique_input(inputs, snapshot);
+                continue;
+            }
+            Err(error) => {
+                return Err(capture_to_sync("read archive note", error));
+            }
+        };
+        push_unique_input(inputs, snapshot);
         catalog.note_paths.insert(relative_path.clone());
         for task in parse_tasks(&contents, settings) {
             if let Some(block_id) = task.block_id {
@@ -2927,30 +3008,70 @@ fn compose_outputs(
     outputs
 }
 
-fn apply_outputs(outputs: &[(PathBuf, String)]) -> Result<(), SyncError> {
+fn apply_guarded_outputs(
+    vault: &Path,
+    inputs: &[InputSnapshot],
+    scan_paths: &[PathBuf],
+    outputs: Vec<(PathBuf, String)>,
+) -> Result<(), SyncError> {
+    let mut planned = Vec::new();
     for (path, contents) in outputs {
-        atomic_write(path, contents)
-            .map_err(|error| SyncError::io("write note", path, error))?;
+        let original = snapshot_for_path(inputs, &path).ok_or_else(|| {
+            SyncError::new(format!(
+                "planned write is missing a snapshot: {}",
+                path.display()
+            ))
+        })?;
+        planned.push(
+            planned_write(path, original, contents.into_bytes(), false)
+                .map_err(|error| capture_to_sync("plan note write", error))?,
+        );
     }
-    Ok(())
+    let vault_canonical =
+        vault.canonicalize().unwrap_or_else(|_| vault.to_path_buf());
+    let rescan_vault = vault.to_path_buf();
+    let session = ApplySession::production(Box::new(move || {
+        markdown_files(&rescan_vault)
+    }));
+    match apply_plan(
+        &WritePlan {
+            vault_root: vault.to_path_buf(),
+            vault_canonical,
+            inputs: inputs.to_vec(),
+            scan_paths: scan_paths.to_vec(),
+            outputs: planned,
+        },
+        &session,
+    ) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(SyncError::from_apply(error)),
+    }
 }
 
-fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
-    let file_name = path.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("path has no file name: {}", path.display()),
-        )
-    })?;
-    let mut temp_name = OsString::from(".");
-    temp_name.push(file_name);
-    temp_name.push(format!(".{}.tmp", process::id()));
-    let temp_path = path.with_file_name(temp_name);
-    let _ = fs::remove_file(&temp_path);
-    fs::write(&temp_path, contents)?;
-    fs::rename(&temp_path, path).inspect_err(|_| {
-        let _ = fs::remove_file(&temp_path);
-    })
+fn push_unique_input(inputs: &mut Vec<InputSnapshot>, snapshot: InputSnapshot) {
+    if snapshot_for_path(inputs, &snapshot.path).is_some() {
+        return;
+    }
+    inputs.push(snapshot);
+}
+
+fn required_utf8(snapshot: &InputSnapshot) -> Result<String, CaptureError> {
+    snapshot
+        .utf8_contents()?
+        .ok_or_else(|| CaptureError::NotFound(snapshot.path.clone()))
+}
+
+fn capture_to_sync(action: &str, error: CaptureError) -> SyncError {
+    let reason = match &error {
+        CaptureError::Unstable(_) => Some("unstable_read"),
+        CaptureError::Unsupported { .. } => Some("unsupported_file"),
+        CaptureError::InvalidUtf8(_) => Some("io"),
+        _ => None,
+    };
+    let mut sync_error =
+        SyncError::new(format!("failed to {action} {}", error.message()));
+    sync_error.reason = reason.map(str::to_string);
+    sync_error
 }
 
 fn print_result(result: &SyncResult, format: OutputFormat) {
@@ -3357,25 +3478,68 @@ fn print_warnings(result: &SyncResult) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SyncError {
     message: String,
+    reason: Option<String>,
+    applied_files: Vec<String>,
+    deferred_files: Vec<String>,
+    recovery_directory: Option<String>,
 }
 
 impl SyncError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            reason: None,
+            applied_files: Vec::new(),
+            deferred_files: Vec::new(),
+            recovery_directory: None,
         }
     }
 
     fn io(action: &str, path: &Path, error: io::Error) -> Self {
         Self::new(format!("failed to {action} {}: {error}", path.display()))
     }
+
+    fn from_apply(error: ApplyError) -> Self {
+        Self {
+            message: error.message,
+            reason: Some(error.reason.as_str().to_string()),
+            applied_files: error
+                .applied_files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+            deferred_files: error
+                .deferred_files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+            recovery_directory: error
+                .recovery_directory
+                .map(|path| path.display().to_string()),
+        }
+    }
 }
 
 fn print_error(error: SyncError, format: OutputFormat) -> i32 {
     match format {
-        OutputFormat::Human => eprintln!("{COMMAND_NAME}: {}", error.message),
+        OutputFormat::Human => {
+            eprintln!("{COMMAND_NAME}: {}", error.message);
+            if let Some(recovery) = &error.recovery_directory {
+                eprintln!("{COMMAND_NAME}: recovery copies: {recovery}");
+            }
+        }
         OutputFormat::Json => {
-            println!("{}", json!({ "ok": false, "error": error.message }))
+            println!(
+                "{}",
+                json!({
+                    "ok": false,
+                    "error": error.message,
+                    "reason": error.reason,
+                    "applied_files": error.applied_files,
+                    "deferred_files": error.deferred_files,
+                    "recovery_directory": error.recovery_directory,
+                })
+            )
         }
     }
     1

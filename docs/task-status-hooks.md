@@ -492,6 +492,29 @@ registry is unreadable or its Blocked definition is missing, duplicated, or
 incompatible. Dry-run uses the same guard. This prevents both an unknown `[?]`
 marker and partial composition with daily-note structural edits.
 
+Live runs take the shared vault-maintenance lock (`BOB_VAULT_SYNC_LOCK_FILE`,
+the same lock as `bob vault-sync` and `bob nightly`) before planning and hold
+it through application. Before the first note replacement the command re-reads
+every planning input — scanned notes, the current and previous daily, loaded
+archive notes, Tasks settings (missing or present), and the scan manifest —
+and compares complete bytes plus regular-file identity, not only mtime or
+length. A concurrent save, a replacement inode, a symlink substitution, a
+changed Tasks settings file, or a new or deleted scan candidate cancels the
+run with no note writes. Replacements are staged as uniquely created
+temporaries in the destination directories; originals and proposed bytes are
+stored first under
+`${XDG_STATE_HOME:-$HOME/.local/state}/bob-cli/task-status-hooks/<vault-hash>/<run-id>/`.
+Recovery failure prevents note writes. A later failure after some notes have
+already been replaced reports the applied and remaining paths and does not
+roll earlier notes back. Byte checks and atomic rename reduce lost-update
+risk but cannot provide a true compare-and-swap against an editor that does
+not coordinate with the command. An unsaved Obsidian buffer is not
+observable, and a save can still race the final check. Recovery copies are
+the observed originals and intended outputs for compare/merge into the
+current note, not a blind vault restore. `--dry-run` does not lock, stage, or
+write recovery records. A live no-op may create the ordinary lock file, but
+no recovery or note staging artifacts.
+
 Unresolved direct or dependency links are warnings, not failures. If duplicate
 task block IDs occur in one resolved note, every matching task is synchronized
 and the ambiguity is reported. Completed-link normalization proceeds only when

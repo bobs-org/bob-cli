@@ -42,6 +42,22 @@ pub fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+pub fn state_home() -> PathBuf {
+    env::var_os("XDG_STATE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".local/state"))
+        })
+        .unwrap_or_else(|| env::temp_dir().join("bob-cli-state"))
+}
+
+pub fn bob_cli_state_dir() -> PathBuf {
+    state_home().join("bob-cli")
+}
+
 pub fn expand_tilde(path: &Path) -> PathBuf {
     let Some(path_text) = path.to_str() else {
         return path.to_path_buf();
