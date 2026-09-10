@@ -28,6 +28,7 @@ mod capture_sections;
 mod capture_targets;
 mod capture_task_id;
 mod capture_task_sections;
+mod capture_task_toggle;
 mod capture_tasks;
 mod collect_done;
 mod config;
