@@ -1654,6 +1654,30 @@ mod tests {
     }
 
     #[test]
+    fn hash_after_a_bare_block_id_marker_completes_a_pomodoro_name() {
+        let temp = TempDir::new("bob-cli-capture-complete-task-toggle-hash");
+        write_file(&temp.path().join("cash.md"), "- [ ] #task Parent ^bar\n");
+        let day_file = temp.path().join("2026/20260828.md");
+        write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n- [ ] ()\n");
+
+        let raw = "@cash+bar#bu";
+        let value = with_env("BOB_DAY_FILE", &day_file, || {
+            result(temp.path(), raw, raw.len())
+        });
+
+        assert_eq!(value.context, Some(CompletionContext::PomodoroName));
+        let Candidates::PomodoroName(candidates) = &value.candidates else {
+            panic!("expected Pomodoro-name candidates");
+        };
+        assert_eq!(candidates[0].replacement, "bugs");
+
+        // The same marker with body text keeps the task-section context.
+        let with_body = "note @cash+bar#bu";
+        let section = result(temp.path(), with_body, with_body.len());
+        assert_eq!(section.context, Some(CompletionContext::TaskSection));
+    }
+
+    #[test]
     fn pomodoro_name_completion_lists_named_then_nameable_rows() {
         let scan = capture_pomodoros::scan(concat!(
             "## Pomodoros\n",

@@ -85,8 +85,8 @@ result always carries at most one declaration. Only the bare '@@' at \
 --cursor (or, when --cursor is omitted, the last bare '@@' in source order) \
 is a candidate. An item whose single local marker cannot be expressed as a \
 declaration -- '@route#Section', '@route+block-id#section', \
-'@route^block-id', '@route:block-id', or a trailing bare '#' -- is left \
-untouched with a notice explaining why; an item \
+'@route+block-id' (a task toggle), '@route^block-id', '@route:block-id', \
+or a trailing bare '#' -- is left untouched with a notice explaining why; an item \
 with more than one local marker is left untouched with no notice, since \
 'bob capture-parse' already reports that duplicate. Feeding a rewrite's own \
 output back in is a no-op, because the claiming token is no longer bare.\n\n\
@@ -402,6 +402,17 @@ mod tests {
             .as_str()
             .expect("notice")
             .contains("cannot take a section"));
+    }
+
+    #[test]
+    fn json_reports_a_task_toggle_notice_without_changing_text() {
+        let value = json("@cash+goog-exit @@", None);
+        assert_eq!(value["changed"], false);
+        assert_eq!(value["text"], "@cash+goog-exit @@");
+        assert_eq!(value["notices"].as_array().expect("notices").len(), 1);
+        let notice = value["notices"][0].as_str().expect("notice");
+        assert!(notice.contains("cannot take a task toggle"), "{notice}");
+        assert!(notice.contains("@cash+goog-exit"), "{notice}");
     }
 
     #[test]

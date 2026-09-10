@@ -672,6 +672,14 @@ fn plan_capture_item(
     if let Some(clip) = request.forced_clip.as_ref() {
         parsed.clip = Some(clip.clone());
     }
+    if matches!(parsed.kind, CaptureKind::TaskToggle { .. }) {
+        // The `grammar` phase only teaches the shared grammar to recognize
+        // and parse a bare `@route+block-id[#name]` marker as a toggle; the
+        // `capture` phase wires the actual note mutation into this planner.
+        return Err(CaptureError::usage(
+            "task toggle capture is not implemented yet",
+        ));
+    }
     let created = date_string(today);
     let priority = match parsed.priority_level {
         Some(number) => Some(resolve_priority(
@@ -739,6 +747,9 @@ fn plan_capture_item(
         ),
         CaptureKind::PomodoroNote => {
             format_sub_bullet_line(&parsed.body, None, None)
+        }
+        CaptureKind::TaskToggle { .. } => {
+            unreachable!("task toggle capture is rejected before this point")
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);
@@ -996,6 +1007,7 @@ fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::Pomodoro { .. } => "pomodoro_task",
         CaptureKind::SubBullet { .. } => "sub_bullet",
         CaptureKind::PomodoroNote => "pomodoro_note",
+        CaptureKind::TaskToggle { .. } => "task_toggle",
     }
 }
 
@@ -1309,6 +1321,11 @@ fn plan_capture_to_target(
         CaptureKind::PomodoroNote => {
             return Err(CaptureError::io(
                 "pomodoro-note capture invariant failed: wrong write planner",
+            ));
+        }
+        CaptureKind::TaskToggle { .. } => {
+            return Err(CaptureError::io(
+                "task toggle capture invariant failed: wrong write planner",
             ));
         }
     };
@@ -4137,7 +4154,7 @@ mod tests {
             ("body @cash+id#", "requires a task section"),
             ("body @cash+id#bad_id", "section must contain"),
             ("body @cash+id#req^x", "section must contain"),
-            ("@cash+id", "task text is required"),
+            ("body @cash+id#req+x", "section must contain"),
         ] {
             let error = parse_capture_text(raw, None)
                 .expect_err(&format!("{raw} should fail"));
@@ -4149,6 +4166,42 @@ mod tests {
             .expect("mid-text marker remains literal");
         assert_eq!(parsed.body, "Discuss @cash+id later");
         assert_eq!(parsed.kind, CaptureKind::Task);
+    }
+
+    /// A bare `@route+block-id[#name]` marker with no other text is a task
+    /// toggle, not a "task text is required" error.
+    #[test]
+    fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
+        let parsed = parse_capture_text("@cash+id", None)
+            .expect("bare block-ID marker toggles");
+        assert_eq!(parsed.body, "");
+        assert_eq!(parsed.route.as_deref(), Some("cash"));
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::TaskToggle {
+                block_id: "id".to_string(),
+                pomodoro_name: None,
+            }
+        );
+
+        let named = parse_capture_text("@cash+id#deep+work", None)
+            .expect("bare marker with a Pomodoro name toggles");
+        assert_eq!(
+            named.kind,
+            CaptureKind::TaskToggle {
+                block_id: "id".to_string(),
+                pomodoro_name: Some("deep+work".to_string()),
+            }
+        );
+
+        for raw in ["@cash+id s:2", "@cash+id\n- child text"] {
+            let error = parse_capture_text(raw, None)
+                .expect_err(&format!("{raw} should still need text"));
+            assert!(
+                error.message.contains("task text is required"),
+                "{raw}: {error:?}"
+            );
+        }
     }
 
     #[test]

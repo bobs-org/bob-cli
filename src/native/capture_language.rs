@@ -38,6 +38,13 @@ pub(crate) enum CaptureKind {
         section: Option<TaskSectionSelector>,
     },
     PomodoroNote,
+    /// A bare `@route+block-id` or `@route+block-id#pomodoro` marker with no
+    /// other text on the item: toggle the existing task's status instead of
+    /// capturing a new sub-bullet under it.
+    TaskToggle {
+        block_id: String,
+        pomodoro_name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -781,7 +788,15 @@ fn parse_capture_item<'a>(
         parent_outcome.declarations,
         parent_line.line_number,
     ));
-    if parent_outcome.body.is_empty() {
+    let parent_body_is_empty = parent_outcome.body.is_empty();
+    let parent_is_toggle_candidate = matches!(
+        parent_outcome.route.as_ref().map(|route| &route.token.kind),
+        Some(CaptureKind::SubBullet {
+            target: SubBulletTarget::BlockId(_),
+            ..
+        })
+    );
+    if parent_body_is_empty && !parent_is_toggle_candidate {
         return Err(missing_text_error());
     }
 
@@ -886,6 +901,14 @@ fn parse_capture_item<'a>(
         Some(line_route) => (line_route.token.route, line_route.token.kind),
         None => (None, CaptureKind::Task),
     };
+    let kind = resolve_sub_bullet_kind(
+        kind,
+        parent_body_is_empty,
+        sub_bullets.is_empty(),
+        aggregate.clip.is_none()
+            && aggregate.scheduled_offset.is_none()
+            && aggregate.priority_level.is_none(),
+    )?;
     if matches!(kind, CaptureKind::PomodoroNote) {
         if aggregate.scheduled_offset.is_some() {
             return Err(pomodoro_note_schedule_conflict_error());
@@ -908,6 +931,45 @@ fn parse_capture_item<'a>(
         declarations,
         local_destination_marker,
     ))
+}
+
+/// Decide whether a resolved `@route+block-id[#name]` marker stays an
+/// ordinary sub-bullet capture or becomes a task toggle, once the finished
+/// item -- not just the marker's own token -- is known. A toggle needs an
+/// empty parent body, no authored children, and no other item-wide marker;
+/// an item that looks like a toggle but fails one of those still needs text,
+/// exactly like it always has. Every other kind passes through unchanged.
+fn resolve_sub_bullet_kind(
+    kind: CaptureKind,
+    parent_body_is_empty: bool,
+    sub_bullets_is_empty: bool,
+    no_other_item_markers: bool,
+) -> Result<CaptureKind, String> {
+    let CaptureKind::SubBullet {
+        target: SubBulletTarget::BlockId(block_id),
+        section,
+    } = kind
+    else {
+        return Ok(kind);
+    };
+    if !parent_body_is_empty {
+        if let Some(section) = &section
+            && !is_selector_component(&section.text)
+        {
+            return Err(SUB_BULLET_SECTION_ERROR.to_string());
+        }
+        return Ok(CaptureKind::SubBullet {
+            target: SubBulletTarget::BlockId(block_id),
+            section,
+        });
+    }
+    if sub_bullets_is_empty && no_other_item_markers {
+        return Ok(CaptureKind::TaskToggle {
+            block_id,
+            pomodoro_name: section.map(|selector| selector.text),
+        });
+    }
+    Err(missing_text_error())
 }
 
 fn parsed_capture_item_outcome<'a>(
@@ -1050,10 +1112,31 @@ fn resolve_line<'a>(
     {
         let rest = &tokens[1..];
         if rest.is_empty() {
-            if !matches!(token.kind, CaptureKind::Task) {
+            if matches!(token.kind, CaptureKind::Task) {
+                // A bare `@foo` with no body stays literal task text.
+            } else if matches!(
+                token.kind,
+                CaptureKind::SubBullet {
+                    target: SubBulletTarget::BlockId(_),
+                    ..
+                }
+            ) {
+                // A bare `@route+block-id[#name]` routes with an empty body;
+                // `parse_capture_item` decides whether the finished item
+                // qualifies as a task toggle once children and other
+                // item-wide markers are known.
+                return Ok(LineOutcome {
+                    body: String::new(),
+                    markers,
+                    route: Some(LineRoute {
+                        token,
+                        marker_text: tokens[0].text.to_string(),
+                    }),
+                    declarations,
+                });
+            } else {
                 return Err(missing_text_error());
             }
-            // A bare `@foo` with no body stays literal task text.
         } else {
             if rest.iter().any(|token| token.text == "#") {
                 return Err(pomodoro_note_route_conflict_error());
@@ -1320,7 +1403,12 @@ fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
                 block_id
             ));
         }
-        Some(selector) if !is_selector_component(selector) => {
+        // The strict task-section charset (no `+`) is enforced later, once
+        // the finished item shows whether this stays a sub-bullet capture or
+        // becomes a task toggle -- whose trailing name is a Pomodoro name and
+        // takes the wider Pomodoro charset instead. See
+        // `resolve_sub_bullet_kind`.
+        Some(selector) if !is_pomodoro_selector_component(selector) => {
             return Err(SUB_BULLET_SECTION_ERROR.to_string());
         }
         Some(selector) => Some(TaskSectionSelector {
@@ -1828,6 +1916,9 @@ pub(crate) enum SpanKind {
     SubBulletRoute,
     SubBulletBlockId,
     SubBulletSection,
+    TaskToggleRoute,
+    TaskToggleBlockId,
+    TaskTogglePomodoroName,
     GlobalRoute,
     GlobalSubBulletRoute,
     GlobalSubBulletBlockId,
@@ -1856,6 +1947,9 @@ impl SpanKind {
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
             Self::SubBulletSection => "sub_bullet_section",
+            Self::TaskToggleRoute => "task_toggle_route",
+            Self::TaskToggleBlockId => "task_toggle_block_id",
+            Self::TaskTogglePomodoroName => "task_toggle_pomodoro_name",
             Self::GlobalRoute => "global_route",
             Self::GlobalSubBulletRoute => "global_sub_bullet_route",
             Self::GlobalSubBulletBlockId => "global_sub_bullet_block_id",
@@ -1919,6 +2013,7 @@ pub(crate) enum EditorMode {
     PomodoroTask,
     PomodoroNote,
     SubBullet,
+    TaskToggle,
     Incomplete,
 }
 
@@ -1930,6 +2025,7 @@ impl EditorMode {
             Self::PomodoroTask => "pomodoro_task",
             Self::PomodoroNote => "pomodoro_note",
             Self::SubBullet => "sub_bullet",
+            Self::TaskToggle => "task_toggle",
             Self::Incomplete => "incomplete",
         }
     }
@@ -2407,6 +2503,20 @@ struct EditorItemOutcome<'a> {
     declarations: Vec<GlobalDeclarationToken<'a>>,
 }
 
+/// Re-kind a resolved sub-bullet marker's spans to the task-toggle span
+/// kinds, so the editor can color the marker distinctly the instant an item
+/// becomes (or is one keystroke from becoming) a toggle.
+fn rekind_sub_bullet_spans(spans: &mut [Span]) {
+    for span in spans {
+        span.kind = match span.kind {
+            SpanKind::SubBulletRoute => SpanKind::TaskToggleRoute,
+            SpanKind::SubBulletBlockId => SpanKind::TaskToggleBlockId,
+            SpanKind::SubBulletSection => SpanKind::TaskTogglePomodoroName,
+            other => other,
+        };
+    }
+}
+
 fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
     let mut spans: Vec<Span> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -2432,17 +2542,36 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
     if local_destination_marker.is_none() {
         local_destination_marker = parent_parse.marker_text.clone();
     }
+    let mut own_local_destination_marker_index = None;
     if let Some(marker) = complete_local_destination_marker(
         parent_parse.marker_text.as_deref(),
         parent_parse.marker.as_ref(),
     ) {
         local_destination_markers.push(marker);
+        own_local_destination_marker_index =
+            Some(local_destination_markers.len() - 1);
     }
+    // Set only when the parent's marker is a complete sub-bullet marker whose
+    // trailing name only passed the wider Pomodoro charset -- i.e. it needs a
+    // strict re-check once we know whether this item is a task toggle.
+    let mut sub_bullet_relaxed_section_range = None;
     let (mut mode, mut route, mut section, mut block_id, mut needs) =
         match &parent_parse.marker {
             Some(marker) => {
                 spans.extend(marker.spans.clone());
                 seen.absorb_route(None, &mut diagnostics);
+                if marker.mode == EditorMode::SubBullet
+                    && marker
+                        .section
+                        .as_deref()
+                        .is_some_and(|section| !is_selector_component(section))
+                {
+                    let start = marker.spans.first().map(|span| span.start);
+                    let end = marker.spans.last().map(|span| span.end);
+                    if let (Some(start), Some(end)) = (start, end) {
+                        sub_bullet_relaxed_section_range = Some((start, end));
+                    }
+                }
                 (
                     marker.mode,
                     marker.route.clone(),
@@ -2540,6 +2669,56 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
             if authored.depth == AuthoredDepth::First {
                 has_first_level_owner = true;
             }
+        }
+    }
+
+    // A bare `@route+block-id[#name]` marker with an empty body, no authored
+    // children, and no other item-wide marker is a task toggle instead of a
+    // sub-bullet capture; a trailing bare `#` on the same shape is one
+    // keystroke away from one. Neither can arise from a child line's marker
+    // (a child line always has authored body text), so only the parent's
+    // marker is ever relevant here. See `resolve_sub_bullet_kind` for the
+    // mirrored decision in the execution grammar.
+    let toggle_eligible = body.is_empty()
+        && sub_bullets.is_empty()
+        && !seen.schedule
+        && !seen.priority
+        && !seen.clip;
+    if toggle_eligible && mode == EditorMode::SubBullet {
+        mode = EditorMode::TaskToggle;
+        rekind_sub_bullet_spans(&mut spans);
+        if let Some(index) = own_local_destination_marker_index {
+            local_destination_markers[index].mode = EditorMode::TaskToggle;
+        }
+    } else if toggle_eligible
+        && mode == EditorMode::Incomplete
+        && needs == [Need::TaskSection]
+    {
+        needs = vec![Need::PomodoroName];
+        rekind_sub_bullet_spans(&mut spans);
+    } else if let Some(range) = sub_bullet_relaxed_section_range {
+        mode = EditorMode::Task;
+        route = None;
+        section = None;
+        block_id = None;
+        needs = Vec::new();
+        spans.retain(|span| {
+            !matches!(
+                span.kind,
+                SpanKind::SubBulletRoute
+                    | SpanKind::SubBulletBlockId
+                    | SpanKind::SubBulletSection
+            )
+        });
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "invalid_sub_bullet_section",
+            message: SUB_BULLET_SECTION_ERROR.to_string(),
+            range: Some(range),
+        });
+        local_destination_marker = None;
+        if let Some(index) = own_local_destination_marker_index {
+            local_destination_markers.remove(index);
         }
     }
 
@@ -2846,8 +3025,12 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
             SUB_BULLET_BLOCK_ID_ERROR,
         ));
     }
+    // The strict task-section charset (no `+`) is enforced later, once the
+    // finished item shows whether this stays a sub-bullet capture or becomes
+    // a task toggle -- whose trailing name is a Pomodoro name and takes the
+    // wider Pomodoro charset instead. See `parse_editor_item`.
     if section_part.is_some_and(|section| {
-        !section.is_empty() && !is_selector_component(section)
+        !section.is_empty() && !is_pomodoro_selector_component(section)
     }) {
         return TokenParse::Invalid(token_diagnostic(
             token,
@@ -3393,7 +3576,17 @@ pub(crate) fn completion_field_at(
         return None;
     }
 
-    marker_field_at_cursor(&token, cursor)
+    // A `#` after `@route+block-id` completes a Pomodoro name instead of a
+    // task section exactly when the finished item is (or is one keystroke
+    // from becoming) a task toggle -- mirroring `parse_editor_item`'s own
+    // toggle decision, since only that whole-item view knows whether the
+    // body, authored children, and other item-wide markers allow it.
+    let resolved = parse_editor_item(item).item;
+    let sub_bullet_is_toggle = matches!(resolved.mode, EditorMode::TaskToggle)
+        || (resolved.mode == EditorMode::Incomplete
+            && resolved.needs == [Need::PomodoroName]);
+
+    marker_field_at_cursor(&token, cursor, sub_bullet_is_toggle)
 }
 
 fn has_previous_first_level_authored_item(
@@ -3450,6 +3643,7 @@ fn completion_marker_index(
 fn marker_field_at_cursor(
     token: &Token<'_>,
     cursor: usize,
+    sub_bullet_is_toggle: bool,
 ) -> Option<CompletionField> {
     let text = token.text;
 
@@ -3457,13 +3651,18 @@ fn marker_field_at_cursor(
         let marker = &text[1..];
         let (route_part, rest) =
             marker.split_once('+').expect("sub-bullet candidate");
+        let third_context = if sub_bullet_is_toggle {
+            CompletionContext::PomodoroName
+        } else {
+            CompletionContext::TaskSection
+        };
         let (block_part, third) = match rest.split_once('#') {
             Some((block, section)) => (
                 block,
                 Some(CompletionThird {
                     separator_len: 1,
                     part: section,
-                    context: CompletionContext::TaskSection,
+                    context: third_context,
                 }),
             ),
             None => (rest, None),
@@ -3923,7 +4122,8 @@ fn classify_local_marker(
         | EditorMode::SubBullet
         | EditorMode::Bullet
         | EditorMode::PomodoroTask
-        | EditorMode::PomodoroNote => LocalMarkerAbsorbability::NonAbsorbable,
+        | EditorMode::PomodoroNote
+        | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
         }
@@ -3948,6 +4148,10 @@ fn non_absorbable_marker_notice(marker: &LocalDestinationMarker) -> String {
         ),
         EditorMode::PomodoroNote => format!(
             "@@ cannot take a Pomodoro note: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::TaskToggle => format!(
+            "@@ cannot take a task toggle: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::Incomplete => {
@@ -4998,8 +5202,8 @@ mod tests {
         for (raw, mode) in [
             ("@dev:id", EditorMode::PomodoroTask),
             ("@:", EditorMode::Incomplete),
-            ("@dev+id", EditorMode::SubBullet),
-            ("@dev+id#req", EditorMode::SubBullet),
+            ("@dev+id", EditorMode::TaskToggle),
+            ("@dev+id#req", EditorMode::TaskToggle),
             ("@+", EditorMode::Incomplete),
             ("@dev^id", EditorMode::Task),
             ("@^", EditorMode::Incomplete),
@@ -5048,6 +5252,9 @@ mod tests {
             "Postgres 17 minimum %log @foo+bar#requirements",
             "Postgres 17 minimum @foo+bar#q-and-a",
             "Postgres 17 minimum @foo+bar#Q&A",
+            "@Cash+Goog-Exit",
+            "@Cash+Goog-Exit#bugs",
+            "@Cash+Goog-Exit#deep+work",
             "Some note @foo#bar",
             "@foo#bar Some note",
             "Some note @foo#",
@@ -5078,6 +5285,7 @@ mod tests {
                 CaptureKind::Pomodoro { .. } => EditorMode::PomodoroTask,
                 CaptureKind::SubBullet { .. } => EditorMode::SubBullet,
                 CaptureKind::PomodoroNote => EditorMode::PomodoroNote,
+                CaptureKind::TaskToggle { .. } => EditorMode::TaskToggle,
             };
             assert_eq!(parse.mode, expected_mode, "{raw}");
             if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {
@@ -5109,6 +5317,18 @@ mod tests {
             }
             if let CaptureKind::Bullet { section_prefix, .. } = &executed.kind {
                 assert_eq!(parse.section, *section_prefix, "{raw}");
+            }
+            if let CaptureKind::TaskToggle {
+                block_id,
+                pomodoro_name,
+            } = &executed.kind
+            {
+                assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
+                assert_eq!(
+                    parse.section.as_deref(),
+                    pomodoro_name.as_deref(),
+                    "{raw}"
+                );
             }
             assert!(parse.diagnostics.is_empty(), "{raw}");
         }
@@ -5258,6 +5478,93 @@ mod tests {
         let needs_section = editor("Add context @Dev+focus-123#");
         assert_eq!(needs_section.needs, vec![Need::TaskSection]);
         assert_eq!(needs_section.block_id.as_deref(), Some("focus-123"));
+    }
+
+    #[test]
+    fn a_bare_sub_bullet_marker_becomes_a_task_toggle() {
+        let bare = editor("@Cash+Goog-Exit");
+        assert_eq!(bare.mode, EditorMode::TaskToggle);
+        assert_eq!(bare.body, "");
+        assert_eq!(bare.route.as_deref(), Some("cash"));
+        assert_eq!(bare.block_id.as_deref(), Some("Goog-Exit"));
+        assert!(bare.section.is_none());
+        assert!(bare.needs.is_empty());
+        assert!(bare.diagnostics.is_empty());
+        assert_eq!(
+            span_kinds(&bare),
+            vec![SpanKind::TaskToggleRoute, SpanKind::TaskToggleBlockId]
+        );
+
+        let named = editor("@Cash+Goog-Exit#deep+work");
+        assert_eq!(named.mode, EditorMode::TaskToggle);
+        assert_eq!(named.section.as_deref(), Some("deep+work"));
+        assert!(named.diagnostics.is_empty());
+        assert_eq!(
+            span_kinds(&named),
+            vec![
+                SpanKind::TaskToggleRoute,
+                SpanKind::TaskToggleBlockId,
+                SpanKind::TaskTogglePomodoroName,
+            ]
+        );
+
+        // A trailing bare `#` on an otherwise-empty item is one keystroke
+        // from a toggle: stay `incomplete`, but ask for a Pomodoro name
+        // instead of a task section.
+        let incomplete = editor("@cash+goog-exit#");
+        assert_eq!(incomplete.mode, EditorMode::Incomplete);
+        assert_eq!(incomplete.needs, vec![Need::PomodoroName]);
+        assert_eq!(
+            span_kinds(&incomplete),
+            vec![
+                SpanKind::TaskToggleRoute,
+                SpanKind::TaskToggleBlockId,
+                SpanKind::InteractivePlaceholder,
+            ]
+        );
+
+        // The same trailing bare `#` keeps its task-section meaning once the
+        // item has body text -- unaffected by the toggle rule.
+        let with_body = editor("note @cash+goog-exit#");
+        assert_eq!(with_body.mode, EditorMode::Incomplete);
+        assert_eq!(with_body.needs, vec![Need::TaskSection]);
+
+        // Any authored child bullet disqualifies the item from toggling, so
+        // it still just needs text.
+        let with_child = editor("@cash+goog-exit\n- detail");
+        assert_ne!(with_child.mode, EditorMode::TaskToggle);
+        assert_eq!(with_child.mode, EditorMode::SubBullet);
+
+        // A schedule/priority/clip marker on the item also disqualifies it.
+        let with_schedule = editor("@cash+goog-exit s:2");
+        assert_ne!(with_schedule.mode, EditorMode::TaskToggle);
+    }
+
+    #[test]
+    fn a_toggle_with_body_text_stays_a_sub_bullet_marker() {
+        // A `+`-name is only valid Pomodoro syntax for a genuine toggle; a
+        // sub-bullet capture with real body text still enforces the
+        // stricter task-section charset and reports the sub-bullet code,
+        // even though the relaxed parse-time check let it through.
+        let rejected = editor("Add context @sase+goog-exit#a+b");
+        assert_eq!(codes(&rejected), vec!["invalid_sub_bullet_section"]);
+        assert_eq!(rejected.mode, EditorMode::Task);
+        assert_eq!(rejected.body, "Add context");
+        assert!(rejected.route.is_none());
+        assert!(rejected.needs.is_empty());
+        assert!(
+            span_kinds(&rejected).iter().all(|kind| !matches!(
+                kind,
+                SpanKind::SubBulletRoute
+                    | SpanKind::SubBulletBlockId
+                    | SpanKind::SubBulletSection
+                    | SpanKind::TaskToggleRoute
+                    | SpanKind::TaskToggleBlockId
+                    | SpanKind::TaskTogglePomodoroName
+            )),
+            "{:?}",
+            rejected.spans
+        );
     }
 
     #[test]
@@ -6135,6 +6442,35 @@ mod tests {
         assert_eq!(completion.block_id.as_deref(), Some("goog"));
         assert_eq!(completion.query, "");
         assert_eq!(completion.replacement, (raw.len(), raw.len()));
+    }
+
+    #[test]
+    fn hash_after_a_bare_block_id_marker_completes_a_pomodoro_name() {
+        // The `@route+` route side and the task-picker side are unchanged --
+        // still `Route` and `Task` -- only the trailing `#` context flips.
+        let raw = "@Cash+goog#bu";
+        let at = raw.find('@').expect("at");
+        let plus = raw.find('+').expect("plus");
+        let hash = raw.find('#').expect("hash");
+
+        let route = field(raw, at + 3).expect("route field");
+        assert_eq!(route.context, CompletionContext::Route);
+
+        let task = field(raw, plus + 2).expect("task field");
+        assert_eq!(task.context, CompletionContext::Task);
+
+        let name = field(raw, raw.len()).expect("pomodoro name field");
+        assert_eq!(name.context, CompletionContext::PomodoroName);
+        assert_eq!(name.route.as_deref(), Some("cash"));
+        assert_eq!(name.block_id.as_deref(), Some("goog"));
+        assert_eq!(name.query, "bu");
+        assert_eq!(name.replacement, (hash + 1, raw.len()));
+
+        // Once the item has body text, the same `#` keeps its task-section
+        // meaning -- unaffected by the toggle rule.
+        let with_body = "note @Cash+goog#bu";
+        let section = field(with_body, with_body.len()).expect("task section");
+        assert_eq!(section.context, CompletionContext::TaskSection);
     }
 
     #[test]
@@ -7063,6 +7399,29 @@ were removed"
                 section: None,
             }
         );
+    }
+
+    #[test]
+    fn execution_a_toggle_item_participates_normally_in_a_multi_item_draft() {
+        let draft = parse_capture_draft_with_clip_control(
+            "First task @dev\n\n@cash+goog-exit\n\nThird task @dev",
+            None,
+            None,
+            true,
+        )
+        .expect("parse");
+        assert_eq!(draft.items.len(), 3);
+        assert_eq!(draft.items[0].parsed.kind, CaptureKind::Task);
+        assert_eq!(
+            draft.items[1].parsed.kind,
+            CaptureKind::TaskToggle {
+                block_id: "goog-exit".to_string(),
+                pomodoro_name: None,
+            }
+        );
+        assert_eq!(draft.items[1].parsed.body, "");
+        assert_eq!(draft.items[1].parsed.route.as_deref(), Some("cash"));
+        assert_eq!(draft.items[2].parsed.kind, CaptureKind::Task);
     }
 
     #[test]
