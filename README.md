@@ -99,8 +99,9 @@ separate steps:
    token sends them to another note; scheduled checkbox-bearing captures start
    Blocked (`[?]`).
 2. **Link today's work** onto a Pomodoro in the daily note. That happens when
-   you capture with `@route:id` (which also marks the task Next), or when you
-   add a task link under a Pomodoro in Obsidian. `bob pomodoro`,
+   you capture with `@route:id` (which also marks the task Next), toggle an
+   existing task with a bare `@route+id` capture, or add a task link under a
+   Pomodoro in Obsidian. `bob pomodoro`,
    `bob tmux-pomodoro`, and `bob notify` only *read* that ledger; they do not
    create links.
 3. **Reconcile statuses** with `bob task-status-hooks` so Next, In Progress, and
@@ -193,6 +194,8 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
+| `@route+id` with no other text | Toggle that task between Ready and Next and add or remove its Pomodoro task link |
+| `@route+id#pomodoro` with no other text | Same toggle, selecting a named Pomodoro when setting Next |
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
 | `s:<N>` | Schedule N days from today; checkbox-bearing captures start Blocked, including `s:0` |
 | `p:<N>` | Write priority level N and roll a scheduled date, so checkbox-bearing captures start Blocked |
@@ -200,10 +203,19 @@ typed on that same item. The whole batch is planned before anything is written.
 
 `#` is not one marker. A trailing bare `#` is a Pomodoro note; `@route#…` selects
 a heading in that note; `@route+id#…` selects an ALL-CAPS child section of that
-task; `@route:id#…` selects a matching named open Pomodoro or creates a named
-future Pomodoro. A `#` in the middle of the body stays ordinary text. The retired
-`@route::id` spelling is not accepted; use `@route^id` for an ordinary task
-with a block ID.
+task once the item has body text, but selects a Pomodoro name when
+`@route+id#…` is the whole item; `@route:id#…` selects a matching named open
+Pomodoro or creates a named future Pomodoro. A `#` in the middle of the body
+stays ordinary text. The retired `@route::id` spelling is not accepted; use
+`@route^id` for an ordinary task with a block ID.
+
+A bare `@route+id` capture toggles the existing task: Ready `[ ]` and Blocked
+`[?]` become Next `[*]` and get `[[route#^id]]` under the selected open
+Pomodoro; Next becomes Ready and removes matching links from every open
+Pomodoro. Future schedules are retired only when the task has exactly one valid
+future `[scheduled::YYYY-MM-DD]`, and a Schedule Log entry is written only if
+the task already has that log. In Progress, done, canceled, missing,
+duplicate, and non-task IDs are rejected before any note is written.
 
 ```bash
 bob capture buy milk @groceries
@@ -211,6 +223,8 @@ bob capture '@dev^foobar' 'Some ordinary task.'
 bob capture '@dev:foobar' 'Some foobar task.'
 bob capture '@dev:foobar#bugs' 'Some foobar task.'
 bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'
+bob capture '@cash+goog-exit'
+bob capture '@cash+goog-exit#coding'
 bob capture remembered to bump the timeout #
 printf '@@foo\nFirst task\n\nSecond task @bar\n' | bob capture
 ```

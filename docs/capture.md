@@ -23,6 +23,7 @@ workflow guide.
   - [Task with a requested block ID](#task-with-a-requested-block-id)
   - [Pomodoro-linked tasks](#pomodoro-linked-tasks)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
+  - [Task status toggle](#task-status-toggle)
   - [Pomodoro notes](#pomodoro-notes)
   - [Section bullets](#section-bullets)
   - [Command-line options](#command-line-options)
@@ -53,6 +54,8 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route+block-id` | Ordinary child bullet under an existing task |
 | `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
+| `@route+block-id` with no other text | Toggle that task between Ready `[ ]` and Next `[*]` and add or remove its Pomodoro task link |
+| `@route+block-id#pomodoro` with no other text | Same toggle, selecting a matching named open Pomodoro or creating a named future Pomodoro |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `p:<N>` | Write priority level N and roll a scheduled date in that level's window |
@@ -66,10 +69,14 @@ anything is written, and any failure rolls the whole batch back.
 | `@notes#Ideas` | Bullet under a heading in `notes.md` |
 | `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
 | `@cash+id#requirements` | Child under that task's `REQUIREMENTS` section |
+| `@cash+id#coding` with no other text | Toggle that task and select the `CODING` Pomodoro |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
 
-A `#` in the middle of the body stays ordinary text. `@route::id` is retired;
-use `@route^id` for an ordinary task with a block ID.
+A `#` after `@route+id` follows the item's mode: with no body text it names a
+Pomodoro for the task toggle, and once body text is present it names an
+ALL-CAPS task section for the child bullet. A `#` in the middle of the body
+stays ordinary text. `@route::id` is retired; use `@route^id` for an ordinary
+task with a block ID.
 
 Leading `@route text` is accepted only on an item's first physical line. Later
 lines in the same item take trailing markers only. `@@...` has no such
@@ -578,6 +585,67 @@ task:
 	- FUTURE WORK
 ```
 
+### Task status toggle
+
+A capture item that is exactly `@route+block-id`, with no body text and no
+authored child bullets, toggles that existing task instead of writing a child
+bullet. `bob capture '@cash+goog-exit'` flips the task between Ready `[ ]` and
+Next `[*]`, matching the Obsidian Ctrl+Shift+Enter keymap this command mirrors.
+The route note and daily note are planned together before either file is
+written, so a failure leaves the whole batch unchanged.
+
+`@route+block-id#pomodoro` is the same toggle with a Pomodoro selector. The
+`#` component follows the item's mode: with no body text it selects a Pomodoro
+name, using the same slug matching, canonicalization, and named-future-entry
+creation rules as `@route:block-id#pomodoro`; once the item has body text,
+`#section` keeps its child-bullet meaning and selects an ALL-CAPS task section.
+
+Status transitions are:
+
+| Current status | Result |
+| --- | --- |
+| Ready `[ ]` | Next `[*]`, with `[[route#^block-id]]` linked under the selected open Pomodoro |
+| Blocked `[?]` | Next `[*]`, with the same Pomodoro link; `dependsOn` on the task line also emits a warning |
+| Next `[*]` | Ready `[ ]`, with matching links removed from every open Pomodoro |
+| In Progress `[/]` | Error: `task ^<id> is In Progress; toggling from In Progress needs a work summary, so use <ctrl+shift+enter> in Obsidian` |
+| Done, canceled, or unknown | Error: `task ^<id> is <Status Name>; only Ready, Blocked, and Next tasks can be toggled` |
+
+When a Ready or Blocked task is promoted to Next, Bob inserts the task link
+under the selected Pomodoro unless that entry already has the same link. In
+that idempotent case no duplicate is written and JSON reports
+`pomodoro_already_linked: true`. Matching duplicate links under later still-open
+Pomodoros are removed. Completed Pomodoros are not cleaned up. When a Next task
+is cleared back to Ready, every matching link under every open Pomodoro is
+removed; a `#pomodoro` selector on this clearing pass is inert and reported as
+`pomodoro_selector_unused: true`, because the selector only matters when adding
+a link.
+
+If the task line has exactly one valid future `[scheduled::YYYY-MM-DD]` field
+and the toggle sets the task to Next, Bob removes that scheduled field. When
+the task already owns a direct-child `🗓️ **SCHEDULE LOG**`, Bob prepends a
+dated entry under it:
+
+```markdown
+- _2026-07-20 → 2026-07-10_ — 🍅 pulled into today's Pomodoro
+```
+
+No Schedule Log is created for a task that does not already have one, and past,
+today, invalid, or multiple scheduled fields are left alone.
+
+Task lookup errors match sub-bullet capture: unresolved route notes, missing
+block IDs, duplicate block IDs, non-task block IDs, close-match suggestions,
+and the `bob capture-tasks -r <route>` hint are reused. Daily-ledger errors
+match Pomodoro-linked capture: `Bob daily note does not exist: <path>`, `Bob
+daily note has no Pomodoros section`, `Bob daily note has no eligible open
+Pomodoro`, `Bob daily note has multiple open timed Pomodoros`, and invalid
+Pomodoro names with ``Pomodoro name must contain only A-Z, 0-9 or `& ' ( ) + , . / -` and must start with a letter or digit``. A task toggle also
+rejects forced destination flags with `task toggle capture cannot be combined
+with <flags>`, `--clip` with `task toggle capture cannot be combined with
+--clip`, `%...` with `task toggle capture cannot be combined with % clipboard
+markers`, `s:<N>` with `task toggle capture cannot be combined with s:<N>`,
+`p:<N>` with `task toggle capture cannot be combined with p:<N>`, and authored
+child bullets with `task toggle capture cannot have authored child bullets`.
+
 ### Pomodoro notes
 
 Append a bare trailing `#` marker to capture the item as a plain-text
@@ -692,8 +760,8 @@ call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`, and
 `placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
-`"pomodoro_note"`, or `"sub_bullet"`, and `task_line` holds the rendered line
-for any kind. On JSON-mode failures, stdout is still a
+`"pomodoro_note"`, `"sub_bullet"`, or `"task_toggle"`, and `task_line` holds
+the rendered line for any kind. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
 
 A capture with authored sub-bullets additionally includes a `sub_bullets`
@@ -741,6 +809,21 @@ Sub-bullet results additionally include `parent_line`, `parent_text`,
 task section also includes `parent_section` (the matched original title);
 plain `@route+block-id` captures omit it. They reuse `block_id` for the
 parent's ID, omitting it when a task-ref selected a parent without one.
+
+Task-toggle results use kind `"task_toggle"`, `placement: "toggled"`,
+`routed: true`, `text: ""`, and `task_line` set to the resulting task line.
+They additionally include `toggle_direction` (`"next"` or `"open"`),
+`previous_task_line`, `status_symbol`, `status_name`,
+`previous_status_symbol`, `previous_status_name`, `block_id`, `day_file`,
+`block_link`, `removed_pomodoro_links`, `removed_scheduled` when a future
+scheduled date was retired, and `schedule_log` when that retirement wrote an
+entry under an existing Schedule Log. Link-direction toggles also report
+`pomodoro_link_placement` when a link was inserted, `pomodoro_name` when a
+named entry was selected or created, `creates_pomodoro`,
+`pomodoro_already_linked`, and any later-link removals. Clearing toggles report
+the all-open-Pomodoro cleanup count and set `pomodoro_selector_unused: true`
+when the input included an inert `#name`. Toggle results omit `sub_bullets`,
+`clip`, `priority`, `priority_label`, `parent_*`, and `scheduled`.
 
 Pomodoro-note results use kind `"pomodoro_note"` with `routed: false`, `route:
 null`, and `target`/`relative_target` set to the daily note. They additionally
@@ -849,8 +932,8 @@ JSON output is a single versioned object:
 `input` is the raw text as received, before whitespace normalization. `body` is
 the normalized capture body after terminal `s:<N>`, `p:<N>`, and `%...` markers
 and the recognized `@...` token are removed, matching what `bob capture` would
-write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`, `pomodoro_note`,
-`sub_bullet`, or `incomplete`, describing whichever line resolved a marker
+write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
+`pomodoro_note`, `sub_bullet`, `task_toggle`, or `incomplete`, describing whichever line resolved a marker
 first -- the parent's leading or trailing form, or else the first child line
 with a trailing marker. A bare trailing `#` reports `pomodoro_note` with
 `route`, `section`, and `block_id` all `null` and an empty `needs` list. Combining
@@ -864,11 +947,14 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 still has to supply, in the
 order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
-needs `["section"]`, while `@route+id#` reports mode `incomplete` and needs
-`["task_section"]` and `@route:id#` reports mode `incomplete` and needs
-`["pomodoro_name"]`. A complete `@route+id#sec` sub-bullet populates `route`,
-`block_id`, and `section` together. A complete `@route:id#name` Pomodoro marker
-populates `route`, `block_id`, and `section` the same way.
+needs `["section"]`, while `@route+id#` with no body text reports mode
+`incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode
+`incomplete` and needs `["task_section"]`, and `@route:id#` reports mode
+`incomplete` and needs `["pomodoro_name"]`. A complete `@route+id#sec`
+sub-bullet populates `route`, `block_id`, and `section` together. A complete
+`@route:id#name` Pomodoro marker and a complete `@route+id#name` task toggle
+populate `route`, `block_id`, and `section` the same way; the mode says whether
+`section` is a Pomodoro name or a task section.
 
 `sub_bullets` is an optional array, omitted when empty, of every other valid
 physical line's normalized body -- its source `-`/`*`/`+` marker and any
@@ -901,12 +987,13 @@ present, so schema version 1 stays additive.
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
 `pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_note`, `sub_bullet_route`,
-`sub_bullet_block_id`, `sub_bullet_section`, `global_route`,
+`sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
+`task_toggle_block_id`, `task_toggle_pomodoro_name`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
 `interactive_placeholder`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
-`@cash+` or `@@cash+`, the trailing `#` in `@cash+id#`, or the whole `@+` /
+`@cash+` or `@@cash+`, the trailing `#` in `@cash+id#` or `@cash:id#`, or the whole `@+` /
 `@@` when the route is still empty too. Wikilink spans
 cover syntax only; unresolved note targets are not errors.
 
@@ -992,9 +1079,12 @@ no-op, because the claiming token is no longer bare.
 
 An item's single local marker that cannot be expressed as a declaration --
 `@route#Section`, `@route+block-id#section`, `@route^block-id`,
-`@route:block-id`, or a trailing bare `#` -- is left untouched; the result reports `changed: false` plus a
+`@route:block-id`, `@route+block-id` as a task toggle, or a trailing bare `#`
+-- is left untouched; the result reports `changed: false` plus a
 `notices` entry naming the marker and why, e.g.
 `@@ cannot take a section: leave @notes#Ideas on this item, or delete it and declare @@notes`.
+For a task toggle the notice is
+`@@ cannot take a task toggle: leave @cash+goog-exit on this item, or delete it`.
 An item with more than one local marker is also left untouched, with no
 notice, because `bob capture-parse` already reports that duplicate as a
 `duplicate_capture_marker` diagnostic.
@@ -1078,10 +1168,12 @@ becomes the current note for same-note wikilink heading/block completion unless
 that item overrides it. Route completion is backed by the same
 scan as `bob capture-targets`. Section completion covers `@route#prefix`,
 backed by the same scan as `bob capture-sections`. Task-section completion
-covers `@route+id#prefix` and a bare `@route+id#`, backed by the same scanner
-as `bob capture-task-sections`; the candidate `replacement` is the section
-slug (`future-work` for `FUTURE WORK`). Pomodoro-name completion covers
-`@route:id#prefix`, a bare `@route:id#`, and `@route:#prefix`; only the route
+covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
+backed by the same scanner as `bob capture-task-sections`; the candidate
+`replacement` is the section slug (`future-work` for `FUTURE WORK`).
+Pomodoro-name completion covers `@route:id#prefix`, a bare `@route:id#`,
+`@route:#prefix`, and `@route+id#prefix` or a bare `@route+id#` while the item
+has no body text; only the route
 must already resolve because the Pomodoro list does not depend on the block
 ID. It is backed by the same scan as `bob capture-pomodoros`, offers only open
 entries, and returns Pomodoros in picker order: named rows first, then
