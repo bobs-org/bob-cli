@@ -9,13 +9,9 @@
 //! module mirrors. Everything here operates on `&str` note contents and
 //! returns a full postimage; nothing touches disk.
 //!
-//! `bob capture` does not call any of this yet: wiring
-//! `CaptureKind::TaskToggle` into `capture.rs`'s planner, including creating
-//! a brand-new named Pomodoro via the existing
-//! `select_named_pomodoro`/`insert_named_pomodoro_child_block` machinery, is
-//! the `capture` phase's job. Until then every item below is exercised only
-//! by this module's own tests, so the crate's dead-code lint is suppressed
-//! for the whole file rather than faked out with an artificial caller.
+//! `bob capture` wires these planners into its staged batch planner, while
+//! keeping the note-level mutation rules here as pure functions so the route
+//! note and daily ledger behavior can be tested directly.
 #![allow(dead_code)]
 
 use std::sync::LazyLock;
@@ -202,6 +198,10 @@ pub(crate) enum LinkInsertionOutcome {
 pub(crate) struct LinkInsertionPlan {
     pub(crate) content: String,
     pub(crate) has_changes: bool,
+    /// Where the selected-entry link was added. `None` means the selected
+    /// entry already had the link, even if duplicate cleanup changed the
+    /// ledger afterward.
+    pub(crate) placement: Option<LinkPlacement>,
     /// The selected entry already carried a matching link; nothing was
     /// inserted.
     pub(crate) already_linked: bool,
@@ -209,6 +209,12 @@ pub(crate) struct LinkInsertionPlan {
     pub(crate) pomodoro_name: Option<String>,
     /// Duplicates removed from later still-open Pomodoros.
     pub(crate) removed_links: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkPlacement {
+    Inserted,
+    Appended,
 }
 
 /// Select a destination Pomodoro entry and insert `block_link` as one of
@@ -278,36 +284,44 @@ pub(crate) fn plan_link_insertion(
     };
 
     let lines = line_spans(day_contents);
-    let (content_after_insert, already_linked) = insert_link_into_entry(
-        day_contents,
-        &lines,
-        entry_line_index,
-        block_link,
-    );
+    let (content_after_insert, already_linked, placement) =
+        insert_link_into_entry(
+            day_contents,
+            &lines,
+            entry_line_index,
+            block_link,
+        );
 
-    let (final_content, removed_links) = if already_linked {
-        (content_after_insert, 0)
-    } else {
-        let updated_lines = line_spans(&content_after_insert);
-        let updated_scan = capture_pomodoros::scan(&content_after_insert);
-        let ranges = updated_scan
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.state == PomodoroState::Open
-                    && entry.line - 1 > entry_line_index
-            })
-            .map(|entry| {
-                let line_index = entry.line - 1;
-                (line_index, child_block_end_line(&updated_lines, line_index))
-            })
-            .collect::<Vec<_>>();
-        remove_matching_links(&content_after_insert, block_link, &ranges)
-    };
+    let updated_lines = line_spans(&content_after_insert);
+    let updated_scan = capture_pomodoros::scan(&content_after_insert);
+    let selected_line = updated_scan
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.state == PomodoroState::Open
+                && entry.name == resolved_name
+                && entry.line - 1 >= entry_line_index
+        })
+        .map(|entry| entry.line - 1)
+        .unwrap_or(entry_line_index);
+    let ranges = updated_scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == PomodoroState::Open && entry.line - 1 > selected_line
+        })
+        .map(|entry| {
+            let line_index = entry.line - 1;
+            (line_index, child_block_end_line(&updated_lines, line_index))
+        })
+        .collect::<Vec<_>>();
+    let (final_content, removed_links) =
+        remove_matching_links(&content_after_insert, block_link, &ranges);
 
     Ok(LinkInsertionOutcome::Planned(LinkInsertionPlan {
         has_changes: !already_linked || removed_links > 0,
         content: final_content,
+        placement,
         already_linked,
         pomodoro_name: resolved_name,
         removed_links,
@@ -623,14 +637,14 @@ fn insert_link_into_entry(
     lines: &[LineSpan<'_>],
     entry_line_index: usize,
     block_link: &str,
-) -> (String, bool) {
+) -> (String, bool, Option<LinkPlacement>) {
     let entry_end_line = child_block_end_line(lines, entry_line_index);
     let child_start_offset = lines[entry_line_index].end;
     let child_end_offset = lines[entry_end_line].end;
     let already_linked =
         day_contents[child_start_offset..child_end_offset].contains(block_link);
     if already_linked {
-        return (day_contents.to_string(), true);
+        return (day_contents.to_string(), true, None);
     }
 
     let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
@@ -644,9 +658,14 @@ fn insert_link_into_entry(
         section.end,
     );
     let new_line = format!("{indentation}- {block_link}");
+    let placement = if lines[entry_end_line].end >= day_contents.len() {
+        LinkPlacement::Appended
+    } else {
+        LinkPlacement::Inserted
+    };
     let content =
         insert_line_after(day_contents, lines, entry_end_line, &new_line);
-    (content, false)
+    (content, false, Some(placement))
 }
 
 /// Remove every occurrence of `block_link` found among the children of the
