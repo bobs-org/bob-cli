@@ -123,18 +123,9 @@ pub(crate) fn verify_bob_worktree(
 /// Outcome of acquiring the shared vault-maintenance lock without printing.
 #[derive(Debug)]
 pub(crate) enum LockAcquireError {
-    Contended {
-        #[allow(dead_code)]
-        path: PathBuf,
-    },
-    Open {
-        path: PathBuf,
-        error: io::Error,
-    },
-    Acquire {
-        path: PathBuf,
-        error: io::Error,
-    },
+    Contended,
+    Open { path: PathBuf, error: io::Error },
+    Acquire { path: PathBuf, error: io::Error },
 }
 
 /// Acquire the exclusive run lock shared by vault maintenance commands.
@@ -169,7 +160,7 @@ pub(crate) fn try_acquire_lock() -> Result<File, LockAcquireError> {
     match file.try_lock_exclusive() {
         Ok(()) => Ok(file),
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-            Err(LockAcquireError::Contended { path: lock_file })
+            Err(LockAcquireError::Contended)
         }
         Err(error) => Err(LockAcquireError::Acquire {
             path: lock_file,
@@ -184,7 +175,7 @@ fn report_lock(
 ) -> Result<Option<File>, i32> {
     match result {
         Ok(file) => Ok(Some(file)),
-        Err(LockAcquireError::Contended { .. }) => {
+        Err(LockAcquireError::Contended) => {
             if !quiet_if_held {
                 eprintln!(
                     "bob: another Bob vault maintenance run is already active; \

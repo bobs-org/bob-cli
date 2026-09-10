@@ -581,7 +581,9 @@ buffer is not observable, and a save can still race the final check. Recovery
 copies are the observed originals and intended outputs for compare/merge into
 the current note, not a blind vault restore. `--dry-run` does not wait, lock,
 stage, or write recovery records. A live no-op may create the ordinary lock
-file, but no recovery or note staging artifacts.
+file, but no recovery or note staging artifacts. Lock contention, a changed
+input, a quiet-period deferral, and a partial apply all exit with status 1 and
+are retryable: rerun the command once the vault settles.
 
 Unresolved direct or dependency links are warnings, not failures. If duplicate
 task block IDs occur in one resolved note, every matching task is synchronized

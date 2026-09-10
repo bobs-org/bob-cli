@@ -19,8 +19,9 @@ apollo, and the MacBook. Obsidian Sync is no longer the automation path for
 6. Push, retrying bounded non-fast-forward races.
 7. Write the status record used by `bob vault-sync status`.
 
-The command shares the `bob_sync.lock` maintenance lock with `bob nightly`, so
-background sync and nightly maintenance do not mutate the vault concurrently.
+The command shares the `bob_sync.lock` maintenance lock with `bob nightly` and
+live `bob task-status-hooks` runs, so background sync, nightly maintenance, and
+task-status writes do not mutate the vault concurrently.
 
 ## Conflict policy
 

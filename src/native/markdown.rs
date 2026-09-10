@@ -118,7 +118,6 @@ fn markdown_indented_line(line: &str) -> Option<&str> {
 }
 
 /// Split a physical line into content and its terminator (`\n`, `\r\n`, or empty).
-#[allow(dead_code)]
 pub(crate) fn split_line_ending(line: &str) -> (&str, &str) {
     if let Some(content) = line.strip_suffix("\r\n") {
         (content, "\r\n")
@@ -133,7 +132,6 @@ pub(crate) fn split_line_ending(line: &str) -> (&str, &str) {
 ///
 /// Accepts 0–3 leading spaces and trailing whitespace. The remaining
 /// characters must all be the same marker.
-#[allow(dead_code)]
 pub(crate) fn setext_underline(line: &str) -> Option<usize> {
     let line = markdown_indented_line(line)?;
     let trimmed = line.trim_end();
@@ -148,31 +146,26 @@ pub(crate) fn setext_underline(line: &str) -> Option<usize> {
 }
 
 /// Inner text of a standalone HTML comment line, trimmed.
-#[allow(dead_code)]
 pub(crate) fn standalone_html_comment(line: &str) -> Option<&str> {
     let trimmed = line.trim();
     let inner = trimmed.strip_prefix("<!--")?.strip_suffix("-->")?;
     Some(inner.trim())
 }
 
-#[allow(dead_code)]
 pub(crate) fn html_comment_opens(line: &str) -> bool {
     line.trim_start().starts_with("<!--")
 }
 
-#[allow(dead_code)]
 pub(crate) fn html_comment_closes(line: &str) -> bool {
     line.contains("-->")
 }
 
 /// A blockquote line: 0–3 leading spaces followed by `>`.
-#[allow(dead_code)]
 pub(crate) fn is_blockquote_line(line: &str) -> bool {
     markdown_indented_line(line).is_some_and(|rest| rest.starts_with('>'))
 }
 
 /// Document-level indented code: 4+ leading spaces on a non-blank line.
-#[allow(dead_code)]
 pub(crate) fn is_indented_code_line(line: &str) -> bool {
     !line.trim().is_empty()
         && line.bytes().take_while(|byte| *byte == b' ').count() >= 4

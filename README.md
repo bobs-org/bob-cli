@@ -570,8 +570,8 @@ Rust binaries, and the binaries carry the script assets they need.
 
 ## Environment
 
-`BOB_VAULT_SYNC_LOCK_FILE` overrides the lock path used by `bob vault-sync` and
-`bob nightly`.
+`BOB_VAULT_SYNC_LOCK_FILE` overrides the lock path used by `bob vault-sync`,
+`bob nightly`, and live `bob task-status-hooks` runs.
 The default path is the same shared `bob_sync.lock` path used by nightly
 maintenance.
 

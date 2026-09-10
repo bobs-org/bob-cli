@@ -4,7 +4,6 @@
 //! links, or write files. Classification is supplied by the caller.
 //! Integration in a later phase is the first production caller; unit tests
 //! exercise the API until then.
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -138,13 +137,6 @@ impl GroupingSkipCode {
         }
     }
 
-    fn fails_closed(self) -> bool {
-        !matches!(
-            self,
-            Self::NestedUnderOrdinaryItem | Self::UnsupportedOrderedList
-        )
-    }
-
     fn message(self, title: &str, line: usize) -> String {
         match self {
             Self::H6Container => format!(
@@ -255,16 +247,14 @@ impl TaskClassification {
         }
     }
 
-    pub(crate) fn with_symbol(
-        mut self,
-        symbol: char,
-        bucket: StatusBucket,
-    ) -> Self {
+    #[cfg(test)]
+    fn with_symbol(mut self, symbol: char, bucket: StatusBucket) -> Self {
         self.buckets.insert(symbol, bucket);
         self
     }
 
-    pub(crate) fn standard(global_filter: impl Into<String>) -> Self {
+    #[cfg(test)]
+    fn standard(global_filter: impl Into<String>) -> Self {
         Self::new(global_filter)
             .with_symbol(' ', StatusBucket::Ready)
             .with_symbol('*', StatusBucket::NextAndInProgress)
@@ -2474,9 +2464,6 @@ Intro.
             GroupingSkipCode::AmbiguousBoundary.as_str(),
             "ambiguous_boundary"
         );
-        assert!(GroupingSkipCode::OwnershipCollision.fails_closed());
-        assert!(!GroupingSkipCode::UnsupportedOrderedList.fails_closed());
-        assert!(!GroupingSkipCode::NestedUnderOrdinaryItem.fails_closed());
     }
 
     #[test]

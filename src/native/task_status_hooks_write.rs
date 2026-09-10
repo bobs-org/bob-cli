@@ -70,8 +70,6 @@ pub(crate) enum InputKind {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileIdentity {
-    #[allow(dead_code)]
-    pub path: PathBuf,
     pub canonical_path: PathBuf,
     pub dev: u64,
     pub ino: u64,
@@ -179,8 +177,6 @@ pub(crate) struct PlannedWrite {
 
 #[derive(Debug, Clone)]
 pub(crate) struct WritePlan {
-    #[allow(dead_code)]
-    pub vault_root: PathBuf,
     pub vault_canonical: PathBuf,
     pub inputs: Vec<InputSnapshot>,
     pub scan_paths: Vec<PathBuf>,
@@ -270,8 +266,6 @@ pub(crate) struct ApplyError {
     pub message: String,
     pub applied_files: Vec<PathBuf>,
     pub deferred_files: Vec<PathBuf>,
-    #[allow(dead_code)]
-    pub remaining_files: Vec<PathBuf>,
     pub recovery_directory: Option<PathBuf>,
 }
 
@@ -283,7 +277,6 @@ impl ApplyError {
                 .to_string(),
             applied_files: Vec::new(),
             deferred_files: Vec::new(),
-            remaining_files: Vec::new(),
             recovery_directory: None,
         }
     }
@@ -297,7 +290,6 @@ impl ApplyError {
             ),
             applied_files: Vec::new(),
             deferred_files: Vec::new(),
-            remaining_files: Vec::new(),
             recovery_directory: None,
         }
     }
@@ -308,7 +300,6 @@ impl ApplyError {
             message: error.message(),
             applied_files: Vec::new(),
             deferred_files: Vec::new(),
-            remaining_files: Vec::new(),
             recovery_directory: None,
         }
     }
@@ -327,9 +318,8 @@ impl ApplyError {
         Self {
             reason,
             message,
-            deferred_files: remaining.clone(),
+            deferred_files: remaining,
             applied_files: applied,
-            remaining_files: remaining,
             recovery_directory: recovery,
         }
     }
@@ -358,8 +348,7 @@ impl ApplyError {
         Self {
             reason,
             message,
-            deferred_files: remaining.clone(),
-            remaining_files: remaining,
+            deferred_files: remaining,
             applied_files: applied.to_vec(),
             recovery_directory: recovery,
         }
@@ -374,8 +363,7 @@ impl ApplyError {
                 detail.into()
             ),
             applied_files: Vec::new(),
-            deferred_files: remaining.clone(),
-            remaining_files: remaining,
+            deferred_files: remaining,
             recovery_directory: None,
         }
     }
@@ -385,9 +373,7 @@ impl ApplyError {
 pub(crate) enum ApplyOutcome {
     NoOp,
     Applied {
-        #[allow(dead_code)]
         applied_files: Vec<PathBuf>,
-        #[allow(dead_code)]
         recovery_directory: PathBuf,
     },
 }
@@ -443,7 +429,7 @@ pub(crate) fn new_run_id() -> String {
 pub(crate) fn acquire_maintenance_lock() -> Result<File, ApplyError> {
     match ob::try_acquire_lock() {
         Ok(file) => Ok(file),
-        Err(ob::LockAcquireError::Contended { path: _ }) => {
+        Err(ob::LockAcquireError::Contended) => {
             Err(ApplyError::lock_contention())
         }
         Err(ob::LockAcquireError::Open { path, error })
@@ -583,9 +569,8 @@ pub(crate) fn apply_plan(
                     error.message
                 ),
                 applied_files: applied.iter().map(|item| item.path.clone()).collect(),
-                deferred_files: remaining.clone(),
-                remaining_files: remaining,
-                recovery_directory: Some(recovery_dir),
+                deferred_files: remaining,
+                    recovery_directory: Some(recovery_dir),
             });
         }
         if let Err(error) = fs::rename(&next.temp, &next.dest) {
@@ -970,7 +955,6 @@ fn file_identity(
         let canonical_path = fs::canonicalize(path)
             .map_err(|error| CaptureError::io(path, error))?;
         Ok(FileIdentity {
-            path: path.to_path_buf(),
             canonical_path,
             dev: metadata.dev(),
             ino: metadata.ino(),
@@ -1064,7 +1048,6 @@ fn create_recovery(
             ),
             applied_files: Vec::new(),
             deferred_files: remaining_outputs(plan, &[]),
-            remaining_files: remaining_outputs(plan, &[]),
             recovery_directory: None,
         })?;
 
@@ -1089,7 +1072,6 @@ fn create_recovery(
             ),
             applied_files: Vec::new(),
             deferred_files: remaining_outputs(plan, &[]),
-            remaining_files: remaining_outputs(plan, &[]),
             recovery_directory: None,
         })?;
     }
@@ -1104,7 +1086,6 @@ fn create_recovery(
             ),
             applied_files: Vec::new(),
             deferred_files: remaining_outputs(plan, &[]),
-            remaining_files: remaining_outputs(plan, &[]),
             recovery_directory: None,
         })?;
     Ok(recovery_dir)
@@ -1623,7 +1604,6 @@ mod tests {
             );
         }
         WritePlan {
-            vault_root: vault.to_path_buf(),
             vault_canonical: vault.canonicalize().expect("canonical vault"),
             inputs,
             scan_paths,
@@ -1751,7 +1731,6 @@ mod tests {
         let (temp, vault, first, second) = fixture();
         let scan = vec![first, second];
         let plan = WritePlan {
-            vault_root: vault.clone(),
             vault_canonical: vault.canonicalize().unwrap(),
             inputs: Vec::new(),
             scan_paths: scan.clone(),
@@ -2002,7 +1981,7 @@ mod tests {
         let error = apply_plan(&plan, &session).expect_err("partial");
         assert_eq!(error.reason, ReasonCode::PartialApply);
         assert_eq!(error.applied_files, vec![first.clone()]);
-        assert_eq!(error.remaining_files, vec![second.clone()]);
+        assert_eq!(error.deferred_files, vec![second.clone()]);
         assert_eq!(fs::read_to_string(&first).unwrap(), "alpha-new\n");
         assert_eq!(fs::read_to_string(&second).unwrap(), "keep-me\n");
         let recovery = error.recovery_directory.expect("recovery");
