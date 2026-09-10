@@ -203,6 +203,17 @@ pub(crate) enum DestinationLabel {
     DoneAndCanceled,
 }
 
+impl DestinationLabel {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Intake => "intake",
+            Self::NextAndInProgress => "next_and_in_progress",
+            Self::Blocked => "blocked",
+            Self::DoneAndCanceled => "done_and_canceled",
+        }
+    }
+}
+
 impl Destination {
     fn label(self) -> DestinationLabel {
         match self {

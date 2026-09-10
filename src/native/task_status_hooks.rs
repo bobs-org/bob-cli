@@ -20,10 +20,14 @@ use super::{
     collect_done, env as bob_env, is_always_excluded_note_directory_name,
     pomodoro, projects,
     style::{display_width, pad_right, Styler},
+    task_status_groups::{
+        self, GroupedSection, GroupingWarning, TaskClassification,
+    },
     task_status_hooks_write::{
         acquire_maintenance_lock, apply_plan, capture_optional,
         capture_required, planned_write, snapshot_for_path, ApplyError,
-        ApplySession, CaptureError, InputKind, InputSnapshot, WritePlan,
+        ApplyOutcome, ApplySession, CaptureError, InputKind, InputSnapshot,
+        WritePlan,
     },
 };
 
@@ -107,6 +111,14 @@ vault-relative path plus block ID. Repeats within one owning Pomodoro are \
 preserved, as are unresolved links and links beneath completed or cancelled \
 Pomodoros. If a block ID matches multiple task lines, canceled-reference \
 list-item removal requires every match to have a recognized CANCELLED status.\n\n\
+After final checkbox and daily structural changes are composed, eligible \
+area/project Tasks sections are grouped into generated child headings: \
+Next & In Progress, Blocked, and Done & Canceled. Ready [ ] tasks and \
+introductory prose stay in the unheaded intake where ordinary capture adds \
+new tasks. Authored topic headings keep their local context, generated groups \
+use hidden ownership comments, and unsupported containers are warned and left \
+unchanged. Grouping excludes daily notes, the selected previous daily, \
+ordinary notes, archives, generated notes, and templates.\n\n\
 Only Markdown checkbox lines allowed by the Obsidian Tasks globalFilter are \
 considered. The scan skips hidden directories, templates, generated notes, \
 and done archives. Blocked writes require exactly one compatible Tasks status \
@@ -114,7 +126,10 @@ named Blocked with symbol [?], type ON_HOLD, and next status Ready. Missing \
 current daily notes and current daily notes without a Pomodoros section, as \
 well as current notes with multiple open timed Pomodoros, fail before any file \
 is changed. No earlier daily note is valid; an earlier note without a \
-Pomodoros section contributes no historical references.",
+Pomodoros section contributes no historical references. Live writes use \
+guarded snapshots, recovery copies, and a bounded quiet-period check for \
+structural regrouping. Dry-run computes the same grouping preview without \
+locking, waiting, staging, writing notes, or creating recovery records.",
         )
         .after_help(format!(
             "Examples:\n  {COMMAND_NAME}\n  {COMMAND_NAME} --dry-run\n  {COMMAND_NAME} --format json\n  {COMMAND_NAME} --bob-dir /tmp/bob-vault\n\nEnvironment:\n  BOB_DAY_FILE  exact current daily ledger; its dated filename anchors earlier-note lookup and future schedules\n  BOB_DIR       Bob vault root when --bob-dir is omitted\n  BOB_NOW       current date/time fallback for current and earlier-note selection"
@@ -267,6 +282,33 @@ struct RemovedDuplicateLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct GroupedTaskSectionReport {
+    path: String,
+    original_heading_line: usize,
+    heading_ancestry: Vec<String>,
+    next_and_in_progress: usize,
+    blocked: usize,
+    done_and_canceled: usize,
+    moved_block_count: usize,
+    moved_blocks: Vec<GroupedMovedBlockReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct GroupedMovedBlockReport {
+    original_line: usize,
+    destination: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct GroupingWarningReport {
+    path: String,
+    original_heading_line: usize,
+    heading_ancestry: Vec<String>,
+    code: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct SyncResult {
     ok: bool,
     dry_run: bool,
@@ -291,6 +333,11 @@ struct SyncResult {
     marker_removed_references: Vec<MarkerReference>,
     removed_canceled_references: Vec<RemovedCanceledReference>,
     removed_duplicate_lines: Vec<RemovedDuplicateLine>,
+    grouped_task_sections: Vec<GroupedTaskSectionReport>,
+    grouping_warnings: Vec<GroupingWarningReport>,
+    applied_files: Vec<String>,
+    deferred_files: Vec<String>,
+    recovery_directory: Option<String>,
     kept_next: usize,
     kept_in_progress: usize,
     unresolved_references: Vec<UnresolvedReference>,
@@ -346,6 +393,37 @@ struct PlannedChange {
 }
 
 #[derive(Debug, Clone)]
+struct ComposedOutput {
+    path: PathBuf,
+    contents: String,
+    structural_regrouping: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ComposeResult {
+    outputs: Vec<ComposedOutput>,
+    grouped_task_sections: Vec<GroupedTaskSectionReport>,
+    grouping_warnings: Vec<GroupingWarningReport>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ApplyReport {
+    applied_files: Vec<String>,
+    deferred_files: Vec<String>,
+    recovery_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ComposeContext<'a> {
+    daily_path: &'a Path,
+    previous_daily_path: Option<&'a Path>,
+    daily_contents: &'a str,
+    pomodoro_model: &'a PomodoroModel,
+    structural_plan: &'a StructuralPlan,
+    settings: &'a TasksSettings,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct TasksSettings {
     pub(crate) global_filter: String,
     done_statuses: BTreeSet<char>,
@@ -384,6 +462,18 @@ impl TaskStatusType {
             "NON_TASK" => Self::NonTask,
             "EMPTY" => Self::Empty,
             _ => Self::Todo,
+        }
+    }
+
+    fn as_tasks_type_name(self) -> &'static str {
+        match self {
+            Self::Todo => "TODO",
+            Self::Done => "DONE",
+            Self::InProgress => "IN_PROGRESS",
+            Self::OnHold => "ON_HOLD",
+            Self::Cancelled => "CANCELLED",
+            Self::NonTask => "NON_TASK",
+            Self::Empty => "EMPTY",
         }
     }
 
@@ -986,17 +1076,28 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         validate_blocked_status(&settings)?;
     }
 
-    let outputs = compose_outputs(
+    let compose = compose_outputs(
         &files,
         &changes,
-        &daily_path,
-        &daily_contents,
-        &pomodoro_model,
-        &structural_plan,
+        ComposeContext {
+            daily_path: &daily_path,
+            previous_daily_path: previous_daily_path.as_deref(),
+            daily_contents: &daily_contents,
+            pomodoro_model: &pomodoro_model,
+            structural_plan: &structural_plan,
+            settings: &settings,
+        },
     );
-    if !request.dry_run {
-        apply_guarded_outputs(&request.bob_dir, &inputs, &scan_paths, outputs)?;
-    }
+    let apply_report = if request.dry_run {
+        ApplyReport::default()
+    } else {
+        apply_guarded_outputs(
+            &request.bob_dir,
+            &inputs,
+            &scan_paths,
+            compose.outputs,
+        )?
+    };
 
     Ok(SyncResult {
         ok: true,
@@ -1026,6 +1127,11 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         marker_removed_references: structural_plan.marker_removed,
         removed_canceled_references: structural_plan.removed_canceled,
         removed_duplicate_lines,
+        grouped_task_sections: compose.grouped_task_sections,
+        grouping_warnings: compose.grouping_warnings,
+        applied_files: apply_report.applied_files,
+        deferred_files: apply_report.deferred_files,
+        recovery_directory: apply_report.recovery_directory,
         kept_next,
         kept_in_progress,
         unresolved_references: unresolved,
@@ -2944,11 +3050,8 @@ fn display_path(path: &Path) -> String {
 fn compose_outputs(
     files: &[FileScan],
     changes: &[PlannedChange],
-    daily_path: &Path,
-    daily_contents: &str,
-    pomodoro_model: &PomodoroModel,
-    structural_plan: &StructuralPlan,
-) -> Vec<(PathBuf, String)> {
+    ctx: ComposeContext<'_>,
+) -> ComposeResult {
     let mut by_file: BTreeMap<usize, Vec<&PlannedChange>> = BTreeMap::new();
     for change in changes {
         by_file.entry(change.file_index).or_default().push(change);
@@ -2973,9 +3076,9 @@ fn compose_outputs(
         updated.insert(file_index, contents);
     }
 
-    let canonical_daily_path = daily_path.canonicalize().ok();
+    let canonical_daily_path = ctx.daily_path.canonicalize().ok();
     let daily_file_index = files.iter().position(|file| {
-        file.path == daily_path
+        file.path == ctx.daily_path
             || canonical_daily_path.as_ref().is_some_and(|daily| {
                 file.path.canonicalize().ok().as_ref() == Some(daily)
             })
@@ -2983,9 +3086,12 @@ fn compose_outputs(
     let daily_base = daily_file_index
         .and_then(|index| updated.get(&index))
         .map(String::as_str)
-        .unwrap_or(daily_contents);
-    let updated_daily =
-        apply_structural_plan(daily_base, pomodoro_model, structural_plan);
+        .unwrap_or(ctx.daily_contents);
+    let updated_daily = apply_structural_plan(
+        daily_base,
+        ctx.pomodoro_model,
+        ctx.structural_plan,
+    );
     let external_daily = if let Some(index) = daily_file_index {
         updated.insert(index, updated_daily);
         None
@@ -2993,38 +3099,167 @@ fn compose_outputs(
         Some(updated_daily)
     };
 
+    let classification = task_group_classification(ctx.settings);
+    let mut grouped_task_sections = Vec::new();
+    let mut grouping_warnings = Vec::new();
+    let mut structural_files = BTreeSet::new();
+    for (index, file) in files.iter().enumerate() {
+        if !task_grouping_eligible(
+            file,
+            ctx.daily_path,
+            ctx.previous_daily_path,
+        ) {
+            continue;
+        }
+        let input = updated
+            .get(&index)
+            .map(String::as_str)
+            .unwrap_or(&file.contents);
+        let transformed = task_status_groups::transform(input, &classification);
+        grouped_task_sections.extend(
+            transformed
+                .grouped_sections
+                .iter()
+                .map(|section| grouped_section_report(file, section)),
+        );
+        grouping_warnings.extend(
+            transformed
+                .warnings
+                .iter()
+                .map(|warning| grouping_warning_report(file, warning)),
+        );
+        if transformed.changed {
+            structural_files.insert(index);
+            updated.insert(index, transformed.contents);
+        }
+    }
+
     let mut outputs = updated
         .into_iter()
         .filter_map(|(index, contents)| {
-            (contents != files[index].contents)
-                .then(|| (files[index].path.clone(), contents))
+            (contents != files[index].contents).then(|| ComposedOutput {
+                path: files[index].path.clone(),
+                contents,
+                structural_regrouping: structural_files.contains(&index),
+            })
         })
         .collect::<Vec<_>>();
     if let Some(updated_daily) = external_daily
-        && updated_daily != daily_contents
+        && updated_daily != ctx.daily_contents
     {
-        outputs.push((daily_path.to_path_buf(), updated_daily));
+        outputs.push(ComposedOutput {
+            path: ctx.daily_path.to_path_buf(),
+            contents: updated_daily,
+            structural_regrouping: false,
+        });
     }
-    outputs
+
+    ComposeResult {
+        outputs,
+        grouped_task_sections,
+        grouping_warnings,
+    }
+}
+
+fn task_group_classification(settings: &TasksSettings) -> TaskClassification {
+    TaskClassification::from_status_types(
+        &settings.global_filter,
+        settings.status_types.iter().map(|(symbol, status_type)| {
+            (*symbol, status_type.as_tasks_type_name())
+        }),
+        '*',
+        '/',
+        '?',
+        ' ',
+    )
+}
+
+fn task_grouping_eligible(
+    file: &FileScan,
+    daily_path: &Path,
+    previous_daily_path: Option<&Path>,
+) -> bool {
+    if !file.note_kind.is_area_or_project() {
+        return false;
+    }
+    if canonical_daily_date(&file.relative_path).is_some()
+        || paths_match(&file.path, daily_path)
+        || previous_daily_path.is_some_and(|path| paths_match(&file.path, path))
+    {
+        return false;
+    }
+    true
+}
+
+fn paths_match(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn grouped_section_report(
+    file: &FileScan,
+    section: &GroupedSection,
+) -> GroupedTaskSectionReport {
+    GroupedTaskSectionReport {
+        path: display_path(&file.relative_path),
+        original_heading_line: section.original_heading_line,
+        heading_ancestry: section.heading_ancestry.clone(),
+        next_and_in_progress: section.next_and_in_progress,
+        blocked: section.blocked,
+        done_and_canceled: section.done_and_canceled,
+        moved_block_count: section.moved_block_count,
+        moved_blocks: section
+            .moved_blocks
+            .iter()
+            .map(|block| GroupedMovedBlockReport {
+                original_line: block.original_line,
+                destination: block.destination.as_str().to_string(),
+            })
+            .collect(),
+    }
+}
+
+fn grouping_warning_report(
+    file: &FileScan,
+    warning: &GroupingWarning,
+) -> GroupingWarningReport {
+    GroupingWarningReport {
+        path: display_path(&file.relative_path),
+        original_heading_line: warning.original_heading_line,
+        heading_ancestry: warning.heading_ancestry.clone(),
+        code: warning.code.as_str().to_string(),
+        message: warning.message.clone(),
+    }
 }
 
 fn apply_guarded_outputs(
     vault: &Path,
     inputs: &[InputSnapshot],
     scan_paths: &[PathBuf],
-    outputs: Vec<(PathBuf, String)>,
-) -> Result<(), SyncError> {
+    outputs: Vec<ComposedOutput>,
+) -> Result<ApplyReport, SyncError> {
     let mut planned = Vec::new();
-    for (path, contents) in outputs {
-        let original = snapshot_for_path(inputs, &path).ok_or_else(|| {
-            SyncError::new(format!(
-                "planned write is missing a snapshot: {}",
-                path.display()
-            ))
-        })?;
+    for output in outputs {
+        let original =
+            snapshot_for_path(inputs, &output.path).ok_or_else(|| {
+                SyncError::new(format!(
+                    "planned write is missing a snapshot: {}",
+                    output.path.display()
+                ))
+            })?;
         planned.push(
-            planned_write(path, original, contents.into_bytes(), false)
-                .map_err(|error| capture_to_sync("plan note write", error))?,
+            planned_write(
+                output.path,
+                original,
+                output.contents.into_bytes(),
+                output.structural_regrouping,
+            )
+            .map_err(|error| capture_to_sync("plan note write", error))?,
         );
     }
     let vault_canonical =
@@ -3043,9 +3278,26 @@ fn apply_guarded_outputs(
         },
         &session,
     ) {
-        Ok(_) => Ok(()),
-        Err(error) => Err(SyncError::from_apply(error)),
+        Ok(ApplyOutcome::NoOp) => Ok(ApplyReport::default()),
+        Ok(ApplyOutcome::Applied {
+            applied_files,
+            recovery_directory,
+        }) => Ok(ApplyReport {
+            applied_files: applied_files
+                .iter()
+                .map(|path| display_report_path(vault, path))
+                .collect(),
+            deferred_files: Vec::new(),
+            recovery_directory: Some(recovery_directory.display().to_string()),
+        }),
+        Err(error) => Err(SyncError::from_apply_with_vault(error, vault)),
     }
+}
+
+fn display_report_path(vault: &Path, path: &Path) -> String {
+    path.strip_prefix(vault)
+        .map(display_path)
+        .unwrap_or_else(|_| path.display().to_string())
 }
 
 fn push_unique_input(inputs: &mut Vec<InputSnapshot>, snapshot: InputSnapshot) {
@@ -3100,7 +3352,8 @@ fn print_human_result(result: &SyncResult) {
         + result.marker_added_references.len()
         + result.marker_removed_references.len()
         + result.removed_canceled_references.len()
-        + result.removed_duplicate_lines.len();
+        + result.removed_duplicate_lines.len()
+        + result.grouped_task_sections.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
     } else {
@@ -3115,7 +3368,7 @@ fn print_human_result(result: &SyncResult) {
             )
         },
     );
-    if change_count == 0 {
+    if change_count == 0 && result.grouping_warnings.is_empty() {
         println!(
             "{prefix} {COMMAND_NAME}  {} \u{2014} already in sync, no changes \u{b7} {previous_context}",
             styler.cyan(&result.daily_file),
@@ -3203,6 +3456,7 @@ fn print_human_result(result: &SyncResult) {
     print_marker_reference_sections(result);
     print_canceled_reference_section(result);
     print_duplicate_line_section(result);
+    print_grouped_task_sections(&styler, result);
     if result.kept_next > 0 || result.kept_in_progress > 0 {
         println!();
         println!(
@@ -3210,8 +3464,14 @@ fn print_human_result(result: &SyncResult) {
             result.kept_next, result.kept_in_progress
         );
     }
+    if !result.dry_run
+        && let Some(recovery) = &result.recovery_directory
+    {
+        println!();
+        println!("  recovery copies: {recovery}");
+    }
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} grouped sections",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -3223,8 +3483,36 @@ fn print_human_result(result: &SyncResult) {
         result.marker_added_references.len(),
         result.marker_removed_references.len(),
         result.removed_canceled_references.len(),
-        result.removed_duplicate_lines.len()
+        result.removed_duplicate_lines.len(),
+        result.grouped_task_sections.len()
     );
+}
+
+fn print_grouped_task_sections(styler: &Styler, result: &SyncResult) {
+    if result.grouped_task_sections.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "  {} task sections",
+        if result.dry_run {
+            "would group"
+        } else {
+            "grouped"
+        }
+    );
+    for section in &result.grouped_task_sections {
+        let heading = section.heading_ancestry.join(" > ");
+        println!(
+            "    {}  {}  next/in progress {} \u{b7} blocked {} \u{b7} done/canceled {} \u{b7} moved {}",
+            styler.cyan(&section.path),
+            heading,
+            section.next_and_in_progress,
+            section.blocked,
+            section.done_and_canceled,
+            section.moved_block_count
+        );
+    }
 }
 
 fn print_dependency_status_section(
@@ -3473,6 +3761,16 @@ fn print_warnings(result: &SyncResult) {
             warning.reason
         );
     }
+    for warning in &result.grouping_warnings {
+        eprintln!(
+            "{}: {}:{} {} \u{2014} {}",
+            styler.warning_prefix(),
+            warning.path,
+            warning.original_heading_line,
+            warning.heading_ancestry.join(" > "),
+            warning.message
+        );
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3500,18 +3798,30 @@ impl SyncError {
     }
 
     fn from_apply(error: ApplyError) -> Self {
+        Self::from_apply_with_root(error, None)
+    }
+
+    fn from_apply_with_vault(error: ApplyError, vault: &Path) -> Self {
+        Self::from_apply_with_root(error, Some(vault))
+    }
+
+    fn from_apply_with_root(error: ApplyError, root: Option<&Path>) -> Self {
+        let display = |path: &Path| {
+            root.map(|root| display_report_path(root, path))
+                .unwrap_or_else(|| path.display().to_string())
+        };
         Self {
             message: error.message,
             reason: Some(error.reason.as_str().to_string()),
             applied_files: error
                 .applied_files
                 .iter()
-                .map(|path| path.display().to_string())
+                .map(|path| display(path))
                 .collect(),
             deferred_files: error
                 .deferred_files
                 .iter()
-                .map(|path| path.display().to_string())
+                .map(|path| display(path))
                 .collect(),
             recovery_directory: error
                 .recovery_directory

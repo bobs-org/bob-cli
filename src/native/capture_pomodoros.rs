@@ -1001,10 +1001,7 @@ mod tests {
         assert_eq!(named_creation_name(&existing, "c++"), None);
 
         let novel = scan("## Pomodoros\n- [ ] () — MEMORY\n");
-        assert_eq!(
-            named_creation_name(&novel, "c++").as_deref(),
-            Some("C++")
-        );
+        assert_eq!(named_creation_name(&novel, "c++").as_deref(), Some("C++"));
         assert_eq!(
             named_creation_name(&novel, "bob+sase").as_deref(),
             Some("BOB+SASE")

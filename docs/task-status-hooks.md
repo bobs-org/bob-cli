@@ -32,6 +32,7 @@ subtree from an open Pomodoro without changing the canceled task itself.
 - [Usage](#usage)
 - [Sync rules](#sync-rules)
 - [Derived Blocked status](#derived-blocked-status)
+- [Status grouping](#status-grouping)
 - [Pomodoro marker](#pomodoro-marker)
 - [Guard rails](#guard-rails)
 - [Output](#output)
@@ -389,6 +390,69 @@ when its entry in `statusSettings.coreStatuses` or
 `statusSettings.customStatuses` has type `DONE`. `CANCELLED`, `IN_PROGRESS`,
 `ON_HOLD`, `NON_TASK`, unknown, and unchecked statuses are not complete.
 
+## Status Grouping
+
+After all final checkbox changes and daily-note structural cleanup are
+composed, the command groups eligible `[[area]]` and `[[project]]` note
+`Tasks` sections. Grouping is applied to the composed bytes, so a task promoted
+to Next, blocked by a future schedule, completed, canceled, or reopened in the
+same run lands in the group matching its final status. Area/project notes with
+no checkbox edits are still grouped when their current layout needs it.
+
+Ready `[ ]` tasks remain in the unheaded intake directly under `Tasks`, along
+with introductory prose and new ordinary captures. The generated groups are
+plain child headings with hidden ownership comments:
+
+```markdown
+## Tasks
+
+Project context.
+
+- [ ] #task Later idea ^idea
+
+### Next & In Progress
+<!-- bob:task-status-group:v1:active -->
+
+- [/] #task Finish implementation ^finish
+- [*] #task Review ^review
+
+### Blocked
+<!-- bob:task-status-group:v1:blocked -->
+
+- [?] #task Wait for dependency ^wait
+
+### Done & Canceled
+<!-- bob:task-status-group:v1:closed -->
+
+- [x] #task Agreed scope ^scope
+- [-] #task Superseded option
+```
+
+The command preserves authored topic headings under a `Tasks` section. Direct
+task blocks are grouped locally inside the container where they already live,
+so a custom `### Backend` topic receives its own generated child groups rather
+than losing its context. Once a container has generated groups, all three
+headings are retained even when one is empty, preserving Obsidian heading links
+and fold targets. Re-running on unchanged semantic input is byte-identical.
+
+Only root task blocks accepted by the configured Tasks `globalFilter` move.
+The parent root's final status chooses the destination; nested children, notes,
+links, block IDs, metadata, continuations, and internal fenced snippets travel
+with that root. Ordered-list task roots and tasks nested under ordinary list
+items are reported as unsupported for grouping and left intact. H6 `Tasks`
+containers, ambiguous Markdown boundaries, unmarked heading collisions, renamed
+or malformed generated markers, duplicate group headings, and authored child
+headings inside a managed group are warnings; the affected container is left
+unchanged, but other safe containers may still be written.
+
+Grouping never creates a missing `Tasks` section. It excludes canonical daily
+notes, the selected current daily ledger even when `BOB_DAY_FILE` points
+outside the vault, the selected previous daily, ordinary notes, read-only
+archive references, hidden directories, `done/`, `_generated/`, and
+`_templates/`. `bob capture` keeps adding Ready tasks to the intake before
+generated group headings; a later `bob task-status-hooks` run moves that task
+only if its final status becomes Next, In Progress, Blocked, Done, or Canceled.
+
 For each bullet beneath an open or completed Pomodoro that contains a block
 link resolving unambiguously to a completed Tasks task, the command retires
 that link as `~~[[...]]~~`. Aliases and neighboring text are preserved, so
@@ -508,12 +572,16 @@ Recovery failure prevents note writes. A later failure after some notes have
 already been replaced reports the applied and remaining paths and does not
 roll earlier notes back. Byte checks and atomic rename reduce lost-update
 risk but cannot provide a true compare-and-swap against an editor that does
-not coordinate with the command. An unsaved Obsidian buffer is not
-observable, and a save can still race the final check. Recovery copies are
-the observed originals and intended outputs for compare/merge into the
-current note, not a blind vault restore. `--dry-run` does not lock, stage, or
-write recovery records. A live no-op may create the ordinary lock file, but
-no recovery or note staging artifacts.
+not coordinate with the command. When a note needs structural status grouping,
+the live writer also requires a two-second quiet interval after that note's
+observed modification time; if the timestamp is uncertain, in the future, or
+changes during the bounded wait, the run is deferred with no note writes.
+`BOB_NOW` does not affect this real filesystem check. An unsaved Obsidian
+buffer is not observable, and a save can still race the final check. Recovery
+copies are the observed originals and intended outputs for compare/merge into
+the current note, not a blind vault restore. `--dry-run` does not wait, lock,
+stage, or write recovery records. A live no-op may create the ordinary lock
+file, but no recovery or note staging artifacts.
 
 Unresolved direct or dependency links are warnings, not failures. If duplicate
 task block IDs occur in one resolved note, every matching task is synchronized
@@ -538,11 +606,14 @@ original daily-note line number, text, owning Pomodoro, and canonical task
 identities. Marker additions and removals have their own
 `marked`/`unmarked` sections and summary counts. Dependency-derived promotions
 carry a `(dependency)` suffix. Next and In-Progress promotions have separate
-sections and summary counts. Dry-run
-uses the same planning path and reports what would happen
+sections and summary counts. Grouping changes appear under
+`grouped task sections` or `would group task sections`, with the note path,
+heading ancestry, per-group root-task counts, and moved-block count. A
+successful live write that changed notes also prints the recovery-copy
+directory. Dry-run uses the same planning path and reports what would happen
 without changing any file. Warnings go to stderr. A no-op prints a single
-`already in sync` line only when neither task statuses nor daily-note links
-need changes.
+`already in sync` line only when task statuses, daily-note links, grouping,
+and grouping diagnostics are all unchanged.
 
 JSON mode prints one object on stdout with these stable fields:
 
@@ -665,6 +736,35 @@ JSON mode prints one object on stdout with these stable fields:
       ]
     }
   ],
+  "grouped_task_sections": [
+    {
+      "path": "Projects/Alpha.md",
+      "original_heading_line": 12,
+      "heading_ancestry": ["Alpha", "Tasks"],
+      "next_and_in_progress": 2,
+      "blocked": 1,
+      "done_and_canceled": 1,
+      "moved_block_count": 4,
+      "moved_blocks": [
+        {
+          "original_line": 17,
+          "destination": "next_and_in_progress"
+        }
+      ]
+    }
+  ],
+  "grouping_warnings": [
+    {
+      "path": "Projects/Beta.md",
+      "original_heading_line": 20,
+      "heading_ancestry": ["Beta", "Tasks"],
+      "code": "ownership_collision",
+      "message": "unmarked status-group heading in \"Tasks\" at line 20 contains authored context"
+    }
+  ],
+  "applied_files": [],
+  "deferred_files": [],
+  "recovery_directory": null,
   "kept_next": 0,
   "kept_in_progress": 1,
   "unresolved_references": []
@@ -707,7 +807,17 @@ file/occurrence order. Each
 one-based original `line_number`, original `line`, owning `pomodoro`, and one or
 more canonical path-plus-block `duplicate_tasks`. Each unresolved reference
 contains `target`, `block_id`, and `reason`; marker-reference entries contain
-`target`, `block_id`, and the owning `pomodoro` line. JSON
-failures also remain machine-readable as `{ "ok": false, "error": "..." }`.
+`target`, `block_id`, and the owning `pomodoro` line.
+`grouped_task_sections` contains only containers whose bytes changed for
+grouping, with original source heading lines and moved-block destinations
+reported from the pre-move source. `grouping_warnings` contains safe-to-report
+container diagnostics; warnings do not by themselves make `ok` false.
+`applied_files`, `deferred_files`, and `recovery_directory` describe live
+application. On dry-run and live no-op, `applied_files` and `deferred_files`
+are empty and `recovery_directory` is `null`; on a successful live write,
+`applied_files` lists the vault-relative notes replaced and
+`recovery_directory` points to the recovery record. JSON failures also remain
+machine-readable as `{ "ok": false, "error": "...", "reason": "..." }` and
+include applied/deferred paths plus recovery directory when available.
 `embedded_completed_references` is a deprecated, always-empty compatibility
 field for one contract cycle.

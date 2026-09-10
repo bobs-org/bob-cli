@@ -1174,6 +1174,393 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
 }
 
 #[test]
+fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-status-groups");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let project = vault.join("alpha.md");
+    let area = vault.join("Areas/Home.md");
+    let ordinary = vault.join("notes.md");
+    let archived = vault.join("done/Archive.md");
+    let generated = vault.join("_generated/Ref.md");
+    let template = vault.join("_templates/Task.md");
+    let state = temp.path().join("state");
+    let lock = temp.path().join("task-status-hooks.lock");
+
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &daily,
+        concat!(
+            "---\n",
+            "type: [[project]]\n",
+            "---\n",
+            "# Today\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - [[alpha#^promote]]\n",
+            "  - [[Areas/Home#^already]]\n",
+            "  - [[Areas/Home#^working]]\n",
+            "\n",
+            "## Tasks\n\n",
+            "- [x] #task Daily task is not grouped ^daily\n",
+        ),
+    );
+    write_file(
+        &project,
+        concat!(
+            "---\n",
+            "type: [[project]]\n",
+            "---\n",
+            "# Alpha\n\n",
+            "## Tasks\n\n",
+            "Project context.\n\n",
+            "- [ ] #task Keep in intake ^ready\n",
+            "- [ ] #task Promote from Pomodoro ^promote\n",
+            "- [/] #task Stale work clears ^stale\n",
+            "- [ ] #task Future blocked [scheduled:: 2026-07-11] ^future\n",
+            "- [x] #task Finished ^done\n",
+            "- [-] #task Canceled without block\n",
+            "\n",
+            "## Notes\n\n",
+            "- [x] #task Outside Tasks is not grouped ^outside\n",
+        ),
+    );
+    write_file(
+        &area,
+        concat!(
+            "---\n",
+            "type: \"[[area]]\"\n",
+            "---\n",
+            "# Home\n\n",
+            "## Tasks\n\n",
+            "- [*] #task Already next ^already\n",
+            "- [/] #task Keep working ^working\n",
+        ),
+    );
+    write_file(
+        &ordinary,
+        concat!(
+            "# Ordinary\n\n",
+            "## Tasks\n\n",
+            "- [x] #task Ordinary done ^ordinary\n",
+        ),
+    );
+    for path in [&archived, &generated, &template] {
+        write_file(
+            path,
+            concat!(
+                "---\n",
+                "type: [[project]]\n",
+                "---\n",
+                "# Excluded\n\n",
+                "## Tasks\n\n",
+                "- [x] #task Excluded done ^excluded\n",
+            ),
+        );
+    }
+
+    let dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("dry-run grouped task-status-hooks");
+    assert_success(&dry_run);
+    assert!(
+        stderr(&dry_run).is_empty(),
+        "unexpected dry-run stderr:\n{}",
+        format_output(&dry_run)
+    );
+    assert!(
+        !state.join("bob-cli/task-status-hooks").exists(),
+        "dry-run must not create recovery state"
+    );
+    let dry_json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim())
+            .expect("grouping dry-run JSON");
+    assert_eq!(dry_json["dry_run"], true);
+    assert_eq!(dry_json["marked_next"].as_array().unwrap().len(), 1);
+    assert_eq!(dry_json["cleared_in_progress"].as_array().unwrap().len(), 1);
+    assert_eq!(dry_json["marked_blocked"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        dry_json["grouped_task_sections"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(dry_json["applied_files"], serde_json::json!([]));
+    assert_eq!(dry_json["deferred_files"], serde_json::json!([]));
+    assert_eq!(dry_json["recovery_directory"], serde_json::Value::Null);
+    let project_group = dry_json["grouped_task_sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|section| section["path"] == "alpha.md")
+        .expect("project grouping report");
+    assert_eq!(project_group["original_heading_line"], 6);
+    assert_eq!(
+        project_group["heading_ancestry"],
+        serde_json::json!(["Alpha", "Tasks"])
+    );
+    assert_eq!(project_group["next_and_in_progress"], 1);
+    assert_eq!(project_group["blocked"], 1);
+    assert_eq!(project_group["done_and_canceled"], 2);
+    assert_eq!(project_group["moved_block_count"], 4);
+    assert_eq!(
+        project_group["moved_blocks"][0],
+        serde_json::json!({
+            "original_line": 11,
+            "destination": "next_and_in_progress"
+        })
+    );
+    assert!(!fs::read_to_string(&project)
+        .unwrap()
+        .contains("Next & In Progress"));
+    assert!(!fs::read_to_string(&area)
+        .unwrap()
+        .contains("Next & In Progress"));
+
+    let human_dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("human dry-run grouped task-status-hooks");
+    assert_success(&human_dry_run);
+    let human = stdout(&human_dry_run);
+    assert!(
+        human.contains("would group task sections")
+            && human.contains("alpha.md")
+            && human.contains("Summary:")
+            && !human.contains("already in sync, no changes"),
+        "unexpected grouping human dry-run:\n{}",
+        format_output(&human_dry_run)
+    );
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("apply grouped task-status-hooks");
+    assert_success(&applied);
+    let applied_json: serde_json::Value =
+        serde_json::from_str(stdout(&applied).trim())
+            .expect("grouping apply JSON");
+    assert_eq!(
+        applied_json["applied_files"],
+        serde_json::json!(["Areas/Home.md", "alpha.md"])
+    );
+    let recovery = applied_json["recovery_directory"]
+        .as_str()
+        .expect("recovery directory");
+    assert!(
+        Path::new(recovery).join("manifest.json").is_file(),
+        "missing recovery manifest in {recovery}"
+    );
+    let project_after = fs::read_to_string(&project).unwrap();
+    assert_text_order(
+        &project_after,
+        &[
+            "## Tasks",
+            "Project context.",
+            "- [ ] #task Keep in intake ^ready",
+            "- [ ] #task Stale work clears ^stale",
+            "### Next & In Progress",
+            "<!-- bob:task-status-group:v1:active -->",
+            "- [*] #task Promote from Pomodoro ^promote",
+            "### Blocked",
+            "- [?] #task Future blocked [scheduled:: 2026-07-11] ^future",
+            "### Done & Canceled",
+            "- [x] #task Finished ^done",
+            "- [-] #task Canceled without block",
+            "## Notes",
+            "- [x] #task Outside Tasks is not grouped ^outside",
+        ],
+    );
+    let area_after = fs::read_to_string(&area).unwrap();
+    assert_text_order(
+        &area_after,
+        &[
+            "## Tasks",
+            "### Next & In Progress",
+            "- [*] #task Already next ^already",
+            "- [/] #task Keep working ^working",
+        ],
+    );
+    for path in [&daily, &ordinary, &archived, &generated, &template] {
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(
+            !contents.contains("bob:task-status-group"),
+            "{} should not receive generated groups",
+            path.display()
+        );
+    }
+
+    let project_mtime = fs::metadata(&project).unwrap().modified().unwrap();
+    let second = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("rerun grouped task-status-hooks");
+    assert_success(&second);
+    assert!(
+        stdout(&second).contains("already in sync, no changes"),
+        "expected idempotent no-op:\n{}",
+        format_output(&second)
+    );
+    assert_eq!(
+        fs::metadata(&project).unwrap().modified().unwrap(),
+        project_mtime
+    );
+
+    let capture = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("Captured ready @alpha^captured")
+        .env("BOB_NOW", "2026-07-10 10:11:12")
+        .output()
+        .expect("capture into grouped note");
+    assert_success(&capture);
+    let project_after_capture = fs::read_to_string(&project).unwrap();
+    assert_text_order(
+        &project_after_capture,
+        &[
+            "- [ ] #task Stale work clears ^stale",
+            "- [ ] #task Captured ready [created::2026-07-10] ^captured",
+            "### Next & In Progress",
+        ],
+    );
+
+    let after_ready_capture = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("rerun after ready capture");
+    assert_success(&after_ready_capture);
+    assert!(
+        stdout(&after_ready_capture).contains("already in sync, no changes"),
+        "Ready capture should remain in intake:\n{}",
+        format_output(&after_ready_capture)
+    );
+
+    let daily_with_captured = fs::read_to_string(&daily).unwrap().replace(
+        "  - [[Areas/Home#^working]]\n\n## Tasks",
+        "  - [[Areas/Home#^working]]\n  - [[alpha#^captured]]\n\n## Tasks",
+    );
+    write_file(&daily, &daily_with_captured);
+    let promoted_capture = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("promote captured task");
+    assert_success(&promoted_capture);
+    let project_after_promotion = fs::read_to_string(&project).unwrap();
+    assert_text_order(
+        &project_after_promotion,
+        &[
+            "### Next & In Progress",
+            "- [*] #task Captured ready [created::2026-07-10] ^captured",
+            "- [*] #task Promote from Pomodoro ^promote",
+        ],
+    );
+}
+
+#[test]
+fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-group-warning");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let area = vault.join("area.md");
+
+    write_file(
+        &daily,
+        concat!("# Today\n\n", "## Pomodoros\n\n", "- [ ] Current\n"),
+    );
+    write_file(
+        &area,
+        concat!(
+            "---\n",
+            "type: [[area]]\n",
+            "---\n",
+            "# Area\n\n",
+            "###### Tasks\n\n",
+            "- [x] #task Cannot have generated child groups ^done\n",
+        ),
+    );
+
+    let json_output = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run grouping warning JSON");
+    assert_success(&json_output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&json_output).trim())
+            .expect("grouping warning JSON");
+    assert_eq!(json["grouped_task_sections"], serde_json::json!([]));
+    assert_eq!(json["grouping_warnings"].as_array().unwrap().len(), 1);
+    assert_eq!(json["grouping_warnings"][0]["path"], "area.md");
+    assert_eq!(json["grouping_warnings"][0]["code"], "h6_container");
+    assert!(
+        stderr(&json_output).contains("H6 heading"),
+        "expected stderr warning:\n{}",
+        format_output(&json_output)
+    );
+
+    let human_output = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run grouping warning human");
+    assert_success(&human_output);
+    assert!(
+        !stdout(&human_output).contains("already in sync, no changes"),
+        "grouping warning should not be reported as a clean no-op:\n{}",
+        format_output(&human_output)
+    );
+    assert!(
+        stderr(&human_output).contains("H6 heading"),
+        "expected human stderr warning:\n{}",
+        format_output(&human_output)
+    );
+}
+
+#[test]
 fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     let temp = TempDir::new("bob-cli-task-status-hooks-previous-daily");
     let vault = temp.path().join("vault");

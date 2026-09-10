@@ -5387,10 +5387,7 @@ mod tests {
             field(inside, inside_hash + 2).expect("cursor inside c++");
         assert_eq!(inside_field.context, CompletionContext::PomodoroName);
         assert_eq!(inside_field.query, "c");
-        assert_eq!(
-            inside_field.replacement,
-            (inside_hash + 1, inside.len())
-        );
+        assert_eq!(inside_field.replacement, (inside_hash + 1, inside.len()));
         assert_eq!(
             &inside[inside_field.replacement.0..inside_field.replacement.1],
             "c++"
