@@ -1770,6 +1770,66 @@ mod tests {
     }
 
     #[test]
+    fn fresh_attempt_after_vault_changed_replans_from_intervening_edit() {
+        // Models what the `task-status-hooks` retry controller does across
+        // two independent attempts: attempt 1 sees an editor's intervening
+        // save and stops without writing; attempt 2 is a wholly fresh
+        // snapshot/plan/apply, not a replay of attempt 1's stale plan, so it
+        // observes the edit and preserves it.
+        let (temp, vault, first, second) = fixture();
+        let scan = vec![first.clone(), second.clone()];
+
+        let attempt_one_plan = plan_for(
+            &vault,
+            vec![(first.as_path(), "alpha-planned\n", false)],
+            vec![snapshot(&second, InputKind::Note)],
+            scan.clone(),
+        );
+        let mut attempt_one_session =
+            make_session(&temp, scan.clone(), "attempt-1");
+        attempt_one_session.before_preflight = Some(Box::new({
+            let first = first.clone();
+            move || fs::write(&first, "alpha-from-editor\n").unwrap()
+        }));
+        let error = apply_plan(&attempt_one_plan, &attempt_one_session)
+            .expect_err("attempt 1 must see the intervening edit");
+        assert_eq!(error.reason, ReasonCode::VaultChanged);
+        assert!(error.applied_files.is_empty());
+        assert_eq!(fs::read_to_string(&first).unwrap(), "alpha-from-editor\n");
+
+        // The lock and every attempt-1 snapshot are dropped between
+        // attempts; attempt 2 rebuilds everything from scratch.
+        let refreshed = snapshot(&first, InputKind::Note);
+        assert_eq!(
+            refreshed.utf8_contents().unwrap().as_deref(),
+            Some("alpha-from-editor\n"),
+            "a fresh attempt must observe the intervening edit, not attempt 1's stale bytes"
+        );
+        let attempt_two_plan = plan_for(
+            &vault,
+            vec![(
+                first.as_path(),
+                "alpha-from-editor\nplanned-addition\n",
+                false,
+            )],
+            vec![snapshot(&second, InputKind::Note)],
+            scan,
+        );
+        let attempt_two_session = make_session(
+            &temp,
+            vec![first.clone(), second.clone()],
+            "attempt-2",
+        );
+        let outcome = apply_ok(&attempt_two_plan, &attempt_two_session);
+        assert!(matches!(outcome, ApplyOutcome::Applied { .. }));
+        assert_eq!(
+            fs::read_to_string(&first).unwrap(),
+            "alpha-from-editor\nplanned-addition\n",
+            "the successful retry must preserve the editor's intervening change"
+        );
+    }
+
+    #[test]
     fn replacement_inode_prevents_write() {
         let (temp, vault, first, second) = fixture();
         let scan = vec![first.clone(), second.clone()];

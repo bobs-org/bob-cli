@@ -109,6 +109,55 @@ ssh mac 'tail -n 80 /var/tmp/com.bbugyi.bob-vault-sync.err'
 
 The LaunchAgent runs `bob vault-sync -q` every 15 seconds and at load.
 
+## Mac scheduled maintenance
+
+The MacBook also runs three independent 15-minute cron jobs, staggered five
+minutes apart so their writes do not collide with each other or with the
+15-second `bob-vault-sync` LaunchAgent:
+
+```cron
+0,15,30,45 * * * * ~/bin/maybe_bob_highlights_sync -w >> /var/tmp/maybe_bob_highlights_sync.log 2>&1
+5,20,35,50 * * * * ~/.cargo/bin/bob projects sync >> /var/tmp/bob_projects.log 2>&1
+10,25,40,55 * * * * ~/.cargo/bin/bob task-status-hooks --retry-timeout 120 >> /var/tmp/bob_task_status_hooks.log 2>&1
+```
+
+Highlights intake precedes project reconciliation, which precedes task-status
+reconciliation. The 2-minute `--retry-timeout` on `task-status-hooks` fits
+comfortably inside the 15-minute cadence and absorbs transient
+maintenance-lock contention and concurrent-save races against the
+15-second sync LaunchAgent; see
+[Retries](task-status-hooks.md#retries) for the backoff policy and its
+allowed failure reasons. Offsetting the three jobs by minutes reduces
+collisions between them, but cannot guarantee exclusion from an open editor,
+a slow job, or the sync LaunchAgent — correctness comes from the existing
+lock and guarded-write checks plus the fresh-attempt retry behavior, not from
+the schedule alone.
+
+This crontab is not chezmoi-managed; it is installed by hand with `crontab`
+directly on the Mac. Each job redirects both stdout and stderr with
+`>> logfile 2>&1` (in that order), so retry diagnostics, the final result,
+and any warnings land in its `/var/tmp` log instead of becoming cron mail.
+
+```bash
+ssh mac crontab -l
+ssh mac 'tail -n 80 /var/tmp/bob_task_status_hooks.log'
+ssh mac '~/.cargo/bin/bob task-status-hooks --help' # confirm --retry-timeout is listed before installing a crontab that uses it
+```
+
+To change this schedule: re-read the live crontab, save a timestamped backup
+outside the vault, and replace only the three matching Bob entries, leaving
+unrelated lines untouched:
+
+```bash
+ssh mac 'crontab -l' > /tmp/mac-crontab-backup-$(date +%Y%m%dT%H%M%S).txt
+# edit the three lines in a local copy, then:
+ssh mac 'crontab -' < /tmp/mac-crontab-new.txt
+ssh mac 'crontab -l' # confirm exactly one entry per job
+```
+
+Roll back by reinstalling the saved backup the same way, preserving any
+intervening unrelated edits.
+
 ## Nightly maintenance
 
 athena's cron entry runs `bob nightly` at 03:30. `bob nightly` now runs:

@@ -35,12 +35,13 @@ subtree from an open Pomodoro without changing the canceled task itself.
 - [Status grouping](#status-grouping)
 - [Pomodoro marker](#pomodoro-marker)
 - [Guard rails](#guard-rails)
+- [Retries](#retries)
 - [Output](#output)
 
 ## Usage
 
 ```bash
-bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
+bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-r|--retry-timeout SECONDS]
 ```
 
 The vault root comes from `--bob-dir`, then `BOB_DIR`, then `~/bob`. The current
@@ -58,11 +59,14 @@ directories, the anchor date, and future dates are ignored. No earlier daily
 note is a valid result.
 
 Use `--dry-run` to compute and print the complete sync without writing files.
-Repeated successful runs are idempotent.
+Repeated successful runs are idempotent. Live runs retry certain transient
+failures with jittered backoff, controlled by `-r, --retry-timeout SECONDS`
+(default `120`); see [Retries](#retries).
 
 `task-status-hooks` is the canonical and documented command name. The hidden
 `task-status-setter` and `mark-next-tasks` spellings remain compatibility-only
-dispatch aliases and show canonical usage when asked for help.
+dispatch aliases and show canonical usage when asked for help, including the
+same retry behavior.
 
 ## Sync Rules
 
@@ -611,8 +615,13 @@ copies are the observed originals and intended outputs for compare/merge into
 the current note, not a blind vault restore. `--dry-run` does not wait, lock,
 stage, or write recovery records. A live no-op may create the ordinary lock
 file, but no recovery or note staging artifacts. Lock contention, a changed
-input, a quiet-period deferral, and a partial apply all exit with status 1 and
-are retryable: rerun the command once the vault settles.
+input, and a quiet-period deferral all exit with status 1; the retry
+controller described in [Retries](#retries) reruns each of those
+automatically within its budget. A partial apply also exits with status 1
+but is never retried automatically — its reason can combine different
+failure stages, so treat it as an instruction to inspect the recovery
+directory and rerun by hand once the vault settles, not as something the
+automatic policy replays for you.
 
 Unresolved direct or dependency links are warnings, not failures. If duplicate
 task block IDs occur in one resolved note, every matching task is synchronized
@@ -621,6 +630,62 @@ all duplicate matches are complete; conflicting completion states are warned
 and left structurally unchanged. Canceled-reference list-item removal likewise
 proceeds only when every match has a recognized `CANCELLED` status; mixed
 cancellation states are warned and retained.
+
+## Retries
+
+Live runs (anything without `--dry-run`) wrap one complete sync attempt in a
+bounded, jittered-backoff retry controller. `-r, --retry-timeout SECONDS` sets
+the budget (default `120`); `0` performs exactly one attempt and preserves
+the pre-retry fail-fast behavior. Each retried attempt is a wholly fresh
+attempt: returning from one drops its maintenance lock and every snapshot
+before any backoff, and the next attempt reacquires the same lock, rereads
+every input, and recomputes the whole plan from scratch — never replaying a
+stale plan or staged output from an earlier attempt. Backing off between
+attempts therefore never holds the shared maintenance lock, and an
+in-flight attempt is always allowed to finish; the budget only gates
+whether another attempt starts, never a running one.
+
+Only these existing failure reasons are ever retried automatically, using
+an explicit allowlist rather than error-message matching or a blanket retry
+on exit status 1:
+
+| Failure | Automatic action |
+| --- | --- |
+| `lock_contention` | Retry within the budget. |
+| `vault_changed`, `quiet_period`, `unstable_read` | Retry only when the attempt applied no files. |
+| `partial_apply`, or any error that lists applied files | Stop and retain recovery details. |
+| `recovery_failed`, `unsupported_file`, `io`, validation errors, and unknown or missing reasons | Stop immediately. |
+
+Backoff delays follow ceilings of 2, 4, 8, 16, then 30 seconds and capped
+there, drawing a random subsecond delay from the upper half of each ceiling
+so retries do not synchronize with the 15-second vault-sync LaunchAgent
+timer. Each sleep is clamped to the remaining budget, and the elapsed
+budget is checked again before every new attempt, so the command never
+starts another attempt once the budget is exhausted.
+
+Each retry decision prints one concise timestamped line to stderr with a
+run identifier, attempt number, elapsed time, failure reason, error detail,
+next delay, and the recovery directory when the failed attempt left one.
+Once the retry sequence ends, one more timestamped summary line reports
+success, an exhausted budget, or a terminal stop, with the attempt count
+and elapsed time — an exhausted budget is never reported as a success. An
+uncontended run, whose first attempt either succeeds or fails terminally,
+prints none of these lines, so ordinary runs keep their existing concise
+output. In both formats stdout still carries exactly one final result:
+the normal human or JSON output described under [Output](#output),
+unchanged by however many attempts it took.
+
+`--dry-run` always uses exactly one attempt and never enters the retry
+controller's sleep or logging behavior, even when `--retry-timeout` is
+supplied; it still creates no lock, recovery records, staged files, or
+modified notes.
+
+This command does not manage its own log file; the scheduler owns
+redirection. Cron and other schedulers should redirect both streams with
+`>> logfile 2>&1` (in that order) so retry diagnostics, the final result,
+and any child-command output all land in one file instead of becoming cron
+mail. See [Mac scheduled maintenance](vault-git-sync.md#mac-scheduled-maintenance)
+for the exact staggered crontab this project runs.
 
 ## Output
 

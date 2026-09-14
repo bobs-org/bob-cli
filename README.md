@@ -277,7 +277,7 @@ The full command contract and live smoke-test steps live in
 ## Task status hooks
 
 ```bash
-bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json]
+bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-r|--retry-timeout SECONDS]
 ```
 
 Run this after capturing or closing Pomodoro-linked work, and after
@@ -307,8 +307,10 @@ The command refuses to change files if the current daily note is missing, lacks
 a `Pomodoros` section, or has multiple open timed Pomodoros. Live writes use
 guarded snapshots, recovery copies, and a bounded quiet-period check for
 structural regrouping; `--dry-run` computes the same plan without locking or
-writing recovery state. The full sync, grouping, link-resolution, exclusion,
-output, and JSON contract lives in
+writing recovery state. Live runs also retry lock contention and other
+transient failures with jittered backoff, bounded by `--retry-timeout`
+(default 120s; `0` fails fast on the first attempt). The full sync, grouping,
+link-resolution, exclusion, retry, output, and JSON contract lives in
 [`docs/task-status-hooks.md`](docs/task-status-hooks.md).
 
 ## Projects
