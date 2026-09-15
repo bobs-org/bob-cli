@@ -1839,12 +1839,25 @@ mod tests {
             Vec::new(),
             scan.clone(),
         );
+        let planned_identity = plan.outputs[0].identity.clone();
         let mut session = make_session(&temp, scan, "inode");
         session.before_preflight = Some(Box::new({
             let first = first.clone();
             move || {
                 fs::remove_file(&first).unwrap();
                 fs::write(&first, "alpha\n").unwrap();
+                let replacement_identity = snapshot(&first, InputKind::Note)
+                    .identity()
+                    .unwrap()
+                    .clone();
+                if replacement_identity == planned_identity {
+                    let mut permissions = fs::metadata(&first)
+                        .expect("replacement metadata")
+                        .permissions();
+                    permissions.set_readonly(true);
+                    fs::set_permissions(&first, permissions)
+                        .expect("force replacement identity change");
+                }
             }
         }));
         let error = apply_plan(&plan, &session).expect_err("defer");

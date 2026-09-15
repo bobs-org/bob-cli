@@ -663,17 +663,17 @@ timer. Each sleep is clamped to the remaining budget, and the elapsed
 budget is checked again before every new attempt, so the command never
 starts another attempt once the budget is exhausted.
 
-Each retry decision prints one concise timestamped line to stderr with a
-run identifier, attempt number, elapsed time, failure reason, error detail,
-next delay, and the recovery directory when the failed attempt left one.
-Once the retry sequence ends, one more timestamped summary line reports
-success, an exhausted budget, or a terminal stop, with the attempt count
-and elapsed time — an exhausted budget is never reported as a success. An
-uncontended run, whose first attempt either succeeds or fails terminally,
-prints none of these lines, so ordinary runs keep their existing concise
-output. In both formats stdout still carries exactly one final result:
-the normal human or JSON output described under [Output](#output),
-unchanged by however many attempts it took.
+Each retry decision prints one concise timestamped line with a run identifier,
+attempt number, elapsed time, failure reason, error detail, next delay, and
+the recovery directory when the failed attempt left one. Once the retry
+sequence ends, one more timestamped summary line reports success, an exhausted
+budget, or a terminal stop, with the attempt count and elapsed time — an
+exhausted budget is never reported as a success. In default human mode, these
+routine retry decision and summary lines use stdout so successful scheduled
+runs can append retry progress with the normal final report. In `--format json`
+mode, retry progress remains on stderr so stdout continues to contain exactly
+one parseable final JSON object. An uncontended run, whose first attempt either
+succeeds or fails terminally, prints none of these retry lines.
 
 `--dry-run` always uses exactly one attempt and never enters the retry
 controller's sleep or logging behavior, even when `--retry-timeout` is
@@ -681,11 +681,13 @@ supplied; it still creates no lock, recovery records, staged files, or
 modified notes.
 
 This command does not manage its own log file; the scheduler owns
-redirection. Cron and other schedulers should redirect both streams with
-`>> logfile 2>&1` (in that order) so retry diagnostics, the final result,
-and any child-command output all land in one file instead of becoming cron
-mail. See [Mac scheduled maintenance](vault-git-sync.md#mac-scheduled-maintenance)
-for the exact staggered crontab this project runs.
+redirection. For the default human cron invocation, append stdout with
+`>> logfile` so routine retry progress and the final result are logged while
+warnings and terminal failures still go to stderr and can trigger scheduler
+mail. JSON schedulers that want a combined log must choose explicitly whether
+to keep stderr separate for retry progress or merge it with `2>&1`. See
+[Mac scheduled maintenance](vault-git-sync.md#mac-scheduled-maintenance) for
+the exact staggered crontab this project runs.
 
 ## Output
 

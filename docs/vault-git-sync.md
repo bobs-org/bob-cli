@@ -118,7 +118,7 @@ minutes apart so their writes do not collide with each other or with the
 ```cron
 0,15,30,45 * * * * ~/bin/maybe_bob_highlights_sync -w >> /var/tmp/maybe_bob_highlights_sync.log 2>&1
 5,20,35,50 * * * * ~/.cargo/bin/bob projects sync >> /var/tmp/bob_projects.log 2>&1
-10,25,40,55 * * * * ~/.cargo/bin/bob task-status-hooks --retry-timeout 120 >> /var/tmp/bob_task_status_hooks.log 2>&1
+10,25,40,55 * * * * ~/.cargo/bin/bob task-status-hooks --retry-timeout 120 >> /var/tmp/bob_task_status_hooks.log
 ```
 
 Highlights intake precedes project reconciliation, which precedes task-status
@@ -134,9 +134,11 @@ lock and guarded-write checks plus the fresh-attempt retry behavior, not from
 the schedule alone.
 
 This crontab is not chezmoi-managed; it is installed by hand with `crontab`
-directly on the Mac. Each job redirects both stdout and stderr with
-`>> logfile 2>&1` (in that order), so retry diagnostics, the final result,
-and any warnings land in its `/var/tmp` log instead of becoming cron mail.
+directly on the Mac. The highlights and projects jobs redirect both stdout
+and stderr with `>> logfile 2>&1` (in that order). The `task-status-hooks`
+job redirects stdout only: routine retry progress and the final human result
+land in `/var/tmp/bob_task_status_hooks.log`, while warnings and real
+terminal failures remain on stderr so cron mail is still actionable.
 
 ```bash
 ssh mac crontab -l

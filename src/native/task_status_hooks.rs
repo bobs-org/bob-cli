@@ -52,7 +52,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let outcome = if request.dry_run || request.retry_timeout.is_zero() {
         sync_task_statuses(&request)
     } else {
-        run_with_retries(&request, &RetryEnv::production())
+        run_with_retries(&request, &RetryEnv::production(format))
     };
     match outcome {
         Ok(result) => {
@@ -729,12 +729,16 @@ struct RetryEnv {
 }
 
 impl RetryEnv {
-    fn production() -> Self {
+    fn production(format: OutputFormat) -> Self {
+        let log: Box<dyn Fn(String)> = match format {
+            OutputFormat::Human => Box::new(|line: String| println!("{line}")),
+            OutputFormat::Json => Box::new(|line: String| eprintln!("{line}")),
+        };
         Self {
             now: Box::new(Instant::now),
             sleep: Box::new(std::thread::sleep),
             jitter: Box::new(random_unit_interval),
-            log: Box::new(|line: String| eprintln!("{line}")),
+            log,
         }
     }
 }

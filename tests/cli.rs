@@ -3461,8 +3461,129 @@ fn task_status_hooks_defers_when_maintenance_lock_is_held() {
 }
 
 #[test]
-fn task_status_hooks_retries_past_a_released_lock_and_succeeds() {
+fn task_status_hooks_human_retry_progress_goes_to_stdout() {
     let temp = TempDir::new("bob-cli-task-status-hooks-retry-success");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let tasks = vault.join("tasks.md");
+    let lock_path = temp.path().join("bob_sync.lock");
+    write_file(&daily, "## Pomodoros\n");
+    write_file(&tasks, "- [*] #task Stale next ^stale\n");
+
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open lock");
+    lock.try_lock_exclusive().expect("hold lock");
+
+    let mut child = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .arg("-r")
+        .arg("30")
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn contended task-status-hooks");
+
+    let stdout_pipe = child.stdout.take().expect("stdout pipe");
+    let (tx, rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in io::BufReader::new(stdout_pipe).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut seen = Vec::new();
+    let mut saw_retry_decision = false;
+    while let Ok(line) = rx.recv_timeout(Duration::from_secs(20)) {
+        let is_decision =
+            line.contains("retry run=") && line.contains("attempt=1");
+        seen.push(line);
+        if is_decision {
+            saw_retry_decision = true;
+            break;
+        }
+    }
+    if !saw_retry_decision {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!(
+            "expected a retry diagnostic on stdout before the lock was released; saw:\n{}",
+            seen.join("\n")
+        );
+    }
+
+    lock.unlock().expect("release lock");
+    // Confirm the lock is free during the child's backoff window: a fresh
+    // handle can also take it immediately, proving backoff never holds the
+    // shared maintenance lock.
+    let verifier = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open lock for verification");
+    verifier
+        .try_lock_exclusive()
+        .expect("the lock must be free while the child backs off");
+    verifier.unlock().expect("release verification hold");
+    drop(verifier);
+    drop(lock);
+
+    // Drain the remaining retry diagnostics and final human report from the
+    // child's stdout pipe while we wait for it to exit.
+    for line in rx.iter() {
+        seen.push(line);
+    }
+    let _ = reader.join();
+
+    let output = child
+        .wait_with_output()
+        .expect("wait for retrying task-status-hooks");
+    assert!(
+        output.status.success(),
+        "retry must eventually succeed once the lock is free:\n{}\nstderr:\n{}",
+        stdout(&output),
+        seen.join("\n")
+    );
+    assert!(
+        stderr(&output).is_empty(),
+        "human retry success without warnings must keep stderr empty:\n{}",
+        stderr(&output)
+    );
+    assert!(
+        seen.iter().any(|line| line.contains("succeeded")),
+        "expected a retry success summary; saw:\n{}",
+        seen.join("\n")
+    );
+    let human_output = seen.join("\n");
+    assert!(
+        human_output.contains("retry run=")
+            && human_output.contains("attempt=1")
+            && human_output.contains("Summary:")
+            && human_output.contains("bob task-status-hooks"),
+        "expected retry progress and final human report on stdout:\n{human_output}"
+    );
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        "- [ ] #task Stale next ^stale\n",
+        "the eventually successful retry must still apply the guarded write"
+    );
+}
+
+#[test]
+fn task_status_hooks_json_retry_progress_stays_off_stdout() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-json-retry-success");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260710.md");
     let tasks = vault.join("tasks.md");
@@ -3493,7 +3614,7 @@ fn task_status_hooks_retries_past_a_released_lock_and_succeeds() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn contended task-status-hooks");
+        .expect("spawn contended JSON task-status-hooks");
 
     let stderr_pipe = child.stderr.take().expect("stderr pipe");
     let (tx, rx) = mpsc::channel();
@@ -3527,23 +3648,8 @@ fn task_status_hooks_retries_past_a_released_lock_and_succeeds() {
     }
 
     lock.unlock().expect("release lock");
-    // Confirm the lock is free during the child's backoff window: a fresh
-    // handle can also take it immediately, proving backoff never holds the
-    // shared maintenance lock.
-    let verifier = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .expect("open lock for verification");
-    verifier
-        .try_lock_exclusive()
-        .expect("the lock must be free while the child backs off");
-    verifier.unlock().expect("release verification hold");
-    drop(verifier);
     drop(lock);
 
-    // Drain any remaining retry diagnostics so the child's stderr pipe never
-    // fills up while we wait for it to exit.
     for line in rx.iter() {
         seen.push(line);
     }
@@ -3551,19 +3657,23 @@ fn task_status_hooks_retries_past_a_released_lock_and_succeeds() {
 
     let output = child
         .wait_with_output()
-        .expect("wait for retrying task-status-hooks");
+        .expect("wait for retrying JSON task-status-hooks");
     assert!(
         output.status.success(),
-        "retry must eventually succeed once the lock is free:\n{}\nstderr:\n{}",
-        stdout(&output),
-        seen.join("\n")
+        "retry must eventually succeed once the lock is free:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        !out.contains("retry run="),
+        "JSON stdout must not be interleaved with retry diagnostics:\n{out}"
     );
     let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("retry JSON");
+        serde_json::from_str(out.trim()).expect("retry JSON");
     assert_eq!(json["ok"], true);
     assert!(
         seen.iter().any(|line| line.contains("succeeded")),
-        "expected a retry success summary; saw:\n{}",
+        "expected a retry success summary on stderr; saw:\n{}",
         seen.join("\n")
     );
     assert_eq!(
@@ -3718,7 +3828,7 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
 
     let mut child = Command::new("sh")
         .arg("-c")
-        .arg(r#"exec "$0" task-status-hooks --format json --bob-dir "$1" -r 30 >> "$2" 2>&1"#)
+        .arg(r#"exec "$0" task-status-hooks --bob-dir "$1" -r 30 >> "$2""#)
         .arg(BOB_BIN)
         .arg(&vault)
         .arg(&log_path)
@@ -3755,12 +3865,12 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
     assert_eq!(output.status.code(), Some(0));
     assert!(
         stdout(&output).is_empty(),
-        "parent stdout must stay empty under >>log 2>&1 redirection:\n{}",
+        "parent stdout must stay empty under stdout log redirection:\n{}",
         format_output(&output)
     );
     assert!(
         stderr(&output).is_empty(),
-        "parent stderr must stay empty under >>log 2>&1 redirection:\n{}",
+        "parent stderr must stay empty when a successful retry has no diagnostics:\n{}",
         format_output(&output)
     );
 
@@ -3774,8 +3884,12 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
         "expected a retry success summary in the log:\n{log}"
     );
     assert!(
-        log.contains("\"ok\":true"),
-        "expected the final JSON result in the log:\n{log}"
+        log.contains("Summary:"),
+        "expected the final human result in the log:\n{log}"
+    );
+    assert!(
+        log.contains("bob task-status-hooks"),
+        "expected the human command report in the log:\n{log}"
     );
     assert_eq!(
         fs::read_to_string(&tasks).unwrap(),
@@ -3799,7 +3913,7 @@ fn task_status_hooks_cron_redirection_captures_terminal_failure_and_exit_status(
 
     let output = Command::new("sh")
         .arg("-c")
-        .arg(r#"exec "$0" task-status-hooks --format json --bob-dir "$1" -r 30 >> "$2" 2>&1"#)
+        .arg(r#"exec "$0" task-status-hooks --bob-dir "$1" -r 30 >> "$2""#)
         .arg(BOB_BIN)
         .arg(&vault)
         .arg(&log_path)
@@ -3821,19 +3935,20 @@ fn task_status_hooks_cron_redirection_captures_terminal_failure_and_exit_status(
         format_output(&output)
     );
     assert!(
-        stderr(&output).is_empty(),
-        "parent stderr must stay empty under redirection:\n{}",
+        stderr(&output).contains("daily note does not exist"),
+        "stdout-only redirection must leave human terminal errors on stderr:\n{}",
         format_output(&output)
     );
 
-    let log = fs::read_to_string(&log_path).expect("read cron log");
     assert!(
-        log.contains("\"ok\":false"),
-        "expected the final JSON error object in the log:\n{log}"
+        stderr(&output).contains("bob task-status-hooks"),
+        "expected the command name in the terminal diagnostic:\n{}",
+        format_output(&output)
     );
+    let log = fs::read_to_string(&log_path).unwrap_or_default();
     assert!(
-        log.contains("daily note does not exist"),
-        "expected the failure detail in the log:\n{log}"
+        !log.contains("daily note does not exist"),
+        "stdout-only cron logging must not swallow human terminal errors:\n{log}"
     );
     assert!(
         !log.contains("retry run="),
