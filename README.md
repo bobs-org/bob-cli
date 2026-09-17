@@ -294,7 +294,8 @@ notes rolls back the same way. Independently, open Dataview dependencies and
 future `[scheduled:: YYYY-MM-DD]` dates mark a task Blocked (`[?]`). The command
 also retires completed references, moves stray bullets onto the current
 Pomodoro, repairs Pomodoro markers, de-duplicates the same task under later
-open Pomodoros, removes list items that only point at canceled tasks, and
+open Pomodoros, removes list items that only point at canceled tasks, deletes
+childless current-daily Pomodoro entries, and
 groups area/project `Tasks` sections into `Next & In Progress`, `Blocked`, and
 `Done & Canceled` child headings with a linked status-count badge row while
 keeping Ready tasks in the intake.
@@ -304,7 +305,7 @@ bob task-status-hooks --dry-run
 ```
 
 The command refuses to change files if the current daily note is missing, lacks
-a `Pomodoros` section, or has multiple open timed Pomodoros. Live writes use
+a `Pomodoros` section, or has multiple non-empty open timed Pomodoros. Live writes use
 guarded snapshots, recovery copies, and a bounded quiet-period check for
 structural regrouping; `--dry-run` computes the same plan without locking or
 writing recovery state. Live runs also retry lock contention and other

@@ -15,7 +15,8 @@ In practice it:
 - Marks a task Blocked (`[?]`) when it has an open Dataview dependency or a
   future `[scheduled:: YYYY-MM-DD]` date
 - Cleans the ledger: de-duplicates links across open Pomodoros, retires
-  completed references, removes canceled-task bullets, and repairs `🍅` markers
+  completed references, removes canceled-task bullets, deletes childless
+  Pomodoros, and repairs `🍅` markers
 
 The latest existing earlier daily note is a read-only recent-activity source:
 it can keep an area/project In Progress task active and can supply the rank an
@@ -166,11 +167,40 @@ only; canceled-reference cleanup uses the full list-item subtree. When a
 completed parent bullet is relocated, any independently canceled descendant
 subtree is omitted from the moved content.
 
-The rewritten Pomodoro section is scanned again after duplicate removal and
-canceled/completed-reference structural rewrites. Only references that will
-actually be written contribute to the direct desired-status map and dependency
-graph. Thus an otherwise-live task mentioned only as sibling or nested content
-in a removed item, a removed canceled root, and any otherwise-unreachable
+### Empty Pomodoros
+
+After duplicate-line removal, canceled-reference subtree removal,
+completed-reference retirement or relocation, and marker repair have been
+composed, the command removes childless Pomodoro entries from the selected
+current daily note. The cleanup is limited to recognized column-zero open or
+completed ledger entries in the real `## Pomodoros` section; nested checkbox
+lookalikes, fenced examples, entries outside the section, and statuses that
+the Pomodoro parser does not recognize are left alone.
+
+A Pomodoro is kept when it has at least one real direct Markdown list-item
+child, even when that child is plain prose and contains no resolvable task
+block link. Fenced-example bullets do not count. If an empty entry owns
+indented continuation text but no list-item child, its whole entry block is
+removed so no orphaned text remains. Line endings and the original final
+newline state are preserved.
+
+Empty entries do not count toward the multiple-open-timed-Pomodoro guard and
+are not selected as current or completed fallback destinations for completed
+reference relocation. Multiple non-empty open timed entries still fail before
+any write. Because empty cleanup runs after the other structural rewrites, it
+also removes entries whose last child was removed or moved away during the same
+invocation, while retaining an entry that receives a moved child.
+
+Dry-run reports the same deterministic removals without changing the vault.
+Live runs write through the normal guarded snapshot, recovery, and retry path.
+A second run after a successful cleanup is a no-op.
+
+The rewritten Pomodoro section is scanned again after duplicate removal,
+canceled/completed-reference structural rewrites, marker repair, and empty
+Pomodoro cleanup. Only references that will actually be written contribute to
+the direct desired-status map and dependency graph. Thus an otherwise-live task
+mentioned only as sibling or nested content in a removed item, a removed
+canceled root, a removed empty Pomodoro, and any otherwise-unreachable
 dependency chain stop contributing desired Next or In-Progress state in that
 same run.
 
@@ -573,11 +603,12 @@ remains untouched.
 ## Guard Rails
 
 The command exits with status 1 and writes nothing when the current daily note
-is missing, has no `## Pomodoros` section, or contains multiple open timed
-Pomodoros. A valid but empty current section is a valid source of truth: it
-clears every scanned `[*]` task and applies scoped stale-In-Progress rollback
-using the optional previous source. This distinction prevents a missing or
-malformed current ledger from causing a mass clear.
+is missing, has no `## Pomodoros` section, or contains multiple non-empty open
+timed Pomodoros. Empty timed entries are pruned instead of making the current
+Pomodoro ambiguous. A valid but empty current section is a valid source of
+truth: it clears every scanned `[*]` task and applies scoped stale-In-Progress
+rollback using the optional previous source. This distinction prevents a
+missing or malformed current ledger from causing a mass clear.
 
 The previous daily is optional and never weakens those current-ledger guards.
 No previous note is valid, while a selected previous note with no Pomodoros
@@ -693,9 +724,10 @@ the exact staggered crontab this project runs.
 
 Human output lists every Next promotion, In-Progress promotion, Next clear,
 scoped In-Progress clear, Blocked transition, unblock, duplicate line removal,
-retired reference, move, and marker repair, plus every canceled-reference
-list-item trigger, followed by a summary. The selected previous daily path and
-its reference count appear in changed and no-op reports.
+empty Pomodoro removal, retired reference, move, and marker repair, plus every
+canceled-reference list-item trigger, followed by a summary. The selected
+previous daily path and its reference count appear in changed and no-op
+reports.
 Canceled-reference rows show the target, block ID, original one-based line
 number, and owning Pomodoro that triggered complete list-item deletion. Blocked
 rows identify the future scheduled date, open dependency IDs, or both;
@@ -704,7 +736,10 @@ original daily-note line number, text, owning Pomodoro, and canonical task
 identities. Marker additions and removals have their own
 `marked`/`unmarked` sections and summary counts. Dependency-derived promotions
 carry a `(dependency)` suffix. Next and In-Progress promotions have separate
-sections and summary counts. Grouping changes appear under
+sections and summary counts. Empty-Pomodoro removals appear under
+`removed empty Pomodoros` or `would remove empty Pomodoros`, show the original
+one-based Pomodoro line number and line text, and have their own summary
+count. Grouping changes appear under
 `grouped task sections` or `would group task sections`, with the note path,
 heading ancestry, open intake count, per-group root-task counts, and moved-block count. A
 successful live write that changed notes also prints the recovery-copy
@@ -834,6 +869,12 @@ JSON mode prints one object on stdout with these stable fields:
       ]
     }
   ],
+  "removed_empty_pomodoros": [
+    {
+      "line_number": 12,
+      "line": "- [ ] () — GTD"
+    }
+  ],
   "grouped_task_sections": [
     {
       "path": "Projects/Alpha.md",
@@ -904,7 +945,12 @@ on one deleted item remain separate entries. The array follows deterministic
 file/occurrence order. Each
 `removed_duplicate_lines` item represents one physical line and contains its
 one-based original `line_number`, original `line`, owning `pomodoro`, and one or
-more canonical path-plus-block `duplicate_tasks`. Each unresolved reference
+more canonical path-plus-block `duplicate_tasks`.
+`removed_empty_pomodoros` contains one item per deleted Pomodoro entry in source
+document order. Each item reports the original one-based `line_number` and the
+original Pomodoro entry `line`; compatibility counters such as
+`open_pomodoros` and `references` keep their input-count meaning and are not
+decremented by this cleanup. Each unresolved reference
 contains `target`, `block_id`, and `reason`; marker-reference entries contain
 `target`, `block_id`, and the owning `pomodoro` line.
 `grouped_task_sections` contains only containers whose bytes changed for

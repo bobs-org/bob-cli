@@ -2063,6 +2063,108 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
 }
 
 #[test]
+fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-empty-pomodoros");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260717.md");
+    let tasks = vault.join("tasks.md");
+    let daily_before = concat!(
+        "# Daily\n\n",
+        "## Pomodoros\n\n",
+        "- [ ] () — GTD\n",
+        "  - [[tasks#^keep]]\n",
+        "- [ ] () — GTD\n",
+        "- [ ] Current (0900-0930)\n",
+        "  - current child without a link\n",
+        "- [x] Completed (0800-0830)\n",
+        "  - completed child without a link\n",
+    );
+    let daily_after = concat!(
+        "# Daily\n\n",
+        "## Pomodoros\n\n",
+        "- [ ] () — GTD\n",
+        "  - [[tasks#^keep]]\n",
+        "- [ ] Current (0900-0930)\n",
+        "  - current child without a link\n",
+        "- [x] Completed (0800-0830)\n",
+        "  - completed child without a link\n",
+    );
+    write_file(&daily, daily_before);
+    write_file(&tasks, "- [*] #task Keep ^keep\n");
+
+    let dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run empty Pomodoro cleanup");
+    assert_success(&dry_run);
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
+        .expect("empty Pomodoro dry-run JSON");
+    assert_eq!(json["open_pomodoros"], 3);
+    assert_eq!(json["references"], 1);
+    assert_eq!(
+        json["removed_empty_pomodoros"],
+        serde_json::json!([
+            {"line_number": 7, "line": "- [ ] () — GTD"}
+        ])
+    );
+
+    let human_dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("human dry-run empty Pomodoro cleanup");
+    assert_success(&human_dry_run);
+    assert!(
+        stdout(&human_dry_run).contains("would remove empty Pomodoros"),
+        "unexpected empty Pomodoro dry-run report:\n{}",
+        format_output(&human_dry_run)
+    );
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply empty Pomodoro cleanup");
+    assert_success(&applied);
+    assert!(
+        stdout(&applied).contains("removed empty Pomodoros")
+            && stdout(&applied).contains("1 empty Pomodoros removed")
+            && stdout(&applied).contains("recovery copies:"),
+        "unexpected empty Pomodoro live report:\n{}",
+        format_output(&applied)
+    );
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_after);
+
+    let second = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("rerun empty Pomodoro cleanup");
+    assert_success(&second);
+    assert!(
+        stdout(&second).contains("already in sync, no changes"),
+        "expected idempotent no-op:\n{}",
+        format_output(&second)
+    );
+    assert_eq!(fs::read_to_string(&daily).unwrap(), daily_after);
+}
+
+#[test]
 fn task_status_hooks_resolves_duplicate_fragments_by_explicit_note_path() {
     let temp = TempDir::new("bob-cli-task-status-hooks-duplicate-fragments");
     let vault = temp.path().join("vault");
@@ -2150,7 +2252,9 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
         concat!(
             "## Pomodoros\n\n",
             "- [ ] First (0900-0930)\n",
+            "  - child\n",
             "- [ ] Second (0930-1000)\n",
+            "  - child\n",
         ),
     );
     let multiple = bob_command()
@@ -2162,6 +2266,40 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
         .expect("run with multiple current Pomodoros");
     assert_eq!(multiple.status.code(), Some(1));
     assert!(stderr(&multiple).contains("multiple open timed Pomodoros"));
+    assert_eq!(
+        fs::read_to_string(&task_file).unwrap(),
+        "- [*] #task Must remain next ^keep\n"
+    );
+
+    let empty_timed = vault.join("empty-timed.md");
+    write_file(
+        &empty_timed,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] First (0900-0930)\n",
+            "  - [[tasks#^keep]]\n",
+            "- [ ] Second (0930-1000)\n",
+        ),
+    );
+    let empty_timed_output = bob_command()
+        .arg("task-status-hooks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &empty_timed)
+        .output()
+        .expect("run with empty timed Pomodoro");
+    assert_success(&empty_timed_output);
+    let empty_timed_json: serde_json::Value =
+        serde_json::from_str(stdout(&empty_timed_output).trim())
+            .expect("empty timed JSON");
+    assert_eq!(
+        empty_timed_json["removed_empty_pomodoros"],
+        serde_json::json!([
+            {"line_number": 5, "line": "- [ ] Second (0930-1000)"}
+        ])
+    );
     assert_eq!(
         fs::read_to_string(&task_file).unwrap(),
         "- [*] #task Must remain next ^keep\n"
@@ -2181,8 +2319,10 @@ fn task_status_hooks_uses_custom_done_status_and_completed_fallback() {
         concat!(
             "## Pomodoros\n\n",
             "- [x] Last completed\n",
+            "  - existing completed child\n",
             "- [ ] Future\n",
             "    - Review [[tasks#^custom|custom done]]\n",
+            "    - keep future entry\n",
         ),
     );
     write_file(&tasks, "- [D] #task Custom completion ^custom\n");
@@ -2236,8 +2376,10 @@ fn task_status_hooks_uses_custom_done_status_and_completed_fallback() {
         concat!(
             "## Pomodoros\n\n",
             "- [x] Last completed\n",
-            "    - Review 🍅 ~~[[tasks#^custom|custom done]]~~\n",
+            "  - existing completed child\n",
+            "  - Review 🍅 ~~[[tasks#^custom|custom done]]~~\n",
             "- [ ] Future\n",
+            "    - keep future entry\n",
         )
     );
 }
@@ -2823,8 +2965,10 @@ fn task_status_hooks_composes_daily_status_and_structural_edits() {
         concat!(
             "## Pomodoros\n\n",
             "- [ ] Current (0900-0930)\n",
+            "  - current child\n",
             "- [ ] Future\n",
-            "  - [[tasks#^done]]\n\n",
+            "  - [[tasks#^done]]\n",
+            "  - future child\n\n",
             "## Tasks\n\n",
             "- [*] #task Daily orphan ^daily-orphan\n",
         ),
@@ -2844,8 +2988,10 @@ fn task_status_hooks_composes_daily_status_and_structural_edits() {
         concat!(
             "## Pomodoros\n\n",
             "- [ ] Current (0900-0930)\n",
+            "  - current child\n",
             "  - ~~[[tasks#^done]]~~\n",
-            "- [ ] Future\n\n",
+            "- [ ] Future\n",
+            "  - future child\n\n",
             "## Tasks\n\n",
             "- [ ] #task Daily orphan ^daily-orphan\n",
         )

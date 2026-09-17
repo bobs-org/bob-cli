@@ -109,6 +109,9 @@ there is no current one. A link to an unambiguously cancelled Tasks task \
 removes its complete Markdown list-item subtree from an open Pomodoro, \
 including for custom single-character statuses whose Tasks type is CANCELLED; \
 the cancelled task status itself is left unchanged. \
+After duplicate, canceled, completed-reference, and marker repairs are \
+composed, childless open or completed Pomodoro entries in the current daily \
+ledger are removed with their full entry blocks. \
 Done, cancelled, non-task, and unknown task statuses are never transitioned.\n\n\
 When the same resolved task is linked beneath multiple open Pomodoros, the \
 first open Pomodoro in file order keeps ownership and every conflicting \
@@ -132,7 +135,7 @@ considered. The scan skips hidden directories, templates, generated notes, \
 and done archives. Blocked writes require exactly one compatible Tasks status \
 named Blocked with symbol [?], type ON_HOLD, and next status Ready. Missing \
 current daily notes and current daily notes without a Pomodoros section, as \
-well as current notes with multiple open timed Pomodoros, fail before any file \
+well as current notes with multiple non-empty open timed Pomodoros, fail before any file \
 is changed. No earlier daily note is valid; an earlier note without a \
 Pomodoros section contributes no historical references. Live writes use \
 guarded snapshots, recovery copies, and a bounded quiet-period check for \
@@ -307,6 +310,12 @@ struct RemovedDuplicateLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct RemovedEmptyPomodoro {
+    line_number: usize,
+    line: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct GroupedTaskSectionReport {
     path: String,
     original_heading_line: usize,
@@ -359,6 +368,7 @@ struct SyncResult {
     marker_removed_references: Vec<MarkerReference>,
     removed_canceled_references: Vec<RemovedCanceledReference>,
     removed_duplicate_lines: Vec<RemovedDuplicateLine>,
+    removed_empty_pomodoros: Vec<RemovedEmptyPomodoro>,
     grouped_task_sections: Vec<GroupedTaskSectionReport>,
     grouping_warnings: Vec<GroupingWarningReport>,
     applied_files: Vec<String>,
@@ -444,8 +454,7 @@ struct ComposeContext<'a> {
     daily_path: &'a Path,
     previous_daily_path: Option<&'a Path>,
     daily_contents: &'a str,
-    pomodoro_model: &'a PomodoroModel,
-    structural_plan: &'a StructuralPlan,
+    normalized_daily_contents: &'a str,
     settings: &'a TasksSettings,
 }
 
@@ -519,6 +528,7 @@ struct PomodoroEntry {
     open: bool,
     completed: bool,
     timed: bool,
+    has_child: bool,
     child_indentation: Option<String>,
     context: String,
 }
@@ -598,6 +608,12 @@ struct StructuralPlan {
     marker_added: Vec<MarkerReference>,
     marker_removed: Vec<MarkerReference>,
     removed_canceled: Vec<RemovedCanceledReference>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EmptyPomodoroPlan {
+    deleted_lines: BTreeSet<usize>,
+    removed: Vec<RemovedEmptyPomodoro>,
 }
 
 #[derive(Debug, Clone)]
@@ -988,7 +1004,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
     let timed_open = pomodoro_model
         .entries
         .iter()
-        .filter(|entry| entry.open && entry.timed)
+        .filter(|entry| entry.open && entry.timed && entry.has_child)
         .count();
     if timed_open > 1 {
         return Err(SyncError::new(
@@ -1053,10 +1069,10 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         });
     }
 
-    let note_index = NoteIndex::from_paths(
+    let original_note_index = NoteIndex::from_paths(
         files.iter().map(|file| file.relative_path.clone()),
     );
-    let task_blocks = task_blocks(&files);
+    let original_task_blocks = task_blocks(&files);
     let daily_relative = daily_path.strip_prefix(&request.bob_dir).ok();
     let previous_daily_relative =
         previous_daily_path.as_ref().and_then(|path| {
@@ -1095,16 +1111,87 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
             .chain(previous_daily_references.iter()),
         &mut inputs,
     )?;
+    let original_reference_resolver = TaskReferenceResolver {
+        note_index: &original_note_index,
+        task_blocks: &original_task_blocks,
+        archive_catalog: &archive_catalog,
+    };
+    let mut structural_unresolved = Vec::new();
+    let mut original_resolved_references = BTreeMap::new();
+    for reference in &pomodoro_model.all_references {
+        let Some(resolved) = resolve_task_reference(
+            reference,
+            daily_relative,
+            &original_reference_resolver,
+            ReferenceContext::CurrentDaily,
+            &settings,
+            &mut structural_unresolved,
+        ) else {
+            continue;
+        };
+        original_resolved_references.insert(reference.clone(), resolved);
+    }
+
+    let removed_duplicate_lines = plan_duplicate_line_removals(
+        &daily_lines,
+        &pomodoro_model,
+        &original_resolved_references,
+    );
+    let deleted_lines = removed_duplicate_lines
+        .iter()
+        .map(|item| item.line_number - 1)
+        .collect::<BTreeSet<_>>();
+    let structural_plan = plan_structural_changes(
+        &pomodoro_model,
+        &original_resolved_references,
+        &settings.done_statuses,
+        &settings.status_types,
+        &deleted_lines,
+    );
+    let structurally_updated_daily = apply_structural_plan(
+        &daily_contents,
+        &pomodoro_model,
+        &structural_plan,
+    );
+    let empty_pomodoro_plan = plan_empty_pomodoro_removals(
+        &structurally_updated_daily,
+        &pomodoro_model,
+    );
+    let normalized_daily = apply_empty_pomodoro_plan(
+        &structurally_updated_daily,
+        &empty_pomodoro_plan,
+    );
+    let updated_lines = logical_lines(&normalized_daily);
+    let updated_section = pomodoro::pomodoros_section_range(&updated_lines)
+        .expect("the structural rewrite preserves the Pomodoros section");
+    let updated_pomodoro_model =
+        scan_pomodoros(&updated_lines, updated_section);
+    let mut files = files;
+    let canonical_daily_path = daily_path.canonicalize().ok();
+    if let Some(file) = files.iter_mut().find(|file| {
+        file.path == daily_path
+            || canonical_daily_path.as_ref().is_some_and(|daily| {
+                file.path.canonicalize().ok().as_ref() == Some(daily)
+            })
+    }) {
+        file.contents = normalized_daily.clone();
+        file.tasks = parse_tasks(&file.contents, &settings);
+        file.note_kind = note_kind(&file.contents);
+    }
+    let note_index = NoteIndex::from_paths(
+        files.iter().map(|file| file.relative_path.clone()),
+    );
+    let task_blocks = task_blocks(&files);
+    let mut unresolved = Vec::new();
+    let dependency_edges =
+        dependency_edges(&files, &note_index, &task_blocks, &mut unresolved);
     let reference_resolver = TaskReferenceResolver {
         note_index: &note_index,
         task_blocks: &task_blocks,
         archive_catalog: &archive_catalog,
     };
-    let mut unresolved = Vec::new();
-    let dependency_edges =
-        dependency_edges(&files, &note_index, &task_blocks, &mut unresolved);
     let mut resolved_references = BTreeMap::new();
-    for reference in &pomodoro_model.all_references {
+    for reference in &updated_pomodoro_model.all_references {
         let Some(resolved) = resolve_task_reference(
             reference,
             daily_relative,
@@ -1117,33 +1204,6 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         };
         resolved_references.insert(reference.clone(), resolved);
     }
-
-    let removed_duplicate_lines = plan_duplicate_line_removals(
-        &daily_lines,
-        &pomodoro_model,
-        &resolved_references,
-    );
-    let deleted_lines = removed_duplicate_lines
-        .iter()
-        .map(|item| item.line_number - 1)
-        .collect::<BTreeSet<_>>();
-    let structural_plan = plan_structural_changes(
-        &pomodoro_model,
-        &resolved_references,
-        &settings.done_statuses,
-        &settings.status_types,
-        &deleted_lines,
-    );
-    let structurally_updated_daily = apply_structural_plan(
-        &daily_contents,
-        &pomodoro_model,
-        &structural_plan,
-    );
-    let updated_lines = logical_lines(&structurally_updated_daily);
-    let updated_section = pomodoro::pomodoros_section_range(&updated_lines)
-        .expect("the structural rewrite preserves the Pomodoros section");
-    let updated_pomodoro_model =
-        scan_pomodoros(&updated_lines, updated_section);
     let direct_desired = updated_pomodoro_model
         .raw_references
         .iter()
@@ -1345,8 +1405,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
             daily_path: &daily_path,
             previous_daily_path: previous_daily_path.as_deref(),
             daily_contents: &daily_contents,
-            pomodoro_model: &pomodoro_model,
-            structural_plan: &structural_plan,
+            normalized_daily_contents: &normalized_daily,
             settings: &settings,
         },
     );
@@ -1389,6 +1448,7 @@ fn sync_task_statuses(request: &Request) -> Result<SyncResult, SyncError> {
         marker_removed_references: structural_plan.marker_removed,
         removed_canceled_references: structural_plan.removed_canceled,
         removed_duplicate_lines,
+        removed_empty_pomodoros: empty_pomodoro_plan.removed,
         grouped_task_sections: compose.grouped_task_sections,
         grouping_warnings: compose.grouping_warnings,
         applied_files: apply_report.applied_files,
@@ -1532,9 +1592,12 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
             continue;
         }
         let end_line = entry_block_end(lines, line_index, section.end);
-        let child_indentation = (line_index + 1..end_line)
-            .filter(|index| !fenced_lines.contains(index))
-            .find_map(|index| bullet_indentation(lines[index]));
+        let child_indentation = direct_child_indentation(
+            lines,
+            line_index,
+            end_line,
+            &fenced_lines,
+        );
         entries.push(PomodoroEntry {
             line_index,
             end_line,
@@ -1542,6 +1605,7 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
             completed: completed_task.is_some(),
             timed: open_task
                 .is_some_and(|task| pomodoro::task_time_range(task).is_some()),
+            has_child: child_indentation.is_some(),
             child_indentation,
             context: line.trim_end().to_string(),
         });
@@ -1556,7 +1620,8 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
             if fenced_lines.contains(&line_index) {
                 continue;
             }
-            let Some(indentation) = bullet_indentation(lines[line_index])
+            let Some(indentation) =
+                pomodoro_bullet_indentation(lines[line_index])
             else {
                 continue;
             };
@@ -1605,35 +1670,40 @@ fn scan_pomodoros(lines: &[&str], section: Range<usize>) -> PomodoroModel {
     }
 }
 
-fn is_sub_bullet(line: &str) -> bool {
-    if line
-        .chars()
-        .next()
-        .is_some_and(|character| matches!(character, '-' | '*' | '+'))
-    {
-        return line.chars().nth(1).is_some_and(char::is_whitespace);
-    }
-    let digits = line
-        .bytes()
-        .take_while(|byte| byte.is_ascii_digit())
-        .count();
-    digits > 0
-        && line.as_bytes().get(digits).is_some_and(|byte| {
-            matches!(byte, b'.' | b')')
-                && line
-                    .as_bytes()
-                    .get(digits + 1)
-                    .is_some_and(u8::is_ascii_whitespace)
-        })
+fn direct_child_indentation(
+    lines: &[&str],
+    entry_line: usize,
+    entry_end: usize,
+    fenced_lines: &BTreeSet<usize>,
+) -> Option<String> {
+    (entry_line + 1..entry_end).find_map(|line_index| {
+        direct_child_indentation_at(lines, entry_line, line_index, fenced_lines)
+    })
 }
 
-fn bullet_indentation(line: &str) -> Option<String> {
-    let indentation_len = line
-        .as_bytes()
-        .iter()
-        .take_while(|byte| matches!(byte, b' ' | b'\t'))
-        .count();
-    (indentation_len > 0 && is_sub_bullet(&line[indentation_len..]))
+fn direct_child_indentation_at(
+    lines: &[&str],
+    entry_line: usize,
+    child_line: usize,
+    fenced_lines: &BTreeSet<usize>,
+) -> Option<String> {
+    if fenced_lines.contains(&child_line) {
+        return None;
+    }
+    let line = lines[child_line];
+    let indentation_len = leading_indentation_len(line);
+    if indentation_len == 0
+        || after_list_marker(line, indentation_len).is_none()
+        || nearest_parent_list_item(lines, child_line) != Some(entry_line)
+    {
+        return None;
+    }
+    Some(line[..indentation_len].to_string())
+}
+
+fn pomodoro_bullet_indentation(line: &str) -> Option<String> {
+    let indentation_len = leading_indentation_len(line);
+    (indentation_len > 0 && after_list_marker(line, indentation_len).is_some())
         .then(|| line[..indentation_len].to_string())
 }
 
@@ -2085,8 +2155,11 @@ fn plan_structural_changes(
     let current = model
         .entries
         .iter()
-        .position(|entry| entry.open && entry.timed);
-    let fallback = model.entries.iter().rposition(|entry| entry.completed);
+        .position(|entry| entry.open && entry.timed && entry.has_child);
+    let fallback = model
+        .entries
+        .iter()
+        .rposition(|entry| entry.completed && entry.has_child);
     let target_entry = current.or(fallback);
     let mut token_edits: BTreeMap<usize, Vec<TokenEdit>> = BTreeMap::new();
     let mut move_candidates = Vec::new();
@@ -2336,6 +2409,48 @@ fn apply_structural_plan(
         }
     }
     output
+}
+
+fn plan_empty_pomodoro_removals(
+    contents: &str,
+    original_model: &PomodoroModel,
+) -> EmptyPomodoroPlan {
+    let lines = logical_lines(contents);
+    let Some(section) = pomodoro::pomodoros_section_range(&lines) else {
+        return EmptyPomodoroPlan::default();
+    };
+    let model = scan_pomodoros(&lines, section);
+    let mut plan = EmptyPomodoroPlan::default();
+
+    for (entry_index, entry) in model.entries.iter().enumerate() {
+        if entry.has_child {
+            continue;
+        }
+        plan.deleted_lines.extend(entry.line_index..entry.end_line);
+        let original = original_model.entries.get(entry_index).unwrap_or(entry);
+        plan.removed.push(RemovedEmptyPomodoro {
+            line_number: original.line_index + 1,
+            line: original.context.clone(),
+        });
+    }
+
+    plan
+}
+
+fn apply_empty_pomodoro_plan(
+    contents: &str,
+    plan: &EmptyPomodoroPlan,
+) -> String {
+    if plan.deleted_lines.is_empty() {
+        return contents.to_string();
+    }
+    contents
+        .split_inclusive('\n')
+        .enumerate()
+        .filter_map(|(index, segment)| {
+            (!plan.deleted_lines.contains(&index)).then_some(segment)
+        })
+        .collect()
 }
 
 fn reindent_segment(
@@ -3348,12 +3463,8 @@ fn compose_outputs(
     let daily_base = daily_file_index
         .and_then(|index| updated.get(&index))
         .map(String::as_str)
-        .unwrap_or(ctx.daily_contents);
-    let updated_daily = apply_structural_plan(
-        daily_base,
-        ctx.pomodoro_model,
-        ctx.structural_plan,
-    );
+        .unwrap_or(ctx.normalized_daily_contents);
+    let updated_daily = daily_base.to_string();
     let external_daily = if let Some(index) = daily_file_index {
         updated.insert(index, updated_daily);
         None
@@ -3399,7 +3510,12 @@ fn compose_outputs(
     let mut outputs = updated
         .into_iter()
         .filter_map(|(index, contents)| {
-            (contents != files[index].contents).then(|| ComposedOutput {
+            let original_contents = if Some(index) == daily_file_index {
+                ctx.daily_contents
+            } else {
+                &files[index].contents
+            };
+            (contents != original_contents).then(|| ComposedOutput {
                 path: files[index].path.clone(),
                 contents,
                 structural_regrouping: structural_files.contains(&index),
@@ -3615,6 +3731,7 @@ fn print_human_result(result: &SyncResult) {
         + result.marker_removed_references.len()
         + result.removed_canceled_references.len()
         + result.removed_duplicate_lines.len()
+        + result.removed_empty_pomodoros.len()
         + result.grouped_task_sections.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
@@ -3718,6 +3835,7 @@ fn print_human_result(result: &SyncResult) {
     print_marker_reference_sections(result);
     print_canceled_reference_section(result);
     print_duplicate_line_section(result);
+    print_empty_pomodoro_section(result);
     print_grouped_task_sections(&styler, result);
     if result.kept_next > 0 || result.kept_in_progress > 0 {
         println!();
@@ -3733,7 +3851,7 @@ fn print_human_result(result: &SyncResult) {
         println!("  recovery copies: {recovery}");
     }
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} grouped sections",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -3746,6 +3864,7 @@ fn print_human_result(result: &SyncResult) {
         result.marker_removed_references.len(),
         result.removed_canceled_references.len(),
         result.removed_duplicate_lines.len(),
+        result.removed_empty_pomodoros.len(),
         result.grouped_task_sections.len()
     );
 }
@@ -3866,6 +3985,24 @@ fn print_duplicate_line_section(result: &SyncResult) {
             item.pomodoro,
             identities
         );
+    }
+}
+
+fn print_empty_pomodoro_section(result: &SyncResult) {
+    if result.removed_empty_pomodoros.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "  {} empty Pomodoros",
+        if result.dry_run {
+            "would remove"
+        } else {
+            "removed"
+        }
+    );
+    for item in &result.removed_empty_pomodoros {
+        println!("    line {}  {}", item.line_number, item.line);
     }
 }
 
@@ -4148,6 +4285,7 @@ mod tests {
             marker_removed_references: Vec::new(),
             removed_canceled_references: Vec::new(),
             removed_duplicate_lines: Vec::new(),
+            removed_empty_pomodoros: Vec::new(),
             grouped_task_sections: Vec::new(),
             grouping_warnings: Vec::new(),
             applied_files: Vec::new(),
@@ -5655,6 +5793,7 @@ mod tests {
     fn canceled_subtrees_compose_with_nested_and_moving_bullets() {
         let contents = concat!(
             "- [x] Completed\r\n",
+            "  - existing completed child\r\n",
             "- [ ] Future\r\n",
             "  - surviving [[tasks#^live]]\r\n",
             "    - canceled child [[tasks#^canceled]]\r\n",
@@ -5691,7 +5830,7 @@ mod tests {
                 .iter()
                 .map(|item| (item.block_id.as_str(), item.line_number))
                 .collect::<Vec<_>>(),
-            vec![("canceled", 4), ("canceled", 7), ("custom", 10)]
+            vec![("canceled", 5), ("canceled", 8), ("custom", 11)]
         );
         assert_eq!(plan.struck.len(), 1);
         assert_eq!(plan.moved.len(), 1);
@@ -5699,6 +5838,7 @@ mod tests {
             apply_structural_plan(contents, &model, &plan),
             concat!(
                 "- [x] Completed\r\n",
+                "  - existing completed child\r\n",
                 "  - moving parent 🍅 ~~[[tasks#^done]]~~\r\n",
                 "- [ ] Future\r\n",
                 "  - surviving [[tasks#^live]]\r\n",
@@ -5774,6 +5914,222 @@ mod tests {
         assert_eq!(
             apply_structural_plan(contents, &model, &plan),
             "- [ ] First\n- [ ] Second\n"
+        );
+    }
+
+    #[test]
+    fn direct_child_scan_counts_plain_children_but_ignores_fences() {
+        let contents = concat!(
+            "- [ ] Empty\n",
+            "- [ ] Plain child\n",
+            "  - authored note without a link\n",
+            "    - [[tasks#^nested]]\n",
+            "- [ ] Fenced only\n",
+            "  ```md\n",
+            "  - [[tasks#^fenced]]\n",
+            "  ```\n",
+            "- [ ] Direct link\n",
+            "  - [[tasks#^direct]]\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+
+        assert!(!model.entries[0].has_child);
+        assert!(model.entries[1].has_child);
+        assert!(!model.entries[2].has_child);
+        assert!(model.entries[3].has_child);
+        assert_eq!(
+            model.raw_references,
+            BTreeSet::from([
+                reference("tasks", "direct"),
+                reference("tasks", "nested"),
+            ])
+        );
+    }
+
+    #[test]
+    fn empty_pomodoro_deletion_removes_full_blocks_and_preserves_crlf_eof() {
+        let contents = concat!(
+            "## Pomodoros\r\n\r\n",
+            "- [ ] ()\r\n",
+            "  continuation text\r\n",
+            "- [ ] (**0900-0930** [t:: 30m])\r\n",
+            "- [x] Done (0800-0830)\r\n",
+            "- [ ] Kept\r\n",
+            "  - child without a link"
+        );
+        let lines = logical_lines(contents);
+        let section = pomodoro::pomodoros_section_range(&lines).unwrap();
+        let model = scan_pomodoros(&lines, section);
+        let plan = plan_empty_pomodoro_removals(contents, &model);
+
+        assert_eq!(
+            plan.removed,
+            vec![
+                RemovedEmptyPomodoro {
+                    line_number: 3,
+                    line: "- [ ] ()".to_string(),
+                },
+                RemovedEmptyPomodoro {
+                    line_number: 5,
+                    line: "- [ ] (**0900-0930** [t:: 30m])".to_string(),
+                },
+                RemovedEmptyPomodoro {
+                    line_number: 6,
+                    line: "- [x] Done (0800-0830)".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            apply_empty_pomodoro_plan(contents, &plan),
+            "## Pomodoros\r\n\r\n- [ ] Kept\r\n  - child without a link"
+        );
+    }
+
+    #[test]
+    fn entries_emptied_by_duplicate_cleanup_are_removed_in_same_pass() {
+        let contents = concat!(
+            "## Pomodoros\n\n",
+            "- [ ] First\n",
+            "  - [[tasks#^alpha]]\n",
+            "- [ ] Second\n",
+            "  - duplicate [[tasks#^alpha]]\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let resolved = resolved(&[("tasks", "alpha", vec![' '])]);
+        let duplicate_removals =
+            plan_duplicate_line_removals(&lines, &model, &resolved);
+        let deleted_lines = duplicate_removals
+            .iter()
+            .map(|item| item.line_number - 1)
+            .collect::<BTreeSet<_>>();
+        let settings = test_settings();
+        let structural = plan_structural_changes(
+            &model,
+            &resolved,
+            &settings.done_statuses,
+            &settings.status_types,
+            &deleted_lines,
+        );
+        let structurally_updated =
+            apply_structural_plan(contents, &model, &structural);
+        let empty = plan_empty_pomodoro_removals(&structurally_updated, &model);
+
+        assert_eq!(
+            duplicate_removals
+                .iter()
+                .map(|item| item.line_number)
+                .collect::<Vec<_>>(),
+            vec![6]
+        );
+        assert_eq!(
+            empty.removed,
+            vec![RemovedEmptyPomodoro {
+                line_number: 5,
+                line: "- [ ] Second".to_string(),
+            }]
+        );
+        assert_eq!(
+            apply_empty_pomodoro_plan(&structurally_updated, &empty),
+            "## Pomodoros\n\n- [ ] First\n  - [[tasks#^alpha]]\n"
+        );
+    }
+
+    #[test]
+    fn moving_last_child_removes_source_but_retains_destination() {
+        let contents = concat!(
+            "## Pomodoros\n\n",
+            "- [x] Done\n",
+            "  - existing child\n",
+            "- [ ] Future\n",
+            "  - [[tasks#^done]]\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let settings = test_settings();
+        let structural = plan_structural_changes(
+            &model,
+            &resolved(&[("tasks", "done", vec!['x'])]),
+            &settings.done_statuses,
+            &settings.status_types,
+            &BTreeSet::new(),
+        );
+        let structurally_updated =
+            apply_structural_plan(contents, &model, &structural);
+        let empty = plan_empty_pomodoro_removals(&structurally_updated, &model);
+
+        assert_eq!(structural.moved.len(), 1);
+        assert_eq!(
+            empty.removed,
+            vec![RemovedEmptyPomodoro {
+                line_number: 5,
+                line: "- [ ] Future".to_string(),
+            }]
+        );
+        assert_eq!(
+            apply_empty_pomodoro_plan(&structurally_updated, &empty),
+            concat!(
+                "## Pomodoros\n\n",
+                "- [x] Done\n",
+                "  - existing child\n",
+                "  - 🍅 ~~[[tasks#^done]]~~\n",
+            )
+        );
+    }
+
+    #[test]
+    fn empty_timed_entries_are_not_current_targets_or_ambiguity_inputs() {
+        let contents = concat!(
+            "- [ ] Empty current (0900-0930)\n",
+            "- [ ] Real current (0930-1000)\n",
+            "  - real child\n",
+            "- [ ] Empty later (1000-1030)\n",
+            "- [ ] Future\n",
+            "  - [[tasks#^done]]\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+        let non_empty_timed = model
+            .entries
+            .iter()
+            .filter(|entry| entry.open && entry.timed && entry.has_child)
+            .count();
+        let settings = test_settings();
+        let structural = plan_structural_changes(
+            &model,
+            &resolved(&[("tasks", "done", vec!['x'])]),
+            &settings.done_statuses,
+            &settings.status_types,
+            &BTreeSet::new(),
+        );
+
+        assert_eq!(non_empty_timed, 1);
+        assert_eq!(structural.moved.len(), 1);
+        assert_eq!(
+            structural.moved[0].destination_pomodoro,
+            "- [ ] Real current (0930-1000)"
+        );
+    }
+
+    #[test]
+    fn two_non_empty_timed_entries_still_match_the_ambiguity_guard() {
+        let contents = concat!(
+            "- [ ] First (0900-0930)\n",
+            "  - child\n",
+            "- [ ] Second (0930-1000)\n",
+            "  - child\n",
+        );
+        let lines = logical_lines(contents);
+        let model = scan_pomodoros(&lines, 0..lines.len());
+
+        assert_eq!(
+            model
+                .entries
+                .iter()
+                .filter(|entry| entry.open && entry.timed && entry.has_child)
+                .count(),
+            2
         );
     }
 
