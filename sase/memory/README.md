@@ -106,8 +106,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 
 - Kind: memory web descriptor
 - Description: No description set.
-- Lines: 32
-- Approx. tokens: 309
+- Lines: 34
+- Approx. tokens: 310
 
 ### `sase/memory/cli_rules.md`
 
@@ -152,8 +152,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Core notes: 1
 - Reference notes: 4
 - Web descriptor notes: 2
-- Total lines: 432
-- Total approx. tokens: 5158
+- Total lines: 434
+- Total approx. tokens: 5159
 
 ## Commands
 
