@@ -21,7 +21,7 @@ use super::{
     capture_language::{
         is_block_id, AuthoredSubBullet, CaptureKind, ClipRequest,
         ParsedCaptureItem, ParsedCaptureText, SubBulletTarget,
-        TaskSectionSelector,
+        TaskSectionSelector, TaskToggleIntent,
     },
     capture_pomodoros, capture_schedule_log, capture_task_sections,
     capture_task_toggle, collect_done, config, env as bob_env, markdown,
@@ -190,7 +190,13 @@ nested under it, using the section's child indentation. A selector that matches 
 nothing is an error listing the task's real sections; capture never falls back \
 to the end of the task. '@<route>+<block-id>#' with an empty selector is \
 incomplete and needs a task section; run \
-'bob capture-task-sections -r <route> -i <block-id>' to list them.\n\n\
+'bob capture-task-sections -r <route> -i <block-id>' to list them. A marker-only \
+'@<route>+<block-id>' item with no body text toggles that task between Ready and \
+Next and adds or removes its Pomodoro Task Link. A terminal '!' on that same \
+marker-only form, '@<route>+<block-id>!', is one-way: it ensures the task is Next \
+and relocates its existing open-Pomodoro Task Link to today's implicit \
+current/next Pomodoro without creating a missing link or toggling Next back to \
+Ready.\n\n\
 Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
 Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
 no '#task' marker, and no block ID. The daily note comes from BOB_DAY_FILE or \
@@ -220,7 +226,7 @@ case insensitively; unlike a typed #<section> selector, it is not slug- or \
 prefix-matched, so --task-section future-work does not match FUTURE WORK.",
         )
         .after_help(
-            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+            "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -678,6 +684,7 @@ fn plan_capture_item(
     if let CaptureKind::TaskToggle {
         block_id,
         pomodoro_name,
+        intent,
     } = &parsed.kind
     {
         reject_task_toggle_conflicts(&parsed, request)?;
@@ -696,6 +703,7 @@ fn plan_capture_item(
             route,
             block_id,
             pomodoro_name.as_deref(),
+            *intent,
             today,
             warnings,
         )?;
@@ -745,6 +753,13 @@ fn plan_capture_item(
                 removed_pomodoro_links: Some(toggle.removed_pomodoro_links),
                 removed_scheduled: toggle.removed_scheduled.clone(),
                 pomodoro_selector_unused: Some(toggle.pomodoro_selector_unused),
+                toggle_behavior: toggle.toggle_behavior,
+                status_changed: toggle.status_changed,
+                pomodoro_link_action: toggle.pomodoro_link_action,
+                pomodoro_link_source: toggle.pomodoro_link_source.clone(),
+                pomodoro_link_destination: toggle
+                    .pomodoro_link_destination
+                    .clone(),
                 toggle_task_description: Some(toggle.task_description.clone()),
             },
             clip_plan: None,
@@ -1036,6 +1051,11 @@ fn plan_capture_item(
             removed_pomodoro_links: None,
             removed_scheduled: None,
             pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
             toggle_task_description: None,
         },
         clip_plan,
@@ -1498,6 +1518,20 @@ struct TaskToggleCaptureDetails {
     removed_scheduled: Option<String>,
     schedule_log: Option<capture_schedule_log::ScheduleLog>,
     pomodoro_selector_unused: bool,
+    toggle_behavior: Option<&'static str>,
+    status_changed: Option<bool>,
+    pomodoro_link_action: Option<&'static str>,
+    pomodoro_link_source: Option<PomodoroLinkEndpoint>,
+    pomodoro_link_destination: Option<PomodoroLinkEndpoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PomodoroLinkEndpoint {
+    line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_range: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1626,6 +1660,7 @@ fn plan_task_toggle_capture(
     route: &str,
     block_id: &str,
     pomodoro_name: Option<&str>,
+    intent: TaskToggleIntent,
     today: NaiveDate,
     warnings: &mut Vec<String>,
 ) -> Result<CaptureWritePlan, CaptureError> {
@@ -1669,6 +1704,25 @@ fn plan_task_toggle_capture(
     let task_description = task.description.clone();
     let previous_task_line =
         line_text_at(&contents, task_line_index)?.to_string();
+
+    if intent == TaskToggleIntent::EnsureNext {
+        return plan_ensure_next_capture(
+            planner,
+            bob_dir,
+            target,
+            route,
+            block_id,
+            &contents,
+            task_line_index,
+            previous_status_symbol,
+            previous_status_name,
+            task_description,
+            previous_task_line,
+            today,
+            warnings,
+            &settings,
+        );
+    }
 
     let direction = match previous_status_symbol {
         ' ' | '?' => TaskToggleDirection::Next,
@@ -1847,8 +1901,185 @@ fn plan_task_toggle_capture(
             removed_scheduled: task_plan.removed_scheduled,
             schedule_log: task_plan.schedule_log,
             pomodoro_selector_unused,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
         }),
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_ensure_next_capture(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    target: &Path,
+    route: &str,
+    block_id: &str,
+    contents: &str,
+    task_line_index: usize,
+    previous_status_symbol: char,
+    previous_status_name: String,
+    task_description: String,
+    previous_task_line: String,
+    today: NaiveDate,
+    warnings: &mut Vec<String>,
+    settings: &note_tasks::NoteTaskSettings,
+) -> Result<CaptureWritePlan, CaptureError> {
+    match previous_status_symbol {
+        ' ' | '?' | '/' | '*' => {}
+        _ => {
+            return Err(CaptureError::io(format!(
+                "task ^{block_id} is {previous_status_name}; only Ready, Blocked, In Progress, and Next tasks can be ensured Next"
+            )));
+        }
+    }
+
+    let task_plan = capture_task_toggle::plan_task_next(
+        contents,
+        task_line_index,
+        today,
+    )
+    .ok_or_else(|| {
+        CaptureError::io(
+            "task toggle capture invariant failed: task line could not be updated",
+        )
+    })?;
+    let task_line =
+        line_text_at(&task_plan.content, task_line_index)?.to_string();
+    let updated_scan = note_tasks::scan(&task_plan.content, settings);
+    let updated_task = match updated_scan.by_block_id(block_id) {
+        BlockIdLookup::Found(task) => task,
+        _ => {
+            return Err(CaptureError::io(
+                "task toggle capture invariant failed: toggled task disappeared",
+            ));
+        }
+    };
+    let status_changed = previous_status_symbol != updated_task.status_symbol;
+    if status_changed && task_line_declares_dependencies(&previous_task_line) {
+        warnings.push(format!(
+            "^{block_id} still declares dependencies; bob task-status-hooks may return it to Blocked"
+        ));
+    }
+
+    if task_plan.content != contents {
+        planner.stage(target, task_plan.content.clone())?;
+    }
+
+    let day_file = pomodoro::day_file_for(bob_dir);
+    if !day_file.is_file() {
+        return Err(CaptureError::io(format!(
+            "Bob daily note does not exist: {}",
+            day_file.display()
+        )));
+    }
+    let block_link = format!("[[{route}#^{block_id}]]");
+    let day_contents = planner.read_existing(&day_file)?;
+    let relocation =
+        capture_task_toggle::plan_link_relocation(&day_contents, &block_link)
+            .map_err(|error| {
+            relocation_plan_error(error, &block_link, route, block_id)
+        })?;
+    if relocation.has_changes {
+        planner.stage(&day_file, relocation.content.clone())?;
+    }
+
+    let pomodoro_link_action = match relocation.action {
+        capture_task_toggle::LinkRelocationAction::Moved => "moved",
+        capture_task_toggle::LinkRelocationAction::AlreadyCurrent => {
+            "already_current"
+        }
+    };
+    let pomodoro_already_linked = matches!(
+        relocation.action,
+        capture_task_toggle::LinkRelocationAction::AlreadyCurrent
+    );
+    let pomodoro_link_placement =
+        relocation.placement.map(link_placement_to_placement);
+    let pomodoro_name = relocation.destination.name.clone();
+
+    Ok(CaptureWritePlan {
+        placement: Placement::Toggled,
+        pomodoro: None,
+        sub_bullet: None,
+        pomodoro_note: None,
+        toggle: Some(TaskToggleCaptureDetails {
+            direction: TaskToggleDirection::Next,
+            previous_task_line,
+            task_line,
+            task_description,
+            previous_status_symbol,
+            previous_status_name,
+            status_symbol: updated_task.status_symbol,
+            status_name: updated_task.status_name.clone(),
+            block_id: block_id.to_string(),
+            day_file: day_file.display().to_string(),
+            block_link,
+            pomodoro_link_placement,
+            pomodoro_name,
+            creates_pomodoro: false,
+            pomodoro_already_linked,
+            removed_pomodoro_links: 0,
+            removed_scheduled: task_plan.removed_scheduled,
+            schedule_log: task_plan.schedule_log,
+            pomodoro_selector_unused: false,
+            toggle_behavior: Some("ensure_next"),
+            status_changed: Some(status_changed),
+            pomodoro_link_action: Some(pomodoro_link_action),
+            pomodoro_link_source: Some(endpoint_json(&relocation.source)),
+            pomodoro_link_destination: Some(endpoint_json(
+                &relocation.destination,
+            )),
+        }),
+    })
+}
+
+fn endpoint_json(
+    endpoint: &capture_task_toggle::PomodoroEndpoint,
+) -> PomodoroLinkEndpoint {
+    PomodoroLinkEndpoint {
+        line: endpoint.line,
+        name: endpoint.name.clone(),
+        time_range: endpoint.time_range.clone(),
+    }
+}
+
+fn relocation_plan_error(
+    error: capture_task_toggle::LinkRelocationError,
+    block_link: &str,
+    route: &str,
+    block_id: &str,
+) -> CaptureError {
+    match error {
+        capture_task_toggle::LinkRelocationError::NoPomodorosSection
+        | capture_task_toggle::LinkRelocationError::NoEligibleOpenEntry
+        | capture_task_toggle::LinkRelocationError::MultipleOpenTimedEntries => {
+            link_plan_error(match error {
+                capture_task_toggle::LinkRelocationError::NoPomodorosSection => {
+                    capture_task_toggle::LinkPlanError::NoPomodorosSection
+                }
+                capture_task_toggle::LinkRelocationError::NoEligibleOpenEntry => {
+                    capture_task_toggle::LinkPlanError::NoEligibleOpenEntry
+                }
+                capture_task_toggle::LinkRelocationError::MultipleOpenTimedEntries => {
+                    capture_task_toggle::LinkPlanError::MultipleOpenTimedEntries
+                }
+                _ => capture_task_toggle::LinkPlanError::NoEligibleOpenEntry,
+            })
+        }
+        capture_task_toggle::LinkRelocationError::NoMovableLink => {
+            CaptureError::io(format!(
+                "no movable open Pomodoro Task Link for {block_link}; use @{route}+{block_id} to add one"
+            ))
+        }
+        capture_task_toggle::LinkRelocationError::MultipleMovableLinks => {
+            CaptureError::io(format!(
+                "found more than one movable open Pomodoro Task Link for {block_link}; make the dedicated Task Link unique before capturing"
+            ))
+        }
+    }
 }
 
 fn line_text_at(
@@ -3656,6 +3887,16 @@ struct CaptureItemResult {
     removed_scheduled: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_selector_unused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    toggle_behavior: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_link_action: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_link_source: Option<PomodoroLinkEndpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_link_destination: Option<PomodoroLinkEndpoint>,
     #[serde(skip)]
     toggle_task_description: Option<String>,
 }
@@ -3810,10 +4051,12 @@ fn print_human_task_toggle_success(
     ordinal: &str,
     target_label: &str,
 ) {
-    let verb = if result.dry_run {
-        "would toggle"
-    } else {
-        "toggled"
+    let ensure_next = result.toggle_behavior == Some("ensure_next");
+    let verb = match (result.dry_run, ensure_next) {
+        (true, true) => "would ensure",
+        (false, true) => "ensured",
+        (true, false) => "would toggle",
+        (false, false) => "toggled",
     };
     println!("{prefix} {verb}  {ordinal}{target_label}");
 
@@ -3834,7 +4077,13 @@ fn print_human_task_toggle_success(
         .as_deref()
         .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
         .unwrap_or_default();
-    println!("  {previous_marker} → {next_marker}  {description}{block_id}");
+    if ensure_next && result.status_changed == Some(false) {
+        println!("  {next_marker} already Next  {description}{block_id}");
+    } else {
+        println!(
+            "  {previous_marker} → {next_marker}  {description}{block_id}"
+        );
+    }
 
     let mut chips = Vec::new();
     if result.removed_scheduled.is_some() {
@@ -3843,7 +4092,7 @@ fn print_human_task_toggle_success(
     if result.schedule_log.is_some() {
         chips.push("logged schedule change".to_string());
     }
-    if result.pomodoro_already_linked == Some(true) {
+    if !ensure_next && result.pomodoro_already_linked == Some(true) {
         chips.push("already linked".to_string());
     }
     if result.pomodoro_selector_unused == Some(true) {
@@ -3856,6 +4105,11 @@ fn print_human_task_toggle_success(
     }
     if !chips.is_empty() {
         println!("  {}", styler.dim(&chips.join(" · ")));
+    }
+
+    if ensure_next {
+        print_human_ensure_next_ledger(result, styler);
+        return;
     }
 
     if let Some(day_file) = result.day_file.as_deref() {
@@ -3890,6 +4144,55 @@ fn print_human_task_toggle_success(
             );
         }
         _ => {}
+    }
+}
+
+fn print_human_ensure_next_ledger(result: &CaptureItemResult, styler: &Styler) {
+    match result.pomodoro_link_action {
+        Some("moved") => {
+            if let Some(day_file) = result.day_file.as_deref() {
+                let under = result
+                    .pomodoro_name
+                    .as_deref()
+                    .map(|name| format!(" · under {}", styler.cyan(name)))
+                    .unwrap_or_default();
+                println!("  {}{under}", styler.cyan(day_file));
+            }
+            let source = result
+                .pomodoro_link_source
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "source".to_string());
+            let destination = result
+                .pomodoro_link_destination
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "current/next".to_string());
+            println!(
+                "  {} moved Task Link {} → {}",
+                styler.green("↗"),
+                styler.cyan(&source),
+                styler.cyan(&destination),
+            );
+        }
+        _ => {
+            println!(
+                "  {}",
+                styler.dim(
+                    "Task Link already in current/next Pomodoro; no ledger change."
+                )
+            );
+        }
+    }
+}
+
+fn format_pomodoro_endpoint(endpoint: &PomodoroLinkEndpoint) -> String {
+    if let Some(name) = endpoint.name.as_deref() {
+        name.to_string()
+    } else if let Some(range) = endpoint.time_range.as_deref() {
+        range.to_string()
+    } else {
+        format!("line {}", endpoint.line)
     }
 }
 
@@ -4782,6 +5085,7 @@ mod tests {
             CaptureKind::TaskToggle {
                 block_id: "id".to_string(),
                 pomodoro_name: None,
+                intent: TaskToggleIntent::Toggle,
             }
         );
 
@@ -4792,6 +5096,7 @@ mod tests {
             CaptureKind::TaskToggle {
                 block_id: "id".to_string(),
                 pomodoro_name: Some("deep+work".to_string()),
+                intent: TaskToggleIntent::Toggle,
             }
         );
 
@@ -4803,6 +5108,18 @@ mod tests {
                 "{raw}: {error:?}"
             );
         }
+
+        let force = parse_capture_text("@cash+id!", None)
+            .expect("bare force-Next marker");
+        assert_eq!(force.body, "");
+        assert_eq!(
+            force.kind,
+            CaptureKind::TaskToggle {
+                block_id: "id".to_string(),
+                pomodoro_name: None,
+                intent: TaskToggleIntent::EnsureNext,
+            }
+        );
     }
 
     #[test]
@@ -6188,6 +6505,11 @@ mod tests {
                 removed_pomodoro_links: None,
                 removed_scheduled: None,
                 pomodoro_selector_unused: None,
+                toggle_behavior: None,
+                status_changed: None,
+                pomodoro_link_action: None,
+                pomodoro_link_source: None,
+                pomodoro_link_destination: None,
                 toggle_task_description: None,
             }],
             None,
@@ -6241,6 +6563,11 @@ mod tests {
             "removed_pomodoro_links",
             "removed_scheduled",
             "pomodoro_selector_unused",
+            "toggle_behavior",
+            "status_changed",
+            "pomodoro_link_action",
+            "pomodoro_link_source",
+            "pomodoro_link_destination",
         ] {
             assert!(value.get(special_field).is_none(), "{value}");
         }

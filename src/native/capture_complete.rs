@@ -2086,6 +2086,30 @@ mod tests {
     }
 
     #[test]
+    fn task_completion_before_a_force_next_bang_does_not_replace_the_bang() {
+        let temp = TempDir::new("bob-cli-capture-complete-force-next");
+        write_settings(temp.path());
+        write_file(
+            &temp.path().join("file.md"),
+            "- [ ] #task Ready one ^ready-one\n",
+        );
+        let raw = "@file+ready!";
+        let bang = raw.find('!').expect("bang");
+        let value = result(temp.path(), raw, bang);
+        assert_eq!(value.context, Some(CompletionContext::Task));
+        assert_eq!(value.replacement.start, raw.find('+').expect("plus") + 1);
+        assert_eq!(value.replacement.end, bang);
+        let Candidates::Task(tasks) = &value.candidates else {
+            panic!("expected task candidates");
+        };
+        assert_eq!(tasks[0].block_id.as_deref(), Some("ready-one"));
+        assert_eq!(tasks[0].replacement, "ready-one");
+
+        let after_bang = result(temp.path(), raw, raw.len());
+        assert_eq!(after_bang.context, None);
+    }
+
+    #[test]
     fn task_block_id_completion_offers_routes_but_not_authored_ids() {
         let temp = TempDir::new("bob-cli-capture-complete-task-block-id");
         write_file(&temp.path().join("cash.md"), "---\ntype: [[area]]\n---\n");

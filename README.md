@@ -100,7 +100,8 @@ separate steps:
    Blocked (`[?]`).
 2. **Link today's work** onto a Pomodoro in the daily note. That happens when
    you capture with `@route:id` (which also marks the task Next), toggle an
-   existing task with a bare `@route+id` capture, or add a task link under a
+   existing task with a bare `@route+id` capture, pull an already-planned Task
+   Link into the current Pomodoro with `@route+id!`, or add a task link under a
    Pomodoro in Obsidian. `bob pomodoro`,
    `bob tmux-pomodoro`, and `bob notify` only *read* that ledger; they do not
    create links.
@@ -195,6 +196,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+id` with no other text | Toggle that task between Ready and Next and add or remove its Pomodoro task link |
+| `@route+id!` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
 | `@route+id#pomodoro` with no other text | Same toggle, selecting a named Pomodoro when setting Next |
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
 | `s:<N>` | Schedule N days from today; checkbox-bearing captures start Blocked, including `s:0` |
@@ -216,6 +218,10 @@ Pomodoro. Future schedules are retired only when the task has exactly one valid
 future `[scheduled::YYYY-MM-DD]`, and a Schedule Log entry is written only if
 the task already has that log. In Progress, done, canceled, missing,
 duplicate, and non-task IDs are rejected before any note is written.
+`@route+id!` is the one-way form: it never toggles Next back to Ready, never
+creates a missing link, and moves the dedicated Task Link subtree to the
+implicit current/next open Pomodoro. Repeating it when the task is already
+Next and the link is already there is a no-op.
 
 ```bash
 bob capture buy milk @groceries
@@ -224,6 +230,7 @@ bob capture '@dev:foobar' 'Some foobar task.'
 bob capture '@dev:foobar#bugs' 'Some foobar task.'
 bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'
 bob capture '@cash+goog-exit'
+bob capture '@cash+goog-exit!'
 bob capture '@cash+goog-exit#coding'
 bob capture remembered to bump the timeout #
 printf '@@foo\nFirst task\n\nSecond task @bar\n' | bob capture

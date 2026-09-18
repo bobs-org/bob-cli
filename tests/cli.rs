@@ -7144,6 +7144,471 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
 }
 
 #[test]
+fn capture_parse_json_reports_force_next_mode_span_and_empty_body() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+goog-exit!")
+        .output()
+        .expect("run force-Next parse");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["mode"], "task_toggle");
+    assert_eq!(json["body"], "");
+    assert_eq!(json["route"], "cash");
+    assert_eq!(json["block_id"], "goog-exit");
+    assert!(json["section"].is_null());
+    assert_eq!(json["needs"], serde_json::json!([]));
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 0, "end": 5, "kind": "task_toggle_route" },
+            { "start": 6, "end": 15, "kind": "task_toggle_block_id" },
+            { "start": 15, "end": 16, "kind": "task_toggle_force_next" },
+        ])
+    );
+    assert!(json["diagnostics"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn capture_task_toggle_force_next_moves_link_and_sets_next() {
+    let temp = TempDir::new("bob-cli-capture-force-next-ready");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        "- [ ] #task Finish packet [dependsOn::root] ^goog-exit\n",
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - context\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^goog-exit]]\n",
+            "    - review notes\n",
+        ),
+    );
+
+    let dry_run = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--")
+        .arg("@cash+goog-exit!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("dry-run force-Next");
+    assert_success(&dry_run);
+    let human = stdout(&dry_run);
+    assert!(human.contains("would ensure"), "{human}");
+    assert!(human.contains("[ ] → [*]"), "{human}");
+    assert!(human.contains("moved Task Link"), "{human}");
+    assert!(human.contains("LATER"), "{human}");
+    assert!(human.contains("CURRENT"), "{human}");
+    assert_eq!(
+        fs::read_to_string(&target).expect("dry target"),
+        "- [ ] #task Finish packet [dependsOn::root] ^goog-exit\n"
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+goog-exit!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("force-Next ready task");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["kind"], "task_toggle");
+    assert_eq!(json["toggle_direction"], "next");
+    assert_eq!(json["toggle_behavior"], "ensure_next");
+    assert_eq!(json["status_changed"], true);
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(json["creates_pomodoro"], false);
+    assert_eq!(json["pomodoro_already_linked"], false);
+    assert_eq!(json["removed_pomodoro_links"], 0);
+    assert_eq!(json["pomodoro_name"], "CURRENT");
+    assert_eq!(json["pomodoro_link_source"]["name"], "LATER");
+    assert_eq!(json["pomodoro_link_destination"]["name"], "CURRENT");
+    assert_eq!(json["pomodoro_link_destination"]["time_range"], "0900-0930");
+    assert!(json.get("pomodoro_link_placement").is_some(), "{json}");
+    assert!(
+        json["warnings"][0]
+            .as_str()
+            .is_some_and(|warning| warning.contains("declares dependencies")),
+        "{json}"
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("target"),
+        "- [*] #task Finish packet [dependsOn::root] ^goog-exit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - context\n",
+            "  - [[cash#^goog-exit]]\n",
+            "    - review notes\n",
+            "- [ ] () — LATER\n",
+        )
+    );
+
+    let noop = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+goog-exit!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:05:00")
+        .output()
+        .expect("total no-op force-Next");
+    assert_success(&noop);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&noop).trim()).expect("json");
+    assert_eq!(json["status_changed"], false);
+    assert_eq!(json["pomodoro_link_action"], "already_current");
+    assert_eq!(json["pomodoro_already_linked"], true);
+    assert!(json.get("pomodoro_link_placement").is_none(), "{json}");
+}
+
+#[test]
+fn capture_task_toggle_force_next_covers_open_states_and_failures() {
+    struct Case<'a> {
+        name: &'a str,
+        target: &'a str,
+        day: &'a str,
+        expected_status: &'a str,
+        link_action: &'a str,
+        status_changed: bool,
+    }
+
+    let cases = [
+        Case {
+            name: "blocked-move",
+            target: "- [?] #task Waiting ^wait\n",
+            day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n- [ ] () — LATER\n  - [[cash#^wait]]\n",
+            expected_status: "*",
+            link_action: "moved",
+            status_changed: true,
+        },
+        Case {
+            name: "in-progress-move",
+            target: "- [/] #task Busy ^busy\n",
+            day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n- [ ] () — LATER\n  - [[cash#^busy]]\n",
+            expected_status: "*",
+            link_action: "moved",
+            status_changed: true,
+        },
+        Case {
+            name: "already-next-move-only",
+            target: "- [*] #task Planned ^plan\n",
+            day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n- [ ] () — LATER\n  - [[cash#^plan]]\n",
+            expected_status: "*",
+            link_action: "moved",
+            status_changed: false,
+        },
+        Case {
+            name: "status-only-already-current",
+            target: "- [ ] #task Here ^here\n",
+            day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n  - [[cash#^here]]\n",
+            expected_status: "*",
+            link_action: "already_current",
+            status_changed: true,
+        },
+    ];
+
+    for case in cases {
+        let temp =
+            TempDir::new(&format!("bob-cli-capture-force-next-{}", case.name));
+        let vault = temp.path().join("vault");
+        let target = vault.join("cash.md");
+        let day_file = vault.join("day.md");
+        write_toggle_task_settings(&vault);
+        write_file(&target, case.target);
+        write_file(&day_file, case.day);
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(&format!(
+                "@cash+{}!",
+                case.target.rsplit('^').next().unwrap().trim()
+            ))
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 10:00:00")
+            .output()
+            .unwrap_or_else(|_| panic!("run {}", case.name));
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("json");
+        assert_eq!(json["toggle_behavior"], "ensure_next", "{}", case.name);
+        assert_eq!(
+            json["status_symbol"], case.expected_status,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            json["status_changed"], case.status_changed,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            json["pomodoro_link_action"], case.link_action,
+            "{}",
+            case.name
+        );
+    }
+
+    let sched_temp = TempDir::new("bob-cli-capture-force-next-schedule");
+    let vault = sched_temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Scheduled [scheduled::2026-07-20] ^sched\n",
+            "  - 🗓️ **SCHEDULE LOG**\n",
+            "    - *2026-07-01* — older\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**1330-1400**) — CURRENT\n  - [[cash#^sched]]\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+sched!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("schedule retirement");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["removed_scheduled"], "2026-07-20");
+    assert_eq!(json["pomodoro_link_action"], "already_current");
+    assert!(json.get("schedule_log").is_some(), "{json}");
+
+    let failures = [
+        (
+            "missing-link",
+            "- [ ] #task Alpha ^alpha\n",
+            "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
+            "no movable open Pomodoro Task Link",
+        ),
+        (
+            "completed-only",
+            "- [ ] #task Alpha ^alpha\n",
+            "## Pomodoros\n- [x] (**0800-0830**) — DONE\n  - [[cash#^alpha]]\n- [ ] (**0900-0930**) — CURRENT\n",
+            "no movable open Pomodoro Task Link",
+        ),
+        (
+            "duplicate-link",
+            "- [ ] #task Alpha ^alpha\n",
+            "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n  - [[cash#^alpha]]\n- [ ] () — LATER\n  - [[cash#^alpha]]\n",
+            "more than one movable open Pomodoro Task Link",
+        ),
+        (
+            "done-task",
+            "- [x] #task Done already ^done\n",
+            "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n  - [[cash#^done]]\n",
+            "only Ready, Blocked, In Progress, and Next tasks can be ensured Next",
+        ),
+    ];
+    for (name, target_body, day_body, expected) in failures {
+        let temp = TempDir::new(&format!("bob-cli-capture-force-next-{name}"));
+        let vault = temp.path().join("vault");
+        let target = vault.join("cash.md");
+        let day_file = vault.join("day.md");
+        write_toggle_task_settings(&vault);
+        write_file(&target, target_body);
+        write_file(&day_file, day_body);
+        let id = target_body.rsplit('^').next().unwrap().trim();
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(format!("@cash+{id}!"))
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 10:00:00")
+            .output()
+            .unwrap_or_else(|_| panic!("run {name}"));
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: {}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("json");
+        assert!(
+            json["error"]
+                .as_str()
+                .is_some_and(|error| error.contains(expected)),
+            "{name}: {json}"
+        );
+        assert_eq!(
+            fs::read_to_string(&target).expect("target"),
+            target_body,
+            "{name}"
+        );
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("day"),
+            day_body,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn capture_task_toggle_force_next_same_note_batch_and_rollback() {
+    let temp = TempDir::new("bob-cli-capture-force-next-same-note");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — DAILY\n",
+            "- [ ] () — LATER\n",
+            "  - [[day#^daily]]\n",
+            "## Tasks\n",
+            "- [ ] #task Daily task ^daily\n",
+        ),
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@day+daily!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:05:00")
+        .output()
+        .expect("same-note force-Next");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — DAILY\n",
+            "  - [[day#^daily]]\n",
+            "- [ ] () — LATER\n",
+            "## Tasks\n",
+            "- [*] #task Daily task ^daily\n",
+        )
+    );
+
+    let batch_temp = TempDir::new("bob-cli-capture-force-next-batch");
+    let vault = batch_temp.path().join("vault");
+    let cash = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&cash, "- [ ] #task Alpha ^alpha\n- [ ] #task Beta ^beta\n");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**1330-1400**) — CURRENT\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^alpha]]\n",
+            "  - [[cash#^beta]]\n",
+        ),
+    );
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 13:40:00"),
+        "@cash+alpha!\n\n@cash+beta!\n",
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
+    let captures = json["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 2);
+    assert_eq!(captures[0]["pomodoro_link_action"], "moved");
+    assert_eq!(captures[1]["pomodoro_link_action"], "moved");
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**1330-1400**) — CURRENT\n",
+            "  - [[cash#^alpha]]\n",
+            "  - [[cash#^beta]]\n",
+            "- [ ] () — LATER\n",
+        )
+    );
+
+    let rollback_temp = TempDir::new("bob-cli-capture-force-next-rollback");
+    let vault = rollback_temp.path().join("vault");
+    let cash = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    let cash_before = "- [ ] #task Alpha ^alpha\n";
+    let day_before = "## Notes\n- nothing here\n";
+    write_toggle_task_settings(&vault);
+    write_file(&cash, cash_before);
+    write_file(&day_file, day_before);
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 13:40:00"),
+        "ordinary @notes\n\n@cash+alpha!\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert_eq!(fs::read_to_string(&cash).expect("cash"), cash_before);
+    assert_eq!(fs::read_to_string(&day_file).expect("day"), day_before);
+    assert!(
+        !vault.join("notes.md").exists(),
+        "failed batch must not commit earlier ordinary captures"
+    );
+}
+
+#[test]
 fn capture_parse_named_pomodoro_reports_incomplete_need() {
     let output = bob_command()
         .arg("capture-parse")

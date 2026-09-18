@@ -55,6 +55,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route+block-id` | Ordinary child bullet under an existing task |
 | `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+block-id` with no other text | Toggle that task between Ready `[ ]` and Next `[*]` and add or remove its Pomodoro task link |
+| `@route+block-id!` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's implicit current/next Pomodoro |
 | `@route+block-id#pomodoro` with no other text | Same toggle, selecting a matching named open Pomodoro or creating a named future Pomodoro |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
@@ -648,6 +649,52 @@ markers`, `s:<N>` with `task toggle capture cannot be combined with s:<N>`,
 `p:<N>` with `task toggle capture cannot be combined with p:<N>`, and authored
 child bullets with `task toggle capture cannot have authored child bullets`.
 
+A terminal `!` on the same marker-only form, `@route+block-id!`, is one-way
+force-Next. It is accepted only as the final byte of that exact marker: not on
+`@route+id#name`, `@@route+id`, body-bearing items, authored children,
+clipboard, schedule, priority, or forced destination flags. Ordinary `!` in
+capture prose stays literal. Ready `[ ]`, Blocked `[?]`, In Progress `[/]`,
+and Next `[*]` are eligible and all end as Next. Done, canceled, unknown,
+missing, non-task, and duplicate-ID targets keep actionable errors.
+
+The destination is today's implicit current/next open Pomodoro: the single
+open timed entry when present, otherwise the first open entry in document
+order. A missing Pomodoros section, no eligible open entry, or multiple open
+timed entries is an atomic error. The command never creates a missing Task
+Link or a named future Pomodoro; if no dedicated Task Link exists under an
+open Pomodoro, it fails write-free and tells the user to use `@route+block-id`
+to add one. More than one movable occurrence is also a write-free invariant
+error. Completed Pomodoros are historical and are never edited. A link
+embedded in surrounding prose is not a dedicated Task Link.
+
+When the sole link is already under the selected destination, the daily file
+is left byte-for-byte unchanged. The task-side plan is independent: a
+non-Next open status still becomes Next and a single future schedule is still
+retired when an existing Schedule Log is present. An already-Next task whose
+link is already at the destination is a true no-op. When relocation is
+needed, Bob moves the dedicated link bullet and its complete descendant
+subtree, adapting only the root indentation to the destination's established
+child indentation.
+
+Human output says `would ensure` / `ensured` rather than `would toggle` /
+`toggled`, distinguishes "set Next" from "already Next", and prints either
+the source-to-destination Pomodoro move or `Task Link already in
+current/next Pomodoro; no ledger change.` JSON stays schema version 1 and
+kind `"task_toggle"` with `toggle_direction: "next"`. Additive fields let
+new clients render the outcome precisely while old clients ignore them:
+
+- `toggle_behavior: "ensure_next"` (omitted for the two-way toggle)
+- `status_changed: true|false`
+- `pomodoro_link_action: "moved"|"already_current"`
+- `pomodoro_link_source` and `pomodoro_link_destination` objects with
+  one-based `line` plus optional `name` and `time_range`
+
+Compatibility fields: `pomodoro_name` is the resolved destination name when
+one exists, `creates_pomodoro` is `false`, `pomodoro_already_linked` is
+`true` only for the already-current outcome, and destination placement is
+reported only for an actual move. Relocation is never described as later
+duplicate removal through `removed_pomodoro_links`.
+
 ### Pomodoro notes
 
 Append a bare trailing `#` marker to capture the item as a plain-text
@@ -825,7 +872,10 @@ named entry was selected or created, `creates_pomodoro`,
 `pomodoro_already_linked`, and any later-link removals. Clearing toggles report
 the all-open-Pomodoro cleanup count and set `pomodoro_selector_unused: true`
 when the input included an inert `#name`. Toggle results omit `sub_bullets`,
-`clip`, `priority`, `priority_label`, `parent_*`, and `scheduled`.
+`clip`, `priority`, `priority_label`, `parent_*`, and `scheduled`. The
+force-Next form `@route+block-id!` adds `toggle_behavior`, `status_changed`,
+`pomodoro_link_action`, and the source/destination endpoint objects described
+under [Task status toggle](#task-status-toggle).
 
 Pomodoro-note results use kind `"pomodoro_note"` with `routed: false`, `route:
 null`, and `target`/`relative_target` set to the daily note. They additionally
@@ -990,7 +1040,7 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
 `pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_note`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
-`task_toggle_block_id`, `task_toggle_pomodoro_name`, `global_route`,
+`task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_force_next`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
 `interactive_placeholder`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
@@ -1005,7 +1055,7 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `legacy_bullet_marker`,
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `unsupported_force_next`, `legacy_bullet_marker`,
 `pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
 `s:<N>`, or `p:<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero

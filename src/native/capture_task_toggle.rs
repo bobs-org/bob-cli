@@ -23,11 +23,11 @@ use super::{
     capture::{
         first_child_indentation, first_direct_managed_log_start,
         leading_spaces_or_tabs_len, line_spans, list_item_body,
-        list_marker_len, LineSpan,
+        list_marker_len, nearest_shallower_list_item_parent, LineSpan,
     },
-    capture_pomodoros::{self, NamedSelection, PomodoroState},
+    capture_pomodoros::{self, NamedSelection, PomodoroEntry, PomodoroState},
     capture_schedule_log::{ScheduleLog, SEPARATOR, TRANSITION},
-    pomodoro,
+    markdown, pomodoro,
 };
 
 /// `SCHEDULE_LOG_ENTRY_EMPHASIS = "_"` in `plugins/block-id-prompt/main.js`,
@@ -252,33 +252,7 @@ pub(crate) fn plan_link_insertion(
             }
         },
         None => {
-            if !scan.has_section {
-                return Err(LinkPlanError::NoPomodorosSection);
-            }
-            let open_timed_count = scan
-                .entries
-                .iter()
-                .filter(|entry| {
-                    entry.state == PomodoroState::Open
-                        && entry.time_range.is_some()
-                })
-                .count();
-            if open_timed_count > 1 {
-                return Err(LinkPlanError::MultipleOpenTimedEntries);
-            }
-            let entry = scan
-                .entries
-                .iter()
-                .find(|entry| {
-                    entry.state == PomodoroState::Open
-                        && entry.time_range.is_some()
-                })
-                .or_else(|| {
-                    scan.entries
-                        .iter()
-                        .find(|entry| entry.state == PomodoroState::Open)
-                })
-                .ok_or(LinkPlanError::NoEligibleOpenEntry)?;
+            let entry = select_implicit_open_entry(&scan)?;
             (entry.line - 1, entry.name.clone())
         }
     };
@@ -368,6 +342,357 @@ pub(crate) fn plan_link_removal(
         has_changes: removed_links > 0,
         content,
         removed_links,
+    }
+}
+
+/// Why [`plan_link_relocation`] could not move a Task Link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkRelocationError {
+    NoPomodorosSection,
+    NoEligibleOpenEntry,
+    MultipleOpenTimedEntries,
+    NoMovableLink,
+    MultipleMovableLinks,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkRelocationAction {
+    Moved,
+    AlreadyCurrent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PomodoroEndpoint {
+    pub(crate) line: usize,
+    pub(crate) name: Option<String>,
+    pub(crate) time_range: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinkRelocationPlan {
+    pub(crate) content: String,
+    pub(crate) has_changes: bool,
+    pub(crate) action: LinkRelocationAction,
+    pub(crate) placement: Option<LinkPlacement>,
+    pub(crate) source: PomodoroEndpoint,
+    pub(crate) destination: PomodoroEndpoint,
+}
+
+/// Move the sole dedicated open-Pomodoro Task Link for `block_link` onto
+/// today's implicit current/next open Pomodoro. Never synthesizes a missing
+/// link or edits completed history.
+pub(crate) fn plan_link_relocation(
+    day_contents: &str,
+    block_link: &str,
+) -> Result<LinkRelocationPlan, LinkRelocationError> {
+    let scan = capture_pomodoros::scan(day_contents);
+    let destination = select_implicit_open_entry(&scan)
+        .map_err(relocation_from_link_plan_error)?;
+    let dest_entry_index = destination.line - 1;
+    let dest_endpoint = endpoint_from_entry(destination);
+
+    let lines = line_spans(day_contents);
+    let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+    let section = pomodoro::pomodoros_section_range(&line_texts)
+        .ok_or(LinkRelocationError::NoPomodorosSection)?;
+    let movable =
+        find_movable_task_links(&lines, &scan, section.clone(), block_link);
+    match movable.as_slice() {
+        [] => Err(LinkRelocationError::NoMovableLink),
+        [_, _, ..] => Err(LinkRelocationError::MultipleMovableLinks),
+        [source] => {
+            let source_endpoint = endpoint_from_entry(source.owner);
+            if source.entry_line_index == dest_entry_index {
+                return Ok(LinkRelocationPlan {
+                    content: day_contents.to_string(),
+                    has_changes: false,
+                    action: LinkRelocationAction::AlreadyCurrent,
+                    placement: None,
+                    source: source_endpoint,
+                    destination: dest_endpoint,
+                });
+            }
+
+            let dest_child_end = child_block_end_line(&lines, dest_entry_index);
+            let dest_indent = pomodoro_child_indentation(
+                &lines,
+                dest_entry_index,
+                dest_child_end,
+                section.start,
+                section.end,
+            );
+            let source_indent_len =
+                leading_spaces_or_tabs_len(lines[source.line_index].text);
+            let source_indent =
+                &lines[source.line_index].text[..source_indent_len];
+            let subtree = extract_line_range(
+                day_contents,
+                &lines,
+                source.line_index,
+                source.subtree_end,
+            );
+            let reindented =
+                reindent_subtree(subtree, source_indent, &dest_indent);
+            let new_lines = logical_lines(&reindented);
+
+            let lines_removed_before_insert =
+                if source.line_index <= dest_child_end {
+                    source.subtree_end - source.line_index + 1
+                } else {
+                    0
+                };
+            let dest_after = dest_child_end - lines_removed_before_insert;
+            let without_source = remove_line_range(
+                day_contents,
+                &lines,
+                source.line_index,
+                source.subtree_end,
+            );
+            let updated_lines = line_spans(&without_source);
+            let placement =
+                if updated_lines[dest_after].end >= without_source.len() {
+                    LinkPlacement::Appended
+                } else {
+                    LinkPlacement::Inserted
+                };
+            let content = insert_lines_after(
+                &without_source,
+                &updated_lines,
+                dest_after,
+                &new_lines,
+            );
+            Ok(LinkRelocationPlan {
+                content,
+                has_changes: true,
+                action: LinkRelocationAction::Moved,
+                placement: Some(placement),
+                source: source_endpoint,
+                destination: dest_endpoint,
+            })
+        }
+    }
+}
+
+fn relocation_from_link_plan_error(
+    error: LinkPlanError,
+) -> LinkRelocationError {
+    match error {
+        LinkPlanError::NoPomodorosSection => {
+            LinkRelocationError::NoPomodorosSection
+        }
+        LinkPlanError::NoEligibleOpenEntry => {
+            LinkRelocationError::NoEligibleOpenEntry
+        }
+        LinkPlanError::MultipleOpenTimedEntries => {
+            LinkRelocationError::MultipleOpenTimedEntries
+        }
+        LinkPlanError::InvalidPomodoroName => {
+            LinkRelocationError::NoEligibleOpenEntry
+        }
+    }
+}
+
+fn select_implicit_open_entry(
+    scan: &capture_pomodoros::PomodoroScan,
+) -> Result<&PomodoroEntry, LinkPlanError> {
+    if !scan.has_section {
+        return Err(LinkPlanError::NoPomodorosSection);
+    }
+    let open_timed_count = scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == PomodoroState::Open && entry.time_range.is_some()
+        })
+        .count();
+    if open_timed_count > 1 {
+        return Err(LinkPlanError::MultipleOpenTimedEntries);
+    }
+    scan.entries
+        .iter()
+        .find(|entry| {
+            entry.state == PomodoroState::Open && entry.time_range.is_some()
+        })
+        .or_else(|| {
+            scan.entries
+                .iter()
+                .find(|entry| entry.state == PomodoroState::Open)
+        })
+        .ok_or(LinkPlanError::NoEligibleOpenEntry)
+}
+
+fn endpoint_from_entry(entry: &PomodoroEntry) -> PomodoroEndpoint {
+    PomodoroEndpoint {
+        line: entry.line,
+        name: entry.name.clone(),
+        time_range: entry.time_range.clone(),
+    }
+}
+
+struct MovableLink<'a> {
+    owner: &'a PomodoroEntry,
+    entry_line_index: usize,
+    line_index: usize,
+    subtree_end: usize,
+}
+
+fn find_movable_task_links<'a>(
+    lines: &[LineSpan<'_>],
+    scan: &'a capture_pomodoros::PomodoroScan,
+    section: std::ops::Range<usize>,
+    block_link: &str,
+) -> Vec<MovableLink<'a>> {
+    let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+    let fenced = markdown::fenced_lines(&line_texts, section.clone());
+    let mut found = Vec::new();
+    for entry in &scan.entries {
+        if entry.state != PomodoroState::Open {
+            continue;
+        }
+        let entry_line_index = entry.line - 1;
+        let child_end = child_block_end_line(lines, entry_line_index);
+        if child_end < entry_line_index + 1 {
+            continue;
+        }
+        for line_index in entry_line_index + 1..=child_end {
+            if fenced.contains(&line_index) {
+                continue;
+            }
+            let text = lines[line_index].text;
+            if nearest_shallower_list_item_parent(lines, line_index)
+                != Some(entry_line_index)
+            {
+                continue;
+            }
+            let Some(body) = list_item_body(text).map(str::trim_end) else {
+                continue;
+            };
+            if body != block_link {
+                continue;
+            }
+            found.push(MovableLink {
+                owner: entry,
+                entry_line_index,
+                line_index,
+                subtree_end: child_block_end_line(lines, line_index),
+            });
+        }
+    }
+    found
+}
+
+fn extract_line_range<'a>(
+    contents: &'a str,
+    lines: &[LineSpan<'_>],
+    start_line: usize,
+    end_line: usize,
+) -> &'a str {
+    let start = line_start_offset(lines, start_line);
+    &contents[start..lines[end_line].end]
+}
+
+fn remove_line_range(
+    contents: &str,
+    lines: &[LineSpan<'_>],
+    start_line: usize,
+    end_line: usize,
+) -> String {
+    let start = line_start_offset(lines, start_line);
+    format!("{}{}", &contents[..start], &contents[lines[end_line].end..])
+}
+
+fn reindent_subtree(
+    subtree: &str,
+    from_indent: &str,
+    to_indent: &str,
+) -> String {
+    let mut result = String::new();
+    for (line, ending) in physical_line_pieces(subtree) {
+        if line.trim().is_empty() {
+            result.push_str(line);
+        } else if let Some(suffix) = line.strip_prefix(from_indent) {
+            result.push_str(to_indent);
+            result.push_str(suffix);
+        } else {
+            result.push_str(line);
+        }
+        result.push_str(ending);
+    }
+    result
+}
+
+fn logical_lines(text: &str) -> Vec<String> {
+    physical_line_pieces(text)
+        .into_iter()
+        .map(|(line, _)| line.to_string())
+        .collect()
+}
+
+fn physical_line_pieces(text: &str) -> Vec<(&str, &str)> {
+    let bytes = text.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'\n' {
+            let ending_start = if index > start && bytes[index - 1] == b'\r' {
+                index - 1
+            } else {
+                index
+            };
+            lines.push((
+                &text[start..ending_start],
+                &text[ending_start..index + 1],
+            ));
+            index += 1;
+            start = index;
+        } else {
+            index += 1;
+        }
+    }
+    if start < text.len() {
+        lines.push((&text[start..], ""));
+    }
+    lines
+}
+
+fn insert_lines_after(
+    content: &str,
+    lines: &[LineSpan<'_>],
+    after_index: usize,
+    new_lines: &[String],
+) -> String {
+    if new_lines.is_empty() {
+        return content.to_string();
+    }
+    let insert_offset = lines[after_index].end;
+    let ending = if line_has_crlf(content, lines, after_index) {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let at_eof_no_nl =
+        insert_offset == content.len() && !content.ends_with('\n');
+    let mut block = String::new();
+    for (index, line) in new_lines.iter().enumerate() {
+        let last = index + 1 == new_lines.len();
+        block.push_str(line);
+        if at_eof_no_nl {
+            if !last {
+                block.push_str(ending);
+            }
+        } else {
+            block.push_str(ending);
+        }
+    }
+    if at_eof_no_nl {
+        format!("{content}{ending}{block}")
+    } else {
+        format!(
+            "{}{block}{}",
+            &content[..insert_offset],
+            &content[insert_offset..]
+        )
     }
 }
 
@@ -1112,5 +1437,233 @@ mod tests {
         let removal = plan_link_removal(&plan.content, "[[cash#^id]]");
         assert_eq!(removal.content, contents);
         assert_eq!(removal.removed_links, 1);
+    }
+
+    fn relocated(contents: &str, block_link: &str) -> LinkRelocationPlan {
+        plan_link_relocation(contents, block_link).expect("relocate")
+    }
+
+    #[test]
+    fn relocation_moves_a_later_link_into_the_timed_current_pomodoro() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - keep\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^id]]\n",
+        );
+        let plan = relocated(contents, "[[cash#^id]]");
+        assert_eq!(plan.action, LinkRelocationAction::Moved);
+        assert!(plan.has_changes);
+        assert_eq!(plan.source.name.as_deref(), Some("LATER"));
+        assert_eq!(plan.destination.name.as_deref(), Some("CURRENT"));
+        assert_eq!(plan.destination.time_range.as_deref(), Some("0900-0930"));
+        assert_eq!(
+            plan.content,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (**0900-0930**) — CURRENT\n",
+                "  - keep\n",
+                "  - [[cash#^id]]\n",
+                "- [ ] () — LATER\n",
+            )
+        );
+    }
+
+    #[test]
+    fn relocation_moves_an_earlier_link_into_a_later_destination() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] () — EARLIER\n",
+            "  - [[cash#^id]]\n",
+            "- [ ] (**1330-1400**) — CURRENT\n",
+            "  - context\n",
+        );
+        let plan = relocated(contents, "[[cash#^id]]");
+        assert_eq!(plan.action, LinkRelocationAction::Moved);
+        assert_eq!(plan.source.name.as_deref(), Some("EARLIER"));
+        assert_eq!(plan.destination.name.as_deref(), Some("CURRENT"));
+        assert_eq!(
+            plan.content,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] () — EARLIER\n",
+                "- [ ] (**1330-1400**) — CURRENT\n",
+                "  - context\n",
+                "  - [[cash#^id]]\n",
+            )
+        );
+    }
+
+    #[test]
+    fn relocation_falls_back_to_the_first_open_entry_without_timed() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] () — PLANNED\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^id]]\n",
+        );
+        let plan = relocated(contents, "[[cash#^id]]");
+        assert_eq!(plan.destination.name.as_deref(), Some("PLANNED"));
+        assert!(plan
+            .content
+            .contains("- [ ] () — PLANNED\n  - [[cash#^id]]\n"));
+        assert!(plan.content.contains("- [ ] () — LATER\n"));
+        assert!(!plan.content.contains("- [ ] () — LATER\n  - [[cash#^id]]"));
+    }
+
+    #[test]
+    fn relocation_reports_an_unnamed_endpoint() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**)\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^id]]\n",
+        );
+        let plan = relocated(contents, "[[cash#^id]]");
+        assert!(plan.destination.name.is_none());
+        assert_eq!(plan.destination.time_range.as_deref(), Some("0900-0930"));
+        assert_eq!(plan.destination.line, 2);
+    }
+
+    #[test]
+    fn relocation_moves_a_descendant_bearing_task_link_as_a_subtree() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^id]]\n",
+            "    - review notes\n",
+            "      - nested\n",
+        );
+        let plan = relocated(contents, "[[cash#^id]]");
+        assert_eq!(
+            plan.content,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (**0900-0930**) — CURRENT\n",
+                "  - [[cash#^id]]\n",
+                "    - review notes\n",
+                "      - nested\n",
+                "- [ ] () — LATER\n",
+            )
+        );
+    }
+
+    #[test]
+    fn relocation_uses_the_destination_child_indentation() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "\t- existing\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^id]]\n",
+            "    - note\n",
+        );
+        let plan = relocated(contents, "[[cash#^id]]");
+        assert_eq!(
+            plan.content,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (**0900-0930**) — CURRENT\n",
+                "\t- existing\n",
+                "\t- [[cash#^id]]\n",
+                "\t  - note\n",
+                "- [ ] () — LATER\n",
+            )
+        );
+    }
+
+    #[test]
+    fn relocation_preserves_crlf_and_a_missing_final_newline() {
+        let contents =
+            "## Pomodoros\r\n- [ ] (**0900-0930**) — CURRENT\r\n- [ ] () — LATER\r\n  - [[cash#^id]]";
+        let plan = relocated(contents, "[[cash#^id]]");
+        assert_eq!(
+            plan.content,
+            "## Pomodoros\r\n- [ ] (**0900-0930**) — CURRENT\r\n  - [[cash#^id]]\r\n- [ ] () — LATER\r\n"
+        );
+        assert_eq!(plan.placement, Some(LinkPlacement::Inserted));
+    }
+
+    #[test]
+    fn relocation_ignores_completed_history_and_mixed_text_lookalikes() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] (**0800-0830**) — DONE\n",
+            "  - [[cash#^id]]\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - see [[cash#^id]] later\n",
+            "  - context\n",
+            "    - [[cash#^id]]\n",
+        );
+        let error = plan_link_relocation(contents, "[[cash#^id]]").unwrap_err();
+        assert_eq!(error, LinkRelocationError::NoMovableLink);
+    }
+
+    #[test]
+    fn relocation_errors_when_the_link_is_missing() {
+        let contents = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
+        assert_eq!(
+            plan_link_relocation(contents, "[[cash#^id]]").unwrap_err(),
+            LinkRelocationError::NoMovableLink
+        );
+    }
+
+    #[test]
+    fn relocation_errors_on_duplicate_movable_links() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - [[cash#^id]]\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^id]]\n",
+        );
+        assert_eq!(
+            plan_link_relocation(contents, "[[cash#^id]]").unwrap_err(),
+            LinkRelocationError::MultipleMovableLinks
+        );
+    }
+
+    #[test]
+    fn relocation_is_a_noop_when_the_link_is_already_current() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - [[cash#^id]]\n",
+            "    - notes\n",
+            "- [ ] () — LATER\n",
+        );
+        let plan = relocated(contents, "[[cash#^id]]");
+        assert_eq!(plan.action, LinkRelocationAction::AlreadyCurrent);
+        assert!(!plan.has_changes);
+        assert_eq!(plan.content, contents);
+        assert_eq!(plan.source.name.as_deref(), Some("CURRENT"));
+        assert_eq!(plan.destination.name.as_deref(), Some("CURRENT"));
+        assert!(plan.placement.is_none());
+    }
+
+    #[test]
+    fn relocation_reuses_implicit_selection_errors() {
+        assert_eq!(
+            plan_link_relocation("# Day\n", "[[cash#^id]]").unwrap_err(),
+            LinkRelocationError::NoPomodorosSection
+        );
+        assert_eq!(
+            plan_link_relocation(
+                "## Pomodoros\n- [x] (**0900-0930**) — DONE\n",
+                "[[cash#^id]]"
+            )
+            .unwrap_err(),
+            LinkRelocationError::NoEligibleOpenEntry
+        );
+        assert_eq!(
+            plan_link_relocation(
+                "## Pomodoros\n- [ ] (**0900-0930**) — A\n- [ ] (**0930-1000**) — B\n  - [[cash#^id]]\n",
+                "[[cash#^id]]"
+            )
+            .unwrap_err(),
+            LinkRelocationError::MultipleOpenTimedEntries
+        );
     }
 }
