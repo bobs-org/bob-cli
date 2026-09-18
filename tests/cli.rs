@@ -6738,19 +6738,19 @@ fn capture_task_toggle_next_and_open_updates_notes_and_reports_json() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+goog-exit#unused-selector")
+        .arg("@cash+goog-exit!")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 10:05:00")
         .output()
-        .expect("toggle next task open");
+        .expect("explicitly toggle next task open");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
     assert_eq!(json["toggle_direction"], "open");
     assert_eq!(json["previous_status_symbol"], "*");
     assert_eq!(json["status_symbol"], " ");
-    assert_eq!(json["pomodoro_selector_unused"], true);
-    assert_eq!(json["pomodoro_name"], "UNUSED-SELECTOR");
+    assert_eq!(json["pomodoro_selector_unused"], false);
+    assert!(json.get("toggle_behavior").is_none(), "{json}");
     assert_eq!(json["removed_pomodoro_links"], 1);
     assert_eq!(
         fs::read_to_string(&target).expect("read opened target"),
@@ -6782,6 +6782,9 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     let day_before = concat!(
         "## Pomodoros\n",
         "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
+        "  - [[cash#^sched]]\n",
+        "    - review notes\n",
+        "  - [[cash#^nolog]]\n",
     );
     write_toggle_task_settings(&vault);
     write_file(&target, target_before);
@@ -6805,7 +6808,9 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         serde_json::from_str(stdout(&dry_run).trim()).expect("dry-run JSON");
     assert_eq!(json["dry_run"], true);
     assert_eq!(json["toggle_direction"], "next");
+    assert_eq!(json["toggle_behavior"], "ensure_next");
     assert_eq!(json["creates_pomodoro"], true);
+    assert_eq!(json["pomodoro_link_action"], "moved");
     assert_eq!(json["pomodoro_name"], "DEEP+WORK");
     assert_eq!(json["removed_scheduled"], "2026-07-20");
     assert_eq!(
@@ -6837,7 +6842,10 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
     assert_eq!(json["creates_pomodoro"], true);
-    assert_eq!(json["pomodoro_link_placement"], "appended");
+    assert_eq!(json["toggle_behavior"], "ensure_next");
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(json["removed_pomodoro_links"], 0);
+    assert!(json.get("pomodoro_link_placement").is_some(), "{json}");
     assert_eq!(
         fs::read_to_string(&target).expect("read target"),
         concat!(
@@ -6883,6 +6891,7 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
             "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
             "- [ ] () — DEEP+WORK\n",
             "  - [[cash#^sched]]\n",
+            "    - review notes\n",
             "  - [[cash#^nolog]]\n",
         )
     );
@@ -6943,7 +6952,12 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
     write_file(&cash, "- [ ] #task Alpha ^alpha\n- [ ] #task Beta ^beta\n");
     write_file(
         &day_file,
-        "## Pomodoros\n- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
+            "  - [[cash#^alpha]]\n",
+            "  - [[cash#^beta]]\n",
+        ),
     );
 
     let draft = "New work @dev:first#deep-work\n\n@cash+alpha#deep-work\n\n@cash+beta#deep-work\n";
@@ -6965,7 +6979,9 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
     assert_eq!(captures.len(), 3);
     assert_eq!(captures[0]["kind"], "pomodoro_task");
     assert_eq!(captures[1]["kind"], "task_toggle");
+    assert_eq!(captures[1]["toggle_behavior"], "ensure_next");
     assert_eq!(captures[2]["kind"], "task_toggle");
+    assert_eq!(captures[2]["toggle_behavior"], "ensure_next");
     assert_eq!(
         fs::read_to_string(&day_file).expect("read day"),
         concat!(
@@ -7193,6 +7209,28 @@ fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
         serde_json::json!([
             { "start": 0, "end": 5, "kind": "task_toggle_route" },
             { "start": 6, "end": 15, "kind": "task_toggle_block_id" },
+        ])
+    );
+
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+goog-exit#deep+work")
+        .output()
+        .expect("run named ensure-Next parse");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    assert_eq!(json["mode"], "task_toggle");
+    assert_eq!(json["section"], "deep+work");
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 0, "end": 5, "kind": "task_toggle_route" },
+            { "start": 6, "end": 15, "kind": "task_toggle_block_id" },
+            { "start": 16, "end": 25, "kind": "task_toggle_pomodoro_name" },
         ])
     );
 }
@@ -7636,6 +7674,262 @@ fn capture_task_toggle_ensure_next_same_note_batch_and_rollback() {
     assert!(
         !vault.join("notes.md").exists(),
         "failed batch must not commit earlier ordinary captures"
+    );
+}
+
+#[test]
+fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
+    let temp = TempDir::new("bob-cli-capture-named-ensure-next");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&target, "- [*] #task Finish packet ^goog-exit\n");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - context\n",
+            "- [ ] () — CODING\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^goog-exit]]\n",
+            "    - review notes\n",
+        ),
+    );
+
+    let dry_run = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--")
+        .arg("@cash+goog-exit#coding")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("dry-run named ensure-Next");
+    assert_success(&dry_run);
+    let human = stdout(&dry_run);
+    assert!(human.contains("would ensure"), "{human}");
+    assert!(human.contains("[*] already Next"), "{human}");
+    assert!(human.contains("moved Task Link"), "{human}");
+    assert!(human.contains("LATER"), "{human}");
+    assert!(human.contains("CODING"), "{human}");
+    assert!(!human.contains("would toggle"), "{human}");
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("dry day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - context\n",
+            "- [ ] () — CODING\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^goog-exit]]\n",
+            "    - review notes\n",
+        )
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+goog-exit#cod")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("named prefix ensure-Next");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["toggle_behavior"], "ensure_next");
+    assert_eq!(json["toggle_direction"], "next");
+    assert_eq!(json["status_changed"], false);
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(json["creates_pomodoro"], false);
+    assert_eq!(json["pomodoro_already_linked"], false);
+    assert_eq!(json["removed_pomodoro_links"], 0);
+    assert_eq!(json["pomodoro_name"], "CODING");
+    assert_eq!(json["pomodoro_link_source"]["name"], "LATER");
+    assert_eq!(json["pomodoro_link_destination"]["name"], "CODING");
+    assert!(
+        json.get("pomodoro_selector_unused") != Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("target"),
+        "- [*] #task Finish packet ^goog-exit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - context\n",
+            "- [ ] () — CODING\n",
+            "  - [[cash#^goog-exit]]\n",
+            "    - review notes\n",
+            "- [ ] () — LATER\n",
+        )
+    );
+
+    let noop = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--")
+        .arg("@cash+goog-exit#coding")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:05:00")
+        .output()
+        .expect("named no-op");
+    assert_success(&noop);
+    let human = stdout(&noop);
+    assert!(human.contains("already in CODING"), "{human}");
+    assert!(!human.contains("current/next Pomodoro"), "{human}");
+
+    let noop_json = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+goog-exit#coding")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:05:00")
+        .output()
+        .expect("named no-op json");
+    assert_success(&noop_json);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&noop_json).trim()).expect("json");
+    assert_eq!(json["status_changed"], false);
+    assert_eq!(json["pomodoro_link_action"], "already_current");
+    assert_eq!(json["pomodoro_already_linked"], true);
+    assert_eq!(json["creates_pomodoro"], false);
+    assert_eq!(json["pomodoro_name"], "CODING");
+    assert!(json.get("pomodoro_link_placement").is_none(), "{json}");
+
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0800-0830**) — DEEP+WORK\n",
+            "  - old\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - [[cash#^goog-exit]]\n",
+            "    - review notes\n",
+        ),
+    );
+    write_file(&target, "- [ ] #task Finish packet ^goog-exit\n");
+    let created = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+goog-exit#deep+work")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:10:00")
+        .output()
+        .expect("named create");
+    assert_success(&created);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&created).trim()).expect("json");
+    assert_eq!(json["toggle_behavior"], "ensure_next");
+    assert_eq!(json["status_changed"], true);
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(json["creates_pomodoro"], true);
+    assert_eq!(json["pomodoro_name"], "DEEP+WORK");
+    assert_eq!(json["removed_pomodoro_links"], 0);
+    assert_eq!(
+        fs::read_to_string(&target).expect("target"),
+        "- [*] #task Finish packet ^goog-exit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0800-0830**) — DEEP+WORK\n",
+            "  - old\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] () — DEEP+WORK\n",
+            "  - [[cash#^goog-exit]]\n",
+            "    - review notes\n",
+        )
+    );
+
+    let created_human = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--")
+        .arg("@cash+goog-exit#fresh")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:15:00")
+        .output()
+        .expect("named create human");
+    assert_success(&created_human);
+    let human = stdout(&created_human);
+    assert!(human.contains("created FRESH"), "{human}");
+    assert!(human.contains("moved Task Link"), "{human}");
+
+    write_file(&target, "- [ ] #task No link ^noleak\n");
+    let missing = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+noleak#coding")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:20:00")
+        .output()
+        .expect("named missing link");
+    assert_eq!(
+        missing.status.code(),
+        Some(1),
+        "{}",
+        format_output(&missing)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&missing).trim()).expect("json");
+    assert!(
+        json["error"].as_str().is_some_and(|error| error
+            .contains("no movable open Pomodoro Task Link")
+            && error.contains("use @cash+noleak!")),
+        "{json}"
+    );
+
+    let bang = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+noleak!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:25:00")
+        .output()
+        .expect("explicit insert");
+    assert_success(&bang);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&bang).trim()).expect("json");
+    assert!(json.get("toggle_behavior").is_none(), "{json}");
+    assert_eq!(json["toggle_direction"], "next");
+    assert!(json["removed_pomodoro_links"].as_u64().unwrap_or(0) == 0);
+    assert!(
+        fs::read_to_string(&day_file)
+            .expect("day")
+            .contains("- [[cash#^noleak]]"),
+        "explicit toggle may insert a missing link"
     );
 }
 

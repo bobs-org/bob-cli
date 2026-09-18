@@ -52,10 +52,12 @@ pub(crate) enum CaptureKind {
 /// How a marker-only `@route+block-id` capture should change an existing task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskToggleIntent {
-    /// Two-way Ready/Blocked <-> Next toggle, including suffixed `!` and
-    /// named `#pomodoro`.
+    /// Two-way Ready/Blocked <-> Next toggle. Only the terminal
+    /// `@route+block-id!` spelling carries this intent.
     Toggle,
-    /// One-way ensure-Next plus Task Link relocation (`@route+block-id`).
+    /// One-way ensure-Next plus Task Link relocation. Both unsuffixed
+    /// marker-only forms (`@route+block-id` and `@route+block-id#pomodoro`)
+    /// carry this intent; the optional Pomodoro name selects the destination.
     EnsureNext,
 }
 
@@ -988,15 +990,10 @@ fn resolve_sub_bullet_kind(
         });
     }
     if sub_bullets_is_empty && no_other_item_markers {
-        let is_named_toggle = section.is_some();
         return Ok(CaptureKind::TaskToggle {
             block_id,
             pomodoro_name: section.map(|selector| selector.text),
-            intent: if is_named_toggle {
-                TaskToggleIntent::Toggle
-            } else {
-                TaskToggleIntent::EnsureNext
-            },
+            intent: TaskToggleIntent::EnsureNext,
         });
     }
     Err(missing_text_error())
@@ -5781,6 +5778,67 @@ mod tests {
         );
         let bang = "café @dev+id!".rfind('!').expect("bang");
         assert_eq!(café.diagnostics[0].range, Some((bang, bang + 1)));
+    }
+
+    #[test]
+    fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
+        let plain = execute("@dev+id").expect("plain ensure-Next");
+        assert_eq!(
+            plain.kind,
+            CaptureKind::TaskToggle {
+                block_id: "id".to_string(),
+                pomodoro_name: None,
+                intent: TaskToggleIntent::EnsureNext,
+            }
+        );
+        let plain_editor = editor("@dev+id");
+        assert_eq!(plain_editor.mode, EditorMode::TaskToggle);
+        assert_eq!(
+            span_kinds(&plain_editor),
+            vec![SpanKind::TaskToggleRoute, SpanKind::TaskToggleBlockId]
+        );
+
+        let named = execute("@dev+id#deep+work").expect("named ensure-Next");
+        assert_eq!(
+            named.kind,
+            CaptureKind::TaskToggle {
+                block_id: "id".to_string(),
+                pomodoro_name: Some("deep+work".to_string()),
+                intent: TaskToggleIntent::EnsureNext,
+            }
+        );
+        assert_eq!(named.route.as_deref(), Some("dev"));
+        let named_editor = editor("@dev+id#deep+work");
+        assert_eq!(named_editor.mode, EditorMode::TaskToggle);
+        assert_eq!(
+            span_kinds(&named_editor),
+            vec![
+                SpanKind::TaskToggleRoute,
+                SpanKind::TaskToggleBlockId,
+                SpanKind::TaskTogglePomodoroName,
+            ]
+        );
+        assert!(!span_kinds(&named_editor)
+            .contains(&SpanKind::TaskToggleExplicitToggle));
+
+        let bang = execute("@dev+id!").expect("explicit toggle");
+        assert_eq!(
+            bang.kind,
+            CaptureKind::TaskToggle {
+                block_id: "id".to_string(),
+                pomodoro_name: None,
+                intent: TaskToggleIntent::Toggle,
+            }
+        );
+        let bang_editor = editor("@dev+id!");
+        assert_eq!(
+            span_kinds(&bang_editor),
+            vec![
+                SpanKind::TaskToggleRoute,
+                SpanKind::TaskToggleBlockId,
+                SpanKind::TaskToggleExplicitToggle,
+            ]
+        );
     }
 
     #[test]

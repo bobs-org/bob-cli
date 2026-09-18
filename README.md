@@ -196,8 +196,8 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
+| `@route+id#pomodoro` with no other text | Ensure Next and move that existing Task Link to the named Pomodoro, creating the named future Pomodoro if needed |
 | `@route+id!` with no other text | Explicitly toggle that task between Ready and Next and add or remove its Pomodoro task link |
-| `@route+id#pomodoro` with no other text | Same toggle, selecting a named Pomodoro when setting Next |
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
 | `s:<N>` | Schedule N days from today; checkbox-bearing captures start Blocked, including `s:0` |
 | `p:<N>` | Write priority level N and roll a scheduled date, so checkbox-bearing captures start Blocked |
@@ -214,20 +214,22 @@ stays ordinary text. The retired `@route::id` spelling is not accepted; use
 A bare `@route+id` marker-only capture is the default Ensure Next operation:
 Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and Next `[*]` all end as Next,
 and Bob moves the task's single existing open-Pomodoro Task Link subtree to the
-implicit current/next open Pomodoro. It never toggles Next back to Ready and
-never creates a missing link. Repeating it when the task is already Next and
-the link is already there is a no-op.
+implicit current/next open Pomodoro. `@route+id#pomodoro` is the same Ensure
+Next operation targeting a named open Pomodoro, or creating that named future
+Pomodoro when no open match exists. Neither unsuffixed form toggles Next back
+to Ready or creates a missing link. Repeating the request when the task is
+already Next and the link is already at the destination is a no-op.
 
 Use `@route+id!` to explicitly run the two-way toggle: Ready `[ ]` and Blocked
-`[?]` become Next `[*]` and get `[[route#^id]]` under the selected open
-Pomodoro; Next becomes Ready and removes matching links from every open
-Pomodoro. Future schedules are retired only when the task has exactly one valid
-future `[scheduled::YYYY-MM-DD]`, and a Schedule Log entry is written only if
-the task already has that log. In Progress, done, canceled, missing,
-duplicate, and non-task IDs are rejected before any note is written.
-Users upgrading from the initial `!` implementation should note this reversal:
-plain `@route+id` is now the idempotent default, and `!` is the add/clear
-escape hatch.
+`[?]` become Next `[*]` and get `[[route#^id]]` under the implicit current/next
+open Pomodoro; Next becomes Ready and removes matching links from every open
+Pomodoro. `!` cannot be combined with `#pomodoro`. Future schedules are retired
+only when the task has exactly one valid future `[scheduled::YYYY-MM-DD]`, and
+a Schedule Log entry is written only if the task already has that log. In
+Progress, done, canceled, missing, duplicate, and non-task IDs are rejected
+before any note is written. Users upgrading from the initial `!`
+implementation should note this reversal: the unsuffixed forms are now the
+idempotent default, and `!` is the add/clear escape hatch.
 
 ```bash
 bob capture buy milk @groceries

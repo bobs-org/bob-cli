@@ -351,6 +351,7 @@ pub(crate) enum LinkRelocationError {
     NoPomodorosSection,
     NoEligibleOpenEntry,
     MultipleOpenTimedEntries,
+    InvalidPomodoroName,
     NoMovableLink,
     MultipleMovableLinks,
 }
@@ -376,101 +377,344 @@ pub(crate) struct LinkRelocationPlan {
     pub(crate) placement: Option<LinkPlacement>,
     pub(crate) source: PomodoroEndpoint,
     pub(crate) destination: PomodoroEndpoint,
+    /// True only when this plan created the named destination Pomodoro.
+    pub(crate) creates_pomodoro: bool,
 }
 
 /// Move the sole dedicated open-Pomodoro Task Link for `block_link` onto
-/// today's implicit current/next open Pomodoro. Never synthesizes a missing
-/// link or edits completed history.
+/// either today's implicit current/next open Pomodoro or a named destination.
+/// Never synthesizes a missing link or edits completed history. A named
+/// selector with no matching open entry creates the canonical named future
+/// Pomodoro, then moves the existing subtree beneath it.
 pub(crate) fn plan_link_relocation(
     day_contents: &str,
     block_link: &str,
+    pomodoro_name: Option<&str>,
 ) -> Result<LinkRelocationPlan, LinkRelocationError> {
     let scan = capture_pomodoros::scan(day_contents);
-    let destination = select_implicit_open_entry(&scan)
-        .map_err(relocation_from_link_plan_error)?;
-    let dest_entry_index = destination.line - 1;
-    let dest_endpoint = endpoint_from_entry(destination);
-
     let lines = line_spans(day_contents);
     let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
     let section = pomodoro::pomodoros_section_range(&line_texts)
         .ok_or(LinkRelocationError::NoPomodorosSection)?;
     let movable =
         find_movable_task_links(&lines, &scan, section.clone(), block_link);
-    match movable.as_slice() {
-        [] => Err(LinkRelocationError::NoMovableLink),
-        [_, _, ..] => Err(LinkRelocationError::MultipleMovableLinks),
-        [source] => {
-            let source_endpoint = endpoint_from_entry(source.owner);
-            if source.entry_line_index == dest_entry_index {
-                return Ok(LinkRelocationPlan {
-                    content: day_contents.to_string(),
-                    has_changes: false,
-                    action: LinkRelocationAction::AlreadyCurrent,
-                    placement: None,
-                    source: source_endpoint,
-                    destination: dest_endpoint,
-                });
-            }
+    let source = match movable.as_slice() {
+        [] => return Err(LinkRelocationError::NoMovableLink),
+        [_, _, ..] => return Err(LinkRelocationError::MultipleMovableLinks),
+        [source] => source,
+    };
+    let source_endpoint = endpoint_from_entry(source.owner);
+    let source_entry_line_index = source.entry_line_index;
+    let source_line_index = source.line_index;
+    let source_subtree_end = source.subtree_end;
 
-            let dest_child_end = child_block_end_line(&lines, dest_entry_index);
-            let dest_indent = pomodoro_child_indentation(
-                &lines,
+    let resolved = resolve_relocation_destination(
+        day_contents,
+        &scan,
+        pomodoro_name,
+        source_entry_line_index,
+    )?;
+    if resolved.already_current {
+        return Ok(LinkRelocationPlan {
+            content: day_contents.to_string(),
+            has_changes: false,
+            action: LinkRelocationAction::AlreadyCurrent,
+            placement: None,
+            source: source_endpoint,
+            destination: resolved.destination,
+            creates_pomodoro: false,
+        });
+    }
+
+    let (working, source_line_index, source_subtree_end, dest_entry_index) =
+        if resolved.creates_pomodoro {
+            let working_scan = capture_pomodoros::scan(&resolved.content);
+            let working_lines = line_spans(&resolved.content);
+            let working_texts = working_lines
+                .iter()
+                .map(|line| line.text)
+                .collect::<Vec<_>>();
+            let working_section =
+                pomodoro::pomodoros_section_range(&working_texts)
+                    .ok_or(LinkRelocationError::NoPomodorosSection)?;
+            let movable = find_movable_task_links(
+                &working_lines,
+                &working_scan,
+                working_section,
+                block_link,
+            );
+            let source = match movable.as_slice() {
+                [source] => source,
+                _ => return Err(LinkRelocationError::NoMovableLink),
+            };
+            (
+                resolved.content,
+                source.line_index,
+                source.subtree_end,
+                resolved.dest_entry_index,
+            )
+        } else {
+            (
+                day_contents.to_string(),
+                source_line_index,
+                source_subtree_end,
+                resolved.dest_entry_index,
+            )
+        };
+
+    let (content, placement) = move_subtree_to_entry(
+        &working,
+        source_line_index,
+        source_subtree_end,
+        dest_entry_index,
+    )?;
+    let destination = destination_endpoint_after_move(
+        &content,
+        pomodoro_name,
+        &resolved.destination,
+        resolved.creates_pomodoro,
+    )?;
+    Ok(LinkRelocationPlan {
+        content,
+        has_changes: true,
+        action: LinkRelocationAction::Moved,
+        placement: Some(placement),
+        source: source_endpoint,
+        destination,
+        creates_pomodoro: resolved.creates_pomodoro,
+    })
+}
+
+struct ResolvedRelocationDestination {
+    content: String,
+    dest_entry_index: usize,
+    destination: PomodoroEndpoint,
+    already_current: bool,
+    creates_pomodoro: bool,
+}
+
+fn resolve_relocation_destination(
+    day_contents: &str,
+    scan: &capture_pomodoros::PomodoroScan,
+    pomodoro_name: Option<&str>,
+    source_entry_line_index: usize,
+) -> Result<ResolvedRelocationDestination, LinkRelocationError> {
+    match pomodoro_name {
+        None => {
+            let destination = select_implicit_open_entry(scan)
+                .map_err(relocation_from_link_plan_error)?;
+            let dest_entry_index = destination.line - 1;
+            Ok(ResolvedRelocationDestination {
+                content: day_contents.to_string(),
                 dest_entry_index,
-                dest_child_end,
-                section.start,
-                section.end,
-            );
-            let source_indent_len =
-                leading_spaces_or_tabs_len(lines[source.line_index].text);
-            let source_indent =
-                &lines[source.line_index].text[..source_indent_len];
-            let subtree = extract_line_range(
-                day_contents,
-                &lines,
-                source.line_index,
-                source.subtree_end,
-            );
-            let reindented =
-                reindent_subtree(subtree, source_indent, &dest_indent);
-            let new_lines = logical_lines(&reindented);
-
-            let lines_removed_before_insert =
-                if source.line_index <= dest_child_end {
-                    source.subtree_end - source.line_index + 1
-                } else {
-                    0
-                };
-            let dest_after = dest_child_end - lines_removed_before_insert;
-            let without_source = remove_line_range(
-                day_contents,
-                &lines,
-                source.line_index,
-                source.subtree_end,
-            );
-            let updated_lines = line_spans(&without_source);
-            let placement =
-                if updated_lines[dest_after].end >= without_source.len() {
-                    LinkPlacement::Appended
-                } else {
-                    LinkPlacement::Inserted
-                };
-            let content = insert_lines_after(
-                &without_source,
-                &updated_lines,
-                dest_after,
-                &new_lines,
-            );
-            Ok(LinkRelocationPlan {
-                content,
-                has_changes: true,
-                action: LinkRelocationAction::Moved,
-                placement: Some(placement),
-                source: source_endpoint,
-                destination: dest_endpoint,
+                destination: endpoint_from_entry(destination),
+                already_current: source_entry_line_index == dest_entry_index,
+                creates_pomodoro: false,
             })
         }
+        Some(selector) => match capture_pomodoros::select_named(scan, selector)
+        {
+            capture_pomodoros::NamedSelection::Found(entry) => {
+                let dest_entry_index = entry.line - 1;
+                Ok(ResolvedRelocationDestination {
+                    content: day_contents.to_string(),
+                    dest_entry_index,
+                    destination: endpoint_from_entry(entry),
+                    already_current: source_entry_line_index
+                        == dest_entry_index,
+                    creates_pomodoro: false,
+                })
+            }
+            capture_pomodoros::NamedSelection::CompletedOnly(_)
+            | capture_pomodoros::NamedSelection::Missing { .. } => {
+                let (content, created_line, name) =
+                    insert_named_placeholder(day_contents, selector)?;
+                Ok(ResolvedRelocationDestination {
+                    dest_entry_index: created_line,
+                    destination: PomodoroEndpoint {
+                        line: created_line + 1,
+                        name: Some(name),
+                        time_range: None,
+                    },
+                    content,
+                    already_current: false,
+                    creates_pomodoro: true,
+                })
+            }
+        },
     }
+}
+
+fn destination_endpoint_after_move(
+    content: &str,
+    pomodoro_name: Option<&str>,
+    planned: &PomodoroEndpoint,
+    creates_pomodoro: bool,
+) -> Result<PomodoroEndpoint, LinkRelocationError> {
+    let scan = capture_pomodoros::scan(content);
+    if let Some(selector) = pomodoro_name {
+        match capture_pomodoros::select_named(&scan, selector) {
+            capture_pomodoros::NamedSelection::Found(entry) => {
+                return Ok(endpoint_from_entry(entry));
+            }
+            _ => {
+                if creates_pomodoro
+                    && let Some(entry) = scan.entries.iter().find(|entry| {
+                        entry.state == PomodoroState::Open
+                            && entry.name == planned.name
+                    })
+                {
+                    return Ok(endpoint_from_entry(entry));
+                }
+                return Err(LinkRelocationError::NoEligibleOpenEntry);
+            }
+        }
+    }
+    select_implicit_open_entry(&scan)
+        .map(endpoint_from_entry)
+        .map_err(relocation_from_link_plan_error)
+}
+
+fn move_subtree_to_entry(
+    contents: &str,
+    source_line_index: usize,
+    source_subtree_end: usize,
+    dest_entry_index: usize,
+) -> Result<(String, LinkPlacement), LinkRelocationError> {
+    let lines = line_spans(contents);
+    let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+    let section = pomodoro::pomodoros_section_range(&line_texts)
+        .ok_or(LinkRelocationError::NoPomodorosSection)?;
+    let dest_child_end = child_block_end_line(&lines, dest_entry_index);
+    let dest_indent = pomodoro_child_indentation(
+        &lines,
+        dest_entry_index,
+        dest_child_end,
+        section.start,
+        section.end,
+    );
+    let source_indent_len =
+        leading_spaces_or_tabs_len(lines[source_line_index].text);
+    let source_indent = &lines[source_line_index].text[..source_indent_len];
+    let subtree = extract_line_range(
+        contents,
+        &lines,
+        source_line_index,
+        source_subtree_end,
+    );
+    let reindented = reindent_subtree(subtree, source_indent, &dest_indent);
+    let new_lines = logical_lines(&reindented);
+
+    let lines_removed_before_insert = if source_line_index <= dest_child_end {
+        source_subtree_end - source_line_index + 1
+    } else {
+        0
+    };
+    let dest_after = dest_child_end - lines_removed_before_insert;
+    let without_source = remove_line_range(
+        contents,
+        &lines,
+        source_line_index,
+        source_subtree_end,
+    );
+    let updated_lines = line_spans(&without_source);
+    let placement = if updated_lines[dest_after].end >= without_source.len() {
+        LinkPlacement::Appended
+    } else {
+        LinkPlacement::Inserted
+    };
+    let content = insert_lines_after(
+        &without_source,
+        &updated_lines,
+        dest_after,
+        &new_lines,
+    );
+    Ok((content, placement))
+}
+
+fn insert_named_placeholder(
+    contents: &str,
+    selector: &str,
+) -> Result<(String, usize, String), LinkRelocationError> {
+    let scan = capture_pomodoros::scan(contents);
+    if !scan.has_section {
+        return Err(LinkRelocationError::NoPomodorosSection);
+    }
+    let timed_open = scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == PomodoroState::Open && entry.time_range.is_some()
+        })
+        .count();
+    if timed_open > 1 {
+        return Err(LinkRelocationError::MultipleOpenTimedEntries);
+    }
+    let name = capture_pomodoros::canonicalize_pomodoro_name(selector)
+        .ok_or(LinkRelocationError::InvalidPomodoroName)?;
+    let lines = line_spans(contents);
+    let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+    let section = pomodoro::pomodoros_section_range(&line_texts)
+        .ok_or(LinkRelocationError::NoPomodorosSection)?;
+    let placeholder = capture_pomodoros::format_named_placeholder_line(&name);
+    let timed = scan.entries.iter().find(|entry| {
+        entry.state == PomodoroState::Open && entry.time_range.is_some()
+    });
+    let last_completed = scan
+        .entries
+        .iter()
+        .rev()
+        .find(|entry| entry.state == PomodoroState::Completed);
+    let (content, created_line) = if let Some(entry) = timed.or(last_completed)
+    {
+        let after = child_block_end_line(&lines, entry.line - 1);
+        (
+            insert_line_after(contents, &lines, after, &placeholder),
+            after + 1,
+        )
+    } else if let Some(first) = scan.entries.first() {
+        let index = first.line - 1;
+        (
+            insert_line_before(contents, &lines, index, &placeholder),
+            index,
+        )
+    } else if section.start < lines.len() {
+        (
+            insert_line_before(contents, &lines, section.start, &placeholder),
+            section.start,
+        )
+    } else if !lines.is_empty() {
+        let after = lines.len() - 1;
+        (
+            insert_line_after(contents, &lines, after, &placeholder),
+            after + 1,
+        )
+    } else {
+        return Err(LinkRelocationError::NoPomodorosSection);
+    };
+    Ok((content, created_line, name))
+}
+
+fn insert_line_before(
+    content: &str,
+    lines: &[LineSpan<'_>],
+    at_index: usize,
+    new_line: &str,
+) -> String {
+    if at_index >= lines.len() {
+        return insert_line_after(content, lines, lines.len() - 1, new_line);
+    }
+    let insert_offset = line_start_offset(lines, at_index);
+    let ending = if line_has_crlf(content, lines, at_index) {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    format!(
+        "{}{new_line}{ending}{}",
+        &content[..insert_offset],
+        &content[insert_offset..]
+    )
 }
 
 fn relocation_from_link_plan_error(
@@ -487,7 +731,7 @@ fn relocation_from_link_plan_error(
             LinkRelocationError::MultipleOpenTimedEntries
         }
         LinkPlanError::InvalidPomodoroName => {
-            LinkRelocationError::NoEligibleOpenEntry
+            LinkRelocationError::InvalidPomodoroName
         }
     }
 }
@@ -1440,7 +1684,16 @@ mod tests {
     }
 
     fn relocated(contents: &str, block_link: &str) -> LinkRelocationPlan {
-        plan_link_relocation(contents, block_link).expect("relocate")
+        plan_link_relocation(contents, block_link, None).expect("relocate")
+    }
+
+    fn relocated_named(
+        contents: &str,
+        block_link: &str,
+        name: &str,
+    ) -> LinkRelocationPlan {
+        plan_link_relocation(contents, block_link, Some(name))
+            .expect("relocate")
     }
 
     #[test]
@@ -1597,7 +1850,8 @@ mod tests {
             "  - context\n",
             "    - [[cash#^id]]\n",
         );
-        let error = plan_link_relocation(contents, "[[cash#^id]]").unwrap_err();
+        let error =
+            plan_link_relocation(contents, "[[cash#^id]]", None).unwrap_err();
         assert_eq!(error, LinkRelocationError::NoMovableLink);
     }
 
@@ -1605,7 +1859,7 @@ mod tests {
     fn relocation_errors_when_the_link_is_missing() {
         let contents = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
         assert_eq!(
-            plan_link_relocation(contents, "[[cash#^id]]").unwrap_err(),
+            plan_link_relocation(contents, "[[cash#^id]]", None).unwrap_err(),
             LinkRelocationError::NoMovableLink
         );
     }
@@ -1620,7 +1874,7 @@ mod tests {
             "  - [[cash#^id]]\n",
         );
         assert_eq!(
-            plan_link_relocation(contents, "[[cash#^id]]").unwrap_err(),
+            plan_link_relocation(contents, "[[cash#^id]]", None).unwrap_err(),
             LinkRelocationError::MultipleMovableLinks
         );
     }
@@ -1646,24 +1900,256 @@ mod tests {
     #[test]
     fn relocation_reuses_implicit_selection_errors() {
         assert_eq!(
-            plan_link_relocation("# Day\n", "[[cash#^id]]").unwrap_err(),
+            plan_link_relocation("# Day\n", "[[cash#^id]]", None).unwrap_err(),
             LinkRelocationError::NoPomodorosSection
         );
         assert_eq!(
             plan_link_relocation(
                 "## Pomodoros\n- [x] (**0900-0930**) — DONE\n",
-                "[[cash#^id]]"
+                "[[cash#^id]]",
+                None
             )
             .unwrap_err(),
-            LinkRelocationError::NoEligibleOpenEntry
+            LinkRelocationError::NoMovableLink
         );
         assert_eq!(
             plan_link_relocation(
                 "## Pomodoros\n- [ ] (**0900-0930**) — A\n- [ ] (**0930-1000**) — B\n  - [[cash#^id]]\n",
-                "[[cash#^id]]"
+                "[[cash#^id]]",
+                None
             )
             .unwrap_err(),
             LinkRelocationError::MultipleOpenTimedEntries
         );
+    }
+
+    #[test]
+    fn named_relocation_moves_to_an_exact_open_match() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - [[cash#^id]]\n",
+            "    - notes\n",
+            "- [ ] () — DEEP+WORK\n",
+            "  - keep\n",
+        );
+        let plan = relocated_named(contents, "[[cash#^id]]", "deep+work");
+        assert_eq!(plan.action, LinkRelocationAction::Moved);
+        assert!(!plan.creates_pomodoro);
+        assert_eq!(plan.source.name.as_deref(), Some("CURRENT"));
+        assert_eq!(plan.destination.name.as_deref(), Some("DEEP+WORK"));
+        assert_eq!(
+            plan.content,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (**0900-0930**) — CURRENT\n",
+                "- [ ] () — DEEP+WORK\n",
+                "  - keep\n",
+                "  - [[cash#^id]]\n",
+                "    - notes\n",
+            )
+        );
+    }
+
+    #[test]
+    fn named_relocation_prefix_match_loses_to_a_whole_slug() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] () — CODE\n",
+            "  - [[cash#^id]]\n",
+            "- [ ] () — CODING\n",
+        );
+        let plan = relocated_named(contents, "[[cash#^id]]", "cod");
+        assert_eq!(plan.destination.name.as_deref(), Some("CODE"));
+        assert!(plan.content.contains("- [ ] () — CODE\n  - [[cash#^id]]\n"));
+        assert!(!plan.content.contains("- [ ] () — CODING\n  - [[cash#^id]]"));
+
+        let exact = relocated_named(contents, "[[cash#^id]]", "coding");
+        assert_eq!(exact.destination.name.as_deref(), Some("CODING"));
+        assert!(exact
+            .content
+            .contains("- [ ] () — CODING\n  - [[cash#^id]]\n"));
+    }
+
+    #[test]
+    fn named_relocation_is_a_noop_when_already_at_the_named_destination() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] () — DEEP+WORK\n",
+            "  - [[cash#^id]]\n",
+            "    - notes\n",
+        );
+        let plan = relocated_named(contents, "[[cash#^id]]", "deep+work");
+        assert_eq!(plan.action, LinkRelocationAction::AlreadyCurrent);
+        assert!(!plan.has_changes);
+        assert!(!plan.creates_pomodoro);
+        assert_eq!(plan.content, contents);
+        assert_eq!(plan.source.name.as_deref(), Some("DEEP+WORK"));
+        assert_eq!(plan.destination.name.as_deref(), Some("DEEP+WORK"));
+        assert!(plan.placement.is_none());
+    }
+
+    #[test]
+    fn named_relocation_creates_on_completed_only_and_missing_names() {
+        let completed_only = concat!(
+            "## Pomodoros\n",
+            "- [x] () — BUGS\n",
+            "  - old bug\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - [[cash#^id]]\n",
+            "    - review\n",
+            "- [ ] () — MEMORY\n",
+        );
+        let plan = relocated_named(completed_only, "[[cash#^id]]", "bugs");
+        assert_eq!(plan.action, LinkRelocationAction::Moved);
+        assert!(plan.creates_pomodoro);
+        assert_eq!(plan.destination.name.as_deref(), Some("BUGS"));
+        assert_eq!(
+            plan.content,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] () — BUGS\n",
+                "  - old bug\n",
+                "- [ ] (**0900-0930**) — CURRENT\n",
+                "- [ ] () — BUGS\n",
+                "  - [[cash#^id]]\n",
+                "    - review\n",
+                "- [ ] () — MEMORY\n",
+            )
+        );
+        assert_eq!(plan.destination.line, 5);
+
+        let missing = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - [[cash#^id]]\n",
+        );
+        let created = relocated_named(missing, "[[cash#^id]]", "deep+work");
+        assert!(created.creates_pomodoro);
+        assert_eq!(created.destination.name.as_deref(), Some("DEEP+WORK"));
+        assert_eq!(
+            created.content,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (**0900-0930**) — CURRENT\n",
+                "- [ ] () — DEEP+WORK\n",
+                "  - [[cash#^id]]\n",
+            )
+        );
+        assert_eq!(created.source.name.as_deref(), Some("CURRENT"));
+        assert_eq!(created.destination.line, 3);
+    }
+
+    #[test]
+    fn named_relocation_inserts_before_the_first_future_entry() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] () — ALPHA\n",
+            "  - [[cash#^id]]\n",
+            "- [ ] () — BRAVO\n",
+        );
+        let plan = relocated_named(contents, "[[cash#^id]]", "zzzz");
+        assert!(plan.creates_pomodoro);
+        assert_eq!(
+            plan.content,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] () — ZZZZ\n",
+                "  - [[cash#^id]]\n",
+                "- [ ] () — ALPHA\n",
+                "- [ ] () — BRAVO\n",
+            )
+        );
+        assert_eq!(plan.destination.line, 2);
+        assert_eq!(plan.source.name.as_deref(), Some("ALPHA"));
+    }
+
+    #[test]
+    fn named_relocation_selects_an_existing_name_despite_multiple_timed() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (0800-0830) — ONE\n",
+            "  - [[cash#^id]]\n",
+            "- [ ] (**0900-0930**) — TWO\n",
+        );
+        let plan = relocated_named(contents, "[[cash#^id]]", "two");
+        assert!(!plan.creates_pomodoro);
+        assert_eq!(plan.destination.name.as_deref(), Some("TWO"));
+        assert!(plan
+            .content
+            .contains("- [ ] (**0900-0930**) — TWO\n  - [[cash#^id]]\n"));
+    }
+
+    #[test]
+    fn named_relocation_rejects_creation_with_multiple_timed_entries() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (0800-0830) — ONE\n",
+            "  - [[cash#^id]]\n",
+            "- [ ] (**0900-0930**) — TWO\n",
+        );
+        assert_eq!(
+            plan_link_relocation(contents, "[[cash#^id]]", Some("three"))
+                .unwrap_err(),
+            LinkRelocationError::MultipleOpenTimedEntries
+        );
+    }
+
+    #[test]
+    fn named_relocation_rejects_an_invalid_name() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - [[cash#^id]]\n",
+        );
+        assert_eq!(
+            plan_link_relocation(contents, "[[cash#^id]]", Some("bad_id"))
+                .unwrap_err(),
+            LinkRelocationError::InvalidPomodoroName
+        );
+    }
+
+    #[test]
+    fn named_relocation_preserves_descendants_and_destination_indent() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "\t- existing\n",
+            "\t- [[cash#^id]]\n",
+            "\t  - nested\n",
+            "- [ ] () — LATER\n",
+        );
+        let plan = relocated_named(contents, "[[cash#^id]]", "later");
+        assert_eq!(
+            plan.content,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (**0900-0930**) — CURRENT\n",
+                "\t- existing\n",
+                "- [ ] () — LATER\n",
+                "\t- [[cash#^id]]\n",
+                "\t  - nested\n",
+            )
+        );
+    }
+
+    #[test]
+    fn named_relocation_preserves_crlf_when_creating() {
+        let contents = "## Pomodoros\r\n- [x] Done\r\n\t- old child\r\n- [ ] (**0900-0930**) — CURRENT\r\n  - [[cash#^id]]\r\n";
+        let plan = relocated_named(contents, "[[cash#^id]]", "crlf-name");
+        assert!(plan.creates_pomodoro);
+        assert_eq!(
+            plan.content,
+            "## Pomodoros\r\n- [x] Done\r\n\t- old child\r\n- [ ] (**0900-0930**) — CURRENT\r\n- [ ] () — CRLF-NAME\r\n\t- [[cash#^id]]\r\n"
+        );
+    }
+
+    #[test]
+    fn named_relocation_same_location_noop_does_not_edit_bytes() {
+        let contents = "## Pomodoros\n- [ ] () — DEEP+WORK\n  - [[cash#^id]]\n";
+        let plan = relocated_named(contents, "[[cash#^id]]", "DEEP+WORK");
+        assert_eq!(plan.action, LinkRelocationAction::AlreadyCurrent);
+        assert_eq!(plan.content, contents);
     }
 }

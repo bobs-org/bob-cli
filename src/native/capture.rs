@@ -193,9 +193,14 @@ incomplete and needs a task section; run \
 'bob capture-task-sections -r <route> -i <block-id>' to list them. A marker-only \
 '@<route>+<block-id>' item with no body text ensures that task is Next and \
 relocates its existing open-Pomodoro Task Link to today's implicit current/next \
-Pomodoro without creating a missing link or toggling Next back to Ready. A \
-terminal '!' on that same marker-only form, '@<route>+<block-id>!', explicitly \
-toggles Ready/Blocked <-> Next and adds or removes its Pomodoro Task Link.\n\n\
+Pomodoro without creating a missing link or toggling Next back to Ready. The \
+same marker-only form with a Pomodoro selector, '@<route>+<block-id>#<pomodoro>', \
+ensures Next and moves that existing Task Link subtree to the named open \
+Pomodoro, or creates that named future Pomodoro and moves the subtree there. \
+Neither unsuffixed form synthesizes a missing Task Link. A terminal '!' on the \
+unsuffixed marker-only form, '@<route>+<block-id>!', is the only spelling that \
+explicitly toggles Ready/Blocked <-> Next and adds or removes its Pomodoro Task \
+Link; '!' cannot be combined with '#<pomodoro>'.\n\n\
 Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
 Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
 no '#task' marker, and no block ID. The daily note comes from BOB_DAY_FILE or \
@@ -1711,6 +1716,7 @@ fn plan_task_toggle_capture(
             target,
             route,
             block_id,
+            pomodoro_name,
             &contents,
             task_line_index,
             previous_status_symbol,
@@ -1916,6 +1922,7 @@ fn plan_ensure_next_capture(
     target: &Path,
     route: &str,
     block_id: &str,
+    pomodoro_name: Option<&str>,
     contents: &str,
     task_line_index: usize,
     previous_status_symbol: char,
@@ -1976,11 +1983,14 @@ fn plan_ensure_next_capture(
     }
     let block_link = format!("[[{route}#^{block_id}]]");
     let day_contents = planner.read_existing(&day_file)?;
-    let relocation =
-        capture_task_toggle::plan_link_relocation(&day_contents, &block_link)
-            .map_err(|error| {
-            relocation_plan_error(error, &block_link, route, block_id)
-        })?;
+    let relocation = capture_task_toggle::plan_link_relocation(
+        &day_contents,
+        &block_link,
+        pomodoro_name,
+    )
+    .map_err(|error| {
+        relocation_plan_error(error, &block_link, route, block_id)
+    })?;
     if relocation.has_changes {
         planner.stage(&day_file, relocation.content.clone())?;
     }
@@ -2018,7 +2028,7 @@ fn plan_ensure_next_capture(
             block_link,
             pomodoro_link_placement,
             pomodoro_name,
-            creates_pomodoro: false,
+            creates_pomodoro: relocation.creates_pomodoro,
             pomodoro_already_linked,
             removed_pomodoro_links: 0,
             removed_scheduled: task_plan.removed_scheduled,
@@ -2054,7 +2064,8 @@ fn relocation_plan_error(
     match error {
         capture_task_toggle::LinkRelocationError::NoPomodorosSection
         | capture_task_toggle::LinkRelocationError::NoEligibleOpenEntry
-        | capture_task_toggle::LinkRelocationError::MultipleOpenTimedEntries => {
+        | capture_task_toggle::LinkRelocationError::MultipleOpenTimedEntries
+        | capture_task_toggle::LinkRelocationError::InvalidPomodoroName => {
             link_plan_error(match error {
                 capture_task_toggle::LinkRelocationError::NoPomodorosSection => {
                     capture_task_toggle::LinkPlanError::NoPomodorosSection
@@ -2064,6 +2075,9 @@ fn relocation_plan_error(
                 }
                 capture_task_toggle::LinkRelocationError::MultipleOpenTimedEntries => {
                     capture_task_toggle::LinkPlanError::MultipleOpenTimedEntries
+                }
+                capture_task_toggle::LinkRelocationError::InvalidPomodoroName => {
+                    capture_task_toggle::LinkPlanError::InvalidPomodoroName
                 }
                 _ => capture_task_toggle::LinkPlanError::NoEligibleOpenEntry,
             })
@@ -4173,14 +4187,32 @@ fn print_human_ensure_next_ledger(result: &CaptureItemResult, styler: &Styler) {
                 styler.cyan(&source),
                 styler.cyan(&destination),
             );
+            if result.creates_pomodoro == Some(true) {
+                println!(
+                    "  {} created {}",
+                    styler.green("+"),
+                    styler.cyan(&destination)
+                );
+            }
         }
         _ => {
-            println!(
-                "  {}",
-                styler.dim(
+            let already = result
+                .pomodoro_name
+                .as_deref()
+                .or_else(|| {
+                    result
+                        .pomodoro_link_destination
+                        .as_ref()
+                        .and_then(|endpoint| endpoint.name.as_deref())
+                })
+                .map(|name| {
+                    format!("Task Link already in {name}; no ledger change.")
+                })
+                .unwrap_or_else(|| {
                     "Task Link already in current/next Pomodoro; no ledger change."
-                )
-            );
+                        .to_string()
+                });
+            println!("  {}", styler.dim(&already));
         }
     }
 }
@@ -5089,13 +5121,13 @@ mod tests {
         );
 
         let named = parse_capture_text("@cash+id#deep+work", None)
-            .expect("bare marker with a Pomodoro name toggles");
+            .expect("bare marker with a Pomodoro name ensures Next");
         assert_eq!(
             named.kind,
             CaptureKind::TaskToggle {
                 block_id: "id".to_string(),
                 pomodoro_name: Some("deep+work".to_string()),
-                intent: TaskToggleIntent::Toggle,
+                intent: TaskToggleIntent::EnsureNext,
             }
         );
 
