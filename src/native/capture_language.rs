@@ -38,10 +38,10 @@ pub(crate) enum CaptureKind {
         section: Option<TaskSectionSelector>,
     },
     PomodoroNote,
-    /// A bare `@route+block-id` or `@route+block-id#pomodoro` marker with no
-    /// other text on the item: toggle the existing task's status instead of
-    /// capturing a new sub-bullet under it. `@route+block-id!` is the same
-    /// marker-only form with [`TaskToggleIntent::EnsureNext`].
+    /// A bare `@route+block-id`, `@route+block-id!`, or
+    /// `@route+block-id#pomodoro` marker with no other text on the item:
+    /// update the existing task's status instead of capturing a new
+    /// sub-bullet under it.
     TaskToggle {
         block_id: String,
         pomodoro_name: Option<String>,
@@ -52,9 +52,10 @@ pub(crate) enum CaptureKind {
 /// How a marker-only `@route+block-id` capture should change an existing task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskToggleIntent {
-    /// Two-way Ready/Blocked <-> Next toggle, including named `#pomodoro`.
+    /// Two-way Ready/Blocked <-> Next toggle, including suffixed `!` and
+    /// named `#pomodoro`.
     Toggle,
-    /// One-way ensure-Next plus Task Link relocation (`@route+block-id!`).
+    /// One-way ensure-Next plus Task Link relocation (`@route+block-id`).
     EnsureNext,
 }
 
@@ -703,7 +704,7 @@ fn parse_global_destination_token(
         .strip_prefix("@@")
         .ok_or_else(|| GLOBAL_DESTINATION_SHAPE_ERROR.to_string())?;
     if rest.ends_with('!') {
-        return Err(FORCE_NEXT_GLOBAL_ERROR.to_string());
+        return Err(EXPLICIT_TOGGLE_GLOBAL_ERROR.to_string());
     }
     if rest.contains('#') || rest.contains('^') || rest.contains(':') {
         return Err(unsupported_global_destination_error(token));
@@ -961,18 +962,12 @@ fn resolve_sub_bullet_kind(
     sub_bullets_is_empty: bool,
     no_other_item_markers: bool,
 ) -> Result<CaptureKind, String> {
-    if matches!(
-        kind,
-        CaptureKind::TaskToggle {
-            intent: TaskToggleIntent::EnsureNext,
-            ..
-        }
-    ) {
+    if matches!(kind, CaptureKind::TaskToggle { .. }) {
         if parent_body_is_empty && sub_bullets_is_empty && no_other_item_markers
         {
             return Ok(kind);
         }
-        return Err(FORCE_NEXT_ONLY_MARKER_ERROR.to_string());
+        return Err(EXPLICIT_TOGGLE_ONLY_MARKER_ERROR.to_string());
     }
     let CaptureKind::SubBullet {
         target: SubBulletTarget::BlockId(block_id),
@@ -993,10 +988,15 @@ fn resolve_sub_bullet_kind(
         });
     }
     if sub_bullets_is_empty && no_other_item_markers {
+        let is_named_toggle = section.is_some();
         return Ok(CaptureKind::TaskToggle {
             block_id,
             pomodoro_name: section.map(|selector| selector.text),
-            intent: TaskToggleIntent::Toggle,
+            intent: if is_named_toggle {
+                TaskToggleIntent::Toggle
+            } else {
+                TaskToggleIntent::EnsureNext
+            },
         });
     }
     Err(missing_text_error())
@@ -1153,9 +1153,9 @@ fn resolve_line<'a>(
             ) {
                 // A bare `@route+block-id[#name]` or `@route+block-id!`
                 // routes with an empty body; `parse_capture_item` decides
-                // whether the finished item qualifies as a two-way toggle
-                // or a valid force-Next once children and other item-wide
-                // markers are known.
+                // whether the finished item qualifies as a task-toggle
+                // operation once children and other item-wide markers are
+                // known.
                 return Ok(LineOutcome {
                     body: String::new(),
                     markers,
@@ -1393,10 +1393,10 @@ fn parse_terminal_route_token(
 }
 
 fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
-    if let Some(message) = force_next_unsupported_message(token) {
+    if let Some(message) = explicit_toggle_unsupported_message(token) {
         return Err(message.to_string());
     }
-    let (token, ensure_next) = match exact_force_next_prefix(token) {
+    let (token, explicit_toggle) = match exact_explicit_toggle_prefix(token) {
         Some(prefix) => (prefix, true),
         None => (token, false),
     };
@@ -1455,13 +1455,13 @@ fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
         }),
     };
 
-    if ensure_next {
+    if explicit_toggle {
         return Ok(RouteToken {
             route: Some(route.to_ascii_lowercase()),
             kind: CaptureKind::TaskToggle {
                 block_id: block_id.to_string(),
                 pomodoro_name: None,
-                intent: TaskToggleIntent::EnsureNext,
+                intent: TaskToggleIntent::Toggle,
             },
         });
     }
@@ -1477,7 +1477,7 @@ fn parse_sub_bullet_route_token(token: &str) -> Result<RouteToken, String> {
 
 /// The prefix of an exact `@<route>+<block-id>!` token, without the terminal
 /// `!`. `None` for every near-miss (`!!`, `#name!`, `@@...!`, incomplete).
-fn exact_force_next_prefix(token: &str) -> Option<&str> {
+fn exact_explicit_toggle_prefix(token: &str) -> Option<&str> {
     let prefix = token.strip_suffix('!')?;
     if prefix.ends_with('!') || prefix.starts_with("@@") {
         return None;
@@ -1491,10 +1491,10 @@ fn exact_force_next_prefix(token: &str) -> Option<&str> {
 }
 
 /// Focused diagnostic for an `@...!` token that is not the exact
-/// marker-only force-Next form. Ordinary prose `!` and `@!route:id` stay
+/// marker-only explicit-toggle form. Ordinary prose `!` and `@!route:id` stay
 /// out of this family.
-fn force_next_unsupported_message(token: &str) -> Option<&'static str> {
-    if exact_force_next_prefix(token).is_some() {
+fn explicit_toggle_unsupported_message(token: &str) -> Option<&'static str> {
+    if exact_explicit_toggle_prefix(token).is_some() {
         return None;
     }
     if !token.ends_with('!') {
@@ -1506,19 +1506,19 @@ fn force_next_unsupported_message(token: &str) -> Option<&'static str> {
         return None;
     }
     if token.starts_with("@@") {
-        return Some(FORCE_NEXT_GLOBAL_ERROR);
+        return Some(EXPLICIT_TOGGLE_GLOBAL_ERROR);
     }
     let after_at = token.strip_prefix('@')?;
     if !after_at.contains('+') {
         return None;
     }
     if token.bytes().filter(|byte| *byte == b'!').count() > 1 {
-        return Some(FORCE_NEXT_REPEATED_ERROR);
+        return Some(EXPLICIT_TOGGLE_REPEATED_ERROR);
     }
     if after_at.contains('#') {
-        return Some(FORCE_NEXT_NAMED_ERROR);
+        return Some(EXPLICIT_TOGGLE_NAMED_ERROR);
     }
-    Some(FORCE_NEXT_ONLY_MARKER_ERROR)
+    Some(EXPLICIT_TOGGLE_ONLY_MARKER_ERROR)
 }
 
 /// Return whether one already-whitespace-free selector component is typeable
@@ -1968,14 +1968,14 @@ const GLOBAL_DESTINATION_BLOCK_ID_ERROR: &str =
     "global destination block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
 const MISSING_CAPTURE_ITEM_ERROR: &str =
     "global destination declaration has no capture item; add a capture item to this draft";
-const FORCE_NEXT_ONLY_MARKER_ERROR: &str =
-    "force-Next `!` is only valid on a marker-only `@<route>+<block-id>!` capture; it cannot be combined with body text, authored children, clipboard, schedule, priority, or a Pomodoro name";
-const FORCE_NEXT_NAMED_ERROR: &str =
-    "force-Next `!` cannot be combined with a `#<pomodoro>` selector; use `@<route>+<block-id>!`";
-const FORCE_NEXT_REPEATED_ERROR: &str =
-    "force-Next `!` cannot be repeated; use a single `@<route>+<block-id>!`";
-const FORCE_NEXT_GLOBAL_ERROR: &str =
-    "force-Next `!` cannot be used on a `@@` destination; use a marker-only `@<route>+<block-id>!` item";
+const EXPLICIT_TOGGLE_ONLY_MARKER_ERROR: &str =
+    "explicit toggle `!` is only valid on a marker-only `@<route>+<block-id>!` capture; it cannot be combined with body text, authored children, clipboard, schedule, priority, or a Pomodoro name";
+const EXPLICIT_TOGGLE_NAMED_ERROR: &str =
+    "explicit toggle `!` cannot be combined with a `#<pomodoro>` selector; use `@<route>+<block-id>!`";
+const EXPLICIT_TOGGLE_REPEATED_ERROR: &str =
+    "explicit toggle `!` cannot be repeated; use a single `@<route>+<block-id>!`";
+const EXPLICIT_TOGGLE_GLOBAL_ERROR: &str =
+    "explicit toggle `!` cannot be used on a `@@` destination; use a marker-only `@<route>+<block-id>!` item";
 const SUB_BULLET_SHAPE_ERROR: &str =
     "sub-bullet capture markers must use @<route>+<block-id> or @<route>+<block-id>#<section>";
 const SUB_BULLET_ROUTE_ERROR: &str =
@@ -2022,7 +2022,7 @@ pub(crate) enum SpanKind {
     TaskToggleRoute,
     TaskToggleBlockId,
     TaskTogglePomodoroName,
-    TaskToggleForceNext,
+    TaskToggleExplicitToggle,
     GlobalRoute,
     GlobalSubBulletRoute,
     GlobalSubBulletBlockId,
@@ -2054,7 +2054,7 @@ impl SpanKind {
             Self::TaskToggleRoute => "task_toggle_route",
             Self::TaskToggleBlockId => "task_toggle_block_id",
             Self::TaskTogglePomodoroName => "task_toggle_pomodoro_name",
-            Self::TaskToggleForceNext => "task_toggle_force_next",
+            Self::TaskToggleExplicitToggle => "task_toggle_explicit_toggle",
             Self::GlobalRoute => "global_route",
             Self::GlobalSubBulletRoute => "global_sub_bullet_route",
             Self::GlobalSubBulletBlockId => "global_sub_bullet_block_id",
@@ -2789,18 +2789,18 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
         && !seen.schedule
         && !seen.priority
         && !seen.clip;
-    let has_force_next = spans
+    let has_explicit_toggle = spans
         .iter()
-        .any(|span| span.kind == SpanKind::TaskToggleForceNext);
-    if has_force_next && !toggle_eligible {
+        .any(|span| span.kind == SpanKind::TaskToggleExplicitToggle);
+    if has_explicit_toggle && !toggle_eligible {
         let range = spans.iter().find_map(|span| {
-            (span.kind == SpanKind::TaskToggleForceNext)
+            (span.kind == SpanKind::TaskToggleExplicitToggle)
                 .then_some((span.start, span.end))
         });
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
-            code: "unsupported_force_next",
-            message: FORCE_NEXT_ONLY_MARKER_ERROR.to_string(),
+            code: "unsupported_explicit_toggle",
+            message: EXPLICIT_TOGGLE_ONLY_MARKER_ERROR.to_string(),
             range,
         });
     }
@@ -3017,8 +3017,8 @@ fn classify_global_token(token: &Token<'_>) -> TokenParse {
     if rest.ends_with('!') {
         return TokenParse::Invalid(token_diagnostic(
             token,
-            "unsupported_force_next",
-            FORCE_NEXT_GLOBAL_ERROR,
+            "unsupported_explicit_toggle",
+            EXPLICIT_TOGGLE_GLOBAL_ERROR,
         ));
     }
     if rest.contains('#') || rest.contains('^') || rest.contains(':') {
@@ -3131,17 +3131,18 @@ fn is_incomplete_pomodoro_marker_candidate(token: &str) -> bool {
 }
 
 fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
-    if let Some(message) = force_next_unsupported_message(token.text) {
+    if let Some(message) = explicit_toggle_unsupported_message(token.text) {
         return TokenParse::Invalid(token_diagnostic(
             token,
-            "unsupported_force_next",
+            "unsupported_explicit_toggle",
             message,
         ));
     }
-    let (token_text, ensure_next) = match exact_force_next_prefix(token.text) {
-        Some(prefix) => (prefix, true),
-        None => (token.text, false),
-    };
+    let (token_text, explicit_toggle) =
+        match exact_explicit_toggle_prefix(token.text) {
+            Some(prefix) => (prefix, true),
+            None => (token.text, false),
+        };
     let marker = &token_text[1..];
     let (route_part, rest) =
         marker.split_once('+').expect("sub-bullet candidate");
@@ -3179,7 +3180,7 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
     }
 
     let (route_kind, right_kind, complete_mode, third_kind, third_need) =
-        if ensure_next {
+        if explicit_toggle {
             (
                 SpanKind::TaskToggleRoute,
                 SpanKind::TaskToggleBlockId,
@@ -3213,9 +3214,9 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
                 kind: third_kind,
                 need: third_need,
             }),
-            suffix: ensure_next.then_some(MarkerSuffix {
+            suffix: explicit_toggle.then_some(MarkerSuffix {
                 len: 1,
-                kind: SpanKind::TaskToggleForceNext,
+                kind: SpanKind::TaskToggleExplicitToggle,
             }),
         },
     ))
@@ -3828,13 +3829,13 @@ fn marker_field_at_cursor(
     let text = token.text;
 
     if is_sub_bullet_marker_candidate(text) {
-        if let Some(prefix) = exact_force_next_prefix(text) {
+        if let Some(prefix) = exact_explicit_toggle_prefix(text) {
             let bang_start = token.start + prefix.len();
             if cursor > bang_start {
                 return None;
             }
         }
-        let text = exact_force_next_prefix(text).unwrap_or(text);
+        let text = exact_explicit_toggle_prefix(text).unwrap_or(text);
         let marker = &text[1..];
         let (route_part, rest) =
             marker.split_once('+').expect("sub-bullet candidate");
@@ -5731,7 +5732,7 @@ mod tests {
     }
 
     #[test]
-    fn a_terminal_bang_on_a_marker_only_toggle_is_force_next() {
+    fn a_terminal_bang_on_a_marker_only_toggle_is_explicit_toggle() {
         let parse = editor("@dev+id!");
         assert_eq!(parse.mode, EditorMode::TaskToggle);
         assert_eq!(parse.body, "");
@@ -5745,7 +5746,7 @@ mod tests {
             vec![
                 SpanKind::TaskToggleRoute,
                 SpanKind::TaskToggleBlockId,
-                SpanKind::TaskToggleForceNext,
+                SpanKind::TaskToggleExplicitToggle,
             ]
         );
         assert_eq!(
@@ -5753,7 +5754,7 @@ mod tests {
             vec![
                 (0, 4, SpanKind::TaskToggleRoute),
                 (5, 7, SpanKind::TaskToggleBlockId),
-                (7, 8, SpanKind::TaskToggleForceNext),
+                (7, 8, SpanKind::TaskToggleExplicitToggle),
             ]
         );
 
@@ -5765,12 +5766,12 @@ mod tests {
             CaptureKind::TaskToggle {
                 block_id: "id".to_string(),
                 pomodoro_name: None,
-                intent: TaskToggleIntent::EnsureNext,
+                intent: TaskToggleIntent::Toggle,
             }
         );
 
         let café = editor("café @dev+id!");
-        assert_eq!(codes(&café), vec!["unsupported_force_next"]);
+        assert_eq!(codes(&café), vec!["unsupported_explicit_toggle"]);
         assert!(
             café.diagnostics[0]
                 .message
@@ -5783,9 +5784,9 @@ mod tests {
     }
 
     #[test]
-    fn force_next_near_misses_have_focused_diagnostics() {
+    fn explicit_toggle_near_misses_have_focused_diagnostics() {
         let named = editor("@dev+id#now!");
-        assert_eq!(codes(&named), vec!["unsupported_force_next"]);
+        assert_eq!(codes(&named), vec!["unsupported_explicit_toggle"]);
         assert!(
             named.diagnostics[0].message.contains("#<pomodoro>"),
             "{}",
@@ -5793,7 +5794,7 @@ mod tests {
         );
 
         let hash_bang = editor("@dev+id#!");
-        assert_eq!(codes(&hash_bang), vec!["unsupported_force_next"]);
+        assert_eq!(codes(&hash_bang), vec!["unsupported_explicit_toggle"]);
         assert!(
             hash_bang.diagnostics[0].message.contains("#<pomodoro>"),
             "{}",
@@ -5801,7 +5802,7 @@ mod tests {
         );
 
         let repeated = editor("@dev+id!!");
-        assert_eq!(codes(&repeated), vec!["unsupported_force_next"]);
+        assert_eq!(codes(&repeated), vec!["unsupported_explicit_toggle"]);
         assert!(
             repeated.diagnostics[0].message.contains("repeated"),
             "{}",
@@ -5809,7 +5810,7 @@ mod tests {
         );
 
         let global = editor("@@dev+id!\nTask");
-        assert_eq!(codes(&global), vec!["unsupported_force_next"]);
+        assert_eq!(codes(&global), vec!["unsupported_explicit_toggle"]);
         assert!(
             global.diagnostics[0].message.contains("`@@`"),
             "{}",
@@ -5825,7 +5826,7 @@ mod tests {
         ] {
             let parse = editor(raw);
             assert!(
-                codes(&parse).contains(&"unsupported_force_next"),
+                codes(&parse).contains(&"unsupported_explicit_toggle"),
                 "{raw}: {:?}",
                 parse.diagnostics
             );
@@ -6794,7 +6795,7 @@ mod tests {
     }
 
     #[test]
-    fn force_next_task_completion_replacement_ends_before_the_bang() {
+    fn explicit_toggle_task_completion_replacement_ends_before_the_bang() {
         let raw = "@Cash+goog-exit!";
         let plus = raw.find('+').expect("plus");
         let bang = raw.find('!').expect("bang");
@@ -7751,7 +7752,8 @@ were removed"
     }
 
     #[test]
-    fn execution_a_toggle_item_participates_normally_in_a_multi_item_draft() {
+    fn execution_an_ensure_next_item_participates_normally_in_a_multi_item_draft(
+    ) {
         let draft = parse_capture_draft_with_clip_control(
             "First task @dev\n\n@cash+goog-exit\n\nThird task @dev",
             None,
@@ -7766,7 +7768,7 @@ were removed"
             CaptureKind::TaskToggle {
                 block_id: "goog-exit".to_string(),
                 pomodoro_name: None,
-                intent: TaskToggleIntent::Toggle,
+                intent: TaskToggleIntent::EnsureNext,
             }
         );
         assert_eq!(draft.items[1].parsed.body, "");
@@ -7775,7 +7777,7 @@ were removed"
     }
 
     #[test]
-    fn execution_a_force_next_item_participates_in_a_multi_item_draft() {
+    fn execution_an_explicit_toggle_item_participates_in_a_multi_item_draft() {
         let draft = parse_capture_draft_with_clip_control(
             "First task @dev\n\n@cash+goog-exit!\n\nThird task @dev",
             None,
@@ -7789,7 +7791,7 @@ were removed"
             CaptureKind::TaskToggle {
                 block_id: "goog-exit".to_string(),
                 pomodoro_name: None,
-                intent: TaskToggleIntent::EnsureNext,
+                intent: TaskToggleIntent::Toggle,
             }
         );
         assert_eq!(draft.items[1].parsed.body, "");

@@ -99,10 +99,10 @@ separate steps:
    token sends them to another note; scheduled checkbox-bearing captures start
    Blocked (`[?]`).
 2. **Link today's work** onto a Pomodoro in the daily note. That happens when
-   you capture with `@route:id` (which also marks the task Next), toggle an
-   existing task with a bare `@route+id` capture, pull an already-planned Task
-   Link into the current Pomodoro with `@route+id!`, or add a task link under a
-   Pomodoro in Obsidian. `bob pomodoro`,
+   you capture with `@route:id` (which also marks the task Next), ensure an
+   already-planned task with a bare `@route+id` capture, explicitly toggle a
+   task with `@route+id!`, or add a task link under a Pomodoro in Obsidian.
+   `bob pomodoro`,
    `bob tmux-pomodoro`, and `bob notify` only *read* that ledger; they do not
    create links.
 3. **Reconcile statuses** with `bob task-status-hooks` so Next, In Progress, and
@@ -195,8 +195,8 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
-| `@route+id` with no other text | Toggle that task between Ready and Next and add or remove its Pomodoro task link |
-| `@route+id!` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
+| `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
+| `@route+id!` with no other text | Explicitly toggle that task between Ready and Next and add or remove its Pomodoro task link |
 | `@route+id#pomodoro` with no other text | Same toggle, selecting a named Pomodoro when setting Next |
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
 | `s:<N>` | Schedule N days from today; checkbox-bearing captures start Blocked, including `s:0` |
@@ -211,17 +211,23 @@ Pomodoro or creates a named future Pomodoro. A `#` in the middle of the body
 stays ordinary text. The retired `@route::id` spelling is not accepted; use
 `@route^id` for an ordinary task with a block ID.
 
-A bare `@route+id` capture toggles the existing task: Ready `[ ]` and Blocked
+A bare `@route+id` marker-only capture is the default Ensure Next operation:
+Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and Next `[*]` all end as Next,
+and Bob moves the task's single existing open-Pomodoro Task Link subtree to the
+implicit current/next open Pomodoro. It never toggles Next back to Ready and
+never creates a missing link. Repeating it when the task is already Next and
+the link is already there is a no-op.
+
+Use `@route+id!` to explicitly run the two-way toggle: Ready `[ ]` and Blocked
 `[?]` become Next `[*]` and get `[[route#^id]]` under the selected open
 Pomodoro; Next becomes Ready and removes matching links from every open
 Pomodoro. Future schedules are retired only when the task has exactly one valid
 future `[scheduled::YYYY-MM-DD]`, and a Schedule Log entry is written only if
 the task already has that log. In Progress, done, canceled, missing,
 duplicate, and non-task IDs are rejected before any note is written.
-`@route+id!` is the one-way form: it never toggles Next back to Ready, never
-creates a missing link, and moves the dedicated Task Link subtree to the
-implicit current/next open Pomodoro. Repeating it when the task is already
-Next and the link is already there is a no-op.
+Users upgrading from the initial `!` implementation should note this reversal:
+plain `@route+id` is now the idempotent default, and `!` is the add/clear
+escape hatch.
 
 ```bash
 bob capture buy milk @groceries

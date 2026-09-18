@@ -191,12 +191,11 @@ nothing is an error listing the task's real sections; capture never falls back \
 to the end of the task. '@<route>+<block-id>#' with an empty selector is \
 incomplete and needs a task section; run \
 'bob capture-task-sections -r <route> -i <block-id>' to list them. A marker-only \
-'@<route>+<block-id>' item with no body text toggles that task between Ready and \
-Next and adds or removes its Pomodoro Task Link. A terminal '!' on that same \
-marker-only form, '@<route>+<block-id>!', is one-way: it ensures the task is Next \
-and relocates its existing open-Pomodoro Task Link to today's implicit \
-current/next Pomodoro without creating a missing link or toggling Next back to \
-Ready.\n\n\
+'@<route>+<block-id>' item with no body text ensures that task is Next and \
+relocates its existing open-Pomodoro Task Link to today's implicit current/next \
+Pomodoro without creating a missing link or toggling Next back to Ready. A \
+terminal '!' on that same marker-only form, '@<route>+<block-id>!', explicitly \
+toggles Ready/Blocked <-> Next and adds or removes its Pomodoro Task Link.\n\n\
 Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
 Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
 no '#task' marker, and no block ID. The daily note comes from BOB_DAY_FILE or \
@@ -2071,7 +2070,7 @@ fn relocation_plan_error(
         }
         capture_task_toggle::LinkRelocationError::NoMovableLink => {
             CaptureError::io(format!(
-                "no movable open Pomodoro Task Link for {block_link}; use @{route}+{block_id} to add one"
+                "no movable open Pomodoro Task Link for {block_link}; use @{route}+{block_id}! to run the explicit toggle and add one"
             ))
         }
         capture_task_toggle::LinkRelocationError::MultipleMovableLinks => {
@@ -5073,7 +5072,7 @@ mod tests {
     }
 
     /// A bare `@route+block-id[#name]` marker with no other text is a task
-    /// toggle, not a "task text is required" error.
+    /// toggle operation, not a "task text is required" error.
     #[test]
     fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
         let parsed = parse_capture_text("@cash+id", None)
@@ -5085,7 +5084,7 @@ mod tests {
             CaptureKind::TaskToggle {
                 block_id: "id".to_string(),
                 pomodoro_name: None,
-                intent: TaskToggleIntent::Toggle,
+                intent: TaskToggleIntent::EnsureNext,
             }
         );
 
@@ -5109,15 +5108,15 @@ mod tests {
             );
         }
 
-        let force = parse_capture_text("@cash+id!", None)
-            .expect("bare force-Next marker");
-        assert_eq!(force.body, "");
+        let explicit = parse_capture_text("@cash+id!", None)
+            .expect("bare explicit-toggle marker");
+        assert_eq!(explicit.body, "");
         assert_eq!(
-            force.kind,
+            explicit.kind,
             CaptureKind::TaskToggle {
                 block_id: "id".to_string(),
                 pomodoro_name: None,
-                intent: TaskToggleIntent::EnsureNext,
+                intent: TaskToggleIntent::Toggle,
             }
         );
     }

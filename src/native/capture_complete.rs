@@ -2086,8 +2086,9 @@ mod tests {
     }
 
     #[test]
-    fn task_completion_before_a_force_next_bang_does_not_replace_the_bang() {
-        let temp = TempDir::new("bob-cli-capture-complete-force-next");
+    fn task_completion_before_an_explicit_toggle_bang_does_not_replace_the_bang(
+    ) {
+        let temp = TempDir::new("bob-cli-capture-complete-explicit-toggle");
         write_settings(temp.path());
         write_file(
             &temp.path().join("file.md"),

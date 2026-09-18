@@ -6678,17 +6678,20 @@ fn capture_task_toggle_next_and_open_updates_notes_and_reports_json() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+goog-exit")
+        .arg("@cash+goog-exit!")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 10:00:00")
         .output()
-        .expect("toggle ready task next");
+        .expect("explicitly toggle ready task next");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
     assert_eq!(json["kind"], "task_toggle");
     assert_eq!(json["placement"], "toggled");
     assert_eq!(json["toggle_direction"], "next");
+    assert!(json.get("toggle_behavior").is_none(), "{json}");
+    assert!(json.get("status_changed").is_none(), "{json}");
+    assert!(json.get("pomodoro_link_action").is_none(), "{json}");
     assert_eq!(json["previous_status_symbol"], " ");
     assert_eq!(json["previous_status_name"], "Ready");
     assert_eq!(json["status_symbol"], "*");
@@ -6908,7 +6911,7 @@ fn capture_task_toggle_can_edit_task_in_daily_note() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@day+daily")
+        .arg("@day+daily!")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 09:05:00")
         .output()
@@ -6997,7 +7000,7 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-07-10 13:40:00"),
-        "ordinary @notes\n\n@cash+alpha\n",
+        "ordinary @notes\n\n@cash+alpha!\n",
     );
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     let json: serde_json::Value =
@@ -7032,7 +7035,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
             name: "in-progress",
             target: "- [/] #task Busy ^busy\n",
             day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
-            args: vec!["@cash+busy"],
+            args: vec!["@cash+busy!"],
             exit: 1,
             expected: "toggling from In Progress needs a work summary",
         },
@@ -7040,7 +7043,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
             name: "done",
             target: "- [x] #task Done already ^done\n",
             day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
-            args: vec!["@cash+done"],
+            args: vec!["@cash+done!"],
             exit: 1,
             expected: "task ^done is Done; only Ready, Blocked, and Next tasks can be toggled",
         },
@@ -7048,7 +7051,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
             name: "missing-id",
             target: "- [ ] #task Parent ^parent\n",
             day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
-            args: vec!["@cash+missing"],
+            args: vec!["@cash+missing!"],
             exit: 1,
             expected: "no task with block ID ^missing in cash.md",
         },
@@ -7056,7 +7059,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
             name: "not-task",
             target: "ordinary paragraph ^plain\n",
             day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
-            args: vec!["@cash+plain"],
+            args: vec!["@cash+plain!"],
             exit: 1,
             expected: "^plain in cash.md is not a task",
         },
@@ -7064,7 +7067,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
             name: "duplicate-id",
             target: "- [ ] #task One ^dup\n- [ ] #task Two ^dup\n",
             day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
-            args: vec!["@cash+dup"],
+            args: vec!["@cash+dup!"],
             exit: 1,
             expected: "block ID ^dup appears 2 times",
         },
@@ -7072,7 +7075,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
             name: "no-section",
             target: "- [ ] #task Alpha ^alpha\n",
             day: "## Notes\n- nothing here\n",
-            args: vec!["@cash+alpha"],
+            args: vec!["@cash+alpha!"],
             exit: 1,
             expected: "Bob daily note has no Pomodoros section",
         },
@@ -7080,7 +7083,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
             name: "ambiguous-current",
             target: "- [ ] #task Alpha ^alpha\n",
             day: "## Pomodoros\n- [ ] (**0900-0930**) — A\n- [ ] (**0930-1000**) — B\n",
-            args: vec!["@cash+alpha"],
+            args: vec!["@cash+alpha!"],
             exit: 1,
             expected: "Bob daily note has multiple open timed Pomodoros",
         },
@@ -7088,7 +7091,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
             name: "clip-conflict",
             target: "- [ ] #task Alpha ^alpha\n",
             day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
-            args: vec!["--clip", "@cash+alpha"],
+            args: vec!["--clip", "@cash+alpha!"],
             exit: 2,
             expected: "task toggle capture cannot be combined with --clip",
         },
@@ -7144,7 +7147,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
 }
 
 #[test]
-fn capture_parse_json_reports_force_next_mode_span_and_empty_body() {
+fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
     let output = bob_command()
         .arg("capture-parse")
         .arg("-f")
@@ -7152,7 +7155,7 @@ fn capture_parse_json_reports_force_next_mode_span_and_empty_body() {
         .arg("--")
         .arg("@cash+goog-exit!")
         .output()
-        .expect("run force-Next parse");
+        .expect("run explicit-toggle parse");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
@@ -7168,15 +7171,35 @@ fn capture_parse_json_reports_force_next_mode_span_and_empty_body() {
         serde_json::json!([
             { "start": 0, "end": 5, "kind": "task_toggle_route" },
             { "start": 6, "end": 15, "kind": "task_toggle_block_id" },
-            { "start": 15, "end": 16, "kind": "task_toggle_force_next" },
+            { "start": 15, "end": 16, "kind": "task_toggle_explicit_toggle" },
         ])
     );
     assert!(json["diagnostics"].as_array().unwrap().is_empty());
+
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+goog-exit")
+        .output()
+        .expect("run plain ensure-Next parse");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    assert_eq!(json["mode"], "task_toggle");
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 0, "end": 5, "kind": "task_toggle_route" },
+            { "start": 6, "end": 15, "kind": "task_toggle_block_id" },
+        ])
+    );
 }
 
 #[test]
-fn capture_task_toggle_force_next_moves_link_and_sets_next() {
-    let temp = TempDir::new("bob-cli-capture-force-next-ready");
+fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
+    let temp = TempDir::new("bob-cli-capture-ensure-next-ready");
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
@@ -7203,11 +7226,11 @@ fn capture_task_toggle_force_next_moves_link_and_sets_next() {
         .arg(&vault)
         .arg("-d")
         .arg("--")
-        .arg("@cash+goog-exit!")
+        .arg("@cash+goog-exit")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 10:00:00")
         .output()
-        .expect("dry-run force-Next");
+        .expect("dry-run ensure-Next");
     assert_success(&dry_run);
     let human = stdout(&dry_run);
     assert!(human.contains("would ensure"), "{human}");
@@ -7227,11 +7250,11 @@ fn capture_task_toggle_force_next_moves_link_and_sets_next() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+goog-exit!")
+        .arg("@cash+goog-exit")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 10:00:00")
         .output()
-        .expect("force-Next ready task");
+        .expect("ensure-Next ready task");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("json");
@@ -7277,11 +7300,11 @@ fn capture_task_toggle_force_next_moves_link_and_sets_next() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+goog-exit!")
+        .arg("@cash+goog-exit")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 10:05:00")
         .output()
-        .expect("total no-op force-Next");
+        .expect("total no-op ensure-Next");
     assert_success(&noop);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&noop).trim()).expect("json");
@@ -7292,7 +7315,7 @@ fn capture_task_toggle_force_next_moves_link_and_sets_next() {
 }
 
 #[test]
-fn capture_task_toggle_force_next_covers_open_states_and_failures() {
+fn capture_task_toggle_ensure_next_covers_open_states_and_failures() {
     struct Case<'a> {
         name: &'a str,
         target: &'a str,
@@ -7339,7 +7362,7 @@ fn capture_task_toggle_force_next_covers_open_states_and_failures() {
 
     for case in cases {
         let temp =
-            TempDir::new(&format!("bob-cli-capture-force-next-{}", case.name));
+            TempDir::new(&format!("bob-cli-capture-ensure-next-{}", case.name));
         let vault = temp.path().join("vault");
         let target = vault.join("cash.md");
         let day_file = vault.join("day.md");
@@ -7353,8 +7376,8 @@ fn capture_task_toggle_force_next_covers_open_states_and_failures() {
             .arg("-f")
             .arg("json")
             .arg("--")
-            .arg(&format!(
-                "@cash+{}!",
+            .arg(format!(
+                "@cash+{}",
                 case.target.rsplit('^').next().unwrap().trim()
             ))
             .env("BOB_DAY_FILE", &day_file)
@@ -7382,7 +7405,7 @@ fn capture_task_toggle_force_next_covers_open_states_and_failures() {
         );
     }
 
-    let sched_temp = TempDir::new("bob-cli-capture-force-next-schedule");
+    let sched_temp = TempDir::new("bob-cli-capture-ensure-next-schedule");
     let vault = sched_temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
@@ -7406,7 +7429,7 @@ fn capture_task_toggle_force_next_covers_open_states_and_failures() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+sched!")
+        .arg("@cash+sched")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -7445,7 +7468,7 @@ fn capture_task_toggle_force_next_covers_open_states_and_failures() {
         ),
     ];
     for (name, target_body, day_body, expected) in failures {
-        let temp = TempDir::new(&format!("bob-cli-capture-force-next-{name}"));
+        let temp = TempDir::new(&format!("bob-cli-capture-ensure-next-{name}"));
         let vault = temp.path().join("vault");
         let target = vault.join("cash.md");
         let day_file = vault.join("day.md");
@@ -7460,7 +7483,7 @@ fn capture_task_toggle_force_next_covers_open_states_and_failures() {
             .arg("-f")
             .arg("json")
             .arg("--")
-            .arg(format!("@cash+{id}!"))
+            .arg(format!("@cash+{id}"))
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-07-10 10:00:00")
             .output()
@@ -7479,6 +7502,14 @@ fn capture_task_toggle_force_next_covers_open_states_and_failures() {
                 .is_some_and(|error| error.contains(expected)),
             "{name}: {json}"
         );
+        if name == "missing-link" {
+            assert!(
+                json["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("use @cash+alpha!")),
+                "{name}: {json}"
+            );
+        }
         assert_eq!(
             fs::read_to_string(&target).expect("target"),
             target_body,
@@ -7493,8 +7524,8 @@ fn capture_task_toggle_force_next_covers_open_states_and_failures() {
 }
 
 #[test]
-fn capture_task_toggle_force_next_same_note_batch_and_rollback() {
-    let temp = TempDir::new("bob-cli-capture-force-next-same-note");
+fn capture_task_toggle_ensure_next_same_note_batch_and_rollback() {
+    let temp = TempDir::new("bob-cli-capture-ensure-next-same-note");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
     write_toggle_task_settings(&vault);
@@ -7516,11 +7547,11 @@ fn capture_task_toggle_force_next_same_note_batch_and_rollback() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@day+daily!")
+        .arg("@day+daily")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 09:05:00")
         .output()
-        .expect("same-note force-Next");
+        .expect("same-note ensure-Next");
     assert_success(&output);
     assert_eq!(
         fs::read_to_string(&day_file).expect("day"),
@@ -7534,7 +7565,7 @@ fn capture_task_toggle_force_next_same_note_batch_and_rollback() {
         )
     );
 
-    let batch_temp = TempDir::new("bob-cli-capture-force-next-batch");
+    let batch_temp = TempDir::new("bob-cli-capture-ensure-next-batch");
     let vault = batch_temp.path().join("vault");
     let cash = vault.join("cash.md");
     let day_file = vault.join("day.md");
@@ -7559,7 +7590,7 @@ fn capture_task_toggle_force_next_same_note_batch_and_rollback() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-07-10 13:40:00"),
-        "@cash+alpha!\n\n@cash+beta!\n",
+        "@cash+alpha\n\n@cash+beta\n",
     );
     assert_success(&output);
     let json: serde_json::Value =
@@ -7579,7 +7610,7 @@ fn capture_task_toggle_force_next_same_note_batch_and_rollback() {
         )
     );
 
-    let rollback_temp = TempDir::new("bob-cli-capture-force-next-rollback");
+    let rollback_temp = TempDir::new("bob-cli-capture-ensure-next-rollback");
     let vault = rollback_temp.path().join("vault");
     let cash = vault.join("cash.md");
     let day_file = vault.join("day.md");
@@ -7597,7 +7628,7 @@ fn capture_task_toggle_force_next_same_note_batch_and_rollback() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-07-10 13:40:00"),
-        "ordinary @notes\n\n@cash+alpha!\n",
+        "ordinary @notes\n\n@cash+alpha\n",
     );
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert_eq!(fs::read_to_string(&cash).expect("cash"), cash_before);
