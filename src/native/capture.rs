@@ -837,6 +837,9 @@ fn plan_capture_item(
         CaptureKind::PomodoroNote => {
             format_sub_bullet_line(&parsed.body, None, None)
         }
+        CaptureKind::ProjectNote { .. } => {
+            todo!("bob-cli-25 execute phase: render project-note capture line")
+        }
         CaptureKind::TaskToggle { .. } => {
             unreachable!("task toggle capture is rejected before this point")
         }
@@ -977,6 +980,9 @@ fn plan_capture_item(
         CaptureKind::PomodoroNote => {
             plan_pomodoro_note_capture(planner, &target, &capture_block)?
         }
+        CaptureKind::ProjectNote { .. } => {
+            todo!("bob-cli-25 execute phase: plan project-note capture")
+        }
         _ => plan_capture_to_target(
             planner,
             &target,
@@ -1114,6 +1120,7 @@ fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::Pomodoro { .. } => "pomodoro_task",
         CaptureKind::SubBullet { .. } => "sub_bullet",
         CaptureKind::PomodoroNote => "pomodoro_note",
+        CaptureKind::ProjectNote { .. } => "project_note",
         CaptureKind::TaskToggle { .. } => "task_toggle",
     }
 }
@@ -1421,6 +1428,11 @@ fn plan_capture_to_target(
             section_prefix.as_deref(),
             *exact,
         ),
+        CaptureKind::ProjectNote { .. } => {
+            return Err(CaptureError::io(
+                "project-note capture invariant failed: wrong write planner",
+            ));
+        }
         CaptureKind::SubBullet { .. } => {
             return Err(CaptureError::io(
                 "sub-bullet capture invariant failed: wrong write planner",

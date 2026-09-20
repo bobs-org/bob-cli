@@ -33,6 +33,16 @@ pub(crate) enum CaptureKind {
         block_id: String,
         pomodoro_name: Option<String>,
     },
+    /// `@<route>^<block-id>+` (create the note only) or
+    /// `@<route>:<block-id>+[#[<pomodoro>]]` (also link its `^prj` task under
+    /// a Pomodoro): create the project note `<route>_<block-id>.md`.
+    /// `pomodoro: None` is the `^` form; `Some` is the `:` form, whose
+    /// `name: None` selects the implicit current/next Pomodoro and whose
+    /// `name: Some` names one explicitly.
+    ProjectNote {
+        block_id: String,
+        pomodoro: Option<ProjectNotePomodoro>,
+    },
     SubBullet {
         target: SubBulletTarget,
         section: Option<TaskSectionSelector>,
@@ -47,6 +57,14 @@ pub(crate) enum CaptureKind {
         pomodoro_name: Option<String>,
         intent: TaskToggleIntent,
     },
+}
+
+/// Which Pomodoro, if any, a project-note capture links its `^prj` task under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectNotePomodoro {
+    /// `None` selects the implicit current/next Pomodoro; `Some` names one
+    /// explicitly (created as a future Pomodoro when it does not exist yet).
+    pub(crate) name: Option<String>,
 }
 
 /// How a marker-only `@route+block-id` capture should change an existing task.
@@ -1576,14 +1594,36 @@ fn parse_task_block_id_route_token(token: &str) -> Result<RouteToken, String> {
     if !is_route_token(route) {
         return Err(TASK_BLOCK_ID_ROUTE_ERROR.to_string());
     }
+    // The `^` family takes no Pomodoro name. A `+` before the `#` marks this
+    // as a project-note attempt that used the wrong family; any other `#`
+    // stays an ordinary invalid block ID.
+    if let Some((before_hash, _)) = block_id.split_once('#')
+        && before_hash.ends_with('+')
+    {
+        return Err(PROJECT_NOTE_POMODORO_NAME_ERROR.to_string());
+    }
+    // A single trailing `+` immediately after the block ID is the
+    // project-note sigil. `is_block_id` accepts only letters, digits, and
+    // `-`, so the slot was previously a hard error and takes nothing away.
+    let (block_id, project_note) = match block_id.strip_suffix('+') {
+        Some(stripped) => (stripped, true),
+        None => (block_id, false),
+    };
     if !is_block_id(block_id) {
         return Err(TASK_BLOCK_ID_ERROR.to_string());
     }
 
     Ok(RouteToken {
         route: Some(route.to_ascii_lowercase()),
-        kind: CaptureKind::TaskWithBlockId {
-            block_id: block_id.to_string(),
+        kind: if project_note {
+            CaptureKind::ProjectNote {
+                block_id: block_id.to_string(),
+                pomodoro: None,
+            }
+        } else {
+            CaptureKind::TaskWithBlockId {
+                block_id: block_id.to_string(),
+            }
         },
     })
 }
@@ -1647,6 +1687,14 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
         Some((block_id, name)) => (block_id, Some(name)),
         None => (rest, None),
     };
+    // A single trailing `+` immediately after the block ID is the
+    // project-note sigil. A `+` inside the Pomodoro name is ordinary
+    // Pomodoro-name charset and stays untouched, so
+    // `@sase:deep-fix#bugs+` keeps naming the Pomodoro `bugs+`.
+    let (block_id, project_note) = match block_id.strip_suffix('+') {
+        Some(stripped) => (stripped, true),
+        None => (block_id, false),
+    };
     if block_id.is_empty() {
         return Err(if pomodoro_name.is_some() {
             format!(
@@ -1673,9 +1721,18 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
 
     Ok(RouteToken {
         route: Some(route.to_ascii_lowercase()),
-        kind: CaptureKind::Pomodoro {
-            block_id: block_id.to_string(),
-            pomodoro_name,
+        kind: if project_note {
+            CaptureKind::ProjectNote {
+                block_id: block_id.to_string(),
+                pomodoro: Some(ProjectNotePomodoro {
+                    name: pomodoro_name,
+                }),
+            }
+        } else {
+            CaptureKind::Pomodoro {
+                block_id: block_id.to_string(),
+                pomodoro_name,
+            }
         },
     })
 }
@@ -1998,6 +2055,8 @@ const POMODORO_NAME_ERROR: &str =
 `& ' ( ) + , . / -`";
 const POMODORO_NAME_REQUIRED_ERROR: &str =
     "Pomodoro capture requires a Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)";
+const PROJECT_NOTE_POMODORO_NAME_ERROR: &str =
+    "the `@<route>^<block-id>+` project-note marker takes no Pomodoro name; use `@<route>:<block-id>+#<pomodoro>` to link a Pomodoro";
 
 // ---------------------------------------------------------------------------
 // Editor-facing parse
@@ -2020,6 +2079,7 @@ pub(crate) enum SpanKind {
     TaskToggleBlockId,
     TaskTogglePomodoroName,
     TaskToggleExplicitToggle,
+    ProjectNoteMarker,
     GlobalRoute,
     GlobalSubBulletRoute,
     GlobalSubBulletBlockId,
@@ -2052,6 +2112,7 @@ impl SpanKind {
             Self::TaskToggleBlockId => "task_toggle_block_id",
             Self::TaskTogglePomodoroName => "task_toggle_pomodoro_name",
             Self::TaskToggleExplicitToggle => "task_toggle_explicit_toggle",
+            Self::ProjectNoteMarker => "project_note_marker",
             Self::GlobalRoute => "global_route",
             Self::GlobalSubBulletRoute => "global_sub_bullet_route",
             Self::GlobalSubBulletBlockId => "global_sub_bullet_block_id",
@@ -2116,6 +2177,8 @@ pub(crate) enum EditorMode {
     PomodoroNote,
     SubBullet,
     TaskToggle,
+    ProjectNote,
+    PomodoroProjectNote,
     Incomplete,
 }
 
@@ -2128,6 +2191,8 @@ impl EditorMode {
             Self::PomodoroNote => "pomodoro_note",
             Self::SubBullet => "sub_bullet",
             Self::TaskToggle => "task_toggle",
+            Self::ProjectNote => "project_note",
+            Self::PomodoroProjectNote => "pomodoro_project_note",
             Self::Incomplete => "incomplete",
         }
     }
@@ -2895,7 +2960,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
 
 /// Build a [`LocalDestinationMarker`] from one line's resolved marker, when
 /// that marker is a real, fully-typed destination. An incomplete marker
-/// (still being typed, e.g. a bare `@`) is not one of the six local
+/// (still being typed, e.g. a bare `@`) is not one of the eight local
 /// destination marker forms `rewrite_draft` reasons about, so it is filtered
 /// out here rather than at every call site.
 fn complete_local_destination_marker(
@@ -3231,6 +3296,21 @@ fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
             TASK_BLOCK_ID_ROUTE_ERROR,
         ));
     }
+    // Mirror the execution grammar: a `+` before the `#` is a project-note
+    // attempt that used the `^` family, which takes no Pomodoro name.
+    if let Some((before_hash, _)) = block_part.split_once('#')
+        && before_hash.ends_with('+')
+    {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_project_note_marker",
+            PROJECT_NOTE_POMODORO_NAME_ERROR,
+        ));
+    }
+    let (block_part, project_note) = match block_part.strip_suffix('+') {
+        Some(stripped) => (stripped, true),
+        None => (block_part, false),
+    };
     if !block_part.is_empty() && !is_block_id(block_part) {
         return TokenParse::Invalid(token_diagnostic(
             token,
@@ -3239,7 +3319,7 @@ fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
         ));
     }
 
-    TokenParse::Marker(marker_parse(
+    let mut marker_parse = marker_parse(
         token,
         MarkerShape {
             sigil_len: 1,
@@ -3248,12 +3328,25 @@ fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
             right_part: block_part,
             route_kind: SpanKind::TaskBlockIdRoute,
             right_kind: SpanKind::TaskBlockId,
-            complete_mode: EditorMode::Task,
+            complete_mode: if project_note {
+                EditorMode::ProjectNote
+            } else {
+                EditorMode::Task
+            },
             right_need: Need::BlockId,
             third: None,
-            suffix: None,
+            suffix: project_note.then_some(MarkerSuffix {
+                len: 1,
+                kind: SpanKind::ProjectNoteMarker,
+            }),
         },
-    ))
+    );
+    // `@^<id>+` carries the project-note intent even while the route is
+    // still missing; an empty block ID stays an ordinary incomplete state.
+    if project_note && !block_part.is_empty() && route_part.is_empty() {
+        marker_parse.mode = EditorMode::ProjectNote;
+    }
+    TokenParse::Marker(marker_parse)
 }
 
 fn classify_retired_double_colon_token(token: &Token<'_>) -> TokenParse {
@@ -3293,6 +3386,14 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             POMODORO_ROUTE_ERROR,
         ));
     }
+    // The project-note `+` sits immediately after the block ID, before any
+    // `#`. A `+` anywhere else -- notably inside the Pomodoro name -- is
+    // ordinary Pomodoro-name charset, so `@sase:deep-fix#bugs+` keeps
+    // naming the Pomodoro `bugs+`.
+    let (block_part, project_note) = match block_part.strip_suffix('+') {
+        Some(stripped) => (stripped, true),
+        None => (block_part, false),
+    };
     if !block_part.is_empty() && !is_block_id(block_part) {
         return TokenParse::Invalid(token_diagnostic(
             token,
@@ -3310,26 +3411,72 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         ));
     }
 
-    TokenParse::Marker(marker_parse(
+    let separator_len = usize::from(separator);
+    let mut marker_parse = marker_parse(
         token,
         MarkerShape {
             sigil_len,
             route_part,
-            separator_len: usize::from(separator),
+            separator_len,
             right_part: block_part,
             route_kind: SpanKind::PomodoroRoute,
             right_kind: SpanKind::PomodoroBlockId,
-            complete_mode: EditorMode::PomodoroTask,
+            complete_mode: if project_note {
+                EditorMode::PomodoroProjectNote
+            } else {
+                EditorMode::PomodoroTask
+            },
             right_need: Need::PomodoroId,
             third: name_part.map(|part| MarkerThird {
-                separator_len: 1,
+                // `+#` spans two bytes once the project-note sigil is
+                // present; a plain `#` spans one.
+                separator_len: 1 + usize::from(project_note),
                 part,
                 kind: SpanKind::PomodoroName,
                 need: Need::PomodoroName,
             }),
-            suffix: None,
+            suffix: (project_note && name_part.is_none()).then_some(
+                MarkerSuffix {
+                    len: 1,
+                    kind: SpanKind::ProjectNoteMarker,
+                },
+            ),
         },
-    ))
+    );
+    if project_note && name_part.is_some() {
+        // `marker_parse` leaves the `+#` separator bytes uncovered, so span
+        // the `+` sigil explicitly: ahead of the Pomodoro name, or split out
+        // of the `#` placeholder when the name is still missing.
+        let plus_start = token.start
+            + sigil_len
+            + route_part.len()
+            + separator_len
+            + block_part.len();
+        let plus_span = Span {
+            start: plus_start,
+            end: plus_start + 1,
+            kind: SpanKind::ProjectNoteMarker,
+        };
+        if name_part.is_some_and(|part| !part.is_empty()) {
+            marker_parse.spans.insert(
+                marker_parse.spans.len().saturating_sub(1),
+                plus_span,
+            );
+        } else if marker_parse.spans.pop().is_some() {
+            marker_parse.spans.push(plus_span);
+            marker_parse.spans.push(Span {
+                start: plus_start + 1,
+                end: plus_start + 2,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+        }
+    }
+    // `@:<id>+` carries the project-note intent even while the route is
+    // still missing; an empty block ID stays an ordinary incomplete state.
+    if project_note && !block_part.is_empty() && route_part.is_empty() {
+        marker_parse.mode = EditorMode::PomodoroProjectNote;
+    }
+    TokenParse::Marker(marker_parse)
 }
 
 /// Classify the remaining `@` forms: a bare `@`, the `@#`/`@#prefix` target
@@ -4284,8 +4431,10 @@ enum LocalMarkerAbsorbability {
 }
 
 /// Classify Rule A1's ordered payload source 1: `mode`/`block_id`/`section`
-/// close over the six local destination marker forms the Vocabulary section
+/// close over the eight local destination marker forms the Vocabulary section
 /// defines, so this match is exhaustive over real (non-incomplete) markers.
+/// A project-note marker is never absorbable: a `@@` declaration that
+/// created a note would try to create the same note once per item.
 fn classify_local_marker(
     marker: &LocalDestinationMarker,
 ) -> LocalMarkerAbsorbability {
@@ -4308,6 +4457,8 @@ fn classify_local_marker(
         | EditorMode::Bullet
         | EditorMode::PomodoroTask
         | EditorMode::PomodoroNote
+        | EditorMode::ProjectNote
+        | EditorMode::PomodoroProjectNote
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
@@ -4333,6 +4484,10 @@ fn non_absorbable_marker_notice(marker: &LocalDestinationMarker) -> String {
         ),
         EditorMode::PomodoroNote => format!(
             "@@ cannot take a Pomodoro note: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote => format!(
+            "@@ cannot take a project note: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::TaskToggle => format!(
@@ -4851,6 +5006,30 @@ mod tests {
                 &[Need::Route, Need::BlockId],
             ),
             (
+                "Body @dev^focus-123+",
+                EditorMode::ProjectNote,
+                Some("dev"),
+                None,
+                Some("focus-123"),
+                &[],
+            ),
+            (
+                "Body @^focus-123+",
+                EditorMode::ProjectNote,
+                None,
+                None,
+                Some("focus-123"),
+                &[Need::Route],
+            ),
+            (
+                "Body @dev^+",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                None,
+                &[Need::BlockId],
+            ),
+            (
                 "Body @dev:focus-123",
                 EditorMode::PomodoroTask,
                 Some("dev"),
@@ -4937,6 +5116,46 @@ mod tests {
                 None,
                 None,
                 &[Need::Route, Need::PomodoroId],
+            ),
+            (
+                "Body @dev:focus-123+",
+                EditorMode::PomodoroProjectNote,
+                Some("dev"),
+                None,
+                Some("focus-123"),
+                &[],
+            ),
+            (
+                "Body @dev:focus-123+#bugs",
+                EditorMode::PomodoroProjectNote,
+                Some("dev"),
+                Some("bugs"),
+                Some("focus-123"),
+                &[],
+            ),
+            (
+                "Body @dev:focus-123+#",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                Some("focus-123"),
+                &[Need::PomodoroName],
+            ),
+            (
+                "Body @:focus-123+",
+                EditorMode::PomodoroProjectNote,
+                None,
+                None,
+                Some("focus-123"),
+                &[Need::Route],
+            ),
+            (
+                "Body @dev:+",
+                EditorMode::Incomplete,
+                Some("dev"),
+                None,
+                None,
+                &[Need::PomodoroId],
             ),
             (
                 "Body @!",
@@ -5090,6 +5309,30 @@ mod tests {
             ),
             ("Body @^", &[SpanKind::InteractivePlaceholder]),
             (
+                "Body @dev^focus-123+",
+                &[
+                    SpanKind::TaskBlockIdRoute,
+                    SpanKind::TaskBlockId,
+                    SpanKind::ProjectNoteMarker,
+                ],
+            ),
+            (
+                "Body @^focus-123+",
+                &[
+                    SpanKind::InteractivePlaceholder,
+                    SpanKind::TaskBlockId,
+                    SpanKind::ProjectNoteMarker,
+                ],
+            ),
+            (
+                "Body @dev^+",
+                &[
+                    SpanKind::TaskBlockIdRoute,
+                    SpanKind::InteractivePlaceholder,
+                    SpanKind::ProjectNoteMarker,
+                ],
+            ),
+            (
                 "Body @dev:focus-123",
                 &[SpanKind::PomodoroRoute, SpanKind::PomodoroBlockId],
             ),
@@ -5107,6 +5350,40 @@ mod tests {
                     SpanKind::PomodoroRoute,
                     SpanKind::PomodoroBlockId,
                     SpanKind::InteractivePlaceholder,
+                ],
+            ),
+            (
+                "Body @dev:focus-123+",
+                &[
+                    SpanKind::PomodoroRoute,
+                    SpanKind::PomodoroBlockId,
+                    SpanKind::ProjectNoteMarker,
+                ],
+            ),
+            (
+                "Body @dev:focus-123+#bugs",
+                &[
+                    SpanKind::PomodoroRoute,
+                    SpanKind::PomodoroBlockId,
+                    SpanKind::ProjectNoteMarker,
+                    SpanKind::PomodoroName,
+                ],
+            ),
+            (
+                "Body @dev:focus-123+#",
+                &[
+                    SpanKind::PomodoroRoute,
+                    SpanKind::PomodoroBlockId,
+                    SpanKind::ProjectNoteMarker,
+                    SpanKind::InteractivePlaceholder,
+                ],
+            ),
+            (
+                "Body @:focus-123+",
+                &[
+                    SpanKind::InteractivePlaceholder,
+                    SpanKind::PomodoroBlockId,
+                    SpanKind::ProjectNoteMarker,
                 ],
             ),
             (
@@ -5218,6 +5495,21 @@ mod tests {
                 TASK_BLOCK_ID_ERROR,
             ),
             (
+                "Body @dev^bad.id+",
+                "invalid_task_block_id",
+                TASK_BLOCK_ID_ERROR,
+            ),
+            (
+                "Body @dev^id+!",
+                "invalid_task_block_id",
+                TASK_BLOCK_ID_ERROR,
+            ),
+            (
+                "Body @dev^focus-123+#bugs",
+                "invalid_project_note_marker",
+                PROJECT_NOTE_POMODORO_NAME_ERROR,
+            ),
+            (
                 "Body @bad.route:id",
                 "invalid_pomodoro_route",
                 POMODORO_ROUTE_ERROR,
@@ -5236,6 +5528,16 @@ mod tests {
                 "Body @dev:id#req^x",
                 "invalid_pomodoro_name",
                 POMODORO_NAME_ERROR,
+            ),
+            (
+                "Body @dev:bad.id+",
+                "invalid_pomodoro_block_id",
+                POMODORO_BLOCK_ID_ERROR,
+            ),
+            (
+                "Body @dev:id+!",
+                "invalid_pomodoro_block_id",
+                POMODORO_BLOCK_ID_ERROR,
             ),
         ];
 
@@ -5455,6 +5757,9 @@ mod tests {
             "remembered to bump the timeout #",
             "paste the failing output % #",
             "paste the failing output # %",
+            "Finish it @cash^goog-exit+",
+            "Finish it @cash:goog-exit+",
+            "Finish it @cash:goog-exit+#bugs",
         ];
 
         for raw in inputs {
@@ -5472,6 +5777,13 @@ mod tests {
                 CaptureKind::Pomodoro { .. } => EditorMode::PomodoroTask,
                 CaptureKind::SubBullet { .. } => EditorMode::SubBullet,
                 CaptureKind::PomodoroNote => EditorMode::PomodoroNote,
+                CaptureKind::ProjectNote { pomodoro, .. } => {
+                    if pomodoro.is_none() {
+                        EditorMode::ProjectNote
+                    } else {
+                        EditorMode::PomodoroProjectNote
+                    }
+                }
                 CaptureKind::TaskToggle { .. } => EditorMode::TaskToggle,
             };
             assert_eq!(parse.mode, expected_mode, "{raw}");
@@ -5515,6 +5827,20 @@ mod tests {
                 assert_eq!(
                     parse.section.as_deref(),
                     pomodoro_name.as_deref(),
+                    "{raw}"
+                );
+            }
+            if let CaptureKind::ProjectNote {
+                block_id,
+                pomodoro,
+            } = &executed.kind
+            {
+                assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
+                assert_eq!(
+                    parse.section.as_deref(),
+                    pomodoro
+                        .as_ref()
+                        .and_then(|pomodoro| pomodoro.name.as_deref()),
                     "{raw}"
                 );
             }
@@ -7502,6 +7828,141 @@ were removed"
     }
 
     #[test]
+    fn project_note_markers_stay_in_their_families() {
+        // (token, sub-bullet, task-block-ID, pomodoro)
+        let cases: &[(&str, bool, bool, bool)] = &[
+            ("@cash^goog-exit+", false, true, false),
+            ("@cash:goog-exit+", false, false, true),
+            ("@cash:goog-exit+#bugs", false, false, true),
+            // A `+` inside the Pomodoro name is name charset, not a sigil.
+            ("@sase:deep-fix#bugs+", false, false, true),
+            ("@cash+goog-exit", true, false, false),
+            ("@cash^goog-exit", false, true, false),
+            ("@cash:goog-exit", false, false, true),
+            ("@cash:goog-exit#bugs", false, false, true),
+        ];
+        for (token, sub_bullet, task_block_id, pomodoro) in cases {
+            assert_eq!(
+                is_sub_bullet_marker_candidate(token),
+                *sub_bullet,
+                "{token}"
+            );
+            assert_eq!(
+                is_task_block_id_marker_candidate(token),
+                *task_block_id,
+                "{token}"
+            );
+            assert_eq!(
+                is_pomodoro_marker_candidate(token),
+                *pomodoro,
+                "{token}"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_parses_project_note_markers() {
+        let parsed = execute("Finish it @cash^goog-exit+").expect("caret plus");
+        assert_eq!(parsed.route.as_deref(), Some("cash"));
+        assert_eq!(parsed.body, "Finish it");
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::ProjectNote {
+                block_id: "goog-exit".to_string(),
+                pomodoro: None,
+            }
+        );
+
+        let parsed =
+            execute("Finish it @cash:goog-exit+").expect("colon plus");
+        assert_eq!(parsed.route.as_deref(), Some("cash"));
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::ProjectNote {
+                block_id: "goog-exit".to_string(),
+                pomodoro: Some(ProjectNotePomodoro { name: None }),
+            }
+        );
+
+        let parsed = execute("Finish it @cash:goog-exit+#bugs")
+            .expect("named pomodoro plus");
+        assert_eq!(parsed.route.as_deref(), Some("cash"));
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::ProjectNote {
+                block_id: "goog-exit".to_string(),
+                pomodoro: Some(ProjectNotePomodoro {
+                    name: Some("bugs".to_string()),
+                }),
+            }
+        );
+
+        // A trailing `+` on the Pomodoro name is not a sigil.
+        let parsed = execute("Finish it @sase:deep-fix#bugs+")
+            .expect("plus in pomodoro name");
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::Pomodoro {
+                block_id: "deep-fix".to_string(),
+                pomodoro_name: Some("bugs+".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn execution_rejects_project_note_shape_errors() {
+        let error = execute("Finish it @cash^goog-exit+#bugs")
+            .expect_err("caret takes no pomodoro");
+        assert_eq!(error, PROJECT_NOTE_POMODORO_NAME_ERROR);
+
+        let error =
+            execute("Finish it @cash^+").expect_err("empty caret block ID");
+        assert_eq!(error, TASK_BLOCK_ID_ERROR);
+
+        let error =
+            execute("Finish it @cash:+").expect_err("empty colon block ID");
+        assert_eq!(error, POMODORO_BLOCK_ID_ERROR);
+
+        let error = execute("Finish it @cash:+#bugs")
+            .expect_err("empty block ID before pomodoro name");
+        assert!(
+            error.contains("requires a block ID before the Pomodoro name"),
+            "{error}"
+        );
+
+        // `!` stays reserved for the explicit sub-bullet toggle: these keep
+        // their existing block-ID errors and never become toggles.
+        let error =
+            execute("Finish it @cash^goog-exit+!").expect_err("caret plus bang");
+        assert_eq!(error, TASK_BLOCK_ID_ERROR);
+        let error =
+            execute("Finish it @cash:goog-exit+!").expect_err("colon plus bang");
+        assert_eq!(error, POMODORO_BLOCK_ID_ERROR);
+        assert!(exact_explicit_toggle_prefix("@cash^goog-exit+!").is_none());
+        assert!(exact_explicit_toggle_prefix("@cash:goog-exit+!").is_none());
+    }
+
+    #[test]
+    fn global_declaration_rejects_project_note_shapes() {
+        for token in ["@@cash^goog-exit+", "@@cash:goog-exit+"] {
+            let declaration = Token {
+                text: token,
+                start: 0,
+                end: token.len(),
+            };
+            match classify_global_token(&declaration) {
+                TokenParse::Invalid(diagnostic) => {
+                    assert_eq!(
+                        diagnostic.code, "invalid_global_destination",
+                        "{token}"
+                    );
+                }
+                TokenParse::Marker(_) => panic!("{token} must not parse"),
+            }
+        }
+    }
+
+    #[test]
     fn execution_forced_route_keeps_retired_and_special_markers_literal() {
         let parsed = parse_capture_text_with_clip_control(
             "Do thing @dev::id @dev+parent @dev^new-id",
@@ -8120,6 +8581,9 @@ were removed"
             ("note @dev:id @@", "cannot take a Pomodoro link"),
             ("note @dev:id#bugs @@", "cannot take a Pomodoro link"),
             ("note this # @@", "cannot take a Pomodoro note"),
+            ("note @dev^id+ @@", "cannot take a project note"),
+            ("note @dev:id+ @@", "cannot take a project note"),
+            ("note @dev:id+#bugs @@", "cannot take a project note"),
         ] {
             let rewrite = rewrite_draft(raw, None);
             assert_eq!(rewrite.rule, None, "{raw}");

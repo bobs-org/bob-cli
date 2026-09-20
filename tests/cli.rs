@@ -4504,6 +4504,125 @@ fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
 }
 
 #[test]
+fn capture_parse_json_reports_project_note_markers() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @cash^goog-exit+")
+        .output()
+        .expect("run bob capture-parse project-note caret marker");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "project_note");
+    assert_eq!(json["body"], "Do work");
+    assert_eq!(json["route"], "cash");
+    assert_eq!(json["block_id"], "goog-exit");
+    assert!(json["section"].is_null());
+    assert_eq!(json["needs"], serde_json::json!([]));
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 8, "end": 13, "kind": "task_block_id_route" },
+            { "start": 14, "end": 23, "kind": "task_block_id" },
+            { "start": 23, "end": 24, "kind": "project_note_marker" },
+        ])
+    );
+    assert!(json["diagnostics"].as_array().unwrap().is_empty());
+
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @cash:goog-exit+#bugs")
+        .output()
+        .expect("run bob capture-parse project-note pomodoro marker");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "pomodoro_project_note");
+    assert_eq!(json["body"], "Do work");
+    assert_eq!(json["route"], "cash");
+    assert_eq!(json["block_id"], "goog-exit");
+    assert_eq!(json["section"], "bugs");
+    assert_eq!(json["needs"], serde_json::json!([]));
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 8, "end": 13, "kind": "pomodoro_route" },
+            { "start": 14, "end": 23, "kind": "pomodoro_block_id" },
+            { "start": 23, "end": 24, "kind": "project_note_marker" },
+            { "start": 25, "end": 29, "kind": "pomodoro_name" },
+        ])
+    );
+    assert!(json["diagnostics"].as_array().unwrap().is_empty());
+
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @^focus-123+")
+        .output()
+        .expect("run bob capture-parse routeless project-note marker");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "project_note");
+    assert!(json["route"].is_null());
+    assert_eq!(json["block_id"], "focus-123");
+    assert_eq!(json["needs"], serde_json::json!(["route"]));
+
+    let invalid = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @cash^goog-exit+#bugs")
+        .output()
+        .expect("run caret project-note marker with a pomodoro name");
+    assert_success(&invalid);
+    let json: serde_json::Value = serde_json::from_str(stdout(&invalid).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "task");
+    assert_eq!(
+        json["diagnostics"][0]["code"],
+        "invalid_project_note_marker"
+    );
+    assert!(
+        json["diagnostics"][0]["message"]
+            .as_str()
+            .is_some_and(|message| {
+                message.contains("takes no Pomodoro name")
+                    && message.contains("@<route>:<block-id>+#<pomodoro>")
+            }),
+        "{json}"
+    );
+
+    let global = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@@cash^goog-exit+")
+        .output()
+        .expect("run project-note global declaration parse");
+    assert_success(&global);
+    let json: serde_json::Value = serde_json::from_str(stdout(&global).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(
+        json["diagnostics"][0]["code"],
+        "invalid_global_destination"
+    );
+}
+
+#[test]
 fn capture_parse_json_reports_retired_double_colon_as_migration_guidance() {
     let output = bob_command()
         .arg("capture-parse")
