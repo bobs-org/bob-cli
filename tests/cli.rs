@@ -21139,10 +21139,7 @@ fn highlights_ref_scan_rejects_legacy_pre_scan_command_key() {
     let vault = temp.path().join("vault");
     let config = temp.path().join("config.yml");
     fs::create_dir_all(&vault).expect("create vault");
-    write_file(
-        &config,
-        "highlights:\n  pre_scan_command: bob_xlib_pull\n",
-    );
+    write_file(&config, "highlights:\n  pre_scan_command: bob_xlib_pull\n");
 
     let output = bob_command()
         .arg("highlights")
