@@ -63,7 +63,7 @@ pub(crate) struct PriorityProperty {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct HighlightsConfig {
-    pre_scan_command: Option<String>,
+    pre_scan_hook: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,8 +113,8 @@ impl PriorityProperty {
 }
 
 impl HighlightsConfig {
-    pub(crate) fn pre_scan_command(&self) -> Option<&str> {
-        self.pre_scan_command.as_deref()
+    pub(crate) fn pre_scan_hook(&self) -> Option<&str> {
+        self.pre_scan_hook.as_deref()
     }
 }
 
@@ -235,7 +235,9 @@ struct RawLevel {
 #[derive(Debug, Deserialize)]
 struct RawHighlights {
     #[serde(default)]
-    pre_scan_command: Option<String>,
+    pre_scan_hook: Option<String>,
+    #[serde(default)]
+    pre_scan_command: Option<serde_yaml::Value>,
 }
 
 fn parse_priority_property(
@@ -302,13 +304,24 @@ fn parse_highlights_config(
         ConfigError::Invalid(format!("parse {}: {error}", path.display()))
     })?;
 
-    let pre_scan_command = config
+    if config
         .highlights
-        .and_then(|highlights| highlights.pre_scan_command)
+        .as_ref()
+        .is_some_and(|highlights| highlights.pre_scan_command.is_some())
+    {
+        return Err(ConfigError::Invalid(format!(
+            "highlights.pre_scan_command in {} was renamed; use highlights.pre_scan_hook",
+            path.display()
+        )));
+    }
+
+    let pre_scan_hook = config
+        .highlights
+        .and_then(|highlights| highlights.pre_scan_hook)
         .map(|command| command.trim().to_string())
         .filter(|command| !command.is_empty());
 
-    Ok(HighlightsConfig { pre_scan_command })
+    Ok(HighlightsConfig { pre_scan_hook })
 }
 
 fn parse_priority_level(
@@ -461,7 +474,7 @@ properties:
     }
 
     #[test]
-    fn parses_highlights_pre_scan_command() {
+    fn parses_highlights_pre_scan_hook() {
         let config = parse_highlights_config(
             r#"
 unused_top_level: ignored
@@ -469,13 +482,13 @@ properties:
   - name: priority
     values: priority
 highlights:
-  pre_scan_command: " bob_xlib_pull "
+  pre_scan_hook: " bob_xlib_pull "
 "#,
             Path::new("/config.yml"),
         )
         .expect("valid highlights config");
 
-        assert_eq!(config.pre_scan_command(), Some("bob_xlib_pull"));
+        assert_eq!(config.pre_scan_hook(), Some("bob_xlib_pull"));
     }
 
     #[test]
@@ -490,21 +503,39 @@ properties:
         )
         .expect("valid config without highlights block");
 
-        assert_eq!(config.pre_scan_command(), None);
+        assert_eq!(config.pre_scan_hook(), None);
     }
 
     #[test]
-    fn blank_highlights_pre_scan_command_disables_file_hook() {
+    fn blank_highlights_pre_scan_hook_disables_file_hook() {
         let config = parse_highlights_config(
             r#"
 highlights:
-  pre_scan_command: "   "
+  pre_scan_hook: "   "
 "#,
             Path::new("/config.yml"),
         )
         .expect("valid blank highlights config");
 
-        assert_eq!(config.pre_scan_command(), None);
+        assert_eq!(config.pre_scan_hook(), None);
+    }
+
+    #[test]
+    fn rejects_legacy_highlights_pre_scan_command() {
+        let error = parse_highlights_config(
+            r#"
+highlights:
+  pre_scan_command: "bob_xlib_pull"
+"#,
+            Path::new("/config.yml"),
+        )
+        .expect_err("legacy pre_scan_command must be rejected");
+
+        assert!(
+            error.message().contains("pre_scan_hook"),
+            "legacy rejection must name the new spelling: {}",
+            error.message()
+        );
     }
 
     fn parse(text: &str) -> Result<PriorityProperty, ConfigError> {

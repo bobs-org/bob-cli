@@ -46,23 +46,24 @@ the same marker without writing.
 `scan` runs the configured pre-scan hook on writing runs, then moves pending
 PDFs from the configured intake directory into the mirrored library path,
 recursively finds PDFs under the configured library directory, and processes
-them in stable path order. Per-PDF validation or write failures are reported
-without stopping unrelated PDFs; the final command status is still non-zero when
-any PDF fails. It refuses intake destinations that already exist and duplicate
-output paths such as two PDFs that would both write the same
-`ref/<ref_type>/<basename>.md` target.
+them in stable path order. Pass `-n, --no-hooks` to ignore the hook. Per-PDF
+validation or write failures are reported without stopping unrelated PDFs; the
+final command status is still non-zero when any PDF fails. It refuses intake
+destinations that already exist and duplicate output paths such as two PDFs
+that would both write the same `ref/<ref_type>/<basename>.md` target.
 
 `doctor` checks vault paths, library/ref/xlib directories, pending intake,
-the configured pre-scan command, sidecar presence, marker readability, Git
-worktree status, and optional `ob` availability. It never writes files.
+the configured pre-scan hook, sidecar presence, marker readability, Git
+worktree status, and optional `ob` availability. It never writes files. Pass
+`-n, --no-hooks` to skip the pre-scan hook check.
 
 Available commands:
 
 ```bash
 bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
-bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
@@ -185,20 +186,24 @@ Reference notes are written under:
 BOB_HIGHLIGHTS_REF_DIR=ref
 ```
 
-Writing scans can run a pre-scan command before xlib intake:
+Writing scans can run a pre-scan hook before xlib intake:
 
 ```yaml
 highlights:
   # Runs from the vault root before `bob highlights scan` inspects the library.
   # Use it to deliver PDFs that do not travel on the git sync channel.
-  pre_scan_command: bob_xlib_pull
+  pre_scan_hook: bob_xlib_pull
 ```
 
-`BOB_HIGHLIGHTS_PRE_SCAN_COMMAND` overrides the config file value. Set it to an
-empty value to disable a configured hook. The command runs as `sh -c <command>`
+`BOB_HIGHLIGHTS_PRE_SCAN_HOOK` overrides the config file value. Set it to an
+empty value to disable a configured hook. The hook runs as `sh -c <command>`
 from `BOB_DIR` and inherits stdout/stderr, so scheduled logs include its output.
-If it exits non-zero, `scan` reports the exit code and aborts before intake.
-`scan --dry-run` reports the command it would run without executing it.
+Bob exports `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` to the hook child. If it exits
+non-zero, `scan` reports the exit code and aborts before intake.
+`scan --dry-run` reports the hook it would run without executing it. Pass
+`-n, --no-hooks` to `scan` or `doctor` to ignore the hook from every source.
+The legacy `highlights.pre_scan_command` key and
+`BOB_HIGHLIGHTS_PRE_SCAN_COMMAND` variable are hard errors.
 
 Relative `BOB_HIGHLIGHTS_LIB_DIR`, `BOB_HIGHLIGHTS_XLIB_DIR`, and
 `BOB_HIGHLIGHTS_REF_DIR` values are resolved under `BOB_DIR`. Absolute paths
@@ -398,17 +403,18 @@ writes so the apps do not race the CLI.
 
 `scan --dry-run` reports every discovered PDF, including PDFs that are still
 pending under `xlib`. If a pre-scan hook is configured, the dry run reports that
-it would run and the exact command, but does not execute it. The default report
-is concise. `-v, --verbose` prints the detailed per-PDF plan, including each
-planned `xlib/<rel> -> lib/<rel>` intake move. Dry runs do not move anything.
-Valid PDFs show their target reference note, sidecar path if present, selected
-sync source, and note/PDF marker action. Invalid PDFs show a `plan_error`. Scan
-output also reports `write_pdfs: true|false` so bulk marker-write runs are
-auditable. Dry runs do not create directories, move intake files, write notes,
-write PDFs, or run the pre-scan command, even when combined with `--write-pdfs`.
+it would run and the exact hook command, but does not execute it. The default
+report is concise. `-v, --verbose` prints the detailed per-PDF plan, including
+each planned `xlib/<rel> -> lib/<rel>` intake move. Dry runs do not move
+anything. Valid PDFs show their target reference note, sidecar path if present,
+selected sync source, and note/PDF marker action. Invalid PDFs show a
+`plan_error`. Scan output also reports `write_pdfs: true|false` so bulk
+marker-write runs are auditable. Dry runs do not create directories, move
+intake files, write notes, write PDFs, or run the pre-scan hook, even when
+combined with `--write-pdfs`.
 
-Before planning notes, writing scans run the optional pre-scan command and then
-preflight intake. Intake moves each PDF under `xlib` to the mirrored `lib` path
+Before planning notes, writing scans run the optional pre-scan hook and then
+preflight intake. Pass `-n, --no-hooks` to skip the hook. Intake moves each PDF under `xlib` to the mirrored `lib` path
 and moves same-stem Markdown sidecars and TextBundle directories with the PDF,
 so annotation text and image assets are not orphaned. If any destination PDF or
 sidecar already exists, the whole scan aborts before moving or writing anything.
@@ -889,9 +895,9 @@ MacBook validation checklist:
 - `cargo install --path ~/projects/bob-cli --locked --force` installs the local
   checkout.
 - `bob highlights doctor` reports valid vault/library/ref paths, the xlib intake
-  path and pending count, marker readability, Git status, and optional `ob`
-  availability. A missing `~/bob/xlib` is warning-only because `create` creates
-  it on demand.
+  path and pending count, the pre-scan hook status, marker readability, Git
+  status, and optional `ob` availability. A missing `~/bob/xlib` is
+  warning-only because `create` creates it on demand.
 - `bob highlights scan --dry-run` lists the expected PDFs under `~/bob/lib` and
   any pending `~/bob/xlib` intake moves, reports the intended
   `~/bob/ref/<ref_type>/*.md` targets, and prints `writes: none`. If

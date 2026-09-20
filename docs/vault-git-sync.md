@@ -177,11 +177,11 @@ Highlights scanning starts. The managed Bob config sets:
 
 ```yaml
 highlights:
-  pre_scan_command: PATH="$HOME/bin:$PATH" bob_xlib_pull
+  pre_scan_hook: PATH="$HOME/bin:$PATH" bob_xlib_pull
 ```
 
 On the MacBook, the 15-minute `~/bin/maybe_bob_highlights_sync -w` cron job runs
-`bob highlights scan`. The pre-scan command probes athena and apollo in parallel.
+`bob highlights scan`. The pre-scan hook probes athena and apollo in parallel.
 Missing or empty queues skip rsync entirely, while nonempty queues are pulled one host
 at a time into the MacBook's `~/bob/xlib/` with
 `rsync --remove-source-files --ignore-existing`. The script reuses a private per-run SSH

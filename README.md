@@ -378,9 +378,9 @@ The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 
 ```bash
 bob highlights create <md-file> [-d|--dry-run] [-f|--force] [-i|--include-id] [-o|--output PDF] [-P|--parent NOTE] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights doctor [-x|--xlib-dir PATH]
+bob highlights doctor [-n|--no-hooks] [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-x|--xlib-dir PATH]
-bob highlights scan [-d|--dry-run] [-j|--jobs N] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob highlights scan [-d|--dry-run] [-j|--jobs N] [-n|--no-hooks] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob highlights sync <pdf> [-d|--dry-run] [-w|--write-pdf] [-p|--prefer marker|frontmatter] [-x|--xlib-dir PATH]
 ```
 
@@ -396,15 +396,17 @@ Obsidian reference notes.
   Markdown filename stem. Intake targets still go through `scan`; a PDF written
   directly into the library is also found by `scan`; a PDF outside both
   directories needs `bob highlights sync <PDF>`.
-- `scan` runs the configured pre-scan hook on writing runs, then moves pending
-  PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs the library. By
-  default it does not write PDF markers; use `scan --dry-run --write-pdfs`,
-  review, then `scan --write-pdfs`. `-v, --verbose` prints the detailed per-PDF
-  plan instead of the concise report.
+- `scan` runs the configured `highlights.pre_scan_hook` on writing runs, then
+  moves pending PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs
+  the library. Pass `-n, --no-hooks` to ignore the hook. By default it does
+  not write PDF markers; use `scan --dry-run --write-pdfs`, review, then
+  `scan --write-pdfs`. `-v, --verbose` prints the detailed per-PDF plan instead
+  of the concise report.
 - `sync <pdf>` updates one reference note from the page-1 marker and sidecar.
 - `marker <pdf>` inspects that marker without writing.
 - `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, and
-  optional `ob` without writing.
+  optional `ob` without writing. Pass `-n, --no-hooks` to skip the pre-scan
+  hook check.
 
 Generated notes live under `ref/`. Nested library PDFs such as
 `lib/books/foo.pdf` write `ref/books/foo.md` with `type: "[[ref]]"` and
@@ -662,11 +664,14 @@ and Pomodoro-note `bob capture` requests, and `bob task-status-hooks`.
 resolved under the Bob vault; absolute paths and `~/...` paths are used as
 configured.
 
-`BOB_HIGHLIGHTS_PRE_SCAN_COMMAND` overrides
-`highlights.pre_scan_command` from `~/.config/bob/config.yml` for
-`bob highlights scan`. Non-empty values run with `sh -c` from `BOB_DIR` before
-intake; an empty value disables a configured hook. `scan --dry-run` reports the
-hook it would run without executing it.
+`BOB_HIGHLIGHTS_PRE_SCAN_HOOK` overrides
+`highlights.pre_scan_hook` from `~/.config/bob/config.yml` for
+`bob highlights scan` and `bob highlights doctor`. Non-empty values run with
+`sh -c` from `BOB_DIR` before intake; an empty value disables a configured
+hook. `scan --dry-run` reports the hook it would run without executing it.
+Pass `-n, --no-hooks` to ignore the hook from every source. The legacy
+`BOB_HIGHLIGHTS_PRE_SCAN_COMMAND` variable is now an error. Bob exports
+`BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` to the hook child process.
 
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
 `bob highlights`. It defaults to `ref` under `BOB_DIR`.

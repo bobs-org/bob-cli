@@ -34,8 +34,9 @@ const DEFAULT_LIB_DIR: &str = "lib";
 const DEFAULT_REF_DIR: &str = "ref";
 const DEFAULT_XLIB_DIR: &str = "xlib";
 
+const ENV_LEGACY_PRE_SCAN_COMMAND: &str = "BOB_HIGHLIGHTS_PRE_SCAN_COMMAND";
 const ENV_LIB_DIR: &str = "BOB_HIGHLIGHTS_LIB_DIR";
-const ENV_PRE_SCAN_COMMAND: &str = "BOB_HIGHLIGHTS_PRE_SCAN_COMMAND";
+const ENV_PRE_SCAN_HOOK: &str = "BOB_HIGHLIGHTS_PRE_SCAN_HOOK";
 const ENV_REF_DIR: &str = "BOB_HIGHLIGHTS_REF_DIR";
 const ENV_XLIB_DIR: &str = "BOB_HIGHLIGHTS_XLIB_DIR";
 
@@ -124,11 +125,11 @@ struct Config {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PreScanCommand {
+struct PreScanHook {
     command: OsString,
 }
 
-impl PreScanCommand {
+impl PreScanHook {
     fn display(&self) -> String {
         self.command.to_string_lossy().into_owned()
     }
@@ -591,15 +592,23 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
     match matches.subcommand() {
         Some(("create", sub_matches)) => create::run(sub_matches),
-        Some(("scan", sub_matches)) => run_scan(sub_matches),
+        Some(("scan", sub_matches)) => {
+            run_scan(sub_matches, no_hooks_flag(&matches, sub_matches))
+        }
         Some(("sync", sub_matches)) => run_sync(sub_matches),
-        Some(("doctor", sub_matches)) => run_doctor(sub_matches),
+        Some(("doctor", sub_matches)) => {
+            run_doctor(sub_matches, no_hooks_flag(&matches, sub_matches))
+        }
         Some(("marker", sub_matches)) => run_marker(sub_matches),
         _ => 2,
     }
 }
 
-fn run_scan(matches: &ArgMatches) -> i32 {
+fn no_hooks_flag(root_matches: &ArgMatches, sub_matches: &ArgMatches) -> bool {
+    root_matches.get_flag("no-hooks") || sub_matches.get_flag("no-hooks")
+}
+
+fn run_scan(matches: &ArgMatches, no_hooks: bool) -> i32 {
     let config = Config::from_matches(matches);
     let options = SyncOptions {
         dry_run: matches.get_flag("dry-run"),
@@ -611,6 +620,7 @@ fn run_scan(matches: &ArgMatches) -> i32 {
         options,
         jobs_from_matches(matches),
         matches.get_flag("verbose"),
+        no_hooks,
     ))
 }
 
@@ -643,9 +653,9 @@ fn run_sync(matches: &ArgMatches) -> i32 {
     report_result(sync_pdf(&config, &pdf, options))
 }
 
-fn run_doctor(matches: &ArgMatches) -> i32 {
+fn run_doctor(matches: &ArgMatches, no_hooks: bool) -> i32 {
     let config = Config::from_matches(matches);
-    report_result(doctor_vault(&config))
+    report_result(doctor_vault(&config, no_hooks))
 }
 
 fn run_marker(matches: &ArgMatches) -> i32 {
@@ -664,21 +674,29 @@ fn report_result(result: Result<()>) -> i32 {
     }
 }
 
-fn configured_pre_scan_command() -> Result<Option<PreScanCommand>> {
-    if let Some(command) = env::var_os(ENV_PRE_SCAN_COMMAND) {
-        return Ok(pre_scan_command_from_os(command));
+fn configured_pre_scan_hook(no_hooks: bool) -> Result<Option<PreScanHook>> {
+    if no_hooks {
+        return Ok(None);
+    }
+    if env::var_os(ENV_LEGACY_PRE_SCAN_COMMAND).is_some() {
+        return Err(CommandError::new(format!(
+            "{ENV_LEGACY_PRE_SCAN_COMMAND} was renamed; use {ENV_PRE_SCAN_HOOK}"
+        )));
+    }
+    if let Some(command) = env::var_os(ENV_PRE_SCAN_HOOK) {
+        return Ok(pre_scan_hook_from_os(command));
     }
 
     let config = bob_config::load_highlights_config(&bob_config::config_path())
         .map_err(config_error)?;
-    Ok(config.pre_scan_command().map(|command| PreScanCommand {
+    Ok(config.pre_scan_hook().map(|command| PreScanHook {
         command: OsString::from(command),
     }))
 }
 
-fn pre_scan_command_from_os(command: OsString) -> Option<PreScanCommand> {
+fn pre_scan_hook_from_os(command: OsString) -> Option<PreScanHook> {
     (!command.to_string_lossy().trim().is_empty())
-        .then_some(PreScanCommand { command })
+        .then_some(PreScanHook { command })
 }
 
 fn config_error(error: bob_config::ConfigError) -> CommandError {
@@ -690,9 +708,9 @@ fn config_error(error: bob_config::ConfigError) -> CommandError {
     }
 }
 
-fn run_pre_scan_command(
+fn run_pre_scan_hook(
     config: &Config,
-    command: Option<&PreScanCommand>,
+    command: Option<&PreScanHook>,
     dry_run: bool,
 ) -> Result<()> {
     let Some(command) = command else {
@@ -700,22 +718,23 @@ fn run_pre_scan_command(
     };
 
     if dry_run {
-        println!("pre_scan_command: would-run {}", command.display());
+        println!("pre_scan_hook: would-run {}", command.display());
         return Ok(());
     }
 
-    println!("pre_scan_command: run {}", command.display());
+    println!("pre_scan_hook: run {}", command.display());
     let status = process::Command::new("sh")
         .arg("-c")
         .arg(&command.command)
         .current_dir(&config.bob_dir)
+        .env("BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
         .map_err(|error| {
             CommandError::new(format!(
-                "run pre-scan command {}: {error}",
+                "run pre-scan hook {}: {error}",
                 command.display()
             ))
         })?;
@@ -724,7 +743,7 @@ fn run_pre_scan_command(
         Ok(())
     } else {
         Err(CommandError::new(format!(
-            "pre-scan command failed with {}: {}",
+            "pre-scan hook failed with {}: {}",
             exit_status_label(&status),
             command.display()
         )))
@@ -738,22 +757,22 @@ fn exit_status_label(status: &process::ExitStatus) -> String {
         .unwrap_or_else(|| status.to_string())
 }
 
-fn check_pre_scan_command(
-    command: Option<&PreScanCommand>,
+fn check_pre_scan_hook(
+    command: Option<&PreScanHook>,
     failures: &mut Vec<String>,
 ) {
     let Some(command) = command else {
-        println!("pre_scan_command: none");
+        println!("pre_scan_hook: none");
         return;
     };
 
     let Some(program) = pre_scan_program(command) else {
         println!(
-            "pre_scan_command: fail ({}; executable not found)",
+            "pre_scan_hook: fail ({}; executable not found)",
             command.display()
         );
         failures.push(format!(
-            "pre-scan command has no executable word: {}",
+            "pre-scan hook has no executable word: {}",
             command.display()
         ));
         return;
@@ -762,35 +781,35 @@ fn check_pre_scan_command(
     match shell_command_available(&program) {
         Ok(true) => {
             println!(
-                "pre_scan_command: ok ({}; executable: {})",
+                "pre_scan_hook: ok ({}; executable: {})",
                 command.display(),
                 program.to_string_lossy()
             );
         }
         Ok(false) => {
             println!(
-                "pre_scan_command: fail ({}; executable not found: {})",
+                "pre_scan_hook: fail ({}; executable not found: {})",
                 command.display(),
                 program.to_string_lossy()
             );
             failures.push(format!(
-                "pre-scan command executable not found: {}",
+                "pre-scan hook executable not found: {}",
                 program.to_string_lossy()
             ));
         }
         Err(error) => {
             println!(
-                "pre_scan_command: fail ({}; executable check failed: {error})",
+                "pre_scan_hook: fail ({}; executable check failed: {error})",
                 command.display()
             );
             failures.push(format!(
-                "pre-scan command executable check failed: {error}"
+                "pre-scan hook executable check failed: {error}"
             ));
         }
     }
 }
 
-fn pre_scan_program(command: &PreScanCommand) -> Option<OsString> {
+fn pre_scan_program(command: &PreScanHook) -> Option<OsString> {
     command
         .display()
         .split_whitespace()
@@ -853,10 +872,11 @@ fn scan_library(
     options: SyncOptions,
     jobs: usize,
     verbose: bool,
+    no_hooks: bool,
 ) -> Result<()> {
     validate_library_layout(config)?;
-    let pre_scan_command = configured_pre_scan_command()?;
-    run_pre_scan_command(config, pre_scan_command.as_ref(), options.dry_run)?;
+    let pre_scan_hook = configured_pre_scan_hook(no_hooks)?;
+    run_pre_scan_hook(config, pre_scan_hook.as_ref(), options.dry_run)?;
     let intake = plan_xlib_intake(config)?;
     if !options.dry_run {
         execute_xlib_intake(&intake)?;
@@ -2387,17 +2407,21 @@ fn show_marker(config: &Config, pdf: &Path) -> Result<()> {
     Ok(())
 }
 
-fn doctor_vault(config: &Config) -> Result<()> {
+fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
     print_config_report("doctor", config);
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
-    match configured_pre_scan_command() {
-        Ok(pre_scan_command) => {
-            check_pre_scan_command(pre_scan_command.as_ref(), &mut failures);
-        }
-        Err(error) => {
-            println!("pre_scan_command: fail ({error})");
-            failures.push(error.to_string());
+    if no_hooks {
+        println!("pre_scan_hook: skipped (--no-hooks)");
+    } else {
+        match configured_pre_scan_hook(no_hooks) {
+            Ok(pre_scan_hook) => {
+                check_pre_scan_hook(pre_scan_hook.as_ref(), &mut failures);
+            }
+            Err(error) => {
+                println!("pre_scan_hook: fail ({error})");
+                failures.push(error.to_string());
+            }
         }
     }
     let layout_valid = match validate_library_layout(config) {
@@ -5455,12 +5479,16 @@ fn build_cli() -> ClapCommand {
         .about("Sync Highlights PDF annotations into Bob reference notes")
         .subcommand_required(true)
         .arg_required_else_help(true)
+        .arg(no_hooks_arg())
         .subcommand(create::command())
         .subcommand(
-            with_config_args(
-                ClapCommand::new("doctor")
-                    .about("Check Highlights reference sync prerequisites"),
-            )
+            ClapCommand::new("doctor")
+                .about("Check Highlights reference sync prerequisites")
+                .arg(bob_dir_arg())
+                .arg(lib_dir_arg())
+                .arg(no_hooks_arg())
+                .arg(ref_dir_arg())
+                .arg(xlib_dir_arg())
             .after_help("Checks vault paths, sidecars, PDF markers, Git state, and optional ob support."),
         )
         .subcommand(
@@ -5495,10 +5523,19 @@ fn with_scan_args(command: ClapCommand) -> ClapCommand {
         .arg(dry_run_arg())
         .arg(jobs_arg())
         .arg(lib_dir_arg())
+        .arg(no_hooks_arg())
         .arg(ref_dir_arg())
         .arg(verbose_arg())
         .arg(write_pdfs_arg())
         .arg(xlib_dir_arg())
+}
+
+fn no_hooks_arg() -> Arg {
+    Arg::new("no-hooks")
+        .long("no-hooks")
+        .short('n')
+        .action(ArgAction::SetTrue)
+        .help("Ignore the configured highlights.pre_scan_hook")
 }
 
 fn with_sync_args(command: ClapCommand) -> ClapCommand {

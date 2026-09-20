@@ -20702,7 +20702,7 @@ fn highlights_ref_scan_runs_configured_pre_scan_before_xlib_intake() {
     write_file(
         &config,
         &format!(
-            "highlights:\n  pre_scan_command: {}\n",
+            "highlights:\n  pre_scan_hook: {}\n",
             shell_single_quote(path_str(&script))
         ),
     );
@@ -20721,7 +20721,7 @@ fn highlights_ref_scan_runs_configured_pre_scan_before_xlib_intake() {
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        report.contains("pre_scan_command: run")
+        report.contains("pre_scan_hook: run")
             && report.contains("pre-scan stdout from")
             && report.contains(
                 "intake: moved xlib/chat/from-hook.pdf -> lib/chat/from-hook.pdf"
@@ -20738,7 +20738,7 @@ fn highlights_ref_scan_runs_configured_pre_scan_before_xlib_intake() {
     assert_eq!(
         fs::read_to_string(&pre_scan_log).expect("read pre-scan pwd log"),
         format!("{}\n", path_str(&vault)),
-        "pre-scan command must run from BOB_DIR"
+        "pre-scan hook must run from BOB_DIR"
     );
     assert!(destination_pdf.is_file(), "pre-scan PDF was not intaked");
     assert!(
@@ -20763,7 +20763,7 @@ fn highlights_ref_scan_dry_run_reports_env_pre_scan_without_executing() {
     );
     write_file(
         &config,
-        "highlights:\n  pre_scan_command: should-not-use-file-config\n",
+        "highlights:\n  pre_scan_hook: should-not-use-file-config\n",
     );
     write_executable(
         &script,
@@ -20780,14 +20780,14 @@ fn highlights_ref_scan_dry_run_reports_env_pre_scan_without_executing() {
         .arg("--verbose")
         .env("BOB_DIR", &vault)
         .env("BOB_CONFIG_FILE", &config)
-        .env("BOB_HIGHLIGHTS_PRE_SCAN_COMMAND", &command)
+        .env("BOB_HIGHLIGHTS_PRE_SCAN_HOOK", &command)
         .output()
         .expect("dry-run scan with pre-scan hook");
 
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        report.contains(&format!("pre_scan_command: would-run {command}")),
+        report.contains(&format!("pre_scan_hook: would-run {command}")),
         "dry-run should report the env override hook:\n{}",
         format_output(&output)
     );
@@ -20828,7 +20828,7 @@ fn highlights_ref_scan_empty_env_disables_configured_pre_scan() {
     write_file(
         &config,
         &format!(
-            "highlights:\n  pre_scan_command: {}\n",
+            "highlights:\n  pre_scan_hook: {}\n",
             shell_single_quote(path_str(&script))
         ),
     );
@@ -20839,14 +20839,14 @@ fn highlights_ref_scan_empty_env_disables_configured_pre_scan() {
         .arg("--verbose")
         .env("BOB_DIR", &vault)
         .env("BOB_CONFIG_FILE", &config)
-        .env("BOB_HIGHLIGHTS_PRE_SCAN_COMMAND", "")
+        .env("BOB_HIGHLIGHTS_PRE_SCAN_HOOK", "")
         .output()
         .expect("scan with empty pre-scan override");
 
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        !report.contains("pre_scan_command:"),
+        !report.contains("pre_scan_hook:"),
         "empty env override should disable the configured hook:\n{report}"
     );
     assert!(
@@ -20857,7 +20857,7 @@ fn highlights_ref_scan_empty_env_disables_configured_pre_scan() {
 }
 
 #[test]
-fn highlights_ref_scan_fails_when_pre_scan_command_fails() {
+fn highlights_ref_scan_fails_when_pre_scan_hook_fails() {
     let temp = TempDir::new("bob-cli-highlights-ref-pre-scan-fail");
     let vault = temp.path().join("vault");
     let config = temp.path().join("config.yml");
@@ -20873,7 +20873,7 @@ fn highlights_ref_scan_fails_when_pre_scan_command_fails() {
     write_file(
         &config,
         &format!(
-            "highlights:\n  pre_scan_command: {}\n",
+            "highlights:\n  pre_scan_hook: {}\n",
             shell_single_quote(path_str(&script))
         ),
     );
@@ -20901,7 +20901,7 @@ fn highlights_ref_scan_fails_when_pre_scan_command_fails() {
     let diagnostic = stderr(&output);
     assert!(
         diagnostic.contains("pre-scan stderr before failure")
-            && diagnostic.contains("pre-scan command failed with exit 17"),
+            && diagnostic.contains("pre-scan hook failed with exit 17"),
         "expected failing pre-scan diagnostics:\n{}",
         format_output(&output)
     );
@@ -20925,7 +20925,7 @@ fn highlights_ref_doctor_reports_configured_pre_scan_executable() {
     write_executable(&script, "#!/bin/sh\nexit 0\n");
     write_file(
         &config,
-        &format!("highlights:\n  pre_scan_command: {}\n", path_str(&script)),
+        &format!("highlights:\n  pre_scan_hook: {}\n", path_str(&script)),
     );
 
     let output = bob_command()
@@ -20939,11 +20939,306 @@ fn highlights_ref_doctor_reports_configured_pre_scan_executable() {
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        report.contains("pre_scan_command: ok")
+        report.contains("pre_scan_hook: ok")
             && report.contains(path_str(&script))
             && report.contains("result: ok"),
         "doctor should report the configured executable hook:\n{}",
         format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_ref_scan_no_hooks_before_subcommand_skips_configured_hook() {
+    let temp = TempDir::new("bob-cli-highlights-ref-no-hooks-before");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/existing.pdf");
+    let note = vault.join("ref/chat/existing.md");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    let sentinel = temp.path().join("pre-scan-ran");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Existing\n",
+    );
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf ran > {}\nexit 29\n",
+            shell_single_quote(path_str(&sentinel))
+        ),
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_hook: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("scan with --no-hooks before subcommand");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        !report.contains("pre_scan_hook:"),
+        "--no-hooks must skip the hook without reporting it:\n{report}"
+    );
+    assert!(
+        !sentinel.exists(),
+        "--no-hooks must not execute the configured hook"
+    );
+    assert!(note.is_file(), "scan should still write notes for lib PDFs");
+}
+
+#[test]
+fn highlights_ref_scan_no_hooks_after_subcommand_skips_configured_hook() {
+    let temp = TempDir::new("bob-cli-highlights-ref-no-hooks-after");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/existing.pdf");
+    let note = vault.join("ref/chat/existing.md");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    let sentinel = temp.path().join("pre-scan-ran");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Existing\n",
+    );
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf ran > {}\nexit 29\n",
+            shell_single_quote(path_str(&sentinel))
+        ),
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_hook: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--no-hooks")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("scan with --no-hooks after subcommand");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        !report.contains("pre_scan_hook:"),
+        "--no-hooks must skip the hook without reporting it:\n{report}"
+    );
+    assert!(
+        !sentinel.exists(),
+        "--no-hooks must not execute the configured hook"
+    );
+    assert!(note.is_file(), "scan should still write notes for lib PDFs");
+}
+
+#[test]
+fn highlights_ref_scan_no_hooks_overrides_env_hook() {
+    let temp = TempDir::new("bob-cli-highlights-ref-no-hooks-env");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/existing.pdf");
+    let note = vault.join("ref/chat/existing.md");
+    let script = temp.path().join("pre-scan");
+    let sentinel = temp.path().join("pre-scan-ran");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Existing\n",
+    );
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf ran > {}\nexit 29\n",
+            shell_single_quote(path_str(&sentinel))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--no-hooks")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_HIGHLIGHTS_PRE_SCAN_HOOK", path_str(&script))
+        .output()
+        .expect("scan with --no-hooks overriding env hook");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        !report.contains("pre_scan_hook:"),
+        "--no-hooks must override the env hook:\n{report}"
+    );
+    assert!(!sentinel.exists(), "env hook must not execute");
+    assert!(note.is_file(), "scan should still write notes for lib PDFs");
+}
+
+#[test]
+fn highlights_ref_scan_hook_child_sees_in_hook_marker() {
+    let temp = TempDir::new("bob-cli-highlights-ref-hook-marker");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/existing.pdf");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    let marker_log = temp.path().join("hook-marker.log");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Existing\n",
+    );
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf '%s' \"${{BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK:-empty}}\" > {}\n",
+            shell_single_quote(path_str(&marker_log))
+        ),
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_hook: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("scan with marker-logging hook");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&marker_log).expect("read hook marker log"),
+        "1",
+        "hook child must see BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1"
+    );
+}
+
+#[test]
+fn highlights_ref_scan_rejects_legacy_pre_scan_command_key() {
+    let temp = TempDir::new("bob-cli-highlights-ref-legacy-key");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(
+        &config,
+        "highlights:\n  pre_scan_command: bob_xlib_pull\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("scan with legacy config key");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "legacy config key must fail scan:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("pre_scan_hook"),
+        "legacy rejection must name the new spelling:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_ref_scan_rejects_legacy_pre_scan_env() {
+    let temp = TempDir::new("bob-cli-highlights-ref-legacy-env");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_HIGHLIGHTS_PRE_SCAN_COMMAND", "true")
+        .output()
+        .expect("scan with legacy env var");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "legacy env var must fail scan:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("BOB_HIGHLIGHTS_PRE_SCAN_HOOK"),
+        "legacy env rejection must name the new spelling:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_ref_doctor_no_hooks_reports_skipped() {
+    let temp = TempDir::new("bob-cli-highlights-ref-doctor-no-hooks");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    let sentinel = temp.path().join("pre-scan-ran");
+    fs::create_dir_all(vault.join("lib")).expect("create lib");
+    fs::create_dir_all(vault.join("ref")).expect("create ref");
+    fs::create_dir_all(vault.join("xlib")).expect("create xlib");
+    git_in(&vault, ["init", "-q"]);
+    configure_test_git_identity(&vault);
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf ran > {}\nexit 29\n",
+            shell_single_quote(path_str(&sentinel))
+        ),
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_hook: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("doctor")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("doctor with --no-hooks");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("pre_scan_hook: skipped (--no-hooks)")
+            && report.contains("result: ok"),
+        "doctor --no-hooks should skip the hook and stay ok:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !sentinel.exists(),
+        "--no-hooks doctor must not execute the hook"
     );
 }
 
