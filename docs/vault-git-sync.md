@@ -172,8 +172,8 @@ and pushes the maintenance commit afterwards.
 explicitly when a second machine needs the PDFs.
 
 `xlib/` is the Highlights intake bridge. athena and apollo each keep a gitignored
-`~/bob/xlib/` source queue, and `bob_xlib_pull` drains both into the MacBook before
-Highlights scanning starts. The managed Bob config sets:
+`~/bob/xlib/` source queue, and `bob_xlib_pull` drains both into the MacBook, either as
+`bob highlights scan`'s pre-scan hook or when run by hand. The managed Bob config sets:
 
 ```yaml
 highlights:
@@ -181,11 +181,27 @@ highlights:
 ```
 
 On the MacBook, the 15-minute `~/bin/maybe_bob_highlights_sync -w` cron job runs
-`bob highlights scan`. The pre-scan hook probes athena and apollo in parallel.
-Missing or empty queues skip rsync entirely, while nonempty queues are pulled one host
-at a time into the MacBook's `~/bob/xlib/` with
+`bob highlights scan`, whose pre-scan hook runs `bob_xlib_pull`. The script probes
+athena and apollo in parallel. Missing or empty queues skip rsync entirely, while
+nonempty queues are pulled one host at a time into the MacBook's `~/bob/xlib/` with
 `rsync --remove-source-files --ignore-existing`. The script reuses a private per-run SSH
 control socket for each host's probe, transfer, and best-effort empty directory cleanup.
+
+After draining athena and apollo, `bob_xlib_pull` runs
+`bob highlights --no-hooks scan -w` itself on the MacBook, so a manual pull syncs the
+new PDFs immediately instead of waiting for the next cron tick. The scan runs even when
+both queues were empty or a probe or transfer failed, because `xlib/` can still hold
+files from an earlier run, and `--no-hooks` keeps it from re-entering the hook. It is
+skipped in two cases:
+
+- bob invoked `bob_xlib_pull` as the pre-scan hook. bob exports
+  `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` to the hook and is about to scan anyway.
+- The `${TMPDIR:-/tmp}/maybe_bob_highlights_sync.lock` directory is already held.
+  `bob_xlib_pull` takes the same lock as the cron job while it scans, so the two never
+  run concurrent scans against the vault.
+
+A failed scan, or a missing `bob` binary, makes `bob_xlib_pull` exit non-zero. The
+15-minute cron job stays as the periodic fallback.
 
 Destination files win collisions. If athena, apollo, or the local intake already has the
 same relative path, the later source keeps its copy instead of overwriting the
@@ -193,9 +209,10 @@ destination; a later scan can handle the retained duplicate after the local inta
 clears. Offline hosts and empty queues are no-work successes, so the scan still proceeds
 with whatever is already local. Genuine traversal, local setup, or transfer failures are
 reported after both hosts are accounted for and make the pre-scan hook fail, which stops
-that `bob highlights scan` run before it consumes intake. Checking both hosts means a
-fast reachable source can still wait for the other host's SSH timeout when that other
-host is unavailable.
+that `bob highlights scan` run before it consumes intake; a manual `bob_xlib_pull` still
+scans what is already local and then exits non-zero. Checking both hosts means a fast
+reachable source can still wait for the other host's SSH timeout when that other host is
+unavailable.
 
 Useful checks:
 
