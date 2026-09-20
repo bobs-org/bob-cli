@@ -22,6 +22,7 @@ mod capture_links;
 mod capture_parse;
 mod capture_pomodoro_name;
 mod capture_pomodoros;
+mod capture_project_note;
 mod capture_rewrite;
 mod capture_schedule_log;
 mod capture_sections;
