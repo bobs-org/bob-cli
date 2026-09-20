@@ -212,10 +212,13 @@ When a project has no `status:` line and the `^prj` task is checked or canceled,
 `sync` inserts `status: done` or `status: canceled` immediately after the
 `type:` line.
 
-The Bob Navigation Hotkeys "Create project note from task" command transfers a
+The Bob Navigation Hotkeys "Create project note from task" command
+(`<ctrl+shift+option+n`) transfers a
 valid `[scheduled:: YYYY-MM-DD]` source-task field into the new project's
 frontmatter and removes it from the completion criteria. Invalid or duplicate
-schedule fields stop creation with a focused notice. In the `<ctrl+=>` child
+schedule fields stop creation with a focused notice. `bob capture` can create
+the same kind of project note directly, with no Obsidian window open: see
+[Project notes](capture.md#project-notes). In the `<ctrl+=>` child
 note picker, future-scheduled projects show a `calendar-clock` chip immediately
 before the status pill; the chip says `Tomorrow`, `Jul 16`, or `Jul 16, 2027`
 while its tooltip and accessible label expose the full date. Today, past,

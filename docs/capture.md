@@ -22,6 +22,7 @@ workflow guide.
   - [Clipboard](#clipboard)
   - [Task with a requested block ID](#task-with-a-requested-block-id)
   - [Pomodoro-linked tasks](#pomodoro-linked-tasks)
+  - [Project notes](#project-notes)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
   - [Task status toggle](#task-status-toggle)
   - [Pomodoro notes](#pomodoro-notes)
@@ -52,6 +53,9 @@ anything is written, and any failure rolls the whole batch back.
 | `@route^block-id` | Ordinary open task with a user-authored block ID |
 | `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; scheduled tasks start Blocked (`[?]`) |
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
+| `@route^block-id+` | Create the project note `<route>_<block_id>.md`; do not touch the daily note |
+| `@route:block-id+` | Same, and link the new note's `^prj` task from today's implicit current/next Pomodoro |
+| `@route:block-id+#pomodoro` | Same, targeting the named open Pomodoro or creating that named future Pomodoro |
 | `@route+block-id` | Ordinary child bullet under an existing task |
 | `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's implicit current/next Pomodoro |
@@ -72,6 +76,10 @@ anything is written, and any failure rolls the whole batch back.
 | `@cash+id#requirements` | Child under that task's `REQUIREMENTS` section |
 | `@cash+id#coding` with no other text | Toggle that task and select the `CODING` Pomodoro |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
+| `@cash^goog-exit+` | New project note `cash_goog_exit.md`; the `+` is a project-note sigil, not a sub-bullet |
+| `@cash:goog-exit+` | Same project note, plus a link of its `^prj` task under the implicit current/next Pomodoro |
+| `@cash:goog-exit+#bugs` | Same project note, linked under the Pomodoro named `BUGS`; the `#` names a Pomodoro, not a task section |
+| `@sase:deep-fix#bugs+` | Pomodoro-linked task under the Pomodoro named `BUGS+`; a trailing `+` after a `#name` stays part of the Pomodoro name |
 
 A `#` after `@route+id` follows the item's mode: with no body text it names a
 Pomodoro for the task toggle, and once body text is present it names an
@@ -175,7 +183,8 @@ destination error naming both lines:
 Buy milk @@bar
 ```
 
-Unsupported forms such as `@@foo#Ideas`, `@@foo^id`, and `@@foo:id` are errors
+Unsupported forms such as `@@foo#Ideas`, `@@foo^id`, `@@foo:id`,
+`@@foo^id+`, and `@@foo:id+` are errors
 rather than literal task text. Wrap `@@...` in inline code to keep it literal.
 
 An item-local marker still wins for that item. If the same item also owns the
@@ -197,7 +206,7 @@ stdin remain composable.
 Each real item resolves in this order:
 
 1. An item-local route or mode marker wins. That includes `@bar`, `@bar+b-id`,
-   `@bar#...`, `@bar^...`, `@bar:...`, and a trailing bare `#`.
+   `@bar#...`, `@bar^...`, `@bar:...`, `@bar^id+`, `@bar:id+`, and a trailing bare `#`.
 2. Otherwise inherit the complete `@@...` declaration.
 3. Otherwise keep today's `mac_inbox.md` task default.
 
@@ -322,7 +331,8 @@ item before any first-level authored item is an `orphaned_nested_bullet`
 error, and an item that becomes empty only because its whole body was a
 capture marker is rejected the same way. Every recognized
 terminal `s:<N>`, `p:<N>`, `%...`, and `@route`/`@route#`/`@route^block-id`/
-`@route:block-id`/`@route+block-id` marker is an item-wide directive no matter
+`@route:block-id`/`@route+block-id`/`@route^block-id+`/`@route:block-id+`
+marker is an item-wide directive no matter
 which physical line in that item it appears on -- as shown above, `@work` and
 `p:1` on the last child still route and prioritize that item -- and is
 stripped from the rendered line it was typed on. A second line in the same
@@ -521,6 +531,124 @@ malformed marker, duplicate block ID, or duplicate Pomodoro link leaves both
 notes unchanged. `--dry-run` and multi-item batches use the same staged
 daily-note snapshot as a real capture, so a later batch item can reuse a
 Pomodoro created by an earlier item without creating a duplicate.
+
+### Project notes
+
+Use a leading or trailing `@<route>^<block-id>+` marker to create a brand-new
+sub-project note instead of a task, without touching the daily note. For
+example,
+`bob capture '@cash^goog-exit+' 'Finish the Google exit packet!'` creates
+`cash_goog_exit.md`:
+
+```markdown
+---
+parent: "[[cash]]"
+template: "[[new_project]]"
+type: "[[project]]"
+status: wip
+created: 2026-09-20T14:31:07-0400
+---
+
+- [ ] #task #prj Finish the Google exit packet! #hide ^prj
+
+## Tasks
+
+- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::2026-09-20]
+```
+
+This mirrors the Obsidian Bob Navigation Hotkeys command **Create project
+note from task**, so CLI-created notes are indistinguishable from
+hotkey-created ones — including the `template: "[[new_project]]"` line, which
+the Obsidian flow inherits from `_templates/new_project.md` and never strips.
+The CLI renders the note directly and never reads that template.
+
+The `+` sigil sits immediately after the block ID, before any `#` component.
+A trailing `+` would be ambiguous — `@sase:deep-fix#bugs+` is a valid
+Pomodoro-linked task naming the Pomodoro `BUGS+` — while `+` right after the
+block ID takes nothing away, because block IDs accept only letters, digits,
+and `-`. The `:` forms link the new note's `^prj` task into the daily ledger:
+`@<route>:<block-id>+` uses today's implicit current/next Pomodoro, and
+`@<route>:<block-id>+#<pomodoro>` targets the named open Pomodoro or creates
+that named future Pomodoro, following the same selection, creation, and
+"both notes validated before either is replaced" rules as Pomodoro-linked
+tasks. The ledger link is `[[<route>_<id>#^prj]]`.
+
+The filename is `<route>_<block-id with every '-' replaced by '_'>.md` at
+the vault root. The route arrives lower-cased from the marker parser; the
+block ID keeps its authored case. `parent` is `"[[<route>]]"` — every capture
+route is a vault-root note, so the `[[path|basename]]` form never applies.
+`created` uses the `YYYY-MM-DDTHH:mm:ss±ZZZZ` shape the template's
+`tp.file.creation_date` writes, controlled by `BOB_NOW` like every other
+capture date.
+
+The `^prj` line is `- [ ] #task #prj <body> #hide ^prj`, where `<body>` is
+the item's normalized parent text, never truncated. Checkbox status follows
+the existing capture contract: `[ ]` normally, `[?]` when a scheduled
+property was resolved, and `[*]` for the `:` form, since a Pomodoro-linked
+capture is a Next task. `bob task-status-hooks` reconciles derived Blocked
+state later, as it does for every other capture.
+
+`p:<N>` writes `[priority::<value>]` inline on the `^prj` line, before
+`#hide ^prj`, and a rolled `p:<N>` date still writes its
+`🗓️ **SCHEDULE LOG**` child under `^prj`. A resolved scheduled date itself
+lands in frontmatter as `scheduled: YYYY-MM-DD`, immediately after `status` —
+frontmatter is the sole project schedule, and `bob projects sync` strips
+inline `scheduled` fields from open `^prj` tasks, so an inline field would be
+deleted on the next sync.
+
+Authored child bullets are re-routed into the new note rather than nested
+under the captured line. A first-level authored bullet with at least one
+nested authored bullet **and** an ALL-CAPS title (letters, digits, spaces,
+and `& ' ( ) , . / -`, starting with a letter or digit) becomes a
+`## Title Case` section appended at the end of the note, with its nested
+bullets copied in verbatim as `- <body>` lines. Title casing lowercases the
+body and uppercases the first character of every alphanumeric run, so
+`FUTURE WORK` becomes `Future Work`, `NON-GOALS` becomes `Non-Goals`, and
+`API DESIGN` becomes `Api Design` without preserving the acronym. Two
+sections whose titles normalize equally (trimmed, whitespace-collapsed,
+casefolded) merge into one in source order. Every other first-level authored
+bullet becomes a `- [ ] #task <body> [created::YYYY-MM-DD]` line inside
+`## Tasks`, with its nested authored bullets rendered one indentation unit
+beneath it; an authored checkbox status is preserved, and a bare ALL-CAPS
+bullet with no nested bullets stays a task. An authored `TASKS` section
+merges into the generated `## Tasks` section instead of adding a duplicate
+header. With no authored task children, the note keeps the template's
+placeholder line
+`- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::YYYY-MM-DD]` under
+`## Tasks`.
+
+The parent note `<route>.md` must already exist and be an area or
+non-terminal project note — the same rule `bob capture-targets` lists routes
+by. A missing parent fails with
+`cannot create a project note under <route>.md: note does not exist (run 'bob capture-targets' to list routable notes)`;
+a parent that is neither area nor project fails with
+`... note is not an area or project note`, and a done or canceled project
+fails with `... note is a <status> project`. Parent reads see earlier batch
+items, so a later item can parent onto a note an earlier item created. When
+`<route>_<id>.md` already exists on disk or was already staged earlier in the
+same batch, capture fails with `project note already exists: <path>` and
+writes nothing. The parent note itself is never modified: `bob projects sync`
+owns the generated `- 🧩 **Sub-projects:** [[...]]` line, which is
+machine-owned and rewritten there.
+
+Project-note capture cannot be combined with clipboard input:
+`%...` markers fail with
+`project-note capture cannot be combined with % clipboard markers` and
+`--clip` with `project-note capture cannot be combined with --clip`.
+Authored children are re-routed into `## Tasks` and `##` sections, so
+clipboard children under the captured parent have no unambiguous home; this
+is a deliberate deferral a future change can lift. Forced destination flags
+(`--route`, `--section`, `--task`, `--task-ref`, `--task-section`) keep
+`@tokens` literal, so they never reach this family. `s:<N>` and `p:<N>` are
+allowed and behave as described above. A `^`-family marker with a Pomodoro
+name (`@<route>^<block-id>+#<name>`) is rejected with a message naming
+`@<route>:<block-id>+#<pomodoro>` as the form that takes one; `!` stays
+reserved for the sub-bullet toggle and is not accepted on this family; a
+`@@<route>^<id>+` or `@@<route>:<id>+` declaration fails as
+`invalid_global_destination`, since one declaration creating the same note
+per item is never what was meant; and an empty block ID (`@<route>^+`,
+`@<route>:+`) fails with the family's existing "requires a block ID"
+wording.
 
 ### Sub-bullets under existing tasks
 
@@ -837,14 +965,18 @@ call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`, and
 `placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
-`"pomodoro_note"`, `"sub_bullet"`, or `"task_toggle"`, and `task_line` holds
-the rendered line for any kind. On JSON-mode failures, stdout is still a
+`"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, or `"project_note"`, and
+`task_line` holds the rendered line for any kind — for `"project_note"` it is
+the rendered `^prj` line. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
 
 A capture with authored sub-bullets additionally includes a `sub_bullets`
 array of the exact rendered child lines, including their target-selected
 indentation, in source order; it is omitted entirely for an ordinary
-capture with no authored children. Human output prints those lines directly
+capture with no authored children. A project-note capture always omits
+`sub_bullets` — authored children are re-routed into the new note's
+`## Tasks` and `##` sections, and the `project_note` summary below replaces
+it. Human output prints those lines directly
 beneath `task_line`, before any clipboard children and schedule log.
 
 A `p:<N>` capture additionally includes `priority` (the written value, such as
@@ -880,6 +1012,28 @@ They omit `day_file`, `block_link`, and `pomodoro_link_placement`.
 
 Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 `block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`.
+
+Project-note results use kind `"project_note"` with `placement: "created"`.
+`route` stays the parent route (`cash` for `@cash^goog-exit+`), so
+route-based clients keep working, while `relative_target` and `target` point
+at the new project note (`cash_goog_exit.md`). `route_label` is the written
+file name (`cash_goog_exit.md`) — the one capture kind where `route_label`
+is not `<route>.md`, because the project note is what a notification should
+show as the destination. `block_id` is `"prj"`, and `task_line` is the
+rendered `^prj` line. A new `project_note` object reports `basename`,
+`parent_route`, `parent_link` (for example `"[[cash]]"`), `tasks` (the count
+of `## Tasks` lines written, including the placeholder when it is kept), and
+`sections` (the ordered array of rendered section titles, excluding
+`## Tasks`). The `:` form additionally reports `day_file`, `block_link`
+(`[[<route>_<id>#^prj]]`), `pomodoro_link_placement`, `pomodoro_name`, and
+`creates_pomodoro`, matching `pomodoro_task` results. `scheduled`,
+`priority`, `priority_label`, and `schedule_log` keep their existing meanings,
+and `sub_bullets` is omitted as described above. Human output prints the
+created note, its `parent` link, the `^prj` line, a `<N> <task|tasks> ·
+sections <titles>` line, and — for the `:` form — the Pomodoro destination,
+closing with a hint that `bob projects sync` adds the parent's Sub-projects
+line and `bob task-status-hooks` reconciles Blocked state, since neither is
+written here.
 
 Sub-bullet results additionally include `parent_line`, `parent_text`,
 `parent_status_symbol`, and `parent_status_name`. A capture that targeted a
@@ -947,6 +1101,11 @@ ID, or `<task> @^block-id` to prompt only for the destination. A complete
 `<task> @route^block-id` request captures immediately as an ordinary task.
 The right-hand block ID is user-authored and must be new, so completion is
 deliberately route-only and never offers existing task block IDs for that side.
+Appending the `+` sigil carries the project-note intent through the same
+pickers: `<task> @^block-id+` (or `<task> @:block-id+` for the Pomodoro-linked
+form) still prompts only for the destination, while `@^<id>+` / `@:<id>+`
+report the project-note mode with `needs: ["route"]` and a bare
+`<task> @route^block-id+` / `<task> @route:block-id+` is complete.
 
 ## `bob capture-parse`
 
@@ -976,9 +1135,11 @@ first-level authored children, and later lines prefixed by exactly two ASCII
 spaces become nested authored children. Separator rows themselves have no
 marker completion or highlighting. Incomplete
 interactive markers are valid input rather than errors, so `@`, `@#`,
-`@#Ideas`, `@route#`, `@^`, `@route^`, `@+`, `@route+`, `@route+id#`,
-`@:`, `@route:`, `@route:id#`, `@route:#name`,
-and the legacy `@!` aliases all parse on any line. The retired
+`@#Ideas`, `@route#`, `@^`, `@route^`, `@^id+`, `@+`, `@route+`, `@route+id#`,
+`@:`, `@route:`, `@:id+`, `@route:id#`, `@route:#name`,
+and the legacy `@!` aliases all parse on any line. The picker's in-progress
+`@^`, `@route^`, `@^id`, `@:`, `@route:`, and `@:id` spellings are unchanged,
+and `@^id+` / `@:id+` carry the project-note intent with `needs: ["route"]`. The retired
 `@route::...` spelling is a diagnostic directing users to `@route^...`;
 it is not an incomplete Pomodoro marker. A trailing bare `#` is a complete
 `pomodoro_note`, not an incomplete section marker. Complete and in-progress Obsidian links such as `[[sase`,
@@ -1014,17 +1175,23 @@ JSON output is a single versioned object:
 the normalized capture body after terminal `s:<N>`, `p:<N>`, and `%...` markers
 and the recognized `@...` token are removed, matching what `bob capture` would
 write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
-`pomodoro_note`, `sub_bullet`, `task_toggle`, or `incomplete`, describing whichever line resolved a marker
+`pomodoro_note`, `sub_bullet`, `task_toggle`, `project_note`,
+`pomodoro_project_note`, or `incomplete`, describing whichever line resolved a marker
 first -- the parent's leading or trailing form, or else the first child line
-with a trailing marker. A bare trailing `#` reports `pomodoro_note` with
+with a trailing marker. The `project_note` / `pomodoro_project_note` split
+mirrors the `task` / `pomodoro_task` one, so a client can tell whether the
+daily note is involved. A bare trailing `#` reports `pomodoro_note` with
 `route`, `section`, and `block_id` all `null` and an empty `needs` list. Combining
 that marker with `@route`, `s:<N>`, or `p:<N>` on the same item still reports
 mode `pomodoro_note` plus a `pomodoro_note_conflict` diagnostic; `bob capture`
 rejects the same input. `route`, `section`, and `block_id` are the
 resolved components, or `null`; `block_id` carries the ID-only task, Pomodoro,
-or sub-bullet ID, whichever applies. For a Pomodoro marker, `section` carries
+sub-bullet, or project-note ID, whichever applies — for a project-note marker
+it is the authored block ID the filename suffix derives from. For a Pomodoro
+marker, `section` carries
 the Pomodoro name when one was typed — the same "whichever applies" reuse
-`block_id` already has, and `mode` disambiguates. `needs` lists what a picker
+`block_id` already has, and `mode` disambiguates — and the same holds for the
+`:` project-note form. `needs` lists what a picker
 still has to supply, in the
 order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
@@ -1067,7 +1234,7 @@ present, so schema version 1 stays additive.
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
-`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_note`, `sub_bullet_route`,
+`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_note`, `project_note_marker`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
@@ -1075,7 +1242,11 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
 `@cash+` or `@@cash+`, the trailing `#` in `@cash+id#` or `@cash:id#`, or the whole `@+` /
-`@@` when the route is still empty too. Wikilink spans
+`@@` when the route is still empty too. A project-note marker adds one
+`project_note_marker` span covering the single `+` byte; its route and
+block-ID components keep their base-family span kinds (`task_block_id_route`
+/ `task_block_id` for the `^` form, `pomodoro_route` / `pomodoro_block_id` /
+`pomodoro_name` for the `:` form). Wikilink spans
 cover syntax only; unresolved note targets are not errors.
 
 Each entry in `diagnostics` has `severity` (`error`, `warning`, or `info`), a
@@ -1084,7 +1255,7 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `unsupported_explicit_toggle`, `legacy_bullet_marker`,
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_project_note_marker` (a project-note shape error, such as a Pomodoro name on the `^` form), `unsupported_explicit_toggle`, `legacy_bullet_marker`,
 `pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
 `s:<N>`, or `p:<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
@@ -1160,12 +1331,15 @@ no-op, because the claiming token is no longer bare.
 
 An item's single local marker that cannot be expressed as a declaration --
 `@route#Section`, `@route+block-id#section`, `@route^block-id`,
-`@route:block-id`, `@route+block-id` as a task toggle, or a trailing bare `#`
+`@route:block-id`, `@route^block-id+` / `@route:block-id+` as a project note,
+`@route+block-id` as a task toggle, or a trailing bare `#`
 -- is left untouched; the result reports `changed: false` plus a
 `notices` entry naming the marker and why, e.g.
 `@@ cannot take a section: leave @notes#Ideas on this item, or delete it and declare @@notes`.
 For a task toggle the notice is
-`@@ cannot take a task toggle: leave @cash+goog-exit on this item, or delete it`.
+`@@ cannot take a task toggle: leave @cash+goog-exit on this item, or delete it`,
+and for a project note it is
+`@@ cannot take a project note: leave @cash^goog-exit+ on this item, or delete it`.
 An item with more than one local marker is also left untouched, with no
 notice, because `bob capture-parse` already reports that duplicate as a
 `duplicate_capture_marker` diagnostic.
