@@ -5,8 +5,9 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::{
+        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -27,8 +28,7 @@ const BOB_BIN: &str = env!("CARGO_BIN_EXE_bob");
 const BOB_NOTIFY_BIN: &str = env!("CARGO_BIN_EXE_bob_notify");
 const BOB_POMODORO_BIN: &str = env!("CARGO_BIN_EXE_bob_pomodoro");
 const TMUX_BOB_POMODORO_BIN: &str = env!("CARGO_BIN_EXE_tmux_bob_pomodoro");
-const TEST_MISSING_CONFIG_FILE: &str =
-    "/definitely/missing/bob-cli-test-config.yml";
+const TEST_MISSING_CONFIG_FILE: &str = "/definitely/missing/bob-cli-test-config.yml";
 
 struct LegacyHelpCase {
     command: fn() -> Command,
@@ -97,18 +97,14 @@ fn move_done_tasks_help_is_native_only() {
 #[test]
 fn task_status_hooks_help_is_native_only() {
     let temp = TempDir::new("bob-cli-task-status-hooks-native-help");
-    for spelling in
-        ["task-status-hooks", "task-status-setter", "mark-next-tasks"]
-    {
+    for spelling in ["task-status-hooks", "task-status-setter", "mark-next-tasks"] {
         let output = bob_command()
             .arg(spelling)
             .arg("--help")
             .env("BOB_CLI_USE_SCRIPT", "1")
             .env("XDG_CACHE_HOME", temp.path())
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run native-only bob {spelling} --help: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run native-only bob {spelling} --help: {error}"));
 
         assert_success(&output);
         assert!(
@@ -124,9 +120,7 @@ fn task_status_hooks_help_is_native_only() {
             .env("BOB_CLI_USE_SCRIPT", "1")
             .env("XDG_CACHE_HOME", temp.path())
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run native-only bob {spelling} diagnostic: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run native-only bob {spelling} diagnostic: {error}"));
         assert_eq!(diagnostic.status.code(), Some(2));
         assert!(
             stderr(&diagnostic).contains("Usage: bob task-status-hooks"),
@@ -629,10 +623,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             .unwrap_or_else(|error| panic!("run {name} --help: {error}"));
 
         assert_success(&output);
-        assert_no_long_only_option_lines(
-            &format!("{name} --help"),
-            &stdout(&output),
-        );
+        assert_no_long_only_option_lines(&format!("{name} --help"), &stdout(&output));
     }
 }
 
@@ -657,13 +648,10 @@ fn legacy_binary_help_is_safe_and_plain() {
     ];
 
     for case in cases {
-        let output =
-            (case.command)()
-                .arg("--help")
-                .output()
-                .unwrap_or_else(|error| {
-                    panic!("run {} --help: {error}", case.name)
-                });
+        let output = (case.command)()
+            .arg("--help")
+            .output()
+            .unwrap_or_else(|error| panic!("run {} --help: {error}", case.name));
 
         assert_success(&output);
         let help = stdout(&output);
@@ -696,9 +684,7 @@ fn script_fallback_help_is_safe_and_plain() {
             .env("BOB_CLI_USE_SCRIPT", "1")
             .env("XDG_CACHE_HOME", temp.path().join("cache"))
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run script fallback bob {args:?}: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run script fallback bob {args:?}: {error}"));
 
         assert_success(&output);
         let help = stdout(&output);
@@ -824,9 +810,7 @@ fn capture_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains(
-            "Capture one or more tasks or bullets into the Bob Obsidian vault"
-        ),
+        help.contains("Capture one or more tasks or bullets into the Bob Obsidian vault"),
         "expected capture long help:\n{help}"
     );
     assert!(
@@ -991,11 +975,13 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
             .len(),
         2
     );
-    assert!(json["struck_completed_references"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["removed_embed"] == true));
+    assert!(
+        json["struck_completed_references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["removed_embed"] == true)
+    );
     assert_eq!(
         json["moved_completed_references"].as_array().unwrap().len(),
         0
@@ -1023,19 +1009,21 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         ])
     );
     assert_eq!(json["unresolved_references"].as_array().unwrap().len(), 1);
-    assert!(json["unresolved_references"][0]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("dependency from dev.md:3"));
+    assert!(
+        json["unresolved_references"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("dependency from dev.md:3")
+    );
     let marked = json["marked_next"].as_array().unwrap();
     assert!(marked.iter().any(|item| {
-        item["path"] == "dev.md"
-            && item["block_id"] == "promote"
-            && item["dependency"] == false
+        item["path"] == "dev.md" && item["block_id"] == "promote" && item["dependency"] == false
     }));
-    assert!(marked.iter().any(|item| {
-        item["block_id"] == "dep-one" && item["dependency"] == true
-    }));
+    assert!(
+        marked
+            .iter()
+            .any(|item| { item["block_id"] == "dep-one" && item["dependency"] == true })
+    );
     assert!(marked.iter().any(|item| {
         item["path"] == "Projects/Alpha.md"
             && item["block_id"] == "dep-two"
@@ -1058,35 +1046,27 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
             && report.contains("unmarked Pomodoro references")
             && report.contains("removed duplicate task-link lines")
             && report.contains("(dependency)")
-            && report.contains(
-                "Summary: 3 marked next, 0 marked in progress, 2 cleared"
-            ),
+            && report.contains("Summary: 3 marked next, 0 marked in progress, 2 cleared"),
         "unexpected task-status-hooks report:\n{}",
         format_output(&applied)
     );
     let dev_contents = fs::read_to_string(&dev).expect("read updated dev");
     assert!(dev_contents.contains("- [*] #task Promote me ^promote"));
     assert!(dev_contents.contains("- [*] #task Same-file dependency ^dep-one"));
-    assert!(dev_contents
-        .contains("- [x] #task Completed dependency stays done ^done-dep"));
-    assert!(dev_contents
-        .contains("- [ ] #task Plain link is not a dependency ^plain"));
-    assert!(dev_contents.contains(
-        "- [ ] #task Fenced transclusion is not a dependency ^fenced-dep"
-    ));
-    assert!(dev_contents
-        .contains("- [ ] #task Stale dependency clears ^stale-child"));
+    assert!(dev_contents.contains("- [x] #task Completed dependency stays done ^done-dep"));
+    assert!(dev_contents.contains("- [ ] #task Plain link is not a dependency ^plain"));
+    assert!(
+        dev_contents.contains("- [ ] #task Fenced transclusion is not a dependency ^fenced-dep")
+    );
+    assert!(dev_contents.contains("- [ ] #task Stale dependency clears ^stale-child"));
     assert!(dev_contents.contains("- [*] #task Already next ^already"));
     assert!(dev_contents.contains("- [ ] #task Clear me ^orphan"));
-    assert!(dev_contents
-        .contains("- [ ] #task Closed reference stays todo ^closed"));
+    assert!(dev_contents.contains("- [ ] #task Closed reference stays todo ^closed"));
     assert!(dev_contents.contains("- [x] #task Done stays done ^done"));
-    assert!(dev_contents
-        .contains("- [-] #task Cancelled stays cancelled ^cancelled"));
+    assert!(dev_contents.contains("- [-] #task Cancelled stays cancelled ^cancelled"));
     assert!(dev_contents.contains("- [!] #task Unknown stays unknown ^unknown"));
     assert!(dev_contents.contains("- [*] Not a Tasks task ^not-a-task"));
-    let daily_contents =
-        fs::read_to_string(&daily).expect("read updated daily");
+    let daily_contents = fs::read_to_string(&daily).expect("read updated daily");
     assert!(daily_contents.contains(concat!(
         "  - [[dev#^promote]]\n",
         "  - Work on [[Projects/Alpha#^working]] and [[dev#^already]]\n",
@@ -1100,10 +1080,8 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         "  - ~~[[dev#^done|historical completed work]]~~\n",
         "  - ~~[[dev#^done|historical embedded work]]~~\n",
     )));
-    let alpha_contents =
-        fs::read_to_string(&alpha).expect("read updated alpha");
-    assert!(alpha_contents
-        .contains("- [*] #task Cross-file recursive dependency ^dep-two"));
+    let alpha_contents = fs::read_to_string(&alpha).expect("read updated alpha");
+    assert!(alpha_contents.contains("- [*] #task Cross-file recursive dependency ^dep-two"));
 
     let second = bob_command()
         .arg("task-status-hooks")
@@ -1142,9 +1120,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
             .env("BOB_CLI_USE_SCRIPT", "1")
             .env("XDG_CACHE_HOME", temp.path().join("alias-cache"))
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run compatibility alias {alias} JSON no-op: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run compatibility alias {alias} JSON no-op: {error}"));
         assert_success(&alias_json);
         assert_eq!(stdout(&alias_json), stdout(&canonical_json));
     }
@@ -1168,10 +1144,8 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     let dev_contents = fs::read_to_string(&dev).expect("read cleared chain");
     assert!(dev_contents.contains("- [ ] #task Promote me ^promote"));
     assert!(dev_contents.contains("- [ ] #task Same-file dependency ^dep-one"));
-    let alpha_contents =
-        fs::read_to_string(&alpha).expect("read cleared alpha");
-    assert!(alpha_contents
-        .contains("- [ ] #task Cross-file recursive dependency ^dep-two"));
+    let alpha_contents = fs::read_to_string(&alpha).expect("read cleared alpha");
+    assert!(alpha_contents.contains("- [ ] #task Cross-file recursive dependency ^dep-two"));
 }
 
 #[test]
@@ -1283,8 +1257,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         "dry-run must not create recovery state"
     );
     let dry_json: serde_json::Value =
-        serde_json::from_str(stdout(&dry_run).trim())
-            .expect("grouping dry-run JSON");
+        serde_json::from_str(stdout(&dry_run).trim()).expect("grouping dry-run JSON");
     assert_eq!(dry_json["dry_run"], true);
     assert_eq!(dry_json["marked_next"].as_array().unwrap().len(), 1);
     assert_eq!(dry_json["cleared_in_progress"].as_array().unwrap().len(), 1);
@@ -1319,12 +1292,16 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
             "destination": "next_and_in_progress"
         })
     );
-    assert!(!fs::read_to_string(&project)
-        .unwrap()
-        .contains("Next & In Progress"));
-    assert!(!fs::read_to_string(&area)
-        .unwrap()
-        .contains("Next & In Progress"));
+    assert!(
+        !fs::read_to_string(&project)
+            .unwrap()
+            .contains("Next & In Progress")
+    );
+    assert!(
+        !fs::read_to_string(&area)
+            .unwrap()
+            .contains("Next & In Progress")
+    );
 
     let human_dry_run = bob_command()
         .arg("task-status-hooks")
@@ -1361,8 +1338,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         .expect("apply grouped task-status-hooks");
     assert_success(&applied);
     let applied_json: serde_json::Value =
-        serde_json::from_str(stdout(&applied).trim())
-            .expect("grouping apply JSON");
+        serde_json::from_str(stdout(&applied).trim()).expect("grouping apply JSON");
     assert_eq!(
         applied_json["applied_files"],
         serde_json::json!(["Areas/Home.md", "alpha.md"])
@@ -1554,22 +1530,24 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
         .expect("dry-run grouping warning JSON");
     assert_success(&json_output);
     let json: serde_json::Value =
-        serde_json::from_str(stdout(&json_output).trim())
-            .expect("grouping warning JSON");
+        serde_json::from_str(stdout(&json_output).trim()).expect("grouping warning JSON");
     assert_eq!(json["grouped_task_sections"], serde_json::json!([]));
     assert_eq!(json["grouping_warnings"].as_array().unwrap().len(), 2);
-    assert!(json["grouping_warnings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|warning| warning["path"] == "area.md"
-            && warning["code"] == "h6_container"));
-    assert!(json["grouping_warnings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|warning| warning["path"] == "badges.md"
-            && warning["code"] == "malformed_badge_marker"));
+    assert!(
+        json["grouping_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["path"] == "area.md" && warning["code"] == "h6_container")
+    );
+    assert!(
+        json["grouping_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["path"] == "badges.md"
+                && warning["code"] == "malformed_badge_marker")
+    );
     assert!(
         stderr(&json_output).contains("H6 heading")
             && stderr(&json_output).contains("task-status-badges"),
@@ -1723,8 +1701,8 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     assert_eq!(fs::read_to_string(&older).unwrap(), older_before);
     assert_eq!(fs::read_to_string(&area).unwrap(), area_before);
     assert_eq!(fs::read_to_string(&project).unwrap(), project_before);
-    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
-        .expect("rolling daily dry-run JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).expect("rolling daily dry-run JSON");
     assert_eq!(json["daily_file"], "2026/20260721.md");
     assert_eq!(json["previous_daily_file"], "2026/20260710.md");
     assert_eq!(json["previous_daily_references"], 4);
@@ -1732,11 +1710,13 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert!(json["cleared"].as_array().unwrap().is_empty());
     assert_eq!(json["cleared_in_progress"].as_array().unwrap().len(), 4);
-    assert!(json["cleared_in_progress"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["path"] == "Areas/Home.md" && item["block_id"] == ""));
+    assert!(
+        json["cleared_in_progress"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["path"] == "Areas/Home.md" && item["block_id"] == "")
+    );
 
     let applied = bob_command()
         .arg("task-status-hooks")
@@ -1754,12 +1734,16 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     assert_eq!(fs::read_to_string(&area).unwrap(), area_after);
     assert_eq!(fs::read_to_string(&project).unwrap(), project_after);
     assert_eq!(fs::read_to_string(&ordinary).unwrap(), ordinary_before);
-    assert!(fs::read_to_string(&current)
-        .unwrap()
-        .contains("  - ~~[[Tasks#^done|finished]]~~\n"));
-    assert!(fs::read_to_string(&tasks)
-        .unwrap()
-        .contains("- [*] #task Current root ^current-root\n"));
+    assert!(
+        fs::read_to_string(&current)
+            .unwrap()
+            .contains("  - ~~[[Tasks#^done|finished]]~~\n")
+    );
+    assert!(
+        fs::read_to_string(&tasks)
+            .unwrap()
+            .contains("- [*] #task Current root ^current-root\n")
+    );
 
     let second = bob_command()
         .arg("task-status-hooks")
@@ -1785,8 +1769,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         .expect("run with sectionless previous daily");
     assert_success(&empty_previous);
     let json: serde_json::Value =
-        serde_json::from_str(stdout(&empty_previous).trim())
-            .expect("sectionless previous JSON");
+        serde_json::from_str(stdout(&empty_previous).trim()).expect("sectionless previous JSON");
     assert_eq!(json["previous_daily_file"], "2026/20260720.md");
     assert_eq!(json["previous_daily_references"], 0);
     assert_eq!(
@@ -1795,15 +1778,12 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     );
     let area_contents = fs::read_to_string(&area).unwrap();
     assert!(area_contents.contains("- [ ] #task Previous direct ^previous"));
-    assert!(area_contents
-        .contains("- [ ] #task Previous dependency ^previous-dependency"));
-    assert!(area_contents
-        .contains("- [/] #task Current dependency ^current-dependency"));
+    assert!(area_contents.contains("- [ ] #task Previous dependency ^previous-dependency"));
+    assert!(area_contents.contains("- [/] #task Current dependency ^current-dependency"));
 }
 
 #[test]
-fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotions(
-) {
+fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotions() {
     let temp = TempDir::new("bob-cli-task-status-hooks-ranked-dependencies");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260714.md");
@@ -1852,24 +1832,26 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     assert_success(&dry_run);
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
     assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
-    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
-        .expect("ranked propagation dry-run JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).expect("ranked propagation dry-run JSON");
     assert_eq!(json["dependency_references"], 8);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 2);
     assert_eq!(json["marked_in_progress"].as_array().unwrap().len(), 3);
     assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
-    assert!(json["marked_in_progress"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["block_id"] == "stronger-child"
-            && item["dependency"] == true));
-    assert!(json["marked_in_progress"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["block_id"] == "working-next"
-            && item["dependency"] == true));
+    assert!(
+        json["marked_in_progress"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["block_id"] == "stronger-child" && item["dependency"] == true)
+    );
+    assert!(
+        json["marked_in_progress"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["block_id"] == "working-next" && item["dependency"] == true)
+    );
 
     let applied = bob_command()
         .arg("task-status-hooks")
@@ -1883,9 +1865,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     assert!(
         report.contains("marked in progress")
             && report.contains("[ ] or [*] -> [/]")
-            && report.contains(
-                "Summary: 2 marked next, 3 marked in progress, 1 cleared"
-            ),
+            && report.contains("Summary: 2 marked next, 3 marked in progress, 1 cleared"),
         "unexpected ranked propagation report:\n{}",
         format_output(&applied)
     );
@@ -1934,9 +1914,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     let contents = fs::read_to_string(&tasks).unwrap();
     assert!(contents.contains("- [ ] #task Next root ^root-next"));
     assert!(contents.contains("- [ ] #task Next child ^next-ready"));
-    assert!(
-        contents.contains("- [/] #task Stronger descendant ^stronger-child")
-    );
+    assert!(contents.contains("- [/] #task Stronger descendant ^stronger-child"));
     assert!(contents.contains("- [/] #task Working next child ^working-next"));
 }
 
@@ -1979,8 +1957,8 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
     assert_success(&dry_run);
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
     assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
-    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
-        .expect("duplicate cleanup dry-run JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).expect("duplicate cleanup dry-run JSON");
     assert_eq!(json["references"], 2);
     assert_eq!(json["dependency_references"], 0);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
@@ -2002,8 +1980,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
         .expect("human dry-run duplicate Pomodoro cleanup");
     assert_success(&human_dry_run);
     assert!(
-        stdout(&human_dry_run)
-            .contains("would remove duplicate task-link lines"),
+        stdout(&human_dry_run).contains("would remove duplicate task-link lines"),
         "unexpected duplicate cleanup dry-run report:\n{}",
         format_output(&human_dry_run)
     );
@@ -2104,8 +2081,8 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
         .expect("dry-run empty Pomodoro cleanup");
     assert_success(&dry_run);
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
-    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
-        .expect("empty Pomodoro dry-run JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).expect("empty Pomodoro dry-run JSON");
     assert_eq!(json["open_pomodoros"], 3);
     assert_eq!(json["references"], 1);
     assert_eq!(
@@ -2188,15 +2165,21 @@ fn task_status_hooks_resolves_duplicate_fragments_by_explicit_note_path() {
         .output()
         .expect("mark next duplicate fragments");
     assert_success(&output);
-    assert!(fs::read_to_string(vault.join("Root.md"))
-        .unwrap()
-        .contains("- [*] #task Root ^root"));
-    assert!(fs::read_to_string(vault.join("Alpha.md"))
-        .unwrap()
-        .contains("- [*] #task Alpha ^dep"));
-    assert!(fs::read_to_string(vault.join("Beta.md"))
-        .unwrap()
-        .contains("- [ ] #task Beta ^dep"));
+    assert!(
+        fs::read_to_string(vault.join("Root.md"))
+            .unwrap()
+            .contains("- [*] #task Root ^root")
+    );
+    assert!(
+        fs::read_to_string(vault.join("Alpha.md"))
+            .unwrap()
+            .contains("- [*] #task Alpha ^dep")
+    );
+    assert!(
+        fs::read_to_string(vault.join("Beta.md"))
+            .unwrap()
+            .contains("- [ ] #task Beta ^dep")
+    );
 }
 
 #[test]
@@ -2237,10 +2220,12 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&malformed).trim()).expect("guard JSON");
     assert_eq!(json["ok"], false);
-    assert!(json["error"]
-        .as_str()
-        .unwrap()
-        .contains("has no Pomodoros section"));
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("has no Pomodoros section")
+    );
     assert_eq!(
         fs::read_to_string(&task_file).unwrap(),
         "- [*] #task Must remain next ^keep\n"
@@ -2292,8 +2277,7 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
         .expect("run with empty timed Pomodoro");
     assert_success(&empty_timed_output);
     let empty_timed_json: serde_json::Value =
-        serde_json::from_str(stdout(&empty_timed_output).trim())
-            .expect("empty timed JSON");
+        serde_json::from_str(stdout(&empty_timed_output).trim()).expect("empty timed JSON");
     assert_eq!(
         empty_timed_json["removed_empty_pomodoros"],
         serde_json::json!([
@@ -2312,8 +2296,7 @@ fn task_status_hooks_uses_custom_done_status_and_completed_fallback() {
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260710.md");
     let tasks = vault.join("tasks.md");
-    let settings =
-        vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
+    let settings = vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
     write_file(
         &daily,
         concat!(
@@ -2367,10 +2350,12 @@ fn task_status_hooks_uses_custom_done_status_and_completed_fallback() {
         1
     );
     assert_eq!(json["marker_added_references"].as_array().unwrap().len(), 1);
-    assert!(json["marker_removed_references"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        json["marker_removed_references"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         fs::read_to_string(&daily).unwrap(),
         concat!(
@@ -2457,8 +2442,8 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
     assert_success(&repeated_dry_run);
     assert_eq!(stdout(&repeated_dry_run), stdout(&dry_run));
 
-    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
-        .expect("canceled cleanup dry-run JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).expect("canceled cleanup dry-run JSON");
     assert_eq!(json["references"], 7);
     assert_eq!(json["dependency_references"], 0);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
@@ -2492,15 +2477,17 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
             }
         ])
     );
-    assert!(json["unresolved_references"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["block_id"] == "mixed"
-            && item["reason"]
-                .as_str()
-                .unwrap()
-                .contains("canceled-reference list-item removal was skipped")));
+    assert!(
+        json["unresolved_references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["block_id"] == "mixed"
+                && item["reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("canceled-reference list-item removal was skipped"))
+    );
 
     let human_dry_run = bob_command()
         .arg("task-status-hooks")
@@ -2512,9 +2499,9 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
         .expect("human dry-run canceled Pomodoro cleanup");
     assert_success(&human_dry_run);
     assert!(
-        stdout(&human_dry_run).contains(
-            "would remove list items containing canceled task references"
-        ) && stdout(&human_dry_run).contains("4 canceled-reference triggers"),
+        stdout(&human_dry_run)
+            .contains("would remove list items containing canceled task references")
+            && stdout(&human_dry_run).contains("4 canceled-reference triggers"),
         "unexpected canceled cleanup dry-run report:\n{}",
         format_output(&human_dry_run)
     );
@@ -2530,8 +2517,7 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
         .expect("apply canceled Pomodoro cleanup");
     assert_success(&applied);
     assert!(
-        stdout(&applied)
-            .contains("removed list items containing canceled task references")
+        stdout(&applied).contains("removed list items containing canceled task references")
             && stdout(&applied).contains("4 canceled-reference triggers"),
         "unexpected canceled cleanup report:\n{}",
         format_output(&applied)
@@ -2583,12 +2569,13 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
         .output()
         .expect("rerun canceled Pomodoro cleanup");
     assert_success(&second);
-    let second_json: serde_json::Value =
-        serde_json::from_str(stdout(&second).trim()).unwrap();
-    assert!(second_json["removed_canceled_references"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    let second_json: serde_json::Value = serde_json::from_str(stdout(&second).trim()).unwrap();
+    assert!(
+        second_json["removed_canceled_references"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert!(second_json["marked_next"].as_array().unwrap().is_empty());
     assert!(second_json["cleared"].as_array().unwrap().is_empty());
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_after);
@@ -2597,8 +2584,7 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
 
 #[test]
 fn task_status_hooks_resolves_archive_references_read_only() {
-    let temp =
-        TempDir::new("bob-cli-task-status-hooks-archive-references-readonly");
+    let temp = TempDir::new("bob-cli-task-status-hooks-archive-references-readonly");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260827.md");
     let previous = vault.join("2026/20260826.md");
@@ -2613,8 +2599,7 @@ fn task_status_hooks_resolves_archive_references_read_only() {
         "- [x] Previous (0900-0930)\n",
         "  - [[done/dev/dev_done#^lower-athena-disk-use]]\n",
     );
-    let archive_before =
-        "- [x] #task Lower Athena disk use ^lower-athena-disk-use\n";
+    let archive_before = "- [x] #task Lower Athena disk use ^lower-athena-disk-use\n";
     write_file(&daily, daily_before);
     write_file(&previous, previous_before);
     write_file(&archive, archive_before);
@@ -2650,8 +2635,7 @@ fn task_status_hooks_resolves_archive_references_read_only() {
         "unexpected archive warning:\n{}",
         format_output(&dry_run)
     );
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim()).unwrap();
     assert_eq!(json["scanned_files"], 2);
     assert_eq!(json["previous_daily_file"], "2026/20260826.md");
     assert_eq!(json["previous_daily_references"], 1);
@@ -2704,12 +2688,13 @@ fn task_status_hooks_resolves_archive_references_read_only() {
         .output()
         .expect("rerun archived Pomodoro references");
     assert_success(&second);
-    let second_json: serde_json::Value =
-        serde_json::from_str(stdout(&second).trim()).unwrap();
-    assert!(second_json["unresolved_references"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    let second_json: serde_json::Value = serde_json::from_str(stdout(&second).trim()).unwrap();
+    assert!(
+        second_json["unresolved_references"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
     assert_eq!(fs::read_to_string(&previous).unwrap(), previous_before);
     assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
@@ -2753,8 +2738,7 @@ fn task_status_hooks_normalizes_live_archive_terminal_references() {
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
     assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
     assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim()).unwrap();
     assert_eq!(json["scanned_files"], 2);
     assert!(json["unresolved_references"].as_array().unwrap().is_empty());
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
@@ -2819,28 +2803,32 @@ fn task_status_hooks_normalizes_live_archive_terminal_references() {
         .output()
         .expect("rerun live archived terminal links");
     assert_success(&second);
-    let second_json: serde_json::Value =
-        serde_json::from_str(stdout(&second).trim()).unwrap();
+    let second_json: serde_json::Value = serde_json::from_str(stdout(&second).trim()).unwrap();
     assert!(second_json["marked_next"].as_array().unwrap().is_empty());
-    assert!(second_json["struck_completed_references"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-    assert!(second_json["removed_canceled_references"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-    assert!(second_json["unresolved_references"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        second_json["struck_completed_references"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        second_json["removed_canceled_references"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        second_json["unresolved_references"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
 }
 
 #[test]
 fn task_status_hooks_keeps_archive_out_of_active_dependency_sync() {
-    let temp =
-        TempDir::new("bob-cli-task-status-hooks-archive-dependency-scope");
+    let temp = TempDir::new("bob-cli-task-status-hooks-archive-dependency-scope");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260827.md");
     let tasks = vault.join("tasks.md");
@@ -2853,8 +2841,7 @@ fn task_status_hooks_keeps_archive_out_of_active_dependency_sync() {
         "  - missing [[done/missing#^ghost]]\n",
         "  - invalid [[done/../dev_done#^bad]]\n",
     );
-    let tasks_before =
-        "- [ ] #task Active root ^root\n  - ![[done/dev_done#^archived-open]]\n";
+    let tasks_before = "- [ ] #task Active root ^root\n  - ![[done/dev_done#^archived-open]]\n";
     let archive_before = "- [ ] #task Archived open ^archived-open\n";
     write_file(&daily, daily_before);
     write_file(&tasks, tasks_before);
@@ -2872,8 +2859,7 @@ fn task_status_hooks_keeps_archive_out_of_active_dependency_sync() {
         .expect("dry-run archive dependency scope");
     assert_success(&dry_run);
     assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim()).unwrap();
     assert_eq!(json["scanned_files"], 2);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert_eq!(json["marked_next"][0]["path"], "tasks.md");
@@ -3042,28 +3028,31 @@ fn task_status_hooks_reconciles_blocked_status_from_dataview_dependencies() {
         .expect("dry-run dependency status reconciliation");
     assert_success(&dry_run);
     assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim()).unwrap();
     assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 6);
     assert!(json["unblocked"].as_array().unwrap().is_empty());
-    assert!(json["marked_blocked"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| {
-            item["block_id"] == "ready"
-                && item["from"] == " "
-                && item["to"] == "?"
-                && item["open_dependency_ids"] == serde_json::json!(["root"])
-        }));
-    assert!(json["marked_blocked"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| {
-            item["block_id"] == "self"
-                && item["open_dependency_ids"] == serde_json::json!(["self"])
-        }));
+    assert!(
+        json["marked_blocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| {
+                item["block_id"] == "ready"
+                    && item["from"] == " "
+                    && item["to"] == "?"
+                    && item["open_dependency_ids"] == serde_json::json!(["root"])
+            })
+    );
+    assert!(
+        json["marked_blocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| {
+                item["block_id"] == "self"
+                    && item["open_dependency_ids"] == serde_json::json!(["self"])
+            })
+    );
 
     let applied = bob_command()
         .arg("task-status-hooks")
@@ -3084,8 +3073,9 @@ fn task_status_hooks_reconciles_blocked_status_from_dataview_dependencies() {
         "duplicate-parent",
     ] {
         assert!(
-            contents.lines().any(|line| line.contains("- [?]")
-                && line.ends_with(&format!("^{block_id}"))),
+            contents
+                .lines()
+                .any(|line| line.contains("- [?]") && line.ends_with(&format!("^{block_id}"))),
             "missing blocked {block_id}:\n{contents}"
         );
     }
@@ -3114,8 +3104,7 @@ fn task_status_hooks_reconciles_blocked_status_from_dataview_dependencies() {
 }
 
 #[test]
-fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
-{
+fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons() {
     let temp = TempDir::new("bob-cli-task-status-hooks-scheduled-blocked");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260716.md");
@@ -3163,8 +3152,7 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
         .expect("dry-run scheduled status reconciliation");
     assert_success(&dry_run);
     assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim()).unwrap();
     assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 6);
     assert_eq!(json["unblocked"].as_array().unwrap().len(), 1);
 
@@ -3222,8 +3210,9 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
         "future-closed",
     ] {
         assert!(
-            contents.lines().any(|line| line.contains("- [?]")
-                && line.ends_with(&format!("^{block_id}"))),
+            contents
+                .lines()
+                .any(|line| line.contains("- [?]") && line.ends_with(&format!("^{block_id}"))),
             "missing blocked {block_id}:\n{contents}"
         );
     }
@@ -3296,15 +3285,13 @@ fn task_status_hooks_unblocks_to_final_pomodoro_rank_and_ready() {
         .output()
         .expect("unblock dependency statuses");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).unwrap();
     assert_eq!(json["unblocked"].as_array().unwrap().len(), 4);
     assert!(json["unblocked"].as_array().unwrap().iter().any(|item| {
         item["block_id"] == "working"
             && item["from"] == "?"
             && item["to"] == "/"
-            && item["unresolved_dependency_ids"]
-                == serde_json::json!(["missing"])
+            && item["unresolved_dependency_ids"] == serde_json::json!(["missing"])
             && item["future_scheduled_date"].is_null()
     }));
     assert!(json["marked_next"].as_array().unwrap().is_empty());
@@ -3323,8 +3310,7 @@ fn task_status_hooks_unblocks_to_final_pomodoro_rank_and_ready() {
 
 #[test]
 fn task_status_hooks_uses_recent_ledgers_only_for_blocked_recovery() {
-    let temp =
-        TempDir::new("bob-cli-task-status-hooks-recovery-only-recent-rank");
+    let temp = TempDir::new("bob-cli-task-status-hooks-recovery-only-recent-rank");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260716.md");
     let previous = vault.join("2026/20260710.md");
@@ -3379,8 +3365,7 @@ fn task_status_hooks_uses_recent_ledgers_only_for_blocked_recovery() {
         .expect("preview recovery-only recent ranks");
     assert_success(&dry_run);
     assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim()).unwrap();
     assert_eq!(json["previous_daily_file"], "2026/20260710.md");
     assert_eq!(json["unblocked"].as_array().unwrap().len(), 5);
     assert!(json["marked_next"].as_array().unwrap().is_empty());
@@ -3430,10 +3415,10 @@ fn task_status_hooks_blocked_status_guard_writes_nothing() {
         ),
         (
             "incompatible",
-            Some(blocked_tasks_settings_json("").replace(
-                "\"nextStatusSymbol\":\" \"",
-                "\"nextStatusSymbol\":\"x\"",
-            )),
+            Some(
+                blocked_tasks_settings_json("")
+                    .replace("\"nextStatusSymbol\":\" \"", "\"nextStatusSymbol\":\"x\""),
+            ),
         ),
     ];
     for (name, settings) in scenarios {
@@ -3450,8 +3435,7 @@ fn task_status_hooks_blocked_status_guard_writes_nothing() {
         write_file(&tasks, tasks_before);
         if let Some(settings) = settings {
             write_file(
-                &vault
-                    .join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+                &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
                 &settings,
             );
         }
@@ -3586,14 +3570,15 @@ fn task_status_hooks_defers_when_maintenance_lock_is_held() {
         .output()
         .expect("run contended task-status-hooks");
     assert_eq!(output.status.code(), Some(1));
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("lock JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("lock JSON");
     assert_eq!(json["ok"], false);
     assert_eq!(json["reason"], "lock_contention");
-    assert!(json["error"]
-        .as_str()
-        .unwrap()
-        .contains("another Bob vault maintenance run"));
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("another Bob vault maintenance run")
+    );
     assert_eq!(json["applied_files"].as_array().unwrap().len(), 0);
     assert_eq!(
         fs::read_to_string(&tasks).unwrap(),
@@ -3653,8 +3638,7 @@ fn task_status_hooks_human_retry_progress_goes_to_stdout() {
     let mut seen = Vec::new();
     let mut saw_retry_decision = false;
     while let Ok(line) = rx.recv_timeout(Duration::from_secs(20)) {
-        let is_decision =
-            line.contains("retry run=") && line.contains("attempt=1");
+        let is_decision = line.contains("retry run=") && line.contains("attempt=1");
         seen.push(line);
         if is_decision {
             saw_retry_decision = true;
@@ -3776,8 +3760,7 @@ fn task_status_hooks_json_retry_progress_stays_off_stdout() {
     let mut seen = Vec::new();
     let mut saw_retry_decision = false;
     while let Ok(line) = rx.recv_timeout(Duration::from_secs(20)) {
-        let is_decision =
-            line.contains("retry run=") && line.contains("attempt=1");
+        let is_decision = line.contains("retry run=") && line.contains("attempt=1");
         seen.push(line);
         if is_decision {
             saw_retry_decision = true;
@@ -3814,8 +3797,7 @@ fn task_status_hooks_json_retry_progress_stays_off_stdout() {
         !out.contains("retry run="),
         "JSON stdout must not be interleaved with retry diagnostics:\n{out}"
     );
-    let json: serde_json::Value =
-        serde_json::from_str(out.trim()).expect("retry JSON");
+    let json: serde_json::Value = serde_json::from_str(out.trim()).expect("retry JSON");
     assert_eq!(json["ok"], true);
     assert!(
         seen.iter().any(|line| line.contains("succeeded")),
@@ -3989,11 +3971,8 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
         .spawn()
         .expect("spawn cron-style task-status-hooks");
 
-    let log_during_contention = poll_log_until_contains(
-        &log_path,
-        "retry run=",
-        Duration::from_secs(20),
-    );
+    let log_during_contention =
+        poll_log_until_contains(&log_path, "retry run=", Duration::from_secs(20));
     if !log_during_contention.contains("retry run=") {
         let _ = child.kill();
         let _ = child.wait();
@@ -4045,8 +4024,7 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
 }
 
 #[test]
-fn task_status_hooks_cron_redirection_captures_terminal_failure_and_exit_status(
-) {
+fn task_status_hooks_cron_redirection_captures_terminal_failure_and_exit_status() {
     let temp = TempDir::new("bob-cli-task-status-hooks-cron-terminal-log");
     let vault = temp.path().join("vault");
     // Never created, so the run fails immediately with a non-retryable
@@ -4384,8 +4362,8 @@ fn capture_parse_json_output_is_stable_and_parseable() {
         "unexpected capture-parse stderr:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["input"], "Call bank @Cash+");
@@ -4418,8 +4396,8 @@ fn capture_parse_json_reports_batch_items_with_global_ranges() {
         .expect("run batch capture-parse json");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     let first_end = draft.find("\n\n").expect("separator");
     let second_start = first_end + 2;
 
@@ -4474,8 +4452,8 @@ fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
         .expect("run bob capture-parse task block ID marker");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["route"], "dev");
     assert!(json["block_id"].is_null());
@@ -4497,8 +4475,8 @@ fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
         .output()
         .expect("run invalid task block ID parse");
     assert_success(&invalid);
-    let json: serde_json::Value = serde_json::from_str(stdout(&invalid).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&invalid).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "task");
     assert_eq!(json["diagnostics"][0]["code"], "invalid_task_block_id");
 }
@@ -4515,8 +4493,8 @@ fn capture_parse_json_reports_project_note_markers() {
         .expect("run bob capture-parse project-note caret marker");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "project_note");
     assert_eq!(json["body"], "Do work");
     assert_eq!(json["route"], "cash");
@@ -4543,8 +4521,8 @@ fn capture_parse_json_reports_project_note_markers() {
         .expect("run bob capture-parse project-note pomodoro marker");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "pomodoro_project_note");
     assert_eq!(json["body"], "Do work");
     assert_eq!(json["route"], "cash");
@@ -4572,8 +4550,8 @@ fn capture_parse_json_reports_project_note_markers() {
         .expect("run bob capture-parse routeless project-note marker");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "project_note");
     assert!(json["route"].is_null());
     assert_eq!(json["block_id"], "focus-123");
@@ -4588,8 +4566,8 @@ fn capture_parse_json_reports_project_note_markers() {
         .output()
         .expect("run caret project-note marker with a pomodoro name");
     assert_success(&invalid);
-    let json: serde_json::Value = serde_json::from_str(stdout(&invalid).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&invalid).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "task");
     assert_eq!(
         json["diagnostics"][0]["code"],
@@ -4614,12 +4592,9 @@ fn capture_parse_json_reports_project_note_markers() {
         .output()
         .expect("run project-note global declaration parse");
     assert_success(&global);
-    let json: serde_json::Value = serde_json::from_str(stdout(&global).trim())
-        .expect("capture-parse JSON");
-    assert_eq!(
-        json["diagnostics"][0]["code"],
-        "invalid_global_destination"
-    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&global).trim()).expect("capture-parse JSON");
+    assert_eq!(json["diagnostics"][0]["code"], "invalid_global_destination");
 }
 
 #[test]
@@ -4666,14 +4641,22 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
     assert_eq!(json["project_note"]["parent_route"], "cash");
     assert_eq!(json["project_note"]["parent_link"], "[[cash]]");
     assert_eq!(json["project_note"]["tasks"], 1);
-    assert!(json["project_note"]["sections"].as_array().unwrap().is_empty());
+    assert!(
+        json["project_note"]["sections"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert!(json.get("sub_bullets").is_none(), "{json}");
     assert!(json.get("day_file").is_none(), "{json}");
 
-    let contents = fs::read_to_string(vault.join("cash_goog_exit.md"))
-        .expect("read new project note");
+    let contents =
+        fs::read_to_string(vault.join("cash_goog_exit.md")).expect("read new project note");
     assert!(contents.contains("parent: \"[[cash]]\""), "{contents}");
-    assert!(contents.contains("template: \"[[new_project]]\""), "{contents}");
+    assert!(
+        contents.contains("template: \"[[new_project]]\""),
+        "{contents}"
+    );
     assert!(contents.contains("type: \"[[project]]\""), "{contents}");
     assert!(contents.contains("status: wip"), "{contents}");
     assert!(
@@ -4681,15 +4664,11 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
         "{contents}"
     );
     assert!(
-        contents.contains(
-            "- [ ] #task #prj Finish the Google exit packet! #hide ^prj"
-        ),
+        contents.contains("- [ ] #task #prj Finish the Google exit packet! #hide ^prj"),
         "{contents}"
     );
     assert!(
-        contents.contains(
-            "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::2026-09-20]"
-        ),
+        contents.contains("- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::2026-09-20]"),
         "{contents}"
     );
 
@@ -4705,7 +4684,10 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
         .expect("run human project-note capture");
     assert_success(&human);
     let out = stdout(&human);
-    assert!(out.contains("captured") && out.contains("cash_second_note.md"), "{out}");
+    assert!(
+        out.contains("captured") && out.contains("cash_second_note.md"),
+        "{out}"
+    );
     assert!(out.contains("[[cash]]"), "{out}");
     assert!(out.contains("^prj"), "{out}");
     assert!(out.contains("projects sync"), "{out}");
@@ -4737,15 +4719,10 @@ fn capture_project_note_pomodoro_variants_link_the_prj_task() {
             true,
         ),
     ] {
-        let temp = TempDir::new(&format!(
-            "bob-cli-capture-project-note-{name}"
-        ));
+        let temp = TempDir::new(&format!("bob-cli-capture-project-note-{name}"));
         let vault = temp.path().join("vault");
         let day_file = vault.join("day.md");
-        write_file(
-            &vault.join("cash.md"),
-            "---\ntype: \"[[area]]\"\n---\n",
-        );
+        write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
         write_file(&day_file, day_before);
 
         let mut command = bob_command();
@@ -4767,8 +4744,7 @@ fn capture_project_note_pomodoro_variants_link_the_prj_task() {
 
         assert_success(&output);
         let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim())
-                .expect("capture JSON");
+            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
         assert_eq!(json["kind"], "project_note", "{json}");
         assert_eq!(json["block_id"], "prj", "{json}");
         assert_eq!(json["day_file"], day_file.display().to_string(), "{json}");
@@ -4790,13 +4766,11 @@ fn capture_project_note_pomodoro_variants_link_the_prj_task() {
         }
         if name == "implicit" {
             assert_eq!(
-                json["task_line"],
-                "- [*] #task #prj Body implicit #hide ^prj",
+                json["task_line"], "- [*] #task #prj Body implicit #hide ^prj",
                 "{json}"
             );
         }
-        let day_after =
-            fs::read_to_string(&day_file).expect("read daily note");
+        let day_after = fs::read_to_string(&day_file).expect("read daily note");
         assert!(
             day_after.contains(json["block_link"].as_str().unwrap()),
             "{day_after}"
@@ -4808,10 +4782,7 @@ fn capture_project_note_pomodoro_variants_link_the_prj_task() {
 fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
     let temp = TempDir::new("bob-cli-capture-project-note-authored");
     let vault = temp.path().join("vault");
-    write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n",
-    );
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
 
     let input = "Parent @cash^auth1+\n- Call Morgan Stanley\n- FUTURE WORK\n  - nested detail\n";
     let output = run_with_stdin(
@@ -4835,8 +4806,7 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
         serde_json::json!(["Future Work"]),
         "{json}"
     );
-    let contents = fs::read_to_string(vault.join("cash_auth1.md"))
-        .expect("read authored note");
+    let contents = fs::read_to_string(vault.join("cash_auth1.md")).expect("read authored note");
     assert!(
         contents.contains("- [ ] #task Call Morgan Stanley [created::2026-09-20]"),
         "{contents}"
@@ -4844,8 +4814,7 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
     assert!(contents.contains("## Future Work"), "{contents}");
     assert!(contents.contains("- nested detail"), "{contents}");
 
-    let tasks_input =
-        "Parent @cash^tasks1+\n- TASKS\n  - merged note\n- Real task\n";
+    let tasks_input = "Parent @cash^tasks1+\n- TASKS\n  - merged note\n- Real task\n";
     let tasks_output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -4859,8 +4828,7 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
     );
     assert_success(&tasks_output);
     let tasks_json: serde_json::Value =
-        serde_json::from_str(stdout(&tasks_output).trim())
-            .expect("tasks merge JSON");
+        serde_json::from_str(stdout(&tasks_output).trim()).expect("tasks merge JSON");
     assert!(
         tasks_json["project_note"]["sections"]
             .as_array()
@@ -4868,8 +4836,8 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
             .is_empty(),
         "{tasks_json}"
     );
-    let tasks_contents = fs::read_to_string(vault.join("cash_tasks1.md"))
-        .expect("read tasks merge note");
+    let tasks_contents =
+        fs::read_to_string(vault.join("cash_tasks1.md")).expect("read tasks merge note");
     assert_eq!(
         tasks_contents.matches("## Tasks").count(),
         1,
@@ -4886,10 +4854,7 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
 fn capture_project_note_schedule_and_priority_write_frontmatter_and_log() {
     let temp = TempDir::new("bob-cli-capture-project-note-schedule");
     let vault = temp.path().join("vault");
-    write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n",
-    );
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
 
     let scheduled = bob_command()
         .arg("capture")
@@ -4906,15 +4871,13 @@ fn capture_project_note_schedule_and_priority_write_frontmatter_and_log() {
         .expect("run scheduled project-note capture");
     assert_success(&scheduled);
     let json: serde_json::Value =
-        serde_json::from_str(stdout(&scheduled).trim())
-            .expect("scheduled JSON");
+        serde_json::from_str(stdout(&scheduled).trim()).expect("scheduled JSON");
     assert_eq!(json["scheduled"], "2026-09-22", "{json}");
     assert!(
         json["task_line"].as_str().unwrap().starts_with("- [?] "),
         "{json}"
     );
-    let contents = fs::read_to_string(vault.join("cash_sched1.md"))
-        .expect("read scheduled note");
+    let contents = fs::read_to_string(vault.join("cash_sched1.md")).expect("read scheduled note");
     assert!(contents.contains("scheduled: 2026-09-22"), "{contents}");
 
     let config = temp.path().join("config.yml");
@@ -4936,19 +4899,12 @@ fn capture_project_note_schedule_and_priority_write_frontmatter_and_log() {
         .expect("run prioritized project-note capture");
     assert_success(&prioritized);
     let prio_json: serde_json::Value =
-        serde_json::from_str(stdout(&prioritized).trim())
-            .expect("priority JSON");
+        serde_json::from_str(stdout(&prioritized).trim()).expect("priority JSON");
     assert_eq!(prio_json["priority"], "lowest", "{prio_json}");
-    assert!(
-        prio_json["scheduled"].as_str().is_some(),
-        "{prio_json}"
-    );
-    assert!(
-        prio_json["schedule_log"].is_object(),
-        "{prio_json}"
-    );
-    let prio_contents = fs::read_to_string(vault.join("cash_prio1.md"))
-        .expect("read priority note");
+    assert!(prio_json["scheduled"].as_str().is_some(), "{prio_json}");
+    assert!(prio_json["schedule_log"].is_object(), "{prio_json}");
+    let prio_contents =
+        fs::read_to_string(vault.join("cash_prio1.md")).expect("read priority note");
     assert!(
         prio_contents.contains("[priority::lowest] #hide ^prj"),
         "{prio_contents}"
@@ -5046,10 +5002,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
 
     let collision = TempDir::new("bob-cli-project-note-collision");
     let vault = collision.path().join("vault");
-    write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n",
-    );
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     write_file(&vault.join("cash_x1.md"), "existing\n");
     let output = bob_command()
         .arg("capture")
@@ -5078,10 +5031,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
 
     let clip = TempDir::new("bob-cli-project-note-clip");
     let vault = clip.path().join("vault");
-    write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n",
-    );
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -5122,8 +5072,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         format_output(&forced_clip)
     );
     assert!(
-        stderr(&forced_clip)
-            .contains("project-note capture cannot be combined with --clip"),
+        stderr(&forced_clip).contains("project-note capture cannot be combined with --clip"),
         "{}",
         format_output(&forced_clip)
     );
@@ -5131,11 +5080,11 @@ fn capture_project_note_rejections_leave_no_partial_write() {
     let ledger = TempDir::new("bob-cli-project-note-ledger");
     let vault = ledger.path().join("vault");
     let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n",
+        &day_file,
+        "## Pomodoros\n- [ ] (1330-1400) Work\n  - [[cash_dup#^prj]]\n",
     );
-    write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n  - [[cash_dup#^prj]]\n");
     let _ = bob_command()
         .arg("capture")
         .arg("-b")
@@ -5147,7 +5096,10 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .output();
-    write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n  - [[cash_dup#^prj]]\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (1330-1400) Work\n  - [[cash_dup#^prj]]\n",
+    );
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -5164,18 +5116,16 @@ fn capture_project_note_rejections_leave_no_partial_write() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
     assert!(
-        json["error"].as_str().is_some_and(|error| error
-            .contains("Pomodoro ledger already contains")),
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Pomodoro ledger already contains")),
         "{json}"
     );
     assert!(!vault.join("cash_dup.md").exists());
 
     let forced = TempDir::new("bob-cli-project-note-forced-literal");
     let vault = forced.path().join("vault");
-    write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n",
-    );
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -5197,10 +5147,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
 fn capture_project_note_dry_run_and_batch_parenting_and_rollback() {
     let temp = TempDir::new("bob-cli-capture-project-note-dry-run");
     let vault = temp.path().join("vault");
-    write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n",
-    );
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     let preview = bob_command()
         .arg("capture")
         .arg("-b")
@@ -5223,10 +5170,7 @@ fn capture_project_note_dry_run_and_batch_parenting_and_rollback() {
 
     let batch = TempDir::new("bob-cli-capture-project-note-batch");
     let vault = batch.path().join("vault");
-    write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n",
-    );
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     let input = "First @cash^first1+\n\nSecond @cash_first1^second1+\n";
     let output = run_with_stdin(
         bob_command()
@@ -5240,21 +5184,16 @@ fn capture_project_note_dry_run_and_batch_parenting_and_rollback() {
         input,
     );
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
     assert_eq!(json["captures"].as_array().unwrap().len(), 2, "{json}");
     assert!(vault.join("cash_first1.md").exists());
     assert!(vault.join("cash_first1_second1.md").exists());
-    let child = fs::read_to_string(vault.join("cash_first1_second1.md"))
-        .expect("read child note");
+    let child = fs::read_to_string(vault.join("cash_first1_second1.md")).expect("read child note");
     assert!(child.contains("parent: \"[[cash_first1]]\""), "{child}");
 
     let rollback = TempDir::new("bob-cli-capture-project-note-rollback");
     let vault = rollback.path().join("vault");
-    write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n",
-    );
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     let failing = "First @cash^ok1+\n\nSecond @cash^ok1+\n";
     let output = run_with_stdin(
         bob_command()
@@ -5286,8 +5225,8 @@ fn capture_parse_json_reports_retired_double_colon_as_migration_guidance() {
         .expect("run bob capture-parse retired double colon");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "task");
     assert_eq!(
         json["diagnostics"][0]["code"],
@@ -5316,8 +5255,8 @@ fn capture_parse_json_reports_pomodoro_note_mode_and_span() {
         .expect("run bob capture-parse on a bare #");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "pomodoro_note");
     assert_eq!(json["body"], "note");
     assert!(json["route"].is_null());
@@ -5339,8 +5278,7 @@ fn capture_parse_json_reports_pomodoro_note_mode_and_span() {
 
     assert_success(&conflict);
     let json: serde_json::Value =
-        serde_json::from_str(stdout(&conflict).trim())
-            .expect("capture-parse JSON");
+        serde_json::from_str(stdout(&conflict).trim()).expect("capture-parse JSON");
     assert_eq!(json["diagnostics"][0]["code"], "pomodoro_note_conflict");
 }
 
@@ -5356,8 +5294,8 @@ fn capture_parse_json_reports_wikilink_semantic_spans() {
         .expect("run bob capture-parse wikilink json");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["body"], "See [[sase#Design|Spec]]");
     assert_eq!(
@@ -5391,8 +5329,8 @@ fn capture_parse_reports_diagnostics_without_failing() {
         .expect("run bob capture-parse diagnostic");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["mode"], "task");
     assert_eq!(
@@ -5411,8 +5349,8 @@ fn capture_parse_reads_one_stdin_line_when_text_is_omitted() {
     );
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "bullet");
     assert_eq!(json["route"], "notes");
     assert_eq!(json["section"], "Ideas");
@@ -5424,8 +5362,7 @@ fn capture_parse_missing_text_is_a_usage_error() {
     let human = run_with_stdin(bob_command().arg("capture-parse"), "   \n");
     assert_eq!(human.status.code(), Some(2));
     assert!(
-        stdout(&human).is_empty()
-            && stderr(&human).contains("task text is required"),
+        stdout(&human).is_empty() && stderr(&human).contains("task text is required"),
         "unexpected capture-parse missing-text output:\n{}",
         format_output(&human)
     );
@@ -5441,8 +5378,7 @@ fn capture_parse_missing_text_is_a_usage_error() {
         format_output(&json_output)
     );
     let json: serde_json::Value =
-        serde_json::from_str(stdout(&json_output).trim())
-            .expect("capture-parse failure JSON");
+        serde_json::from_str(stdout(&json_output).trim()).expect("capture-parse failure JSON");
     assert_eq!(json["ok"], false);
     assert!(
         json["error"]
@@ -5466,8 +5402,8 @@ fn capture_parse_reports_utf8_byte_offsets() {
         .expect("run bob capture-parse utf8");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["mode"], "sub_bullet");
     assert_eq!(json["body"], "caf\u{e9} run \u{1f680}");
     assert_eq!(
@@ -5492,8 +5428,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         .output()
         .expect("run complete three-component parse");
     assert_success(&complete);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&complete).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&complete).trim()).expect("json");
     assert_eq!(json["mode"], "sub_bullet");
     assert_eq!(json["body"], "Postgres 17 minimum");
     assert_eq!(json["route"], "foo");
@@ -5518,8 +5453,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         .output()
         .expect("run incomplete section parse");
     assert_success(&incomplete);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&incomplete).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&incomplete).trim()).expect("json");
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["route"], "foo");
     assert_eq!(json["block_id"], "bar");
@@ -5535,8 +5469,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         .output()
         .expect("run empty block-id parse");
     assert_success(&needs_task);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&needs_task).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&needs_task).trim()).expect("json");
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["needs"], serde_json::json!(["task"]));
     assert_eq!(json["section"], "req");
@@ -5550,8 +5483,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         .output()
         .expect("run empty block-id and section parse");
     assert_success(&both);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&both).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&both).trim()).expect("json");
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["needs"], serde_json::json!(["task", "task_section"]));
 
@@ -5564,8 +5496,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         .output()
         .expect("run invalid section parse");
     assert_success(&invalid);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&invalid).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&invalid).trim()).expect("json");
     assert_eq!(json["diagnostics"][0]["code"], "invalid_sub_bullet_section");
 
     let note_bullet = bob_command()
@@ -5577,8 +5508,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         .output()
         .expect("run note-bullet parse");
     assert_success(&note_bullet);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&note_bullet).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&note_bullet).trim()).expect("json");
     assert_eq!(json["mode"], "bullet");
     assert_eq!(json["section"], "Ideas");
     assert!(json["block_id"].is_null());
@@ -5618,8 +5548,8 @@ fn capture_parse_never_touches_the_vault_or_clipboard() {
         "unexpected capture-parse stderr:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["mode"], "pomodoro_task");
     assert_eq!(json["route"], "dev");
@@ -5716,8 +5646,8 @@ fn capture_rewrite_json_absorbs_a_local_marker() {
         "unexpected capture-rewrite stderr:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-rewrite JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-rewrite JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["input"], "Buy milk @dev @@");
@@ -5748,16 +5678,18 @@ fn capture_rewrite_json_reports_a_rule_a5_notice_without_changing_text() {
         .expect("run bob capture-rewrite notice");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-rewrite JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-rewrite JSON");
     assert_eq!(json["changed"], false);
     assert_eq!(json["text"], "note @notes#Ideas @@");
     assert!(json.get("rule").is_none(), "{json}");
     assert_eq!(json["notices"].as_array().expect("notices").len(), 1);
-    assert!(json["notices"][0]
-        .as_str()
-        .expect("notice")
-        .contains("cannot take a section"));
+    assert!(
+        json["notices"][0]
+            .as_str()
+            .expect("notice")
+            .contains("cannot take a section")
+    );
 }
 
 #[test]
@@ -5772,8 +5704,8 @@ fn capture_rewrite_json_reports_no_rewrite_without_a_bare_at_at() {
         .expect("run bob capture-rewrite no-op");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-rewrite JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-rewrite JSON");
     assert_eq!(json["changed"], false);
     assert_eq!(json["text"], "Buy milk @dev");
     assert!(json.get("cursor").is_none(), "{json}");
@@ -5788,8 +5720,8 @@ fn capture_rewrite_reads_stdin_when_text_is_omitted() {
     );
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-rewrite JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-rewrite JSON");
     assert_eq!(json["text"], "Buy milk @@dev");
 }
 
@@ -5798,8 +5730,7 @@ fn capture_rewrite_missing_text_is_a_usage_error() {
     let human = run_with_stdin(bob_command().arg("capture-rewrite"), "   \n");
     assert_eq!(human.status.code(), Some(2));
     assert!(
-        stdout(&human).is_empty()
-            && stderr(&human).contains("task text is required"),
+        stdout(&human).is_empty() && stderr(&human).contains("task text is required"),
         "unexpected capture-rewrite missing-text output:\n{}",
         format_output(&human)
     );
@@ -5815,8 +5746,7 @@ fn capture_rewrite_missing_text_is_a_usage_error() {
         format_output(&json_output)
     );
     let json: serde_json::Value =
-        serde_json::from_str(stdout(&json_output).trim())
-            .expect("capture-rewrite failure JSON");
+        serde_json::from_str(stdout(&json_output).trim()).expect("capture-rewrite failure JSON");
     assert_eq!(json["ok"], false);
     assert!(
         json["error"]
@@ -5841,8 +5771,8 @@ fn capture_rewrite_rejects_a_cursor_off_a_char_boundary() {
         .expect("run bob capture-rewrite bad cursor");
 
     assert_eq!(output.status.code(), Some(2));
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-rewrite failure JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-rewrite failure JSON");
     assert_eq!(json["ok"], false);
     assert!(
         json["error"]
@@ -5868,8 +5798,8 @@ fn capture_rewrite_never_touches_the_vault_or_clipboard() {
         .expect("run bob capture-rewrite without a vault");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-rewrite JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-rewrite JSON");
     assert_eq!(json["ok"], true);
     assert!(
         !missing.exists(),
@@ -5930,8 +5860,7 @@ fn capture_unrouted_scheduled_offset_appends_property() {
         .expect("run scheduled inbox capture");
 
     assert_success(&output);
-    let expected =
-        "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]";
+    let expected = "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]";
     assert!(
         stdout(&output).contains(expected),
         "unexpected capture output:\n{}",
@@ -6025,8 +5954,7 @@ fn capture_routed_prefix_inserts_and_suffix_creates_file() {
         format_output(&output)
     );
     assert_eq!(
-        fs::read_to_string(vault.join("groceries.md"))
-            .expect("read groceries"),
+        fs::read_to_string(vault.join("groceries.md")).expect("read groceries"),
         "# Groceries\n- [ ] #task existing\n  detail\n- [ ] #task pick apples [created::2026-06-15]\n\nNext\n"
     );
 
@@ -6236,14 +6164,14 @@ fn capture_priority_with_explicit_schedule_skips_roll() {
         .expect("run p:2 s:1 capture");
 
     assert_success(&output);
-    let expected = "- [?] #task buy milk [created::2026-06-15] [priority::medium] [scheduled::2026-06-16]";
+    let expected =
+        "- [?] #task buy milk [created::2026-06-15] [priority::medium] [scheduled::2026-06-16]";
     assert!(
         stdout(&output).contains(expected),
         "unexpected capture output:\n{}",
         format_output(&output)
     );
-    let inbox =
-        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
+    let inbox = fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
     assert_eq!(inbox, format!("{expected}\n"));
     assert!(
         !inbox.contains("SCHEDULE LOG") && !inbox.contains('\u{1F3B2}'),
@@ -6342,8 +6270,8 @@ fn capture_priority_json_includes_priority_fields_only_when_set() {
         .expect("run p:3 json capture");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["priority"], "low");
@@ -6380,15 +6308,13 @@ fn capture_priority_json_includes_priority_fields_only_when_set() {
         .output()
         .expect("run capture without p:<N>");
     assert_success(&unset_output);
-    let unset_json: serde_json::Value = serde_json::from_str(
-        stdout(&unset_output).trim(),
-    )
-    .unwrap_or_else(|error| {
-        panic!(
-            "stdout should be JSON: {error}\n{}",
-            format_output(&unset_output)
-        )
-    });
+    let unset_json: serde_json::Value = serde_json::from_str(stdout(&unset_output).trim())
+        .unwrap_or_else(|error| {
+            panic!(
+                "stdout should be JSON: {error}\n{}",
+                format_output(&unset_output)
+            )
+        });
     assert!(unset_json.get("priority").is_none(), "{unset_json}");
     assert!(unset_json.get("priority_label").is_none(), "{unset_json}");
     assert!(unset_json.get("schedule_log").is_none(), "{unset_json}");
@@ -6633,8 +6559,7 @@ fn capture_task_block_id_marker_writes_ordinary_task_and_ignores_daily_note() {
 
     assert_success(&scheduled_output);
     let scheduled_json: serde_json::Value =
-        serde_json::from_str(stdout(&scheduled_output).trim())
-            .expect("scheduled capture JSON");
+        serde_json::from_str(stdout(&scheduled_output).trim()).expect("scheduled capture JSON");
     assert_eq!(scheduled_json["scheduled"], "2026-07-10");
     assert_eq!(scheduled_json["block_id"], "scheduled-id");
     assert_eq!(
@@ -6773,8 +6698,7 @@ fn capture_retired_double_colon_marker_is_usage_error_without_writes() {
 
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     assert!(
-        stderr(&output)
-            .contains("'@<route>::<block-id>' is no longer accepted")
+        stderr(&output).contains("'@<route>::<block-id>' is no longer accepted")
             && stderr(&output).contains("@<route>^<block-id>"),
         "{}",
         format_output(&output)
@@ -6812,8 +6736,7 @@ fn capture_priority_dry_run_prints_schedule_log_without_writing() {
     );
     let out = stdout(&output);
     assert!(
-        out.contains("🗓️ **SCHEDULE LOG**")
-            && out.contains("🎲 P0 → P2 · in **11** (8–30) days"),
+        out.contains("🗓️ **SCHEDULE LOG**") && out.contains("🎲 P0 → P2 · in **11** (8–30) days"),
         "unexpected dry-run output:\n{out}"
     );
     assert!(
@@ -6850,9 +6773,10 @@ fn capture_without_priority_token_tolerates_missing_config_file() {
 fn priority_scheduled_offset_days(output: &Output, created: &str) -> i64 {
     let out = stdout(output);
     let marker = "[scheduled::";
-    let start = out.find(marker).unwrap_or_else(|| {
-        panic!("expected a [scheduled::] field:\n{}", format_output(output))
-    }) + marker.len();
+    let start = out
+        .find(marker)
+        .unwrap_or_else(|| panic!("expected a [scheduled::] field:\n{}", format_output(output)))
+        + marker.len();
     let end = out[start..].find(']').expect("closing bracket") + start;
     let scheduled_text = &out[start..end];
     date_offset_days(created, scheduled_text)
@@ -6860,11 +6784,9 @@ fn priority_scheduled_offset_days(output: &Output, created: &str) -> i64 {
 
 fn date_offset_days(created: &str, scheduled: &str) -> i64 {
     let scheduled = chrono::NaiveDate::parse_from_str(scheduled, "%Y-%m-%d")
-        .unwrap_or_else(|error| {
-            panic!("invalid scheduled date {scheduled}: {error}")
-        });
-    let created = chrono::NaiveDate::parse_from_str(created, "%Y-%m-%d")
-        .expect("valid created date");
+        .unwrap_or_else(|error| panic!("invalid scheduled date {scheduled}: {error}"));
+    let created =
+        chrono::NaiveDate::parse_from_str(created, "%Y-%m-%d").expect("valid created date");
     (scheduled - created).num_days()
 }
 
@@ -6904,8 +6826,8 @@ fn capture_pomodoro_linked_task_updates_both_notes_and_reports_json() {
 
     assert_success(&output);
     assert!(stderr(&output).is_empty(), "{}", format_output(&output));
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -7189,8 +7111,8 @@ fn capture_named_pomodoro_updates_both_notes_and_skips_current() {
         .expect("run named Pomodoro capture");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -7325,8 +7247,7 @@ fn capture_named_pomodoro_dry_run_and_failures_leave_notes_untouched() {
         );
     }
 
-    let ambiguous_dir =
-        TempDir::new("bob-cli-capture-named-pomodoro-ambiguous-current");
+    let ambiguous_dir = TempDir::new("bob-cli-capture-named-pomodoro-ambiguous-current");
     let vault = ambiguous_dir.path().join("vault");
     let target = vault.join("dev.md");
     let day_file = vault.join("day.md");
@@ -7356,9 +7277,9 @@ fn capture_named_pomodoro_dry_run_and_failures_leave_notes_untouched() {
         serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
     assert_eq!(json["ok"], false);
     assert!(
-        json["error"].as_str().is_some_and(
-            |error| error.contains("multiple open timed Pomodoros")
-        ),
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("multiple open timed Pomodoros")),
         "{json}"
     );
     assert_eq!(
@@ -7387,8 +7308,7 @@ fn capture_named_pomodoro_batch_reuses_new_placeholder() {
         ),
     );
 
-    let input =
-        "First @dev:first#after-tui-fix\n\nSecond @dev:second#after-tui-fix\n";
+    let input = "First @dev:first#after-tui-fix\n\nSecond @dev:second#after-tui-fix\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -7401,8 +7321,7 @@ fn capture_named_pomodoro_batch_reuses_new_placeholder() {
         input,
     );
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
     let captures = json["captures"].as_array().expect("captures array");
     assert_eq!(captures.len(), 2);
     assert_eq!(captures[0]["block_link"], "[[dev#^first]]");
@@ -7744,8 +7663,7 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
         draft,
     );
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
     let captures = json["captures"].as_array().expect("captures array");
     assert_eq!(captures.len(), 3);
     assert_eq!(captures[0]["kind"], "pomodoro_task");
@@ -7885,10 +7803,7 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
     ];
 
     for case in cases {
-        let temp = TempDir::new(&format!(
-            "bob-cli-capture-toggle-error-{}",
-            case.name
-        ));
+        let temp = TempDir::new(&format!("bob-cli-capture-toggle-error-{}", case.name));
         let vault = temp.path().join("vault");
         let target = vault.join("cash.md");
         let day_file = vault.join("day.md");
@@ -7944,8 +7859,7 @@ fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
         .output()
         .expect("run explicit-toggle parse");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["mode"], "task_toggle");
     assert_eq!(json["body"], "");
@@ -7972,8 +7886,7 @@ fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
         .output()
         .expect("run plain ensure-Next parse");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(json["mode"], "task_toggle");
     assert_eq!(
         json["spans"],
@@ -7992,8 +7905,7 @@ fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
         .output()
         .expect("run named ensure-Next parse");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(json["mode"], "task_toggle");
     assert_eq!(json["section"], "deep+work");
     assert_eq!(
@@ -8065,8 +7977,7 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
         .output()
         .expect("ensure-Next ready task");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["kind"], "task_toggle");
     assert_eq!(json["toggle_direction"], "next");
     assert_eq!(json["toggle_behavior"], "ensure_next");
@@ -8115,8 +8026,7 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
         .output()
         .expect("total no-op ensure-Next");
     assert_success(&noop);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&noop).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&noop).trim()).expect("json");
     assert_eq!(json["status_changed"], false);
     assert_eq!(json["pomodoro_link_action"], "already_current");
     assert_eq!(json["pomodoro_already_linked"], true);
@@ -8170,8 +8080,7 @@ fn capture_task_toggle_ensure_next_covers_open_states_and_failures() {
     ];
 
     for case in cases {
-        let temp =
-            TempDir::new(&format!("bob-cli-capture-ensure-next-{}", case.name));
+        let temp = TempDir::new(&format!("bob-cli-capture-ensure-next-{}", case.name));
         let vault = temp.path().join("vault");
         let target = vault.join("cash.md");
         let day_file = vault.join("day.md");
@@ -8194,19 +8103,10 @@ fn capture_task_toggle_ensure_next_covers_open_states_and_failures() {
             .output()
             .unwrap_or_else(|_| panic!("run {}", case.name));
         assert_success(&output);
-        let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim()).expect("json");
+        let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("json");
         assert_eq!(json["toggle_behavior"], "ensure_next", "{}", case.name);
-        assert_eq!(
-            json["status_symbol"], case.expected_status,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            json["status_changed"], case.status_changed,
-            "{}",
-            case.name
-        );
+        assert_eq!(json["status_symbol"], case.expected_status, "{}", case.name);
+        assert_eq!(json["status_changed"], case.status_changed, "{}", case.name);
         assert_eq!(
             json["pomodoro_link_action"], case.link_action,
             "{}",
@@ -8244,8 +8144,7 @@ fn capture_task_toggle_ensure_next_covers_open_states_and_failures() {
         .output()
         .expect("schedule retirement");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["removed_scheduled"], "2026-07-20");
     assert_eq!(json["pomodoro_link_action"], "already_current");
     assert!(json.get("schedule_log").is_some(), "{json}");
@@ -8303,8 +8202,7 @@ fn capture_task_toggle_ensure_next_covers_open_states_and_failures() {
             "{name}: {}",
             format_output(&output)
         );
-        let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim()).expect("json");
+        let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("json");
         assert!(
             json["error"]
                 .as_str()
@@ -8402,8 +8300,7 @@ fn capture_task_toggle_ensure_next_same_note_batch_and_rollback() {
         "@cash+alpha\n\n@cash+beta\n",
     );
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("batch JSON");
     let captures = json["captures"].as_array().expect("captures");
     assert_eq!(captures.len(), 2);
     assert_eq!(captures[0]["pomodoro_link_action"], "moved");
@@ -8514,8 +8411,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .output()
         .expect("named prefix ensure-Next");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["toggle_behavior"], "ensure_next");
     assert_eq!(json["toggle_direction"], "next");
     assert_eq!(json["status_changed"], false);
@@ -8526,9 +8422,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
     assert_eq!(json["pomodoro_name"], "CODING");
     assert_eq!(json["pomodoro_link_source"]["name"], "LATER");
     assert_eq!(json["pomodoro_link_destination"]["name"], "CODING");
-    assert!(
-        json.get("pomodoro_selector_unused") != Some(&serde_json::json!(true))
-    );
+    assert!(json.get("pomodoro_selector_unused") != Some(&serde_json::json!(true)));
     assert_eq!(
         fs::read_to_string(&target).expect("target"),
         "- [*] #task Finish packet ^goog-exit\n"
@@ -8575,8 +8469,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .output()
         .expect("named no-op json");
     assert_success(&noop_json);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&noop_json).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&noop_json).trim()).expect("json");
     assert_eq!(json["status_changed"], false);
     assert_eq!(json["pomodoro_link_action"], "already_current");
     assert_eq!(json["pomodoro_already_linked"], true);
@@ -8609,8 +8502,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .output()
         .expect("named create");
     assert_success(&created);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&created).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&created).trim()).expect("json");
     assert_eq!(json["toggle_behavior"], "ensure_next");
     assert_eq!(json["status_changed"], true);
     assert_eq!(json["pomodoro_link_action"], "moved");
@@ -8669,12 +8561,12 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         "{}",
         format_output(&missing)
     );
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&missing).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&missing).trim()).expect("json");
     assert!(
-        json["error"].as_str().is_some_and(|error| error
-            .contains("no movable open Pomodoro Task Link")
-            && error.contains("use @cash+noleak!")),
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("no movable open Pomodoro Task Link")
+                && error.contains("use @cash+noleak!")),
         "{json}"
     );
 
@@ -8691,8 +8583,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .output()
         .expect("explicit insert");
     assert_success(&bang);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&bang).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&bang).trim()).expect("json");
     assert!(json.get("toggle_behavior").is_none(), "{json}");
     assert_eq!(json["toggle_direction"], "next");
     assert!(json["removed_pomodoro_links"].as_u64().unwrap_or(0) == 0);
@@ -8715,8 +8606,7 @@ fn capture_parse_named_pomodoro_reports_incomplete_need() {
         .output()
         .expect("run capture-parse named pomodoro");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["route"], "dev");
@@ -8751,8 +8641,7 @@ fn capture_routed_prefers_tasks_section_over_root_task() {
         format_output(&output)
     );
     assert_eq!(
-        fs::read_to_string(vault.join("groceries.md"))
-            .expect("read groceries"),
+        fs::read_to_string(vault.join("groceries.md")).expect("read groceries"),
         "# Groceries\n- [ ] #task root\n## Tasks\n\n- [ ] #task pick apples [created::2026-06-15]\nNotes\n"
     );
 }
@@ -8866,9 +8755,7 @@ fn capture_scheduled_dry_run_reports_without_writing() {
     let out = stdout(&output);
     assert!(
         out.contains("[dry-run] ok would capture  groceries.md")
-            && out.contains(
-                "- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"
-            ),
+            && out.contains("- [?] #task buy milk [created::2026-06-15] [scheduled::2026-06-16]"),
         "unexpected dry-run output:\n{out}"
     );
     assert!(
@@ -8903,8 +8790,8 @@ fn capture_json_output_is_machine_readable() {
         "json capture should keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -9036,8 +8923,7 @@ fn capture_batch_human_output_numbers_items() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("would capture  1/2  work.md")
-            && out.contains("would capture  2/2  notes.md"),
+        out.contains("would capture  1/2  work.md") && out.contains("would capture  2/2  notes.md"),
         "{out}"
     );
     assert_stdout_has_no_ansi(&output);
@@ -9179,10 +9065,12 @@ fn capture_global_destination_on_authored_child_line_applies_draft_wide() {
     assert_eq!(json["global_destination"]["route"], "foo");
     assert_eq!(json["captures"][0]["route"], "foo");
     assert_eq!(json["captures"][0]["sub_bullets"][0], "\t- child");
-    assert!(!json["captures"][0]["sub_bullets"][0]
-        .as_str()
-        .unwrap()
-        .contains("@@"));
+    assert!(
+        !json["captures"][0]["sub_bullets"][0]
+            .as_str()
+            .unwrap()
+            .contains("@@")
+    );
     assert_eq!(json["captures"][1]["route"], "foo");
     assert_eq!(
         fs::read_to_string(vault.join("foo.md")).expect("foo"),
@@ -9195,8 +9083,7 @@ fn capture_global_destination_on_authored_child_line_applies_draft_wide() {
 }
 
 #[test]
-fn capture_global_sub_bullet_inserts_ordered_siblings_and_keeps_authored_children(
-) {
+fn capture_global_sub_bullet_inserts_ordered_siblings_and_keeps_authored_children() {
     let temp = TempDir::new("bob-cli-capture-global-sub-bullet");
     let vault = temp.path().join("vault");
     write_file(
@@ -9264,8 +9151,7 @@ fn capture_global_sub_bullet_inserts_ordered_siblings_and_keeps_authored_childre
     let bar = fs::read_to_string(vault.join("bar.md")).expect("bar");
     assert!(bar.contains("- [ ] #task Independent task [created::2026-06-15]"));
     assert!(
-        bar.contains("\t- Different parent")
-            || bar.contains("  - Different parent"),
+        bar.contains("\t- Different parent") || bar.contains("  - Different parent"),
         "{bar}"
     );
 }
@@ -9293,8 +9179,7 @@ fn capture_global_destination_conflict_and_declaration_only_are_usage_errors() {
         format_output(&conflict)
     );
     assert!(
-        stderr(&conflict)
-            .contains("competing document-wide destination controls")
+        stderr(&conflict).contains("competing document-wide destination controls")
             && stderr(&conflict).contains("--route"),
         "{}",
         format_output(&conflict)
@@ -9327,8 +9212,7 @@ fn capture_global_destination_conflict_and_declaration_only_are_usage_errors() {
 fn capture_global_batch_failure_leaves_every_fixture_unchanged() {
     let temp = TempDir::new("bob-cli-capture-global-rollback");
     let vault = temp.path().join("vault");
-    let foo =
-        concat!("## Tasks\n", "- [ ] #task Keep [created::2026-06-01]\n",);
+    let foo = concat!("## Tasks\n", "- [ ] #task Keep [created::2026-06-01]\n",);
     write_file(&vault.join("foo.md"), foo);
     let bar = "- [ ] #task Existing [created::2026-06-01]\n";
     write_file(&vault.join("bar.md"), bar);
@@ -9357,8 +9241,7 @@ fn capture_parse_reports_global_destination_metadata() {
         .output()
         .expect("run global capture-parse");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["route"], "foo");
     assert_eq!(json["global_destination"]["route"], "foo");
@@ -9381,26 +9264,27 @@ fn capture_parse_reports_duplicate_global_destination_diagnostics() {
         .output()
         .expect("run duplicate global capture-parse");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(json["global_destination"]["route"], "foo");
     let diagnostics = json["diagnostics"].as_array().expect("diagnostics");
     let duplicate_diagnostics: Vec<_> = diagnostics
         .iter()
-        .filter(|diagnostic| {
-            diagnostic["code"] == "duplicate_global_destination"
-        })
+        .filter(|diagnostic| diagnostic["code"] == "duplicate_global_destination")
         .collect();
     assert_eq!(duplicate_diagnostics.len(), 2, "{json}");
     assert_eq!(duplicate_diagnostics[0]["severity"], "error");
-    assert!(duplicate_diagnostics[0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("line 2"));
-    assert!(duplicate_diagnostics[1]["message"]
-        .as_str()
-        .unwrap()
-        .contains("line 4"));
+    assert!(
+        duplicate_diagnostics[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("line 2")
+    );
+    assert!(
+        duplicate_diagnostics[1]["message"]
+            .as_str()
+            .unwrap()
+            .contains("line 4")
+    );
 }
 
 #[test]
@@ -9427,10 +9311,12 @@ fn capture_parse_and_capture_report_shadowed_global_destination_warnings() {
         .expect("shadow warning");
     assert_eq!(diagnostic["severity"], "warning");
     assert!(diagnostic["message"].as_str().unwrap().contains("@dev"));
-    assert!(diagnostic["message"]
-        .as_str()
-        .unwrap()
-        .contains("@@groceries"));
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("@@groceries")
+    );
 
     let temp = TempDir::new("bob-cli-capture-global-shadowed");
     let vault = temp.path().join("vault");
@@ -9452,8 +9338,7 @@ fn capture_parse_and_capture_report_shadowed_global_destination_warnings() {
         format_output(&json_output)
     );
     let capture_json: serde_json::Value =
-        serde_json::from_str(stdout(&json_output).trim())
-            .expect("capture JSON");
+        serde_json::from_str(stdout(&json_output).trim()).expect("capture JSON");
     assert_eq!(capture_json["warnings"][0], diagnostic["message"]);
 
     let human_output = bob_command()
@@ -9517,8 +9402,7 @@ fn capture_complete_global_declaration_replaces_only_the_active_component() {
         .expect("run trailing global route completion");
     assert_success(&trailing_output);
     let trailing_json: serde_json::Value =
-        serde_json::from_str(stdout(&trailing_output).trim())
-            .expect("complete JSON");
+        serde_json::from_str(stdout(&trailing_output).trim()).expect("complete JSON");
     assert_eq!(trailing_json["context"], "route");
     assert_eq!(
         trailing_json["replacement"],
@@ -9540,8 +9424,7 @@ fn capture_complete_global_declaration_replaces_only_the_active_component() {
         .expect("run child-line global task completion");
     assert_success(&child_output);
     let child_json: serde_json::Value =
-        serde_json::from_str(stdout(&child_output).trim())
-            .expect("complete JSON");
+        serde_json::from_str(stdout(&child_output).trim()).expect("complete JSON");
     assert_eq!(child_json["context"], "task");
     assert_eq!(child_json["candidates"][0]["route"], "cash");
     assert_eq!(
@@ -9671,8 +9554,8 @@ fn capture_json_output_includes_scheduled_date() {
         .expect("run scheduled json capture");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["text"], "buy milk");
@@ -9690,10 +9573,7 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
     let vault = temp.path().join("vault");
     let clipboard = temp.path().join("clipboard");
     fs::create_dir_all(&vault).expect("create vault");
-    write_executable(
-        &clipboard,
-        "#!/bin/sh\nprintf 'hello from clipboard\n'\n",
-    );
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'hello from clipboard\n'\n");
     write_file(
         &vault.join("work.md"),
         "# Work\n## Tasks\n- [ ] #task Existing\n",
@@ -9712,9 +9592,7 @@ fn capture_clip_marker_composes_with_schedule_routes_bullets_and_pomodoro() {
         .expect("run task clipboard capture");
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
-            panic!("clipboard JSON: {error}\n{}", format_output(&output))
-        });
+        .unwrap_or_else(|error| panic!("clipboard JSON: {error}\n{}", format_output(&output)));
     assert_eq!(json["text"], "do thing");
     assert_eq!(json["scheduled"], "2026-07-16");
     assert_eq!(json["clip"]["header"], "BUILD LOG");
@@ -9807,9 +9685,7 @@ fn capture_headerless_clip_marker_renders_under_tasks_and_pomodoros() {
         .expect("run headerless task clipboard capture");
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
-            panic!("clipboard JSON: {error}\n{}", format_output(&output))
-        });
+        .unwrap_or_else(|error| panic!("clipboard JSON: {error}\n{}", format_output(&output)));
     assert_eq!(json["clip"]["header"], serde_json::Value::Null);
     assert_eq!(
         json["clip"]["lines"],
@@ -9878,12 +9754,14 @@ fn capture_clip_uses_each_target_notes_indent_and_tabs_for_a_fresh_note() {
         .output()
         .expect("capture into tab-indented note");
     assert_success(&output);
-    assert!(fs::read_to_string(vault.join("tabbed.md"))
-        .expect("read tab-indented note")
-        .contains(concat!(
-            "- [ ] #task tab parent [created::2026-07-15]\n",
-            "\t- shared clipboard\n",
-        )));
+    assert!(
+        fs::read_to_string(vault.join("tabbed.md"))
+            .expect("read tab-indented note")
+            .contains(concat!(
+                "- [ ] #task tab parent [created::2026-07-15]\n",
+                "\t- shared clipboard\n",
+            ))
+    );
 
     let output = bob_command()
         .arg("capture")
@@ -9895,12 +9773,14 @@ fn capture_clip_uses_each_target_notes_indent_and_tabs_for_a_fresh_note() {
         .output()
         .expect("capture into two-space-indented note");
     assert_success(&output);
-    assert!(fs::read_to_string(vault.join("spaced.md"))
-        .expect("read two-space-indented note")
-        .contains(concat!(
-            "- [ ] #task space parent [created::2026-07-15]\n",
-            "  - shared clipboard\n",
-        )));
+    assert!(
+        fs::read_to_string(vault.join("spaced.md"))
+            .expect("read two-space-indented note")
+            .contains(concat!(
+                "- [ ] #task space parent [created::2026-07-15]\n",
+                "  - shared clipboard\n",
+            ))
+    );
 
     let output = bob_command()
         .arg("capture")
@@ -9913,8 +9793,7 @@ fn capture_clip_uses_each_target_notes_indent_and_tabs_for_a_fresh_note() {
         .expect("capture into fresh inbox note");
     assert_success(&output);
     assert_eq!(
-        fs::read_to_string(vault.join("mac_inbox.md"))
-            .expect("read fresh inbox note"),
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read fresh inbox note"),
         concat!(
             "- [ ] #task fresh parent [created::2026-07-15]\n",
             "\t- shared clipboard\n",
@@ -9951,9 +9830,7 @@ fn capture_flat_clipboard_list_routes_normalized_children() {
         .expect("capture routed clipboard list");
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
-            panic!("clipboard JSON: {error}\n{}", format_output(&output))
-        });
+        .unwrap_or_else(|error| panic!("clipboard JSON: {error}\n{}", format_output(&output)));
     assert_eq!(json["clip"]["mode"], "lines");
     assert_eq!(
         json["clip"]["lines"],
@@ -10166,8 +10043,7 @@ fn capture_clip_json_always_emits_collection_fields() {
         .output()
         .expect("capture plain clip");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("clip JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("clip JSON");
     let clip = json["clip"]
         .as_object()
         .expect("plain clip emits a JSON object");
@@ -10298,8 +10174,7 @@ fn capture_history_dry_run_plans_colliding_files_without_writes() {
     assert!(
         human.contains("would save")
             && human.contains("file/report.txt")
-            && human
-                .contains(&format!("file/report-{}.txt", &second_hash[..8]))
+            && human.contains(&format!("file/report-{}.txt", &second_hash[..8]))
             && human.contains("file/clip-20260715-131415-structured.md"),
         "{}",
         format_output(&output)
@@ -10352,17 +10227,14 @@ fn capture_clip_options_force_or_disable_marker_parsing() {
         .expect("run headerless forced clipboard capture");
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
-            panic!("clipboard JSON: {error}\n{}", format_output(&output))
-        });
+        .unwrap_or_else(|error| panic!("clipboard JSON: {error}\n{}", format_output(&output)));
     assert_eq!(json["text"], "headerless %literal");
     assert_eq!(json["clip"]["header"], serde_json::Value::Null);
     assert_eq!(
         json["clip"]["lines"],
         serde_json::json!(["\t- forced text"])
     );
-    let inbox =
-        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
+    let inbox = fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
     assert!(inbox.contains(concat!(
         "- [ ] #task headerless %literal [created::2026-07-15]\n",
         "\t- forced text\n",
@@ -10528,9 +10400,11 @@ fn capture_clip_saves_attachments_snippets_and_reports_dry_run() {
         fs::read(vault.join("img/screen-shot.PNG")).expect("saved image"),
         b"fake image bytes"
     );
-    assert!(fs::read_to_string(vault.join("mac_inbox.md"))
-        .expect("read inbox")
-        .contains("\t- ![[img/screen-shot.PNG|400]]"));
+    assert!(
+        fs::read_to_string(vault.join("mac_inbox.md"))
+            .expect("read inbox")
+            .contains("\t- ![[img/screen-shot.PNG|400]]")
+    );
 
     let output = bob_command()
         .arg("capture")
@@ -10544,8 +10418,7 @@ fn capture_clip_saves_attachments_snippets_and_reports_dry_run() {
         .output()
         .expect("reuse image attachment");
     assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("reuse JSON");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("reuse JSON");
     assert_eq!(json["clip"]["attachments"][0]["reused"], true);
 
     write_executable(
@@ -10906,8 +10779,7 @@ fn capture_authored_bullets_reject_indented_or_nonbullet_lines() {
     ];
 
     for (name, text) in cases {
-        let temp =
-            TempDir::new(&format!("bob-cli-capture-authored-invalid-{name}"));
+        let temp = TempDir::new(&format!("bob-cli-capture-authored-invalid-{name}"));
         let vault = temp.path().join("vault");
         fs::create_dir_all(&vault).expect("create vault");
 
@@ -10994,8 +10866,7 @@ fn capture_authored_bullet_marker_on_child_line_configures_whole_capture() {
         .expect("run child-line-marker authored-bullet capture");
 
     assert_success(&output);
-    let content =
-        fs::read_to_string(vault.join("work.md")).expect("read work route");
+    let content = fs::read_to_string(vault.join("work.md")).expect("read work route");
     assert!(
         content.starts_with(
             "- [?] #task Prepare the launch review [created::2026-06-15] [scheduled::2026-06-18]"
@@ -11017,8 +10888,7 @@ fn capture_authored_bullet_marker_on_child_line_configures_whole_capture() {
 }
 
 #[test]
-fn capture_authored_bullets_duplicate_schedule_marker_across_lines_is_usage_error(
-) {
+fn capture_authored_bullets_duplicate_schedule_marker_across_lines_is_usage_error() {
     let temp = TempDir::new("bob-cli-capture-authored-duplicate-schedule");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -11034,8 +10904,7 @@ fn capture_authored_bullets_duplicate_schedule_marker_across_lines_is_usage_erro
 
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        stderr(&output).contains("schedule marker")
-            && stderr(&output).contains("only one line"),
+        stderr(&output).contains("schedule marker") && stderr(&output).contains("only one line"),
         "{}",
         format_output(&output)
     );
@@ -11043,8 +10912,7 @@ fn capture_authored_bullets_duplicate_schedule_marker_across_lines_is_usage_erro
 }
 
 #[test]
-fn capture_authored_bullets_duplicate_route_marker_across_lines_is_usage_error()
-{
+fn capture_authored_bullets_duplicate_route_marker_across_lines_is_usage_error() {
     let temp = TempDir::new("bob-cli-capture-authored-duplicate-route");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -11060,8 +10928,7 @@ fn capture_authored_bullets_duplicate_route_marker_across_lines_is_usage_error()
 
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        stderr(&output).contains("route/mode marker")
-            && stderr(&output).contains("only one line"),
+        stderr(&output).contains("route/mode marker") && stderr(&output).contains("only one line"),
         "{}",
         format_output(&output)
     );
@@ -11255,11 +11122,7 @@ fn capture_authored_bullets_dry_run_reports_children_without_writing() {
     assert_eq!(json["dry_run"], true);
     assert_eq!(
         json["sub_bullets"],
-        serde_json::json!([
-            "\t- child one",
-            "\t\t- child detail",
-            "\t- child two"
-        ])
+        serde_json::json!(["\t- child one", "\t\t- child detail", "\t- child two"])
     );
 }
 
@@ -11297,8 +11160,8 @@ fn capture_parse_reports_sub_bullets_for_a_multiline_draft() {
         .expect("run multiline capture-parse");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["body"], "parent line");
     assert_eq!(json["route"], "work");
     assert_eq!(
@@ -11319,8 +11182,8 @@ fn capture_parse_reports_nested_sub_bullets_and_depths() {
         .expect("run nested multiline capture-parse");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert_eq!(json["body"], "parent line");
     assert_eq!(json["route"], "work");
     assert_eq!(
@@ -11341,8 +11204,8 @@ fn capture_parse_reports_orphaned_nested_bullet_diagnostic() {
         .expect("run orphaned nested capture-parse");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-parse JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON");
     assert!(json.get("sub_bullets").is_none(), "{json}");
     assert!(json.get("sub_bullet_depths").is_none(), "{json}");
     assert_eq!(json["route"], serde_json::Value::Null);
@@ -11371,8 +11234,8 @@ fn capture_complete_completes_a_marker_on_a_child_line() {
         .expect("run child-line capture-complete");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["context"], "route");
     let names: Vec<&str> = json["candidates"]
         .as_array()
@@ -11405,8 +11268,8 @@ fn capture_complete_completes_a_marker_on_a_nested_child_line() {
         .expect("run nested child-line capture-complete");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["context"], "route");
     let names: Vec<&str> = json["candidates"]
         .as_array()
@@ -11440,8 +11303,8 @@ fn capture_complete_scopes_to_later_batch_item_and_ignores_separator() {
         .expect("run batch item capture-complete");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["context"], "route");
     assert_eq!(
         json["replacement"],
@@ -11473,8 +11336,7 @@ fn capture_complete_scopes_to_later_batch_item_and_ignores_separator() {
 
     assert_success(&separator_output);
     let separator_json: serde_json::Value =
-        serde_json::from_str(stdout(&separator_output).trim())
-            .expect("capture-complete JSON");
+        serde_json::from_str(stdout(&separator_output).trim()).expect("capture-complete JSON");
     assert!(separator_json["context"].is_null(), "{separator_json}");
     assert_eq!(separator_json["candidates"], serde_json::json!([]));
     assert_eq!(
@@ -11505,8 +11367,7 @@ fn capture_complete_all_tasks_uses_global_ranges_in_later_batch_item() {
 
     let draft = "café first @work\n\nsecond @file+hand";
     let cursor = draft.len();
-    let replacement_start =
-        draft.find("@file+").expect("task marker") + "@file+".len();
+    let replacement_start = draft.find("@file+").expect("task marker") + "@file+".len();
     let output = bob_command()
         .arg("capture-complete")
         .arg("--all-tasks")
@@ -11522,8 +11383,8 @@ fn capture_complete_all_tasks_uses_global_ranges_in_later_batch_item() {
         .expect("run later batch all-tasks completion");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["cursor"], cursor);
     assert_eq!(json["context"], "task");
     assert_eq!(
@@ -11566,8 +11427,7 @@ fn capture_complete_all_tasks_uses_global_ranges_in_later_batch_item() {
 
     assert_success(&separator_output);
     let separator_json: serde_json::Value =
-        serde_json::from_str(stdout(&separator_output).trim())
-            .expect("capture-complete JSON");
+        serde_json::from_str(stdout(&separator_output).trim()).expect("capture-complete JSON");
     assert!(separator_json["context"].is_null(), "{separator_json}");
     assert_eq!(separator_json["candidates"], serde_json::json!([]));
     assert_eq!(
@@ -11599,8 +11459,7 @@ fn capture_empty_input_is_usage_error() {
         format_output(&output)
     );
     assert!(
-        stdout(&output).is_empty()
-            && stderr(&output).contains("task text is required"),
+        stdout(&output).is_empty() && stderr(&output).contains("task text is required"),
         "expected empty-input error:\n{}",
         format_output(&output)
     );
@@ -11700,8 +11559,8 @@ fn capture_json_failure_prints_error_object() {
         "json failure should keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], false);
@@ -11835,8 +11694,8 @@ fn capture_bare_terminal_marker_writes_pomodoro_note_under_current_pomodoro() {
 
     assert_success(&output);
     assert!(stderr(&output).is_empty(), "{}", format_output(&output));
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -11918,8 +11777,8 @@ fn capture_bare_terminal_marker_falls_back_to_the_last_completed_pomodoro() {
         .expect("run Pomodoro-note capture with no current entry");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("Pomodoro-note JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("Pomodoro-note JSON");
     assert_eq!(json["parent_text"], "Done (0900-0930)");
     assert_eq!(json["parent_line"], 3);
     assert_eq!(
@@ -11955,8 +11814,8 @@ fn capture_bare_terminal_marker_falls_back_to_the_first_future_pomodoro() {
         .expect("run Pomodoro-note capture with only future entries");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("Pomodoro-note JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("Pomodoro-note JSON");
     assert_eq!(json["parent_text"], "Next ()");
     assert_eq!(json["parent_line"], 3);
     assert_eq!(
@@ -11995,8 +11854,8 @@ fn capture_bare_terminal_marker_selects_the_last_of_two_completed_pomodoros() {
         .expect("run Pomodoro-note capture with two completed entries");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("Pomodoro-note JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("Pomodoro-note JSON");
     assert_eq!(json["parent_text"], "Second (1000-1030)");
     assert_eq!(json["parent_line"], 4);
     assert_eq!(
@@ -12015,8 +11874,7 @@ fn capture_bare_terminal_marker_multiple_open_timed_pomodoros_is_io_error() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-note-multiple-timed");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
-    let day_before =
-        "## Pomodoros\n\n- [ ] One (0900-0930)\n- [ ] Two (1000-1030)\n";
+    let day_before = "## Pomodoros\n\n- [ ] One (0900-0930)\n- [ ] Two (1000-1030)\n";
     write_file(&day_file, day_before);
 
     let output = bob_command()
@@ -12044,8 +11902,7 @@ fn capture_bare_terminal_marker_multiple_open_timed_pomodoros_is_io_error() {
 }
 
 #[test]
-fn capture_bare_terminal_marker_preflight_failures_leave_daily_note_untouched()
-{
+fn capture_bare_terminal_marker_preflight_failures_leave_daily_note_untouched() {
     let cases = [
         (
             "missing-section",
@@ -12066,8 +11923,7 @@ fn capture_bare_terminal_marker_preflight_failures_leave_daily_note_untouched()
     ];
 
     for (name, day_before, expected_error) in cases {
-        let temp =
-            TempDir::new(&format!("bob-cli-capture-pomodoro-note-{name}"));
+        let temp = TempDir::new(&format!("bob-cli-capture-pomodoro-note-{name}"));
         let vault = temp.path().join("vault");
         fs::create_dir_all(&vault).expect("create vault");
         let day_file = vault.join("day.md");
@@ -12148,8 +12004,7 @@ fn capture_bare_terminal_marker_dry_run_reports_plan_and_writes_nothing() {
 }
 
 #[test]
-fn capture_bare_terminal_marker_batch_items_land_under_the_same_pomodoro_in_order(
-) {
+fn capture_bare_terminal_marker_batch_items_land_under_the_same_pomodoro_in_order() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-note-batch");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
@@ -12179,8 +12034,7 @@ fn capture_bare_terminal_marker_batch_items_land_under_the_same_pomodoro_in_orde
 }
 
 #[test]
-fn capture_bare_terminal_marker_batch_items_stack_under_the_same_completed_pomodoro(
-) {
+fn capture_bare_terminal_marker_batch_items_stack_under_the_same_completed_pomodoro() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-note-batch-completed");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
@@ -12243,16 +12097,12 @@ fn capture_bare_terminal_marker_authored_children_nest_one_level_deeper() {
 }
 
 #[test]
-fn capture_bare_terminal_marker_clipboard_marker_writes_children_beneath_note()
-{
+fn capture_bare_terminal_marker_clipboard_marker_writes_children_beneath_note() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-note-clip");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
     let clipboard = temp.path().join("clipboard");
-    write_executable(
-        &clipboard,
-        "#!/bin/sh\nprintf 'hello from clipboard\n'\n",
-    );
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'hello from clipboard\n'\n");
     write_file(
         &day_file,
         "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - existing child\n",
@@ -12372,8 +12222,8 @@ fn capture_bullet_json_reports_rendered_line() {
         "json bullet capture should keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -12981,9 +12831,7 @@ fn capture_sub_bullet_selectors_and_batch_keep_order_above_logs() {
     let vault = temp.path().join("vault");
     write_file(
         &vault.join("cash.md"),
-        &format!(
-            "{parent}\n\t- 🗓️ **SCHEDULE LOG**\n\t\t- *2026-08-01* — keep\n"
-        ),
+        &format!("{parent}\n\t- 🗓️ **SCHEDULE LOG**\n\t\t- *2026-08-01* — keep\n"),
     );
     let output = bob_command()
         .arg("capture")
@@ -13195,8 +13043,7 @@ fn capture_sub_bullet_errors_are_actionable_in_human_and_json_modes() {
             note: Some("- [ ] #task Parent ^parent\n"),
             args: vec!["body".into(), "@cash+bad.id".into()],
             exit: 2,
-            expected:
-                "sub-bullet capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'",
+            expected: "sub-bullet capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'",
         },
         ErrorCase {
             name: "task-no-route",
@@ -13248,8 +13095,7 @@ fn capture_sub_bullet_errors_are_actionable_in_human_and_json_modes() {
             );
             let error_text = if json {
                 let value: serde_json::Value =
-                    serde_json::from_str(stdout(&output).trim())
-                        .expect("JSON error object");
+                    serde_json::from_str(stdout(&output).trim()).expect("JSON error object");
                 assert_eq!(value["ok"], false);
                 value["error"].as_str().unwrap_or_default().to_string()
             } else {
@@ -13921,10 +13767,7 @@ fn capture_forced_task_section_option_errors() {
     ];
 
     for case in cases {
-        let temp = TempDir::new(&format!(
-            "bob-cli-forced-task-section-error-{}",
-            case.name
-        ));
+        let temp = TempDir::new(&format!("bob-cli-forced-task-section-error-{}", case.name));
         let vault = temp.path().join("vault");
         fs::create_dir_all(&vault).expect("create vault");
         if let Some(note) = case.note {
@@ -13987,8 +13830,7 @@ fn capture_task_section_errors_leave_the_note_unchanged() {
             note: Some(with_sections),
             args: vec!["body".into(), "@cash+parent#absent".into()],
             exit: 1,
-            expected:
-                "no task section matching 'absent' under ^parent in cash.md",
+            expected: "no task section matching 'absent' under ^parent in cash.md",
         },
         Case {
             name: "lists-titles",
@@ -14062,8 +13904,7 @@ fn capture_task_section_errors_leave_the_note_unchanged() {
             );
             let error_text = if json {
                 let value: serde_json::Value =
-                    serde_json::from_str(stdout(&output).trim())
-                        .expect("JSON error object");
+                    serde_json::from_str(stdout(&output).trim()).expect("JSON error object");
                 assert_eq!(value["ok"], false);
                 value["error"].as_str().unwrap_or_default().to_string()
             } else {
@@ -14078,8 +13919,7 @@ fn capture_task_section_errors_leave_the_note_unchanged() {
             );
             if let Some(note) = case.note {
                 assert_eq!(
-                    fs::read_to_string(vault.join("cash.md"))
-                        .expect("read note"),
+                    fs::read_to_string(vault.join("cash.md")).expect("read note"),
                     note,
                     "{} / {json} must leave the note unchanged",
                     case.name
@@ -14126,8 +13966,8 @@ fn capture_sections_json_lists_sections_in_order() {
         "capture-sections json should keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -14164,8 +14004,8 @@ fn capture_sections_missing_note_returns_empty_json() {
         "missing note should keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -14292,8 +14132,8 @@ fn capture_tasks_json_lists_open_tasks_with_stable_picker_shape() {
         "capture-tasks json should keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -14311,9 +14151,11 @@ fn capture_tasks_json_lists_open_tasks_with_stable_picker_shape() {
     let (line, digest) = task_ref.split_once(':').expect("ref separator");
     assert_eq!(line, "3");
     assert_eq!(digest.len(), 8);
-    assert!(digest
-        .chars()
-        .all(|character| character.is_ascii_hexdigit()));
+    assert!(
+        digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
     assert_eq!(json["tasks"][1]["line"], 6);
     assert_eq!(json["tasks"][1]["status_name"], "In Progress");
     assert_eq!(json["tasks"][1]["depth"], 1);
@@ -14357,8 +14199,8 @@ fn capture_pomodoros_json_lists_open_entries_with_stable_picker_shape() {
         "capture-pomodoros json should keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -14377,14 +14219,15 @@ fn capture_pomodoros_json_lists_open_entries_with_stable_picker_shape() {
     assert_eq!(json["pomodoros"][0]["placeholder"], false);
     assert_eq!(json["pomodoros"][0]["is_current"], true);
     assert_eq!(json["pomodoros"][0]["child_count"], 1);
-    let pomodoro_ref =
-        json["pomodoros"][0]["ref"].as_str().expect("pomodoro ref");
+    let pomodoro_ref = json["pomodoros"][0]["ref"].as_str().expect("pomodoro ref");
     let (line, digest) = pomodoro_ref.split_once(':').expect("ref separator");
     assert_eq!(line, "5");
     assert_eq!(digest.len(), 8);
-    assert!(digest
-        .chars()
-        .all(|character| character.is_ascii_hexdigit()));
+    assert!(
+        digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
     assert_eq!(json["pomodoros"][1]["line"], 7);
     assert_eq!(json["pomodoros"][1]["name"], "FUTURE WORK");
     assert_eq!(json["pomodoros"][1]["slug"], "future-work");
@@ -14406,8 +14249,7 @@ fn capture_pomodoros_json_lists_open_entries_with_stable_picker_shape() {
         .output()
         .expect("run bob capture-pomodoros --all json");
     assert_success(&all);
-    let all_json: serde_json::Value =
-        serde_json::from_str(stdout(&all).trim()).expect("all json");
+    let all_json: serde_json::Value = serde_json::from_str(stdout(&all).trim()).expect("all json");
     assert_eq!(all_json["count"], 4);
     assert_eq!(all_json["pomodoros"][0]["state"], "completed");
     assert_eq!(all_json["pomodoros"][0]["name"], "DONE");
@@ -14473,9 +14315,11 @@ fn capture_pomodoros_missing_note_and_section_warn_in_json() {
         serde_json::from_str(stdout(&missing).trim()).expect("missing json");
     assert_eq!(missing_json["ok"], true);
     assert_eq!(missing_json["count"], 0);
-    assert!(missing_json["warnings"][0]
-        .as_str()
-        .is_some_and(|warning| warning.contains("does not exist")));
+    assert!(
+        missing_json["warnings"][0]
+            .as_str()
+            .is_some_and(|warning| warning.contains("does not exist"))
+    );
 
     write_file(&missing_day, "# Day\n## Notes\n- no ledger\n");
     let sectionless = bob_command()
@@ -14489,13 +14333,14 @@ fn capture_pomodoros_missing_note_and_section_warn_in_json() {
         .expect("run sectionless bob capture-pomodoros");
     assert_success(&sectionless);
     let sectionless_json: serde_json::Value =
-        serde_json::from_str(stdout(&sectionless).trim())
-            .expect("sectionless json");
+        serde_json::from_str(stdout(&sectionless).trim()).expect("sectionless json");
     assert_eq!(sectionless_json["ok"], true);
     assert_eq!(sectionless_json["count"], 0);
-    assert!(sectionless_json["warnings"][0]
-        .as_str()
-        .is_some_and(|warning| warning.contains("no Pomodoros section")));
+    assert!(
+        sectionless_json["warnings"][0]
+            .as_str()
+            .is_some_and(|warning| warning.contains("no Pomodoros section"))
+    );
 }
 
 #[test]
@@ -14528,8 +14373,7 @@ fn capture_pomodoro_name_assigns_and_dry_runs_lf_and_crlf_notes() {
         .output()
         .expect("dry-run capture-pomodoro-name");
     assert_success(&dry);
-    let dry_json: serde_json::Value =
-        serde_json::from_str(stdout(&dry).trim()).expect("json");
+    let dry_json: serde_json::Value = serde_json::from_str(stdout(&dry).trim()).expect("json");
     assert_eq!(dry_json["ok"], true);
     assert_eq!(dry_json["schema_version"], 1);
     assert_eq!(dry_json["dry_run"], true);
@@ -14551,8 +14395,7 @@ fn capture_pomodoro_name_assigns_and_dry_runs_lf_and_crlf_notes() {
         .output()
         .expect("write capture-pomodoro-name");
     assert_success(&written);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&written).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&written).trim()).expect("json");
     assert_eq!(json["ok"], true);
     assert_eq!(json["dry_run"], false);
     assert_eq!(json["day_file"], day_file.display().to_string());
@@ -14618,8 +14461,7 @@ fn capture_pomodoro_name_assigns_and_dry_runs_lf_and_crlf_notes() {
     );
     let crlf_day = vault.join("2026/20260830.md");
     write_file(&crlf_day, crlf);
-    let crlf_ref =
-        capture_pomodoro_ref("- [ ] (**09:20 - 09:50** [t:: 30m])  ", 3);
+    let crlf_ref = capture_pomodoro_ref("- [ ] (**09:20 - 09:50** [t:: 30m])  ", 3);
     let crlf_out = bob_command()
         .arg("capture-pomodoro-name")
         .arg("-b")
@@ -14688,8 +14530,7 @@ fn capture_pomodoro_name_plus_is_selectable_and_targetable() {
         .output()
         .expect("write capture-pomodoro-name c++");
     assert_success(&named);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&named).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&named).trim()).expect("json");
     assert_eq!(json["ok"], true);
     assert_eq!(json["name"], "C++");
     assert_eq!(json["slug"], "c++");
@@ -14814,10 +14655,8 @@ fn capture_pomodoro_name_rejects_write_free_failures() {
             "{name}: {}",
             format_output(&output)
         );
-        let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|_| {
-                panic!("{name}: {}", format_output(&output))
-            });
+        let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+            .unwrap_or_else(|_| panic!("{name}: {}", format_output(&output)));
         assert_eq!(json["ok"], false, "{name}");
         assert!(
             json["error"].as_str().expect("error").contains(expected),
@@ -14847,10 +14686,12 @@ fn capture_pomodoro_name_rejects_write_free_failures() {
     let missing_json: serde_json::Value =
         serde_json::from_str(stdout(&missing).trim()).expect("missing json");
     assert_eq!(missing_json["ok"], false);
-    assert!(missing_json["error"]
-        .as_str()
-        .expect("error")
-        .contains("does not exist"));
+    assert!(
+        missing_json["error"]
+            .as_str()
+            .expect("error")
+            .contains("does not exist")
+    );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), original);
 }
 
@@ -14928,8 +14769,8 @@ fn capture_targets_json_lists_picker_targets_in_order() {
         "default capture-targets should keep skip warnings off stderr:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], true);
@@ -14972,9 +14813,7 @@ fn capture_targets_verbose_emits_skip_warnings() {
             .arg(&vault)
             .arg(flag)
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run bob capture-targets {flag}: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run bob capture-targets {flag}: {error}"));
 
         assert_success(&output);
         assert!(
@@ -15067,8 +14906,8 @@ fn capture_targets_empty_vault_still_lists_inbox_default() {
         "unexpected empty-vault stderr:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["count"], 1);
@@ -15102,8 +14941,8 @@ fn capture_targets_json_failure_prints_error_object() {
         "json failure should keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["ok"], false);
@@ -15120,8 +14959,7 @@ fn capture_complete_route_json_ranks_prefix_before_substring() {
     let temp = TempDir::new("bob-cli-capture-complete-route");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    fs::write(vault.join("cash.md"), "---\ntype: [[area]]\n---\n")
-        .expect("write cash.md");
+    fs::write(vault.join("cash.md"), "---\ntype: [[area]]\n---\n").expect("write cash.md");
     fs::write(vault.join("petty-cash.md"), "---\ntype: [[area]]\n---\n")
         .expect("write petty-cash.md");
 
@@ -15144,8 +14982,8 @@ fn capture_complete_route_json_ranks_prefix_before_substring() {
         "unexpected capture-complete stderr:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["cursor"], 3);
@@ -15171,8 +15009,7 @@ fn capture_complete_task_block_id_marker_completes_only_route_side() {
     let temp = TempDir::new("bob-cli-capture-complete-task-block-id");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    fs::write(vault.join("cash.md"), "---\ntype: [[area]]\n---\n")
-        .expect("write cash.md");
+    fs::write(vault.join("cash.md"), "---\ntype: [[area]]\n---\n").expect("write cash.md");
 
     let route_side = bob_command()
         .arg("capture-complete")
@@ -15189,8 +15026,7 @@ fn capture_complete_task_block_id_marker_completes_only_route_side() {
 
     assert_success(&route_side);
     let json: serde_json::Value =
-        serde_json::from_str(stdout(&route_side).trim())
-            .expect("capture-complete JSON");
+        serde_json::from_str(stdout(&route_side).trim()).expect("capture-complete JSON");
     assert_eq!(json["context"], "route");
     assert_eq!(
         json["replacement"],
@@ -15212,8 +15048,8 @@ fn capture_complete_task_block_id_marker_completes_only_route_side() {
         .expect("run ID-side task block ID completion");
 
     assert_success(&id_side);
-    let json: serde_json::Value = serde_json::from_str(stdout(&id_side).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&id_side).trim()).expect("capture-complete JSON");
     assert!(json["context"].is_null(), "{json}");
     assert_eq!(
         json["replacement"],
@@ -15227,8 +15063,7 @@ fn capture_complete_section_json_lists_headings_of_the_resolved_route() {
     let temp = TempDir::new("bob-cli-capture-complete-section");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    fs::write(vault.join("notes.md"), "# Ideas\n## Inbox Ideas\n")
-        .expect("write notes.md");
+    fs::write(vault.join("notes.md"), "# Ideas\n## Inbox Ideas\n").expect("write notes.md");
 
     let output = bob_command()
         .arg("capture-complete")
@@ -15244,8 +15079,8 @@ fn capture_complete_section_json_lists_headings_of_the_resolved_route() {
         .expect("run bob capture-complete section json");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["context"], "section");
     assert_eq!(
         json["candidates"]
@@ -15300,8 +15135,8 @@ fn capture_complete_task_json_only_offers_tasks_with_a_block_id() {
         .expect("run bob capture-complete task json");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["context"], "task");
     let candidates = json["candidates"].as_array().expect("candidates array");
     assert_eq!(candidates.len(), 1);
@@ -15443,8 +15278,7 @@ fn capture_complete_pomodoro_name_json_lists_named_and_nameable_rows() {
         "unexpected capture-complete stderr:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["context"], "pomodoro_name");
     assert_eq!(
         json["replacement"],
@@ -15518,8 +15352,7 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
 
     let novel = complete("x @dev:some-id#future");
     assert_success(&novel);
-    let novel_json: serde_json::Value =
-        serde_json::from_str(stdout(&novel).trim()).expect("json");
+    let novel_json: serde_json::Value = serde_json::from_str(stdout(&novel).trim()).expect("json");
     assert_eq!(novel_json["schema_version"], 1);
     assert_eq!(novel_json["context"], "pomodoro_name");
     let novel_rows = novel_json["candidates"].as_array().expect("candidates");
@@ -15550,9 +15383,11 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
     assert_eq!(substring_json["candidates"][0]["creates_pomodoro"], true);
     assert_eq!(substring_json["candidates"][0]["replacement"], "work");
     assert_eq!(substring_json["candidates"][1]["replacement"], "network");
-    assert!(substring_json["candidates"][1]
-        .get("creates_pomodoro")
-        .is_none());
+    assert!(
+        substring_json["candidates"][1]
+            .get("creates_pomodoro")
+            .is_none()
+    );
     assert_eq!(substring_json["candidates"][2]["requires_name"], true);
 
     for query in ["memory", "mem"] {
@@ -15574,8 +15409,7 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
 
     let empty = complete("x @dev:some-id#");
     assert_success(&empty);
-    let empty_json: serde_json::Value =
-        serde_json::from_str(stdout(&empty).trim()).expect("json");
+    let empty_json: serde_json::Value = serde_json::from_str(stdout(&empty).trim()).expect("json");
     assert!(
         empty_json["candidates"]
             .as_array()
@@ -15616,8 +15450,7 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
 }
 
 #[test]
-fn capture_complete_pomodoro_name_json_skips_create_when_ledger_cannot_place_it(
-) {
+fn capture_complete_pomodoro_name_json_skips_create_when_ledger_cannot_place_it() {
     let temp = TempDir::new("bob-cli-capture-complete-pomodoro-create-blocked");
     let vault = temp.path().join("vault");
     write_file(&vault.join("dev.md"), "---\ntype: [[area]]\n---\n");
@@ -15749,8 +15582,7 @@ fn capture_task_id_assigns_and_dry_runs_lf_and_crlf_notes() {
         .output()
         .expect("dry-run capture-task-id");
     assert_success(&dry);
-    let dry_json: serde_json::Value =
-        serde_json::from_str(stdout(&dry).trim()).expect("json");
+    let dry_json: serde_json::Value = serde_json::from_str(stdout(&dry).trim()).expect("json");
     assert_eq!(dry_json["ok"], true);
     assert_eq!(dry_json["schema_version"], 1);
     assert_eq!(dry_json["dry_run"], true);
@@ -15772,8 +15604,7 @@ fn capture_task_id_assigns_and_dry_runs_lf_and_crlf_notes() {
         .output()
         .expect("write capture-task-id");
     assert_success(&written);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&written).trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(stdout(&written).trim()).expect("json");
     assert_eq!(json["ok"], true);
     assert_eq!(json["dry_run"], false);
     assert_eq!(json["route"], "file");
@@ -15953,10 +15784,8 @@ fn capture_task_id_recovers_a_shifted_line_and_rejects_write_free_failures() {
             "{name}: {}",
             format_output(&output)
         );
-        let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|_| {
-                panic!("{name}: {}", format_output(&output))
-            });
+        let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+            .unwrap_or_else(|_| panic!("{name}: {}", format_output(&output)));
         assert_eq!(json["ok"], false, "{name}");
         assert!(
             json["error"].as_str().expect("error").contains(expected),
@@ -16023,8 +15852,7 @@ fn capture_task_sections_json_and_human_list_sections() {
             "\"depth\"",
         ],
     );
-    let json: serde_json::Value =
-        serde_json::from_str(raw.trim()).expect("json");
+    let json: serde_json::Value = serde_json::from_str(raw.trim()).expect("json");
     assert_eq!(json["ok"], true);
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["route"], "foo");
@@ -16099,8 +15927,7 @@ fn capture_task_sections_empty_and_error_paths() {
         .output()
         .expect("empty sections");
     assert_success(&empty);
-    let empty_json: serde_json::Value =
-        serde_json::from_str(stdout(&empty).trim()).expect("json");
+    let empty_json: serde_json::Value = serde_json::from_str(stdout(&empty).trim()).expect("json");
     assert_eq!(empty_json["ok"], true);
     assert_eq!(empty_json["count"], 0);
     assert_eq!(
@@ -16121,8 +15948,7 @@ fn capture_task_sections_empty_and_error_paths() {
         .output()
         .expect("task-ref sections");
     assert_success(&by_ref);
-    let ref_json: serde_json::Value =
-        serde_json::from_str(stdout(&by_ref).trim()).expect("json");
+    let ref_json: serde_json::Value = serde_json::from_str(stdout(&by_ref).trim()).expect("json");
     assert!(ref_json["block_id"].is_null(), "{ref_json}");
     assert_eq!(ref_json["count"], 1);
     assert_eq!(ref_json["sections"][0]["title"], "REQUIREMENTS");
@@ -16213,10 +16039,8 @@ fn capture_task_sections_empty_and_error_paths() {
             "{name}: {}",
             format_output(&output)
         );
-        let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|_| {
-                panic!("{name}: {}", format_output(&output))
-            });
+        let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+            .unwrap_or_else(|_| panic!("{name}: {}", format_output(&output)));
         assert_eq!(json["ok"], false, "{name}");
         assert!(
             json["error"].as_str().expect("error").contains(expected),
@@ -16293,8 +16117,7 @@ fn capture_complete_task_section_json_covers_components_and_warnings() {
         .output()
         .expect("bare hash complete");
     assert_success(&bare);
-    let bare_json: serde_json::Value =
-        serde_json::from_str(stdout(&bare).trim()).expect("json");
+    let bare_json: serde_json::Value = serde_json::from_str(stdout(&bare).trim()).expect("json");
     assert_eq!(bare_json["context"], "task_section");
     let titles: Vec<&str> = bare_json["candidates"]
         .as_array()
@@ -16371,8 +16194,7 @@ fn capture_complete_task_section_json_covers_components_and_warnings() {
         .output()
         .expect("route component");
     assert_success(&route);
-    let route_json: serde_json::Value =
-        serde_json::from_str(stdout(&route).trim()).expect("json");
+    let route_json: serde_json::Value = serde_json::from_str(stdout(&route).trim()).expect("json");
     assert_eq!(route_json["context"], "route");
     assert_eq!(route_json["candidates"][0]["route"], "foo");
 
@@ -16389,8 +16211,7 @@ fn capture_complete_task_section_json_covers_components_and_warnings() {
         .output()
         .expect("task component");
     assert_success(&task);
-    let task_json: serde_json::Value =
-        serde_json::from_str(stdout(&task).trim()).expect("json");
+    let task_json: serde_json::Value = serde_json::from_str(stdout(&task).trim()).expect("json");
     assert_eq!(task_json["context"], "task");
     assert_eq!(task_json["candidates"][0]["block_id"], "bar");
 }
@@ -16418,8 +16239,8 @@ fn capture_complete_wikilink_note_json_returns_replacement_and_cursor_after() {
         .expect("run bob capture-complete wikilink note json");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["context"], "wikilink_note");
     assert_eq!(
         json["replacement"],
@@ -16456,8 +16277,8 @@ fn capture_complete_wikilink_same_note_heading_uses_capture_route() {
         .expect("run bob capture-complete wikilink heading json");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["context"], "wikilink_heading");
     let candidates = json["candidates"].as_array().expect("candidates array");
     assert_eq!(
@@ -16491,8 +16312,8 @@ fn capture_complete_missing_note_behind_a_resolved_route_is_an_empty_success() {
         .expect("run bob capture-complete missing note");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["context"], "section");
     assert_eq!(json["candidates"], serde_json::json!([]));
@@ -16515,8 +16336,8 @@ fn capture_complete_cursor_in_body_text_is_an_empty_success() {
         .expect("run bob capture-complete body text");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["ok"], true);
     assert!(json["context"].is_null());
     assert_eq!(
@@ -16543,8 +16364,8 @@ fn capture_complete_bare_hash_marker_is_an_empty_success() {
         .expect("run bob capture-complete on a trailing #");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["ok"], true);
     assert!(json["context"].is_null());
     assert_eq!(
@@ -16570,8 +16391,8 @@ fn capture_complete_empty_text_defaults_to_an_empty_draft() {
     );
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["ok"], true);
     assert!(json["context"].is_null());
     assert_eq!(json["candidates"], serde_json::json!([]));
@@ -16599,8 +16420,8 @@ fn capture_complete_rejects_a_cursor_outside_the_text() {
         "JSON failures keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete failure JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete failure JSON");
     assert_eq!(json["ok"], false);
     assert!(
         json["error"]
@@ -16628,8 +16449,8 @@ fn capture_complete_rejects_a_cursor_that_splits_a_multibyte_character() {
         .expect("run bob capture-complete mid-character cursor");
 
     assert_eq!(output.status.code(), Some(2));
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete failure JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete failure JSON");
     assert_eq!(json["ok"], false);
 }
 
@@ -16659,8 +16480,8 @@ fn capture_complete_reports_utf8_byte_offsets() {
         .expect("run bob capture-complete utf8");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["context"], "task");
     assert_eq!(
         json["replacement"],
@@ -16674,8 +16495,7 @@ fn capture_complete_human_output_is_plain_and_concise() {
     let temp = TempDir::new("bob-cli-capture-complete-human");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    fs::write(vault.join("cash.md"), "---\ntype: [[area]]\n---\n")
-        .expect("write cash.md");
+    fs::write(vault.join("cash.md"), "---\ntype: [[area]]\n---\n").expect("write cash.md");
 
     let output = bob_command()
         .arg("capture-complete")
@@ -16723,8 +16543,8 @@ fn capture_complete_discovery_failure_reports_an_actionable_error() {
         "missing vault should be an IO failure:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete failure JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete failure JSON");
     assert_eq!(json["ok"], false);
     assert!(
         json["error"]
@@ -16753,8 +16573,8 @@ fn capture_complete_never_creates_the_vault_directory() {
         .expect("run bob capture-complete section against a missing vault");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-complete JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture-complete JSON");
     assert_eq!(json["ok"], true);
     assert_eq!(json["context"], "section");
     assert_eq!(json["candidates"], serde_json::json!([]));
@@ -16793,11 +16613,9 @@ fn dataview_help_lists_options_alphabetically() {
         ],
     );
     assert!(
-        help.contains(
-            "Run Dataview source expressions, Dataview DQL, or Obsidian Tasks"
-        ) && help.contains("whole-note block execution")
-            && help
-                .contains("bob query --tasks-note dash.md --format markdown")
+        help.contains("Run Dataview source expressions, Dataview DQL, or Obsidian Tasks")
+            && help.contains("whole-note block execution")
+            && help.contains("bob query --tasks-note dash.md --format markdown")
             && help.contains("Run every Tasks code block in a vault note"),
         "expected complete Tasks query help:\n{help}"
     );
@@ -16830,8 +16648,8 @@ fn dataview_short_options_are_accepted() {
         .expect("run bob query with short query-file options");
 
     assert_success(&output);
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["format"], "json");
@@ -17116,8 +16934,8 @@ fn dataview_obsidian_dql_json_reads_query_file_and_forwards_env_vault() {
         "unexpected query stderr:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["engine"], "obsidian");
@@ -17131,12 +16949,8 @@ fn dataview_obsidian_dql_json_reads_query_file_and_forwards_env_vault() {
     assert_text_order(&log_text, &["ARG:vault=Bob", "ARG:eval", "ARG:code="]);
     assert!(
         log_text.contains(r##""origin":"Home.md""##)
-            && log_text.contains(
-                r##""query":{"kind":"dql","query":"LIST FROM #project"}"##
-            )
-            && log_text.contains(
-                "api.tryQuery(request.query.query, origin, { forceId: true })"
-            ),
+            && log_text.contains(r##""query":{"kind":"dql","query":"LIST FROM #project"}"##)
+            && log_text.contains("api.tryQuery(request.query.query, origin, { forceId: true })"),
         "expected generated DQL JavaScript in obsidian argv:\n{log_text}"
     );
 }
@@ -17174,8 +16988,7 @@ fn dataview_obsidian_markdown_prints_rendered_markdown() {
     );
     let log_text = fs::read_to_string(&log).expect("read obsidian argv log");
     assert!(
-        !log_text.contains("ARG:vault=")
-            && log_text.contains("api.tryQueryMarkdown"),
+        !log_text.contains("ARG:vault=") && log_text.contains("api.tryQueryMarkdown"),
         "markdown query should not forward an unset vault:\n{log_text}"
     );
 }
@@ -17215,9 +17028,7 @@ fn dataview_obsidian_reports_protocol_errors() {
             .env_remove("BOB_DATAVIEW_VAULT")
             .env("STUB_LOG", &log)
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run bob query protocol error {name}: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run bob query protocol error {name}: {error}"));
 
         assert_eq!(
             output.status.code(),
@@ -17231,8 +17042,7 @@ fn dataview_obsidian_reports_protocol_errors() {
             format_output(&output)
         );
         assert!(
-            stderr(&output).contains(marker)
-                && stderr(&output).contains(detail),
+            stderr(&output).contains(marker) && stderr(&output).contains(detail),
             "expected protocol error report for {name}:\n{}",
             format_output(&output)
         );
@@ -17272,9 +17082,7 @@ fn dataview_obsidian_reports_missing_and_malformed_sentinel() {
             .env("BOB_DATAVIEW_OBSIDIAN_COMMAND", &obsidian)
             .env_remove("BOB_DATAVIEW_VAULT")
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run bob query sentinel case {name}: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run bob query sentinel case {name}: {error}"));
 
         assert_eq!(
             output.status.code(),
@@ -17288,8 +17096,7 @@ fn dataview_obsidian_reports_missing_and_malformed_sentinel() {
             format_output(&output)
         );
         assert!(
-            stderr(&output).contains(marker)
-                && stderr(&output).contains(detail),
+            stderr(&output).contains(marker) && stderr(&output).contains(detail),
             "expected sentinel protocol error for {name}:\n{}",
             format_output(&output)
         );
@@ -17600,8 +17407,7 @@ WHERE source_pdf
   )
 "#;
     let list_query = format!("LIST\n{query_tail}");
-    let table_query =
-        format!("TABLE status, parent, source_path\n{query_tail}");
+    let table_query = format!("TABLE status, parent, source_path\n{query_tail}");
 
     let list_output = bob_command()
         .arg("query")
@@ -17679,8 +17485,8 @@ fn dataview_native_table_json_projects_frontmatter_rows() {
         "native JSON TABLE query should keep stderr clean:\n{}",
         format_output(&output)
     );
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .unwrap_or_else(|error| {
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
             panic!("stdout should be JSON: {error}\n{}", format_output(&output))
         });
     assert_eq!(json["engine"], "native");
@@ -17949,9 +17755,7 @@ status: wip
     assert!(out.contains("Missing") && out.contains("missing"));
     assert!(out.contains("Placeholder") && out.contains("placeholder"));
     assert!(
-        !out.contains("Template")
-            && !out.contains("Hidden")
-            && !out.contains("Archived"),
+        !out.contains("Template") && !out.contains("Hidden") && !out.contains("Archived"),
         "excluded directories should not be listed:\n{out}"
     );
     assert_text_order(
@@ -18000,9 +17804,7 @@ fn projects_list_reports_prj_errors_without_aborting_scan() {
     );
     let out = stdout(&output);
     assert!(
-        out.contains("Good")
-            && out.contains("Malformed")
-            && out.contains("Multiple"),
+        out.contains("Good") && out.contains("Malformed") && out.contains("Multiple"),
         "list should still render every project row:\n{out}"
     );
     let err = stderr(&output);
@@ -18064,8 +17866,7 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task <short_project_completion_criteria_goes_here> #hide ^prj\n- [ ] #task Needs priority\n",
     );
 
-    let dry_run_snapshot =
-        fs::read_to_string(vault.join("Stalled.md")).expect("read stalled");
+    let dry_run_snapshot = fs::read_to_string(vault.join("Stalled.md")).expect("read stalled");
     let output = bob_command()
         .arg("projects")
         .arg("sync")
@@ -18140,8 +17941,7 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
         "---\ntype: [[project]]\nstatus: canceled\n---\n- [-] #task Stop work #hide ^prj\n"
     );
     assert_eq!(
-        fs::read_to_string(vault.join("MissingStatus.md"))
-            .expect("read missing status"),
+        fs::read_to_string(vault.join("MissingStatus.md")).expect("read missing status"),
         "---\ntype: [[project]]\nstatus: done\n---\n- [X] #task Ship missing status #hide ^prj\n"
     );
     assert_eq!(
@@ -18153,23 +17953,19 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish zero open ^prj\n- [x] #task Already done\n"
     );
     assert_eq!(
-        fs::read_to_string(vault.join("HasUnprioritized.md"))
-            .expect("read has unprioritized"),
+        fs::read_to_string(vault.join("HasUnprioritized.md")).expect("read has unprioritized"),
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish has unprioritized #hide ^prj\n- [ ] #task Needs priority\n"
     );
     assert_eq!(
-        fs::read_to_string(vault.join("MissingPriority.md"))
-            .expect("read missing priority"),
+        fs::read_to_string(vault.join("MissingPriority.md")).expect("read missing priority"),
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish missing priority #hide ^prj\n- [ ] #task Needs priority\n"
     );
     assert_eq!(
-        fs::read_to_string(vault.join("ExistingScheduled.md"))
-            .expect("read scheduled"),
+        fs::read_to_string(vault.join("ExistingScheduled.md")).expect("read scheduled"),
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled ^prj\n"
     );
     assert_eq!(
-        fs::read_to_string(vault.join("TerminalOpen.md"))
-            .expect("read terminal open"),
+        fs::read_to_string(vault.join("TerminalOpen.md")).expect("read terminal open"),
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish drift ^prj\n"
     );
 
@@ -18217,8 +18013,7 @@ fn projects_sync_hides_parent_projects_with_open_subprojects() {
         "---\ntype: [[project]]\nstatus: wip\nparent: [[ParentAdd]]\n---\n- [ ] #task Finish alpha #hide ^prj\n- [ ] #task Needs priority\n",
     );
 
-    let parent_add_snapshot =
-        fs::read_to_string(vault.join("ParentAdd.md")).expect("read parent");
+    let parent_add_snapshot = fs::read_to_string(vault.join("ParentAdd.md")).expect("read parent");
     let output = bob_command()
         .arg("projects")
         .arg("sync")
@@ -18321,8 +18116,7 @@ fn projects_sync_reconciles_future_subproject_markers_at_date_boundary() {
         "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\nscheduled: 2026-07-11\n---\n- [x] #task Finish closed #hide ^prj\n",
     );
 
-    let parent_before =
-        fs::read_to_string(vault.join("Parent.md")).expect("read parent");
+    let parent_before = fs::read_to_string(vault.join("Parent.md")).expect("read parent");
     let output = bob_command()
         .arg("projects")
         .arg("sync")
@@ -18362,11 +18156,8 @@ fn projects_sync_reconciles_future_subproject_markers_at_date_boundary() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains(
-            "added 🗓️ [[FutureOpen]] to ^prj  sub-project scheduled in future"
-        ) && out.contains(
-            "added 🗓️ [[FutureClosed]] to ^prj  sub-project scheduled in future"
-        ),
+        out.contains("added 🗓️ [[FutureOpen]] to ^prj  sub-project scheduled in future")
+            && out.contains("added 🗓️ [[FutureClosed]] to ^prj  sub-project scheduled in future"),
         "unexpected sync output:\n{out}"
     );
     assert_eq!(
@@ -18770,13 +18561,11 @@ fn projects_sync_treats_children_without_open_prj_as_childless() {
         "unexpected sync output:\n{out}"
     );
     assert_eq!(
-        fs::read_to_string(vault.join("ParentMissingChild.md"))
-            .expect("read parent"),
+        fs::read_to_string(vault.join("ParentMissingChild.md")).expect("read parent"),
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n"
     );
     assert_eq!(
-        fs::read_to_string(vault.join("ParentCheckedChild.md"))
-            .expect("read parent"),
+        fs::read_to_string(vault.join("ParentCheckedChild.md")).expect("read parent"),
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent ^prj\n"
     );
 }
@@ -18887,18 +18676,15 @@ fn projects_sync_subproject_line_dry_run_reports_without_writing() {
     let snapshots = [
         (
             "ParentAdd.md",
-            fs::read_to_string(vault.join("ParentAdd.md"))
-                .expect("read parent add"),
+            fs::read_to_string(vault.join("ParentAdd.md")).expect("read parent add"),
         ),
         (
             "ParentRemove.md",
-            fs::read_to_string(vault.join("ParentRemove.md"))
-                .expect("read parent remove"),
+            fs::read_to_string(vault.join("ParentRemove.md")).expect("read parent remove"),
         ),
         (
             "ParentUpdate.md",
-            fs::read_to_string(vault.join("ParentUpdate.md"))
-                .expect("read parent update"),
+            fs::read_to_string(vault.join("ParentUpdate.md")).expect("read parent update"),
         ),
     ];
 
@@ -19002,12 +18788,11 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
     assert_success(&preview);
     assert_eq!(fs::read_to_string(&project).unwrap(), original);
     assert!(
-        stdout(&preview).contains(
-            "would schedule 1 task 2026-07-11  frontmatter scheduled is future"
-        ) && stdout(&preview).contains(
-            "would remove #hide from 1 task  task schedules replace #hide"
-        ) && stdout(&preview)
-            .contains("would normalize #hide on ^prj  scheduled 2026-07-11")
+        stdout(&preview)
+            .contains("would schedule 1 task 2026-07-11  frontmatter scheduled is future")
+            && stdout(&preview)
+                .contains("would remove #hide from 1 task  task schedules replace #hide")
+            && stdout(&preview).contains("would normalize #hide on ^prj  scheduled 2026-07-11")
             && stdout(&preview).contains("1 task schedules updated")
             && stdout(&preview).contains("bob task-status-hooks"),
         "unexpected preview:\n{}",
@@ -19022,9 +18807,7 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
         .expect("apply future scheduled project");
     assert_success(&applied);
     assert!(
-        stdout(&applied).contains(
-            "scheduled 1 task 2026-07-11  frontmatter scheduled is future"
-        ),
+        stdout(&applied).contains("scheduled 1 task 2026-07-11  frontmatter scheduled is future"),
         "unexpected sync output:\n{}",
         format_output(&applied)
     );
@@ -19087,9 +18870,9 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
         .expect("propagate project schedule");
     assert_success(&synced);
     let propagated = fs::read_to_string(&project).unwrap();
-    assert!(propagated.contains(
-        "- [/] #task Implement milestone [scheduled:: 2026-07-17] ^milestone"
-    ));
+    assert!(
+        propagated.contains("- [/] #task Implement milestone [scheduled:: 2026-07-17] ^milestone")
+    );
     assert!(!propagated.contains("milestone #hide"));
 
     let blocked = bob_command()
@@ -19100,9 +18883,11 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
         .output()
         .expect("derive future scheduled Blocked status");
     assert_success(&blocked);
-    assert!(fs::read_to_string(&project).unwrap().contains(
-        "- [?] #task Implement milestone [scheduled:: 2026-07-17] ^milestone"
-    ));
+    assert!(
+        fs::read_to_string(&project)
+            .unwrap()
+            .contains("- [?] #task Implement milestone [scheduled:: 2026-07-17] ^milestone")
+    );
 
     let mature_sync = bob_command()
         .args(["projects", "sync", "--bob-dir"])
@@ -19120,9 +18905,11 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
         .output()
         .expect("recover matured project task");
     assert_success(&recovered);
-    assert!(fs::read_to_string(&project).unwrap().contains(
-        "- [ ] #task Implement milestone [scheduled:: 2026-07-17] ^milestone"
-    ));
+    assert!(
+        fs::read_to_string(&project)
+            .unwrap()
+            .contains("- [ ] #task Implement milestone [scheduled:: 2026-07-17] ^milestone")
+    );
 }
 
 #[test]
@@ -19176,8 +18963,7 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
     let contains_transition = |output: &Output| {
         assert_success(output);
         let json: serde_json::Value =
-            serde_json::from_str(stdout(output).trim())
-                .expect("parse tasks-note JSON");
+            serde_json::from_str(stdout(output).trim()).expect("parse tasks-note JSON");
         json["blocks"]
             .as_array()
             .expect("tasks-note blocks")
@@ -19255,8 +19041,7 @@ fn projects_sync_shows_sole_prj_task_when_schedule_is_due() {
         .expect("sync due project whose only task is ^prj");
     assert_success(&output);
     assert!(
-        stdout(&output)
-            .contains("removed #hide from sole ^prj  scheduled 2026-07-11")
+        stdout(&output).contains("removed #hide from sole ^prj  scheduled 2026-07-11")
             && stdout(&output).contains("0 task schedules updated"),
         "unexpected due output:\n{}",
         format_output(&output)
@@ -19272,7 +19057,8 @@ fn projects_schedule_errors_are_per_file_and_leave_invalid_file_untouched() {
     let temp = TempDir::new("bob-cli-projects-scheduled-errors");
     let vault = temp.path().join("vault");
     let invalid = vault.join("Invalid.md");
-    let invalid_contents = "---\ntype: [[project]]\nscheduled: 2026-02-30\n---\n- [ ] #task Invalid ^prj\n";
+    let invalid_contents =
+        "---\ntype: [[project]]\nscheduled: 2026-02-30\n---\n- [ ] #task Invalid ^prj\n";
     write_file(&invalid, invalid_contents);
     write_file(
         &vault.join("Quoted.md"),
@@ -19286,14 +19072,10 @@ fn projects_schedule_errors_are_per_file_and_leave_invalid_file_untouched() {
         .output()
         .expect("list scheduled projects with one error");
     assert_eq!(listed.status.code(), Some(1));
+    assert!(stdout(&listed).contains("Invalid") && stdout(&listed).contains("Quoted"));
     assert!(
-        stdout(&listed).contains("Invalid")
-            && stdout(&listed).contains("Quoted")
-    );
-    assert!(
-        stderr(&listed).contains(
-            "Invalid.md:3: scheduled is not a valid calendar date: 2026-02-30"
-        ),
+        stderr(&listed)
+            .contains("Invalid.md:3: scheduled is not a valid calendar date: 2026-02-30"),
         "unexpected list error:\n{}",
         format_output(&listed)
     );
@@ -19408,21 +19190,15 @@ fn plugins_list_renders_table_and_summary() {
         "missing table header:\n{out}"
     );
     assert!(
-        out.contains("alpha")
-            && out.contains("synced")
-            && out.contains("enabled"),
+        out.contains("alpha") && out.contains("synced") && out.contains("enabled"),
         "missing synced + enabled alpha row:\n{out}"
     );
     assert!(
-        out.contains("beta")
-            && out.contains("drift")
-            && out.contains("disabled"),
+        out.contains("beta") && out.contains("drift") && out.contains("disabled"),
         "missing drift + disabled beta row:\n{out}"
     );
     assert!(
-        out.contains("gamma")
-            && out.contains("missing")
-            && out.contains("not installed"),
+        out.contains("gamma") && out.contains("missing") && out.contains("not installed"),
         "missing not-installed gamma row:\n{out}"
     );
     assert!(
@@ -19451,8 +19227,7 @@ fn plugins_default_subcommand_runs_list() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("Bob Plugins - 3 - ")
-            && out.contains("1 synced - 1 drift - 1 not installed"),
+        out.contains("Bob Plugins - 3 - ") && out.contains("1 synced - 1 drift - 1 not installed"),
         "bare `bob plugins` should default to list:\n{out}"
     );
 }
@@ -19527,8 +19302,7 @@ fn plugins_list_pulls_repo_before_analysis() {
         format_output(&output)
     );
     assert_eq!(
-        fs::read_to_string(repo.join("plugins/alpha/main.js"))
-            .expect("read pulled plugin"),
+        fs::read_to_string(repo.join("plugins/alpha/main.js")).expect("read pulled plugin"),
         "// new\n"
     );
 }
@@ -19569,8 +19343,7 @@ fn plugins_list_no_pull_uses_existing_checkout() {
         format_output(&output)
     );
     assert_eq!(
-        fs::read_to_string(repo.join("plugins/alpha/main.js"))
-            .expect("read unpulled plugin"),
+        fs::read_to_string(repo.join("plugins/alpha/main.js")).expect("read unpulled plugin"),
         "// old\n"
     );
 }
@@ -19798,9 +19571,7 @@ fn plugins_sync_backs_up_overwritten_file() {
     assert_stdout_has_no_ansi(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("@@")
-            && out.contains("-// beta-stale")
-            && out.contains("+// beta"),
+        out.contains("@@") && out.contains("-// beta-stale") && out.contains("+// beta"),
         "expected real sync diff:\n{out}"
     );
     assert!(
@@ -20119,18 +19890,14 @@ fn highlights_create_output_dry_run_prints_exact_path_without_writes() {
             .arg("nested/custom-name.pdf")
             .env("BOB_PANDOC_COMMAND", &pandoc)
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run create {flag} --dry-run: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run create {flag} --dry-run: {error}"));
 
         assert_success(&output);
         let report = stdout(&output);
         assert!(
             report.contains("nested/custom-name.pdf")
                 && report.contains("Custom Output")
-                && report.contains(
-                    "scan: recursive scan will not discover this PDF"
-                )
+                && report.contains("scan: recursive scan will not discover this PDF")
                 && report.contains("next: bob highlights sync")
                 && !report.contains("library_destination:")
                 && report.contains("writes: none"),
@@ -20380,9 +20147,9 @@ fn highlights_create_refuses_existing_library_pdf_with_or_without_force() {
             command.arg("--force");
         }
 
-        let output = command.output().unwrap_or_else(|error| {
-            panic!("run create force={force}: {error}")
-        });
+        let output = command
+            .output()
+            .unwrap_or_else(|error| panic!("run create force={force}: {error}"));
 
         assert_eq!(
             output.status.code(),
@@ -20415,9 +20182,7 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
         .output()
         .is_ok_and(|output| output.status.success());
     if !pandoc_available || !xelatex_available {
-        eprintln!(
-            "skipping highlights create render test: pandoc and xelatex are required"
-        );
+        eprintln!("skipping highlights create render test: pandoc and xelatex are required");
         return;
     }
 
@@ -20755,9 +20520,7 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
         "{contents}"
     );
     assert!(
-        contents.contains(
-            "- [/] #task #ref [[lib/systems-performance.pdf]] #hide ^ref\n"
-        ),
+        contents.contains("- [/] #task #ref [[lib/systems-performance.pdf]] #hide ^ref\n"),
         "{contents}"
     );
     assert!(
@@ -20777,13 +20540,11 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("note_action: none")
-            && stdout(&output).contains("writes: none"),
+        stdout(&output).contains("note_action: none") && stdout(&output).contains("writes: none"),
         "bare marker parent should be idempotent:\n{}",
         format_output(&output)
     );
-    let repeat_contents =
-        fs::read_to_string(&note).expect("read repeat-synced ref note");
+    let repeat_contents = fs::read_to_string(&note).expect("read repeat-synced ref note");
     assert!(
         repeat_contents.contains("id: systems-performance\n"),
         "{repeat_contents}"
@@ -20857,14 +20618,12 @@ fn highlights_ref_sync_preserves_legacy_research_frontmatter() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("note_action: none")
-            && stdout(&output).contains("writes: none"),
+        stdout(&output).contains("note_action: none") && stdout(&output).contains("writes: none"),
         "legacy research should be idempotent:\n{}",
         format_output(&output)
     );
     assert!(
-        pdf_marker_contents(&pdf)
-            .contains("- research: 202608/artifact_reference_rendering.md\n"),
+        pdf_marker_contents(&pdf).contains("- research: 202608/artifact_reference_rendering.md\n"),
         "legacy research must remain in the PDF marker"
     );
 }
@@ -20967,9 +20726,7 @@ fn highlights_ref_scan_treats_later_page_note_as_missing_marker() {
     assert!(
         report.contains(path_str(&pdf))
             && report.contains("plan_error:")
-            && report.contains(
-                "no standalone /Text note annotations found on page 1"
-            ),
+            && report.contains("no standalone /Text note annotations found on page 1"),
         "expected page-1 missing marker error:\n{}",
         format_output(&output)
     );
@@ -21146,8 +20903,7 @@ fn highlights_ref_rejects_wikilink_marker_parent_before_writes() {
     );
     let report = stdout(&scan);
     assert!(
-        report.contains("plan_error:")
-            && report.contains("wikilinks are not supported"),
+        report.contains("plan_error:") && report.contains("wikilinks are not supported"),
         "expected scan linked parent error:\n{}",
         format_output(&scan)
     );
@@ -21197,9 +20953,7 @@ fn highlights_ref_sync_rejects_malformed_and_duplicate_marker_lists() {
             .arg(&pdf)
             .env("BOB_DIR", &vault)
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run bob highlights sync for {name}: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run bob highlights sync for {name}: {error}"));
 
         assert_eq!(
             output.status.code(),
@@ -21334,8 +21088,7 @@ Note: marker note
     let dry_run = stdout(&output);
     assert!(dry_run.contains("pdf_count: 2"), "{dry_run}");
     assert!(
-        dry_run.contains(path_str(&first_note))
-            && dry_run.contains(path_str(&second_note)),
+        dry_run.contains(path_str(&first_note)) && dry_run.contains(path_str(&second_note)),
         "{dry_run}"
     );
     assert!(dry_run.contains("notes_create: 2"), "{dry_run}");
@@ -21355,10 +21108,8 @@ Note: marker note
     let written = stdout(&output);
     assert!(written.contains("notes_created: 2"), "{written}");
     assert!(written.contains("writes: note"), "{written}");
-    let first_contents =
-        fs::read_to_string(&first_note).expect("read first note");
-    let second_contents =
-        fs::read_to_string(&second_note).expect("read second note");
+    let first_contents = fs::read_to_string(&first_note).expect("read first note");
+    let second_contents = fs::read_to_string(&second_note).expect("read second note");
     assert!(
         first_contents.contains("ref_type: books\n")
             && first_contents.contains("> [!quote] First quote.\n"),
@@ -21429,9 +21180,7 @@ fn highlights_ref_scan_intakes_xlib_pdf_and_writes_note_in_same_run() {
     let report = stdout(&output);
     assert!(
         report.contains("intake_moves: 1")
-            && report.contains(
-                "intake: moved xlib/chat/intake.pdf -> lib/chat/intake.pdf"
-            )
+            && report.contains("intake: moved xlib/chat/intake.pdf -> lib/chat/intake.pdf")
             && report.contains("notes_created: 1"),
         "expected intake and note write in same scan:\n{report}"
     );
@@ -21494,9 +21243,7 @@ fn highlights_ref_scan_runs_configured_pre_scan_before_xlib_intake() {
     assert!(
         report.contains("pre_scan_hook: run")
             && report.contains("pre-scan stdout from")
-            && report.contains(
-                "intake: moved xlib/chat/from-hook.pdf -> lib/chat/from-hook.pdf"
-            )
+            && report.contains("intake: moved xlib/chat/from-hook.pdf -> lib/chat/from-hook.pdf")
             && report.contains("notes_created: 1"),
         "expected pre-scan hook to populate xlib before intake:\n{}",
         format_output(&output)
@@ -21999,8 +21746,7 @@ fn highlights_ref_doctor_no_hooks_reports_skipped() {
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        report.contains("pre_scan_hook: skipped (--no-hooks)")
-            && report.contains("result: ok"),
+        report.contains("pre_scan_hook: skipped (--no-hooks)") && report.contains("result: ok"),
         "doctor --no-hooks should skip the hook and stay ok:\n{}",
         format_output(&output)
     );
@@ -22129,21 +21875,16 @@ Note: marker note
         "bundle intake files should be gone"
     );
 
-    let markdown_contents =
-        fs::read_to_string(&markdown_note).expect("read markdown note");
+    let markdown_contents = fs::read_to_string(&markdown_note).expect("read markdown note");
     assert!(
-        markdown_contents
-            .contains("highlights_sidecar: lib/chat/markdown.md\n")
-            && markdown_contents
-                .contains("> [!quote] Markdown sidecar quote.\n"),
+        markdown_contents.contains("highlights_sidecar: lib/chat/markdown.md\n")
+            && markdown_contents.contains("> [!quote] Markdown sidecar quote.\n"),
         "{markdown_contents}"
     );
-    let bundle_contents =
-        fs::read_to_string(&bundle_note).expect("read bundle note");
+    let bundle_contents = fs::read_to_string(&bundle_note).expect("read bundle note");
     assert!(
-        bundle_contents.contains(
-            "highlights_sidecar: lib/chat/bundle.textbundle/text.md\n"
-        ) && bundle_contents.contains("> [!quote] TextBundle sidecar quote.\n"),
+        bundle_contents.contains("highlights_sidecar: lib/chat/bundle.textbundle/text.md\n")
+            && bundle_contents.contains("> [!quote] TextBundle sidecar quote.\n"),
         "{bundle_contents}"
     );
 }
@@ -22237,8 +21978,7 @@ fn highlights_ref_scan_dry_run_reports_valid_and_invalid_pdfs() {
     );
     assert!(
         report.contains(path_str(&invalid_pdf))
-            && report
-                .contains("plan_error: missing required marker key: status")
+            && report.contains("plan_error: missing required marker key: status")
             && report.contains("plan_failures: 1")
             && report.contains("scan_failures: 1")
             && report.contains("writes: none"),
@@ -22297,8 +22037,7 @@ fn highlights_ref_scan_writes_valid_pdfs_despite_invalid_pdf() {
     );
     assert!(
         report.contains(path_str(&invalid_pdf))
-            && report
-                .contains("plan_error: missing required marker key: status")
+            && report.contains("plan_error: missing required marker key: status")
             && report.contains("plan_failures: 1")
             && report.contains("scan_failures: 1"),
         "invalid PDF should be reported:\n{report}"
@@ -22308,8 +22047,7 @@ fn highlights_ref_scan_writes_valid_pdfs_despite_invalid_pdf() {
         "expected partial failure stderr:\n{}",
         format_output(&output)
     );
-    let valid_contents =
-        fs::read_to_string(&valid_note).expect("read valid note");
+    let valid_contents = fs::read_to_string(&valid_note).expect("read valid note");
     assert!(
         valid_contents.contains("title: \"Valid PDF\"\n"),
         "{valid_contents}"
@@ -22447,8 +22185,7 @@ Note: marker note mirrored from the PDF
     assert_success(&output);
     let written = stdout(&output);
     assert!(
-        written.contains("Scanning 3 PDFs in lib")
-            && !written.contains("dry-run"),
+        written.contains("Scanning 3 PDFs in lib") && !written.contains("dry-run"),
         "{written}"
     );
     assert!(
@@ -22482,10 +22219,7 @@ fn highlights_ref_scan_default_output_reports_inline_errors() {
         &valid_pdf,
         "- status: wip\n- parent: obsidian\n- title: Valid\n",
     );
-    write_highlights_pdf(
-        &invalid_pdf,
-        "- parent: obsidian\n- title: Invalid\n",
-    );
+    write_highlights_pdf(&invalid_pdf, "- parent: obsidian\n- title: Invalid\n");
 
     let output = bob_command()
         .arg("highlights")
@@ -22504,8 +22238,7 @@ fn highlights_ref_scan_default_output_reports_inline_errors() {
     assert_stdout_has_no_ansi(&output);
     let report = stdout(&output);
     assert!(
-        report.contains("error")
-            && report.contains("invalid  missing required marker key: status"),
+        report.contains("error") && report.contains("invalid  missing required marker key: status"),
         "invalid PDF should be rendered inline:\n{report}"
     );
     assert!(
@@ -22587,8 +22320,7 @@ fn highlights_ref_scan_continues_after_write_failure() {
         format_output(&output)
     );
     assert!(!fail_note.exists(), "failed note must not be installed");
-    let later_contents =
-        fs::read_to_string(&later_note).expect("read later note");
+    let later_contents = fs::read_to_string(&later_note).expect("read later note");
     assert!(
         later_contents.contains("title: \"Later Still Writes\"\n"),
         "{later_contents}"
@@ -22613,9 +22345,7 @@ fn highlights_ref_scan_jobs_flag_matches_sequential_output() {
         let pdf = vault.join(rel);
         write_highlights_pdf(
             &pdf,
-            &format!(
-                "- status: {status}\n- parent: obsidian\n- title: {title}\n"
-            ),
+            &format!("- status: {status}\n- parent: obsidian\n- title: {title}\n"),
         );
         write_file(
             &pdf.with_extension("md"),
@@ -22678,10 +22408,8 @@ fn highlights_ref_scan_allows_duplicate_basenames_in_different_ref_types() {
         .expect("run duplicate basename scan");
 
     assert_success(&output);
-    let first_contents =
-        fs::read_to_string(&first_note).expect("read books note");
-    let second_contents =
-        fs::read_to_string(&second_note).expect("read papers note");
+    let first_contents = fs::read_to_string(&first_note).expect("read books note");
+    let second_contents = fs::read_to_string(&second_note).expect("read papers note");
     assert!(
         first_contents.contains("ref_type: books\n"),
         "{first_contents}"
@@ -23001,15 +22729,11 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
 
     let note_after_write = fs::read_to_string(&note).expect("read note");
     assert!(
-        note_after_write.contains(&format!(
-            "source_pdf_sha256: {pdf_hash_after_write}\n"
-        )),
+        note_after_write.contains(&format!("source_pdf_sha256: {pdf_hash_after_write}\n")),
         "reference note should record the post-write PDF hash:\n{note_after_write}"
     );
     assert!(
-        !note_after_write.contains(&format!(
-            "source_pdf_sha256: {pdf_hash_before_write}\n"
-        )),
+        !note_after_write.contains(&format!("source_pdf_sha256: {pdf_hash_before_write}\n")),
         "reference note should not keep the pre-write PDF hash:\n{note_after_write}"
     );
     let output = bob_command()
@@ -23022,8 +22746,7 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("note_action: none")
-            && stdout(&output).contains("writes: none"),
+        stdout(&output).contains("note_action: none") && stdout(&output).contains("writes: none"),
         "frontmatter PDF write-back should settle in one run:\n{}",
         format_output(&output)
     );
@@ -23180,8 +22903,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     let migrated_note = fs::read_to_string(&note).expect("read migrated note");
     assert!(migrated_note.contains("status: read\n"), "{migrated_note}");
     assert!(
-        migrated_note
-            .contains("- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
+        migrated_note.contains("- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
         "{migrated_note}"
     );
     assert!(
@@ -23200,8 +22922,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("note_action: none")
-            && stdout(&output).contains("writes: none"),
+        stdout(&output).contains("note_action: none") && stdout(&output).contains("writes: none"),
         "done migration should settle:\n{}",
         format_output(&output)
     );
@@ -23346,19 +23067,16 @@ fn highlights_ref_task_cancelled_dry_run_requires_and_writes_pdf_marker() {
         "{note_after_write}"
     );
     assert!(
-        note_after_write.contains(
-            "- [-] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] ^ref\n"
-        ),
+        note_after_write
+            .contains("- [-] #task [[lib/example.pdf]] [p::2] [cancelled:: 2026-06-04] ^ref\n"),
         "{note_after_write}"
     );
     assert!(
-        note_after_write
-            .contains(&format!("source_pdf_sha256: {pdf_hash_after_write}\n")),
+        note_after_write.contains(&format!("source_pdf_sha256: {pdf_hash_after_write}\n")),
         "note should record post-write PDF hash:\n{note_after_write}"
     );
     assert!(
-        !note_after_write
-            .contains(&format!("source_pdf_sha256: {pdf_hash_before_write}\n")),
+        !note_after_write.contains(&format!("source_pdf_sha256: {pdf_hash_before_write}\n")),
         "note should not retain pre-write PDF hash:\n{note_after_write}"
     );
 
@@ -23372,8 +23090,7 @@ fn highlights_ref_task_cancelled_dry_run_requires_and_writes_pdf_marker() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("note_action: none")
-            && stdout(&output).contains("writes: none"),
+        stdout(&output).contains("note_action: none") && stdout(&output).contains("writes: none"),
         "cancelled-task write-back should settle:\n{}",
         format_output(&output)
     );
@@ -23429,8 +23146,7 @@ fn highlights_ref_task_cancelled_scan_write_pdfs_writes_pdf_marker() {
         "{note_after_write}"
     );
     assert!(
-        note_after_write
-            .contains("- [-] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
+        note_after_write.contains("- [-] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
         "{note_after_write}"
     );
 }
@@ -23518,8 +23234,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     let scan_write_dry_run = stdout(&output);
     assert!(
         scan_write_dry_run.contains("write_pdfs: true")
-            && scan_write_dry_run
-                .contains("pdf_task_contribution: status=read")
+            && scan_write_dry_run.contains("pdf_task_contribution: status=read")
             && scan_write_dry_run.contains("pdf_marker_action: would-update")
             && scan_write_dry_run.contains("notes_update: 1")
             && scan_write_dry_run.contains("writes: none"),
@@ -23614,18 +23329,15 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
         "{note_after_write}"
     );
     assert!(
-        note_after_write
-            .contains("- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
+        note_after_write.contains("- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
         "{note_after_write}"
     );
     assert!(
-        note_after_write
-            .contains(&format!("source_pdf_sha256: {pdf_hash_after_write}\n")),
+        note_after_write.contains(&format!("source_pdf_sha256: {pdf_hash_after_write}\n")),
         "note should record post-write PDF hash:\n{note_after_write}"
     );
     assert!(
-        !note_after_write
-            .contains(&format!("source_pdf_sha256: {pdf_hash_before_write}\n")),
+        !note_after_write.contains(&format!("source_pdf_sha256: {pdf_hash_before_write}\n")),
         "note should not retain pre-write PDF hash:\n{note_after_write}"
     );
 
@@ -23639,8 +23351,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("note_action: none")
-            && stdout(&output).contains("writes: none"),
+        stdout(&output).contains("note_action: none") && stdout(&output).contains("writes: none"),
         "checked-task write-back should settle:\n{}",
         format_output(&output)
     );
@@ -23668,8 +23379,7 @@ fn highlights_ref_task_ready_scan_reopens_read_ref_to_ready() {
     let read_note = fs::read_to_string(&note).expect("read ref note");
     assert!(
         read_note.contains("status: read\n")
-            && read_note
-                .contains("- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
+            && read_note.contains("- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
         "expected a read ref with a checked ^ref task:\n{read_note}"
     );
     // The user moves the generated ^ref task to Ready to reopen the ref.
@@ -23762,8 +23472,7 @@ fn highlights_ref_task_ready_scan_reopens_read_ref_to_ready() {
         "{note_after_write}"
     );
     assert!(
-        note_after_write
-            .contains("- [ ] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
+        note_after_write.contains("- [ ] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
         "{note_after_write}"
     );
 
@@ -23777,8 +23486,7 @@ fn highlights_ref_task_ready_scan_reopens_read_ref_to_ready() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("note_action: none")
-            && stdout(&output).contains("writes: none"),
+        stdout(&output).contains("note_action: none") && stdout(&output).contains("writes: none"),
         "reopen write-back should settle:\n{}",
         format_output(&output)
     );
@@ -23821,11 +23529,10 @@ Note: marker note mirrored from the PDF
 - #task Ask Alice about closing order @alice
 ",
     );
-    let checked_note =
-        fs::read_to_string(&note).expect("read ref note").replace(
-            "- [/] #task #ref [[lib/books/closing-order.pdf]]",
-            "- [x] #task #ref [[lib/books/closing-order.pdf]]",
-        );
+    let checked_note = fs::read_to_string(&note).expect("read ref note").replace(
+        "- [/] #task #ref [[lib/books/closing-order.pdf]]",
+        "- [x] #task #ref [[lib/books/closing-order.pdf]]",
+    );
     write_file(&note, &checked_note);
 
     let output = bob_command()
@@ -23852,15 +23559,10 @@ Note: marker note mirrored from the PDF
     let contents = fs::read_to_string(&note).expect("read closed ref note");
     assert!(contents.contains("status: read\n"), "{contents}");
     assert!(
-        contents.contains(
-            "- [x] #task #ref [[lib/books/closing-order.pdf]] #hide ^ref\n"
-        ),
+        contents.contains("- [x] #task #ref [[lib/books/closing-order.pdf]] #hide ^ref\n"),
         "{contents}"
     );
-    let same_note_task = find_created_annotation_task(
-        &contents,
-        "#task Final same-note intake.",
-    );
+    let same_note_task = find_created_annotation_task(&contents, "#task Final same-note intake.");
     assert!(
         contents.contains("## Tasks\n\n- [ ]"),
         "same-note task should sit under ## Tasks:\n{contents}"
@@ -23877,12 +23579,9 @@ Note: marker note mirrored from the PDF
         highlight_block_ids(&contents).contains(&same_note_source_id),
         "same-note annotation block should exist:\n{contents}"
     );
-    let route_contents =
-        fs::read_to_string(&route_note).expect("read routed task note");
-    let routed_task = find_created_annotation_task(
-        &route_contents,
-        "#task Ask Alice about closing order",
-    );
+    let route_contents = fs::read_to_string(&route_note).expect("read routed task note");
+    let routed_task =
+        find_created_annotation_task(&route_contents, "#task Ask Alice about closing order");
     assert!(
         !route_contents.contains("## Tasks"),
         "routed notes should not grow a ## Tasks section:\n{route_contents}"
@@ -23920,15 +23619,10 @@ Note: marker note mirrored from the PDF
         "repeat read sync should not create additional annotation tasks:\n{}",
         format_output(&output)
     );
-    let repeat_contents =
-        fs::read_to_string(&note).expect("read repeat-synced ref note");
-    let repeat_route_contents =
-        fs::read_to_string(&route_note).expect("read repeat-routed note");
+    let repeat_contents = fs::read_to_string(&note).expect("read repeat-synced ref note");
+    let repeat_route_contents = fs::read_to_string(&route_note).expect("read repeat-routed note");
     assert_eq!(
-        created_annotation_task_count(
-            &repeat_contents,
-            "#task Final same-note intake."
-        ),
+        created_annotation_task_count(&repeat_contents, "#task Final same-note intake."),
         1,
         "{repeat_contents}"
     );
@@ -24034,15 +23728,10 @@ Note: marker note mirrored from the PDF
     let contents = fs::read_to_string(&note).expect("read scan-closed note");
     assert!(contents.contains("status: read\n"), "{contents}");
     assert!(
-        contents.contains(
-            "- [x] #task #ref [[lib/books/scan-closing.pdf]] #hide ^ref\n"
-        ),
+        contents.contains("- [x] #task #ref [[lib/books/scan-closing.pdf]] #hide ^ref\n"),
         "{contents}"
     );
-    let created_task = find_created_annotation_task(
-        &contents,
-        "#task Import during scan close.",
-    );
+    let created_task = find_created_annotation_task(&contents, "#task Import during scan close.");
     let source_id = annotation_task_source_link_id(&created_task);
     assert!(
         created_task.contains("[[#^h-")
@@ -24101,9 +23790,7 @@ fn highlights_ref_task_checked_dirty_tracked_note_is_allowed() {
 #[test]
 fn highlights_ref_task_checked_competing_status_edits_fail() {
     for source in ["marker", "frontmatter"] {
-        let temp = TempDir::new(&format!(
-            "bob-cli-highlights-ref-task-conflict-{source}"
-        ));
+        let temp = TempDir::new(&format!("bob-cli-highlights-ref-task-conflict-{source}"));
         let vault = temp.path().join("vault");
         let pdf = vault.join("lib/example.pdf");
         let note = vault.join("ref/example.md");
@@ -24124,10 +23811,7 @@ fn highlights_ref_task_checked_competing_status_edits_fail() {
         if source == "frontmatter" {
             edited = edited.replace("status: wip", "status: abandoned");
         } else {
-            set_pdf_marker_contents(
-                &pdf,
-                "- status: abandoned\n- parent: obsidian\n",
-            );
+            set_pdf_marker_contents(&pdf, "- status: abandoned\n- parent: obsidian\n");
         }
         write_file(&note, &edited);
         let note_before = fs::read_to_string(&note).expect("read note before");
@@ -24140,9 +23824,7 @@ fn highlights_ref_task_checked_competing_status_edits_fail() {
             .arg("--write-pdf")
             .env("BOB_DIR", &vault)
             .output()
-            .unwrap_or_else(|error| {
-                panic!("sync checked task conflict for {source}: {error}")
-            });
+            .unwrap_or_else(|error| panic!("sync checked task conflict for {source}: {error}"));
 
         assert_eq!(
             output.status.code(),
@@ -24152,8 +23834,7 @@ fn highlights_ref_task_checked_competing_status_edits_fail() {
         );
         assert!(
             stderr(&output).contains("checked PDF task conflicts")
-                && stderr(&output)
-                    .contains(&format!("{source} status=\"abandoned\"")),
+                && stderr(&output).contains(&format!("{source} status=\"abandoned\"")),
             "expected checked-task conflict report for {source}:\n{}",
             format_output(&output)
         );
@@ -24191,10 +23872,7 @@ fn highlights_ref_task_cancelled_competing_status_edits_fail() {
         if source == "frontmatter" {
             edited = edited.replace("status: wip", "status: read");
         } else {
-            set_pdf_marker_contents(
-                &pdf,
-                "- status: read\n- parent: obsidian\n",
-            );
+            set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
         }
         write_file(&note, &edited);
         let note_before = fs::read_to_string(&note).expect("read note before");
@@ -24207,9 +23885,7 @@ fn highlights_ref_task_cancelled_competing_status_edits_fail() {
             .arg("--write-pdf")
             .env("BOB_DIR", &vault)
             .output()
-            .unwrap_or_else(|error| {
-                panic!("sync cancelled task conflict for {source}: {error}")
-            });
+            .unwrap_or_else(|error| panic!("sync cancelled task conflict for {source}: {error}"));
 
         assert_eq!(
             output.status.code(),
@@ -24219,8 +23895,7 @@ fn highlights_ref_task_cancelled_competing_status_edits_fail() {
         );
         assert!(
             stderr(&output).contains("cancelled PDF task conflicts")
-                && stderr(&output)
-                    .contains(&format!("{source} status=\"read\"")),
+                && stderr(&output).contains(&format!("{source} status=\"read\"")),
             "expected cancelled-task conflict report for {source}:\n{}",
             format_output(&output)
         );
@@ -24259,10 +23934,7 @@ fn highlights_ref_status_abandoned_rewrites_generated_task_to_cancelled() {
                 .replace("- [/] #task", "- [-] #task");
             write_file(&note, &edited);
         } else {
-            set_pdf_marker_contents(
-                &pdf,
-                "- status: abandoned\n- parent: obsidian\n",
-            );
+            set_pdf_marker_contents(&pdf, "- status: abandoned\n- parent: obsidian\n");
             let cancelled_note = fs::read_to_string(&note)
                 .expect("read ref note")
                 .replace("- [/] #task", "- [-] #task");
@@ -24276,9 +23948,7 @@ fn highlights_ref_status_abandoned_rewrites_generated_task_to_cancelled() {
             .arg("--write-pdf")
             .env("BOB_DIR", &vault)
             .output()
-            .unwrap_or_else(|error| {
-                panic!("sync abandoned status render for {source}: {error}")
-            });
+            .unwrap_or_else(|error| panic!("sync abandoned status render for {source}: {error}"));
 
         assert_success(&output);
         let marker = pdf_marker_contents(&pdf);
@@ -24286,8 +23956,7 @@ fn highlights_ref_status_abandoned_rewrites_generated_task_to_cancelled() {
         let contents = fs::read_to_string(&note).expect("read synced note");
         assert!(contents.contains("status: abandoned\n"), "{contents}");
         assert!(
-            contents
-                .contains("- [-] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
+            contents.contains("- [-] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
             "{contents}"
         );
     }
@@ -24378,8 +24047,7 @@ fn highlights_ref_non_overlapping_edits_auto_merge_and_settle() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("note_action: none")
-            && stdout(&output).contains("writes: none"),
+        stdout(&output).contains("note_action: none") && stdout(&output).contains("writes: none"),
         "auto-merge should settle in one write:\n{}",
         format_output(&output)
     );
@@ -24387,8 +24055,7 @@ fn highlights_ref_non_overlapping_edits_auto_merge_and_settle() {
 
 #[test]
 fn highlights_ref_frontmatter_missing_parent_fails_before_pdf_writeback() {
-    let temp =
-        TempDir::new("bob-cli-highlights-ref-frontmatter-missing-parent");
+    let temp = TempDir::new("bob-cli-highlights-ref-frontmatter-missing-parent");
     let vault = temp.path().join("vault");
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
@@ -24470,8 +24137,7 @@ fn highlights_ref_frontmatter_unsupported_status_fails_before_pdf_writeback() {
         format_output(&output)
     );
     assert!(
-        stderr(&output)
-            .contains("frontmatter has unsupported status \"complete\""),
+        stderr(&output).contains("frontmatter has unsupported status \"complete\""),
         "expected unsupported frontmatter status error:\n{}",
         format_output(&output)
     );
@@ -24602,17 +24268,14 @@ Note: Keep a standalone observation after the marker.
         "{contents}"
     );
     assert!(
-        contents
-            .contains("highlights_sidecar: lib/books/systems-performance.md\n"),
+        contents.contains("highlights_sidecar: lib/books/systems-performance.md\n"),
         "{contents}"
     );
     assert!(contents.contains("highlights_count: 2\n"), "{contents}");
     assert!(contents.contains("highlights_synced_at: "), "{contents}");
     assert!(contents.contains("# Systems Performance\n"), "{contents}");
     assert!(
-        contents.contains(
-            "- [/] #task #ref [[lib/books/systems-performance.pdf]] #hide ^ref\n"
-        ),
+        contents.contains("- [/] #task #ref [[lib/books/systems-performance.pdf]] #hide ^ref\n"),
         "{contents}"
     );
     assert!(
@@ -24631,9 +24294,7 @@ Note: Keep a standalone observation after the marker.
         "{contents}"
     );
     assert!(
-        contents.contains(
-            "> [!note] Keep a standalone observation after the marker.\n"
-        ),
+        contents.contains("> [!note] Keep a standalone observation after the marker.\n"),
         "{contents}"
     );
     assert!(
@@ -24646,8 +24307,7 @@ Note: Keep a standalone observation after the marker.
         "nested sync must not create the old flat reference note"
     );
 
-    let stale_ref_type =
-        contents.replace("ref_type: books\n", "ref_type: stale\n");
+    let stale_ref_type = contents.replace("ref_type: books\n", "ref_type: stale\n");
     write_file(&note, &stale_ref_type);
     let output = bob_command()
         .arg("highlights")
@@ -24742,9 +24402,7 @@ Comment: Compare this figure with p.14.
     );
     let contents = fs::read_to_string(&note).expect("read image note");
     assert!(
-        contents.contains(
-            "highlights_sidecar: lib/books/figures.textbundle/text.md\n"
-        ),
+        contents.contains("highlights_sidecar: lib/books/figures.textbundle/text.md\n"),
         "{contents}"
     );
     assert!(contents.contains("highlights_count: 1\n"), "{contents}");
@@ -24753,8 +24411,7 @@ Comment: Compare this figure with p.14.
         "{contents}"
     );
     assert!(
-        contents
-            .contains("> > [!note] Comment Compare this figure with p.14.\n"),
+        contents.contains("> > [!note] Comment Compare this figure with p.14.\n"),
         "{contents}"
     );
 
@@ -24777,8 +24434,7 @@ Comment: Compare this figure with p.14.
         image_bytes
     );
     assert!(
-        contents
-            .contains(&format!("![[ref/books/figures.assets/{file_name}]]")),
+        contents.contains(&format!("![[ref/books/figures.assets/{file_name}]]")),
         "{contents}"
     );
 
@@ -24862,8 +24518,7 @@ Some note...
     assert_success(&output);
     let contents = fs::read_to_string(&note).expect("read generated note");
     assert!(
-        contents
-            .contains("highlights_sidecar: lib/books/highlights-ref-sync.md\n"),
+        contents.contains("highlights_sidecar: lib/books/highlights-ref-sync.md\n"),
         "{contents}"
     );
     assert!(contents.contains("highlights_count: 2\n"), "{contents}");
@@ -24876,8 +24531,7 @@ Some note...
         "{contents}"
     );
     assert!(
-        contents
-            .contains("> > [!note] Comment Support sase tool call replay?\n"),
+        contents.contains("> > [!note] Comment Support sase tool call replay?\n"),
         "{contents}"
     );
     assert!(
@@ -25000,9 +24654,7 @@ Note:
 
     // The generated PDF reading-status task line is unchanged.
     assert!(
-        contents.contains(
-            "- [/] #task #ref [[lib/books/task-notes.pdf]] #hide ^ref\n"
-        ),
+        contents.contains("- [/] #task #ref [[lib/books/task-notes.pdf]] #hide ^ref\n"),
         "{contents}"
     );
 
@@ -25010,9 +24662,7 @@ Note:
         contents
             .lines()
             .find(|line| line.starts_with("- [ ]") && line.contains(prose))
-            .unwrap_or_else(|| {
-                panic!("missing created task for {prose}:\n{contents}")
-            })
+            .unwrap_or_else(|| panic!("missing created task for {prose}:\n{contents}"))
             .to_string()
     };
     let source_link_id = |line: &str| -> String {
@@ -25020,8 +24670,7 @@ Note:
         let rest = &line[start..];
         let end = rest.find("]]").expect("source link terminator");
         let inside = &rest[..end];
-        let target =
-            inside.split_once('|').map_or(inside, |(target, _)| target);
+        let target = inside.split_once('|').map_or(inside, |(target, _)| target);
         target
             .rsplit_once("#^")
             .unwrap_or_else(|| panic!("source link has no block id: {line}"))
@@ -25029,14 +24678,9 @@ Note:
             .to_string()
     };
 
-    let reconcile_line =
-        find_created_task(&contents, "#task Reconcile with chapter 3.");
-    let ask_line =
-        find_created_task(&contents, "#task Ask about the standalone note.");
-    let capture_line = find_created_task(
-        &contents,
-        "#task Capture the second standalone task.",
-    );
+    let reconcile_line = find_created_task(&contents, "#task Reconcile with chapter 3.");
+    let ask_line = find_created_task(&contents, "#task Ask about the standalone note.");
+    let capture_line = find_created_task(&contents, "#task Capture the second standalone task.");
 
     assert!(
         contents.contains("## Tasks\n\n- [ ]"),
@@ -25086,8 +24730,7 @@ Note:
     assert_ne!(reconcile_id, ask_id, "comment and note tasks differ");
 
     assert!(
-        contents
-            .contains("> > [!note] Comment #task Reconcile with chapter 3.\n"),
+        contents.contains("> > [!note] Comment #task Reconcile with chapter 3.\n"),
         "{contents}"
     );
     assert!(
@@ -25133,23 +24776,15 @@ Note:
         &contents,
         &[
             &find_created_task(&contents, "#task Reconcile with chapter 3."),
-            &find_created_task(
-                &contents,
-                "#task Ask about the standalone note.",
-            ),
-            &find_created_task(
-                &contents,
-                "#task Capture the second standalone task.",
-            ),
+            &find_created_task(&contents, "#task Ask about the standalone note."),
+            &find_created_task(&contents, "#task Capture the second standalone task."),
         ],
     );
 
     // Complete the comment task and cancel a standalone task, keeping their
     // links; a later sync preserves them verbatim and never duplicates them.
-    let reconcile_line =
-        find_created_task(&contents, "#task Reconcile with chapter 3.");
-    let ask_line =
-        find_created_task(&contents, "#task Ask about the standalone note.");
+    let reconcile_line = find_created_task(&contents, "#task Reconcile with chapter 3.");
+    let ask_line = find_created_task(&contents, "#task Ask about the standalone note.");
     let reconcile_completed = format!(
         "{} [completion::2026-06-08]",
         reconcile_line.replacen("- [ ]", "- [x]", 1)
@@ -25177,8 +24812,9 @@ Note:
     assert_eq!(
         updated
             .lines()
-            .filter(|line| line.starts_with("- [")
-                && line.contains("#task Reconcile with chapter 3."))
+            .filter(
+                |line| line.starts_with("- [") && line.contains("#task Reconcile with chapter 3.")
+            )
             .count(),
         1,
         "{updated}"
@@ -25196,9 +24832,9 @@ Note:
     let tasks_heading = updated.find("## Tasks\n").expect("## Tasks");
     let highlights = updated.find("## Highlights\n").expect("## Highlights");
     for line in [&reconcile_completed, &ask_cancelled] {
-        let pos = updated.find(line).unwrap_or_else(|| {
-            panic!("missing preserved task {line}:\n{updated}")
-        });
+        let pos = updated
+            .find(line)
+            .unwrap_or_else(|| panic!("missing preserved task {line}:\n{updated}"));
         assert!(
             pos > tasks_heading && pos < highlights,
             "preserved task should remain under ## Tasks: {line}\n{updated}"
@@ -25272,10 +24908,7 @@ Note: marker note mirrored from the PDF
     assert_eq!(
         updated
             .lines()
-            .filter(|line| {
-                line.starts_with("- [")
-                    && line.contains("#task Legacy follow-up")
-            })
+            .filter(|line| { line.starts_with("- [") && line.contains("#task Legacy follow-up") })
             .count(),
         0,
         "{updated}"
@@ -25284,8 +24917,7 @@ Note: marker note mirrored from the PDF
         updated
             .lines()
             .filter(|line| {
-                line.starts_with("- [")
-                    && line.contains("#task Edited legacy follow-up")
+                line.starts_with("- [") && line.contains("#task Edited legacy follow-up")
             })
             .count(),
         1,
@@ -25342,13 +24974,11 @@ Note: marker note mirrored from the PDF
         "routed task should not be inserted into the reference note:\n{ref_contents}"
     );
     assert!(
-        ref_contents
-            .contains("> > [!note] Comment #task Follow up with Alice @alice\n")
+        ref_contents.contains("> > [!note] Comment #task Follow up with Alice @alice\n")
             && !ref_contents.contains(" ^ht-"),
         "managed source should render without task-specific anchors:\n{ref_contents}"
     );
-    let mut route_contents =
-        fs::read_to_string(&route_note).expect("read routed note");
+    let mut route_contents = fs::read_to_string(&route_note).expect("read routed note");
     let routed_line = route_contents
         .lines()
         .find(|line| line.starts_with("- [ ] #task Follow up with Alice"))
@@ -25356,8 +24986,7 @@ Note: marker note mirrored from the PDF
         .to_string();
     assert!(!routed_line.contains("@alice"), "{routed_line}");
     assert!(
-        routed_line.contains("[[ref/books/task-notes#^h-")
-            && routed_line.contains("|🔖]]"),
+        routed_line.contains("[[ref/books/task-notes#^h-") && routed_line.contains("|🔖]]"),
         "routed task should link back to the annotation ref note block:\n{routed_line}"
     );
     assert!(
@@ -25384,8 +25013,7 @@ Note: marker note mirrored from the PDF
             .output()
             .expect("resync completed routed task"),
     );
-    route_contents =
-        fs::read_to_string(&route_note).expect("read rerouted note");
+    route_contents = fs::read_to_string(&route_note).expect("read rerouted note");
     assert_eq!(
         route_contents
             .lines()
@@ -25396,8 +25024,8 @@ Note: marker note mirrored from the PDF
     );
 
     write_file(&route_note, "---\nparent: \"[[people]]\"\n---\n\n# Alice\n");
-    let edited_archived_line = completed_line
-        .replace("#task Follow up with Alice", "#task Followed up with Alice");
+    let edited_archived_line =
+        completed_line.replace("#task Follow up with Alice", "#task Followed up with Alice");
     write_file(&done_note, &format!("{edited_archived_line}\n"));
     assert_success(
         &bob_command()
@@ -25418,18 +25046,14 @@ Note: marker note mirrored from the PDF
 #[test]
 fn highlights_ref_sync_skips_annotation_tasks_for_non_wip_statuses() {
     for status in ["ready", "next", "read", "abandoned", "legacy"] {
-        let temp = TempDir::new(&format!(
-            "bob-cli-highlights-ref-non-wip-task-{status}"
-        ));
+        let temp = TempDir::new(&format!("bob-cli-highlights-ref-non-wip-task-{status}"));
         let vault = temp.path().join("vault");
         let pdf = vault.join("lib/books/task-notes.pdf");
         let sidecar = pdf.with_extension("md");
         let note = vault.join("ref/books/task-notes.md");
         write_highlights_pdf(
             &pdf,
-            &format!(
-                "- status: {status}\n- parent: obsidian\n- title: Task Notes\n"
-            ),
+            &format!("- status: {status}\n- parent: obsidian\n- title: Task Notes\n"),
         );
         write_file(
             &sidecar,
@@ -25460,8 +25084,7 @@ Note: marker note mirrored from the PDF
         assert!(
             !contents
                 .lines()
-                .any(|line| line
-                    .starts_with("- [ ] #task Should not be created.")),
+                .any(|line| line.starts_with("- [ ] #task Should not be created.")),
             "{status} PDFs should not create annotation tasks:\n{contents}"
         );
     }
@@ -25501,8 +25124,7 @@ Note: marker note mirrored from the PDF
     );
     // Invalid UTF-8 bytes make `fs::read_to_string` fail if this file is ever
     // walked by the processed-task index builder.
-    fs::write(&unreadable, [0xff, 0xfe, 0x00, 0x9f])
-        .expect("write invalid utf-8 sibling note");
+    fs::write(&unreadable, [0xff, 0xfe, 0x00, 0x9f]).expect("write invalid utf-8 sibling note");
 
     let output = bob_command()
         .arg("highlights")
@@ -25624,8 +25246,7 @@ Note: marker note mirrored from the PDF
         format_output(&output)
     );
     assert!(
-        stderr(&output)
-            .contains("routed annotation task target does not exist")
+        stderr(&output).contains("routed annotation task target does not exist")
             && stderr(&output).contains("alice.md")
             && stderr(&output).contains("create a root-level note"),
         "expected missing route target error:\n{}",
@@ -25920,8 +25541,7 @@ fn move_done_tasks_commits_and_pushes_collection_changes_only() {
     let output_text = stdout(&output);
     assert!(
         output_text.contains("git:")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected git section with commit and push:\n{}",
         format_output(&output)
@@ -25965,8 +25585,7 @@ done_tasks: \"[[done/obsidian_done]]\"
         "unrelated dirty file must not be committed:\n{show}"
     );
 
-    let remote_head =
-        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let remote_head = stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
     let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
     assert_eq!(remote_head, local_head, "push should update bare remote");
 
@@ -25976,8 +25595,7 @@ done_tasks: \"[[done/obsidian_done]]\"
         "unrelated dirty file should remain dirty:\n{status}"
     );
     assert!(
-        !status.contains("obsidian.md")
-            && !status.contains("done/obsidian_done.md"),
+        !status.contains("obsidian.md") && !status.contains("done/obsidian_done.md"),
         "collection paths should be clean after commit:\n{status}"
     );
 }
@@ -26022,8 +25640,7 @@ fn move_done_tasks_commits_link_repairs_with_collection_changes() {
     assert!(
         output_text.contains("Obsidian links repaired: 2")
             && output_text.contains("link-repair files updated: 1")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected link repair commit and push:\n{}",
         format_output(&output)
@@ -26049,8 +25666,7 @@ fn move_done_tasks_commits_link_repairs_with_collection_changes() {
             && show.contains("\ndaily.md\n"),
         "expected source, archive, and link repair note in commit:\n{show}"
     );
-    let remote_head =
-        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let remote_head = stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
     let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
     assert_eq!(remote_head, local_head, "push should update bare remote");
 }
@@ -26103,8 +25719,7 @@ type: \"[[done]]\"
     assert!(
         output_text.contains("moved block id renames: 1")
             && output_text.contains("Obsidian links repaired: 1")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected block id rename, link repair, commit, and push:\n{}",
         format_output(&output)
@@ -26141,8 +25756,7 @@ done_tasks: \"[[done/obsidian_done]]\"
             && show.contains("\ndaily.md\n"),
         "expected source, archive, and repaired link note in commit:\n{show}"
     );
-    let remote_head =
-        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let remote_head = stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
     let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
     assert_eq!(remote_head, local_head, "push should update bare remote");
 }
@@ -26186,8 +25800,7 @@ type: \"[[done]]\"
     let output_text = stdout(&output);
     assert!(
         output_text.contains("source done_tasks updates: 1")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected metadata commit and push:\n{}",
         format_output(&output)
@@ -26231,8 +25844,7 @@ type: \"[[done]]\"
         "metadata-only commit should not stage archive:\n{show}"
     );
 
-    let remote_head =
-        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let remote_head = stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
     let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
     assert_eq!(remote_head, local_head, "push should update bare remote");
 }
@@ -26284,8 +25896,7 @@ parent: \"[[done]]\"
     let output_text = stdout(&output);
     assert!(
         output_text.contains("archive metadata repairs: 1")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob move-done-tasks 2026-06-02")
             && output_text.contains("pushed"),
         "expected archive metadata commit and push:\n{}",
         format_output(&output)
@@ -26329,8 +25940,7 @@ type: \"[[done]]\"
         "expected archive in metadata repair commit:\n{show}"
     );
 
-    let remote_head =
-        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let remote_head = stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
     let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
     assert_eq!(remote_head, local_head, "push should update bare remote");
 }
@@ -26362,9 +25972,7 @@ fn move_done_tasks_warns_and_skips_git_for_non_repo_vault() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains(
-            "warning: vault is not a git worktree; skipping commit and push"
-        ),
+        stdout(&output).contains("warning: vault is not a git worktree; skipping commit and push"),
         "expected non-repo warning:\n{}",
         format_output(&output)
     );
@@ -26413,9 +26021,8 @@ fn move_done_tasks_moves_canceled_tasks_in_non_repo_vault() {
         output_text.contains("files meeting threshold: 1")
             && output_text.contains("task blocks: 2")
             && output_text.contains("moved task blocks: 2")
-            && output_text.contains(
-                "warning: vault is not a git worktree; skipping commit and push"
-            ),
+            && output_text
+                .contains("warning: vault is not a git worktree; skipping commit and push"),
         "expected canceled task movement in non-repo vault:\n{}",
         format_output(&output)
     );
@@ -26478,8 +26085,7 @@ fn move_done_tasks_rewrites_dirty_link_repair_files() {
     assert_success(&output);
     assert!(
         stdout(&output).contains("Obsidian links repaired: 1")
-            && stdout(&output)
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && stdout(&output).contains("committed: bob move-done-tasks 2026-06-02")
             && stdout(&output).contains("pushed"),
         "expected dirty link repair candidate success:\n{}",
         format_output(&output)
@@ -26560,8 +26166,7 @@ local edit
     assert_success(&output);
     assert!(
         stdout(&output).contains("task blocks: 1")
-            && stdout(&output)
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && stdout(&output).contains("committed: bob move-done-tasks 2026-06-02")
             && stdout(&output).contains("pushed"),
         "expected dirty candidate success:\n{}",
         format_output(&output)
@@ -26588,8 +26193,7 @@ local edit
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.contains("\nobsidian.md\n")
-            && show.contains("\ndone/obsidian_done.md\n"),
+        show.contains("\nobsidian.md\n") && show.contains("\ndone/obsidian_done.md\n"),
         "expected dirty source and archive in commit:\n{show}"
     );
     let status = stdout(&git_in(&vault, ["status", "--short"]));
@@ -26639,8 +26243,7 @@ type: \"[[done]]\"
     assert_success(&output);
     assert!(
         stdout(&output).contains("source done_tasks updates: 1")
-            && stdout(&output)
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && stdout(&output).contains("committed: bob move-done-tasks 2026-06-02")
             && stdout(&output).contains("pushed"),
         "expected dirty metadata source success:\n{}",
         format_output(&output)
@@ -26672,8 +26275,7 @@ type: \"[[done]]\"
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.contains("\nobsidian.md\n")
-            && !show.contains("\ndone/obsidian_done.md\n"),
+        show.contains("\nobsidian.md\n") && !show.contains("\ndone/obsidian_done.md\n"),
         "expected only dirty metadata source in commit:\n{show}"
     );
     let status = stdout(&git_in(&vault, ["status", "--short"]));
@@ -26733,15 +26335,12 @@ local edit
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect(
-            "run bob move-done-tasks with dirty archive metadata candidate",
-        );
+        .expect("run bob move-done-tasks with dirty archive metadata candidate");
 
     assert_success(&output);
     assert!(
         stdout(&output).contains("archive metadata repairs: 1")
-            && stdout(&output)
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && stdout(&output).contains("committed: bob move-done-tasks 2026-06-02")
             && stdout(&output).contains("pushed"),
         "expected dirty archive metadata success:\n{}",
         format_output(&output)
@@ -26773,8 +26372,7 @@ local edit
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        !show.contains("\nobsidian.md\n")
-            && show.contains("\ndone/obsidian_done.md\n"),
+        !show.contains("\nobsidian.md\n") && show.contains("\ndone/obsidian_done.md\n"),
         "expected only dirty archive metadata file in commit:\n{show}"
     );
     let status = stdout(&git_in(&vault, ["status", "--short"]));
@@ -27080,8 +26678,7 @@ fn vault_sync_no_change_cycle_writes_status_without_committing() {
         .expect("run vault-sync status --json");
     assert_success(&status_output);
     let printed_status: serde_json::Value =
-        serde_json::from_str(&stdout(&status_output))
-            .expect("status --json should print JSON");
+        serde_json::from_str(&stdout(&status_output)).expect("status --json should print JSON");
     assert_eq!(printed_status["last_error"], serde_json::Value::Null);
 }
 
@@ -27132,8 +26729,7 @@ fn vault_sync_remote_only_change_fast_forwards() {
 
     assert_success(&output);
     assert_eq!(
-        fs::read_to_string(vault.join("remote.md"))
-            .expect("read fast-forwarded file"),
+        fs::read_to_string(vault.join("remote.md")).expect("read fast-forwarded file"),
         "- [ ] remote #task\n"
     );
     assert_eq!(
@@ -27239,8 +26835,7 @@ fn vault_sync_both_added_file_quarantines_local_copy() {
 
     assert_success(&output);
     assert_eq!(
-        fs::read_to_string(vault.join("2026/20260827.md"))
-            .expect("read remote winner"),
+        fs::read_to_string(vault.join("2026/20260827.md")).expect("read remote winner"),
         "remote daily\n"
     );
     let copies = quarantined_conflict_files(&vault);
@@ -27534,9 +27129,7 @@ fn renamed_old_top_level_commands_are_unknown() {
             .arg(command)
             .arg("--help")
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run bob {command} --help: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run bob {command} --help: {error}"));
         assert_success(&output);
     }
 
@@ -27552,9 +27145,7 @@ fn renamed_old_top_level_commands_are_unknown() {
             .arg(command)
             .arg("--help")
             .output()
-            .unwrap_or_else(|error| {
-                panic!("run bob {command} --help: {error}")
-            });
+            .unwrap_or_else(|error| panic!("run bob {command} --help: {error}"));
         assert_eq!(
             output.status.code(),
             Some(2),
@@ -27600,9 +27191,9 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
     let mut last = 0;
     for command in order {
         let needle = format!("\n  {command} ");
-        let position = help.find(&needle).unwrap_or_else(|| {
-            panic!("expected command `{command}` in help:\n{help}")
-        });
+        let position = help
+            .find(&needle)
+            .unwrap_or_else(|| panic!("expected command `{command}` in help:\n{help}"));
         assert!(
             position >= last,
             "command `{command}` is out of alphabetical order:\n{help}"
@@ -27612,15 +27203,11 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
 
     assert!(
         help.contains("Examples:")
-            && help.contains(
-                "bob capture-pomodoro-name -p 38:0b1c2d3e -n 'deep work'"
-            )
+            && help.contains("bob capture-pomodoro-name -p 38:0b1c2d3e -n 'deep work'")
             && help.contains("bob capture-pomodoros --format json")
             && help.contains("bob capture-sections --route cash --format json")
             && help.contains("bob capture-targets --format json")
-            && help.contains(
-                "bob capture-task-id -r file -t 3:1f3a9c2b -i report-id"
-            )
+            && help.contains("bob capture-task-id -r file -t 3:1f3a9c2b -i report-id")
             && help.contains("bob capture-task-sections -r foo -i bar")
             && help.contains("bob capture-tasks --route cash --format json")
             && help.contains("bob query --source '#project'")
@@ -27712,9 +27299,8 @@ fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
     assert!(
         lines
             .get(1)
-            .is_some_and(|subject| subject.starts_with(
-                "vault(athena-test): 2 files - extra.md, obsidian.md"
-            )),
+            .is_some_and(|subject| subject
+                .starts_with("vault(athena-test): 2 files - extra.md, obsidian.md")),
         "leading vault-sync should commit loose vault changes first:\n{subjects}"
     );
 
@@ -27728,8 +27314,7 @@ fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
         "- [ ] extra #task\n",
         "vault-sync should publish the loose extra file"
     );
-    let remote_head =
-        stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
+    let remote_head = stdout(&git(["--git-dir", path_str(&remote), "rev-parse", "HEAD"]));
     let local_head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
     assert_eq!(
         remote_head, local_head,
@@ -27928,8 +27513,8 @@ fn bob_command() -> Command {
     let mut command = Command::new(BOB_BIN);
     command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
     let nonce = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let isolation = std::env::temp_dir()
-        .join(format!("bob-cli-test-iso-{}-{nonce}", std::process::id()));
+    let isolation =
+        std::env::temp_dir().join(format!("bob-cli-test-iso-{}-{nonce}", std::process::id()));
     let _ = fs::create_dir_all(&isolation);
     command.env("BOB_VAULT_SYNC_LOCK_FILE", isolation.join("bob_sync.lock"));
     command.env("XDG_STATE_HOME", isolation.join("state"));
@@ -28135,12 +27720,10 @@ fn vault_sync_state_file(temp: &TempDir) -> PathBuf {
 
 fn read_vault_sync_status(temp: &TempDir) -> serde_json::Value {
     let path = vault_sync_state_file(temp);
-    let contents = fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!("read status {}: {error}", path.display())
-    });
-    serde_json::from_str(&contents).unwrap_or_else(|error| {
-        panic!("parse status {}: {error}\n{contents}", path.display())
-    })
+    let contents = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read status {}: {error}", path.display()));
+    serde_json::from_str(&contents)
+        .unwrap_or_else(|error| panic!("parse status {}: {error}\n{contents}", path.display()))
 }
 
 fn git_maybe_in<I, S>(directory: &Path, args: I) -> Output
@@ -28162,12 +27745,10 @@ where
 
 fn write_bytes(path: &Path, contents: &[u8]) {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap_or_else(|error| {
-            panic!("create parent {}: {error}", parent.display())
-        });
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("create parent {}: {error}", parent.display()));
     }
-    fs::write(path, contents)
-        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+    fs::write(path, contents).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
 }
 
 fn quarantined_conflict_files(vault: &Path) -> Vec<PathBuf> {
@@ -28177,10 +27758,7 @@ fn quarantined_conflict_files(vault: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn collect_quarantined_conflict_files(
-    directory: &Path,
-    files: &mut Vec<PathBuf>,
-) {
+fn collect_quarantined_conflict_files(directory: &Path, files: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(directory) else {
         return;
     };
@@ -28191,8 +27769,7 @@ fn collect_quarantined_conflict_files(
         if file_type.is_dir() {
             collect_quarantined_conflict_files(&path, files);
         } else if file_type.is_file()
-            && path.file_name().and_then(OsStr::to_str)
-                != Some("sync_conflicts.md")
+            && path.file_name().and_then(OsStr::to_str) != Some("sync_conflicts.md")
         {
             files.push(path);
         }
@@ -28203,8 +27780,8 @@ fn assert_no_conflict_markers(vault: &Path) {
     let mut files = Vec::new();
     collect_vault_files(vault, vault, &mut files);
     for path in files {
-        let contents = fs::read(&path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let contents =
+            fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
         assert!(
             !contents
                 .windows(b"<<<<<<<".len())
@@ -28215,14 +27792,9 @@ fn assert_no_conflict_markers(vault: &Path) {
     }
 }
 
-fn collect_vault_files(
-    vault: &Path,
-    directory: &Path,
-    files: &mut Vec<PathBuf>,
-) {
-    let entries = fs::read_dir(directory).unwrap_or_else(|error| {
-        panic!("read {}: {error}", directory.display())
-    });
+fn collect_vault_files(vault: &Path, directory: &Path, files: &mut Vec<PathBuf>) {
+    let entries = fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()));
     for entry in entries {
         let entry = entry.expect("read vault entry");
         if entry.file_name() == OsStr::new(".git") {
@@ -28318,9 +27890,7 @@ fn find_created_annotation_task(contents: &str, prose: &str) -> String {
     contents
         .lines()
         .find(|line| line.starts_with("- [ ]") && line.contains(prose))
-        .unwrap_or_else(|| {
-            panic!("missing created annotation task for {prose}:\n{contents}")
-        })
+        .unwrap_or_else(|| panic!("missing created annotation task for {prose}:\n{contents}"))
         .to_string()
 }
 
@@ -28331,16 +27901,13 @@ fn created_annotation_task_count(contents: &str, prose: &str) -> usize {
         .count()
 }
 
-fn assert_annotation_tasks_in_tasks_section(
-    contents: &str,
-    task_lines: &[&str],
-) {
+fn assert_annotation_tasks_in_tasks_section(contents: &str, task_lines: &[&str]) {
     let heading = contents
         .find("## Tasks\n")
         .unwrap_or_else(|| panic!("missing ## Tasks heading:\n{contents}"));
-    let highlights = contents.find("## Highlights\n").unwrap_or_else(|| {
-        panic!("missing ## Highlights heading:\n{contents}")
-    });
+    let highlights = contents
+        .find("## Highlights\n")
+        .unwrap_or_else(|| panic!("missing ## Highlights heading:\n{contents}"));
     assert!(
         heading < highlights,
         "## Tasks should precede ## Highlights:\n{contents}"
@@ -28374,11 +27941,7 @@ fn annotation_task_source_link_id(line: &str) -> String {
         .to_string()
 }
 
-fn legacy_highlight_task_id(
-    ref_note_path: &str,
-    source_block_id: &str,
-    identity: &str,
-) -> String {
+fn legacy_highlight_task_id(ref_note_path: &str, source_block_id: &str, identity: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update("v1");
     hasher.update([0]);
@@ -28395,20 +27958,18 @@ fn write_highlights_pdf(path: &Path, marker_contents: &str) {
 }
 
 fn write_highlights_pdf_pages(path: &Path, page_text_annotations: &[&[&str]]) {
-    use lopdf::{dictionary, Document, Object, Stream};
+    use lopdf::{Document, Object, Stream, dictionary};
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap_or_else(|error| {
-            panic!("create parent {}: {error}", parent.display())
-        });
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("create parent {}: {error}", parent.display()));
     }
 
     let mut doc = Document::with_version("1.4");
     let pages_id = doc.new_object_id();
     let mut page_ids = Vec::new();
     for annotations in page_text_annotations {
-        let content_id =
-            doc.add_object(Stream::new(dictionary! {}, Vec::new()));
+        let content_id = doc.add_object(Stream::new(dictionary! {}, Vec::new()));
         let annot_refs = annotations
             .iter()
             .map(|contents| {
@@ -28456,9 +28017,8 @@ fn write_highlights_pdf_pages(path: &Path, page_text_annotations: &[&[&str]]) {
         "Pages" => pages_id,
     });
     doc.trailer.set("Root", catalog_id);
-    doc.save(path).unwrap_or_else(|error| {
-        panic!("write PDF {}: {error}", path.display())
-    });
+    doc.save(path)
+        .unwrap_or_else(|error| panic!("write PDF {}: {error}", path.display()));
 }
 
 fn set_pdf_marker_contents(path: &Path, marker_contents: &str) {
@@ -28470,9 +28030,8 @@ fn set_pdf_marker_contents(path: &Path, marker_contents: &str) {
         .as_dict_mut()
         .expect("marker is dictionary")
         .set("Contents", pdf_text_string(marker_contents));
-    doc.save(path).unwrap_or_else(|error| {
-        panic!("write PDF {}: {error}", path.display())
-    });
+    doc.save(path)
+        .unwrap_or_else(|error| panic!("write PDF {}: {error}", path.display()));
 }
 
 fn set_pdf_marker_literal_contents(path: &Path, marker_contents: &str) {
@@ -28484,9 +28043,8 @@ fn set_pdf_marker_literal_contents(path: &Path, marker_contents: &str) {
         .as_dict_mut()
         .expect("marker is dictionary")
         .set("Contents", pdf_literal_string(marker_contents));
-    doc.save(path).unwrap_or_else(|error| {
-        panic!("write PDF {}: {error}", path.display())
-    });
+    doc.save(path)
+        .unwrap_or_else(|error| panic!("write PDF {}: {error}", path.display()));
 }
 
 fn pdf_marker_contents(path: &Path) -> String {
@@ -28501,8 +28059,7 @@ fn pdf_marker_contents(path: &Path) -> String {
 }
 
 fn sha256_file(path: &Path) -> String {
-    let bytes = fs::read(path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let bytes = fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     hex::encode(Sha256::digest(bytes))
 }
 
@@ -28516,8 +28073,7 @@ fn first_text_annotation_id(doc: &lopdf::Document) -> lopdf::ObjectId {
             .expect("annotation array");
         for annot in annots {
             let annot_id = annot.as_reference().expect("annotation reference");
-            let annot_dict =
-                doc.get_dictionary(annot_id).expect("annotation dictionary");
+            let annot_dict = doc.get_dictionary(annot_id).expect("annotation dictionary");
             if annot_dict
                 .get(b"Subtype")
                 .and_then(lopdf::Object::as_name)
@@ -28538,20 +28094,15 @@ fn pdf_text_string(contents: &str) -> lopdf::Object {
 }
 
 fn pdf_literal_string(contents: &str) -> lopdf::Object {
-    lopdf::Object::String(
-        contents.as_bytes().to_vec(),
-        lopdf::StringFormat::Literal,
-    )
+    lopdf::Object::String(contents.as_bytes().to_vec(), lopdf::StringFormat::Literal)
 }
 
 fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap_or_else(|error| {
-            panic!("create parent {}: {error}", parent.display())
-        });
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("create parent {}: {error}", parent.display()));
     }
-    fs::write(path, contents)
-        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+    fs::write(path, contents).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
 }
 
 fn blocked_tasks_settings_json(extra_custom_status: &str) -> String {
@@ -28687,27 +28238,24 @@ fn write_executable(path: &Path, contents: &str) {
         .arg(&payload)
         .arg(path)
         .output()
-        .unwrap_or_else(|error| {
-            panic!("copy executable stub {}: {error}", path.display())
-        });
+        .unwrap_or_else(|error| panic!("copy executable stub {}: {error}", path.display()));
     assert!(
         output.status.success(),
         "copy executable stub {}:\n{}",
         path.display(),
         format_output(&output)
     );
-    fs::remove_file(&payload).unwrap_or_else(|error| {
-        panic!("remove stub payload {}: {error}", payload.display())
-    });
+    fs::remove_file(&payload)
+        .unwrap_or_else(|error| panic!("remove stub payload {}: {error}", payload.display()));
     set_mode(path, 0o755);
 }
 
 /// Scratch path for a stub payload: written in this process, never executed,
 /// and removed once `cp` has copied it onto the stub path.
 fn scratch_payload_path(path: &Path) -> PathBuf {
-    let file_name = path.file_name().unwrap_or_else(|| {
-        panic!("stub path has no file name: {}", path.display())
-    });
+    let file_name = path
+        .file_name()
+        .unwrap_or_else(|| panic!("stub path has no file name: {}", path.display()));
     let unique = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut name = OsString::from(".");
     name.push(file_name);
@@ -28716,8 +28264,7 @@ fn scratch_payload_path(path: &Path) -> PathBuf {
 }
 
 fn write_obsidian_success_stub(path: &Path, payload: &str) {
-    let sentinel_line =
-        shell_single_quote(&format!("BOB_DATAVIEW_RESULT\t{payload}"));
+    let sentinel_line = shell_single_quote(&format!("BOB_DATAVIEW_RESULT\t{payload}"));
     write_executable(
         path,
         &format!(
@@ -28825,9 +28372,7 @@ fn assert_no_long_only_option_lines(label: &str, help: &str) {
             .and_then(|tail| tail.chars().next())
             .is_some_and(|first| first.is_ascii_alphabetic());
         if starts_with_long_option {
-            panic!(
-                "{label} exposes a long-only option line:\n{line}\n\n{help}"
-            );
+            panic!("{label} exposes a long-only option line:\n{line}\n\n{help}");
         }
     }
 }
@@ -28852,11 +28397,7 @@ fn format_output(output: &Output) -> String {
 /// Poll `path` until its contents contain `needle` or `deadline` elapses,
 /// returning whatever was last read. Used instead of a fixed sleep to wait
 /// for a cron-redirected log to receive a retry diagnostic.
-fn poll_log_until_contains(
-    path: &Path,
-    needle: &str,
-    deadline: Duration,
-) -> String {
+fn poll_log_until_contains(path: &Path, needle: &str, deadline: Duration) -> String {
     let start = Instant::now();
     loop {
         if let Ok(contents) = fs::read_to_string(path)
@@ -28885,9 +28426,8 @@ impl TempDir {
             current_time_nanos(),
             TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(&path).unwrap_or_else(|error| {
-            panic!("create temp dir {}: {error}", path.display())
-        });
+        fs::create_dir_all(&path)
+            .unwrap_or_else(|error| panic!("create temp dir {}: {error}", path.display()));
         Self { path }
     }
 
@@ -28899,10 +28439,7 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         if let Err(error) = remove_dir_all_if_exists(&self.path) {
-            eprintln!(
-                "failed to remove temp dir {}: {error}",
-                self.path.display()
-            );
+            eprintln!("failed to remove temp dir {}: {error}", self.path.display());
         }
     }
 }
@@ -28920,4 +28457,461 @@ fn remove_dir_all_if_exists(path: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+#[test]
+fn capture_pomodoro_start_default_and_explicit_durations() {
+    let cases = [
+        ("default-empty", "=", "0905", "0930", 25, 0),
+        ("explicit-3", "=3", "0905", "0920", 15, 0),
+        ("offset-only", "=-2", "0855", "0920", 25, 2),
+        ("bare-dash", "=-", "0900", "0925", 25, 1),
+        ("dur-offset", "=3-", "0900", "0915", 15, 1),
+        ("dur-offset-nums", "=2-1", "0900", "0910", 10, 1),
+    ];
+    for (name, suffix, expect_start, expect_end, expect_dur, expect_off) in cases {
+        let temp = TempDir::new(&format!("bob-cli-capture-start-{name}"));
+        let vault = temp.path().join("vault");
+        let target = vault.join("sase.md");
+        let day_file = vault.join("day.md");
+        write_file(&target, "# S\n## Tasks\n");
+        write_file(&day_file, "## Pomodoros\n- [ ] ()\n");
+        let marker = format!("@sase:task-{name}{suffix}");
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("Work")
+            .arg(&marker)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:02:00")
+            .output()
+            .expect("run start capture");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("start JSON");
+        assert_eq!(json["kind"], "pomodoro_task", "{name}");
+        let start = &json["pomodoro_start"];
+        assert_eq!(start["start"], expect_start, "{name}: {json}");
+        assert_eq!(start["end"], expect_end, "{name}: {json}");
+        assert_eq!(start["duration_minutes"], expect_dur, "{name}");
+        assert_eq!(start["offset_units"], expect_off, "{name}");
+        assert_eq!(start["created_pomodoro"], false, "{name}");
+        let day_after = fs::read_to_string(&day_file).expect("read day");
+        assert!(
+            day_after.contains(&format!(
+                "(**{expect_start}-{expect_end}** [t:: {expect_dur}m])"
+            )),
+            "{name}: {day_after}"
+        );
+        assert!(
+            day_after.contains(&format!("[[sase#^task-{name}]]")),
+            "{name}: {day_after}"
+        );
+    }
+}
+
+#[test]
+fn capture_pomodoro_start_named_existing_and_new() {
+    let temp = TempDir::new("bob-cli-capture-start-named");
+    let vault = temp.path().join("vault");
+    let target = vault.join("sase.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# S\n## Tasks\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () — BUGS\n- [ ] () — FOCUS\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:named1#bugs=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run named existing start");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim()).expect("named JSON");
+    assert_eq!(json["pomodoro_start"]["pomodoro_name"], "BUGS");
+    assert_eq!(json["pomodoro_start"]["created_pomodoro"], false);
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day_after.contains("(**0905-0930** [t:: 25m]) — BUGS"),
+        "{day_after}"
+    );
+
+    let temp2 = TempDir::new("bob-cli-capture-start-named-new");
+    let vault2 = temp2.path().join("vault");
+    let target2 = vault2.join("sase.md");
+    let day2 = vault2.join("day.md");
+    write_file(&target2, "# S\n## Tasks\n");
+    write_file(
+        &day2,
+        "## Pomodoros\n- [x] (0900-0925) Done\n- [ ] () — BUGS\n",
+    );
+    let output2 = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault2)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:named2#deep-work=")
+        .env("BOB_DAY_FILE", &day2)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run named new start");
+    assert_success(&output2);
+    let json2: serde_json::Value =
+        serde_json::from_str(stdout(&output2).trim()).expect("named new JSON");
+    assert_eq!(json2["pomodoro_start"]["pomodoro_name"], "DEEP-WORK");
+    assert_eq!(json2["pomodoro_start"]["created_pomodoro"], true);
+    let day2_after = fs::read_to_string(&day2).expect("read day2");
+    assert!(
+        day2_after.contains("(**0905-0930** [t:: 25m]) — DEEP-WORK"),
+        "{day2_after}"
+    );
+}
+
+#[test]
+fn capture_pomodoro_start_creates_unnamed_when_no_placeholder() {
+    let temp = TempDir::new("bob-cli-capture-start-no-placeholder");
+    let vault = temp.path().join("vault");
+    let target = vault.join("sase.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# S\n## Tasks\n");
+    write_file(&day_file, "## Pomodoros\n- [x] (0900-0925) Done\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:created=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run unnamed creation");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("creation JSON");
+    assert_eq!(json["pomodoro_start"]["created_pomodoro"], true);
+    assert!(
+        json["pomodoro_start"].get("pomodoro_name").is_none(),
+        "{json}"
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert_eq!(
+        day_after,
+        "## Pomodoros\n- [x] (0900-0925) Done\n- [ ] (**0905-0930** [t:: 25m])\n  - [[sase#^created]]\n",
+        "{day_after}"
+    );
+
+    let temp2 = TempDir::new("bob-cli-capture-start-empty-section");
+    let vault2 = temp2.path().join("vault");
+    let day2 = vault2.join("day.md");
+    write_file(&vault2.join("sase.md"), "# S\n## Tasks\n");
+    write_file(&day2, "## Pomodoros\n");
+    let output2 = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault2)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:empty=")
+        .env("BOB_DAY_FILE", &day2)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run empty section creation");
+    assert_success(&output2);
+    let day2_after = fs::read_to_string(&day2).expect("read day2");
+    assert!(
+        day2_after.contains("(**0905-0930** [t:: 25m])"),
+        "{day2_after}"
+    );
+}
+
+#[test]
+fn capture_pomodoro_start_active_and_ambiguous_fail_atomically() {
+    for (name, day_before) in [
+        (
+            "active-single",
+            "## Pomodoros\n- [ ] (**1330-1400** [t:: 30m]) Current\n- [ ] () — BUGS\n",
+        ),
+        (
+            "ambiguous",
+            "## Pomodoros\n- [ ] (**0900-0925** [t:: 25m]) One\n- [ ] (**0930-0955** [t:: 25m]) Two\n",
+        ),
+    ] {
+        let temp = TempDir::new(&format!("bob-cli-capture-start-{name}"));
+        let vault = temp.path().join("vault");
+        let target = vault.join("sase.md");
+        let day_file = vault.join("day.md");
+        let target_before = "# S\n## Tasks\n";
+        write_file(&target, target_before);
+        write_file(&day_file, day_before);
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("Work")
+            .arg("@sase:new-id=")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 13:40:00")
+            .output()
+            .expect("run failing start");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: {}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
+        assert!(
+            json["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("finish the current Pomodoro first")),
+            "{name}: {json}"
+        );
+        assert_eq!(
+            fs::read_to_string(&target).expect("untouched target"),
+            target_before,
+            "{name}"
+        );
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("untouched day"),
+            day_before,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn capture_pomodoro_start_rejects_invalid_and_conflicting_syntax() {
+    let temp = TempDir::new("bob-cli-capture-start-invalid");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    for marker in ["@sase:b1==3", "@sase:b1=a", "@sase:b1=3--", "@sase:b1=3-2-"] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("Work")
+            .arg(marker)
+            .output()
+            .expect("run invalid start");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{marker}: {}",
+            format_output(&output)
+        );
+        assert_eq!(
+            fs::read_dir(&vault).expect("read vault").count(),
+            0,
+            "{marker}"
+        );
+    }
+    let day_file = vault.join("day.md");
+    write_file(&day_file, "## Pomodoros\n- [ ] ()\n");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    for (marker, extra, expected) in [
+        ("@sase:b1=3", "s:1", "cannot be combined with `s:<N>`"),
+        ("@sase:b1=3", "p:2", "cannot be combined with `p:<N>`"),
+    ] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("Work")
+            .arg(marker)
+            .arg(extra)
+            .env("BOB_DAY_FILE", &day_file)
+            .output()
+            .expect("run conflicting start");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{marker} {extra}: {}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains(expected),
+            "{}",
+            format_output(&output)
+        );
+    }
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("Work")
+        .arg("@sase:b1+=3")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run project-note start");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+}
+
+#[test]
+fn capture_pomodoro_start_midnight_wrap_and_bob_now() {
+    let temp = TempDir::new("bob-cli-capture-start-midnight");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] ()\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("Late")
+        .arg("@sase:late=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 23:58:00")
+        .output()
+        .expect("run midnight start");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("midnight JSON");
+    assert_eq!(json["pomodoro_start"]["start"], "0000");
+    assert_eq!(json["pomodoro_start"]["end"], "0025");
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day_after.contains("(**0000-0025** [t:: 25m])"),
+        "{day_after}"
+    );
+
+    let temp2 = TempDir::new("bob-cli-capture-start-seconds-ignored");
+    let vault2 = temp2.path().join("vault");
+    let day2 = vault2.join("day.md");
+    write_file(&vault2.join("sase.md"), "# S\n## Tasks\n");
+    write_file(&day2, "## Pomodoros\n- [ ] ()\n");
+    let output2 = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault2)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:sec=3")
+        .env("BOB_DAY_FILE", &day2)
+        .env("BOB_NOW", "2026-07-10 09:02:45")
+        .output()
+        .expect("run seconds-ignored start");
+    assert_success(&output2);
+    let json2: serde_json::Value =
+        serde_json::from_str(stdout(&output2).trim()).expect("seconds JSON");
+    assert_eq!(json2["pomodoro_start"]["start"], "0905");
+    assert_eq!(json2["pomodoro_start"]["end"], "0920");
+}
+
+#[test]
+fn capture_pomodoro_start_dry_run_and_batch_rollback() {
+    let temp = TempDir::new("bob-cli-capture-start-dry-run");
+    let vault = temp.path().join("vault");
+    let target = vault.join("sase.md");
+    let day_file = vault.join("day.md");
+    let target_before = "# S\n## Tasks\n";
+    let day_before = "## Pomodoros\n- [ ] ()\n";
+    write_file(&target, target_before);
+    write_file(&day_file, day_before);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:dry1=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run dry-run start");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("dry-run JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["pomodoro_start"]["start"], "0905");
+    assert_eq!(
+        fs::read_to_string(&target).expect("untouched target"),
+        target_before
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("untouched day"),
+        day_before
+    );
+
+    let temp2 = TempDir::new("bob-cli-capture-start-batch-order");
+    let vault2 = temp2.path().join("vault");
+    let target2 = vault2.join("sase.md");
+    let day2 = vault2.join("day.md");
+    write_file(&target2, target_before);
+    write_file(&day2, day_before);
+    let output2 = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault2)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day2)
+            .env("BOB_NOW", "2026-07-10 09:02:00"),
+        "First @sase:a1=\n\nSecond @sase:a2=\n",
+    );
+    assert_eq!(
+        output2.status.code(),
+        Some(1),
+        "{}",
+        format_output(&output2)
+    );
+    assert_eq!(
+        fs::read_to_string(&target2).expect("rolled back target"),
+        target_before
+    );
+    assert_eq!(
+        fs::read_to_string(&day2).expect("rolled back day"),
+        day_before
+    );
+
+    let temp3 = TempDir::new("bob-cli-capture-start-mixed-rollback");
+    let vault3 = temp3.path().join("vault");
+    let target3 = vault3.join("sase.md");
+    let day3 = vault3.join("day.md");
+    write_file(&target3, "- [ ] #task Existing ^dup\n");
+    write_file(&day3, day_before);
+    let output3 = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault3)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day3)
+            .env("BOB_NOW", "2026-07-10 09:02:00"),
+        "Good @sase:good1=\n\nBad @sase:dup\n",
+    );
+    assert_eq!(
+        output3.status.code(),
+        Some(1),
+        "{}",
+        format_output(&output3)
+    );
+    assert_eq!(
+        fs::read_to_string(&day3).expect("rolled back day3"),
+        day_before
+    );
 }

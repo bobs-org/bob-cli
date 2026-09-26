@@ -32,6 +32,7 @@ pub(crate) enum CaptureKind {
     Pomodoro {
         block_id: String,
         pomodoro_name: Option<String>,
+        start: Option<PomodoroStartSpec>,
     },
     /// `@<route>^<block-id>+` (create the note only) or
     /// `@<route>:<block-id>+[#[<pomodoro>]]` (also link its `^prj` task under
@@ -57,6 +58,22 @@ pub(crate) enum CaptureKind {
         pomodoro_name: Option<String>,
         intent: TaskToggleIntent,
     },
+}
+
+/// Typed `@<route>:<block-id>[#<name>]=<X>` start specification, where `<X>`
+/// mirrors the Obsidian bob-ledger-tools `se<X>` snippet suffix: empty,
+/// unsigned ASCII digits, `-`, `-` followed by digits, or digits followed by
+/// `-` and optionally digits. An omitted duration means five 5-minute units
+/// (25 minutes); an omitted offset with `-` means one unit; no `-` means
+/// zero offset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PomodoroStartSpec {
+    /// Raw `<X>` text after `=`, exactly as typed.
+    pub(crate) raw: String,
+    /// Number of 5-minute duration units.
+    pub(crate) duration_units: u64,
+    /// Number of 5-minute offset units.
+    pub(crate) offset_units: u64,
 }
 
 /// Which Pomodoro, if any, a project-note capture links its `^prj` task under.
@@ -358,14 +375,10 @@ pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
 
     for (index, line) in lines.iter().copied().enumerate() {
         let tokens = tokenize_line_with_spans(&line);
-        if !tokens.is_empty()
-            && tokens.iter().all(|token| token.text.starts_with("@@"))
-        {
-            declarations.extend(tokens.into_iter().map(|token| {
-                GlobalDeclarationToken {
-                    token,
-                    line_number: index + 1,
-                }
+        if !tokens.is_empty() && tokens.iter().all(|token| token.text.starts_with("@@")) {
+            declarations.extend(tokens.into_iter().map(|token| GlobalDeclarationToken {
+                token,
+                line_number: index + 1,
             }));
             continue;
         }
@@ -382,9 +395,7 @@ pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
     }
 }
 
-fn split_items_from_item_lines<'a>(
-    lines: &[ItemLine<'a>],
-) -> Vec<CaptureItem<'a>> {
+fn split_items_from_item_lines<'a>(lines: &[ItemLine<'a>]) -> Vec<CaptureItem<'a>> {
     let mut items = Vec::new();
     let mut current: Vec<ItemLine<'_>> = Vec::new();
 
@@ -401,10 +412,7 @@ fn split_items_from_item_lines<'a>(
     items
 }
 
-fn push_capture_item<'a>(
-    items: &mut Vec<CaptureItem<'a>>,
-    current: &mut Vec<ItemLine<'a>>,
-) {
+fn push_capture_item<'a>(items: &mut Vec<CaptureItem<'a>>, current: &mut Vec<ItemLine<'a>>) {
     let Some(first) = current.first().copied() else {
         return;
     };
@@ -441,9 +449,7 @@ pub(crate) enum AuthoredLineClass<'a> {
 /// item parsing reaches this classifier; when classified directly, they and
 /// marker-only placeholder rows are harmless. Every other nonempty shape is
 /// invalid.
-pub(crate) fn classify_authored_line<'a>(
-    line: RawLine<'a>,
-) -> AuthoredLineClass<'a> {
+pub(crate) fn classify_authored_line<'a>(line: RawLine<'a>) -> AuthoredLineClass<'a> {
     if line.text.trim().is_empty() {
         return AuthoredLineClass::EmptyOrPlaceholder;
     }
@@ -480,10 +486,7 @@ pub(crate) fn classify_authored_line<'a>(
 /// Recognize a list marker at a fixed byte prefix and return the raw body
 /// after the contiguous separator run. `prefix_len == 2` accepts exactly two
 /// leading spaces; one, three, a tab, or deeper indentation all fail.
-fn strip_bullet_marker_at(
-    line_text: &str,
-    prefix_len: usize,
-) -> Option<(usize, &str)> {
+fn strip_bullet_marker_at(line_text: &str, prefix_len: usize) -> Option<(usize, &str)> {
     let prefix = line_text.as_bytes().get(..prefix_len)?;
     if prefix_len == 2 && prefix != b"  " {
         return None;
@@ -516,10 +519,7 @@ fn is_marker_only_placeholder(line_text: &str) -> bool {
         || marker_only_placeholder_after_prefix(line_text, 2)
 }
 
-fn marker_only_placeholder_after_prefix(
-    line_text: &str,
-    prefix_len: usize,
-) -> bool {
+fn marker_only_placeholder_after_prefix(line_text: &str, prefix_len: usize) -> bool {
     let bytes = line_text.as_bytes();
     let Some(prefix) = bytes.get(..prefix_len) else {
         return false;
@@ -556,14 +556,7 @@ pub(crate) fn parse_capture_text_with_clip_control(
     let item_outcomes = draft
         .items
         .iter()
-        .map(|item| {
-            parse_capture_item(
-                item,
-                forced_route,
-                forced_section,
-                parse_clip_markers,
-            )
-        })
+        .map(|item| parse_capture_item(item, forced_route, forced_section, parse_clip_markers))
         .collect::<Result<Vec<_>, _>>()?;
     let mut declarations = draft.declarations;
     for outcome in &item_outcomes {
@@ -572,10 +565,7 @@ pub(crate) fn parse_capture_text_with_clip_control(
     let global = resolve_global_declaration_strict(&declarations)?;
 
     if item_outcomes.len() > 1 {
-        return Err(
-            "capture text contains multiple blank-line-separated items"
-                .to_string(),
-        );
+        return Err("capture text contains multiple blank-line-separated items".to_string());
     }
 
     let mut outcome = item_outcomes.into_iter().next().expect("one item");
@@ -607,19 +597,15 @@ pub(crate) fn parse_capture_draft_with_clip_control(
         .items
         .iter()
         .map(|item| {
-            parse_capture_item(
-                item,
-                forced_route,
-                forced_section,
-                parse_clip_markers,
+            parse_capture_item(item, forced_route, forced_section, parse_clip_markers).map_err(
+                |message| {
+                    format!(
+                        "capture item {} starting on line {}: {message}",
+                        item.index + 1,
+                        item.line_start
+                    )
+                },
             )
-            .map_err(|message| {
-                format!(
-                    "capture item {} starting on line {}: {message}",
-                    item.index + 1,
-                    item.line_start
-                )
-            })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -677,22 +663,16 @@ fn resolve_global_declaration_strict(
     .map(Some)
 }
 
-fn duplicate_global_destination_error(
-    first_line: usize,
-    second_line: usize,
-) -> String {
+fn duplicate_global_destination_error(first_line: usize, second_line: usize) -> String {
     format!(
         "duplicate global destination declaration on line {second_line}; first declaration is on line {first_line}"
     )
 }
 
-fn capture_shadow_warnings(
-    item_outcomes: &[ParsedCaptureItemOutcome<'_>],
-) -> Vec<String> {
+fn capture_shadow_warnings(item_outcomes: &[ParsedCaptureItemOutcome<'_>]) -> Vec<String> {
     let mut warnings = Vec::new();
     for outcome in item_outcomes {
-        let Some(local_marker) = outcome.local_destination_marker.as_deref()
-        else {
+        let Some(local_marker) = outcome.local_destination_marker.as_deref() else {
             continue;
         };
         for declaration in &outcome.declarations {
@@ -705,10 +685,7 @@ fn capture_shadow_warnings(
     warnings
 }
 
-fn global_destination_shadowed_warning(
-    local_marker: &str,
-    declaration: &str,
-) -> String {
+fn global_destination_shadowed_warning(local_marker: &str, declaration: &str) -> String {
     format!(
         "this item's {local_marker} marker overrides the {declaration} destination it declares; move {declaration} to an item without a local marker, or delete {local_marker}"
     )
@@ -778,10 +755,7 @@ fn parse_global_destination_token(
     }
 }
 
-fn inherit_global_destination(
-    parsed: &mut ParsedCaptureText,
-    global: &ParsedGlobalDestination,
-) {
+fn inherit_global_destination(parsed: &mut ParsedCaptureText, global: &ParsedGlobalDestination) {
     if parsed.route.is_some() || !matches!(parsed.kind, CaptureKind::Task) {
         return;
     }
@@ -817,8 +791,7 @@ fn parse_capture_item<'a>(
         return Err(missing_text_error());
     }
     let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
-    let parent_outcome =
-        resolve_line(parent_tokens, true, detect_route, parse_clip_markers)?;
+    let parent_outcome = resolve_line(parent_tokens, true, detect_route, parse_clip_markers)?;
     declarations.extend(global_declarations_from_tokens(
         parent_outcome.declarations,
         parent_line.line_number,
@@ -860,8 +833,7 @@ fn parse_capture_item<'a>(
             end: line.raw.end,
         };
         let tokens = tokenize_line_with_spans(&child_line);
-        let outcome =
-            resolve_line(tokens, false, detect_route, parse_clip_markers)?;
+        let outcome = resolve_line(tokens, false, detect_route, parse_clip_markers)?;
         declarations.extend(global_declarations_from_tokens(
             outcome.declarations,
             line_number,
@@ -954,6 +926,14 @@ fn parse_capture_item<'a>(
             return Err(pomodoro_note_priority_conflict_error());
         }
     }
+    if let CaptureKind::Pomodoro { start: Some(_), .. } = &kind {
+        if aggregate.scheduled_offset.is_some() {
+            return Err(POMODORO_START_SCHEDULE_CONFLICT_ERROR.to_string());
+        }
+        if aggregate.priority_level.is_some() {
+            return Err(POMODORO_START_PRIORITY_CONFLICT_ERROR.to_string());
+        }
+    }
     Ok(parsed_capture_item_outcome(
         item,
         ParsedCaptureText {
@@ -983,8 +963,7 @@ fn resolve_sub_bullet_kind(
     no_other_item_markers: bool,
 ) -> Result<CaptureKind, String> {
     if matches!(kind, CaptureKind::TaskToggle { .. }) {
-        if parent_body_is_empty && sub_bullets_is_empty && no_other_item_markers
-        {
+        if parent_body_is_empty && sub_bullets_is_empty && no_other_item_markers {
             return Ok(kind);
         }
         return Err(EXPLICIT_TOGGLE_ONLY_MARKER_ERROR.to_string());
@@ -1089,8 +1068,7 @@ fn resolve_line<'a>(
     parse_clip_markers: bool,
 ) -> Result<LineOutcome<'a>, String> {
     let declarations = take_global_declarations(&mut tokens);
-    let (markers, _) =
-        extract_terminal_markers(&mut tokens, parse_clip_markers);
+    let (markers, _) = extract_terminal_markers(&mut tokens, parse_clip_markers);
     if tokens.is_empty() {
         return Ok(LineOutcome {
             body: String::new(),
@@ -1153,8 +1131,7 @@ fn resolve_line<'a>(
 
     // Leading route wins: when the first token is a route token followed by
     // body text, route by it and do not inspect later route-looking tokens.
-    if leading && let Some(token) = parse_terminal_route_token(tokens[0].text)?
-    {
+    if leading && let Some(token) = parse_terminal_route_token(tokens[0].text)? {
         let rest = &tokens[1..];
         if rest.is_empty() {
             if matches!(token.kind, CaptureKind::Task) {
@@ -1248,11 +1225,7 @@ struct AggregateMarkers {
 }
 
 impl AggregateMarkers {
-    fn absorb(
-        &mut self,
-        markers: TerminalMarkers,
-        route: Option<LineRoute>,
-    ) -> Result<(), String> {
+    fn absorb(&mut self, markers: TerminalMarkers, route: Option<LineRoute>) -> Result<(), String> {
         if let Some(clip) = markers.clip {
             if self.clip.is_some() {
                 return Err(duplicate_marker_error("clipboard marker (%)"));
@@ -1273,9 +1246,7 @@ impl AggregateMarkers {
         }
         if let Some(route) = route {
             if self.route.is_some() {
-                return Err(duplicate_marker_error(
-                    "route/mode marker (@route or #)",
-                ));
+                return Err(duplicate_marker_error("route/mode marker (@route or #)"));
             }
             self.route = Some(route);
         }
@@ -1331,8 +1302,7 @@ fn legacy_marker_error() -> String {
 }
 
 fn pomodoro_note_route_conflict_error() -> String {
-    "the '#' Pomodoro-note marker cannot be combined with an @route marker"
-        .to_string()
+    "the '#' Pomodoro-note marker cannot be combined with an @route marker".to_string()
 }
 
 fn pomodoro_note_forced_route_conflict_error() -> String {
@@ -1389,9 +1359,7 @@ fn parse_route_token(token: &str) -> Option<RouteToken> {
     })
 }
 
-fn parse_terminal_route_token(
-    token: &str,
-) -> Result<Option<RouteToken>, String> {
+fn parse_terminal_route_token(token: &str) -> Result<Option<RouteToken>, String> {
     if is_sub_bullet_marker_candidate(token) {
         return parse_sub_bullet_route_token(token).map(Some);
     }
@@ -1515,9 +1483,7 @@ fn explicit_toggle_unsupported_message(token: &str) -> Option<&'static str> {
     if !token.ends_with('!') {
         return None;
     }
-    if token.starts_with("@!")
-        && token.bytes().filter(|byte| *byte == b'!').count() == 1
-    {
+    if token.starts_with("@!") && token.bytes().filter(|byte| *byte == b'!').count() == 1 {
         return None;
     }
     if token.starts_with("@@") {
@@ -1556,10 +1522,7 @@ pub(crate) fn is_pomodoro_selector_component(value: &str) -> bool {
 
 fn is_selector_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric()
-        || matches!(
-            byte,
-            b'&' | b'\'' | b'(' | b')' | b',' | b'.' | b'/' | b'-'
-        )
+        || matches!(byte, b'&' | b'\'' | b'(' | b')' | b',' | b'.' | b'/' | b'-')
 }
 
 fn is_pomodoro_selector_byte(byte: u8) -> bool {
@@ -1582,14 +1545,11 @@ fn is_sub_bullet_marker_candidate(token: &str) -> bool {
 }
 
 fn parse_task_block_id_route_token(token: &str) -> Result<RouteToken, String> {
-    let marker = token.strip_prefix('@').ok_or_else(|| {
-        "task block-ID capture markers must use @<route>^<block-id>".to_string()
-    })?;
+    let marker = token
+        .strip_prefix('@')
+        .ok_or_else(|| "task block-ID capture markers must use @<route>^<block-id>".to_string())?;
     let Some((route, block_id)) = marker.split_once('^') else {
-        return Err(
-            "task block-ID capture markers must use @<route>^<block-id>"
-                .to_string(),
-        );
+        return Err("task block-ID capture markers must use @<route>^<block-id>".to_string());
     };
     if !is_route_token(route) {
         return Err(TASK_BLOCK_ID_ROUTE_ERROR.to_string());
@@ -1683,9 +1643,21 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
     if !is_route_token(route) {
         return Err(POMODORO_ROUTE_ERROR.to_string());
     }
-    let (block_id, pomodoro_name) = match rest.split_once('#') {
-        Some((block_id, name)) => (block_id, Some(name)),
+    // Split the additive start suffix `=<X>` before `#` handling: the first
+    // `=` separates the old marker from `<X>` (empty, digits, `-`,
+    // `-digits`, or digits-then-`-`-plus-optional-digits). Any extra `=`
+    // inside `<X>` is malformed.
+    let (rest_before_start, start_suffix) = match rest.split_once('=') {
+        Some((before, suffix)) => (before, Some(suffix)),
         None => (rest, None),
+    };
+    let start = match start_suffix {
+        None => None,
+        Some(raw) => Some(parse_pomodoro_start_suffix(raw)?),
+    };
+    let (block_id, pomodoro_name) = match rest_before_start.split_once('#') {
+        Some((block_id, name)) => (block_id, Some(name)),
+        None => (rest_before_start, None),
     };
     // A single trailing `+` immediately after the block ID is the
     // project-note sigil. A `+` inside the Pomodoro name is ordinary
@@ -1719,6 +1691,9 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
         Some(name) => Some(name.to_string()),
     };
 
+    if project_note && start.is_some() {
+        return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
+    }
     Ok(RouteToken {
         route: Some(route.to_ascii_lowercase()),
         kind: if project_note {
@@ -1732,17 +1707,84 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
             CaptureKind::Pomodoro {
                 block_id: block_id.to_string(),
                 pomodoro_name,
+                start,
             }
         },
+    })
+}
+
+fn parse_pomodoro_start_suffix(raw: &str) -> Result<PomodoroStartSpec, String> {
+    if raw.contains('=') || raw.contains('#') || raw.contains(':') {
+        return Err(POMODORO_START_SHAPE_ERROR.to_string());
+    }
+    if raw.is_empty() {
+        return Ok(PomodoroStartSpec {
+            raw: raw.to_string(),
+            duration_units: 5,
+            offset_units: 0,
+        });
+    }
+    if raw == "-" {
+        return Ok(PomodoroStartSpec {
+            raw: raw.to_string(),
+            duration_units: 5,
+            offset_units: 1,
+        });
+    }
+    if let Some(after_dash) = raw.strip_prefix('-') {
+        if after_dash.is_empty() || !after_dash.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(POMODORO_START_SHAPE_ERROR.to_string());
+        }
+        let offset_units = after_dash
+            .parse::<u64>()
+            .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?;
+        return Ok(PomodoroStartSpec {
+            raw: raw.to_string(),
+            duration_units: 5,
+            offset_units,
+        });
+    }
+    if let Some((duration_text, offset_text)) = raw.split_once('-') {
+        if duration_text.is_empty()
+            || !duration_text.bytes().all(|byte| byte.is_ascii_digit())
+            || offset_text.contains('-')
+            || (!offset_text.is_empty() && !offset_text.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return Err(POMODORO_START_SHAPE_ERROR.to_string());
+        }
+        let duration_units = duration_text
+            .parse::<u64>()
+            .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?;
+        let offset_units = if offset_text.is_empty() {
+            1
+        } else {
+            offset_text
+                .parse::<u64>()
+                .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?
+        };
+        return Ok(PomodoroStartSpec {
+            raw: raw.to_string(),
+            duration_units,
+            offset_units,
+        });
+    }
+    if !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(POMODORO_START_SHAPE_ERROR.to_string());
+    }
+    let duration_units = raw
+        .parse::<u64>()
+        .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?;
+    Ok(PomodoroStartSpec {
+        raw: raw.to_string(),
+        duration_units,
+        offset_units: 0,
     })
 }
 
 /// Return whether a terminal token belongs to the Pomodoro-marker grammar.
 /// A colon that follows `#` remains part of an ordinary bullet section prefix.
 fn is_pomodoro_marker_candidate(token: &str) -> bool {
-    let Some(marker) =
-        token.strip_prefix("@!").or_else(|| token.strip_prefix('@'))
-    else {
+    let Some(marker) = token.strip_prefix("@!").or_else(|| token.strip_prefix('@')) else {
         return false;
     };
     if token.starts_with("@!") {
@@ -1870,8 +1912,7 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
         Some(index) if index == tokens.len() - 1 => index,
         _ => tokens.len(),
     };
-    let route_before_trailing_markers =
-        route_index.is_some_and(|index| index < tokens.len() - 1);
+    let route_before_trailing_markers = route_index.is_some_and(|index| index < tokens.len() - 1);
     let mut markers = TerminalMarkers::default();
     let mut spans = Vec::new();
     let mut reached_route = false;
@@ -1882,11 +1923,9 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
             reached_route = true;
             break;
         }
-        let Some(kind) = extract_terminal_marker(
-            tokens[index].text(),
-            parse_clip_markers,
-            &mut markers,
-        ) else {
+        let Some(kind) =
+            extract_terminal_marker(tokens[index].text(), parse_clip_markers, &mut markers)
+        else {
             break;
         };
         if let Some((start, end)) = tokens[index].span() {
@@ -1900,11 +1939,9 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
         cursor = route_index.expect("reached route");
         while cursor > 0 {
             let index = cursor - 1;
-            let Some(kind) = extract_terminal_marker(
-                tokens[index].text(),
-                parse_clip_markers,
-                &mut markers,
-            ) else {
+            let Some(kind) =
+                extract_terminal_marker(tokens[index].text(), parse_clip_markers, &mut markers)
+            else {
                 break;
             };
             if let Some((start, end)) = tokens[index].span() {
@@ -1952,12 +1989,10 @@ fn extract_terminal_marker(
 fn is_route_marker(token: &str) -> bool {
     is_pomodoro_note_marker(token)
         || parse_route_token(token).is_some()
-        || (is_sub_bullet_marker_candidate(token)
-            && parse_sub_bullet_route_token(token).is_ok())
+        || (is_sub_bullet_marker_candidate(token) && parse_sub_bullet_route_token(token).is_ok())
         || (is_task_block_id_marker_candidate(token)
             && parse_task_block_id_route_token(token).is_ok())
-        || (is_pomodoro_marker_candidate(token)
-            && parse_pomodoro_route_token(token).is_ok())
+        || (is_pomodoro_marker_candidate(token) && parse_pomodoro_route_token(token).is_ok())
 }
 
 /// The bare `#` token: a Pomodoro-note marker, recognized only in the
@@ -1974,10 +2009,7 @@ fn is_pomodoro_note_marker(token: &str) -> bool {
 /// Two terminal positions are rejected: a final token that itself starts with
 /// `#`, and (when `allow_route`) a final plain `@route` token preceded by a
 /// `#...` token. A `#tag` anywhere else stays literal task text.
-fn reject_legacy_bullet_markers(
-    tokens: &[&str],
-    allow_route: bool,
-) -> Result<(), String> {
+fn reject_legacy_bullet_markers(tokens: &[&str], allow_route: bool) -> Result<(), String> {
     let Some(&last) = tokens.last() else {
         return Ok(());
     };
@@ -1990,8 +2022,7 @@ fn reject_legacy_bullet_markers(
         && tokens.len() >= 2
         && tokens[tokens.len() - 2].starts_with('#')
         && !is_pomodoro_note_marker(tokens[tokens.len() - 2])
-        && parse_route_token(last)
-            .is_some_and(|token| matches!(token.kind, CaptureKind::Task))
+        && parse_route_token(last).is_some_and(|token| matches!(token.kind, CaptureKind::Task))
     {
         return Err(legacy_marker_error());
     }
@@ -2009,9 +2040,9 @@ fn normalize_forced_route(route: &str) -> Result<String, String> {
 
 pub(crate) fn is_route_token(value: &str) -> bool {
     !value.is_empty()
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 const GLOBAL_DESTINATION_SHAPE_ERROR: &str =
@@ -2022,14 +2053,11 @@ const GLOBAL_DESTINATION_BLOCK_ID_ERROR: &str =
     "global destination block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
 const MISSING_CAPTURE_ITEM_ERROR: &str =
     "global destination declaration has no capture item; add a capture item to this draft";
-const EXPLICIT_TOGGLE_ONLY_MARKER_ERROR: &str =
-    "explicit toggle `!` is only valid on a marker-only `@<route>+<block-id>!` capture; it cannot be combined with body text, authored children, clipboard, schedule, priority, or a Pomodoro name";
-const EXPLICIT_TOGGLE_NAMED_ERROR: &str =
-    "explicit toggle `!` cannot be combined with a `#<pomodoro>` selector; use `@<route>+<block-id>!`";
+const EXPLICIT_TOGGLE_ONLY_MARKER_ERROR: &str = "explicit toggle `!` is only valid on a marker-only `@<route>+<block-id>!` capture; it cannot be combined with body text, authored children, clipboard, schedule, priority, or a Pomodoro name";
+const EXPLICIT_TOGGLE_NAMED_ERROR: &str = "explicit toggle `!` cannot be combined with a `#<pomodoro>` selector; use `@<route>+<block-id>!`";
 const EXPLICIT_TOGGLE_REPEATED_ERROR: &str =
     "explicit toggle `!` cannot be repeated; use a single `@<route>+<block-id>!`";
-const EXPLICIT_TOGGLE_GLOBAL_ERROR: &str =
-    "explicit toggle `!` cannot be used on a `@@` destination; use a marker-only `@<route>+<block-id>!` item";
+const EXPLICIT_TOGGLE_GLOBAL_ERROR: &str = "explicit toggle `!` cannot be used on a `@@` destination; use a marker-only `@<route>+<block-id>!` item";
 const SUB_BULLET_SHAPE_ERROR: &str =
     "sub-bullet capture markers must use @<route>+<block-id> or @<route>+<block-id>#<section>";
 const SUB_BULLET_ROUTE_ERROR: &str =
@@ -2042,21 +2070,23 @@ const TASK_BLOCK_ID_ROUTE_ERROR: &str =
     "task block-ID capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 const TASK_BLOCK_ID_ERROR: &str =
     "task block-ID capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
-const RETIRED_DOUBLE_COLON_ERROR: &str =
-    "'@<route>::<block-id>' is no longer accepted; use '@<route>^<block-id>' to create an ordinary task with an authored block ID";
+const RETIRED_DOUBLE_COLON_ERROR: &str = "'@<route>::<block-id>' is no longer accepted; use '@<route>^<block-id>' to create an ordinary task with an authored block ID";
 const POMODORO_SHAPE_ERROR: &str =
     "Pomodoro capture markers must use @<route>:<block-id> or @<route>:<block-id>#<pomodoro>";
 const POMODORO_ROUTE_ERROR: &str =
     "Pomodoro capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 const POMODORO_BLOCK_ID_ERROR: &str =
     "Pomodoro capture block ID must be non-empty and contain only A-Z, a-z, 0-9, '_' or '-'";
-const POMODORO_NAME_ERROR: &str =
-    "Pomodoro capture name must contain only A-Z, a-z, 0-9 or \
+const POMODORO_NAME_ERROR: &str = "Pomodoro capture name must contain only A-Z, a-z, 0-9 or \
 `& ' ( ) + , . / -`";
-const POMODORO_NAME_REQUIRED_ERROR: &str =
-    "Pomodoro capture requires a Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)";
-const PROJECT_NOTE_POMODORO_NAME_ERROR: &str =
-    "the `@<route>^<block-id>+` project-note marker takes no Pomodoro name; use `@<route>:<block-id>+#<pomodoro>` to link a Pomodoro";
+const POMODORO_NAME_REQUIRED_ERROR: &str = "Pomodoro capture requires a Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)";
+const PROJECT_NOTE_POMODORO_NAME_ERROR: &str = "the `@<route>^<block-id>+` project-note marker takes no Pomodoro name; use `@<route>:<block-id>+#<pomodoro>` to link a Pomodoro";
+const POMODORO_START_SHAPE_ERROR: &str = "Pomodoro start suffix must mirror se<X>: use `=<X>` where <X> is empty, digits, `-`, `-digits`, or `digits-` with optional digits (for example `@<route>:<block-id>=`, `@<route>:<block-id>=3`, `@<route>:<block-id>=-2`)";
+const POMODORO_START_OVERFLOW_ERROR: &str =
+    "Pomodoro start suffix is too large; use a smaller duration or offset";
+const POMODORO_START_PROJECT_NOTE_ERROR: &str = "Pomodoro start suffix `=<X>` applies only to `@<route>:<block-id>` task captures, not project-note `+` forms";
+pub(crate) const POMODORO_START_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `s:<N>`; a scheduled Blocked task cannot start its session";
+pub(crate) const POMODORO_START_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `p:<N>`; a scheduled Blocked task cannot start its session";
 
 // ---------------------------------------------------------------------------
 // Editor-facing parse
@@ -2072,6 +2102,7 @@ pub(crate) enum SpanKind {
     PomodoroRoute,
     PomodoroBlockId,
     PomodoroName,
+    PomodoroStart,
     SubBulletRoute,
     SubBulletBlockId,
     SubBulletSection,
@@ -2105,6 +2136,7 @@ impl SpanKind {
             Self::PomodoroRoute => "pomodoro_route",
             Self::PomodoroBlockId => "pomodoro_block_id",
             Self::PomodoroName => "pomodoro_name",
+            Self::PomodoroStart => "pomodoro_start",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
             Self::SubBulletSection => "sub_bullet_section",
@@ -2346,10 +2378,7 @@ struct LineEditorParse<'a> {
 /// `parse_for_editor` resolved its single line before this module became
 /// line-aware. `leading` allows a first-token route to win and must only be
 /// set for the parent line.
-fn parse_editor_line<'a>(
-    mut tokens: Vec<Token<'a>>,
-    leading: bool,
-) -> LineEditorParse<'a> {
+fn parse_editor_line<'a>(mut tokens: Vec<Token<'a>>, leading: bool) -> LineEditorParse<'a> {
     let declarations = take_global_declarations(&mut tokens);
     let (_, marker_spans) = extract_terminal_markers(&mut tokens, true);
     let terminal_spans: Vec<Span> = marker_spans
@@ -2361,9 +2390,7 @@ fn parse_editor_line<'a>(
     if let Some(diagnostic) = legacy_bullet_marker_diagnostic(&tokens) {
         diagnostics.push(diagnostic);
     }
-    if let Some(diagnostic) =
-        pomodoro_note_conflict_diagnostic(&tokens, leading)
-    {
+    if let Some(diagnostic) = pomodoro_note_conflict_diagnostic(&tokens, leading) {
         diagnostics.push(diagnostic);
     }
 
@@ -2372,11 +2399,10 @@ fn parse_editor_line<'a>(
     let selected = select_marker_token(&tokens, leading);
     let has_destination_marker = selected.is_some();
     let marker_index = selected.as_ref().map(|(index, _)| *index);
-    let marker_text =
-        selected.as_ref().and_then(|(index, parse)| match parse {
-            TokenParse::Marker(_) => Some(tokens[*index].text.to_string()),
-            TokenParse::Invalid(_) => None,
-        });
+    let marker_text = selected.as_ref().and_then(|(index, parse)| match parse {
+        TokenParse::Marker(_) => Some(tokens[*index].text.to_string()),
+        TokenParse::Invalid(_) => None,
+    });
     let body = tokens
         .iter()
         .enumerate()
@@ -2417,11 +2443,7 @@ struct SeenMarkers {
 }
 
 impl SeenMarkers {
-    fn absorb_terminal_spans(
-        &mut self,
-        spans: &[Span],
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
+    fn absorb_terminal_spans(&mut self, spans: &[Span], diagnostics: &mut Vec<Diagnostic>) {
         for span in spans {
             let seen = match span.kind {
                 SpanKind::Schedule => &mut self.schedule,
@@ -2465,10 +2487,7 @@ fn terminal_marker_label(kind: SpanKind) -> &'static str {
     }
 }
 
-fn duplicate_capture_marker_diagnostic(
-    message: String,
-    range: (usize, usize),
-) -> Diagnostic {
+fn duplicate_capture_marker_diagnostic(message: String, range: (usize, usize)) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
         code: "duplicate_capture_marker",
@@ -2507,19 +2526,16 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         declarations.extend(outcome.declarations.iter().copied());
     }
 
-    let global_destination = parse_editor_global_declarations(
-        &declarations,
-        &mut global_spans,
-        &mut global_diagnostics,
-    );
+    let global_destination =
+        parse_editor_global_declarations(&declarations, &mut global_spans, &mut global_diagnostics);
     if !declarations.is_empty() && draft.items.is_empty() {
         global_diagnostics.push(Diagnostic {
             severity: Severity::Error,
             code: "missing_capture_item",
             message: missing_capture_item_error(),
-            range: declarations.first().map(|declaration| {
-                (declaration.token.start, declaration.token.end)
-            }),
+            range: declarations
+                .first()
+                .map(|declaration| (declaration.token.start, declaration.token.end)),
         });
     }
 
@@ -2527,9 +2543,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         .into_iter()
         .map(|outcome| outcome.item)
         .collect::<Vec<_>>();
-    if let Some(global) =
-        global_destination.as_ref().filter(|global| global.inherit)
-    {
+    if let Some(global) = global_destination.as_ref().filter(|global| global.inherit) {
         for item in &mut items {
             inherit_editor_global_destination(item, global);
         }
@@ -2651,10 +2665,7 @@ fn parse_editor_global_declarations(
     effective
 }
 
-fn inherit_editor_global_destination(
-    item: &mut EditorItemParse,
-    global: &EditorGlobalDestination,
-) {
+fn inherit_editor_global_destination(item: &mut EditorItemParse, global: &EditorGlobalDestination) {
     if item.has_local_destination {
         return;
     }
@@ -2715,40 +2726,38 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
         parent_parse.marker.as_ref(),
     ) {
         local_destination_markers.push(marker);
-        own_local_destination_marker_index =
-            Some(local_destination_markers.len() - 1);
+        own_local_destination_marker_index = Some(local_destination_markers.len() - 1);
     }
     // Set only when the parent's marker is a complete sub-bullet marker whose
     // trailing name only passed the wider Pomodoro charset -- i.e. it needs a
     // strict re-check once we know whether this item is a task toggle.
     let mut sub_bullet_relaxed_section_range = None;
-    let (mut mode, mut route, mut section, mut block_id, mut needs) =
-        match &parent_parse.marker {
-            Some(marker) => {
-                spans.extend(marker.spans.clone());
-                seen.absorb_route(None, &mut diagnostics);
-                if marker.mode == EditorMode::SubBullet
-                    && marker
-                        .section
-                        .as_deref()
-                        .is_some_and(|section| !is_selector_component(section))
-                {
-                    let start = marker.spans.first().map(|span| span.start);
-                    let end = marker.spans.last().map(|span| span.end);
-                    if let (Some(start), Some(end)) = (start, end) {
-                        sub_bullet_relaxed_section_range = Some((start, end));
-                    }
+    let (mut mode, mut route, mut section, mut block_id, mut needs) = match &parent_parse.marker {
+        Some(marker) => {
+            spans.extend(marker.spans.clone());
+            seen.absorb_route(None, &mut diagnostics);
+            if marker.mode == EditorMode::SubBullet
+                && marker
+                    .section
+                    .as_deref()
+                    .is_some_and(|section| !is_selector_component(section))
+            {
+                let start = marker.spans.first().map(|span| span.start);
+                let end = marker.spans.last().map(|span| span.end);
+                if let (Some(start), Some(end)) = (start, end) {
+                    sub_bullet_relaxed_section_range = Some((start, end));
                 }
-                (
-                    marker.mode,
-                    marker.route.clone(),
-                    marker.section.clone(),
-                    marker.block_id.clone(),
-                    marker.needs.clone(),
-                )
             }
-            None => (EditorMode::Task, None, None, None, Vec::new()),
-        };
+            (
+                marker.mode,
+                marker.route.clone(),
+                marker.section.clone(),
+                marker.block_id.clone(),
+                marker.needs.clone(),
+            )
+        }
+        None => (EditorMode::Task, None, None, None, Vec::new()),
+    };
 
     let mut sub_bullets = Vec::new();
     let mut has_first_level_owner = false;
@@ -2790,10 +2799,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
             line_number,
         ));
 
-        seen.absorb_terminal_spans(
-            &child_parse.terminal_spans,
-            &mut diagnostics,
-        );
+        seen.absorb_terminal_spans(&child_parse.terminal_spans, &mut diagnostics);
         spans.extend(child_parse.terminal_spans);
         diagnostics.extend(child_parse.diagnostics);
 
@@ -2846,18 +2852,14 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
     // (a child line always has authored body text), so only the parent's
     // marker is ever relevant here. See `resolve_sub_bullet_kind` for the
     // mirrored decision in the execution grammar.
-    let toggle_eligible = body.is_empty()
-        && sub_bullets.is_empty()
-        && !seen.schedule
-        && !seen.priority
-        && !seen.clip;
+    let toggle_eligible =
+        body.is_empty() && sub_bullets.is_empty() && !seen.schedule && !seen.priority && !seen.clip;
     let has_explicit_toggle = spans
         .iter()
         .any(|span| span.kind == SpanKind::TaskToggleExplicitToggle);
     if has_explicit_toggle && !toggle_eligible {
         let range = spans.iter().find_map(|span| {
-            (span.kind == SpanKind::TaskToggleExplicitToggle)
-                .then_some((span.start, span.end))
+            (span.kind == SpanKind::TaskToggleExplicitToggle).then_some((span.start, span.end))
         });
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
@@ -2872,10 +2874,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
         if let Some(index) = own_local_destination_marker_index {
             local_destination_markers[index].mode = EditorMode::TaskToggle;
         }
-    } else if toggle_eligible
-        && mode == EditorMode::Incomplete
-        && needs == [Need::TaskSection]
-    {
+    } else if toggle_eligible && mode == EditorMode::Incomplete && needs == [Need::TaskSection] {
         needs = vec![Need::PomodoroName];
         rekind_sub_bullet_spans(&mut spans);
     } else if let Some(range) = sub_bullet_relaxed_section_range {
@@ -2887,9 +2886,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
         spans.retain(|span| {
             !matches!(
                 span.kind,
-                SpanKind::SubBulletRoute
-                    | SpanKind::SubBulletBlockId
-                    | SpanKind::SubBulletSection
+                SpanKind::SubBulletRoute | SpanKind::SubBulletBlockId | SpanKind::SubBulletSection
             )
         });
         diagnostics.push(Diagnostic {
@@ -2909,10 +2906,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
                 code: "global_destination_shadowed",
-                message: global_destination_shadowed_warning(
-                    local_marker,
-                    declaration.token.text,
-                ),
+                message: global_destination_shadowed_warning(local_marker, declaration.token.text),
                 range: Some((declaration.token.start, declaration.token.end)),
             });
         }
@@ -2985,10 +2979,7 @@ fn complete_local_destination_marker(
     })
 }
 
-pub(crate) fn editor_item_at(
-    raw_text: &str,
-    cursor: usize,
-) -> Option<EditorItemParse> {
+pub(crate) fn editor_item_at(raw_text: &str, cursor: usize) -> Option<EditorItemParse> {
     let draft = split_capture_draft(raw_text);
     let index = draft
         .items
@@ -3009,10 +3000,7 @@ pub(crate) fn editor_item_at(
 /// token wins when `leading` is set (only ever true for the parent line),
 /// and only a plain `@route` token needs body text on the other side before
 /// it routes at all.
-fn select_marker_token(
-    tokens: &[Token<'_>],
-    leading: bool,
-) -> Option<(usize, TokenParse)> {
+fn select_marker_token(tokens: &[Token<'_>], leading: bool) -> Option<(usize, TokenParse)> {
     if leading
         && let Some(first) = tokens.first()
         && let Some(parse) = classify_editor_token(first)
@@ -3172,9 +3160,7 @@ fn classify_editor_token(token: &Token<'_>) -> Option<TokenParse> {
     if is_retired_double_colon_marker_candidate(text) {
         return Some(classify_retired_double_colon_token(token));
     }
-    if is_pomodoro_marker_candidate(text)
-        || is_incomplete_pomodoro_marker_candidate(text)
-    {
+    if is_pomodoro_marker_candidate(text) || is_incomplete_pomodoro_marker_candidate(text) {
         return Some(classify_pomodoro_token(token));
     }
     classify_route_token(token).map(TokenParse::Marker)
@@ -3200,14 +3186,12 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
             message,
         ));
     }
-    let (token_text, explicit_toggle) =
-        match exact_explicit_toggle_prefix(token.text) {
-            Some(prefix) => (prefix, true),
-            None => (token.text, false),
-        };
+    let (token_text, explicit_toggle) = match exact_explicit_toggle_prefix(token.text) {
+        Some(prefix) => (prefix, true),
+        None => (token.text, false),
+    };
     let marker = &token_text[1..];
-    let (route_part, rest) =
-        marker.split_once('+').expect("sub-bullet candidate");
+    let (route_part, rest) = marker.split_once('+').expect("sub-bullet candidate");
     let (block_part, section_part) = match rest.split_once('#') {
         Some((block, section)) => (block, Some(section)),
         None => (rest, None),
@@ -3231,9 +3215,9 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
     // finished item shows whether this stays a sub-bullet capture or becomes
     // a task toggle -- whose trailing name is a Pomodoro name and takes the
     // wider Pomodoro charset instead. See `parse_editor_item`.
-    if section_part.is_some_and(|section| {
-        !section.is_empty() && !is_pomodoro_selector_component(section)
-    }) {
+    if section_part
+        .is_some_and(|section| !section.is_empty() && !is_pomodoro_selector_component(section))
+    {
         return TokenParse::Invalid(token_diagnostic(
             token,
             "invalid_sub_bullet_section",
@@ -3241,24 +3225,23 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
         ));
     }
 
-    let (route_kind, right_kind, complete_mode, third_kind, third_need) =
-        if explicit_toggle {
-            (
-                SpanKind::TaskToggleRoute,
-                SpanKind::TaskToggleBlockId,
-                EditorMode::TaskToggle,
-                SpanKind::TaskTogglePomodoroName,
-                Need::PomodoroName,
-            )
-        } else {
-            (
-                SpanKind::SubBulletRoute,
-                SpanKind::SubBulletBlockId,
-                EditorMode::SubBullet,
-                SpanKind::SubBulletSection,
-                Need::TaskSection,
-            )
-        };
+    let (route_kind, right_kind, complete_mode, third_kind, third_need) = if explicit_toggle {
+        (
+            SpanKind::TaskToggleRoute,
+            SpanKind::TaskToggleBlockId,
+            EditorMode::TaskToggle,
+            SpanKind::TaskTogglePomodoroName,
+            Need::PomodoroName,
+        )
+    } else {
+        (
+            SpanKind::SubBulletRoute,
+            SpanKind::SubBulletBlockId,
+            EditorMode::SubBullet,
+            SpanKind::SubBulletSection,
+            Need::TaskSection,
+        )
+    };
     TokenParse::Marker(marker_parse(
         token,
         MarkerShape {
@@ -3286,8 +3269,7 @@ fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
 
 fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
     let marker = &token.text[1..];
-    let (route_part, block_part) =
-        marker.split_once('^').expect("task block-ID candidate");
+    let (route_part, block_part) = marker.split_once('^').expect("task block-ID candidate");
 
     if !route_part.is_empty() && !is_route_token(route_part) {
         return TokenParse::Invalid(token_diagnostic(
@@ -3365,9 +3347,13 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         Some((route, rest)) => (route, rest, true),
         None => (marker, "", false),
     };
-    let (block_part, name_part) = match rest.split_once('#') {
-        Some((block, name)) => (block, Some(name)),
+    let (rest_before_start, start_part) = match rest.split_once('=') {
+        Some((before, suffix)) => (before, Some(suffix)),
         None => (rest, None),
+    };
+    let (block_part, name_part) = match rest_before_start.split_once('#') {
+        Some((block, name)) => (block, Some(name)),
+        None => (rest_before_start, None),
     };
 
     if legacy && separator && route_part.is_empty() {
@@ -3401,13 +3387,27 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             POMODORO_BLOCK_ID_ERROR,
         ));
     }
-    if name_part.is_some_and(|name| {
-        !name.is_empty() && !is_pomodoro_selector_component(name)
-    }) {
+    if name_part.is_some_and(|name| !name.is_empty() && !is_pomodoro_selector_component(name)) {
         return TokenParse::Invalid(token_diagnostic(
             token,
             "invalid_pomodoro_name",
             POMODORO_NAME_ERROR,
+        ));
+    }
+    if let Some(raw) = start_part
+        && parse_pomodoro_start_suffix(raw).is_err()
+    {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_pomodoro_start",
+            POMODORO_START_SHAPE_ERROR,
+        ));
+    }
+    if project_note && start_part.is_some() {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_pomodoro_start",
+            POMODORO_START_PROJECT_NOTE_ERROR,
         ));
     }
 
@@ -3435,33 +3435,27 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                 kind: SpanKind::PomodoroName,
                 need: Need::PomodoroName,
             }),
-            suffix: (project_note && name_part.is_none()).then_some(
-                MarkerSuffix {
-                    len: 1,
-                    kind: SpanKind::ProjectNoteMarker,
-                },
-            ),
+            suffix: (project_note && name_part.is_none()).then_some(MarkerSuffix {
+                len: 1,
+                kind: SpanKind::ProjectNoteMarker,
+            }),
         },
     );
     if project_note && name_part.is_some() {
         // `marker_parse` leaves the `+#` separator bytes uncovered, so span
         // the `+` sigil explicitly: ahead of the Pomodoro name, or split out
         // of the `#` placeholder when the name is still missing.
-        let plus_start = token.start
-            + sigil_len
-            + route_part.len()
-            + separator_len
-            + block_part.len();
+        let plus_start =
+            token.start + sigil_len + route_part.len() + separator_len + block_part.len();
         let plus_span = Span {
             start: plus_start,
             end: plus_start + 1,
             kind: SpanKind::ProjectNoteMarker,
         };
         if name_part.is_some_and(|part| !part.is_empty()) {
-            marker_parse.spans.insert(
-                marker_parse.spans.len().saturating_sub(1),
-                plus_span,
-            );
+            marker_parse
+                .spans
+                .insert(marker_parse.spans.len().saturating_sub(1), plus_span);
         } else if marker_parse.spans.pop().is_some() {
             marker_parse.spans.push(plus_span);
             marker_parse.spans.push(Span {
@@ -3475,6 +3469,18 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
     // still missing; an empty block ID stays an ordinary incomplete state.
     if project_note && !block_part.is_empty() && route_part.is_empty() {
         marker_parse.mode = EditorMode::PomodoroProjectNote;
+    }
+    if let Some(raw) = start_part {
+        let start_len = 1 + raw.len();
+        let start_span = Span {
+            start: token.end - start_len,
+            end: token.end,
+            kind: SpanKind::PomodoroStart,
+        };
+        marker_parse.spans.push(start_span);
+        marker_parse
+            .spans
+            .sort_by_key(|span| (span.start, span.end));
     }
     TokenParse::Marker(marker_parse)
 }
@@ -3576,8 +3582,7 @@ struct MarkerSuffix {
 /// `interactive_placeholder` span so an editor can highlight the caret
 /// position the user still has to fill in.
 fn marker_parse(token: &Token<'_>, shape: MarkerShape<'_>) -> MarkerParse {
-    let suffix_len =
-        shape.suffix.as_ref().map(|suffix| suffix.len).unwrap_or(0);
+    let suffix_len = shape.suffix.as_ref().map(|suffix| suffix.len).unwrap_or(0);
     let content_end = token.end - suffix_len;
     let route_end = token.start + shape.sigil_len + shape.route_part.len();
     let has_route = !shape.route_part.is_empty();
@@ -3651,8 +3656,7 @@ fn marker_parse(token: &Token<'_>, shape: MarkerShape<'_>) -> MarkerParse {
     // section it could still resolve. A section can only be offered once the
     // route that owns its headings is known. A trailing `#` on a sub-bullet
     // marker is required once typed: `@route+id#` is incomplete.
-    let section_is_optional =
-        shape.right_need == Need::Section && !has_third_sep;
+    let section_is_optional = shape.right_need == Need::Section && !has_third_sep;
     let third_ok = !has_third_sep || has_third;
 
     let mut needs = Vec::new();
@@ -3694,11 +3698,7 @@ fn marker_parse(token: &Token<'_>, shape: MarkerShape<'_>) -> MarkerParse {
     }
 }
 
-fn token_diagnostic(
-    token: &Token<'_>,
-    code: &'static str,
-    message: &str,
-) -> Diagnostic {
+fn token_diagnostic(token: &Token<'_>, code: &'static str, message: &str) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
         code,
@@ -3735,10 +3735,7 @@ fn legacy_bullet_marker_diagnostic(tokens: &[Token<'_>]) -> Option<Diagnostic> {
 /// diagnosed separately in [`parse_editor_item`] once the whole item's mode
 /// is known; a forced `--route` conflict never reaches the editor, which has
 /// no forced-route flag.
-fn pomodoro_note_conflict_diagnostic(
-    tokens: &[Token<'_>],
-    leading: bool,
-) -> Option<Diagnostic> {
+fn pomodoro_note_conflict_diagnostic(tokens: &[Token<'_>], leading: bool) -> Option<Diagnostic> {
     let texts: Vec<&str> = tokens.iter().map(|token| token.text).collect();
     if !texts.contains(&"#") {
         return None;
@@ -3755,8 +3752,7 @@ fn pomodoro_note_conflict_diagnostic(
                 || remaining.last().is_some_and(|token| is_route_marker(token))
         }
         Some(&last) => {
-            (leading
-                && texts.first().is_some_and(|token| is_route_marker(token)))
+            (leading && texts.first().is_some_and(|token| is_route_marker(token)))
                 || is_route_marker(last)
         }
         None => false,
@@ -3838,19 +3834,14 @@ struct CompletionParts<'a> {
 /// indentation plus bullet marker itself is never completable, matching the
 /// authored-bullet grammar `bob capture` and `bob capture-parse` execute
 /// with.
-pub(crate) fn completion_field_at(
-    raw_text: &str,
-    cursor: usize,
-) -> Option<CompletionField> {
+pub(crate) fn completion_field_at(raw_text: &str, cursor: usize) -> Option<CompletionField> {
     if let Some(line) = split_physical_lines(raw_text)
         .into_iter()
         .find(|line| cursor >= line.start && cursor <= line.end)
     {
         let tokens = tokenize_line_with_spans(&line);
         if let Some(token) = tokens.iter().find(|token| {
-            token.text.starts_with("@@")
-                && cursor >= token.start
-                && cursor <= token.end
+            token.text.starts_with("@@") && cursor >= token.start && cursor <= token.end
         }) {
             return global_completion_field_at(token, cursor);
         }
@@ -3862,9 +3853,7 @@ pub(crate) fn completion_field_at(
         item.lines
             .iter()
             .enumerate()
-            .find(|(_, line)| {
-                cursor >= line.raw.start && cursor <= line.raw.end
-            })
+            .find(|(_, line)| cursor >= line.raw.start && cursor <= line.raw.end)
             .map(|(line_index, line)| (item, line_index, line.raw))
     })?;
     let leading = line_index == 0;
@@ -3872,8 +3861,7 @@ pub(crate) fn completion_field_at(
     let scan_line = if leading {
         line
     } else {
-        let AuthoredLineClass::Item(authored) = classify_authored_line(line)
-        else {
+        let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
             return None;
         };
         if authored.depth == AuthoredDepth::Nested
@@ -3908,8 +3896,7 @@ pub(crate) fn completion_field_at(
     // body, authored children, and other item-wide markers allow it.
     let resolved = parse_editor_item(item).item;
     let sub_bullet_is_toggle = matches!(resolved.mode, EditorMode::TaskToggle)
-        || (resolved.mode == EditorMode::Incomplete
-            && resolved.needs == [Need::PomodoroName]);
+        || (resolved.mode == EditorMode::Incomplete && resolved.needs == [Need::PomodoroName]);
 
     marker_field_at_cursor(&token, cursor, sub_bullet_is_toggle)
 }
@@ -3919,9 +3906,7 @@ fn has_previous_first_level_authored_item(
     current_line_index: usize,
 ) -> bool {
     lines[1..current_line_index].iter().any(|line| {
-        let AuthoredLineClass::Item(authored) =
-            classify_authored_line(line.raw)
-        else {
+        let AuthoredLineClass::Item(authored) = classify_authored_line(line.raw) else {
             return false;
         };
         if authored.depth != AuthoredDepth::First {
@@ -3941,10 +3926,7 @@ fn has_previous_first_level_authored_item(
 /// `@route` fragment with no body text yet is still the token a user is
 /// actively completing, even though `bob capture` would leave it literal.
 /// `leading` is only ever set for the parent (first) physical line.
-fn completion_marker_index(
-    tokens: &[Token<'_>],
-    leading: bool,
-) -> Option<usize> {
+fn completion_marker_index(tokens: &[Token<'_>], leading: bool) -> Option<usize> {
     if leading
         && let Some(first) = tokens.first()
         && classify_editor_token(first).is_some()
@@ -3981,8 +3963,7 @@ fn marker_field_at_cursor(
         }
         let text = exact_explicit_toggle_prefix(text).unwrap_or(text);
         let marker = &text[1..];
-        let (route_part, rest) =
-            marker.split_once('+').expect("sub-bullet candidate");
+        let (route_part, rest) = marker.split_once('+').expect("sub-bullet candidate");
         let third_context = if sub_bullet_is_toggle {
             CompletionContext::PomodoroName
         } else {
@@ -4015,8 +3996,7 @@ fn marker_field_at_cursor(
 
     if is_task_block_id_marker_candidate(text) {
         let marker = &text[1..];
-        let (route_part, block_part) =
-            marker.split_once('^').expect("task block-ID candidate");
+        let (route_part, block_part) = marker.split_once('^').expect("task block-ID candidate");
         return completion_field_from_parts(
             token,
             CompletionParts {
@@ -4035,9 +4015,7 @@ fn marker_field_at_cursor(
         return None;
     }
 
-    if is_pomodoro_marker_candidate(text)
-        || is_incomplete_pomodoro_marker_candidate(text)
-    {
+    if is_pomodoro_marker_candidate(text) || is_incomplete_pomodoro_marker_candidate(text) {
         let legacy = text.starts_with("@!");
         let sigil_len = if legacy { 2 } else { 1 };
         let marker = &text[sigil_len..];
@@ -4103,10 +4081,7 @@ fn marker_field_at_cursor(
     )
 }
 
-fn global_completion_field_at(
-    token: &Token<'_>,
-    cursor: usize,
-) -> Option<CompletionField> {
+fn global_completion_field_at(token: &Token<'_>, cursor: usize) -> Option<CompletionField> {
     if cursor < token.start || cursor > token.end {
         return None;
     }
@@ -4224,8 +4199,7 @@ fn completion_field_from_parts(
     Some(CompletionField {
         context: third.context,
         route: Some(parts.route_part.to_ascii_lowercase()),
-        block_id: (!parts.right_part.is_empty())
-            .then(|| parts.right_part.to_string()),
+        block_id: (!parts.right_part.is_empty()).then(|| parts.right_part.to_string()),
         query: third.part[..split].to_string(),
         replacement: (third_start, third_end),
     })
@@ -4287,10 +4261,7 @@ impl RewriteRule {
 /// `@@` -- or whose local marker cannot be expressed as a declaration
 /// (Rule A5), or whose item already has more than one local marker
 /// (Rule A6) -- returns `rule: None` with `text` unchanged.
-pub(crate) fn rewrite_draft(
-    raw_text: &str,
-    cursor: Option<usize>,
-) -> DraftRewrite {
+pub(crate) fn rewrite_draft(raw_text: &str, cursor: Option<usize>) -> DraftRewrite {
     let draft = split_capture_draft(raw_text);
     let item_outcomes: Vec<EditorItemOutcome<'_>> =
         draft.items.iter().map(parse_editor_item).collect();
@@ -4313,8 +4284,7 @@ pub(crate) fn rewrite_draft(
     }
     occurrences.sort_by_key(|occurrence| occurrence.token.start);
 
-    let Some(selected_index) = select_bare_declaration(&occurrences, cursor)
-    else {
+    let Some(selected_index) = select_bare_declaration(&occurrences, cursor) else {
         return unchanged_rewrite(raw_text, cursor, Vec::new());
     };
 
@@ -4327,26 +4297,22 @@ pub(crate) fn rewrite_draft(
             [] => {}
             [marker] => {
                 return match classify_local_marker(marker) {
-                    LocalMarkerAbsorbability::Absorbable(payload) => {
-                        finish_absorption(
-                            raw_text,
-                            cursor,
-                            &draft,
-                            &occurrences,
-                            selected_index,
-                            RewriteRule::AbsorbLocalMarker,
-                            &payload,
-                            Some((marker.start, marker.end)),
-                            absorb_local_marker_summary(&marker.text, &payload),
-                        )
-                    }
-                    LocalMarkerAbsorbability::NonAbsorbable => {
-                        unchanged_rewrite(
-                            raw_text,
-                            cursor,
-                            vec![non_absorbable_marker_notice(marker)],
-                        )
-                    }
+                    LocalMarkerAbsorbability::Absorbable(payload) => finish_absorption(
+                        raw_text,
+                        cursor,
+                        &draft,
+                        &occurrences,
+                        selected_index,
+                        RewriteRule::AbsorbLocalMarker,
+                        &payload,
+                        Some((marker.start, marker.end)),
+                        absorb_local_marker_summary(&marker.text, &payload),
+                    ),
+                    LocalMarkerAbsorbability::NonAbsorbable => unchanged_rewrite(
+                        raw_text,
+                        cursor,
+                        vec![non_absorbable_marker_notice(marker)],
+                    ),
                 };
             }
             // Rule A6: two or more local markers already put the draft in a
@@ -4381,11 +4347,7 @@ pub(crate) fn rewrite_draft(
     unchanged_rewrite(raw_text, cursor, Vec::new())
 }
 
-fn unchanged_rewrite(
-    raw_text: &str,
-    cursor: Option<usize>,
-    notices: Vec<String>,
-) -> DraftRewrite {
+fn unchanged_rewrite(raw_text: &str, cursor: Option<usize>, notices: Vec<String>) -> DraftRewrite {
     DraftRewrite {
         rule: None,
         edits: Vec::new(),
@@ -4435,14 +4397,10 @@ enum LocalMarkerAbsorbability {
 /// defines, so this match is exhaustive over real (non-incomplete) markers.
 /// A project-note marker is never absorbable: a `@@` declaration that
 /// created a note would try to create the same note once per item.
-fn classify_local_marker(
-    marker: &LocalDestinationMarker,
-) -> LocalMarkerAbsorbability {
+fn classify_local_marker(marker: &LocalDestinationMarker) -> LocalMarkerAbsorbability {
     match marker.mode {
         EditorMode::Task if marker.block_id.is_none() => {
-            LocalMarkerAbsorbability::Absorbable(
-                marker.route.clone().unwrap_or_default(),
-            )
+            LocalMarkerAbsorbability::Absorbable(marker.route.clone().unwrap_or_default())
         }
         EditorMode::SubBullet if marker.section.is_none() => {
             let mut payload = marker.route.clone().unwrap_or_default();
@@ -4554,9 +4512,8 @@ fn finish_absorption(
     );
 
     let text = apply_text_edits(raw_text, &edits);
-    let cursor = cursor.map(|_| {
-        mapped_cursor_after(&edits, selected_token.start, replacement.len())
-    });
+    let cursor =
+        cursor.map(|_| mapped_cursor_after(&edits, selected_token.start, replacement.len()));
 
     DraftRewrite {
         rule: Some(rule),
@@ -4584,16 +4541,11 @@ fn apply_text_edits(raw_text: &str, edits: &[TextEdit]) -> String {
 /// original text) through every edit that lands before it, then add
 /// `replacement_len` so the result sits just past the rewritten
 /// `@@<payload>` token, per Rule A1's cursor contract.
-fn mapped_cursor_after(
-    edits: &[TextEdit],
-    replace_start: usize,
-    replacement_len: usize,
-) -> usize {
+fn mapped_cursor_after(edits: &[TextEdit], replace_start: usize, replacement_len: usize) -> usize {
     let mut delta: i64 = 0;
     for edit in edits {
         if edit.end <= replace_start {
-            delta +=
-                edit.replacement.len() as i64 - (edit.end - edit.start) as i64;
+            delta += edit.replacement.len() as i64 - (edit.end - edit.start) as i64;
         }
     }
     (replace_start as i64 + delta) as usize + replacement_len
@@ -4619,10 +4571,10 @@ fn deletion_line_context<'a>(
         .find(|line| line.start <= target.0 && target.1 <= line.end)
         .expect("deleted token must sit on some physical line");
 
-    let is_declaration_only_line =
-        draft.declarations.iter().any(|declaration| {
-            (declaration.token.start, declaration.token.end) == target
-        });
+    let is_declaration_only_line = draft
+        .declarations
+        .iter()
+        .any(|declaration| (declaration.token.start, declaration.token.end) == target);
     if is_declaration_only_line {
         return DeletionLineContext {
             physical,
@@ -4632,10 +4584,11 @@ fn deletion_line_context<'a>(
     }
 
     for item in &draft.items {
-        let Some((position, item_line)) =
-            item.lines.iter().enumerate().find(|(_, line)| {
-                line.raw.start <= target.0 && target.1 <= line.raw.end
-            })
+        let Some((position, item_line)) = item
+            .lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| line.raw.start <= target.0 && target.1 <= line.raw.end)
         else {
             continue;
         };
@@ -4717,10 +4670,7 @@ fn deletion_edits_for_token(
 /// when `line` is the draft's last physical line). Always claiming the
 /// *trailing* terminator, never the preceding one, keeps adjacent whole-line
 /// deletions from fighting over the same terminator bytes.
-fn whole_line_deletion_span(
-    raw_text: &str,
-    line: RawLine<'_>,
-) -> (usize, usize) {
+fn whole_line_deletion_span(raw_text: &str, line: RawLine<'_>) -> (usize, usize) {
     let bytes = raw_text.as_bytes();
     let terminator_len = match bytes.get(line.end) {
         Some(b'\r') => {
@@ -5569,26 +5519,17 @@ mod tests {
             assert_eq!(parse.body, "Body", "{raw}");
             assert_eq!(parse.route, None, "{raw}");
             assert!(parse.needs.is_empty(), "{raw}");
-            assert_eq!(
-                codes(&parse),
-                vec!["retired_task_block_id_marker"],
-                "{raw}"
-            );
+            assert_eq!(codes(&parse), vec!["retired_task_block_id_marker"], "{raw}");
             assert_eq!(
                 parse.diagnostics[0].message, RETIRED_DOUBLE_COLON_ERROR,
                 "{raw}"
             );
-            assert_eq!(
-                parse.diagnostics[0].range,
-                Some((5, raw.len())),
-                "{raw}"
-            );
+            assert_eq!(parse.diagnostics[0].range, Some((5, raw.len())), "{raw}");
         }
     }
 
     #[test]
-    fn mixed_separators_keep_the_first_family_and_do_not_steal_section_suffixes(
-    ) {
+    fn mixed_separators_keep_the_first_family_and_do_not_steal_section_suffixes() {
         let bullet_plus = editor("Jot @notes#time+box");
         assert_eq!(bullet_plus.mode, EditorMode::Bullet);
         assert_eq!(bullet_plus.section.as_deref(), Some("time+box"));
@@ -5611,19 +5552,13 @@ mod tests {
         assert!(plus_then_hash.diagnostics.is_empty());
 
         let plus_then_colon = editor("Add context @route+bad:id");
-        assert_eq!(
-            codes(&plus_then_colon),
-            vec!["invalid_sub_bullet_block_id"]
-        );
+        assert_eq!(codes(&plus_then_colon), vec!["invalid_sub_bullet_block_id"]);
 
         let caret_then_colon = editor("Do work @route^bad:id");
         assert_eq!(codes(&caret_then_colon), vec!["invalid_task_block_id"]);
 
         let plus_then_caret = editor("Add context @route+id^x");
-        assert_eq!(
-            codes(&plus_then_caret),
-            vec!["invalid_sub_bullet_block_id"]
-        );
+        assert_eq!(codes(&plus_then_caret), vec!["invalid_sub_bullet_block_id"]);
 
         let caret_then_plus = editor("Do work @route^id+x");
         assert_eq!(codes(&caret_then_plus), vec!["invalid_task_block_id"]);
@@ -5763,16 +5698,13 @@ mod tests {
         ];
 
         for raw in inputs {
-            let executed =
-                parse_capture_text_with_clip_control(raw, None, None, true)
-                    .unwrap_or_else(|error| panic!("{raw}: {error}"));
+            let executed = parse_capture_text_with_clip_control(raw, None, None, true)
+                .unwrap_or_else(|error| panic!("{raw}: {error}"));
             let parse = editor(raw);
             assert_eq!(parse.body, executed.body, "{raw}");
             assert_eq!(parse.route, executed.route, "{raw}");
             let expected_mode = match &executed.kind {
-                CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => {
-                    EditorMode::Task
-                }
+                CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => EditorMode::Task,
                 CaptureKind::Bullet { .. } => EditorMode::Bullet,
                 CaptureKind::Pomodoro { .. } => EditorMode::PomodoroTask,
                 CaptureKind::SubBullet { .. } => EditorMode::SubBullet,
@@ -5793,14 +5725,11 @@ mod tests {
             if let CaptureKind::Pomodoro {
                 block_id,
                 pomodoro_name,
+                ..
             } = &executed.kind
             {
                 assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
-                assert_eq!(
-                    parse.section.as_deref(),
-                    pomodoro_name.as_deref(),
-                    "{raw}"
-                );
+                assert_eq!(parse.section.as_deref(), pomodoro_name.as_deref(), "{raw}");
             }
             if let CaptureKind::SubBullet {
                 target: SubBulletTarget::BlockId(block_id),
@@ -5824,17 +5753,9 @@ mod tests {
             } = &executed.kind
             {
                 assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
-                assert_eq!(
-                    parse.section.as_deref(),
-                    pomodoro_name.as_deref(),
-                    "{raw}"
-                );
+                assert_eq!(parse.section.as_deref(), pomodoro_name.as_deref(), "{raw}");
             }
-            if let CaptureKind::ProjectNote {
-                block_id,
-                pomodoro,
-            } = &executed.kind
-            {
+            if let CaptureKind::ProjectNote { block_id, pomodoro } = &executed.kind {
                 assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
                 assert_eq!(
                     parse.section.as_deref(),
@@ -5859,9 +5780,8 @@ mod tests {
             "Body @:",
             "Body @:focus-123",
         ] {
-            let executed =
-                parse_capture_text_with_clip_control(raw, None, None, true)
-                    .unwrap_or_else(|error| panic!("{raw}: {error}"));
+            let executed = parse_capture_text_with_clip_control(raw, None, None, true)
+                .unwrap_or_else(|error| panic!("{raw}: {error}"));
             assert_eq!(executed.kind, CaptureKind::Task, "{raw}");
             assert_eq!(executed.route, None, "{raw}");
             assert_eq!(executed.body, raw, "{raw}");
@@ -5892,8 +5812,7 @@ mod tests {
             "Body @!",
             "Body @!dev",
         ] {
-            parse_capture_text_with_clip_control(raw, None, None, true)
-                .expect_err(raw);
+            parse_capture_text_with_clip_control(raw, None, None, true).expect_err(raw);
 
             let parse = editor(raw);
             assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
@@ -6144,8 +6063,7 @@ mod tests {
                 SpanKind::TaskTogglePomodoroName,
             ]
         );
-        assert!(!span_kinds(&named_editor)
-            .contains(&SpanKind::TaskToggleExplicitToggle));
+        assert!(!span_kinds(&named_editor).contains(&SpanKind::TaskToggleExplicitToggle));
 
         let bang = execute("@dev+id!").expect("explicit toggle");
         assert_eq!(
@@ -6228,13 +6146,9 @@ mod tests {
             executed_repeated.contains("repeated"),
             "{executed_repeated}"
         );
-        let executed_global = parse_capture_draft_with_clip_control(
-            "@@dev+id!\nTask",
-            None,
-            None,
-            true,
-        )
-        .expect_err("global");
+        let executed_global =
+            parse_capture_draft_with_clip_control("@@dev+id!\nTask", None, None, true)
+                .expect_err("global");
         assert!(executed_global.contains("`@@`"), "{executed_global}");
 
         let literal = editor("Wow! @dev");
@@ -6316,19 +6230,16 @@ mod tests {
         assert!(!is_selector_component("c++"));
         assert!(!is_selector_component("a+b"));
 
-        let parsed = parse_capture_text_with_clip_control(
-            "Do work @sase:deep-fix#c++",
-            None,
-            None,
-            true,
-        )
-        .expect("pomodoro with plus name");
+        let parsed =
+            parse_capture_text_with_clip_control("Do work @sase:deep-fix#c++", None, None, true)
+                .expect("pomodoro with plus name");
         assert_eq!(parsed.route.as_deref(), Some("sase"));
         assert_eq!(
             parsed.kind,
             CaptureKind::Pomodoro {
                 block_id: "deep-fix".to_string(),
                 pomodoro_name: Some("c++".to_string()),
+                start: None,
             }
         );
 
@@ -6344,6 +6255,7 @@ mod tests {
             CaptureKind::Pomodoro {
                 block_id: "deep-fix".to_string(),
                 pomodoro_name: Some("bob+sase".to_string()),
+                start: None,
             }
         );
 
@@ -6395,8 +6307,7 @@ mod tests {
 
         let inside = "Do work @sase:deep-fix#c++";
         let inside_hash = inside.find('#').expect("hash");
-        let inside_field =
-            field(inside, inside_hash + 2).expect("cursor inside c++");
+        let inside_field = field(inside, inside_hash + 2).expect("cursor inside c++");
         assert_eq!(inside_field.context, CompletionContext::PomodoroName);
         assert_eq!(inside_field.query, "c");
         assert_eq!(inside_field.replacement, (inside_hash + 1, inside.len()));
@@ -7098,9 +7009,7 @@ mod tests {
     #[test]
     fn completion_field_stays_on_unicode_scalar_boundaries() {
         let raw = "caf\u{e9} \u{1f680} @Cash+goog-exit";
-        for cursor in
-            (0..=raw.len()).filter(|&index| raw.is_char_boundary(index))
-        {
+        for cursor in (0..=raw.len()).filter(|&index| raw.is_char_boundary(index)) {
             let _ = field(raw, cursor);
         }
     }
@@ -7208,8 +7117,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_in_route_or_block_id_of_three_component_marker_keeps_existing_contexts(
-    ) {
+    fn cursor_in_route_or_block_id_of_three_component_marker_keeps_existing_contexts() {
         let raw = "note @Cash+goog#req";
         let at = raw.find('@').expect("at");
         let plus = raw.find('+').expect("plus");
@@ -7261,9 +7169,7 @@ mod tests {
     #[test]
     fn completion_field_stays_on_boundaries_of_a_three_component_marker() {
         let raw = "caf\u{e9} \u{1f680} @Cash+goog-exit#req";
-        for cursor in
-            (0..=raw.len()).filter(|&index| raw.is_char_boundary(index))
-        {
+        for cursor in (0..=raw.len()).filter(|&index| raw.is_char_boundary(index)) {
             let _ = field(raw, cursor);
         }
         let hash = raw.find('#').expect("hash");
@@ -7380,8 +7286,7 @@ mod tests {
                 start: 10,
                 end: 10 + raw.len(),
             };
-            let AuthoredLineClass::Item(item) = classify_authored_line(line)
-            else {
+            let AuthoredLineClass::Item(item) = classify_authored_line(line) else {
                 panic!("expected item for {raw:?}");
             };
             assert_eq!(item.body, body, "{raw}");
@@ -7447,9 +7352,7 @@ mod tests {
 
     #[test]
     fn execution_renders_authored_children_in_source_order() {
-        let parsed =
-            execute("@work parent line\n- first child\n- second child")
-                .expect("parse");
+        let parsed = execute("@work parent line\n- first child\n- second child").expect("parse");
         assert_eq!(parsed.body, "parent line");
         assert_eq!(parsed.route.as_deref(), Some("work"));
         assert_eq!(
@@ -7479,8 +7382,7 @@ mod tests {
 
     #[test]
     fn execution_nested_placeholders_do_not_require_or_clear_an_owner() {
-        let parsed = execute("parent\n  - \n- first child\n  -\n  - detail")
-            .expect("parse");
+        let parsed = execute("parent\n  - \n- first child\n  -\n  - detail").expect("parse");
         assert_eq!(
             sub_bullet_bodies(&parsed.sub_bullets),
             vec!["first child", "detail"]
@@ -7523,13 +7425,9 @@ mod tests {
 
     #[test]
     fn execution_batch_parser_prefixes_item_and_line_context() {
-        let error = parse_capture_draft_with_clip_control(
-            "parent\n\nsecond\n  - orphan",
-            None,
-            None,
-            true,
-        )
-        .unwrap_err();
+        let error =
+            parse_capture_draft_with_clip_control("parent\n\nsecond\n  - orphan", None, None, true)
+                .unwrap_err();
         assert_eq!(
             error,
             "capture item 2 starting on line 3: capture line 4 is a nested bullet but has no preceding first-level authored bullet to attach to"
@@ -7559,8 +7457,7 @@ authored bullet to attach to"
 
     #[test]
     fn execution_rejects_nonbullet_continuation_prose() {
-        let error =
-            execute("parent\n- real child\ncontinuation prose").unwrap_err();
+        let error = execute("parent\n- real child\ncontinuation prose").unwrap_err();
         assert!(error.contains("capture line 3"), "{error}");
     }
 
@@ -7606,31 +7503,34 @@ were removed"
     }
 
     #[test]
-    fn execution_rejects_duplicate_schedule_priority_and_clip_markers_across_lines(
-    ) {
-        assert!(execute("@work parent s:1\n- child s:2")
-            .unwrap_err()
-            .contains("schedule marker"));
-        assert!(execute("@work parent p:1\n- child p:2")
-            .unwrap_err()
-            .contains("priority marker"));
-        assert!(execute("@work parent %\n- child %")
-            .unwrap_err()
-            .contains("clipboard marker"));
+    fn execution_rejects_duplicate_schedule_priority_and_clip_markers_across_lines() {
+        assert!(
+            execute("@work parent s:1\n- child s:2")
+                .unwrap_err()
+                .contains("schedule marker")
+        );
+        assert!(
+            execute("@work parent p:1\n- child p:2")
+                .unwrap_err()
+                .contains("priority marker")
+        );
+        assert!(
+            execute("@work parent %\n- child %")
+                .unwrap_err()
+                .contains("clipboard marker")
+        );
     }
 
     #[test]
     fn execution_allows_the_same_marker_kind_once_across_the_whole_draft() {
-        let parsed =
-            execute("parent s:1\n- child one\n- child two p:3").expect("parse");
+        let parsed = execute("parent s:1\n- child one\n- child two p:3").expect("parse");
         assert_eq!(parsed.scheduled_offset, Some(1));
         assert_eq!(parsed.priority_level, Some(3));
     }
 
     #[test]
     fn execution_preserves_unicode_child_bodies() {
-        let parsed = execute("café parent\n- \u{1f680} launch\n- \u{e9}tude")
-            .expect("parse");
+        let parsed = execute("café parent\n- \u{1f680} launch\n- \u{e9}tude").expect("parse");
         assert_eq!(parsed.body, "café parent");
         assert_eq!(
             sub_bullet_bodies(&parsed.sub_bullets),
@@ -7640,13 +7540,9 @@ were removed"
 
     #[test]
     fn execution_forced_route_keeps_child_markers_literal() {
-        let parsed = parse_capture_text_with_clip_control(
-            "parent\n- child @home",
-            Some("work"),
-            None,
-            true,
-        )
-        .expect("parse");
+        let parsed =
+            parse_capture_text_with_clip_control("parent\n- child @home", Some("work"), None, true)
+                .expect("parse");
         assert_eq!(parsed.route.as_deref(), Some("work"));
         assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["child @home"]);
     }
@@ -7672,10 +7568,8 @@ were removed"
 
     #[test]
     fn execution_plus_sub_bullet_does_not_conflict_with_authored_plus_child() {
-        let parsed = execute(
-            "parent line\n+ authored child @dev+focus-123\n+ second child",
-        )
-        .expect("parse");
+        let parsed =
+            execute("parent line\n+ authored child @dev+focus-123\n+ second child").expect("parse");
         assert_eq!(parsed.body, "parent line");
         assert_eq!(parsed.route.as_deref(), Some("dev"));
         assert_eq!(
@@ -7740,8 +7634,7 @@ were removed"
             ),
         ];
         for (raw, body, section, scheduled, priority) in cases {
-            let parsed =
-                execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+            let parsed = execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
             assert_eq!(parsed.body, body, "{raw}");
             assert_eq!(parsed.route.as_deref(), Some("foo"), "{raw}");
             assert_eq!(parsed.scheduled_offset, scheduled, "{raw}");
@@ -7761,12 +7654,9 @@ were removed"
     }
 
     #[test]
-    fn execution_three_component_marker_composes_on_multiline_first_line_only()
-    {
-        let parsed = execute(
-            "@foo+bar#requirements parent line\n- first child\n- second child",
-        )
-        .expect("parse");
+    fn execution_three_component_marker_composes_on_multiline_first_line_only() {
+        let parsed = execute("@foo+bar#requirements parent line\n- first child\n- second child")
+            .expect("parse");
         assert_eq!(parsed.body, "parent line");
         assert_eq!(
             parsed.kind,
@@ -7783,10 +7673,8 @@ were removed"
             vec!["first child", "second child"]
         );
 
-        let parsed = execute(
-            "parent line\n- first child @foo+bar#requirements\n- second child",
-        )
-        .expect("trailing child marker");
+        let parsed = execute("parent line\n- first child @foo+bar#requirements\n- second child")
+            .expect("trailing child marker");
         assert_eq!(parsed.body, "parent line");
         assert_eq!(parsed.route.as_deref(), Some("foo"));
         assert_eq!(
@@ -7794,8 +7682,7 @@ were removed"
             vec!["first child", "second child"]
         );
 
-        let parsed = execute("parent @foo+bar#req later\n- child")
-            .expect("mid-text stays literal");
+        let parsed = execute("parent @foo+bar#req later\n- child").expect("mid-text stays literal");
         assert_eq!(parsed.body, "parent @foo+bar#req later");
         assert_eq!(parsed.kind, CaptureKind::Task);
         assert_eq!(parsed.route, None);
@@ -7803,8 +7690,7 @@ were removed"
 
     #[test]
     fn execution_keeps_pomodoro_note_and_other_families_unchanged() {
-        let parsed =
-            execute("remembered to bump the timeout #").expect("bare hash");
+        let parsed = execute("remembered to bump the timeout #").expect("bare hash");
         assert_eq!(parsed.kind, CaptureKind::PomodoroNote);
         assert_eq!(parsed.body, "remembered to bump the timeout");
 
@@ -7852,11 +7738,7 @@ were removed"
                 *task_block_id,
                 "{token}"
             );
-            assert_eq!(
-                is_pomodoro_marker_candidate(token),
-                *pomodoro,
-                "{token}"
-            );
+            assert_eq!(is_pomodoro_marker_candidate(token), *pomodoro, "{token}");
         }
     }
 
@@ -7873,8 +7755,7 @@ were removed"
             }
         );
 
-        let parsed =
-            execute("Finish it @cash:goog-exit+").expect("colon plus");
+        let parsed = execute("Finish it @cash:goog-exit+").expect("colon plus");
         assert_eq!(parsed.route.as_deref(), Some("cash"));
         assert_eq!(
             parsed.kind,
@@ -7884,8 +7765,7 @@ were removed"
             }
         );
 
-        let parsed = execute("Finish it @cash:goog-exit+#bugs")
-            .expect("named pomodoro plus");
+        let parsed = execute("Finish it @cash:goog-exit+#bugs").expect("named pomodoro plus");
         assert_eq!(parsed.route.as_deref(), Some("cash"));
         assert_eq!(
             parsed.kind,
@@ -7898,33 +7778,31 @@ were removed"
         );
 
         // A trailing `+` on the Pomodoro name is not a sigil.
-        let parsed = execute("Finish it @sase:deep-fix#bugs+")
-            .expect("plus in pomodoro name");
+        let parsed = execute("Finish it @sase:deep-fix#bugs+").expect("plus in pomodoro name");
         assert_eq!(
             parsed.kind,
             CaptureKind::Pomodoro {
                 block_id: "deep-fix".to_string(),
                 pomodoro_name: Some("bugs+".to_string()),
+                start: None,
             }
         );
     }
 
     #[test]
     fn execution_rejects_project_note_shape_errors() {
-        let error = execute("Finish it @cash^goog-exit+#bugs")
-            .expect_err("caret takes no pomodoro");
+        let error =
+            execute("Finish it @cash^goog-exit+#bugs").expect_err("caret takes no pomodoro");
         assert_eq!(error, PROJECT_NOTE_POMODORO_NAME_ERROR);
 
-        let error =
-            execute("Finish it @cash^+").expect_err("empty caret block ID");
+        let error = execute("Finish it @cash^+").expect_err("empty caret block ID");
         assert_eq!(error, TASK_BLOCK_ID_ERROR);
 
-        let error =
-            execute("Finish it @cash:+").expect_err("empty colon block ID");
+        let error = execute("Finish it @cash:+").expect_err("empty colon block ID");
         assert_eq!(error, POMODORO_BLOCK_ID_ERROR);
 
-        let error = execute("Finish it @cash:+#bugs")
-            .expect_err("empty block ID before pomodoro name");
+        let error =
+            execute("Finish it @cash:+#bugs").expect_err("empty block ID before pomodoro name");
         assert!(
             error.contains("requires a block ID before the Pomodoro name"),
             "{error}"
@@ -7932,11 +7810,9 @@ were removed"
 
         // `!` stays reserved for the explicit sub-bullet toggle: these keep
         // their existing block-ID errors and never become toggles.
-        let error =
-            execute("Finish it @cash^goog-exit+!").expect_err("caret plus bang");
+        let error = execute("Finish it @cash^goog-exit+!").expect_err("caret plus bang");
         assert_eq!(error, TASK_BLOCK_ID_ERROR);
-        let error =
-            execute("Finish it @cash:goog-exit+!").expect_err("colon plus bang");
+        let error = execute("Finish it @cash:goog-exit+!").expect_err("colon plus bang");
         assert_eq!(error, POMODORO_BLOCK_ID_ERROR);
         assert!(exact_explicit_toggle_prefix("@cash^goog-exit+!").is_none());
         assert!(exact_explicit_toggle_prefix("@cash:goog-exit+!").is_none());
@@ -7952,10 +7828,7 @@ were removed"
             };
             match classify_global_token(&declaration) {
                 TokenParse::Invalid(diagnostic) => {
-                    assert_eq!(
-                        diagnostic.code, "invalid_global_destination",
-                        "{token}"
-                    );
+                    assert_eq!(diagnostic.code, "invalid_global_destination", "{token}");
                 }
                 TokenParse::Marker(_) => panic!("{token} must not parse"),
             }
@@ -8184,9 +8057,7 @@ were removed"
         split_capture_draft(raw)
             .items
             .iter()
-            .map(|item| {
-                (item.index, item.line_start, &raw[item.start..item.end])
-            })
+            .map(|item| (item.index, item.line_start, &raw[item.start..item.end]))
             .collect()
     }
 
@@ -8271,8 +8142,7 @@ were removed"
     }
 
     #[test]
-    fn execution_an_ensure_next_item_participates_normally_in_a_multi_item_draft(
-    ) {
+    fn execution_an_ensure_next_item_participates_normally_in_a_multi_item_draft() {
         let draft = parse_capture_draft_with_clip_control(
             "First task @dev\n\n@cash+goog-exit\n\nThird task @dev",
             None,
@@ -8353,9 +8223,7 @@ were removed"
 
     #[test]
     fn execution_rejects_a_declaration_only_draft() {
-        let error =
-            parse_capture_draft_with_clip_control("@@foo", None, None, true)
-                .unwrap_err();
+        let error = parse_capture_draft_with_clip_control("@@foo", None, None, true).unwrap_err();
         assert_eq!(error, MISSING_CAPTURE_ITEM_ERROR);
     }
 
@@ -8367,22 +8235,16 @@ were removed"
             ("@@foo:id\nTask", "not supported"),
             ("@@foo+id#sec\nTask", "not supported"),
         ] {
-            let error =
-                parse_capture_draft_with_clip_control(raw, None, None, true)
-                    .unwrap_err();
+            let error = parse_capture_draft_with_clip_control(raw, None, None, true).unwrap_err();
             assert!(error.contains(needle), "{raw}: {error}");
         }
     }
 
     #[test]
     fn execution_accepts_a_later_declaration_only_line() {
-        let draft = parse_capture_draft_with_clip_control(
-            "First task\n\n@@foo\nSecond",
-            None,
-            None,
-            true,
-        )
-        .expect("parse");
+        let draft =
+            parse_capture_draft_with_clip_control("First task\n\n@@foo\nSecond", None, None, true)
+                .expect("parse");
         assert_eq!(draft.global.as_ref().unwrap().line, 3);
         assert_eq!(draft.items[0].parsed.route.as_deref(), Some("foo"));
         assert_eq!(draft.items[1].parsed.route.as_deref(), Some("foo"));
@@ -8390,13 +8252,9 @@ were removed"
 
     #[test]
     fn execution_strips_inline_declarations_before_terminal_markers() {
-        let draft = parse_capture_draft_with_clip_control(
-            "Buy milk s:2 @@Groceries",
-            None,
-            None,
-            true,
-        )
-        .expect("parse");
+        let draft =
+            parse_capture_draft_with_clip_control("Buy milk s:2 @@Groceries", None, None, true)
+                .expect("parse");
         let global = draft.global.expect("global");
         assert_eq!(global.route, "groceries");
         assert_eq!(global.line, 1);
@@ -8407,13 +8265,9 @@ were removed"
 
     #[test]
     fn execution_rejects_duplicate_global_declarations_by_line() {
-        let error = parse_capture_draft_with_clip_control(
-            "@@foo\nBuy milk @@bar",
-            None,
-            None,
-            true,
-        )
-        .unwrap_err();
+        let error =
+            parse_capture_draft_with_clip_control("@@foo\nBuy milk @@bar", None, None, true)
+                .unwrap_err();
         assert!(error.contains("duplicate global destination"), "{error}");
         assert!(error.contains("line 1"), "{error}");
         assert!(error.contains("line 2"), "{error}");
@@ -8544,8 +8398,7 @@ were removed"
     }
 
     #[test]
-    fn rewrite_draft_absorbs_a_parent_lines_marker_from_a_child_lines_bare_at_at(
-    ) {
+    fn rewrite_draft_absorbs_a_parent_lines_marker_from_a_child_lines_bare_at_at() {
         let raw = "Buy milk @dev\n- more detail @@";
         let rewrite = rewrite_draft(raw, None);
         assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbLocalMarker));
@@ -8561,8 +8414,7 @@ were removed"
     }
 
     #[test]
-    fn rewrite_draft_absorbs_a_declaration_only_line_into_a_later_items_bare_at_at(
-    ) {
+    fn rewrite_draft_absorbs_a_declaration_only_line_into_a_later_items_bare_at_at() {
         let raw = "@@foo\nBuy milk @@";
         let rewrite = rewrite_draft(raw, None);
         assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbDeclaration));
