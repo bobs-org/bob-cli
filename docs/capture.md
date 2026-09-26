@@ -53,6 +53,8 @@ anything is written, and any failure rolls the whole batch back.
 | `@route^block-id` | Ordinary open task with a user-authored block ID |
 | `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; scheduled tasks start Blocked (`[?]`) |
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
+| `@route:block-id=<X>` | Same, and atomically start the selected session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
+| `@route:block-id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
 | `@route^block-id+` | Create the project note `<route>_<block_id>.md`; do not touch the daily note |
 | `@route:block-id+` | Same, and link the new note's `^prj` task from today's implicit current/next Pomodoro |
 | `@route:block-id+#pomodoro` | Same, targeting the named open Pomodoro or creating that named future Pomodoro |
@@ -76,6 +78,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@cash+id#requirements` | Child under that task's `REQUIREMENTS` section |
 | `@cash+id#coding` with no other text | Toggle that task and select the `CODING` Pomodoro |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
+| `@sase:deep-fix#bugs=-2` | Same, starting a 25-minute session with a 10-minute offset |
 | `@cash^goog-exit+` | New project note `cash_goog_exit.md`; the `+` is a project-note sigil, not a sub-bullet |
 | `@cash:goog-exit+` | Same project note, plus a link of its `^prj` task under the implicit current/next Pomodoro |
 | `@cash:goog-exit+#bugs` | Same project note, linked under the Pomodoro named `BUGS`; the `#` names a Pomodoro, not a task section |
@@ -531,6 +534,47 @@ malformed marker, duplicate block ID, or duplicate Pomodoro link leaves both
 notes unchanged. `--dry-run` and multi-item batches use the same staged
 daily-note snapshot as a real capture, so a later batch item can reuse a
 Pomodoro created by an earlier item without creating a duplicate.
+
+### Starting the session atomically
+
+Append `=<X>` to a `@<route>:<block-id>[#<pomodoro>]` marker to start the
+selected Pomodoro in the same transaction: `bob capture 'Write outline
+@sase:outline=3'` creates the task, links it to today's next session, and
+starts a 15-minute session. `@sase:outline#deep-work=-2` uses the named
+target and starts a default 25-minute session with a 10-minute offset.
+
+`<X>` is exactly the suffix of the Obsidian bob-ledger-tools `se<X>`
+snippet:
+
+| Suffix | Duration | Offset |
+| --- | --- | --- |
+| (empty) | 25 minutes | none |
+| `3` | 3 × 5 minutes | none |
+| `-` | 25 minutes | 1 × 5 minutes |
+| `-2` | 25 minutes | 2 × 5 minutes |
+| `3-` | 3 × 5 minutes | 1 × 5 minutes |
+| `2-1` | 2 × 5 minutes | 1 × 5 minutes |
+
+An omitted duration means five 5-minute units (25 minutes); an omitted
+offset with `-` means one unit; no `-` means zero offset. `0` and leading
+zeros are valid. At the capture clock's local hour/minute, `start =
+ceil((nowMinutes - 5*offsetUnits)/5)*5` and `end = start +
+5*durationUnits`, displayed modulo 24 hours as `(**HHMM-HHMM** [t:: Nm])`
+byte-for-byte like the snippet's range. `BOB_NOW`/Bob's existing clock sets
+the time; numeric overflow is a useful error rather than a wrong time.
+
+The suffix is item-local and applies only to new `:` task captures — not
+`+` ensures, project-note `+` forms, global `@@` declarations, or ordinary
+text. It cannot combine with `s:<N>` or `p:<N>`: a scheduled Blocked task
+cannot start its session, so those combinations fail before anything is
+written. Only an untimed, open placeholder is ever started. Any open timed
+Pomodoro — including one past its nominal end — stops the capture with a
+"finish the current Pomodoro first" error; Bob never overwrites, completes,
+or double-starts an entry. A selected non-placeholder or structurally
+ambiguous ledger fails the same way. JSON output keeps every existing key
+and adds an additive `pomodoro_start` object (resolved `start`/`end`,
+`duration_minutes`, `offset_units`, destination name/line, whether the entry
+was created); human output names the Pomodoro and its time.
 
 ### Project notes
 
@@ -1137,7 +1181,13 @@ marker completion or highlighting. Incomplete
 interactive markers are valid input rather than errors, so `@`, `@#`,
 `@#Ideas`, `@route#`, `@^`, `@route^`, `@^id+`, `@+`, `@route+`, `@route+id#`,
 `@:`, `@route:`, `@:id+`, `@route:id#`, `@route:#name`,
-and the legacy `@!` aliases all parse on any line. The picker's in-progress
+and the legacy `@!` aliases all parse on any line. A valid `=<X>` start
+suffix on a `@<route>:<block-id>[#<name>]` marker parses as `pomodoro_task`
+with a `pomodoro_start` object (`raw` plus 5-minute `duration_units` and
+`offset_units`) and a `pomodoro_start` span covering the `=` and `<X>`
+bytes; the Pomodoro-name span always ends before the `=`, even on incomplete
+markers such as `@<route>:=3`. An invalid suffix is an
+`invalid_pomodoro_start` diagnostic. The picker's in-progress
 `@^`, `@route^`, `@^id`, `@:`, `@route:`, and `@:id` spellings are unchanged,
 and `@^id+` / `@:id+` carry the project-note intent with `needs: ["route"]`. The retired
 `@route::...` spelling is a diagnostic directing users to `@route^...`;
@@ -1231,10 +1281,16 @@ object with the declaration `range`, one-based physical `line`, effective
 `mode`, `route`, `block_id`, and `needs`. It is omitted when no declaration is
 present, so schema version 1 stays additive.
 
+`pomodoro_start` is an optional object, omitted for every marker without a
+start suffix, with the typed `raw` `<X>` text plus 5-minute
+`duration_units` and `offset_units`, so schema version 1 is unchanged for
+older inputs. Multi-item drafts report each item's own `pomodoro_start`
+alongside the top-level preview of the first item.
+
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
-`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_note`, `project_note_marker`, `sub_bullet_route`,
+`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_note`, `project_note_marker`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
@@ -1255,7 +1311,7 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_project_note_marker` (a project-note shape error, such as a Pomodoro name on the `^` form), `unsupported_explicit_toggle`, `legacy_bullet_marker`,
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, or one on a project-note `+` form), `invalid_project_note_marker` (a project-note shape error, such as a Pomodoro name on the `^` form), `unsupported_explicit_toggle`, `legacy_bullet_marker`,
 `pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
 `s:<N>`, or `p:<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
@@ -1270,7 +1326,8 @@ schedule, priority, or clipboard marker a prior line already resolved),
 `global_destination_shadowed` (warning: an item-local marker overrides the
 declaration token on that same item), and `missing_capture_item` (a declaration
 with no capture item). Human output
-prints the same information without color escapes when piped, plus a
+prints the same information without color escapes when piped — including a
+`start` line such as `=3 (15m, offset 0u)` when a suffix is present — plus a
 `Sub-bullets` section listing `sub_bullets` with indentation from
 `sub_bullet_depths` when it is nonempty. On a missing `TEXT`, JSON mode prints
 a single `{"ok": false, "error": "..."}` object on stdout and keeps stderr
@@ -1430,7 +1487,10 @@ Pomodoro-name completion covers `@route:id#prefix`, a bare `@route:id#`,
 `@route:#prefix`, and `@route+id#prefix` or a bare `@route+id#` while the item
 has no body text; only the route
 must already resolve because the Pomodoro list does not depend on the block
-ID. It is backed by the same scan as `bob capture-pomodoros`, offers only open
+ID. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` suffix is never
+a completion field: block and name replacement ranges end before the `=`, a
+cursor inside the suffix returns an empty success, and accepting a candidate
+preserves the typed suffix. It is backed by the same scan as `bob capture-pomodoros`, offers only open
 entries, and returns Pomodoros in picker order: named rows first, then
 nameable rows. Named rows rank by slug prefix, then slug substring, and open
 entries with the same slug collapse to the first row with `match_count`

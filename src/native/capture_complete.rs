@@ -126,7 +126,10 @@ that row only canonicalizes the marker; `bob capture` creates the named \
 placeholder later. Exact or prefix open-name matches stay first and do not \
 receive a create row. Empty queries stay the existing discovery list. A \
 missing daily note, a missing Pomodoros section, and multiple open timed \
-Pomodoros stay write-free warnings without a create row. Pomodoro block-ID \
+Pomodoros stay write-free warnings without a create row. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` start suffix is \
+never completable: block and Pomodoro-name replacement ranges end before \
+the `=`, a cursor inside the suffix returns an empty success, and accepting \
+a candidate preserves the typed suffix. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
 `bob capture-tasks` and, by default, only offer tasks that already carry a \

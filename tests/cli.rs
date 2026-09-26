@@ -28915,3 +28915,220 @@ fn capture_pomodoro_start_dry_run_and_batch_rollback() {
         day_before
     );
 }
+
+#[test]
+fn capture_parse_reports_start_suffix_spans_and_batch_offsets() {
+    let parse = |text: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    let named = parse("Do work @sase:outline#deep=-2");
+    assert_eq!(named["schema_version"], 1);
+    assert_eq!(named["mode"], "pomodoro_task");
+    assert_eq!(named["section"], "deep");
+    assert_eq!(
+        named["pomodoro_start"],
+        serde_json::json!({
+            "raw": "-2",
+            "duration_units": 5,
+            "offset_units": 2,
+        })
+    );
+    assert_eq!(
+        named["spans"],
+        serde_json::json!([
+            { "start": 8, "end": 13, "kind": "pomodoro_route" },
+            { "start": 14, "end": 21, "kind": "pomodoro_block_id" },
+            { "start": 22, "end": 26, "kind": "pomodoro_name" },
+            { "start": 26, "end": 29, "kind": "pomodoro_start" },
+        ])
+    );
+
+    let block_only = parse("Do work @sase:outline=3");
+    assert_eq!(
+        block_only["pomodoro_start"],
+        serde_json::json!({
+            "raw": "3",
+            "duration_units": 3,
+            "offset_units": 0,
+        })
+    );
+
+    // A partial marker still typing its block ID already reports the start.
+    let partial = parse("Do work @sase:=3");
+    assert_eq!(partial["mode"], "incomplete");
+    assert_eq!(partial["needs"], serde_json::json!(["pomodoro_id"]));
+    assert_eq!(
+        partial["pomodoro_start"],
+        serde_json::json!({
+            "raw": "3",
+            "duration_units": 3,
+            "offset_units": 0,
+        })
+    );
+
+    let invalid = parse("Do work @sase:outline=abc");
+    assert!(invalid.get("pomodoro_start").is_none(), "{invalid}");
+    assert_eq!(invalid["diagnostics"][0]["code"], "invalid_pomodoro_start");
+
+    // Older marker shapes keep the version-1 shape with no start field.
+    let plain = parse("Do work @dev:id#bugs");
+    assert!(plain.get("pomodoro_start").is_none(), "{plain}");
+
+    let batch = parse("First @sase:one=3\n\nSecond @sase:two#deep=-");
+    assert_eq!(batch["items"].as_array().expect("items").len(), 2);
+    assert_eq!(
+        batch["items"][0]["pomodoro_start"],
+        serde_json::json!({
+            "raw": "3",
+            "duration_units": 3,
+            "offset_units": 0,
+        })
+    );
+    assert_eq!(
+        batch["items"][1]["pomodoro_start"],
+        serde_json::json!({
+            "raw": "-",
+            "duration_units": 5,
+            "offset_units": 1,
+        })
+    );
+}
+
+#[test]
+fn capture_parse_human_reports_start_suffix() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("Do work @sase:outline=3")
+        .output()
+        .expect("run capture-parse human");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(out.contains("start"), "{out}");
+    assert!(out.contains("=3 (15m, offset 0u)"), "{out}");
+    assert!(out.contains("pomodoro_start"), "{out}");
+    assert_stdout_has_no_ansi(&output);
+
+    let plain = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("Do work @dev:id#bugs")
+        .output()
+        .expect("run plain capture-parse human");
+    assert_success(&plain);
+    assert!(!stdout(&plain).contains("start"), "{}", stdout(&plain));
+}
+
+#[test]
+fn capture_complete_pomodoro_ranges_preserve_start_suffix() {
+    let temp = TempDir::new("bob-cli-capture-complete-start-suffix");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () — BUGS\n- [ ] () — FOCUS\n",
+    );
+    let complete = |draft: &str, cursor: usize| {
+        let output = bob_command()
+            .arg("capture-complete")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-c")
+            .arg(cursor.to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .env("BOB_DAY_FILE", &day_file)
+            .output()
+            .expect("run capture-complete");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim()).expect("complete JSON")
+    };
+
+    // A cursor inside the name completes just the name; splicing the first
+    // candidate into the reported range keeps the typed suffix.
+    let draft = "Do work @sase:outline#bu=-2";
+    let suffix_start = draft.find('=').expect("suffix");
+    let name = complete(draft, suffix_start - 1);
+    assert_eq!(name["context"], "pomodoro_name");
+    assert_eq!(
+        name["replacement"],
+        serde_json::json!({ "start": 22, "end": suffix_start })
+    );
+    let first = name["candidates"][0]["replacement"]
+        .as_str()
+        .expect("candidate text");
+    let accepted = format!("{}{}{}", &draft[..22], first, &draft[suffix_start..]);
+    assert!(
+        accepted.ends_with("=-2"),
+        "accepting a name must keep the suffix: {accepted}"
+    );
+    assert!(accepted.starts_with("Do work @sase:outline#"), "{accepted}");
+
+    // A cursor inside the suffix offers no completion.
+    let in_suffix = complete(draft, suffix_start + 1);
+    assert!(in_suffix["context"].is_null(), "{in_suffix}");
+    assert_eq!(
+        in_suffix["candidates"],
+        serde_json::json!([]),
+        "{in_suffix}"
+    );
+
+    // Block-ID completion behaves the same way.
+    let block_draft = "Do work @sase:out=3";
+    let block_suffix = block_draft.find('=').expect("suffix");
+    let block = complete(block_draft, block_suffix);
+    assert_eq!(block["context"], "pomodoro_block_id");
+    assert_eq!(
+        block["replacement"],
+        serde_json::json!({ "start": 14, "end": block_suffix })
+    );
+    let at_end = complete(block_draft, block_draft.len());
+    assert!(at_end["context"].is_null(), "{at_end}");
+}
+
+#[test]
+fn capture_human_names_the_starting_pomodoro_and_its_time() {
+    let temp = TempDir::new("bob-cli-capture-start-human");
+    let vault = temp.path().join("vault");
+    let target = vault.join("sase.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# S\n## Tasks\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("-f")
+        .arg("human")
+        .arg("Work")
+        .arg("@sase:human1#bugs=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run start capture human");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("would start")
+            && out.contains("BUGS")
+            && out.contains("0905-0930")
+            && out.contains("25m"),
+        "{out}"
+    );
+    assert_stdout_has_no_ansi(&output);
+}

@@ -66,7 +66,7 @@ pub(crate) enum CaptureKind {
 /// `-` and optionally digits. An omitted duration means five 5-minute units
 /// (25 minutes); an omitted offset with `-` means one unit; no `-` means
 /// zero offset.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroStartSpec {
     /// Raw `<X>` text after `=`, exactly as typed.
     pub(crate) raw: String,
@@ -2264,6 +2264,10 @@ pub(crate) struct EditorParse {
     pub(crate) section: Option<String>,
     pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
+    /// Validated additive `@<route>:<block-id>[#<name>]=<X>` start suffix,
+    /// when the resolved marker carries one. `None` for every older marker
+    /// shape, so version-tolerant readers see no change.
+    pub(crate) pomodoro_start: Option<PomodoroStartSpec>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Normalized authored-child bodies plus semantic depth for every other
@@ -2300,6 +2304,7 @@ pub(crate) struct EditorItemParse {
     pub(crate) section: Option<String>,
     pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
+    pub(crate) pomodoro_start: Option<PomodoroStartSpec>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
@@ -2339,6 +2344,11 @@ struct MarkerParse {
     needs: Vec<Need>,
     spans: Vec<Span>,
     requires_body: bool,
+    /// Validated `@<route>:<block-id>[#<name>]=<X>` start suffix, when the
+    /// marker carries one. Set even on incomplete markers (e.g. `@r:=3`
+    /// still missing its block ID); invalid suffixes become an
+    /// `invalid_pomodoro_start` diagnostic instead.
+    pomodoro_start: Option<PomodoroStartSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2569,6 +2579,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
                 .as_ref()
                 .map(|global| global.needs.clone())
                 .unwrap_or_default(),
+            pomodoro_start: None,
             spans,
             diagnostics: global_diagnostics,
             sub_bullets: Vec::new(),
@@ -2583,6 +2594,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
     let section = first.section.clone();
     let block_id = first.block_id.clone();
     let needs = first.needs.clone();
+    let pomodoro_start = first.pomodoro_start.clone();
     let sub_bullets = first.sub_bullets.clone();
     let mut spans = global_spans;
     spans.extend(items.iter().flat_map(|item| item.spans.iter().copied()));
@@ -2601,6 +2613,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         section,
         block_id,
         needs,
+        pomodoro_start,
         spans,
         diagnostics,
         sub_bullets,
@@ -2732,32 +2745,34 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
     // trailing name only passed the wider Pomodoro charset -- i.e. it needs a
     // strict re-check once we know whether this item is a task toggle.
     let mut sub_bullet_relaxed_section_range = None;
-    let (mut mode, mut route, mut section, mut block_id, mut needs) = match &parent_parse.marker {
-        Some(marker) => {
-            spans.extend(marker.spans.clone());
-            seen.absorb_route(None, &mut diagnostics);
-            if marker.mode == EditorMode::SubBullet
-                && marker
-                    .section
-                    .as_deref()
-                    .is_some_and(|section| !is_selector_component(section))
-            {
-                let start = marker.spans.first().map(|span| span.start);
-                let end = marker.spans.last().map(|span| span.end);
-                if let (Some(start), Some(end)) = (start, end) {
-                    sub_bullet_relaxed_section_range = Some((start, end));
+    let (mut mode, mut route, mut section, mut block_id, mut needs, mut pomodoro_start) =
+        match &parent_parse.marker {
+            Some(marker) => {
+                spans.extend(marker.spans.clone());
+                seen.absorb_route(None, &mut diagnostics);
+                if marker.mode == EditorMode::SubBullet
+                    && marker
+                        .section
+                        .as_deref()
+                        .is_some_and(|section| !is_selector_component(section))
+                {
+                    let start = marker.spans.first().map(|span| span.start);
+                    let end = marker.spans.last().map(|span| span.end);
+                    if let (Some(start), Some(end)) = (start, end) {
+                        sub_bullet_relaxed_section_range = Some((start, end));
+                    }
                 }
+                (
+                    marker.mode,
+                    marker.route.clone(),
+                    marker.section.clone(),
+                    marker.block_id.clone(),
+                    marker.needs.clone(),
+                    marker.pomodoro_start.clone(),
+                )
             }
-            (
-                marker.mode,
-                marker.route.clone(),
-                marker.section.clone(),
-                marker.block_id.clone(),
-                marker.needs.clone(),
-            )
-        }
-        None => (EditorMode::Task, None, None, None, Vec::new()),
-    };
+            None => (EditorMode::Task, None, None, None, Vec::new(), None),
+        };
 
     let mut sub_bullets = Vec::new();
     let mut has_first_level_owner = false;
@@ -2824,6 +2839,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
                 section = marker.section.clone();
                 block_id = marker.block_id.clone();
                 needs = marker.needs.clone();
+                pomodoro_start = marker.pomodoro_start.clone();
             }
         }
 
@@ -2942,6 +2958,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
             section,
             block_id,
             needs,
+            pomodoro_start,
             spans,
             diagnostics,
             sub_bullets,
@@ -3048,6 +3065,7 @@ fn pomodoro_note_marker_parse(token: &Token<'_>) -> MarkerParse {
             kind: SpanKind::PomodoroNote,
         }],
         requires_body: false,
+        pomodoro_start: None,
     }
 }
 
@@ -3122,6 +3140,7 @@ fn classify_global_token(token: &Token<'_>) -> TokenParse {
                 kind: SpanKind::InteractivePlaceholder,
             }],
             requires_body: false,
+            pomodoro_start: None,
         });
     }
     if !is_route_token(rest) {
@@ -3143,6 +3162,7 @@ fn classify_global_token(token: &Token<'_>) -> TokenParse {
             kind: SpanKind::GlobalRoute,
         }],
         requires_body: false,
+        pomodoro_start: None,
     })
 }
 
@@ -3394,16 +3414,20 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             POMODORO_NAME_ERROR,
         ));
     }
-    if let Some(raw) = start_part
-        && parse_pomodoro_start_suffix(raw).is_err()
-    {
-        return TokenParse::Invalid(token_diagnostic(
-            token,
-            "invalid_pomodoro_start",
-            POMODORO_START_SHAPE_ERROR,
-        ));
-    }
-    if project_note && start_part.is_some() {
+    let start_spec = match start_part {
+        None => None,
+        Some(raw) => match parse_pomodoro_start_suffix(raw) {
+            Ok(spec) => Some(spec),
+            Err(_) => {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_pomodoro_start",
+                    POMODORO_START_SHAPE_ERROR,
+                ));
+            }
+        },
+    };
+    if project_note && start_spec.is_some() {
         return TokenParse::Invalid(token_diagnostic(
             token,
             "invalid_pomodoro_start",
@@ -3412,6 +3436,14 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
     }
 
     let separator_len = usize::from(separator);
+    // The start suffix is a trailing component like the project-note `+`
+    // sigil: `marker_parse` ends the Pomodoro-name span before it and emits
+    // the `pomodoro_start` span itself, so the name and start spans never
+    // overlap (and `merge_spans` never drops the start span).
+    let start_suffix = start_spec.as_ref().map(|spec| MarkerSuffix {
+        len: 1 + spec.raw.len(),
+        kind: SpanKind::PomodoroStart,
+    });
     let mut marker_parse = marker_parse(
         token,
         MarkerShape {
@@ -3435,12 +3467,15 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                 kind: SpanKind::PomodoroName,
                 need: Need::PomodoroName,
             }),
-            suffix: (project_note && name_part.is_none()).then_some(MarkerSuffix {
-                len: 1,
-                kind: SpanKind::ProjectNoteMarker,
-            }),
+            suffix: start_suffix.or((project_note && name_part.is_none()).then_some(
+                MarkerSuffix {
+                    len: 1,
+                    kind: SpanKind::ProjectNoteMarker,
+                },
+            )),
         },
     );
+    marker_parse.pomodoro_start = start_spec;
     if project_note && name_part.is_some() {
         // `marker_parse` leaves the `+#` separator bytes uncovered, so span
         // the `+` sigil explicitly: ahead of the Pomodoro name, or split out
@@ -3470,18 +3505,6 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
     if project_note && !block_part.is_empty() && route_part.is_empty() {
         marker_parse.mode = EditorMode::PomodoroProjectNote;
     }
-    if let Some(raw) = start_part {
-        let start_len = 1 + raw.len();
-        let start_span = Span {
-            start: token.end - start_len,
-            end: token.end,
-            kind: SpanKind::PomodoroStart,
-        };
-        marker_parse.spans.push(start_span);
-        marker_parse
-            .spans
-            .sort_by_key(|span| (span.start, span.end));
-    }
     TokenParse::Marker(marker_parse)
 }
 
@@ -3504,6 +3527,7 @@ fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
                     kind: SpanKind::InteractivePlaceholder,
                 }],
                 requires_body: false,
+                pomodoro_start: None,
             });
         }
         if !is_route_token(rest) {
@@ -3521,6 +3545,7 @@ fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
                 kind: SpanKind::Route,
             }],
             requires_body: true,
+            pomodoro_start: None,
         });
     };
 
@@ -3695,6 +3720,7 @@ fn marker_parse(token: &Token<'_>, shape: MarkerShape<'_>) -> MarkerParse {
         needs,
         spans,
         requires_body: false,
+        pomodoro_start: None,
     }
 }
 
@@ -4023,6 +4049,20 @@ fn marker_field_at_cursor(
             Some((route, rest)) => (route, rest, true),
             None => (marker, "", false),
         };
+        // The additive `=<X>` start suffix is never a completable component:
+        // strip it before splitting `#` so the block and name parts — and
+        // their replacement ranges — end before `=`. A cursor inside the
+        // suffix offers no completion; accepting a name candidate must leave
+        // the typed suffix in place.
+        let (rest, start_len) = match rest.split_once('=') {
+            Some((before, suffix)) => (before, Some(1 + suffix.len())),
+            None => (rest, None),
+        };
+        if let Some(start_len) = start_len
+            && cursor > token.end - start_len
+        {
+            return None;
+        }
         let (block_part, third) = match rest.split_once('#') {
             Some((block, name)) => (
                 block,
@@ -6318,6 +6358,68 @@ mod tests {
     }
 
     #[test]
+    fn pomodoro_start_suffix_reports_spec_and_non_overlapping_spans() {
+        let parse = editor("Do work @sase:outline#deep=-2");
+        assert_eq!(parse.mode, EditorMode::PomodoroTask);
+        assert_eq!(parse.section.as_deref(), Some("deep"));
+        assert_eq!(parse.block_id.as_deref(), Some("outline"));
+        assert!(parse.diagnostics.is_empty());
+        let start = parse.pomodoro_start.as_ref().expect("start spec");
+        assert_eq!(start.raw, "-2");
+        assert_eq!(start.duration_units, 5);
+        assert_eq!(start.offset_units, 2);
+        assert_eq!(
+            ranges(&parse),
+            vec![
+                (8, 13, SpanKind::PomodoroRoute),
+                (14, 21, SpanKind::PomodoroBlockId),
+                (22, 26, SpanKind::PomodoroName),
+                (26, 29, SpanKind::PomodoroStart),
+            ]
+        );
+
+        let block_only = editor("Do work @sase:outline=3");
+        let block_start = block_only.pomodoro_start.as_ref().expect("block start");
+        assert_eq!(block_start.raw, "3");
+        assert_eq!(block_start.duration_units, 3);
+        assert_eq!(block_start.offset_units, 0);
+        assert_eq!(
+            ranges(&block_only),
+            vec![
+                (8, 13, SpanKind::PomodoroRoute),
+                (14, 21, SpanKind::PomodoroBlockId),
+                (21, 23, SpanKind::PomodoroStart),
+            ]
+        );
+
+        let empty = editor("Do work @sase:outline=");
+        let empty_start = empty.pomodoro_start.as_ref().expect("empty start");
+        assert_eq!(empty_start.raw, "");
+        assert_eq!(empty_start.duration_units, 5);
+        assert_eq!(empty_start.offset_units, 0);
+
+        // The suffix survives on incomplete markers too: the block ID is
+        // still missing, but the typed start is already structured data.
+        let incomplete = editor("Do work @sase:=3");
+        assert_eq!(incomplete.mode, EditorMode::Incomplete);
+        assert_eq!(incomplete.needs, vec![Need::PomodoroId]);
+        let incomplete_start = incomplete
+            .pomodoro_start
+            .as_ref()
+            .expect("incomplete start");
+        assert_eq!(incomplete_start.raw, "3");
+        assert!(incomplete.diagnostics.is_empty());
+
+        let invalid = editor("Do work @sase:outline=abc");
+        assert!(invalid.pomodoro_start.is_none());
+        assert_eq!(codes(&invalid), vec!["invalid_pomodoro_start"]);
+
+        let plain = editor("Do work @sase:outline");
+        assert!(plain.pomodoro_start.is_none());
+        assert!(!span_kinds(&plain).contains(&SpanKind::PomodoroStart));
+    }
+
+    #[test]
     fn lua_rejects_invalid_sub_bullet_and_pomodoro_components() {
         let cases = [
             ("Add context @bad.route+id", "invalid_sub_bullet_route"),
@@ -6923,6 +7025,39 @@ mod tests {
         let on_hash = field(raw, hash).expect("cursor on hash stays id");
         assert_eq!(on_hash.context, CompletionContext::PomodoroBlockId);
         assert_eq!(on_hash.replacement, (colon + 1, hash));
+    }
+
+    #[test]
+    fn pomodoro_completion_ranges_end_before_the_start_suffix() {
+        let raw = "Do work @sase:outline#dee=-2";
+        let hash = raw.find('#').expect("hash");
+        let suffix_start = raw.find('=').expect("suffix");
+        // A cursor inside the name completes just the name: accepting the
+        // candidate replaces `dee` and leaves `=-2` in place.
+        let name = field(raw, hash + 2).expect("pomodoro name");
+        assert_eq!(name.context, CompletionContext::PomodoroName);
+        assert_eq!(name.route.as_deref(), Some("sase"));
+        assert_eq!(name.block_id.as_deref(), Some("outline"));
+        assert_eq!(name.query, "d");
+        assert_eq!(name.replacement, (hash + 1, suffix_start));
+        assert_eq!(&raw[name.replacement.0..name.replacement.1], "dee");
+
+        // A cursor on the `=` boundary still completes the name.
+        let boundary = field(raw, suffix_start).expect("boundary name");
+        assert_eq!(boundary.context, CompletionContext::PomodoroName);
+        assert_eq!(boundary.replacement, (hash + 1, suffix_start));
+
+        // A cursor inside the suffix offers no completion at all.
+        assert_eq!(field(raw, suffix_start + 1), None);
+        assert_eq!(field(raw, raw.len()), None);
+
+        let block_raw = "Do work @sase:out=3";
+        let block_suffix = block_raw.find('=').expect("suffix");
+        let block = field(block_raw, block_suffix).expect("block id");
+        assert_eq!(block.context, CompletionContext::PomodoroBlockId);
+        assert_eq!(block.query, "out");
+        assert_eq!(block.replacement, (14, block_suffix));
+        assert_eq!(field(block_raw, block_raw.len()), None);
     }
 
     #[test]

@@ -193,6 +193,8 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route^id` | Ordinary task with a user-authored block ID |
 | `@route:id` | Next-status task plus a Pomodoro task link; scheduled tasks start Blocked |
 | `@route:id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
+| `@route:id=<X>` | Same, and atomically start the session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
+| `@route:id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
@@ -231,11 +233,22 @@ before any note is written. Users upgrading from the initial `!`
 implementation should note this reversal: the unsuffixed forms are now the
 idempotent default, and `!` is the add/clear escape hatch.
 
+Append `=<X>` to a Pomodoro-linked marker to start its session in the same
+transaction: `bob capture 'Write outline @sase:outline=3'` starts a
+15-minute session on the next open slot, and
+`@sase:outline#deep-work=-2` starts the default 25-minute session with a
+10-minute offset. `<X>` is exactly the suffix of the `se<X>` snippet — empty,
+digits, `-`, `-digits`, or `digits-` with optional digits — and the range is
+rounded to 5 minutes like the snippet. A timed open Pomodoro stops the
+capture with a "finish the current Pomodoro first" error, and `=<X>` cannot
+combine with `s:<N>` or `p:<N>`.
+
 ```bash
 bob capture buy milk @groceries
 bob capture '@dev^foobar' 'Some ordinary task.'
 bob capture '@dev:foobar' 'Some foobar task.'
 bob capture '@dev:foobar#bugs' 'Some foobar task.'
+bob capture 'Write outline @sase:outline=3'
 bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'
 bob capture '@cash+goog-exit'
 bob capture '@cash+goog-exit!'

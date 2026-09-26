@@ -14,7 +14,8 @@ use serde_json::json;
 use super::{
     capture_language::{
         self, AuthoredSubBullet, Diagnostic, EditorGlobalDestination,
-        EditorItemParse, EditorMode, Need, Severity, Span,
+        EditorItemParse, EditorMode, Need, PomodoroStartSpec, Severity,
+        Span,
     },
     capture_links,
     style::Styler,
@@ -76,8 +77,9 @@ section, and block ID, which parts a picker still has to supply, an optional \
 global_destination object for a @@<route> or @@<route>+<block-id> \
 declaration token anywhere in the draft, ordered blank-line-separated item summaries and ranges after \
 inheritance, the UTF-8 byte spans of every recognized token, Obsidian wikilink \
-component spans, every authored sub-bullet's normalized body plus depth, and \
-structured diagnostics. \
+component spans, every authored sub-bullet's normalized body plus depth, \
+an optional pomodoro_start object for a `@<route>:<block-id>[#<name>]=<X>` \
+start suffix, and structured diagnostics. \
 Wikilink highlighting is syntax-only and never touches the vault. Byte \
 offsets index the original TEXT before whitespace normalization, are \
 half-open [start, end), never overlap, and always land on a character \
@@ -93,7 +95,13 @@ markers are valid input, \
 not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@^', \
 '@route^', '@+', '@route+', '@route+id#', '@:', '@route:', '@route:id#', \
 '@route:#name', and the legacy '@!' aliases \
-all report mode 'incomplete' plus what they still need. A '@^id+' or \
+all report mode 'incomplete' plus what they still need. A valid `=<X>` start \
+suffix on a `@<route>:<block-id>[#<name>]` marker reports mode \
+'pomodoro_task' with a `pomodoro_start` object (`raw` plus 5-minute \
+`duration_units`/`offset_units`) and a `pomodoro_start` span covering the \
+`=` and `<X>` bytes; the Pomodoro-name span always ends before the `=`. An \
+invalid suffix is an `invalid_pomodoro_start` diagnostic instead. \
+A '@^id+' or \
 '@:id+' marker already carries the project-note intent: it reports mode \
 'project_note' or 'pomodoro_project_note' with a 'route' need until the \
 route is typed. The retired \
@@ -228,6 +236,12 @@ struct CaptureParseResult {
     items: Vec<CaptureParseItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     global_destination: Option<GlobalDestinationParse>,
+    /// Validated additive `@<route>:<block-id>[#<name>]=<X>` start suffix:
+    /// the raw `<X>` text plus its 5-minute duration/offset units. Omitted
+    /// for every older marker shape, so schema version 1 is unchanged for
+    /// inputs without a start suffix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_start: Option<PomodoroStartSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -256,6 +270,8 @@ struct CaptureParseItem {
     sub_bullets: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sub_bullet_depths: Vec<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_start: Option<PomodoroStartSpec>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -291,6 +307,7 @@ impl CaptureParseResult {
                 .global_destination
                 .as_ref()
                 .map(global_destination_parse),
+            pomodoro_start: parse.pomodoro_start,
         }
     }
 }
@@ -333,6 +350,7 @@ fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
             needs: item.needs.clone(),
             sub_bullets: sub_bullet_bodies(&item.sub_bullets),
             sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
+            pomodoro_start: item.pomodoro_start.clone(),
         })
         .collect()
 }
@@ -408,6 +426,9 @@ fn print_human_success_with_styler(
     if let Some(block_id) = result.block_id.as_deref() {
         print_field(styler, "block id", block_id);
     }
+    if let Some(start) = result.pomodoro_start.as_ref() {
+        print_field(styler, "start", &format_pomodoro_start(start));
+    }
     if !result.needs.is_empty() {
         let needs = result
             .needs
@@ -460,6 +481,17 @@ fn print_human_success_with_styler(
             );
         }
     }
+}
+
+/// Render a validated `=<X>` start suffix for human output: the typed
+/// suffix plus its resolved 5-minute duration and offset units.
+fn format_pomodoro_start(start: &PomodoroStartSpec) -> String {
+    format!(
+        "={} ({}m, offset {}u)",
+        start.raw,
+        start.duration_units.saturating_mul(5),
+        start.offset_units
+    )
 }
 
 fn print_field(styler: &Styler, label: &str, value: &str) {
@@ -716,6 +748,100 @@ mod tests {
         let invalid = json("Do work @dev:id#bad_id");
         assert_eq!(invalid["diagnostics"][0]["code"], "invalid_pomodoro_name");
         assert_eq!(invalid["mode"], "task");
+    }
+
+    #[test]
+    fn json_reports_the_additive_start_suffix_without_bumping_schema() {
+        let value = json("Do work @sase:outline#deep=-2");
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["mode"], "pomodoro_task");
+        assert_eq!(value["section"], "deep");
+        assert_eq!(
+            value["pomodoro_start"],
+            serde_json::json!({
+                "raw": "-2",
+                "duration_units": 5,
+                "offset_units": 2,
+            })
+        );
+        let kinds = value["spans"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|span| span["kind"].as_str().expect("kind"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                "pomodoro_route",
+                "pomodoro_block_id",
+                "pomodoro_name",
+                "pomodoro_start",
+            ]
+        );
+        let spans = value["spans"].as_array().expect("array");
+        assert_eq!(spans[2]["start"], 22);
+        assert_eq!(spans[2]["end"], 26);
+        assert_eq!(spans[3]["start"], 26);
+        assert_eq!(spans[3]["end"], 29);
+
+        let block_only = json("Do work @sase:outline=3");
+        assert_eq!(
+            block_only["pomodoro_start"],
+            serde_json::json!({
+                "raw": "3",
+                "duration_units": 3,
+                "offset_units": 0,
+            })
+        );
+
+        // Older marker shapes keep the version-1 shape: no start field.
+        let plain = json("Do work @dev:id#bugs");
+        assert!(plain.get("pomodoro_start").is_none(), "{plain}");
+        let incomplete = json("Do work @dev:id#");
+        assert!(incomplete.get("pomodoro_start").is_none(), "{incomplete}");
+    }
+
+    #[test]
+    fn json_reports_invalid_start_suffixes_as_diagnostics() {
+        let value = json("Do work @sase:outline=abc");
+        assert!(value.get("pomodoro_start").is_none(), "{value}");
+        assert_eq!(
+            value["diagnostics"][0]["code"],
+            "invalid_pomodoro_start"
+        );
+
+        let project_note = json("note @sase:outline+=3");
+        assert!(project_note.get("pomodoro_start").is_none(), "{project_note}");
+        assert_eq!(
+            project_note["diagnostics"][0]["code"],
+            "invalid_pomodoro_start"
+        );
+    }
+
+    #[test]
+    fn json_reports_per_item_start_suffixes_for_batches() {
+        let raw = "First @sase:one=3\n\nSecond @sase:two#deep=-";
+        let value = json(raw);
+        assert_eq!(value["items"].as_array().expect("items").len(), 2);
+        assert_eq!(
+            value["items"][0]["pomodoro_start"],
+            serde_json::json!({
+                "raw": "3",
+                "duration_units": 3,
+                "offset_units": 0,
+            })
+        );
+        assert_eq!(
+            value["items"][1]["pomodoro_start"],
+            serde_json::json!({
+                "raw": "-",
+                "duration_units": 5,
+                "offset_units": 1,
+            })
+        );
+        // The top-level preview still describes the first item.
+        assert_eq!(value["pomodoro_start"], value["items"][0]["pomodoro_start"]);
     }
 
     #[test]
