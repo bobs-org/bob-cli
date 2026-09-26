@@ -17,8 +17,8 @@ use super::{
     capture_clip, capture_language,
     capture_language::{
         AuthoredSubBullet, CaptureKind, ClipRequest, ParsedCaptureItem, ParsedCaptureText,
-        PomodoroStartSpec, ProjectNotePomodoro, SubBulletTarget, TaskSectionSelector,
-        TaskToggleIntent, is_block_id,
+        PomodoroAdjustSpec, PomodoroStartSpec, ProjectNotePomodoro, SubBulletTarget,
+        TaskSectionSelector, TaskToggleIntent, is_block_id,
     },
     capture_pomodoros, capture_project_note, capture_schedule_log, capture_task_sections,
     capture_task_toggle, collect_done, config, env as bob_env, markdown, note_tasks,
@@ -667,6 +667,9 @@ fn plan_capture_item(
     warnings: &mut Vec<String>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let mut parsed = parsed_item.parsed;
+    if let CaptureKind::PomodoroAdjust { spec } = parsed.kind.clone() {
+        return plan_pomodoro_adjust_item(request, parsed, spec, today, planner);
+    }
     if let Some(target) = request.forced_sub_bullet_target.as_ref() {
         parsed.kind = CaptureKind::SubBullet {
             target: target.clone(),
@@ -766,6 +769,7 @@ fn plan_capture_item(
                 pomodoro_link_destination: toggle.pomodoro_link_destination.clone(),
                 project_note: None,
                 pomodoro_start: None,
+                pomodoro_adjust: None,
                 toggle_task_description: Some(toggle.task_description.clone()),
             },
             clip_plan: None,
@@ -843,6 +847,9 @@ fn plan_capture_item(
         }
         CaptureKind::TaskToggle { .. } => {
             unreachable!("task toggle capture is rejected before this point")
+        }
+        CaptureKind::PomodoroAdjust { .. } => {
+            unreachable!("pomodoro adjustment capture is planned before this point")
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);
@@ -1041,6 +1048,7 @@ fn plan_capture_item(
             pomodoro_link_destination: None,
             project_note: None,
             pomodoro_start: special.as_ref().and_then(|edit| edit.start.clone()),
+            pomodoro_adjust: None,
             toggle_task_description: None,
         },
         clip_plan,
@@ -1270,6 +1278,7 @@ fn plan_project_note_item(
                 sections: rendered.sections.clone(),
             }),
             pomodoro_start: None,
+            pomodoro_adjust: None,
             toggle_task_description: None,
         },
         clip_plan: None,
@@ -1390,6 +1399,7 @@ fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::PomodoroNote => "pomodoro_note",
         CaptureKind::ProjectNote { .. } => "project_note",
         CaptureKind::TaskToggle { .. } => "task_toggle",
+        CaptureKind::PomodoroAdjust { .. } => "pomodoro_adjust",
     }
 }
 
@@ -1685,6 +1695,11 @@ fn plan_capture_to_target(
                 "task toggle capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::PomodoroAdjust { .. } => {
+            return Err(CaptureError::io(
+                "pomodoro adjustment capture invariant failed: wrong write planner",
+            ));
+        }
     };
     planner.stage(target, updated)?;
     Ok(CaptureWritePlan {
@@ -1732,6 +1747,25 @@ struct PomodoroStartSummary {
     pomodoro_line: usize,
     created_pomodoro: bool,
     time_range: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PomodoroAdjustSummary {
+    direction: &'static str,
+    requested_units: u64,
+    requested_minutes: i64,
+    delta_minutes: i64,
+    before_start: String,
+    before_end: String,
+    before_duration_minutes: u64,
+    after_start: String,
+    after_end: String,
+    after_duration_minutes: u64,
+    pomodoro_line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_name: Option<String>,
+    time_range: String,
+    clamped: bool,
 }
 
 #[derive(Debug)]
@@ -2274,6 +2308,594 @@ fn reject_task_toggle_conflicts(
         ));
     }
     Ok(())
+}
+
+fn reject_pomodoro_adjust_conflicts(
+    parsed: &ParsedCaptureText,
+    request: &CaptureRequest,
+) -> Result<(), CaptureError> {
+    if !request.forced_destination_flags.is_empty() {
+        return Err(CaptureError::usage(format!(
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with {}; capture the adjustment alone",
+            request.forced_destination_flags.join(", ")
+        )));
+    }
+    if request.forced_route.is_some()
+        || request.forced_section.is_some()
+        || request.forced_sub_bullet_target.is_some()
+        || request.forced_task_section.is_some()
+    {
+        return Err(CaptureError::usage(
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with --route, --section, --task, --task-ref, or --task-section; capture the adjustment alone",
+        ));
+    }
+    if request.forced_clip.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with --clip; capture the adjustment alone",
+        ));
+    }
+    if parsed.route.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro adjustment items must contain only the signed count (for example `+5`); remove extra text, markers, or child lines",
+        ));
+    }
+    if parsed.clip.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with % clipboard markers; capture the adjustment alone",
+        ));
+    }
+    if parsed.scheduled_offset.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with s:<N>; capture the adjustment alone",
+        ));
+    }
+    if parsed.priority_level.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with p:<N>; capture the adjustment alone",
+        ));
+    }
+    if !parsed.sub_bullets.is_empty() {
+        return Err(CaptureError::usage(
+            "Pomodoro adjustment items must contain only the signed count (for example `+5`); remove extra text, markers, or child lines",
+        ));
+    }
+    Ok(())
+}
+
+fn plan_pomodoro_adjust_item(
+    request: &CaptureRequest,
+    parsed: ParsedCaptureText,
+    spec: PomodoroAdjustSpec,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    reject_pomodoro_adjust_conflicts(&parsed, request)?;
+    let day_file = pomodoro::day_file_for(&request.bob_dir);
+    if !planner.currently_exists(&day_file)? {
+        return Err(CaptureError::io(format!(
+            "Bob daily note does not exist: {}",
+            day_file.display()
+        )));
+    }
+    let staged = planner.read_existing(&day_file)?;
+    let scan = capture_pomodoros::scan(&staged);
+    if !scan.has_section {
+        return Err(CaptureError::io("Bob daily note has no Pomodoros section"));
+    }
+    let timed_open = scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == capture_pomodoros::PomodoroState::Open && entry.time_range.is_some()
+        })
+        .collect::<Vec<_>>();
+    if timed_open.is_empty() {
+        return Err(CaptureError::io(
+            "Bob daily note has no open timed Pomodoro to adjust",
+        ));
+    }
+    if timed_open.len() > 1 {
+        return Err(CaptureError::io(
+            "Bob daily note has multiple open timed Pomodoros; finish all but one before adjusting",
+        ));
+    }
+    let target = timed_open[0];
+    let line_index = target.line.checked_sub(1).ok_or_else(|| {
+        CaptureError::io("Pomodoro adjustment invariant failed: target line is out of range")
+    })?;
+    let lines = line_spans(&staged);
+    let line = lines.get(line_index).ok_or_else(|| {
+        CaptureError::io("Pomodoro adjustment invariant failed: target line is out of range")
+    })?;
+    let line_text = line.text.to_string();
+    let segment_start = if line_index == 0 {
+        0
+    } else {
+        lines[line_index - 1].end
+    };
+    let range = parse_adjustment_range(&line_text).ok_or_else(|| {
+        CaptureError::io("selected Pomodoro has an unparseable time range and cannot be adjusted")
+    })?;
+    let old_duration = adjustment_duration_minutes(&line_text, &range).unwrap_or_else(|| {
+        normalize_minutes(range.end_minutes as i64 - range.start_minutes as i64)
+    });
+    let delta_requested = spec.units.checked_mul(5).ok_or_else(|| {
+        CaptureError::usage("Pomodoro adjustment is too large; use a smaller unit count")
+    })?;
+    let new_duration = if spec.plus {
+        old_duration.checked_add(delta_requested).ok_or_else(|| {
+            CaptureError::usage("Pomodoro adjustment is too large; use a smaller unit count")
+        })?
+    } else {
+        old_duration.saturating_sub(delta_requested)
+    };
+    let start_total = range
+        .start_minutes
+        .checked_add(new_duration)
+        .ok_or_else(|| {
+            CaptureError::usage("Pomodoro adjustment is too large; use a smaller unit count")
+        })?;
+    let new_end_minutes = (start_total % 1440) as u16;
+    let requested_minutes: i64 = if spec.plus {
+        delta_requested.try_into().map_err(|_| {
+            CaptureError::usage("Pomodoro adjustment is too large; use a smaller unit count")
+        })?
+    } else {
+        -(i64::try_from(delta_requested).map_err(|_| {
+            CaptureError::usage("Pomodoro adjustment is too large; use a smaller unit count")
+        })?)
+    };
+    let actual_minutes = new_duration as i64 - old_duration as i64;
+    let new_range_text = format_adjusted_range(
+        range.start_minutes,
+        new_end_minutes,
+        new_duration,
+        &range.metadata,
+    );
+    let global_start = segment_start + range.start_ch;
+    let global_end = segment_start + range.end_ch;
+    if !staged.is_char_boundary(global_start) || !staged.is_char_boundary(global_end) {
+        return Err(CaptureError::io(
+            "Pomodoro adjustment invariant failed: target range is not on a character boundary",
+        ));
+    }
+    let mut updated = String::with_capacity(staged.len() + new_range_text.len());
+    updated.push_str(&staged[..global_start]);
+    updated.push_str(&new_range_text);
+    updated.push_str(&staged[global_end..]);
+    planner.stage(&day_file, updated)?;
+    let before_start = format!(
+        "{:02}{:02}",
+        range.start_minutes / 60,
+        range.start_minutes % 60
+    );
+    let before_end = format!("{:02}{:02}", range.end_minutes / 60, range.end_minutes % 60);
+    let after_start = format!(
+        "{:02}{:02}",
+        range.start_minutes / 60,
+        range.start_minutes % 60
+    );
+    let after_end = format!("{:02}{:02}", new_end_minutes / 60, new_end_minutes % 60);
+    let new_line = format!(
+        "{}{}{}",
+        &line_text[..range.start_ch],
+        new_range_text,
+        &line_text[range.end_ch..]
+    );
+    let relative_target = day_file
+        .strip_prefix(&request.bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.clone());
+    let summary = PomodoroAdjustSummary {
+        direction: if spec.plus { "plus" } else { "minus" },
+        requested_units: spec.units,
+        requested_minutes,
+        delta_minutes: actual_minutes,
+        before_start,
+        before_end,
+        before_duration_minutes: old_duration,
+        after_start,
+        after_end,
+        after_duration_minutes: new_duration,
+        pomodoro_line: target.line,
+        pomodoro_name: target.name.clone(),
+        time_range: new_range_text.clone(),
+        clamped: actual_minutes != requested_minutes,
+    };
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: false,
+            route: None,
+            route_label: String::new(),
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            target: day_file.display().to_string(),
+            text: spec.raw.clone(),
+            task_line: new_line,
+            kind: capture_kind_label(&parsed.kind),
+            created: date_string(today),
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: Placement::Toggled,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: None,
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: None,
+            status_symbol: None,
+            status_name: None,
+            previous_status_symbol: None,
+            previous_status_name: None,
+            pomodoro_name: target.name.clone(),
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: Some(summary),
+            toggle_task_description: None,
+        },
+        clip_plan: None,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct AdjustRange {
+    start_ch: usize,
+    end_ch: usize,
+    start_minutes: u64,
+    end_minutes: u64,
+    metadata: String,
+}
+
+fn parse_adjustment_range(line: &str) -> Option<AdjustRange> {
+    let bytes = line.as_bytes();
+    let mut search = 0;
+    while let Some(relative_open) = line[search..].find('(') {
+        let open = search + relative_open;
+        let Some(relative_close) = line[open..].find(')') else {
+            return None;
+        };
+        let close = open + relative_close;
+        if let Some(range) = parse_adjustment_inner(line, open, close) {
+            return Some(range);
+        }
+        search = close + 1;
+        if search >= bytes.len() {
+            break;
+        }
+    }
+    None
+}
+
+fn parse_adjustment_inner(line: &str, open: usize, close: usize) -> Option<AdjustRange> {
+    let inner = &line[open + 1..close];
+    let (inner, bold) = match inner.strip_prefix("**") {
+        Some(rest) => (rest, true),
+        None => (inner, false),
+    };
+    let (start_minutes, start_len) = parse_adjustment_time(inner)?;
+    let mut rest = &inner[start_len..];
+    rest = rest.trim_start_matches([' ', '\t']);
+    rest = rest.strip_prefix('-')?;
+    rest = rest.trim_start_matches([' ', '\t']);
+    let (end_minutes, end_len) = parse_adjustment_time(rest)?;
+    rest = &rest[end_len..];
+    if bold {
+        rest = rest.strip_prefix("**")?;
+    } else if rest.starts_with("**") {
+        return None;
+    }
+    if !rest.is_empty() && !rest.starts_with([' ', '\t']) {
+        return None;
+    }
+    let start_ch = open;
+    let end_ch = close + 1;
+    Some(AdjustRange {
+        start_ch,
+        end_ch,
+        start_minutes,
+        end_minutes,
+        metadata: rest.to_string(),
+    })
+}
+
+fn parse_adjustment_time(text: &str) -> Option<(u64, usize)> {
+    let bytes = text.as_bytes();
+    if bytes.len() >= 5
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2] == b':'
+        && bytes[3].is_ascii_digit()
+        && bytes[4].is_ascii_digit()
+    {
+        let hour = ((bytes[0] - b'0') as u64) * 10 + (bytes[1] - b'0') as u64;
+        let minute = ((bytes[3] - b'0') as u64) * 10 + (bytes[4] - b'0') as u64;
+        if hour > 23 || minute > 59 {
+            return None;
+        }
+        return Some((hour * 60 + minute, 5));
+    }
+    if bytes.len() >= 4
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_digit()
+    {
+        let hour = ((bytes[0] - b'0') as u64) * 10 + (bytes[1] - b'0') as u64;
+        let minute = ((bytes[2] - b'0') as u64) * 10 + (bytes[3] - b'0') as u64;
+        if hour > 23 || minute > 59 {
+            return None;
+        }
+        return Some((hour * 60 + minute, 4));
+    }
+    None
+}
+
+fn adjustment_duration_minutes(line: &str, range: &AdjustRange) -> Option<u64> {
+    let range_text = &line[range.start_ch..range.end_ch];
+    if let Some(value) = duration_field_value(range_text)
+        && let Some(minutes) = parse_adjustment_duration(&value)
+    {
+        return Some(minutes);
+    }
+    if let Some(value) = legacy_stopwatch_value(range_text)
+        && let Some(minutes) = parse_adjustment_duration(&value)
+    {
+        return Some(minutes);
+    }
+    None
+}
+
+fn duration_field_value(range_text: &str) -> Option<String> {
+    let lower = range_text.to_ascii_lowercase();
+    let relative = lower.find("[t::")?;
+    let open = relative;
+    let after = open + "[t::".len();
+    let relative_close = range_text[after..].find(']')?;
+    let close = after + relative_close;
+    Some(range_text[after..close].to_string())
+}
+
+fn legacy_stopwatch_value(range_text: &str) -> Option<String> {
+    let stopwatch = '\u{23F1}';
+    let mut search = 0;
+    while let Some(relative) = range_text[search..].find(stopwatch) {
+        let mut index = search + relative + stopwatch.len_utf8();
+        if range_text[index..].starts_with('\u{FE0F}') {
+            index += '\u{FE0F}'.len_utf8();
+        }
+        while range_text[index..].starts_with([' ', '\t']) {
+            index += 1;
+        }
+        let rest = &range_text[index..];
+        if let Some((value, _)) = parse_stopwatch_duration_prefix(rest) {
+            return Some(value);
+        }
+        search = index.max(search + relative + 1);
+        if search >= range_text.len() {
+            break;
+        }
+    }
+    None
+}
+
+fn parse_stopwatch_duration_prefix(text: &str) -> Option<(String, usize)> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let mut hours: Option<u64> = None;
+    let mut minutes: Option<u64> = None;
+    let start = 0;
+    let mut digits_start: Option<usize> = None;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        if digits_start.is_none() {
+            digits_start = Some(index);
+        }
+        index += 1;
+    }
+    if let Some(begin) = digits_start {
+        let number = text[begin..index].parse::<u64>().ok()?;
+        let saved = index;
+        while index < bytes.len() && matches!(bytes[index], b' ' | b'\t') {
+            index += 1;
+        }
+        if index < bytes.len() && (bytes[index] == b'h' || bytes[index] == b'H') {
+            hours = Some(number);
+            index += 1;
+            while index < bytes.len() && matches!(bytes[index], b' ' | b'\t') {
+                index += 1;
+            }
+            let mut second_start: Option<usize> = None;
+            let mut second_end = index;
+            while second_end < bytes.len() && bytes[second_end].is_ascii_digit() {
+                if second_start.is_none() {
+                    second_start = Some(second_end);
+                }
+                second_end += 1;
+            }
+            if let Some(begin) = second_start {
+                let mut probe = second_end;
+                while probe < bytes.len() && matches!(bytes[probe], b' ' | b'\t') {
+                    probe += 1;
+                }
+                if probe < bytes.len() && (bytes[probe] == b'm' || bytes[probe] == b'M') {
+                    let second = text[begin..second_end].parse::<u64>().ok()?;
+                    minutes = Some(second);
+                    index = probe + 1;
+                }
+            }
+        } else if index < bytes.len() && (bytes[index] == b'm' || bytes[index] == b'M') {
+            minutes = Some(number);
+            index += 1;
+        } else {
+            index = saved;
+        }
+    }
+    match (hours, minutes) {
+        (Some(h), Some(m)) => h
+            .checked_mul(60)?
+            .checked_add(m)
+            .map(|_total| (text[start..index].to_string(), index)),
+        (Some(h), None) => h
+            .checked_mul(60)
+            .map(|_total| (text[start..index].to_string(), index)),
+        (None, Some(_m)) => Some((text[start..index].to_string(), index)),
+        (None, None) => None,
+    }
+}
+
+fn parse_adjustment_duration(value: &str) -> Option<u64> {
+    let text = value.trim().to_ascii_lowercase();
+    if text.is_empty() {
+        return None;
+    }
+    if let Some(number) = text.strip_suffix('m').and_then(|core| {
+        let core = core.trim_end();
+        (!core.is_empty() && core.bytes().all(|byte| byte.is_ascii_digit())).then_some(core)
+    }) {
+        // Distinguish `30m` from `1h 30m`: the latter contains `h`.
+        if !text.contains('h') {
+            return number.parse::<u64>().ok();
+        }
+    }
+    let (hours_part, minutes_part) = match text.split_once('h') {
+        Some((hours, rest)) => (Some(hours), Some(rest)),
+        None => (None, Some(text.as_str())),
+    };
+    let hours = match hours_part {
+        Some(part) => {
+            let part = part.trim();
+            if part.is_empty() {
+                0
+            } else if part.bytes().all(|byte| byte.is_ascii_digit()) {
+                part.parse::<u64>().ok()?
+            } else {
+                return None;
+            }
+        }
+        None => 0,
+    };
+    let minutes = match minutes_part {
+        Some(part) => {
+            let part = part.trim();
+            let core = part.strip_suffix('m')?;
+            let core = core.trim_end();
+            if core.is_empty() {
+                return None;
+            }
+            if !core.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            core.parse::<u64>().ok()?
+        }
+        None => return None,
+    };
+    if hours_part.is_none() && minutes_part.is_none() {
+        return None;
+    }
+    if hours == 0 && minutes == 0 && !text.contains(['h', 'm']) {
+        return None;
+    }
+    hours.checked_mul(60)?.checked_add(minutes)
+}
+
+fn remove_adjustment_duration_metadata(metadata: &str) -> String {
+    let without_fields = remove_bracket_duration_fields(metadata);
+    let without_legacy = remove_legacy_stopwatch_fields(&without_fields);
+    without_legacy
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn remove_bracket_duration_fields(metadata: &str) -> String {
+    let mut output = String::with_capacity(metadata.len());
+    let mut index = 0;
+    let lower = metadata.to_ascii_lowercase();
+    while index < metadata.len() {
+        if let Some(relative) = lower[index..].find("[t::") {
+            let open = index + relative;
+            output.push_str(&metadata[index..open]);
+            let after = open + "[t::".len();
+            if let Some(relative_close) = metadata[after..].find(']') {
+                index = after + relative_close + 1;
+                continue;
+            }
+            output.push_str(&metadata[open..]);
+            break;
+        }
+        output.push_str(&metadata[index..]);
+        break;
+    }
+    output
+}
+
+fn remove_legacy_stopwatch_fields(metadata: &str) -> String {
+    let stopwatch = '\u{23F1}';
+    let mut output = String::new();
+    let mut index = 0;
+    while index < metadata.len() {
+        if let Some(relative) = metadata[index..].find(stopwatch) {
+            let open = index + relative;
+            output.push_str(&metadata[index..open]);
+            let mut cursor = open + stopwatch.len_utf8();
+            if metadata[cursor..].starts_with('\u{FE0F}') {
+                cursor += '\u{FE0F}'.len_utf8();
+            }
+            let probe_start = cursor;
+            while cursor < metadata.len() && metadata[cursor..].starts_with([' ', '\t']) {
+                cursor += 1;
+            }
+            if let Some((_, length)) = parse_stopwatch_duration_prefix(&metadata[cursor..]) {
+                index = cursor + length;
+                continue;
+            }
+            output.push_str(&metadata[open..probe_start.max(open + 1)]);
+            index = probe_start.max(open + 1);
+            continue;
+        }
+        output.push_str(&metadata[index..]);
+        break;
+    }
+    output
+}
+
+fn format_adjusted_range(
+    start_minutes: u64,
+    end_minutes: u16,
+    duration_minutes: u64,
+    metadata: &str,
+) -> String {
+    let start = format!("{:02}{:02}", start_minutes / 60, start_minutes % 60);
+    let end = format!("{:02}{:02}", end_minutes / 60, end_minutes % 60);
+    let rest = remove_adjustment_duration_metadata(metadata);
+    if rest.is_empty() {
+        format!("(**{start}-{end}** [t:: {duration_minutes}m])")
+    } else {
+        format!("(**{start}-{end}** [t:: {duration_minutes}m] {rest})")
+    }
+}
+
+fn normalize_minutes(value: i64) -> u64 {
+    (((value % 1440) + 1440) % 1440) as u64
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4335,6 +4957,8 @@ struct CaptureItemResult {
     project_note: Option<ProjectNoteSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_start: Option<PomodoroStartSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_adjust: Option<PomodoroAdjustSummary>,
     #[serde(skip)]
     toggle_task_description: Option<String>,
 }
@@ -4411,6 +5035,17 @@ fn print_human_item_success(result: &CaptureItemResult, ordinal: Option<(usize, 
         .unwrap_or_default();
     if result.toggle_direction.is_some() {
         print_human_task_toggle_success(result, &styler, &prefix, &ordinal, &target_label);
+        return;
+    }
+    if let Some(adjust) = result.pomodoro_adjust.as_ref() {
+        print_human_pomodoro_adjust_success(
+            result,
+            adjust,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
         return;
     }
     let verb = if result.dry_run {
@@ -4505,6 +5140,49 @@ fn print_human_item_success(result: &CaptureItemResult, ordinal: Option<(usize, 
             )
         );
     }
+}
+
+fn print_human_pomodoro_adjust_success(
+    result: &CaptureItemResult,
+    adjust: &PomodoroAdjustSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let verb = if result.dry_run {
+        "would adjust"
+    } else {
+        "adjusted"
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    let name = adjust.pomodoro_name.as_deref().unwrap_or("current session");
+    let sign = if adjust.delta_minutes >= 0 { "+" } else { "-" };
+    let effect = adjust.delta_minutes.abs();
+    let requested_sign = if adjust.direction == "plus" { "+" } else { "-" };
+    let mut detail = format!(
+        "{} {}-{} ({}m) to {}-{} ({}m), {}{}m at line {}",
+        name,
+        adjust.before_start,
+        adjust.before_end,
+        adjust.before_duration_minutes,
+        adjust.after_start,
+        adjust.after_end,
+        adjust.after_duration_minutes,
+        sign,
+        effect,
+        adjust.pomodoro_line,
+    );
+    if adjust.clamped {
+        detail.push_str(&format!(
+            " (requested {}{}m in {} units clamped)",
+            requested_sign,
+            adjust.requested_minutes.abs(),
+            adjust.requested_units,
+        ));
+    }
+    println!("  {}", styler.dim(&detail));
+    println!("  {}", styler.dim(&result.task_line));
 }
 
 fn print_human_task_toggle_success(
@@ -6894,6 +7572,7 @@ mod tests {
                 pomodoro_link_destination: None,
                 project_note: None,
                 pomodoro_start: None,
+                pomodoro_adjust: None,
                 toggle_task_description: None,
             }],
             None,

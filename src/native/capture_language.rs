@@ -58,6 +58,25 @@ pub(crate) enum CaptureKind {
         pomodoro_name: Option<String>,
         intent: TaskToggleIntent,
     },
+    /// A whole-item `+N`/`-N` Pomodoro duration adjustment (for example
+    /// `+5` extends today's current timed Pomodoro by 25 minutes). The item
+    /// must contain only the signed count; any extra text, marker, or child
+    /// line is an invalid adjustment, never a task.
+    PomodoroAdjust {
+        spec: PomodoroAdjustSpec,
+    },
+}
+
+/// Whole-item `+N`/`-N` adjustment: a sign plus a positive ASCII-decimal
+/// magnitude in 5-minute units (`+5` is five units, 25 minutes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PomodoroAdjustSpec {
+    /// Trimmed signed token exactly as typed (for example `+5`).
+    pub(crate) raw: String,
+    /// `true` for `+N`, `false` for `-N`.
+    pub(crate) plus: bool,
+    /// Number of 5-minute units (always positive; `+0`/`-0` is rejected).
+    pub(crate) units: u64,
 }
 
 /// Typed `@<route>:<block-id>[#<name>]=<X>` start specification, where `<X>`
@@ -790,6 +809,11 @@ fn parse_capture_item<'a>(
     if parent_normalized.is_empty() {
         return Err(missing_text_error());
     }
+    if let Some(outcome) =
+        parse_pomodoro_adjust_item(item, parent_line, forced_route, forced_section)?
+    {
+        return Ok(outcome);
+    }
     let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
     let parent_outcome = resolve_line(parent_tokens, true, detect_route, parse_clip_markers)?;
     declarations.extend(global_declarations_from_tokens(
@@ -1022,6 +1046,79 @@ fn global_declarations_from_tokens<'a>(
         .into_iter()
         .map(|token| GlobalDeclarationToken { token, line_number })
         .collect()
+}
+
+/// Whole-item `+N`/`-N` adjustment grammar.
+///
+/// Returns `Ok(None)` when the item does not start with a signed count and
+/// ordinary parsing should continue. Returns `Ok(Some(outcome))` for an
+/// exact single-token adjustment. Returns `Err` for every adjustment-shaped
+/// near miss: a standalone sign, a zero magnitude, an overflow, or a valid
+/// signed-count prefix with extra text, markers, or child lines. Near misses
+/// are never allowed to fall through as ordinary tasks.
+fn parse_pomodoro_adjust_item<'a>(
+    item: &CaptureItem<'a>,
+    parent_line: &ItemLine<'a>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+) -> Result<Option<ParsedCaptureItemOutcome<'a>>, String> {
+    let parent_trimmed = parent_line.raw.text.trim();
+    if parent_trimmed == "+" || parent_trimmed == "-" {
+        return Err(POMODORO_ADJUST_INCOMPLETE_ERROR.to_string());
+    }
+    let Some(prefix_len) = signed_count_prefix_len(parent_trimmed) else {
+        return Ok(None);
+    };
+    let exact = parent_trimmed.len() == prefix_len && item.lines.len() == 1;
+    if !exact {
+        return Err(POMODORO_ADJUST_SHAPE_ERROR.to_string());
+    }
+    let sign = parent_trimmed.as_bytes()[0];
+    let magnitude_text = &parent_trimmed[1..];
+    let units = magnitude_text
+        .parse::<u64>()
+        .map_err(|_| POMODORO_ADJUST_OVERFLOW_ERROR.to_string())?;
+    if units == 0 {
+        return Err(POMODORO_ADJUST_ZERO_ERROR.to_string());
+    }
+    if forced_route.is_some() || forced_section.is_some() {
+        return Err(POMODORO_ADJUST_FORCED_ERROR.to_string());
+    }
+    let raw = parent_trimmed.to_string();
+    let plus = sign == b'+';
+    Ok(Some(parsed_capture_item_outcome(
+        item,
+        ParsedCaptureText {
+            body: raw.clone(),
+            clip: None,
+            route: None,
+            kind: CaptureKind::PomodoroAdjust {
+                spec: PomodoroAdjustSpec { raw, plus, units },
+            },
+            scheduled_offset: None,
+            priority_level: None,
+            sub_bullets: Vec::new(),
+        },
+        Vec::new(),
+        None,
+    )))
+}
+
+/// Length in bytes of a leading `^[+-][0-9]+` prefix, or `None` when the
+/// text does not start with a sign followed by ASCII digits.
+fn signed_count_prefix_len(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 {
+        return None;
+    }
+    if !matches!(bytes[0], b'+' | b'-') {
+        return None;
+    }
+    let mut len = 1;
+    while len < bytes.len() && bytes[len].is_ascii_digit() {
+        len += 1;
+    }
+    (len > 1).then_some(len)
 }
 
 /// One physical line's resolved item-wide markers and (when a route was
@@ -2087,6 +2184,12 @@ const POMODORO_START_OVERFLOW_ERROR: &str =
 const POMODORO_START_PROJECT_NOTE_ERROR: &str = "Pomodoro start suffix `=<X>` applies only to `@<route>:<block-id>` task captures, not project-note `+` forms";
 pub(crate) const POMODORO_START_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `s:<N>`; a scheduled Blocked task cannot start its session";
 pub(crate) const POMODORO_START_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `p:<N>`; a scheduled Blocked task cannot start its session";
+const POMODORO_ADJUST_INCOMPLETE_ERROR: &str = "Pomodoro adjustment needs a unit count; use `+N` or `-N` with a positive number (for example `+5` extends today's Pomodoro by 25 minutes)";
+const POMODORO_ADJUST_ZERO_ERROR: &str = "Pomodoro adjustment magnitude must be positive; `+0` and `-0` adjust nothing (for example `+5` extends by 25 minutes)";
+const POMODORO_ADJUST_OVERFLOW_ERROR: &str =
+    "Pomodoro adjustment is too large; use a smaller unit count";
+const POMODORO_ADJUST_SHAPE_ERROR: &str = "Pomodoro adjustment items must contain only the signed count (for example `+5`); remove extra text, markers, or child lines";
+const POMODORO_ADJUST_FORCED_ERROR: &str = "Pomodoro adjustment `+N`/`-N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the adjustment alone";
 
 // ---------------------------------------------------------------------------
 // Editor-facing parse
@@ -5757,6 +5860,9 @@ mod tests {
                     }
                 }
                 CaptureKind::TaskToggle { .. } => EditorMode::TaskToggle,
+                // The live editor contract for adjustments lands in
+                // bob-cli-27.2; until then the editor still reports `task`.
+                CaptureKind::PomodoroAdjust { .. } => EditorMode::Task,
             };
             assert_eq!(parse.mode, expected_mode, "{raw}");
             if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {
