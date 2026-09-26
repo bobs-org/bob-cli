@@ -14,8 +14,8 @@ use serde_json::json;
 use super::{
     capture_language::{
         self, AuthoredSubBullet, Diagnostic, EditorGlobalDestination,
-        EditorItemParse, EditorMode, Need, PomodoroStartSpec, Severity,
-        Span,
+        EditorItemParse, EditorMode, Need, PomodoroAdjustSpec,
+        PomodoroStartSpec, Severity, Span,
     },
     capture_links,
     style::Styler,
@@ -100,7 +100,21 @@ suffix on a `@<route>:<block-id>[#<name>]` marker reports mode \
 'pomodoro_task' with a `pomodoro_start` object (`raw` plus 5-minute \
 `duration_units`/`offset_units`) and a `pomodoro_start` span covering the \
 `=` and `<X>` bytes; the Pomodoro-name span always ends before the `=`. An \
-invalid suffix is an `invalid_pomodoro_start` diagnostic instead. \
+invalid suffix is an `invalid_pomodoro_start` diagnostic instead. A \
+whole-item `+N`/`-N` adjustment (for example `+5` extends today's current \
+timed Pomodoro by 25 minutes, `-2` shortens it by 10 minutes) reports mode \
+'pomodoro_adjust' with a `pomodoro_adjust` object (`raw` plus sign and \
+5-minute `units`) and a `pomodoro_adjust` span covering only the signed \
+token; the parse stays purely lexical and never guesses current ledger \
+times. A `@@` declaration still routes ordinary items in the same draft but \
+never turns an adjustment into a task or changes its destination. Invalid \
+standalone counts (`+0`, overflow) and malformed adjustment-first items \
+(extra text, markers, or child lines) report an \
+`invalid_pomodoro_adjustment` diagnostic with a useful range; a standalone \
+`+`/`-` is an incomplete editing state, while `bob capture` keeps its \
+strict execution errors for the same text. Other nonmatching words retain \
+normal task semantics. An adjustment is an action and requests no route or \
+task completion candidates. \
 A '@^id+' or \
 '@:id+' marker already carries the project-note intent: it reports mode \
 'project_note' or 'pomodoro_project_note' with a 'route' need until the \
@@ -126,7 +140,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -242,6 +256,13 @@ struct CaptureParseResult {
     /// inputs without a start suffix.
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_start: Option<PomodoroStartSpec>,
+    /// Validated additive whole-item `+N`/`-N` adjustment spec: the typed
+    /// signed token plus its sign and 5-minute unit count. Omitted for
+    /// every older input, so schema version 1 is unchanged for inputs
+    /// without an adjustment. Purely lexical and never guesses current
+    /// ledger times.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_adjust: Option<PomodoroAdjustSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -272,6 +293,8 @@ struct CaptureParseItem {
     sub_bullet_depths: Vec<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_start: Option<PomodoroStartSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_adjust: Option<PomodoroAdjustSpec>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -308,6 +331,7 @@ impl CaptureParseResult {
                 .as_ref()
                 .map(global_destination_parse),
             pomodoro_start: parse.pomodoro_start,
+            pomodoro_adjust: parse.pomodoro_adjust,
         }
     }
 }
@@ -351,6 +375,7 @@ fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
             sub_bullets: sub_bullet_bodies(&item.sub_bullets),
             sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
             pomodoro_start: item.pomodoro_start.clone(),
+            pomodoro_adjust: item.pomodoro_adjust.clone(),
         })
         .collect()
 }
@@ -429,6 +454,9 @@ fn print_human_success_with_styler(
     if let Some(start) = result.pomodoro_start.as_ref() {
         print_field(styler, "start", &format_pomodoro_start(start));
     }
+    if let Some(adjust) = result.pomodoro_adjust.as_ref() {
+        print_field(styler, "adjust", &format_pomodoro_adjust(adjust));
+    }
     if !result.needs.is_empty() {
         let needs = result
             .needs
@@ -491,6 +519,17 @@ fn format_pomodoro_start(start: &PomodoroStartSpec) -> String {
         start.raw,
         start.duration_units.saturating_mul(5),
         start.offset_units
+    )
+}
+
+/// Render a validated whole-item `+N`/`-N` adjustment for human output:
+/// the typed signed token plus its resolved 5-minute minutes and units.
+fn format_pomodoro_adjust(adjust: &PomodoroAdjustSpec) -> String {
+    format!(
+        "{} ({}m, {} units)",
+        adjust.raw,
+        adjust.units.saturating_mul(5),
+        adjust.units
     )
 }
 

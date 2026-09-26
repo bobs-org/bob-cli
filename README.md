@@ -195,6 +195,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route:id=<X>` | Same, and atomically start the session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
 | `@route:id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
+| `+N` / `-N` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-2` shortens 10m); the item must contain only the signed count |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
@@ -243,12 +244,21 @@ rounded to 5 minutes like the snippet. A timed open Pomodoro stops the
 capture with a "finish the current Pomodoro first" error, and `=<X>` cannot
 combine with `s:<N>` or `p:<N>`.
 
+Capture a whole item `+N` or `-N` to adjust today's current timed Pomodoro:
+`bob capture +5` extends by 25 minutes, `bob capture -- -2` shortens by 10
+minutes, and `printf '+5\n\nCall bank @Cash+\n' | bob capture` mixes an
+adjustment with an ordinary item across blank lines. The item must contain
+only the signed count; `Plan +5` stays prose, and forced route/task/clipboard
+options are rejected on adjustments.
+
 ```bash
 bob capture buy milk @groceries
 bob capture '@dev^foobar' 'Some ordinary task.'
 bob capture '@dev:foobar' 'Some foobar task.'
 bob capture '@dev:foobar#bugs' 'Some foobar task.'
 bob capture 'Write outline @sase:outline=3'
+bob capture +5
+bob capture -- -2
 bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'
 bob capture '@cash+goog-exit'
 bob capture '@cash+goog-exit!'

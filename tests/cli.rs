@@ -29641,3 +29641,266 @@ fn capture_pomodoro_adjust_rejects_bad_grammar_and_targets() {
         );
     }
 }
+
+#[test]
+fn capture_parse_pomodoro_adjust_protocol() {
+    let parse = |text: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+    let parse_stdin = |draft: &str| {
+        let output = run_with_stdin(
+            bob_command().arg("capture-parse").arg("-f").arg("json"),
+            draft,
+        );
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    // Exact-unit recognition: `+5` is five 5-minute units, `-2` is two.
+    let plus = parse("+5");
+    assert_eq!(plus["schema_version"], 1);
+    assert_eq!(plus["mode"], "pomodoro_adjust");
+    assert_eq!(plus["body"], "+5");
+    assert!(plus["route"].is_null());
+    assert!(plus["section"].is_null());
+    assert!(plus["block_id"].is_null());
+    assert_eq!(plus["needs"], serde_json::json!([]));
+    assert_eq!(
+        plus["spans"],
+        serde_json::json!([{ "start": 0, "end": 2, "kind": "pomodoro_adjust" }])
+    );
+    assert_eq!(plus["diagnostics"], serde_json::json!([]));
+    assert_eq!(
+        plus["pomodoro_adjust"],
+        serde_json::json!({ "raw": "+5", "plus": true, "units": 5 })
+    );
+    assert!(plus.get("pomodoro_start").is_none(), "{plus}");
+    assert!(plus.get("items").is_none(), "{plus}");
+
+    let minus = parse("-2");
+    assert_eq!(minus["mode"], "pomodoro_adjust");
+    assert_eq!(
+        minus["pomodoro_adjust"],
+        serde_json::json!({ "raw": "-2", "plus": false, "units": 2 })
+    );
+    assert_eq!(
+        minus["spans"],
+        serde_json::json!([{ "start": 0, "end": 2, "kind": "pomodoro_adjust" }])
+    );
+
+    // Whitespace around the token is fine; the span covers only the token.
+    let padded = parse("  +5  ");
+    assert_eq!(padded["mode"], "pomodoro_adjust");
+    assert_eq!(padded["body"], "+5");
+    assert_eq!(
+        padded["spans"],
+        serde_json::json!([{ "start": 2, "end": 4, "kind": "pomodoro_adjust" }])
+    );
+    assert_eq!(
+        padded["pomodoro_adjust"],
+        serde_json::json!({ "raw": "+5", "plus": true, "units": 5 })
+    );
+
+    // Mixed drafts use blank lines; top level previews the first item.
+    let mixed = parse_stdin("+5\n\nCall bank @Cash+\n");
+    assert_eq!(mixed["mode"], "pomodoro_adjust");
+    assert_eq!(
+        mixed["pomodoro_adjust"],
+        serde_json::json!({ "raw": "+5", "plus": true, "units": 5 })
+    );
+    assert_eq!(mixed["items"].as_array().expect("items").len(), 2);
+    assert_eq!(mixed["items"][0]["mode"], "pomodoro_adjust");
+    assert_eq!(
+        mixed["items"][0]["pomodoro_adjust"],
+        serde_json::json!({ "raw": "+5", "plus": true, "units": 5 })
+    );
+    assert_eq!(mixed["items"][1]["mode"], "incomplete");
+    assert_eq!(mixed["items"][1]["route"], "cash");
+
+    // A `@@` declaration routes ordinary items but never an adjustment.
+    let declared = parse_stdin("@@work\nFirst task\n\n+5\n");
+    assert_eq!(declared["global_destination"]["route"], "work");
+    assert_eq!(declared["items"][0]["mode"], "task");
+    assert_eq!(declared["items"][0]["route"], "work");
+    assert_eq!(declared["items"][1]["mode"], "pomodoro_adjust");
+    assert!(declared["items"][1]["route"].is_null());
+    assert_eq!(
+        declared["items"][1]["pomodoro_adjust"],
+        serde_json::json!({ "raw": "+5", "plus": true, "units": 5 })
+    );
+
+    let lone_declared = parse_stdin("@@work\n+5\n");
+    assert_eq!(lone_declared["mode"], "pomodoro_adjust");
+    assert!(lone_declared["route"].is_null(), "{lone_declared}");
+    assert_eq!(
+        lone_declared["pomodoro_adjust"],
+        serde_json::json!({ "raw": "+5", "plus": true, "units": 5 })
+    );
+
+    // Ordinary prose containing a count stays a task.
+    let prose = parse("Plan +5");
+    assert_eq!(prose["mode"], "task");
+    assert!(prose.get("pomodoro_adjust").is_none(), "{prose}");
+    assert_eq!(prose["diagnostics"], serde_json::json!([]));
+
+    // Adjustment-first items with extra text, markers, or children are
+    // invalid adjustments, never tasks.
+    for text in ["+5 foo", "+5 s:1", "+5 p:1", "+5 %", "+5 @work"] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_adjust", "{text}");
+        assert!(value.get("pomodoro_adjust").is_none(), "{text}: {value}");
+        assert_eq!(
+            value["diagnostics"][0]["code"],
+            "invalid_pomodoro_adjustment",
+            "{text}: {value}"
+        );
+    }
+    let child = parse_stdin("+5\n- detail\n");
+    assert_eq!(child["mode"], "pomodoro_adjust");
+    assert!(child.get("pomodoro_adjust").is_none(), "{child}");
+    assert_eq!(
+        child["diagnostics"][0]["code"],
+        "invalid_pomodoro_adjustment",
+        "{child}"
+    );
+
+    // Invalid standalone counts produce a diagnostic with a useful range.
+    let zero = parse("+0");
+    assert_eq!(zero["mode"], "pomodoro_adjust");
+    assert!(zero.get("pomodoro_adjust").is_none(), "{zero}");
+    assert_eq!(zero["diagnostics"][0]["code"], "invalid_pomodoro_adjustment");
+    assert_eq!(zero["diagnostics"][0]["range"], serde_json::json!([0, 2]));
+
+    let overflow = parse("+99999999999999999999999");
+    assert_eq!(overflow["mode"], "pomodoro_adjust");
+    assert!(overflow.get("pomodoro_adjust").is_none(), "{overflow}");
+    assert_eq!(
+        overflow["diagnostics"][0]["code"],
+        "invalid_pomodoro_adjustment",
+        "{overflow}"
+    );
+
+    // A standalone sign is an incomplete editing state, not an error.
+    for text in ["+", "-"] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "incomplete", "{text}");
+        assert_eq!(value["needs"], serde_json::json!([]));
+        assert!(value.get("pomodoro_adjust").is_none(), "{text}: {value}");
+        assert_eq!(value["diagnostics"], serde_json::json!([]));
+    }
+
+    // JSON stays additive at schema version 1.
+    assert_eq!(plus["schema_version"], 1);
+    let ordinary = parse("Call bank @Cash+");
+    assert!(ordinary.get("pomodoro_adjust").is_none(), "{ordinary}");
+    let pomodoro = parse("Do work @dev:id#bugs");
+    assert!(pomodoro.get("pomodoro_adjust").is_none(), "{pomodoro}");
+    assert!(pomodoro.get("pomodoro_start").is_none(), "{pomodoro}");
+}
+
+#[test]
+fn capture_parse_pomodoro_adjust_human_and_help() {
+    let human = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("+5")
+        .output()
+        .expect("run capture-parse human");
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(out.contains("pomodoro_adjust"), "{out}");
+    assert!(out.contains("+5 (25m, 5 units)"), "{out}");
+    assert!(out.contains("pomodoro_adjust"), "{out}");
+    assert_stdout_has_no_ansi(&human);
+
+    let minus = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("-2")
+        .output()
+        .expect("run minus human");
+    assert_success(&minus);
+    assert!(stdout(&minus).contains("-2 (10m, 2 units)"), "{}", stdout(&minus));
+
+    let plain = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("Do work @dev:id#bugs")
+        .output()
+        .expect("run plain human");
+    assert_success(&plain);
+    assert!(!stdout(&plain).contains("adjust"), "{}", stdout(&plain));
+
+    let parse_help = bob_command()
+        .arg("capture-parse")
+        .arg("--help")
+        .output()
+        .expect("run capture-parse help");
+    assert_success(&parse_help);
+    let help = stdout(&parse_help);
+    assert!(
+        help.contains("pomodoro_adjust")
+            && help.contains("+5")
+            && help.contains("-2")
+            && help.contains("+5\\n\\nCall bank"),
+        "expected adjustment help:\n{help}"
+    );
+
+    let capture_help = bob_command()
+        .arg("capture")
+        .arg("--help")
+        .output()
+        .expect("run capture help");
+    assert_success(&capture_help);
+    let capture = stdout(&capture_help);
+    assert!(
+        capture.contains("+5")
+            && capture.contains("-2")
+            && capture.contains("+5\\n\\nCall bank"),
+        "expected capture adjustment help:\n{capture}"
+    );
+}
+
+#[test]
+fn capture_complete_and_rewrite_ignore_adjustments() {
+    let complete = bob_command()
+        .arg("capture-complete")
+        .arg("-c")
+        .arg("1")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("+5")
+        .output()
+        .expect("run capture-complete");
+    assert_success(&complete);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&complete).trim()).expect("complete JSON");
+    assert!(json["context"].is_null(), "{json}");
+    assert_eq!(json["candidates"], serde_json::json!([]));
+
+    let rewrite = bob_command()
+        .arg("capture-rewrite")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("+5")
+        .output()
+        .expect("run capture-rewrite");
+    assert_success(&rewrite);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&rewrite).trim()).expect("rewrite JSON");
+    assert_eq!(json["changed"], false);
+    assert_eq!(json["text"], "+5");
+}

@@ -69,7 +69,7 @@ pub(crate) enum CaptureKind {
 
 /// Whole-item `+N`/`-N` adjustment: a sign plus a positive ASCII-decimal
 /// magnitude in 5-minute units (`+5` is five units, 25 minutes).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroAdjustSpec {
     /// Trimmed signed token exactly as typed (for example `+5`).
     pub(crate) raw: String,
@@ -2206,6 +2206,7 @@ pub(crate) enum SpanKind {
     PomodoroBlockId,
     PomodoroName,
     PomodoroStart,
+    PomodoroAdjust,
     SubBulletRoute,
     SubBulletBlockId,
     SubBulletSection,
@@ -2240,6 +2241,7 @@ impl SpanKind {
             Self::PomodoroBlockId => "pomodoro_block_id",
             Self::PomodoroName => "pomodoro_name",
             Self::PomodoroStart => "pomodoro_start",
+            Self::PomodoroAdjust => "pomodoro_adjust",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
             Self::SubBulletSection => "sub_bullet_section",
@@ -2314,6 +2316,7 @@ pub(crate) enum EditorMode {
     TaskToggle,
     ProjectNote,
     PomodoroProjectNote,
+    PomodoroAdjust,
     Incomplete,
 }
 
@@ -2328,6 +2331,7 @@ impl EditorMode {
             Self::TaskToggle => "task_toggle",
             Self::ProjectNote => "project_note",
             Self::PomodoroProjectNote => "pomodoro_project_note",
+            Self::PomodoroAdjust => "pomodoro_adjust",
             Self::Incomplete => "incomplete",
         }
     }
@@ -2371,6 +2375,11 @@ pub(crate) struct EditorParse {
     /// when the resolved marker carries one. `None` for every older marker
     /// shape, so version-tolerant readers see no change.
     pub(crate) pomodoro_start: Option<PomodoroStartSpec>,
+    /// Validated additive whole-item `+N`/`-N` adjustment spec, when the
+    /// item is an exact signed-count adjustment. `None` for every older
+    /// input, so version-tolerant readers see no change. Purely lexical:
+    /// it never guesses current ledger times.
+    pub(crate) pomodoro_adjust: Option<PomodoroAdjustSpec>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Normalized authored-child bodies plus semantic depth for every other
@@ -2408,6 +2417,7 @@ pub(crate) struct EditorItemParse {
     pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
     pub(crate) pomodoro_start: Option<PomodoroStartSpec>,
+    pub(crate) pomodoro_adjust: Option<PomodoroAdjustSpec>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
@@ -2658,6 +2668,17 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         .collect::<Vec<_>>();
     if let Some(global) = global_destination.as_ref().filter(|global| global.inherit) {
         for item in &mut items {
+            // Whole-item `+N`/`-N` adjustments are their own mode: a `@@`
+            // declaration routes ordinary items in the same draft but never
+            // turns an adjustment into a task or changes its destination.
+            if item.mode == EditorMode::PomodoroAdjust {
+                continue;
+            }
+            if item.mode == EditorMode::Incomplete
+                && (item.body == "+" || item.body == "-")
+            {
+                continue;
+            }
             inherit_editor_global_destination(item, global);
         }
     }
@@ -2683,6 +2704,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
                 .map(|global| global.needs.clone())
                 .unwrap_or_default(),
             pomodoro_start: None,
+            pomodoro_adjust: None,
             spans,
             diagnostics: global_diagnostics,
             sub_bullets: Vec::new(),
@@ -2698,6 +2720,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
     let block_id = first.block_id.clone();
     let needs = first.needs.clone();
     let pomodoro_start = first.pomodoro_start.clone();
+    let pomodoro_adjust = first.pomodoro_adjust.clone();
     let sub_bullets = first.sub_bullets.clone();
     let mut spans = global_spans;
     spans.extend(items.iter().flat_map(|item| item.spans.iter().copied()));
@@ -2717,6 +2740,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         block_id,
         needs,
         pomodoro_start,
+        pomodoro_adjust,
         spans,
         diagnostics,
         sub_bullets,
@@ -2811,7 +2835,183 @@ fn rekind_sub_bullet_spans(spans: &mut [Span]) {
     }
 }
 
+/// Whole-item `+N`/`-N` adjustment for the live editor. Mirrors
+/// [`parse_pomodoro_adjust_item`]'s execution grammar but never fails: an
+/// exact signed count reports `pomodoro_adjust` with a span covering only
+/// the signed token and an additive spec, a standalone `+`/`-` is an
+/// incomplete editing state, and zero/overflow/shape near misses report
+/// `pomodoro_adjust` (or `incomplete` for a bare sign) plus an
+/// `invalid_pomodoro_adjustment` diagnostic instead of becoming a task.
+/// Purely lexical: it never guesses current ledger times.
+fn parse_editor_adjust_item<'a>(item: &CaptureItem<'a>) -> Option<EditorItemOutcome<'a>> {
+    let parent = item.lines.first().expect("nonempty item");
+    let parent_text = parent.raw.text;
+    let parent_trimmed = parent_text.trim();
+    if parent_trimmed == "+" || parent_trimmed == "-" {
+        return Some(EditorItemOutcome {
+            item: EditorItemParse {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                body: parent_trimmed.to_string(),
+                mode: EditorMode::Incomplete,
+                route: None,
+                section: None,
+                block_id: None,
+                needs: Vec::new(),
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                spans: Vec::new(),
+                diagnostics: Vec::new(),
+                sub_bullets: Vec::new(),
+                has_local_destination: false,
+                local_destination_markers: Vec::new(),
+            },
+            declarations: Vec::new(),
+        });
+    }
+    let prefix_len = signed_count_prefix_len(parent_trimmed)?;
+    let leading = parent_text.len() - parent_text.trim_start().len();
+    let token_start = parent.raw.start + leading;
+    let token_end = token_start + prefix_len;
+    let span = Span {
+        start: token_start,
+        end: token_end,
+        kind: SpanKind::PomodoroAdjust,
+    };
+    let exact = parent_trimmed.len() == prefix_len && item.lines.len() == 1;
+    if !exact {
+        return Some(EditorItemOutcome {
+            item: EditorItemParse {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                body: parent_trimmed.to_string(),
+                mode: EditorMode::PomodoroAdjust,
+                route: None,
+                section: None,
+                block_id: None,
+                needs: Vec::new(),
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                spans: vec![span],
+                diagnostics: vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_adjustment",
+                    message: POMODORO_ADJUST_SHAPE_ERROR.to_string(),
+                    range: Some((item.start, item.end)),
+                }],
+                sub_bullets: Vec::new(),
+                has_local_destination: false,
+                local_destination_markers: Vec::new(),
+            },
+            declarations: Vec::new(),
+        });
+    }
+    let magnitude_text = &parent_trimmed[1..];
+    let units = match magnitude_text.parse::<u64>() {
+        Ok(units) => units,
+        Err(_) => {
+            return Some(EditorItemOutcome {
+                item: EditorItemParse {
+                    index: item.index,
+                    start: item.start,
+                    end: item.end,
+                    line_start: item.line_start,
+                    line_end: item.line_end,
+                    body: parent_trimmed.to_string(),
+                    mode: EditorMode::PomodoroAdjust,
+                    route: None,
+                    section: None,
+                    block_id: None,
+                    needs: Vec::new(),
+                    pomodoro_start: None,
+                    pomodoro_adjust: None,
+                    spans: vec![span],
+                    diagnostics: vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_adjustment",
+                        message: POMODORO_ADJUST_OVERFLOW_ERROR.to_string(),
+                        range: Some((token_start, token_end)),
+                    }],
+                    sub_bullets: Vec::new(),
+                    has_local_destination: false,
+                    local_destination_markers: Vec::new(),
+                },
+                declarations: Vec::new(),
+            });
+        }
+    };
+    if units == 0 {
+        return Some(EditorItemOutcome {
+            item: EditorItemParse {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                body: parent_trimmed.to_string(),
+                mode: EditorMode::PomodoroAdjust,
+                route: None,
+                section: None,
+                block_id: None,
+                needs: Vec::new(),
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                spans: vec![span],
+                diagnostics: vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_adjustment",
+                    message: POMODORO_ADJUST_ZERO_ERROR.to_string(),
+                    range: Some((token_start, token_end)),
+                }],
+                sub_bullets: Vec::new(),
+                has_local_destination: false,
+                local_destination_markers: Vec::new(),
+            },
+            declarations: Vec::new(),
+        });
+    }
+    let raw = parent_trimmed.to_string();
+    let plus = parent_trimmed.as_bytes()[0] == b'+';
+    let spec = PomodoroAdjustSpec {
+        raw: raw.clone(),
+        plus,
+        units,
+    };
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: raw,
+            mode: EditorMode::PomodoroAdjust,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            pomodoro_start: None,
+            pomodoro_adjust: Some(spec),
+            spans: vec![span],
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    })
+}
+
 fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
+    if let Some(adjustment) = parse_editor_adjust_item(item) {
+        return adjustment;
+    }
     let mut spans: Vec<Span> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut seen = SeenMarkers::default();
@@ -3062,6 +3262,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
             block_id,
             needs,
             pomodoro_start,
+            pomodoro_adjust: None,
             spans,
             diagnostics,
             sub_bullets,
@@ -3985,6 +4186,11 @@ pub(crate) fn completion_field_at(raw_text: &str, cursor: usize) -> Option<Compl
             .find(|(_, line)| cursor >= line.raw.start && cursor <= line.raw.end)
             .map(|(line_index, line)| (item, line_index, line.raw))
     })?;
+    // A whole-item `+N`/`-N` adjustment is an action, never a routed
+    // capture: it requests no route or task completion candidates.
+    if parse_editor_adjust_item(item).is_some() {
+        return None;
+    }
     let leading = line_index == 0;
 
     let scan_line = if leading {
@@ -4560,6 +4766,7 @@ fn classify_local_marker(marker: &LocalDestinationMarker) -> LocalMarkerAbsorbab
         | EditorMode::PomodoroNote
         | EditorMode::ProjectNote
         | EditorMode::PomodoroProjectNote
+        | EditorMode::PomodoroAdjust
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
@@ -4593,6 +4800,10 @@ fn non_absorbable_marker_notice(marker: &LocalDestinationMarker) -> String {
         ),
         EditorMode::TaskToggle => format!(
             "@@ cannot take a task toggle: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::PomodoroAdjust => format!(
+            "@@ cannot take a Pomodoro adjustment: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::Incomplete => {
@@ -5860,9 +6071,7 @@ mod tests {
                     }
                 }
                 CaptureKind::TaskToggle { .. } => EditorMode::TaskToggle,
-                // The live editor contract for adjustments lands in
-                // bob-cli-27.2; until then the editor still reports `task`.
-                CaptureKind::PomodoroAdjust { .. } => EditorMode::Task,
+                CaptureKind::PomodoroAdjust { .. } => EditorMode::PomodoroAdjust,
             };
             assert_eq!(parse.mode, expected_mode, "{raw}");
             if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {
