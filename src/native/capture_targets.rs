@@ -360,7 +360,7 @@ fn target_from_route(
     }
 }
 
-fn routable_route_for_root_file(path: &Path) -> Option<String> {
+pub(crate) fn routable_route_for_root_file(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     if stem == stem.to_ascii_lowercase() && capture::is_route_token(stem) {
         Some(stem.to_string())
