@@ -65,6 +65,23 @@ pub(crate) enum CaptureKind {
     PomodoroAdjust {
         spec: PomodoroAdjustSpec,
     },
+    /// A solo `@route:block-id[#pomodoro][=<X>]` or
+    /// `^route:block-id[#pomodoro][=<X>]` Task Link: link the existing task
+    /// into today's Pomodoro ledger (and optionally start that session).
+    /// Valid only when the marker is the entire capture item.
+    PomodoroLink {
+        block_id: String,
+        pomodoro_name: Option<String>,
+        start: Option<PomodoroStartSpec>,
+        spelling: PomodoroLinkSpelling,
+    },
+}
+
+/// Which sigil spelled a solo Pomodoro-link item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PomodoroLinkSpelling {
+    At,
+    Caret,
 }
 
 /// Whole-item `+N`/`-N` adjustment: a sign plus a positive ASCII-decimal
@@ -860,6 +877,14 @@ fn parse_capture_item<'a>(
     )? {
         return Ok(outcome);
     }
+    if let Some(outcome) = parse_pomodoro_link_item(
+        item,
+        parent_line,
+        forced_route,
+        forced_section,
+    )? {
+        return Ok(outcome);
+    }
     let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
     let parent_outcome =
         resolve_line(parent_tokens, true, detect_route, parse_clip_markers)?;
@@ -877,7 +902,14 @@ fn parse_capture_item<'a>(
             } | CaptureKind::TaskToggle { .. }
         )
     );
-    if parent_body_is_empty && !parent_is_toggle_candidate {
+    let parent_is_pomodoro_candidate = matches!(
+        parent_outcome.route.as_ref().map(|route| &route.token.kind),
+        Some(CaptureKind::Pomodoro { .. })
+    );
+    if parent_body_is_empty
+        && !parent_is_toggle_candidate
+        && !parent_is_pomodoro_candidate
+    {
         return Err(missing_text_error());
     }
 
@@ -921,6 +953,82 @@ fn parse_capture_item<'a>(
         if authored.depth == AuthoredDepth::First {
             has_first_level_owner = true;
         }
+    }
+
+    if (forced_route.is_some() || forced_section.is_some())
+        && !parent_is_pomodoro_candidate
+    {
+        let trimmed = parent_line.raw.text.trim();
+        if trimmed.split_whitespace().count() == 1
+            && is_pomodoro_marker_candidate(trimmed)
+            && parse_pomodoro_route_token(trimmed).is_ok()
+            && item.lines.len() == 1
+        {
+            return Err(
+                "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the link alone".to_string(),
+            );
+        }
+    }
+
+    if parent_is_pomodoro_candidate && parent_body_is_empty {
+        if forced_route.is_some() || forced_section.is_some() {
+            return Err(
+                "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the link alone".to_string(),
+            );
+        }
+        if aggregate.clip.is_some() {
+            return Err(
+                "Pomodoro link capture cannot be combined with % clipboard markers".to_string(),
+            );
+        }
+        if aggregate.scheduled_offset.is_some() {
+            return Err("Pomodoro link capture cannot be combined with s:<N>"
+                .to_string());
+        }
+        if aggregate.priority_level.is_some() {
+            return Err("Pomodoro link capture cannot be combined with p:<N>"
+                .to_string());
+        }
+        if !sub_bullets.is_empty() {
+            return Err(
+                "Pomodoro link capture cannot be combined with authored child bullets".to_string(),
+            );
+        }
+        let marker_text = aggregate
+            .route
+            .as_ref()
+            .map(|route| route.marker_text.clone());
+        let (route, kind) = match aggregate.route {
+            Some(line_route) => (line_route.token.route, line_route.token.kind),
+            None => (None, CaptureKind::Task),
+        };
+        let CaptureKind::Pomodoro {
+            block_id,
+            pomodoro_name,
+            start,
+        } = kind
+        else {
+            return Err(missing_text_error());
+        };
+        return Ok(parsed_capture_item_outcome(
+            item,
+            ParsedCaptureText {
+                body: String::new(),
+                clip: None,
+                route,
+                kind: CaptureKind::PomodoroLink {
+                    block_id,
+                    pomodoro_name,
+                    start,
+                    spelling: PomodoroLinkSpelling::At,
+                },
+                scheduled_offset: None,
+                priority_level: None,
+                sub_bullets: Vec::new(),
+            },
+            declarations,
+            marker_text,
+        ));
     }
 
     if let Some(section) = forced_section {
@@ -1290,12 +1398,13 @@ fn resolve_line<'a>(
                     target: SubBulletTarget::BlockId(_),
                     ..
                 } | CaptureKind::TaskToggle { .. }
+                    | CaptureKind::Pomodoro { .. }
             ) {
-                // A bare `@route+block-id[#name]` or `@route+block-id!`
-                // routes with an empty body; `parse_capture_item` decides
-                // whether the finished item qualifies as a task-toggle
-                // operation once children and other item-wide markers are
-                // known.
+                // A bare `@route+block-id[#name]`, `@route+block-id!`, or
+                // `@route:block-id[#pomodoro][=<X>]` routes with an empty
+                // body; `parse_capture_item` decides whether the finished
+                // item qualifies as a task-toggle or Pomodoro-link operation
+                // once children and other item-wide markers are known.
                 return Ok(LineOutcome {
                     body: String::new(),
                     markers,
@@ -1797,17 +1906,20 @@ fn is_retired_double_colon_marker_candidate(token: &str) -> bool {
     marker.find(':').is_none_or(|colon| colon >= double_colon)
 }
 
-fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
-    let marker = token
-        .strip_prefix("@!")
-        .or_else(|| token.strip_prefix('@'))
-        .ok_or_else(|| POMODORO_SHAPE_ERROR.to_string())?;
-    let Some((route, rest)) = marker.split_once(':') else {
-        return Err(POMODORO_SHAPE_ERROR.to_string());
-    };
-    if !is_route_token(route) {
-        return Err(POMODORO_ROUTE_ERROR.to_string());
-    }
+struct ColonLinkParts {
+    block_id: String,
+    pomodoro_name: Option<String>,
+    start: Option<PomodoroStartSpec>,
+    project_note: bool,
+}
+
+/// Shared post-sigil `@route:…` / `^route:…` component parser: block ID,
+/// optional `#pomodoro` name, and optional `=<X>` start suffix. Both sigils
+/// share this so their validation stays identical.
+fn parse_colon_link_tail(
+    route: &str,
+    rest: &str,
+) -> Result<ColonLinkParts, String> {
     // Split the additive start suffix `=<X>` before `#` handling: the first
     // `=` separates the old marker from `<X>` (empty, digits, `-`,
     // `-digits`, or digits-then-`-`-plus-optional-digits). Any extra `=`
@@ -1859,20 +1971,40 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
     if project_note && start.is_some() {
         return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
     }
+    Ok(ColonLinkParts {
+        block_id: block_id.to_string(),
+        pomodoro_name,
+        start,
+        project_note,
+    })
+}
+
+fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
+    let marker = token
+        .strip_prefix("@!")
+        .or_else(|| token.strip_prefix('@'))
+        .ok_or_else(|| POMODORO_SHAPE_ERROR.to_string())?;
+    let Some((route, rest)) = marker.split_once(':') else {
+        return Err(POMODORO_SHAPE_ERROR.to_string());
+    };
+    if !is_route_token(route) {
+        return Err(POMODORO_ROUTE_ERROR.to_string());
+    }
+    let parts = parse_colon_link_tail(route, rest)?;
     Ok(RouteToken {
         route: Some(route.to_ascii_lowercase()),
-        kind: if project_note {
+        kind: if parts.project_note {
             CaptureKind::ProjectNote {
-                block_id: block_id.to_string(),
+                block_id: parts.block_id,
                 pomodoro: Some(ProjectNotePomodoro {
-                    name: pomodoro_name,
+                    name: parts.pomodoro_name,
                 }),
             }
         } else {
             CaptureKind::Pomodoro {
-                block_id: block_id.to_string(),
-                pomodoro_name,
-                start,
+                block_id: parts.block_id,
+                pomodoro_name: parts.pomodoro_name,
+                start: parts.start,
             }
         },
     })
@@ -1947,6 +2079,192 @@ fn parse_pomodoro_start_suffix(raw: &str) -> Result<PomodoroStartSpec, String> {
         duration_units,
         offset_units: 0,
     })
+}
+
+/// Parse a `^route:…` token's components with the shared post-sigil parser.
+/// Returns the route plus the shared parts. `+` (project note) and trailing
+/// `!` (explicit toggle) are rejected with caret-specific messages.
+fn parse_caret_link_token(
+    token: &str,
+) -> Result<(String, ColonLinkParts), String> {
+    let marker = token
+        .strip_prefix('^')
+        .ok_or_else(|| POMODORO_LINK_SHAPE_ERROR.to_string())?;
+    let Some((route, rest)) = marker.split_once(':') else {
+        return Err(POMODORO_LINK_INCOMPLETE_ERROR.to_string());
+    };
+    if route.is_empty() || !is_route_token(route) {
+        return Err(POMODORO_LINK_SHAPE_ERROR.to_string());
+    }
+    if rest.is_empty() {
+        return Err(POMODORO_LINK_INCOMPLETE_ERROR.to_string());
+    }
+    if rest.ends_with('!') {
+        return Err(POMODORO_LINK_TOGGLE_ERROR.to_string());
+    }
+    match parse_colon_link_tail(route, rest) {
+        Ok(parts) => {
+            if parts.project_note {
+                return Err(POMODORO_LINK_PROJECT_ERROR.to_string());
+            }
+            Ok((route.to_ascii_lowercase(), parts))
+        }
+        Err(message) => {
+            if message == POMODORO_NAME_REQUIRED_ERROR {
+                return Err(POMODORO_LINK_NAME_INCOMPLETE_ERROR.to_string());
+            }
+            Err(message)
+        }
+    }
+}
+
+/// Whole-item `^route:block-id[#pomodoro][=<X>]` grammar.
+///
+/// Returns `Ok(None)` when the item does not start with `^` and ordinary
+/// parsing should continue. Returns `Ok(Some(outcome))` for an exact solo
+/// link. Returns `Err` for complete-shape near misses, partial solo shapes,
+/// and solo conflicts. Partial shapes followed by other text, and lookalikes
+/// (`^_^`, `^^`, `^.`, …), stay ordinary prose (`Ok(None)`).
+fn parse_pomodoro_link_item<'a>(
+    item: &CaptureItem<'a>,
+    parent_line: &ItemLine<'a>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+) -> Result<Option<ParsedCaptureItemOutcome<'a>>, String> {
+    let parent_trimmed = parent_line.raw.text.trim();
+    if !parent_trimmed.starts_with('^') {
+        return Ok(None);
+    }
+    let tokens: Vec<&str> = parent_trimmed.split_whitespace().collect();
+    let Some(first) = tokens.first().copied() else {
+        return Ok(None);
+    };
+    if !first.starts_with('^') {
+        return Ok(None);
+    }
+    if first == "^" {
+        if tokens.len() == 1 && item.lines.len() == 1 {
+            return Err(POMODORO_LINK_INCOMPLETE_ERROR.to_string());
+        }
+        return Ok(None);
+    }
+    let rest = &first[1..];
+    if rest.contains('^') {
+        return Ok(None);
+    }
+    let second = rest.as_bytes().first().copied().unwrap_or(0);
+    if !(second.is_ascii_alphanumeric() || matches!(second, b'_' | b'-')) {
+        return Ok(None);
+    }
+    if !rest.contains(':') {
+        if !rest
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+        {
+            return Ok(None);
+        }
+        if tokens.len() == 1 && item.lines.len() == 1 {
+            return Err(POMODORO_LINK_INCOMPLETE_ERROR.to_string());
+        }
+        return Ok(None);
+    }
+    let (route_part, tail) = rest.split_once(':').expect("contains colon");
+    if route_part.is_empty()
+        || !is_route_token(route_part)
+        || !route_part.bytes().any(|b| b.is_ascii_alphabetic())
+    {
+        return Ok(None);
+    }
+    if tail.is_empty() {
+        if tokens.len() == 1 && item.lines.len() == 1 {
+            return Err(POMODORO_LINK_INCOMPLETE_ERROR.to_string());
+        }
+        return Ok(None);
+    }
+    let is_solo_parent = tokens.len() == 1;
+    let is_solo_item = is_solo_parent && item.lines.len() == 1;
+    match parse_caret_link_token(first) {
+        Ok((route, parts)) => {
+            if forced_route.is_some() || forced_section.is_some() {
+                return Err(
+                    "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the link alone".to_string(),
+                );
+            }
+            if !is_solo_item {
+                if !is_solo_parent {
+                    for extra in &tokens[1..] {
+                        if parse_schedule_token(extra).is_some() {
+                            return Err(
+                                "Pomodoro link capture cannot be combined with s:<N>".to_string(),
+                            );
+                        }
+                        if parse_priority_token(extra).is_some() {
+                            return Err(
+                                "Pomodoro link capture cannot be combined with p:<N>".to_string(),
+                            );
+                        }
+                        if extra.starts_with('%') {
+                            return Err(
+                                "Pomodoro link capture cannot be combined with % clipboard markers"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    return Err(POMODORO_LINK_SHAPE_ERROR.to_string());
+                }
+                return Err(
+                    "Pomodoro link capture cannot be combined with authored child bullets"
+                        .to_string(),
+                );
+            }
+            let marker_text = first.to_string();
+            return Ok(Some(parsed_capture_item_outcome(
+                item,
+                ParsedCaptureText {
+                    body: String::new(),
+                    clip: None,
+                    route: Some(route),
+                    kind: CaptureKind::PomodoroLink {
+                        block_id: parts.block_id,
+                        pomodoro_name: parts.pomodoro_name,
+                        start: parts.start,
+                        spelling: PomodoroLinkSpelling::Caret,
+                    },
+                    scheduled_offset: None,
+                    priority_level: None,
+                    sub_bullets: Vec::new(),
+                },
+                Vec::new(),
+                Some(marker_text),
+            )));
+        }
+        Err(message) => {
+            if message == POMODORO_LINK_PROJECT_ERROR
+                || message == POMODORO_LINK_TOGGLE_ERROR
+            {
+                return Err(message);
+            }
+            if message == POMODORO_LINK_NAME_INCOMPLETE_ERROR {
+                if is_solo_item {
+                    return Err(message);
+                }
+                return Ok(None);
+            }
+            if message == POMODORO_LINK_INCOMPLETE_ERROR {
+                if is_solo_item {
+                    return Err(message);
+                }
+                return Ok(None);
+            }
+            if is_solo_item {
+                return Err(message);
+            }
+            if tail.ends_with('#') {
+                return Ok(None);
+            }
+            return Err(POMODORO_LINK_SHAPE_ERROR.to_string());
+        }
+    }
 }
 
 /// Return whether a terminal token belongs to the Pomodoro-marker grammar.
@@ -2269,6 +2587,11 @@ const POMODORO_START_OVERFLOW_ERROR: &str =
 const POMODORO_START_PROJECT_NOTE_ERROR: &str = "Pomodoro start suffix `=<X>` applies only to `@<route>:<block-id>` task captures, not project-note `+` forms";
 pub(crate) const POMODORO_START_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `s:<N>`; a scheduled Blocked task cannot start its session";
 pub(crate) const POMODORO_START_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `p:<N>`; a scheduled Blocked task cannot start its session";
+pub(crate) const POMODORO_LINK_SHAPE_ERROR: &str = "`^route:block-id` must be the whole capture item; to create a new Pomodoro-linked task use `<text> @route:block-id`";
+const POMODORO_LINK_INCOMPLETE_ERROR: &str = "incomplete Pomodoro link; finish the marker `^<route>:<block-id>` (for example `^sase:deep-fix`)";
+const POMODORO_LINK_NAME_INCOMPLETE_ERROR: &str = "incomplete Pomodoro link; finish the Pomodoro name `^<route>:<block-id>#<pomodoro>`";
+const POMODORO_LINK_PROJECT_ERROR: &str = "Pomodoro link `^route:block-id+` is a project note; use `@route:block-id+` to create the project note";
+const POMODORO_LINK_TOGGLE_ERROR: &str = "Pomodoro link `^route:block-id!` is a task toggle; use `@route+block-id!` for the explicit toggle";
 const POMODORO_ADJUST_INCOMPLETE_ERROR: &str = "Pomodoro adjustment needs a unit count; use `+N` or `-N` with a positive number (for example `+5` extends today's Pomodoro by 25 minutes)";
 const POMODORO_ADJUST_ZERO_ERROR: &str = "Pomodoro adjustment magnitude must be positive; `+0` and `-0` adjust nothing (for example `+5` extends by 25 minutes)";
 const POMODORO_ADJUST_OVERFLOW_ERROR: &str =
@@ -2402,6 +2725,7 @@ pub(crate) enum EditorMode {
     ProjectNote,
     PomodoroProjectNote,
     PomodoroAdjust,
+    PomodoroLink,
     Incomplete,
 }
 
@@ -2417,6 +2741,7 @@ impl EditorMode {
             Self::ProjectNote => "project_note",
             Self::PomodoroProjectNote => "pomodoro_project_note",
             Self::PomodoroAdjust => "pomodoro_adjust",
+            Self::PomodoroLink => "pomodoro_link",
             Self::Incomplete => "incomplete",
         }
     }
@@ -4961,6 +5286,7 @@ fn classify_local_marker(
         | EditorMode::ProjectNote
         | EditorMode::PomodoroProjectNote
         | EditorMode::PomodoroAdjust
+        | EditorMode::PomodoroLink
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
@@ -4998,6 +5324,10 @@ fn non_absorbable_marker_notice(marker: &LocalDestinationMarker) -> String {
         ),
         EditorMode::PomodoroAdjust => format!(
             "@@ cannot take a Pomodoro adjustment: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::PomodoroLink => format!(
+            "@@ cannot take a Pomodoro link: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::Incomplete => {
@@ -6294,6 +6624,7 @@ mod tests {
                 CaptureKind::PomodoroAdjust { .. } => {
                     EditorMode::PomodoroAdjust
                 }
+                CaptureKind::PomodoroLink { .. } => EditorMode::PomodoroLink,
             };
             assert_eq!(parse.mode, expected_mode, "{raw}");
             if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {

@@ -827,6 +827,95 @@ fn plan_capture_item(
             clip_plan: None,
         });
     }
+    if let CaptureKind::PomodoroLink {
+        block_id,
+        pomodoro_name,
+        start,
+        ..
+    } = &parsed.kind
+    {
+        reject_pomodoro_link_conflicts(&parsed, request)?;
+        let route = parsed.route.as_deref().ok_or_else(|| {
+            CaptureError::io(
+                "pomodoro link capture invariant failed: route is missing",
+            )
+        })?;
+        let created = date_string(today);
+        let relative_target = relative_target(Some(route));
+        let target = request.bob_dir.join(&relative_target);
+        let note_plan = plan_pomodoro_link_capture(
+            planner,
+            &request.bob_dir,
+            &target,
+            route,
+            block_id,
+            pomodoro_name.as_deref(),
+            start.as_ref(),
+            now,
+            today,
+            warnings,
+        )?;
+        let link = note_plan.pomodoro_link.as_ref().ok_or_else(|| {
+            CaptureError::io(
+                "pomodoro link capture invariant failed: missing link details",
+            )
+        })?;
+        return Ok(PlannedCaptureItem {
+            result: CaptureItemResult {
+                ok: true,
+                dry_run: request.dry_run,
+                routed: true,
+                route: Some(route.to_string()),
+                route_label: route_label(route),
+                relative_target: relative_target.to_string_lossy().into_owned(),
+                target: target.display().to_string(),
+                text: String::new(),
+                task_line: link.task_line.clone(),
+                kind: capture_kind_label(&parsed.kind),
+                created,
+                scheduled: None,
+                priority: None,
+                priority_label: None,
+                placement: note_plan.placement,
+                sub_bullets: Vec::new(),
+                clip: None,
+                schedule_log: link.schedule_log.clone(),
+                block_id: Some(link.block_id.clone()),
+                day_file: Some(link.day_file.clone()),
+                block_link: Some(link.block_link.clone()),
+                pomodoro_link_placement: link.pomodoro_link_placement,
+                parent_line: None,
+                parent_text: None,
+                parent_section: None,
+                parent_status_symbol: None,
+                parent_status_name: None,
+                toggle_direction: None,
+                previous_task_line: Some(link.previous_task_line.clone()),
+                status_symbol: Some(link.status_symbol),
+                status_name: Some(link.status_name.clone()),
+                previous_status_symbol: Some(link.previous_status_symbol),
+                previous_status_name: Some(link.previous_status_name.clone()),
+                pomodoro_name: link.pomodoro_name.clone(),
+                creates_pomodoro: Some(link.creates_pomodoro),
+                pomodoro_already_linked: None,
+                removed_pomodoro_links: None,
+                removed_scheduled: link.removed_scheduled.clone(),
+                pomodoro_selector_unused: None,
+                toggle_behavior: None,
+                status_changed: Some(link.status_changed),
+                pomodoro_link_action: Some(link.pomodoro_link_action),
+                pomodoro_link_source: link.pomodoro_link_source.clone(),
+                pomodoro_link_destination: link
+                    .pomodoro_link_destination
+                    .clone(),
+                project_note: None,
+                pomodoro_start: link.pomodoro_start.clone(),
+                pomodoro_adjust: None,
+                toggle_task_description: Some(link.task_description.clone()),
+            },
+            clip_plan: None,
+        });
+    }
     if matches!(parsed.kind, CaptureKind::ProjectNote { .. }) {
         return plan_project_note_item(
             request,
@@ -918,6 +1007,9 @@ fn plan_capture_item(
             unreachable!(
                 "pomodoro adjustment capture is planned before this point"
             )
+        }
+        CaptureKind::PomodoroLink { .. } => {
+            unreachable!("pomodoro link capture is planned before this point")
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);
@@ -1518,6 +1610,7 @@ fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::ProjectNote { .. } => "project_note",
         CaptureKind::TaskToggle { .. } => "task_toggle",
         CaptureKind::PomodoroAdjust { .. } => "pomodoro_adjust",
+        CaptureKind::PomodoroLink { .. } => "pomodoro_link",
     }
 }
 
@@ -1802,6 +1895,7 @@ fn plan_capture_to_target(
             sub_bullet: None,
             pomodoro_note: None,
             toggle: None,
+            pomodoro_link: None,
         });
     }
 
@@ -1849,6 +1943,11 @@ fn plan_capture_to_target(
                 "pomodoro adjustment capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::PomodoroLink { .. } => {
+            return Err(CaptureError::io(
+                "pomodoro link capture invariant failed: wrong write planner",
+            ));
+        }
     };
     planner.stage(target, updated)?;
     Ok(CaptureWritePlan {
@@ -1857,6 +1956,7 @@ fn plan_capture_to_target(
         sub_bullet: None,
         pomodoro_note: None,
         toggle: None,
+        pomodoro_link: None,
     })
 }
 
@@ -1867,6 +1967,31 @@ struct CaptureWritePlan {
     sub_bullet: Option<SubBulletCaptureDetails>,
     pomodoro_note: Option<PomodoroNoteDetails>,
     toggle: Option<TaskToggleCaptureDetails>,
+    pomodoro_link: Option<PomodoroLinkCaptureDetails>,
+}
+
+#[derive(Debug)]
+struct PomodoroLinkCaptureDetails {
+    previous_task_line: String,
+    task_line: String,
+    task_description: String,
+    previous_status_symbol: char,
+    previous_status_name: String,
+    status_symbol: char,
+    status_name: String,
+    block_id: String,
+    day_file: String,
+    block_link: String,
+    pomodoro_link_placement: Option<Placement>,
+    pomodoro_name: Option<String>,
+    creates_pomodoro: bool,
+    pomodoro_link_action: &'static str,
+    pomodoro_link_source: Option<PomodoroLinkEndpoint>,
+    pomodoro_link_destination: Option<PomodoroLinkEndpoint>,
+    removed_scheduled: Option<String>,
+    schedule_log: Option<capture_schedule_log::ScheduleLog>,
+    status_changed: bool,
+    pomodoro_start: Option<PomodoroStartSummary>,
 }
 
 #[derive(Debug)]
@@ -2053,6 +2178,7 @@ fn plan_capture_with_pomodoro_link(
             sub_bullet: None,
             pomodoro_note: None,
             toggle: None,
+            pomodoro_link: None,
         });
     }
     let (updated_day, pomodoro_link_placement) =
@@ -2074,6 +2200,7 @@ fn plan_capture_with_pomodoro_link(
         sub_bullet: None,
         pomodoro_note: None,
         toggle: None,
+        pomodoro_link: None,
     })
 }
 
@@ -3390,6 +3517,7 @@ fn plan_task_toggle_capture(
             pomodoro_link_source: None,
             pomodoro_link_destination: None,
         }),
+        pomodoro_link: None,
     })
 }
 
@@ -3514,6 +3642,7 @@ fn plan_ensure_next_capture(
                 &relocation.destination,
             )),
         }),
+        pomodoro_link: None,
     })
 }
 
@@ -3525,6 +3654,772 @@ fn endpoint_json(
         name: endpoint.name.clone(),
         time_range: endpoint.time_range.clone(),
     }
+}
+
+fn reject_pomodoro_link_conflicts(
+    parsed: &ParsedCaptureText,
+    request: &CaptureRequest,
+) -> Result<(), CaptureError> {
+    if !request.forced_destination_flags.is_empty() {
+        return Err(CaptureError::usage(format!(
+            "Pomodoro link capture cannot be combined with {}",
+            request.forced_destination_flags.join(", ")
+        )));
+    }
+    if request.forced_clip.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro link capture cannot be combined with --clip",
+        ));
+    }
+    if request.forced_sub_bullet_target.is_some()
+        || request.forced_task_section.is_some()
+    {
+        return Err(CaptureError::usage(
+            "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the link alone",
+        ));
+    }
+    if parsed.clip.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro link capture cannot be combined with % clipboard markers",
+        ));
+    }
+    if parsed.scheduled_offset.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro link capture cannot be combined with s:<N>",
+        ));
+    }
+    if parsed.priority_level.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro link capture cannot be combined with p:<N>",
+        ));
+    }
+    if !parsed.sub_bullets.is_empty() {
+        return Err(CaptureError::usage(
+            "Pomodoro link capture cannot be combined with authored child bullets",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_pomodoro_link_capture(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    target: &Path,
+    route: &str,
+    block_id: &str,
+    pomodoro_name: Option<&str>,
+    start: Option<&PomodoroStartSpec>,
+    now: chrono::NaiveDateTime,
+    today: NaiveDate,
+    warnings: &mut Vec<String>,
+) -> Result<CaptureWritePlan, CaptureError> {
+    let contents = planner.read_existing(target)?;
+    let settings = note_tasks::read_settings(bob_dir);
+    let scan = note_tasks::scan(&contents, &settings);
+    let task = match scan.by_block_id(block_id) {
+        BlockIdLookup::Found(task) => task,
+        BlockIdLookup::NotATask {
+            line_index,
+            excerpt,
+        } => {
+            return Err(CaptureError::io(format!(
+                "^{block_id} in {route}.md is not a task (line {}: {excerpt})",
+                line_index + 1
+            )));
+        }
+        BlockIdLookup::Duplicate(count) => {
+            return Err(CaptureError::io(format!(
+                "block ID ^{block_id} appears {count} times in {route}.md; make it unique before capturing"
+            )));
+        }
+        BlockIdLookup::Missing => {
+            let choices = format!(
+                "run 'bob capture-tasks -r {route}' to list task block IDs"
+            );
+            let hint = format!(
+                "to create a new Pomodoro-linked task, add text: `@{route}:{block_id} <text>`"
+            );
+            let message = match scan.suggest_block_id(block_id) {
+                Some(suggestion) => format!(
+                    "no task with block ID ^{block_id} in {route}.md; did you mean ^{suggestion}? ({choices}; {hint})"
+                ),
+                None => format!(
+                    "no task with block ID ^{block_id} in {route}.md ({choices}; {hint})"
+                ),
+            };
+            return Err(CaptureError::io(message));
+        }
+    };
+    let task_line_index = task.line_index;
+    let previous_status_symbol = task.status_symbol;
+    let previous_status_name = task.status_name.clone();
+    let task_description = task.description.clone();
+    let previous_task_line =
+        line_text_at(&contents, task_line_index)?.to_string();
+
+    match previous_status_symbol {
+        ' ' | '?' | '*' | '/' => {}
+        _ => {
+            return Err(CaptureError::io(format!(
+                "task ^{block_id} is {previous_status_name}; only Ready, Blocked, Next, and In Progress tasks can be linked to a Pomodoro"
+            )));
+        }
+    }
+
+    let task_plan =
+        capture_task_toggle::plan_task_link(&contents, task_line_index, today)
+            .ok_or_else(|| {
+                CaptureError::io(
+                    "pomodoro link capture invariant failed: task line could not be updated",
+                )
+            })?;
+    let task_line =
+        line_text_at(&task_plan.content, task_line_index)?.to_string();
+    let updated_scan = note_tasks::scan(&task_plan.content, &settings);
+    let updated_task = match updated_scan.by_block_id(block_id) {
+        BlockIdLookup::Found(task) => task,
+        _ => {
+            return Err(CaptureError::io(
+                "pomodoro link capture invariant failed: linked task disappeared",
+            ));
+        }
+    };
+    let status_changed = previous_status_symbol != updated_task.status_symbol;
+    if status_changed && task_line_declares_dependencies(&previous_task_line) {
+        warnings.push(format!(
+            "^{block_id} still declares dependencies; bob task-status-hooks may return it to Blocked"
+        ));
+    }
+    if task_plan.content != contents {
+        planner.stage(target, task_plan.content.clone())?;
+    }
+
+    let day_file = pomodoro::day_file_for(bob_dir);
+    if !day_file.is_file() && !planner.currently_exists(&day_file)? {
+        return Err(CaptureError::io(format!(
+            "Bob daily note does not exist: {}",
+            day_file.display()
+        )));
+    }
+    if paths_refer_to_same_file(target, &day_file) {
+        return Err(CaptureError::io(
+            "routed note and Bob daily note must be different files",
+        ));
+    }
+    let day_contents = planner.read_existing(&day_file)?;
+    let day_file_label = day_file.display().to_string();
+    let block_link = format!("[[{route}#^{block_id}]]");
+
+    if let Some(spec) = start {
+        return plan_pomodoro_link_with_start(
+            planner,
+            &day_file,
+            &day_file_label,
+            &block_link,
+            route,
+            block_id,
+            pomodoro_name,
+            spec,
+            now,
+            &day_contents,
+            previous_task_line,
+            task_line,
+            task_description,
+            previous_status_symbol,
+            previous_status_name,
+            updated_task.status_symbol,
+            updated_task.status_name.clone(),
+            status_changed,
+            task_plan.removed_scheduled,
+            task_plan.schedule_log,
+        );
+    }
+
+    let relocation = capture_task_toggle::plan_pomodoro_link_ledger(
+        &day_contents,
+        &block_link,
+        pomodoro_name,
+    )
+    .map_err(|error| {
+        relocation_plan_error(error, &block_link, route, block_id)
+    })?;
+    if relocation.has_changes {
+        planner.stage(&day_file, relocation.content.clone())?;
+    }
+    let action = match relocation.action {
+        capture_task_toggle::PomodoroLinkLedgerAction::Linked => "linked",
+        capture_task_toggle::PomodoroLinkLedgerAction::Moved => "moved",
+        capture_task_toggle::PomodoroLinkLedgerAction::AlreadyCurrent => {
+            "already_current"
+        }
+    };
+    let placement = relocation.placement.map(link_placement_to_placement);
+    Ok(CaptureWritePlan {
+        placement: Placement::Linked,
+        pomodoro: None,
+        sub_bullet: None,
+        pomodoro_note: None,
+        toggle: None,
+        pomodoro_link: Some(PomodoroLinkCaptureDetails {
+            previous_task_line,
+            task_line,
+            task_description,
+            previous_status_symbol,
+            previous_status_name,
+            status_symbol: updated_task.status_symbol,
+            status_name: updated_task.status_name.clone(),
+            block_id: block_id.to_string(),
+            day_file: day_file_label,
+            block_link,
+            pomodoro_link_placement: placement,
+            pomodoro_name: relocation.destination.name.clone(),
+            creates_pomodoro: relocation.creates_pomodoro,
+            pomodoro_link_action: action,
+            pomodoro_link_source: relocation.source.as_ref().map(endpoint_json),
+            pomodoro_link_destination: Some(endpoint_json(
+                &relocation.destination,
+            )),
+            removed_scheduled: task_plan.removed_scheduled,
+            schedule_log: task_plan.schedule_log,
+            status_changed,
+            pomodoro_start: None,
+        }),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_pomodoro_link_with_start(
+    planner: &mut CaptureBatchPlanner,
+    day_file: &Path,
+    day_file_label: &str,
+    block_link: &str,
+    route: &str,
+    block_id: &str,
+    pomodoro_name: Option<&str>,
+    spec: &PomodoroStartSpec,
+    now: chrono::NaiveDateTime,
+    day_contents: &str,
+    previous_task_line: String,
+    task_line: String,
+    task_description: String,
+    previous_status_symbol: char,
+    previous_status_name: String,
+    status_symbol: char,
+    status_name: String,
+    status_changed: bool,
+    removed_scheduled: Option<String>,
+    schedule_log: Option<capture_schedule_log::ScheduleLog>,
+) -> Result<CaptureWritePlan, CaptureError> {
+    let (start_text, end_text, duration_minutes, time_range) =
+        compute_pomodoro_start_range(now, spec)?;
+    let scan = capture_pomodoros::scan(day_contents);
+    if !scan.has_section {
+        return Err(CaptureError::io(
+            "Bob daily note has no Pomodoros section",
+        ));
+    }
+    let timed_open: Vec<_> = scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == capture_pomodoros::PomodoroState::Open
+                && entry.time_range.is_some()
+        })
+        .collect();
+    if !timed_open.is_empty() {
+        if timed_open.len() > 1 {
+            return Err(CaptureError::io(
+                "Bob daily note has multiple open timed Pomodoros",
+            ));
+        }
+        let running = timed_open[0];
+        let lines = line_spans(day_contents);
+        let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+        let section = pomodoro::pomodoros_section_range(&line_texts)
+            .ok_or_else(|| {
+                CaptureError::io("Bob daily note has no Pomodoros section")
+            })?;
+        let movable = capture_task_toggle::find_movable_task_links(
+            &lines, &scan, section, block_link,
+        );
+        let queued_in_running =
+            movable.iter().any(|link| link.owner.line == running.line);
+        if queued_in_running {
+            let name = running
+                .name
+                .clone()
+                .unwrap_or_else(|| "current".to_string());
+            return Err(CaptureError::io(format!(
+                "Pomodoro {name} is already running; finish the current Pomodoro first or use `+N`/`-N` to adjust it"
+            )));
+        }
+        return Err(CaptureError::io(
+            "Bob daily note has an active timed Pomodoro; finish the current Pomodoro first",
+        ));
+    }
+
+    let lines = line_spans(day_contents);
+    let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+    let section =
+        pomodoro::pomodoros_section_range(&line_texts).ok_or_else(|| {
+            CaptureError::io("Bob daily note has no Pomodoros section")
+        })?;
+    let movable = capture_task_toggle::find_movable_task_links(
+        &lines,
+        &scan,
+        section.clone(),
+        block_link,
+    );
+    let queue = match movable.as_slice() {
+        [] => None,
+        [_, _, ..] => {
+            return Err(CaptureError::io(format!(
+                "found more than one movable open Pomodoro Task Link for {block_link}; make the dedicated Task Link unique before capturing"
+            )));
+        }
+        [source] => Some((
+            endpoint_json(&capture_task_toggle::endpoint_from_entry(
+                source.owner,
+            )),
+            source.entry_line_index,
+            source.line_index,
+            source.subtree_end,
+        )),
+    };
+
+    if queue.is_none() {
+        let (updated_day, placement, summary) = plan_pomodoro_start(
+            day_contents,
+            block_link,
+            pomodoro_name,
+            spec,
+            now,
+        )?;
+        planner.stage(day_file, updated_day)?;
+        return Ok(CaptureWritePlan {
+            placement: Placement::Linked,
+            pomodoro: None,
+            sub_bullet: None,
+            pomodoro_note: None,
+            toggle: None,
+            pomodoro_link: Some(PomodoroLinkCaptureDetails {
+                previous_task_line,
+                task_line,
+                task_description,
+                previous_status_symbol,
+                previous_status_name,
+                status_symbol,
+                status_name,
+                block_id: block_id.to_string(),
+                day_file: day_file_label.to_string(),
+                block_link: block_link.to_string(),
+                pomodoro_link_placement: Some(placement),
+                pomodoro_name: summary.pomodoro_name.clone(),
+                creates_pomodoro: summary.created_pomodoro,
+                pomodoro_link_action: "linked",
+                pomodoro_link_source: None,
+                pomodoro_link_destination: Some(PomodoroLinkEndpoint {
+                    line: summary.pomodoro_line,
+                    name: summary.pomodoro_name.clone(),
+                    time_range: Some(format!(
+                        "{}-{}",
+                        summary.start, summary.end
+                    )),
+                }),
+                removed_scheduled,
+                schedule_log,
+                status_changed,
+                pomodoro_start: Some(summary),
+            }),
+        });
+    }
+
+    let (source_endpoint, q_entry_index, q_line_index, q_subtree_end) =
+        queue.expect("queue exists");
+    if let Some(selector) = pomodoro_name {
+        match capture_pomodoros::select_named(&scan, selector) {
+            capture_pomodoros::NamedSelection::Found(entry) => {
+                if !(entry.state == capture_pomodoros::PomodoroState::Open
+                    && entry.placeholder
+                    && entry.time_range.is_none())
+                {
+                    return Err(CaptureError::io(format!(
+                        "selected Pomodoro `#{}` is not an untimed open placeholder; finish the current Pomodoro first or choose an untimed placeholder",
+                        entry.slug
+                    )));
+                }
+                let dest_index = entry.line - 1;
+                if q_entry_index == dest_index {
+                    let (started_day, _) = replace_placeholder_range(
+                        day_contents,
+                        dest_index,
+                        &time_range,
+                    )?;
+                    planner.stage(day_file, started_day.clone())?;
+                    let after_scan = capture_pomodoros::scan(&started_day);
+                    let dest_entry = after_scan
+                        .entries
+                        .iter()
+                        .find(|candidate| candidate.line == dest_index + 1)
+                        .map(capture_task_toggle::endpoint_from_entry)
+                        .unwrap_or(capture_task_toggle::PomodoroEndpoint {
+                            line: dest_index + 1,
+                            name: entry.name.clone(),
+                            time_range: None,
+                        });
+                    let dest_json = endpoint_json(&dest_entry);
+                    let summary = PomodoroStartSummary {
+                        start: start_text.clone(),
+                        end: end_text.clone(),
+                        duration_minutes,
+                        offset_units: spec.offset_units,
+                        pomodoro_name: entry.name.clone(),
+                        pomodoro_line: dest_index + 1,
+                        created_pomodoro: false,
+                        time_range: time_range.clone(),
+                    };
+                    return Ok(CaptureWritePlan {
+                        placement: Placement::Linked,
+                        pomodoro: None,
+                        sub_bullet: None,
+                        pomodoro_note: None,
+                        toggle: None,
+                        pomodoro_link: Some(PomodoroLinkCaptureDetails {
+                            previous_task_line,
+                            task_line,
+                            task_description,
+                            previous_status_symbol,
+                            previous_status_name,
+                            status_symbol,
+                            status_name,
+                            block_id: block_id.to_string(),
+                            day_file: day_file_label.to_string(),
+                            block_link: block_link.to_string(),
+                            pomodoro_link_placement: None,
+                            pomodoro_name: entry.name.clone(),
+                            creates_pomodoro: false,
+                            pomodoro_link_action: "already_current",
+                            pomodoro_link_source: Some(PomodoroLinkEndpoint {
+                                line: source_endpoint.line,
+                                name: source_endpoint.name.clone(),
+                                time_range: source_endpoint.time_range.clone(),
+                            }),
+                            pomodoro_link_destination: Some(dest_json),
+                            removed_scheduled,
+                            schedule_log,
+                            status_changed,
+                            pomodoro_start: Some(summary),
+                        }),
+                    });
+                }
+                let (started_day, _) = replace_placeholder_range(
+                    day_contents,
+                    dest_index,
+                    &time_range,
+                )?;
+                let working_lines = line_spans(&started_day);
+                let working_texts = working_lines
+                    .iter()
+                    .map(|line| line.text)
+                    .collect::<Vec<_>>();
+                let working_section =
+                    pomodoro::pomodoros_section_range(&working_texts)
+                        .ok_or_else(|| {
+                            CaptureError::io(
+                                "Bob daily note has no Pomodoros section",
+                            )
+                        })?;
+                let working_scan = capture_pomodoros::scan(&started_day);
+                let movable = capture_task_toggle::find_movable_task_links(
+                    &working_lines,
+                    &working_scan,
+                    working_section,
+                    block_link,
+                );
+                let relocated = match movable.as_slice() {
+                    [source] => source,
+                    _ => {
+                        return Err(CaptureError::io(
+                            "pomodoro link capture invariant failed: queued link disappeared",
+                        ));
+                    }
+                };
+                let (moved_day, placement) =
+                    capture_task_toggle::move_subtree_to_entry(
+                        &started_day,
+                        relocated.line_index,
+                        relocated.subtree_end,
+                        dest_index,
+                    )
+                    .map_err(|error| {
+                        relocation_plan_error(
+                            error, block_link, route, block_id,
+                        )
+                    })?;
+                planner.stage(day_file, moved_day.clone())?;
+                let after_scan = capture_pomodoros::scan(&moved_day);
+                let dest_entry = after_scan
+                    .entries
+                    .iter()
+                    .find(|candidate| {
+                        candidate.state
+                            == capture_pomodoros::PomodoroState::Open
+                            && candidate.name == entry.name
+                    })
+                    .map(capture_task_toggle::endpoint_from_entry)
+                    .unwrap_or(capture_task_toggle::PomodoroEndpoint {
+                        line: dest_index + 1,
+                        name: entry.name.clone(),
+                        time_range: Some(format!("{start_text}-{end_text}")),
+                    });
+                let dest_json = endpoint_json(&dest_entry);
+                let summary = PomodoroStartSummary {
+                    start: start_text,
+                    end: end_text,
+                    duration_minutes,
+                    offset_units: spec.offset_units,
+                    pomodoro_name: entry.name.clone(),
+                    pomodoro_line: dest_json.line,
+                    created_pomodoro: false,
+                    time_range: time_range.clone(),
+                };
+                return Ok(CaptureWritePlan {
+                    placement: Placement::Linked,
+                    pomodoro: None,
+                    sub_bullet: None,
+                    pomodoro_note: None,
+                    toggle: None,
+                    pomodoro_link: Some(PomodoroLinkCaptureDetails {
+                        previous_task_line,
+                        task_line,
+                        task_description,
+                        previous_status_symbol,
+                        previous_status_name,
+                        status_symbol,
+                        status_name,
+                        block_id: block_id.to_string(),
+                        day_file: day_file_label.to_string(),
+                        block_link: block_link.to_string(),
+                        pomodoro_link_placement: Some(
+                            link_placement_to_placement(placement),
+                        ),
+                        pomodoro_name: entry.name.clone(),
+                        creates_pomodoro: false,
+                        pomodoro_link_action: "moved",
+                        pomodoro_link_source: Some(PomodoroLinkEndpoint {
+                            line: source_endpoint.line,
+                            name: source_endpoint.name.clone(),
+                            time_range: source_endpoint.time_range.clone(),
+                        }),
+                        pomodoro_link_destination: Some(dest_json),
+                        removed_scheduled,
+                        schedule_log,
+                        status_changed,
+                        pomodoro_start: Some(summary),
+                    }),
+                });
+            }
+            capture_pomodoros::NamedSelection::CompletedOnly(_)
+            | capture_pomodoros::NamedSelection::Missing { .. } => {
+                let (with_placeholder, created_line, name) =
+                    capture_task_toggle::insert_named_placeholder(
+                        day_contents,
+                        selector,
+                    )
+                    .map_err(|error| {
+                        relocation_plan_error(
+                            error, block_link, route, block_id,
+                        )
+                    })?;
+                let (started_day, _) = replace_placeholder_range(
+                    &with_placeholder,
+                    created_line,
+                    &time_range,
+                )?;
+                let working_lines = line_spans(&started_day);
+                let working_texts = working_lines
+                    .iter()
+                    .map(|line| line.text)
+                    .collect::<Vec<_>>();
+                let working_section =
+                    pomodoro::pomodoros_section_range(&working_texts)
+                        .ok_or_else(|| {
+                            CaptureError::io(
+                                "Bob daily note has no Pomodoros section",
+                            )
+                        })?;
+                let working_scan = capture_pomodoros::scan(&started_day);
+                let movable = capture_task_toggle::find_movable_task_links(
+                    &working_lines,
+                    &working_scan,
+                    working_section,
+                    block_link,
+                );
+                let relocated = match movable.as_slice() {
+                    [source] => source,
+                    _ => {
+                        return Err(CaptureError::io(
+                            "pomodoro link capture invariant failed: queued link disappeared",
+                        ));
+                    }
+                };
+                let (moved_day, placement) =
+                    capture_task_toggle::move_subtree_to_entry(
+                        &started_day,
+                        relocated.line_index,
+                        relocated.subtree_end,
+                        created_line,
+                    )
+                    .map_err(|error| {
+                        relocation_plan_error(
+                            error, block_link, route, block_id,
+                        )
+                    })?;
+                planner.stage(day_file, moved_day.clone())?;
+                let after_scan = capture_pomodoros::scan(&moved_day);
+                let dest_entry = after_scan
+                    .entries
+                    .iter()
+                    .find(|candidate| {
+                        candidate.state
+                            == capture_pomodoros::PomodoroState::Open
+                            && candidate.name.as_deref() == Some(name.as_str())
+                    })
+                    .map(capture_task_toggle::endpoint_from_entry)
+                    .unwrap_or(capture_task_toggle::PomodoroEndpoint {
+                        line: created_line + 1,
+                        name: Some(name.clone()),
+                        time_range: Some(format!("{start_text}-{end_text}")),
+                    });
+                let dest_json = endpoint_json(&dest_entry);
+                let summary = PomodoroStartSummary {
+                    start: start_text,
+                    end: end_text,
+                    duration_minutes,
+                    offset_units: spec.offset_units,
+                    pomodoro_name: Some(name.clone()),
+                    pomodoro_line: dest_json.line,
+                    created_pomodoro: true,
+                    time_range: time_range.clone(),
+                };
+                return Ok(CaptureWritePlan {
+                    placement: Placement::Linked,
+                    pomodoro: None,
+                    sub_bullet: None,
+                    pomodoro_note: None,
+                    toggle: None,
+                    pomodoro_link: Some(PomodoroLinkCaptureDetails {
+                        previous_task_line,
+                        task_line,
+                        task_description,
+                        previous_status_symbol,
+                        previous_status_name,
+                        status_symbol,
+                        status_name,
+                        block_id: block_id.to_string(),
+                        day_file: day_file_label.to_string(),
+                        block_link: block_link.to_string(),
+                        pomodoro_link_placement: Some(
+                            link_placement_to_placement(placement),
+                        ),
+                        pomodoro_name: Some(name),
+                        creates_pomodoro: true,
+                        pomodoro_link_action: "moved",
+                        pomodoro_link_source: Some(PomodoroLinkEndpoint {
+                            line: source_endpoint.line,
+                            name: source_endpoint.name.clone(),
+                            time_range: source_endpoint.time_range.clone(),
+                        }),
+                        pomodoro_link_destination: Some(dest_json),
+                        removed_scheduled,
+                        schedule_log,
+                        status_changed,
+                        pomodoro_start: Some(summary),
+                    }),
+                });
+            }
+        }
+    }
+
+    let q_scan_entry = scan
+        .entries
+        .iter()
+        .find(|entry| entry.line - 1 == q_entry_index)
+        .ok_or_else(|| {
+            CaptureError::io(
+                "pomodoro link capture invariant failed: queued Pomodoro disappeared",
+            )
+        })?;
+    if !(q_scan_entry.placeholder && q_scan_entry.time_range.is_none()) {
+        let suggestion = q_scan_entry
+            .name
+            .as_deref()
+            .map(|name| format!("#{name}=<X>"))
+            .unwrap_or_else(|| "#<pomodoro>=<X>".to_string());
+        return Err(CaptureError::io(format!(
+            "selected Pomodoro is not an untimed open placeholder; use `{suggestion}` to start a specific Pomodoro"
+        )));
+    }
+    let (started_day, _) =
+        replace_placeholder_range(day_contents, q_entry_index, &time_range)?;
+    planner.stage(day_file, started_day.clone())?;
+    let after_scan = capture_pomodoros::scan(&started_day);
+    let dest_entry = after_scan
+        .entries
+        .iter()
+        .find(|candidate| candidate.line - 1 == q_entry_index)
+        .map(capture_task_toggle::endpoint_from_entry)
+        .unwrap_or(capture_task_toggle::PomodoroEndpoint {
+            line: q_entry_index + 1,
+            name: q_scan_entry.name.clone(),
+            time_range: Some(format!("{start_text}-{end_text}")),
+        });
+    let dest_json = endpoint_json(&dest_entry);
+    let summary = PomodoroStartSummary {
+        start: start_text,
+        end: end_text,
+        duration_minutes,
+        offset_units: spec.offset_units,
+        pomodoro_name: q_scan_entry.name.clone(),
+        pomodoro_line: dest_json.line,
+        created_pomodoro: false,
+        time_range: time_range.clone(),
+    };
+    let _ = (q_line_index, q_subtree_end);
+    Ok(CaptureWritePlan {
+        placement: Placement::Linked,
+        pomodoro: None,
+        sub_bullet: None,
+        pomodoro_note: None,
+        toggle: None,
+        pomodoro_link: Some(PomodoroLinkCaptureDetails {
+            previous_task_line,
+            task_line,
+            task_description,
+            previous_status_symbol,
+            previous_status_name,
+            status_symbol,
+            status_name,
+            block_id: block_id.to_string(),
+            day_file: day_file_label.to_string(),
+            block_link: block_link.to_string(),
+            pomodoro_link_placement: None,
+            pomodoro_name: q_scan_entry.name.clone(),
+            creates_pomodoro: false,
+            pomodoro_link_action: "already_current",
+            pomodoro_link_source: Some(PomodoroLinkEndpoint {
+                line: source_endpoint.line,
+                name: source_endpoint.name.clone(),
+                time_range: source_endpoint.time_range.clone(),
+            }),
+            pomodoro_link_destination: Some(dest_json),
+            removed_scheduled,
+            schedule_log,
+            status_changed,
+            pomodoro_start: Some(summary),
+        }),
+    })
 }
 
 fn relocation_plan_error(
@@ -3640,6 +4535,7 @@ fn plan_pomodoro_note_capture(
             pomodoro_text,
         }),
         toggle: None,
+        pomodoro_link: None,
     })
 }
 
@@ -3769,6 +4665,7 @@ fn plan_sub_bullet_capture(
         sub_bullet: Some(details),
         pomodoro_note: None,
         toggle: None,
+        pomodoro_link: None,
     })
 }
 
@@ -5264,6 +6161,7 @@ enum Placement {
     Inserted,
     Appended,
     Toggled,
+    Linked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -5483,6 +6381,16 @@ fn print_human_item_success(
     let ordinal = ordinal
         .map(|(index, total)| format!("{index}/{total}  "))
         .unwrap_or_default();
+    if result.kind == "pomodoro_link" {
+        print_human_pomodoro_link_success(
+            result,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
     if result.toggle_direction.is_some() {
         print_human_task_toggle_success(
             result,
@@ -5820,6 +6728,143 @@ fn format_pomodoro_endpoint(endpoint: &PomodoroLinkEndpoint) -> String {
         range.to_string()
     } else {
         format!("line {}", endpoint.line)
+    }
+}
+
+fn print_human_pomodoro_link_success(
+    result: &CaptureItemResult,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let has_start = result.pomodoro_start.is_some();
+    let verb = match (result.dry_run, has_start) {
+        (true, true) => "would start",
+        (false, true) => "start",
+        (true, false) => "would link",
+        (false, false) => "link",
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+
+    let previous_marker = result
+        .previous_status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| styler.dim("[?]"));
+    let next_marker = result
+        .status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| styler.dim("[?]"));
+    let description = result
+        .toggle_task_description
+        .as_deref()
+        .unwrap_or(result.task_line.as_str());
+    let block_id = result
+        .block_id
+        .as_deref()
+        .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
+        .unwrap_or_default();
+    let previous_symbol = result.previous_status_symbol.unwrap_or(' ');
+    let current_symbol = result.status_symbol.unwrap_or(' ');
+    if previous_symbol == '*' && current_symbol == '*' {
+        println!("  {next_marker} already Next  {description}{block_id}");
+    } else if previous_symbol == '/' && current_symbol == '/' {
+        println!("  {next_marker} stays In Progress  {description}{block_id}");
+    } else {
+        println!(
+            "  {previous_marker} → {next_marker}  {description}{block_id}"
+        );
+    }
+
+    let mut chips = Vec::new();
+    if result.removed_scheduled.is_some() {
+        chips.push("removed future schedule".to_string());
+    }
+    if result.schedule_log.is_some() {
+        chips.push("logged schedule change".to_string());
+    }
+    if !chips.is_empty() {
+        println!("  {}", styler.dim(&chips.join(" · ")));
+    }
+
+    match result.pomodoro_link_action {
+        Some("moved") => {
+            let source = result
+                .pomodoro_link_source
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "source".to_string());
+            let destination = result
+                .pomodoro_link_destination
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "current/next".to_string());
+            let created = if result.creates_pomodoro == Some(true) {
+                format!(" (created {destination})")
+            } else {
+                String::new()
+            };
+            println!(
+                "  {}",
+                styler.dim(&format!(
+                    "Moved Task Link {source} → {destination}{created}"
+                ))
+            );
+        }
+        Some("linked") => {
+            let destination = result
+                .pomodoro_link_destination
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "current/next".to_string());
+            println!(
+                "  {}",
+                styler.dim(&format!("Linked under {destination}"))
+            );
+            if result.creates_pomodoro == Some(true) {
+                println!("  {}", styler.dim(&format!("created {destination}")));
+            }
+        }
+        _ => {
+            let already = result
+                .pomodoro_name
+                .as_deref()
+                .or_else(|| {
+                    result
+                        .pomodoro_link_destination
+                        .as_ref()
+                        .and_then(|endpoint| endpoint.name.as_deref())
+                })
+                .map(|name| format!("Task Link already in {name}; no ledger change."))
+                .unwrap_or_else(|| {
+                    "Task Link already in current/next Pomodoro; no ledger change.".to_string()
+                });
+            println!("  {}", styler.dim(&already));
+        }
+    }
+
+    if let Some(start) = result.pomodoro_start.as_ref() {
+        let name = start.pomodoro_name.as_deref().unwrap_or("next session");
+        let created = if start.created_pomodoro {
+            " (created)"
+        } else {
+            ""
+        };
+        let verb = if result.dry_run {
+            "would start"
+        } else {
+            "started"
+        };
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "{verb} {name} {}-{} ({}m){created} at line {}",
+                start.start,
+                start.end,
+                start.duration_minutes,
+                start.pomodoro_line,
+            ))
+        );
     }
 }
 
@@ -6537,7 +7582,6 @@ mod tests {
             ),
             ("body @dev:id#", "requires a Pomodoro name"),
             ("body @dev:id#bad_id", "name must contain"),
-            ("@dev:id#bugs", "task text is required"),
         ] {
             let error = parse_capture_text(raw, None)
                 .expect_err(&format!("{raw} should fail"));
@@ -6836,9 +7880,11 @@ mod tests {
 
     #[test]
     fn pomodoro_route_requires_a_body_and_stays_literal_in_middle_or_forced() {
-        let error = parse_capture_text("@dev:id", None)
-            .expect_err("marker-only capture should fail");
-        assert_eq!(error.kind, CaptureErrorKind::Usage);
+        let parsed = parse_capture_text("@dev:id", None)
+            .expect("solo link is a Pomodoro link");
+        assert_eq!(parsed.body, "");
+        assert_eq!(parsed.route.as_deref(), Some("dev"));
+        assert!(matches!(parsed.kind, CaptureKind::PomodoroLink { .. }));
 
         let parsed = parse_capture_text("Discuss @dev:id later", None)
             .expect("middle marker stays literal");

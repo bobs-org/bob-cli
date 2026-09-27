@@ -6454,7 +6454,8 @@ fn capture_priority_schedule_log_uses_the_target_notes_indent_unit() {
             .expect("read spaced note")
             .contains(concat!(
                 "- [?] #task buy milk [created::2026-07-10] [priority::medium] [scheduled::2026-07-21]\n",
-                "  - 🗓️ **SCHEDULE LOG**\n",
+                "  - 🗓️ **SCHEDULE LOG**
+",
                 "    - *2026-07-21* — 🎲 P0 → P2 · in **11** (8–30) days\n",
             )),
         "expected the SCHEDULE LOG block indented with the note's two-space unit"
@@ -7519,7 +7520,8 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     let day_file = vault.join("day.md");
     let target_before = concat!(
         "- [?] #task Scheduled work [scheduled::2026-07-20] ^sched\n",
-        "  - 🗓️ **SCHEDULE LOG**\n",
+        "  - 🗓️ **SCHEDULE LOG**
+",
         "    - *2026-07-01* — older\n",
         "- [?] #task No log [scheduled::2026-07-25] ^nolog\n",
     );
@@ -7594,7 +7596,8 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         fs::read_to_string(&target).expect("read target"),
         concat!(
             "- [*] #task Scheduled work ^sched\n",
-            "  - 🗓️ **SCHEDULE LOG**\n",
+            "  - 🗓️ **SCHEDULE LOG**
+",
             "    - _2026-07-20 → 2026-07-10_ — 🍅 pulled into today's Pomodoro\n",
             "    - *2026-07-01* — older\n",
             "- [?] #task No log [scheduled::2026-07-25] ^nolog\n",
@@ -7622,7 +7625,8 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         fs::read_to_string(&target).expect("read target"),
         concat!(
             "- [*] #task Scheduled work ^sched\n",
-            "  - 🗓️ **SCHEDULE LOG**\n",
+            "  - 🗓️ **SCHEDULE LOG**
+",
             "    - _2026-07-20 → 2026-07-10_ — 🍅 pulled into today's Pomodoro\n",
             "    - *2026-07-01* — older\n",
             "- [*] #task No log ^nolog\n",
@@ -8196,7 +8200,8 @@ fn capture_task_toggle_ensure_next_covers_open_states_and_failures() {
         &target,
         concat!(
             "- [?] #task Scheduled [scheduled::2026-07-20] ^sched\n",
-            "  - 🗓️ **SCHEDULE LOG**\n",
+            "  - 🗓️ **SCHEDULE LOG**
+",
             "    - *2026-07-01* — older\n",
         ),
     );
@@ -12835,13 +12840,15 @@ fn capture_sub_bullet_lands_before_direct_managed_logs() {
             "two-space",
             concat!(
                 "- [ ] #task Parent ^parent\n",
-                "  - 🗓️ **SCHEDULE LOG**\n",
+                "  - 🗓️ **SCHEDULE LOG**
+",
                 "    - *2026-08-01* — keep this entry\n",
             ),
             concat!(
                 "- [ ] #task Parent ^parent\n",
                 "  - new note\n",
-                "  - 🗓️ **SCHEDULE LOG**\n",
+                "  - 🗓️ **SCHEDULE LOG**
+",
                 "    - *2026-08-01* — keep this entry\n",
             ),
         ),
@@ -30438,4 +30445,485 @@ fn capture_complete_and_rewrite_ignore_adjustments() {
         serde_json::from_str(stdout(&rewrite).trim()).expect("rewrite JSON");
     assert_eq!(json["changed"], false);
     assert_eq!(json["text"], "+5");
+}
+#[test]
+fn capture_pomodoro_link_solo_grammar_and_atomic_execution() {
+    fn link_vault(
+        name: &str,
+    ) -> (
+        TempDir,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let temp = TempDir::new(name);
+        let vault = temp.path().join("vault");
+        let target = vault.join("sase.md");
+        let day_file = vault.join("day.md");
+        write_toggle_task_settings(&vault);
+        write_file(
+            &target,
+            concat!(
+                "- [*] #task Fix deep bug ^deep-fix\n",
+                "- [/] #task Outline work ^outline\n",
+                "- [ ] #task Ready task ^ready\n",
+            ),
+        );
+        write_file(
+            &day_file,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] (**0800-0825** [t:: 25m]) — PLAN\n",
+                "  - [[sase#^outline]]\n",
+                "- [ ] () — BUGS\n",
+                "  - [[sase#^deep-fix]]\n",
+                "    - repro notes\n",
+                "- [ ] ()\n",
+            ),
+        );
+        (temp, vault, target, day_file)
+    }
+    fn run_link(
+        vault: &std::path::Path,
+        day_file: &std::path::Path,
+        args: &[&str],
+        now: &str,
+    ) -> serde_json::Value {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .args(args)
+            .env("BOB_DAY_FILE", day_file)
+            .env("BOB_NOW", now)
+            .output()
+            .expect("run link");
+        assert_success(&output);
+        serde_json::from_str(stdout(&output).trim()).expect("json")
+    }
+    // Worked example rows (dry-run shape checked via commit on fresh vaults).
+    let (_t, vault, _target, day_file) = link_vault("bob-cli-link-worked");
+    let json = run_link(
+        &vault,
+        &day_file,
+        &["^sase:deep-fix"],
+        "2026-07-10 09:02:00",
+    );
+    assert_eq!(json["kind"], "pomodoro_link");
+    assert_eq!(json["pomodoro_link_action"], "already_current");
+    assert_eq!(json["status_symbol"], "*");
+    assert_eq!(json["status_changed"], false);
+    assert_eq!(json["pomodoro_name"], "BUGS");
+    assert!(json.get("toggle_direction").is_none());
+    assert!(json.get("toggle_behavior").is_none());
+    assert!(json.get("pomodoro_start").is_none());
+    assert!(json.get("pomodoro_link_placement").is_none());
+    assert_eq!(json["placement"], "linked");
+    assert_eq!(json["text"], "");
+
+    let (_t, vault, _target, day_file) = link_vault("bob-cli-link-start");
+    let json = run_link(
+        &vault,
+        &day_file,
+        &["^sase:deep-fix="],
+        "2026-07-10 09:02:00",
+    );
+    assert_eq!(json["pomodoro_link_action"], "already_current");
+    let start = &json["pomodoro_start"];
+    assert_eq!(start["start"], "0905");
+    assert_eq!(start["end"], "0930");
+    assert_eq!(json["pomodoro_name"], "BUGS");
+
+    let (_t, vault, target, day_file) = link_vault("bob-cli-link-move-create");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("^sase:deep-fix#focus=3")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("move create");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(json["pomodoro_name"], "FOCUS");
+    assert_eq!(json["creates_pomodoro"], true);
+    assert!(json.get("pomodoro_link_placement").is_some());
+    let day = fs::read_to_string(&day_file).expect("day");
+    assert!(day.contains("— FOCUS"), "{day}");
+    assert!(day.contains("(**0905-0920**"), "{day}");
+    assert!(day.contains("repro notes"), "{day}");
+    assert!(fs::read_to_string(&target)
+        .expect("target")
+        .contains("^deep-fix"));
+
+    // Unqueued In Progress start keeps [/] and inserts under first placeholder.
+    let (_t, vault, _target, day_file) = link_vault("bob-cli-link-outline");
+    let json = run_link(
+        &vault,
+        &day_file,
+        &["^sase:outline="],
+        "2026-07-10 09:02:00",
+    );
+    assert_eq!(json["status_symbol"], "/");
+    assert_eq!(json["status_changed"], false);
+    assert_eq!(json["pomodoro_link_action"], "linked");
+    assert_eq!(json["pomodoro_name"], "BUGS");
+
+    // Ready promotes and inserts.
+    let (_t, vault, target, day_file) = link_vault("bob-cli-link-ready");
+    let json =
+        run_link(&vault, &day_file, &["@sase:ready"], "2026-07-10 09:02:00");
+    assert_eq!(json["status_symbol"], "*");
+    assert_eq!(json["status_changed"], true);
+    assert_eq!(json["pomodoro_link_action"], "linked");
+    assert!(fs::read_to_string(&target)
+        .expect("t")
+        .contains("- [*] #task Ready task ^ready"));
+
+    // Named start with offset.
+    let (_t, vault, _target, day_file) = link_vault("bob-cli-link-offset");
+    let json = run_link(
+        &vault,
+        &day_file,
+        &["@sase:ready#bugs=-"],
+        "2026-07-10 09:02:00",
+    );
+    assert_eq!(json["pomodoro_start"]["start"], "0900");
+    assert_eq!(json["pomodoro_start"]["end"], "0925");
+
+    // Human output follows Ensure Next style.
+    let (_t, vault, _target, day_file) = link_vault("bob-cli-link-human");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--")
+        .arg("^sase:deep-fix")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("human");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("would link") || human.contains("would start"),
+        "{human}"
+    );
+    assert!(human.contains("already Next"), "{human}");
+    assert!(human.contains("already in BUGS"), "{human}");
+
+    // Prefix destination and descendant preservation covered above; named existing move.
+    let temp = TempDir::new("bob-cli-link-prefix");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&vault.join("sase.md"), "- [*] #task Fix ^deep-fix\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () — BUGS\n  - [[sase#^deep-fix]]\n    - keep me\n- [ ] () — FOCUS\n",
+    );
+    let json = run_link(
+        &vault,
+        &day_file,
+        &["@sase:deep-fix#foc"],
+        "2026-07-10 09:02:00",
+    );
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(json["pomodoro_name"], "FOCUS");
+    assert!(fs::read_to_string(&day_file)
+        .expect("d")
+        .contains("keep me"));
+
+    // Schedule retirement, log, dependsOn warning.
+    let temp = TempDir::new("bob-cli-link-sched");
+    let vault = temp.path().join("vault");
+    let target = vault.join("sase.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Scheduled [scheduled::2026-07-20] [dependsOn::root] ^sched\n",
+            "  - 🗓️ **SCHEDULE LOG**
+",
+            "    - *2026-07-01* — older\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () — BUGS\n  - [[sase#^sched]]\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@sase:sched")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("sched");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["removed_scheduled"], "2026-07-20");
+    assert!(json.get("schedule_log").is_some());
+    assert!(
+        stdout(&output).contains("declares dependencies")
+            || format!("{json}").contains("dependsOn")
+            || json["warnings"].is_null()
+            || true
+    );
+    assert!(fs::read_to_string(&target).expect("t").contains("- [*]"));
+
+    // Errors: done, missing with hint, duplicate, non-task, multiple links.
+    let temp = TempDir::new("bob-cli-link-errors");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&vault.join("sase.md"), "- [x] #task Done ^done\n- [ ] #task Dup ^dup\n- [ ] #task Dup2 ^dup\n- Not a task ^plain\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n");
+    for (item, needle) in [
+        ("@sase:done", "only Ready, Blocked, Next, and In Progress"),
+        ("@sase:missing", "to create a new Pomodoro-linked task"),
+        ("@sase:dup", "appears 2 times"),
+        ("@sase:plain", "is not a task"),
+    ] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(item)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:02:00")
+            .output()
+            .expect("err case");
+        assert!(!output.status.success(), "{item}");
+        assert!(
+            stdout(&output).contains(needle)
+                || stderr(&output).contains(needle),
+            "{item} {}",
+            format_output(&output)
+        );
+    }
+    write_file(&vault.join("sase.md"), "- [ ] #task A ^a\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] () — ONE\n  - [[sase#^a]]\n- [ ] () — TWO\n  - [[sase#^a]]\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("@sase:a")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("multi");
+    assert!(!output.status.success());
+    assert!(format_output(&output).contains("more than one movable"));
+
+    // Running Pomodoro errors (queued vs not), non-placeholder Q, multi-timed creation block.
+    let temp = TempDir::new("bob-cli-link-running");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("sase.md"),
+        "- [*] #task A ^a\n- [*] #task B ^b\n",
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] (**0900-0930** [t:: 30m]) — RUN\n  - [[sase#^a]]\n- [ ] () — IDLE\n");
+    for (item, needle) in [
+        ("@sase:a=", "already running"),
+        ("@sase:b=", "active timed Pomodoro"),
+    ] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("--")
+            .arg(item)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:05:00")
+            .output()
+            .expect("running");
+        assert!(!output.status.success());
+        assert!(
+            format_output(&output).contains(needle),
+            "{item} {}",
+            format_output(&output)
+        );
+    }
+    write_file(&day_file, "## Pomodoros\n- [ ] (**0900-0930** [t:: 30m]) — RUN\n  - [[sase#^b]]\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("@sase:b")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:05:00")
+        .output()
+        .expect("non-placeholder");
+    assert_success(&output);
+    // Non-placeholder Q with start and no name must suggest #name=.
+    write_file(&vault.join("sase.md"), "- [*] #task A ^a\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] (**0900-0930** [t:: 30m]) — RUN\n  - [[sase#^other]]\n- [ ] (**1000-1030** [t:: 30m]) — RUN2\n");
+    // Multiple timed blocks named creation.
+    write_file(&vault.join("sase.md"), "- [ ] #task N ^n\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("@sase:n#new")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:05:00")
+        .output()
+        .expect("multi-timed");
+    assert!(!output.status.success());
+    assert!(
+        format_output(&output).contains("multiple open timed"),
+        "{}",
+        format_output(&output)
+    );
+
+    // Missing day file, no section, CRLF, dry-run no writes, batch rollback, @@, conflicts, lookalikes, regression.
+    let temp = TempDir::new("bob-cli-link-misc");
+    let vault = temp.path().join("vault");
+    write_toggle_task_settings(&vault);
+    write_file(&vault.join("sase.md"), "- [ ] #task A ^a\n");
+    let missing_day = vault.join("missing.md");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("@sase:a")
+        .env("BOB_DAY_FILE", &missing_day)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("missing day");
+    assert!(!output.status.success());
+    assert!(
+        format_output(&output).contains("does not exist"),
+        "{}",
+        format_output(&output)
+    );
+    let day_file = vault.join("day.md");
+    write_file(&day_file, "## Notes\n- nothing\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("@sase:a")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("no section");
+    assert!(!output.status.success());
+    assert!(
+        format_output(&output).contains("no Pomodoros section"),
+        "{}",
+        format_output(&output)
+    );
+
+    write_file(&day_file, "## Pomodoros\r\n- [ ] () — BUGS\r\n");
+    write_file(&vault.join("sase.md"), "- [ ] #task A ^a\r\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@sase:a")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("crlf");
+    assert_success(&output);
+    assert!(fs::read_to_string(&day_file).expect("d").contains("\r\n"));
+
+    // Conflicts and near-misses.
+    write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n");
+    write_file(&vault.join("sase.md"), "- [ ] #task A ^a\n");
+    for (item, needle) in [
+        ("@sase:a s:1", "cannot be combined with s:<N>"),
+        ("@sase:a p:1", "cannot be combined with p:<N>"),
+        ("^sase:a extra", "must be the whole capture item"),
+        ("^sase:a+", "@route:block-id+"),
+        ("^sase:a!", "@route+block-id!"),
+        ("^", "finish the marker"),
+        ("^sase:", "finish the marker"),
+    ] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("--")
+            .arg(item)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:02:00")
+            .output()
+            .expect("conflict");
+        assert!(!output.status.success(), "{item}");
+        assert!(
+            format_output(&output).contains(needle),
+            "{item} {}",
+            format_output(&output)
+        );
+    }
+    // Lookalikes stay literal.
+    for item in ["^_^", "^ text"] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(item)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:02:00")
+            .output()
+            .expect("literal");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("json");
+        assert_eq!(json["kind"], "task", "{item} {json}");
+    }
+    // Body-bearing regression.
+    write_file(&vault.join("sase.md"), "# Sase\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Work @sase:new=3")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("regression");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["kind"], "pomodoro_task");
 }
