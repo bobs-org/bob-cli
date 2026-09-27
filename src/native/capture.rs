@@ -2240,6 +2240,7 @@ fn create_started_pomodoro_entry(
     let line_text = lines.iter().map(|line| line.text).collect::<Vec<_>>();
     let fenced = super::markdown::fenced_lines(&line_text, section.clone());
     let mut completed = Vec::new();
+    let mut first_open = None;
     for index in section.clone() {
         if fenced.contains(&index) {
             continue;
@@ -2249,12 +2250,12 @@ fn create_started_pomodoro_entry(
         }
         if pomodoro::completed_ledger_task(lines[index].text).is_some() {
             completed.push(index);
+        } else if first_open.is_none() && pomodoro::open_ledger_task(lines[index].text).is_some() {
+            first_open = Some(index);
         }
     }
-    let insertion_index = completed
-        .last()
-        .map(|index| task_block_end(lines, *index))
-        .unwrap_or_else(|| line_start(lines, section.start));
+    let insertion_index =
+        new_pomodoro_insertion_index(lines, section, completed.last().copied(), first_open);
     let indentation = completed
         .last()
         .and_then(|index| child_bullet_indentation(lines, index + 1, task_block_end(lines, *index)))
@@ -4117,10 +4118,12 @@ fn insert_named_pomodoro_child_block(
         .first()
         .or_else(|| completed.last())
         .map(|(index, _)| *index);
-    let insertion_index = anchor
-        .map(|index| task_block_end(lines, index))
-        .or_else(|| open.first().map(|(index, _)| line_start(lines, *index)))
-        .unwrap_or_else(|| line_start(lines, section.start));
+    let insertion_index = new_pomodoro_insertion_index(
+        lines,
+        section,
+        anchor,
+        open.first().map(|(index, _)| *index),
+    );
     let indentation = anchor
         .and_then(|index| child_bullet_indentation(lines, index + 1, task_block_end(lines, index)))
         .or_else(|| nearby_child_bullet_indentation(lines, section.start, section.end))
@@ -4183,6 +4186,24 @@ fn verify_created_named_pomodoro(
 
 fn line_start(lines: &[LineSpan<'_>], index: usize) -> usize {
     if index == 0 { 0 } else { lines[index - 1].end }
+}
+
+/// Byte offset for a newly created Pomodoro entry: after the anchor's complete
+/// block, otherwise before the first open Pomodoro so blank lines after the
+/// heading stay put, otherwise the top of the section.
+fn new_pomodoro_insertion_index(
+    lines: &[LineSpan<'_>],
+    section: &std::ops::Range<usize>,
+    anchor: Option<usize>,
+    first_open: Option<usize>,
+) -> usize {
+    if let Some(anchor) = anchor {
+        return task_block_end(lines, anchor);
+    }
+    if let Some(first_open) = first_open {
+        return line_start(lines, first_open);
+    }
+    line_start(lines, section.start)
 }
 
 fn line_index_at_offset(lines: &[LineSpan<'_>], offset: usize) -> usize {

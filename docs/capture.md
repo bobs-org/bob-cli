@@ -575,10 +575,12 @@ written. Only an untimed, open placeholder is ever started. Any open timed
 Pomodoro — including one past its nominal end — stops the capture with a
 "finish the current Pomodoro first" error; Bob never overwrites, completes,
 or double-starts an entry. A selected non-placeholder or structurally
-ambiguous ledger fails the same way. JSON output keeps every existing key
-and adds an additive `pomodoro_start` object (resolved `start`/`end`,
-`duration_minutes`, `offset_units`, destination name/line, whether the entry
-was created); human output names the Pomodoro and its time.
+ambiguous ledger fails the same way. A newly created started entry uses the
+same placement as named creation: after the last completed Pomodoro's complete
+block, otherwise before the first Pomodoro in the section. JSON output keeps
+every existing key and adds an additive `pomodoro_start` object (resolved
+`start`/`end`, `duration_minutes`, `offset_units`, destination name/line,
+whether the entry was created); human output names the Pomodoro and its time.
 
 ### Adjusting the current Pomodoro
 

@@ -28640,6 +28640,116 @@ fn capture_pomodoro_start_creates_unnamed_when_no_placeholder() {
 }
 
 #[test]
+fn capture_pomodoro_start_new_entry_uses_first_open_placement() {
+    let day_before =
+        "# Day\n\n## Pomodoros\n\n- [ ] () — GTD\n\t- [[#^gtd]]\n\n## Tasks\n";
+    let temp = TempDir::new("bob-cli-capture-start-named-new-placement");
+    let vault = temp.path().join("vault");
+    let target = vault.join("sase.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# S\n## Tasks\n");
+    write_file(&day_file, day_before);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("Relaunch")
+        .arg("@sase:relaunch#relaunch=10")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-27 07:12:00")
+        .output()
+        .expect("run named-new start");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("named-new JSON");
+    assert_eq!(json["pomodoro_start"]["created_pomodoro"], true);
+    assert_eq!(json["pomodoro_start"]["pomodoro_line"], 5);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        "# Day\n\n## Pomodoros\n\n- [ ] (**0715-0805** [t:: 50m]) — RELAUNCH\n\t- [[sase#^relaunch]]\n- [ ] () — GTD\n\t- [[#^gtd]]\n\n## Tasks\n",
+    );
+
+    let unnamed_before =
+        "# Day\n\n## Pomodoros\n\n- [ ] Review inbox\n\t- [[#^gtd]]\n\n## Tasks\n";
+    let temp2 = TempDir::new("bob-cli-capture-start-unnamed-placement");
+    let vault2 = temp2.path().join("vault");
+    write_file(&vault2.join("sase.md"), "# S\n## Tasks\n");
+    let day2 = vault2.join("day.md");
+    write_file(&day2, unnamed_before);
+    let output2 = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault2)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:u2=")
+        .env("BOB_DAY_FILE", &day2)
+        .env("BOB_NOW", "2026-09-27 07:12:00")
+        .output()
+        .expect("run unnamed start");
+    assert_success(&output2);
+    let json2: serde_json::Value =
+        serde_json::from_str(stdout(&output2).trim()).expect("unnamed JSON");
+    assert_eq!(json2["pomodoro_start"]["created_pomodoro"], true);
+    assert_eq!(json2["pomodoro_start"]["pomodoro_line"], 5);
+    assert_eq!(
+        fs::read_to_string(&day2).expect("read day2"),
+        "# Day\n\n## Pomodoros\n\n- [ ] (**0715-0740** [t:: 25m])\n\t- [[sase#^u2]]\n- [ ] Review inbox\n\t- [[#^gtd]]\n\n## Tasks\n",
+    );
+
+    let crlf_before =
+        "# Day\r\n\r\n## Pomodoros\r\n\r\n- [ ] () — GTD\r\n\t- [[#^gtd]]\r\n\r\n## Tasks\r\n";
+    let temp3 = TempDir::new("bob-cli-capture-start-crlf-placement");
+    let vault3 = temp3.path().join("vault");
+    write_file(&vault3.join("sase.md"), "# S\n## Tasks\n");
+    let day3 = vault3.join("day.md");
+    write_file(&day3, crlf_before);
+    let output3 = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault3)
+        .arg("-f")
+        .arg("json")
+        .arg("Relaunch")
+        .arg("@sase:relaunch#relaunch=10")
+        .env("BOB_DAY_FILE", &day3)
+        .env("BOB_NOW", "2026-09-27 07:12:00")
+        .output()
+        .expect("run CRLF start");
+    assert_success(&output3);
+    assert_eq!(
+        fs::read_to_string(&day3).expect("read day3"),
+        "# Day\r\n\r\n## Pomodoros\r\n\r\n- [ ] (**0715-0805** [t:: 50m]) — RELAUNCH\r\n\t- [[sase#^relaunch]]\r\n- [ ] () — GTD\r\n\t- [[#^gtd]]\r\n\r\n## Tasks\r\n",
+    );
+
+    let temp4 = TempDir::new("bob-cli-capture-named-create-placement");
+    let vault4 = temp4.path().join("vault");
+    write_file(&vault4.join("sase.md"), "# S\n## Tasks\n");
+    let day4 = vault4.join("day.md");
+    write_file(&day4, day_before);
+    let output4 = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault4)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:n1#relaunch")
+        .env("BOB_DAY_FILE", &day4)
+        .env("BOB_NOW", "2026-09-27 07:12:00")
+        .output()
+        .expect("run non-start named creation");
+    assert_success(&output4);
+    assert_eq!(
+        fs::read_to_string(&day4).expect("read day4"),
+        "# Day\n\n## Pomodoros\n\n- [ ] () — RELAUNCH\n\t- [[sase#^n1]]\n- [ ] () — GTD\n\t- [[#^gtd]]\n\n## Tasks\n",
+    );
+}
+
+#[test]
 fn capture_pomodoro_start_active_and_ambiguous_fail_atomically() {
     for (name, day_before) in [
         (
