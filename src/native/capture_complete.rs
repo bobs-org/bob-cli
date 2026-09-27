@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture,
+    capture, capture_active_tasks,
     capture_language::{self, CompletionContext},
     capture_links::{
         self, WikilinkBlockCandidate, WikilinkHeadingCandidate,
@@ -141,7 +141,13 @@ not be inserted, expose a nullable block_id, carry the route and stale-safe \
 ref, and set requires_block_id. Task search matches block ID, description, \
 section, and status name or symbol; identified tasks stay ahead of \
 unidentified tasks, and prefix matches precede substring matches inside \
-each group. The authored ID portion of '@route^block-id' has no \
+each group. A solo leading '^' token completes active tasks instead: the \
+`route:block-id` part offers only In Progress and Next tasks with block \
+IDs, ordered by today's open-Pomodoro Task Links, and accepting a row \
+inserts the full `route:block-id` in one step while a typed `#name`/`=<X>` \
+suffix survives. A `#name` after `^route:block-id` completes Pomodoro names \
+exactly as it does after `@route:block-id`, and a cursor inside `=<X>` \
+offers nothing. The authored ID portion of '@route^block-id' has no \
 completion source and returns an empty success. An empty block-ID component \
 ('@route+#') returns a successful empty task-section list; an unresolvable \
 parent task returns a successful empty list plus one bounded warning. Other \
@@ -159,7 +165,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n\nContexts:\n  route, section, pomodoro_block_id, pomodoro_name, task, task_section, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n\nContexts:\n  route, section, pomodoro_block_id, pomodoro_name, task, task_section, active_task, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -336,6 +342,29 @@ struct TaskSectionCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ActiveTaskPomodoroCandidate {
+    line: usize,
+    name: Option<String>,
+    time_range: Option<String>,
+    is_current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ActiveTaskCandidate {
+    replacement: String,
+    #[serde(rename = "ref")]
+    task_ref: String,
+    route: String,
+    block_id: String,
+    status_symbol: char,
+    status_name: String,
+    status_type: &'static str,
+    text: String,
+    section: Option<String>,
+    pomodoro: Option<ActiveTaskPomodoroCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PomodoroNameCandidate {
     replacement: String,
     #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
@@ -363,6 +392,7 @@ enum Candidates {
     Task(Vec<TaskCandidate>),
     TaskSection(Vec<TaskSectionCandidate>),
     PomodoroName(Vec<PomodoroNameCandidate>),
+    ActiveTask(Vec<ActiveTaskCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
@@ -376,6 +406,7 @@ impl Candidates {
             Self::Task(items) => items.len(),
             Self::TaskSection(items) => items.len(),
             Self::PomodoroName(items) => items.len(),
+            Self::ActiveTask(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
@@ -444,7 +475,8 @@ fn build_result(
             | CompletionContext::PomodoroBlockId
             | CompletionContext::PomodoroName
             | CompletionContext::Task
-            | CompletionContext::TaskSection => {
+            | CompletionContext::TaskSection
+            | CompletionContext::ActiveTask => {
                 unreachable!("link field context")
             }
         };
@@ -516,6 +548,9 @@ fn build_result(
         }
         CompletionContext::PomodoroName => {
             pomodoro_name_candidates(bob_dir, &field.query)?
+        }
+        CompletionContext::ActiveTask => {
+            active_task_candidates(bob_dir, &field.query)
         }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
@@ -807,6 +842,41 @@ fn pomodoro_name_candidates(
 ) -> Result<(Candidates, Vec<String>), CompleteError> {
     let day_file = pomodoro::day_file_for(bob_dir);
     pomodoro_name_candidates_at(&day_file, query)
+}
+
+/// Active-task candidates for a solo leading `^` token: In Progress and
+/// Next tasks with block IDs, ordered by today's open-Pomodoro Task Links
+/// and ranked by the query. The `replacement` is the `route:block-id` an
+/// accept inserts; `pomodoro` is the queued entry, or `null` when the task
+/// is not queued.
+fn active_task_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_active_tasks::discover(bob_dir);
+    let candidates = capture_active_tasks::rank(&discovered.tasks, query)
+        .into_iter()
+        .map(|task| ActiveTaskCandidate {
+            replacement: task.replacement(),
+            task_ref: task.task_ref.clone(),
+            route: task.route.clone(),
+            block_id: task.block_id.clone(),
+            status_symbol: task.status_symbol,
+            status_name: task.status_name.clone(),
+            status_type: task.status_type,
+            text: task.text.clone(),
+            section: task.section.clone(),
+            pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
+                ActiveTaskPomodoroCandidate {
+                    line: pomodoro.line,
+                    name: pomodoro.name.clone(),
+                    time_range: pomodoro.time_range.clone(),
+                    is_current: pomodoro.is_current,
+                }
+            }),
+        })
+        .collect();
+    (Candidates::ActiveTask(candidates), discovered.warnings)
 }
 
 fn pomodoro_name_candidates_at(
@@ -1175,6 +1245,25 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
                 )
             })
             .collect(),
+        Candidates::ActiveTask(items) => items
+            .iter()
+            .map(|item| {
+                let queue = match item.pomodoro.as_ref() {
+                    Some(pomodoro) => pomodoro
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| "Planned".to_string()),
+                    None => "Not queued".to_string(),
+                };
+                (
+                    item.replacement.clone(),
+                    format!(
+                        "[{}] {}  · {}",
+                        item.status_symbol, item.text, queue
+                    ),
+                )
+            })
+            .collect(),
         Candidates::PomodoroName(items) => items
             .iter()
             .map(|item| {
@@ -1256,6 +1345,7 @@ fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::PomodoroName => "pomodoro_name",
         CompletionContext::Task => "task",
         CompletionContext::TaskSection => "task_section",
+        CompletionContext::ActiveTask => "active_task",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",
         CompletionContext::WikilinkBlock => "wikilink_block",
@@ -1322,6 +1412,18 @@ mod tests {
     };
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// Serializes the `BOB_DAY_FILE` override: the override is
+    /// process-global, so parallel tests must never set and read it at the
+    /// same time. Hold the guard for the whole body of any test that touches
+    /// the day file.
+    static DAY_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn day_file_guard() -> std::sync::MutexGuard<'static, ()> {
+        DAY_FILE_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
 
     fn result(
         bob_dir: &Path,
@@ -1443,6 +1545,152 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["focus-123", "focus-999"]);
         assert!(tasks.iter().all(|task| !task.requires_block_id));
+    }
+
+    fn active_task_fixture(root: &Path) -> PathBuf {
+        write_settings(root);
+        write_file(
+            &root.join("sase.md"),
+            concat!(
+                "- [/] #task Outline talk ^outline\n",
+                "- [*] #task Fix deep bug ^deep-fix\n",
+                "- [ ] #task Ready thing ^ready\n",
+            ),
+        );
+        let day_file = root.join("2026/20260710.md");
+        write_file(
+            &day_file,
+            "## Pomodoros\n- [ ] () — BUGS\n  - [[sase#^deep-fix]]\n",
+        );
+        day_file
+    }
+
+    #[test]
+    fn active_task_completion_offers_queued_tasks_first() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-active-task");
+        let day_file = active_task_fixture(temp.path());
+
+        let value =
+            with_env("BOB_DAY_FILE", &day_file, || result(temp.path(), "^", 1));
+        assert_eq!(value.context, Some(CompletionContext::ActiveTask));
+        assert_eq!(value.replacement, Replacement { start: 1, end: 1 });
+        let Candidates::ActiveTask(candidates) = &value.candidates else {
+            panic!("expected active-task candidates");
+        };
+        // Ready tasks are excluded; the queued Next task sorts first.
+        let replacements: Vec<&str> = candidates
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect();
+        assert_eq!(replacements, vec!["sase:deep-fix", "sase:outline"]);
+
+        let queued = &candidates[0];
+        assert_eq!(queued.route, "sase");
+        assert_eq!(queued.block_id, "deep-fix");
+        assert_eq!(queued.status_symbol, '*');
+        assert_eq!(queued.status_type, "ON_HOLD");
+        assert_eq!(queued.text, "Fix deep bug");
+        let pomodoro = queued.pomodoro.as_ref().expect("queued task");
+        assert_eq!(pomodoro.name.as_deref(), Some("BUGS"));
+        assert!(!pomodoro.is_current);
+
+        let unqueued = &candidates[1];
+        assert_eq!(unqueued.status_symbol, '/');
+        assert!(unqueued.pomodoro.is_none());
+        assert!(value.warnings.is_empty());
+    }
+
+    #[test]
+    fn active_task_completion_ranks_queries_and_pins_json_shape() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-active-rank");
+        let day_file = active_task_fixture(temp.path());
+
+        let raw = "^sase:dee";
+        let value = with_env("BOB_DAY_FILE", &day_file, || {
+            result(temp.path(), raw, raw.len())
+        });
+        assert_eq!(value.context, Some(CompletionContext::ActiveTask));
+        assert_eq!(value.replacement, Replacement { start: 1, end: 9 });
+        let Candidates::ActiveTask(candidates) = &value.candidates else {
+            panic!("expected active-task candidates");
+        };
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].replacement, "sase:deep-fix");
+
+        let json = serde_json::to_value(&value).expect("serialize result");
+        assert_eq!(json["context"], "active_task");
+        assert_eq!(
+            json["replacement"],
+            serde_json::json!({"start": 1, "end": 9})
+        );
+        let candidate = &json["candidates"][0];
+        assert_eq!(candidate["replacement"], "sase:deep-fix");
+        assert_eq!(candidate["ref"], candidates[0].task_ref);
+        assert_eq!(candidate["route"], "sase");
+        assert_eq!(candidate["block_id"], "deep-fix");
+        assert_eq!(candidate["status_symbol"], "*");
+        assert_eq!(candidate["text"], "Fix deep bug");
+        assert_eq!(candidate["pomodoro"]["name"], "BUGS");
+        assert_eq!(candidate["pomodoro"]["is_current"], false);
+    }
+
+    #[test]
+    fn active_task_completion_keeps_suffixes_and_names_pomodoros() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-active-suffix");
+        let day_file = active_task_fixture(temp.path());
+
+        // The replacement always stops before `#`/`=`.
+        let raw = "^sase:deep-fix#bu";
+        let link = with_env("BOB_DAY_FILE", &day_file, || {
+            result(temp.path(), raw, 14)
+        });
+        assert_eq!(link.context, Some(CompletionContext::ActiveTask));
+        assert_eq!(link.replacement, Replacement { start: 1, end: 14 });
+
+        // After `#` the same marker completes Pomodoro names.
+        let name = with_env("BOB_DAY_FILE", &day_file, || {
+            result(temp.path(), raw, raw.len())
+        });
+        assert_eq!(name.context, Some(CompletionContext::PomodoroName));
+        let Candidates::PomodoroName(names) = &name.candidates else {
+            panic!("expected Pomodoro-name candidates");
+        };
+        assert_eq!(names[0].replacement, "bugs");
+
+        // Inside `=<X>` there is no completion field at all.
+        let raw = "^sase:deep-fix=3";
+        let empty = with_env("BOB_DAY_FILE", &day_file, || {
+            result(temp.path(), raw, raw.len())
+        });
+        assert_eq!(empty.context, None);
+        assert_eq!(empty.candidates.len(), 0);
+    }
+
+    #[test]
+    fn active_task_human_rows_name_the_queue() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-active-human");
+        let day_file = active_task_fixture(temp.path());
+
+        let value =
+            with_env("BOB_DAY_FILE", &day_file, || result(temp.path(), "^", 1));
+        let rows = candidate_lines(&value.candidates);
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "sase:deep-fix".to_string(),
+                    "[*] Fix deep bug  · BUGS".to_string(),
+                ),
+                (
+                    "sase:outline".to_string(),
+                    "[/] Outline talk  · Not queued".to_string(),
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -1658,6 +1906,7 @@ mod tests {
 
     #[test]
     fn hash_after_a_bare_block_id_marker_completes_a_pomodoro_name() {
+        let _guard = day_file_guard();
         let temp = TempDir::new("bob-cli-capture-complete-task-toggle-hash");
         write_file(&temp.path().join("cash.md"), "- [ ] #task Parent ^bar\n");
         let day_file = temp.path().join("2026/20260828.md");
@@ -1762,6 +2011,7 @@ mod tests {
 
     #[test]
     fn pomodoro_name_completion_works_without_a_block_id() {
+        let _guard = day_file_guard();
         let temp = TempDir::new("bob-cli-capture-complete-pomodoro-name");
         write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
         let day_file = temp.path().join("2026/20260828.md");

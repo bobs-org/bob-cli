@@ -55,6 +55,8 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route:block-id=<X>` | Same, and atomically start the selected session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
 | `@route:block-id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
+| `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); `=<X>` starts the resolved session atomically |
+| `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes only In Progress and Next tasks |
 | `+N` / `-N` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends by 25 minutes, `-2` shortens by 10 minutes); the item must contain only the signed count |
 | `@route^block-id+` | Create the project note `<route>_<block_id>.md`; do not touch the daily note |
 | `@route:block-id+` | Same, and link the new note's `^prj` task from today's implicit current/next Pomodoro |
@@ -80,6 +82,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@cash+id#coding` with no other text | Toggle that task and select the `CODING` Pomodoro |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
 | `@sase:deep-fix#bugs=-2` | Same, starting a 25-minute session with a 10-minute offset |
+| `^sase:deep-fix#bugs` | Link the existing `^deep-fix` task under open `BUGS`; the `#` names a Pomodoro, and `^` is the active-task spelling |
 | `+5` | Extend today's current timed Pomodoro by 25 minutes; the `+` is an adjustment, not a sub-bullet |
 | `-2` | Shorten today's current timed Pomodoro by 10 minutes |
 | `Plan +5` | Ordinary task text; a count mid-body stays prose |
@@ -582,6 +585,82 @@ every existing key and adds an additive `pomodoro_start` object (resolved
 `start`/`end`, `duration_minutes`, `offset_units`, destination name/line,
 whether the entry was created); human output names the Pomodoro and its time.
 
+### Linking and starting existing tasks
+
+Capture a whole item that is only `@route:block-id[#pomodoro][=<X>]` (or the
+`^route:block-id[#pomodoro][=<X>]` active-task spelling) to link an existing
+task into today's Pomodoro ledger and optionally start that session
+atomically. For example, `bob capture '^sase:deep-fix='` links the existing
+`^deep-fix` task in `sase.md` and starts its session. The marker must be the
+entire capture item: no body text, no authored child bullets, no `%`/`--clip`,
+no `s:<N>`/`p:<N>`, and no forced destination flags. A token with the complete
+`^route:block-id…` shape claims its item; anything else on the item fails with
+an `invalid_pomodoro_link` error instead of becoming task text. Partial shapes
+(`^`, `^fragment`, `^route:`, `^route:block-id#`) are incomplete editing
+states when they are the whole item and ordinary prose otherwise. Anything
+else starting with `^` (`^_^`, `^^`, `^.`) stays ordinary text, and `^` is
+only recognized as the first token of an item's first line. `^…+` and `^…!`
+are rejected with messages naming the `@route:block-id+` project-note and
+`@route+block-id!` toggle spellings. A `@@` declaration never applies to a
+`^` item. Body-bearing `<text> @route:block-id[#name][=<X>]` keeps its exact
+current new-task meaning.
+
+The existing task resolves with the task-toggle lookup, so missing notes,
+missing IDs (with a close-match suggestion plus a hint to add text for a new
+Pomodoro-linked task), duplicate IDs, and non-task block IDs reuse those
+errors. Ready `[ ]` and Blocked `[?]` tasks become Next `[*]`; Next stays
+Next and In Progress `[/]` is never demoted. A single valid future
+`[scheduled::]` is retired with the pull-forward Schedule Log entry when a log
+already exists, and `dependsOn` still warns — all under the existing Ensure
+Next rules. Done, canceled, and unknown statuses fail: only Ready, Blocked,
+Next, and In Progress tasks can be linked.
+
+Let _Q_ be the open Pomodoro whose children hold the task's dedicated
+`[[route#^id]]` Task Link (links under completed Pomodoros are history and are
+never edited; more than one movable link is the existing write-free invariant
+error). With `#pomodoro`, the existing named selection applies: whole-slug
+then prefix over open entries, else the canonical named future Pomodoro is
+created, and _Q_'s complete subtree moves there (or a new link is inserted
+when there is no _Q_). Without a name, an already-queued task respects the
+queue: the destination is _Q_ and nothing moves. Without a name and no _Q_,
+the implicit current/next Pomodoro is used, exactly like a new-task capture.
+`=<X>` uses the same `se<X>` math, clock, and guards: any open timed Pomodoro
+fails with "finish the current Pomodoro first"; `#name=<X>` needs an untimed
+open placeholder or creates a started entry; no-name with _Q_ starts _Q_ in
+place (it must be an untimed open placeholder); no-name without _Q_ uses the
+first open untimed placeholder or creates an unnamed started entry. The
+started entry keeps its position, and the ledger is never reordered.
+
+With `BOB_NOW=2026-07-10 09:02:00` and a ledger holding completed `PLAN`,
+open `BUGS` (with `[[sase#^deep-fix]]` plus child notes), and an open unnamed
+entry, while `sase.md` holds `[*] ^deep-fix`, `[/] ^outline`, and `[ ]
+^ready`:
+
+| Item                     | Result                                                        |
+| ------------------------ | ------------------------------------------------------------- |
+| `^sase:deep-fix`         | True no-op: already Next, Task Link already in BUGS           |
+| `^sase:deep-fix=`        | BUGS becomes `(**0905-0930** [t:: 25m]) — BUGS`; link kept    |
+| `^sase:deep-fix#focus=3` | Started `FOCUS` (0905-0920) created after PLAN; link moved    |
+| `^sase:outline=`         | Stays `[/]`; BUGS starts with a new `[[sase#^outline]]`       |
+| `@sase:ready`            | `[ ]` → `[*]`; new link under BUGS                           |
+| `@sase:ready#bugs=-`     | `[ ]` → `[*]`; BUGS starts 0900-0925; link appended           |
+
+JSON reports kind `"pomodoro_link"` with `text: ""`, the post-image
+`task_line`, `placement: "linked"`, the task-toggle vocabulary (`block_id`,
+`day_file`, `block_link`, `previous_task_line`, `previous_status_symbol` /
+`_name`, `status_symbol` / `_name`, `status_changed`, `removed_scheduled`,
+`schedule_log` when written, `pomodoro_name`, `creates_pomodoro`),
+`pomodoro_link_action` (`"linked"`, `"moved"`, or `"already_current"`),
+pre-image `pomodoro_link_source` (only when a link existed), post-image
+`pomodoro_link_destination`, `pomodoro_link_placement` (when a link was
+inserted or moved), and the exact `pomodoro_start` object `pomodoro_task`
+uses (only with `=<X>`). It emits no `toggle_direction`/`toggle_behavior`.
+Human output follows the Ensure Next style: a `link`/`would link` or
+`start`/`would start` header, a status line (`[ ] → [*]`, `[*] already
+Next`, `[/] stays In Progress`), a ledger line (`Linked … under BUGS`,
+`Moved Task Link BUGS → FOCUS (created FOCUS)`, or `Task Link already in
+BUGS; no ledger change.`), and the existing start phrasing.
+
 ### Adjusting the current Pomodoro
 
 Capture a whole item `+N` or `-N` to adjust today's current timed Pomodoro
@@ -1062,9 +1141,11 @@ call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`, and
 `placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
-`"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, or `"project_note"`, and
+`"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
+`"pomodoro_adjust"`, or `"pomodoro_link"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
-the rendered `^prj` line. On JSON-mode failures, stdout is still a
+the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
+post-image line. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
 
 A capture with authored sub-bullets additionally includes a `sub_bullets`
@@ -1109,6 +1190,19 @@ They omit `day_file`, `block_link`, and `pomodoro_link_placement`.
 
 Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 `block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`.
+
+Solo-link results use kind `"pomodoro_link"` with `placement: "linked"`,
+`routed: true`, and `text: ""`. They carry the post-image `task_line`, the
+`block_id`, `day_file`, `block_link`, `previous_task_line`,
+`previous_status_symbol` / `previous_status_name`, `status_symbol` /
+`status_name`, `status_changed`, `removed_scheduled`, `schedule_log` (when
+written), `pomodoro_name`, and `creates_pomodoro` fields; they add
+`pomodoro_link_action` (`"linked"`, `"moved"`, or `"already_current"`),
+pre-image `pomodoro_link_source` (only when a link existed), post-image
+`pomodoro_link_destination`, `pomodoro_link_placement` (when a link was
+inserted or moved), and `pomodoro_start` (only with `=<X>`). They emit no
+`toggle_direction` / `toggle_behavior`, so older clients degrade to a neutral
+preview instead of a wrong one.
 
 Project-note results use kind `"project_note"` with `placement: "created"`.
 `route` stays the parent route (`cash` for `@cash^goog-exit+`), so
@@ -1204,6 +1298,16 @@ form) still prompts only for the destination, while `@^<id>+` / `@:<id>+`
 report the project-note mode with `needs: ["route"]` and a bare
 `<task> @route^block-id+` / `<task> @route:block-id+` is complete.
 
+A solo leading `^` opens the active-task picker instead of creating a task.
+Typing `^` lists only In Progress and Next tasks with block IDs, ordered by
+today's open-Pomodoro Task Links (queued tasks in ledger order, then unqueued
+In Progress, then unqueued Next); accepting a row inserts the full
+`route:block-id` in one step. A typed `#name`/`=<X>` suffix survives the
+accept. `^`, `^fragment`, and `^route:` report `incomplete` with
+`needs: ["active_task"]`, `^route:block-id#` needs `pomodoro_name`, and a
+complete `^route:block-id[#pomodoro][=<X>]` reports `pomodoro_link` and links
+the existing task on capture.
+
 ## `bob capture-parse`
 
 ```bash
@@ -1288,9 +1392,18 @@ the normalized capture body after terminal `s:<N>`, `p:<N>`, and `%...` markers
 and the recognized `@...` token are removed, matching what `bob capture` would
 write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
 `pomodoro_note`, `sub_bullet`, `task_toggle`, `project_note`,
-`pomodoro_project_note`, `pomodoro_adjust`, or `incomplete`, describing whichever line resolved a marker
+`pomodoro_project_note`, `pomodoro_adjust`, `pomodoro_link`, or `incomplete`, describing whichever line resolved a marker
 first -- the parent's leading or trailing form, or else the first child line
-with a trailing marker. The `project_note` / `pomodoro_project_note` split
+with a trailing marker. A solo `@route:block-id…` item reports
+`pomodoro_link` with the `pomodoro_route` / `pomodoro_block_id` /
+`pomodoro_name` / `pomodoro_start` spans; the `^` spelling reports the same
+mode with `active_task_route` (covering `^route`) and `active_task_block_id`
+spans plus the existing name and start spans. Lone `^`, `^fragment`, and
+`^route:` report `incomplete` with `needs: ["active_task"]` and one
+`interactive_placeholder` span over the token, while `^route:block-id#` needs
+`pomodoro_name`. Near misses and solo-link conflicts report an
+`invalid_pomodoro_link` diagnostic; the additive `pomodoro_start` spec is
+unchanged. The `project_note` / `pomodoro_project_note` split
 mirrors the `task` / `pomodoro_task` one, so a client can tell whether the
 daily note is involved. A bare trailing `#` reports `pomodoro_note` with
 `route`, `section`, and `block_id` all `null` and an empty `needs` list. Combining
@@ -1305,7 +1418,7 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `:` project-note form. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` with no body text reports mode
 `incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode
@@ -1359,7 +1472,7 @@ first item; adjustment items never inherit a `@@` declaration.
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
-`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_note`, `project_note_marker`, `sub_bullet_route`,
+`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
@@ -1380,7 +1493,7 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, or one on a project-note `+` form), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_project_note_marker` (a project-note shape error, such as a Pomodoro name on the `^` form), `unsupported_explicit_toggle`, `legacy_bullet_marker`,
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, or one on a project-note `+` form), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error, such as a Pomodoro name on the `^` form), `unsupported_explicit_toggle`, `legacy_bullet_marker`,
 `pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
 `s:<N>`, or `p:<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
@@ -1458,14 +1571,20 @@ no-op, because the claiming token is no longer bare.
 An item's single local marker that cannot be expressed as a declaration --
 `@route#Section`, `@route+block-id#section`, `@route^block-id`,
 `@route:block-id`, `@route^block-id+` / `@route:block-id+` as a project note,
-`@route+block-id` as a task toggle, or a trailing bare `#`
+`@route+block-id` as a task toggle, a solo `@route:block-id…` / `^route:block-id…`
+Pomodoro link, or a trailing bare `#`
 -- is left untouched; the result reports `changed: false` plus a
 `notices` entry naming the marker and why, e.g.
 `@@ cannot take a section: leave @notes#Ideas on this item, or delete it and declare @@notes`.
 For a task toggle the notice is
 `@@ cannot take a task toggle: leave @cash+goog-exit on this item, or delete it`,
-and for a project note it is
-`@@ cannot take a project note: leave @cash^goog-exit+ on this item, or delete it`.
+for a project note it is
+`@@ cannot take a project note: leave @cash^goog-exit+ on this item, or delete it`,
+and for a Pomodoro link it is
+`@@ cannot take a Pomodoro link: leave ^sase:deep-fix on this item, or delete it`.
+`^` items are never rewritten. An item with more than one local marker is also left untouched, with no
+notice, because `bob capture-parse` already reports that duplicate as a
+`duplicate_capture_marker` diagnostic.
 An item with more than one local marker is also left untouched, with no
 notice, because `bob capture-parse` already reports that duplicate as a
 `duplicate_capture_marker` diagnostic.
@@ -1587,7 +1706,19 @@ context. Pomodoro `@route:` completion stays identified-only even when
 plus-context-only.
 The right-hand side of `@route^block-id` is a new user-authored ID, so it has no
 completion context and returns an empty successful result while the caret is
-inside it. An empty block-ID component (`@route+#`) returns a successful empty
+inside it. A solo leading `^` token instead completes active tasks: while the
+cursor is in the `route:block-id` part (including an empty part) the context
+is `active_task`, offering only In Progress and Next tasks with block IDs
+backed by the active-task discovery scan — queued tasks in ledger order, then
+unqueued In Progress, then unqueued Next — with prefix matches before
+substring matches over `route:block-id`, the block ID, the task text, the
+section, and the Pomodoro name, so `^dee`, `^sase:dee`, and `^outline` all
+find their tasks. `replacement` runs from just after `^` to the end of that
+part and always stops before `#`/`=`, so typed suffixes survive an accept,
+and `query` is the text from after `^` to the cursor. A `#name` after
+`^route:block-id` completes Pomodoro names exactly as it does after
+`@route:block-id`, and a cursor inside `=<X>` returns an empty success.
+Existing `@route:` (`pomodoro_block_id`) completion is unchanged. An empty block-ID component (`@route+#`) returns a successful empty
 task-section list. An unresolvable parent task returns a successful empty list
 plus one bounded `warnings` entry; the warning names the route and block ID
 without logging draft text or the task description.
@@ -1631,7 +1762,7 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `pomodoro_name`, `task`,
-`task_section`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+`task_section`, `active_task`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
 active. Each candidate's `replacement` is the exact text to insert; wikilink
 candidates also include `cursor_after`, the post-accept UTF-8 byte offset after
 deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
@@ -1650,7 +1781,12 @@ sets `creates_pomodoro: true`, and uses the canonical selector as
 (`pomodoro_block_id` or `task` context) has `ref`, nullable `block_id`,
 `route`, `requires_block_id`, `status_symbol`, `status_name`, `status_type`,
 `text`, nullable `section`, `depth`, and `child_count`. Identified tasks keep
-their normal block-ID `replacement`. Missing-ID tasks, which appear only when
+their normal block-ID `replacement`. An active-task candidate (`active_task`
+context) has `replacement` (`route:block-id`), `ref`, `route`, `block_id`,
+`status_symbol`, `status_name`, `status_type`, `text`, nullable `section`, and
+nullable `pomodoro` (`line`, nullable `name`, nullable `time_range`,
+`is_current`; `null` when the task is not queued). Human rows read
+`sase:deep-fix  [*] Fix deep bug  · BUGS`. Missing-ID tasks, which appear only when
 `--all-tasks` is set in the `task` context, have `block_id: null`,
 `requires_block_id: true`, and an empty placeholder `replacement` that the
 updated client must never insert. A wikilink note candidate has `path`, `name`, optional `alias`,

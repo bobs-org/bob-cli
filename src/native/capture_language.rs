@@ -2118,6 +2118,266 @@ fn parse_caret_link_token(
     }
 }
 
+/// Editor reading of one leading `^...` token. Unlike execution this never
+/// fails: partial shapes are mid-typing states, and near misses carry their
+/// message for an `invalid_pomodoro_link` diagnostic. Token-relative offsets
+/// (`link_end`, `name_range`, `start_offset`) are byte offsets into the
+/// token text, so both `parse_editor_item` spans and completion replacement
+/// ranges derive from one classification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CaretTokenShape {
+    /// Ordinary prose, never a link: a lookalike (`^_^`, `^^`, `^.`) or an
+    /// invalid route prefix.
+    Prose,
+    /// A near miss (`^... +`, `^...!`, a bad component, a malformed start)
+    /// with the message execution fails with.
+    Invalid(String),
+    /// Lone `^`, `^fragment`, or `^route:`: still typing the route:block-id
+    /// part. The route is set once a valid `route:` prefix is typed.
+    Partial { route: Option<String> },
+    /// `^route:block-id#`: still typing the Pomodoro name.
+    NamePartial { route: String, block_id: String },
+    /// A complete `^route:block-id[#name][=<X>]` token. `link_end` ends the
+    /// `route:block-id` part (before any `#`/`=`); `name_range` covers the
+    /// name text after `#`; `start_offset` starts the `=<X>` suffix.
+    Complete {
+        route: String,
+        block_id: String,
+        pomodoro_name: Option<String>,
+        start: Option<PomodoroStartSpec>,
+        link_end: usize,
+        name_range: Option<(usize, usize)>,
+        start_offset: Option<usize>,
+    },
+}
+
+fn is_caret_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+}
+
+fn classify_caret_token(text: &str) -> CaretTokenShape {
+    if text == "^" {
+        return CaretTokenShape::Partial { route: None };
+    }
+    let Some(rest) = text.strip_prefix('^') else {
+        return CaretTokenShape::Prose;
+    };
+    if rest.contains('^') {
+        return CaretTokenShape::Prose;
+    }
+    if !rest.bytes().next().is_some_and(is_caret_word_byte) {
+        return CaretTokenShape::Prose;
+    }
+    if !rest.contains(':') {
+        if rest.bytes().all(is_caret_word_byte) {
+            return CaretTokenShape::Partial { route: None };
+        }
+        return CaretTokenShape::Prose;
+    }
+    let (route_part, tail) = rest.split_once(':').expect("contains colon");
+    if route_part.is_empty()
+        || !is_route_token(route_part)
+        || !route_part.bytes().any(|byte| byte.is_ascii_alphabetic())
+    {
+        return CaretTokenShape::Prose;
+    }
+    if tail.is_empty() {
+        return CaretTokenShape::Partial {
+            route: Some(route_part.to_ascii_lowercase()),
+        };
+    }
+    if tail.ends_with('!') {
+        return CaretTokenShape::Invalid(
+            POMODORO_LINK_TOGGLE_ERROR.to_string(),
+        );
+    }
+    match parse_colon_link_tail(route_part, tail) {
+        Ok(parts) => {
+            if parts.project_note {
+                return CaretTokenShape::Invalid(
+                    POMODORO_LINK_PROJECT_ERROR.to_string(),
+                );
+            }
+            let route = route_part.to_ascii_lowercase();
+            let link_base = 1 + route_part.len() + 1;
+            let (before_start, start_offset) = match tail.split_once('=') {
+                Some((before, _)) => (before, Some(link_base + before.len())),
+                None => (tail, None),
+            };
+            let (block_raw, name_raw) = match before_start.split_once('#') {
+                Some((block, name)) => (block, Some(name)),
+                None => (before_start, None),
+            };
+            let link_end = link_base + block_raw.len();
+            let name_range = name_raw.map(|name| {
+                let name_start = link_end + 1;
+                (name_start, name_start + name.len())
+            });
+            CaretTokenShape::Complete {
+                route,
+                block_id: parts.block_id,
+                pomodoro_name: parts.pomodoro_name,
+                start: parts.start,
+                link_end,
+                name_range,
+                start_offset,
+            }
+        }
+        Err(message) => {
+            if message == POMODORO_NAME_REQUIRED_ERROR {
+                let block = tail
+                    .split_once('#')
+                    .map(|(block, _)| block)
+                    .unwrap_or(tail);
+                return CaretTokenShape::NamePartial {
+                    route: route_part.to_ascii_lowercase(),
+                    block_id: block.to_string(),
+                };
+            }
+            CaretTokenShape::Invalid(message)
+        }
+    }
+}
+
+const POMODORO_LINK_CHILD_CONFLICT_ERROR: &str =
+    "Pomodoro link capture cannot be combined with authored child bullets";
+const POMODORO_LINK_CLIP_CONFLICT_ERROR: &str =
+    "Pomodoro link capture cannot be combined with % clipboard markers";
+const POMODORO_LINK_SCHEDULE_CONFLICT_ERROR: &str =
+    "Pomodoro link capture cannot be combined with s:<N>";
+const POMODORO_LINK_PRIORITY_CONFLICT_ERROR: &str =
+    "Pomodoro link capture cannot be combined with p:<N>";
+
+/// Editor reading of an item whose parent line starts with `^`. Returns
+/// `None` when the item stays on the ordinary path (no `^` first token, a
+/// lookalike, or a partial shape with other text on the item, all of which
+/// stay prose). Otherwise the `^` token claims the item: a complete shape
+/// reports `pomodoro_link` (plus an `invalid_pomodoro_link` diagnostic when
+/// anything else is on the item), partial shapes report `incomplete`, and
+/// near misses report `pomodoro_link` with the diagnostic.
+struct CaretItem<'a> {
+    token: Token<'a>,
+    solo_parent: bool,
+    kind: CaretItemKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CaretItemKind {
+    Complete {
+        route: String,
+        block_id: String,
+        pomodoro_name: Option<String>,
+        start: Option<PomodoroStartSpec>,
+        link_end: usize,
+        name_range: Option<(usize, usize)>,
+        start_offset: Option<usize>,
+        conflict: Option<String>,
+    },
+    Partial {
+        route: Option<String>,
+    },
+    NamePartial {
+        route: String,
+        block_id: String,
+    },
+    Invalid {
+        message: String,
+    },
+}
+
+fn classify_caret_item<'a>(
+    item: &CaptureItem<'a>,
+    parent_line: RawLine<'a>,
+) -> Option<CaretItem<'a>> {
+    let parent_tokens = tokenize_line_with_spans(&parent_line);
+    let first = parent_tokens.first()?;
+    if !first.text.starts_with('^') {
+        return None;
+    }
+    let solo_parent = parent_tokens.len() == 1;
+    let single_line = item.lines.len() == 1;
+    match classify_caret_token(first.text) {
+        CaretTokenShape::Prose => None,
+        CaretTokenShape::Invalid(message) => Some(CaretItem {
+            token: *first,
+            solo_parent,
+            kind: CaretItemKind::Invalid { message },
+        }),
+        CaretTokenShape::Partial { route } => {
+            if solo_parent && single_line {
+                Some(CaretItem {
+                    token: *first,
+                    solo_parent,
+                    kind: CaretItemKind::Partial { route },
+                })
+            } else {
+                None
+            }
+        }
+        CaretTokenShape::NamePartial { route, block_id } => {
+            if solo_parent && single_line {
+                Some(CaretItem {
+                    token: *first,
+                    solo_parent,
+                    kind: CaretItemKind::NamePartial { route, block_id },
+                })
+            } else {
+                None
+            }
+        }
+        CaretTokenShape::Complete {
+            route,
+            block_id,
+            pomodoro_name,
+            start,
+            link_end,
+            name_range,
+            start_offset,
+        } => {
+            let conflict = if solo_parent && single_line {
+                None
+            } else if !solo_parent {
+                parent_tokens[1..]
+                    .iter()
+                    .find_map(|extra| {
+                        if parse_schedule_token(extra.text).is_some() {
+                            Some(
+                                POMODORO_LINK_SCHEDULE_CONFLICT_ERROR
+                                    .to_string(),
+                            )
+                        } else if parse_priority_token(extra.text).is_some() {
+                            Some(
+                                POMODORO_LINK_PRIORITY_CONFLICT_ERROR
+                                    .to_string(),
+                            )
+                        } else if extra.text.starts_with('%') {
+                            Some(POMODORO_LINK_CLIP_CONFLICT_ERROR.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| Some(POMODORO_LINK_SHAPE_ERROR.to_string()))
+            } else {
+                Some(POMODORO_LINK_CHILD_CONFLICT_ERROR.to_string())
+            };
+            Some(CaretItem {
+                token: *first,
+                solo_parent,
+                kind: CaretItemKind::Complete {
+                    route,
+                    block_id,
+                    pomodoro_name,
+                    start,
+                    link_end,
+                    name_range,
+                    start_offset,
+                    conflict,
+                },
+            })
+        }
+    }
+}
+
 /// Whole-item `^route:block-id[#pomodoro][=<X>]` grammar.
 ///
 /// Returns `Ok(None)` when the item does not start with `^` and ordinary
@@ -2614,6 +2874,8 @@ pub(crate) enum SpanKind {
     PomodoroBlockId,
     PomodoroName,
     PomodoroStart,
+    ActiveTaskRoute,
+    ActiveTaskBlockId,
     PomodoroAdjust,
     SubBulletRoute,
     SubBulletBlockId,
@@ -2649,6 +2911,8 @@ impl SpanKind {
             Self::PomodoroBlockId => "pomodoro_block_id",
             Self::PomodoroName => "pomodoro_name",
             Self::PomodoroStart => "pomodoro_start",
+            Self::ActiveTaskRoute => "active_task_route",
+            Self::ActiveTaskBlockId => "active_task_block_id",
             Self::PomodoroAdjust => "pomodoro_adjust",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
@@ -2757,6 +3021,7 @@ pub(crate) enum Need {
     PomodoroName,
     Task,
     TaskSection,
+    ActiveTask,
 }
 
 impl Need {
@@ -2769,6 +3034,7 @@ impl Need {
             Self::PomodoroName => "pomodoro_name",
             Self::Task => "task",
             Self::TaskSection => "task_section",
+            Self::ActiveTask => "active_task",
         }
     }
 }
@@ -3464,7 +3730,9 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
     spans.extend(parent_parse.terminal_spans);
     diagnostics.extend(parent_parse.diagnostics);
 
-    let body = parent_parse.body;
+    let caret = classify_caret_item(item, parent_line);
+
+    let mut body = parent_parse.body;
     let mut has_local_destination = parent_parse.has_destination_marker;
     if local_destination_marker.is_none() {
         local_destination_marker = parent_parse.marker_text.clone();
@@ -3669,6 +3937,190 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
         local_destination_marker = None;
         if let Some(index) = own_local_destination_marker_index {
             local_destination_markers.remove(index);
+        }
+    }
+
+    // A solo `@route:block-id…` item links an existing task instead of
+    // creating one, so `capture-parse` reports `pomodoro_link` exactly like
+    // `bob capture` executes it. Anything else on the item (authored
+    // children, clipboard, schedule, or priority markers) is an
+    // `invalid_pomodoro_link` conflict instead of a new task.
+    if mode == EditorMode::PomodoroTask
+        && body.is_empty()
+        && parent_parse
+            .marker
+            .as_ref()
+            .is_some_and(|marker| marker.mode == EditorMode::PomodoroTask)
+    {
+        mode = EditorMode::PomodoroLink;
+        if let Some(index) = own_local_destination_marker_index {
+            local_destination_markers[index].mode = EditorMode::PomodoroLink;
+        }
+        let range = parent_parse.marker.as_ref().and_then(|marker| {
+            let start = marker.spans.first().map(|span| span.start)?;
+            let end = marker.spans.last().map(|span| span.end)?;
+            Some((start, end))
+        });
+        let conflict = if !sub_bullets.is_empty() {
+            Some(POMODORO_LINK_CHILD_CONFLICT_ERROR)
+        } else if seen.schedule {
+            Some(POMODORO_LINK_SCHEDULE_CONFLICT_ERROR)
+        } else if seen.priority {
+            Some(POMODORO_LINK_PRIORITY_CONFLICT_ERROR)
+        } else if seen.clip {
+            Some(POMODORO_LINK_CLIP_CONFLICT_ERROR)
+        } else {
+            None
+        };
+        if let Some(message) = conflict {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_link",
+                message: message.to_string(),
+                range,
+            });
+        }
+    }
+
+    // A leading `^` token claims its item (see `classify_caret_item`):
+    // complete shapes report `pomodoro_link` with the `active_task_*`
+    // spans, partial shapes report `incomplete`, and near misses report
+    // `pomodoro_link` with an `invalid_pomodoro_link` diagnostic. The `^`
+    // token replaces any ordinary marker the generic pass resolved, and a
+    // `@@` declaration never applies to the item.
+    if let Some(caret) = caret {
+        local_destination_markers.clear();
+        local_destination_marker = None;
+        has_local_destination = true;
+        let token_start = caret.token.start;
+        let token_end = caret.token.end;
+        match caret.kind {
+            CaretItemKind::Complete {
+                route: caret_route,
+                block_id: caret_block,
+                pomodoro_name: caret_name,
+                start: caret_start,
+                link_end,
+                name_range,
+                start_offset,
+                conflict,
+            } => {
+                mode = EditorMode::PomodoroLink;
+                body = if caret.solo_parent {
+                    String::new()
+                } else {
+                    body
+                };
+                let route_end = token_start + 1 + caret_route.len();
+                route = Some(caret_route);
+                section = caret_name;
+                block_id = Some(caret_block);
+                needs = Vec::new();
+                pomodoro_start = caret_start;
+                spans.push(Span {
+                    start: token_start,
+                    end: route_end,
+                    kind: SpanKind::ActiveTaskRoute,
+                });
+                spans.push(Span {
+                    start: route_end + 1,
+                    end: token_start + link_end,
+                    kind: SpanKind::ActiveTaskBlockId,
+                });
+                if let Some((name_start, name_end)) = name_range
+                    && name_end > name_start
+                {
+                    spans.push(Span {
+                        start: token_start + name_start,
+                        end: token_start + name_end,
+                        kind: SpanKind::PomodoroName,
+                    });
+                }
+                if let Some(offset) = start_offset {
+                    spans.push(Span {
+                        start: token_start + offset,
+                        end: token_end,
+                        kind: SpanKind::PomodoroStart,
+                    });
+                }
+                local_destination_markers.push(LocalDestinationMarker {
+                    start: token_start,
+                    end: token_end,
+                    text: caret.token.text.to_string(),
+                    mode: EditorMode::PomodoroLink,
+                    route: route.clone(),
+                    block_id: block_id.clone(),
+                    section: section.clone(),
+                });
+                local_destination_marker = local_destination_markers
+                    .last()
+                    .map(|marker| marker.text.clone());
+                if let Some(message) = conflict {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_link",
+                        message,
+                        range: Some((token_start, token_end)),
+                    });
+                }
+            }
+            CaretItemKind::Partial {
+                route: partial_route,
+            } => {
+                mode = EditorMode::Incomplete;
+                body = String::new();
+                route = partial_route;
+                section = None;
+                block_id = None;
+                needs = vec![Need::ActiveTask];
+                pomodoro_start = None;
+                spans.push(Span {
+                    start: token_start,
+                    end: token_end,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+            }
+            CaretItemKind::NamePartial {
+                route: partial_route,
+                block_id: partial_block,
+            } => {
+                mode = EditorMode::Incomplete;
+                body = String::new();
+                route = Some(partial_route);
+                section = None;
+                block_id = Some(partial_block);
+                needs = vec![Need::PomodoroName];
+                pomodoro_start = None;
+                let route_end =
+                    token_start + 1 + route.as_deref().unwrap_or("").len();
+                spans.push(Span {
+                    start: token_start,
+                    end: route_end,
+                    kind: SpanKind::ActiveTaskRoute,
+                });
+                spans.push(Span {
+                    start: route_end + 1,
+                    end: token_end - 1,
+                    kind: SpanKind::ActiveTaskBlockId,
+                });
+                spans.push(Span {
+                    start: token_end - 1,
+                    end: token_end,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+            }
+            CaretItemKind::Invalid { message } => {
+                mode = EditorMode::PomodoroLink;
+                if caret.solo_parent {
+                    body = String::new();
+                }
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_link",
+                    message,
+                    range: Some((token_start, token_end)),
+                });
+            }
         }
     }
 
@@ -4591,6 +5043,7 @@ pub(crate) enum CompletionContext {
     PomodoroName,
     Task,
     TaskSection,
+    ActiveTask,
     WikilinkNote,
     WikilinkHeading,
     WikilinkBlock,
@@ -4645,6 +5098,122 @@ struct CompletionParts<'a> {
 /// indentation plus bullet marker itself is never completable, matching the
 /// authored-bullet grammar `bob capture` and `bob capture-parse` execute
 /// with.
+/// Complete a solo leading `^` token: the `route:block-id` part (up to the
+/// cursor, so typed suffixes survive an accept) offers vault-wide active
+/// tasks, while a cursor after `#` offers Pomodoro names for the resolved
+/// route and block ID. Anything else on the parent line is prose, a cursor
+/// inside `=<X>` offers nothing, and partial shapes on multi-line items
+/// stay prose, so those return `None`.
+fn caret_completion_field_at(
+    item: &CaptureItem<'_>,
+    line: RawLine<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let tokens = tokenize_line_with_spans(&line);
+    let first = tokens.first()?;
+    if !first.text.starts_with('^') || tokens.len() != 1 {
+        return None;
+    }
+    if cursor <= first.start || cursor > first.end {
+        return None;
+    }
+    let relative = cursor - first.start;
+    match classify_caret_token(first.text) {
+        CaretTokenShape::Prose | CaretTokenShape::Invalid(_) => None,
+        CaretTokenShape::Partial { .. } => {
+            if item.lines.len() != 1 {
+                return None;
+            }
+            let query = first.text.get(1..relative)?.to_string();
+            Some(CompletionField {
+                context: CompletionContext::ActiveTask,
+                route: None,
+                block_id: None,
+                query,
+                replacement: (first.start + 1, first.end),
+            })
+        }
+        CaretTokenShape::NamePartial { route, block_id } => {
+            if item.lines.len() != 1 {
+                return None;
+            }
+            // The token ends with a bare `#`: the link part ends before it
+            // and the name is an empty insertion point just after it.
+            let hash = first.text.find('#').unwrap_or(first.text.len());
+            caret_link_field(
+                first,
+                route,
+                block_id,
+                hash,
+                Some((hash + 1, hash + 1)),
+                cursor,
+            )
+        }
+        CaretTokenShape::Complete {
+            route,
+            block_id,
+            link_end,
+            name_range,
+            start_offset,
+            ..
+        } => caret_link_field(
+            first,
+            route,
+            block_id,
+            link_end,
+            name_range.or(Some((link_end, link_end))),
+            cursor,
+        )
+        .filter(|_| {
+            start_offset.is_none_or(|offset| cursor <= first.start + offset)
+        }),
+    }
+}
+
+/// Build the completion field for the `route:block-id[#name]` portion of a
+/// `^` token: inside the link part the query runs from just after `^` to
+/// the cursor and the replacement ends before any `#`/`=`; at or after `#`
+/// the query is the typed name and the replacement covers the name part, so
+/// accepting a candidate preserves a typed `#name`/`=<X>` suffix. `link_end`
+/// and `name_range` are token-relative offsets from `classify_caret_token`.
+fn caret_link_field(
+    token: &Token<'_>,
+    route: String,
+    block_id: String,
+    link_end: usize,
+    name_range: Option<(usize, usize)>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let link_end_abs = token.start + link_end;
+    if cursor <= link_end_abs {
+        let query = token.text.get(1..cursor - token.start)?.to_string();
+        return Some(CompletionField {
+            context: CompletionContext::ActiveTask,
+            route: None,
+            block_id: None,
+            query,
+            replacement: (token.start + 1, link_end_abs),
+        });
+    }
+    let (name_start, name_end) = name_range?;
+    let name_start_abs = token.start + name_start;
+    let name_end_abs = token.start + name_end;
+    if cursor < name_start_abs || cursor > token.end {
+        return None;
+    }
+    let query = token
+        .text
+        .get(name_start..cursor - token.start)?
+        .to_string();
+    Some(CompletionField {
+        context: CompletionContext::PomodoroName,
+        route: Some(route),
+        block_id: Some(block_id),
+        query,
+        replacement: (name_start_abs, name_end_abs),
+    })
+}
+
 pub(crate) fn completion_field_at(
     raw_text: &str,
     cursor: usize,
@@ -4680,6 +5249,17 @@ pub(crate) fn completion_field_at(
         return None;
     }
     let leading = line_index == 0;
+
+    // A solo leading `^` token completes active tasks vault-wide instead of
+    // offering `@` route completion: the cursor inside the `route:block-id`
+    // part (including an empty part) requests the `active_task` context, a
+    // cursor after `#` requests Pomodoro names, and a cursor inside `=<X>`
+    // requests nothing so a typed suffix survives an accept.
+    if leading
+        && let Some(field) = caret_completion_field_at(item, line, cursor)
+    {
+        return Some(field);
+    }
 
     let scan_line = if leading {
         line
@@ -6523,7 +7103,7 @@ mod tests {
     #[test]
     fn editor_accepts_marker_only_input_with_an_empty_body() {
         for (raw, mode) in [
-            ("@dev:id", EditorMode::PomodoroTask),
+            ("@dev:id", EditorMode::PomodoroLink),
             ("@:", EditorMode::Incomplete),
             ("@dev+id", EditorMode::TaskToggle),
             ("@dev+id!", EditorMode::TaskToggle),
@@ -6537,6 +7117,246 @@ mod tests {
             assert_eq!(parse.body, "", "{raw}");
             assert_eq!(parse.mode, mode, "{raw}");
         }
+    }
+
+    #[test]
+    fn editor_reports_solo_at_pomodoro_links() {
+        let parse = editor("@sase:deep-fix");
+        assert_eq!(parse.mode, EditorMode::PomodoroLink);
+        assert_eq!(parse.body, "");
+        assert_eq!(parse.route.as_deref(), Some("sase"));
+        assert_eq!(parse.block_id.as_deref(), Some("deep-fix"));
+        assert_eq!(parse.section, None);
+        assert!(parse.needs.is_empty());
+        assert!(parse.pomodoro_start.is_none());
+        assert_eq!(
+            ranges(&parse),
+            vec![
+                (0, 5, SpanKind::PomodoroRoute),
+                (6, 14, SpanKind::PomodoroBlockId),
+            ]
+        );
+        assert!(parse.diagnostics.is_empty());
+
+        let named = editor("@SASE:deep-fix#bugs=3");
+        assert_eq!(named.mode, EditorMode::PomodoroLink);
+        assert_eq!(named.route.as_deref(), Some("sase"));
+        assert_eq!(named.section.as_deref(), Some("bugs"));
+        let start = named.pomodoro_start.clone().expect("start suffix");
+        assert_eq!(start.raw, "3");
+        assert_eq!(
+            ranges(&named),
+            vec![
+                (0, 5, SpanKind::PomodoroRoute),
+                (6, 14, SpanKind::PomodoroBlockId),
+                (15, 19, SpanKind::PomodoroName),
+                (19, 21, SpanKind::PomodoroStart),
+            ]
+        );
+
+        // Body-bearing markers keep their new-task meaning.
+        let task = editor("Do work @sase:deep-fix");
+        assert_eq!(task.mode, EditorMode::PomodoroTask);
+        assert_eq!(task.body, "Do work");
+
+        // Anything else on a solo item is an `invalid_pomodoro_link`
+        // conflict, not a new task.
+        for (raw, message) in [
+            (
+                "@sase:deep-fix\n- child",
+                "Pomodoro link capture cannot be combined with authored child bullets",
+            ),
+            (
+                "@sase:deep-fix s:2",
+                "Pomodoro link capture cannot be combined with s:<N>",
+            ),
+            (
+                "@sase:deep-fix p:2",
+                "Pomodoro link capture cannot be combined with p:<N>",
+            ),
+            (
+                "@sase:deep-fix %",
+                "Pomodoro link capture cannot be combined with % clipboard markers",
+            ),
+        ] {
+            let parse = editor(raw);
+            assert_eq!(parse.mode, EditorMode::PomodoroLink, "{raw}");
+            assert_eq!(codes(&parse), vec!["invalid_pomodoro_link"], "{raw}");
+            assert_eq!(parse.diagnostics[0].message, message, "{raw}");
+        }
+    }
+
+    #[test]
+    fn editor_reports_caret_pomodoro_links() {
+        let parse = editor("^sase:deep-fix");
+        assert_eq!(parse.mode, EditorMode::PomodoroLink);
+        assert_eq!(parse.body, "");
+        assert_eq!(parse.route.as_deref(), Some("sase"));
+        assert_eq!(parse.block_id.as_deref(), Some("deep-fix"));
+        assert_eq!(parse.section, None);
+        assert!(parse.needs.is_empty());
+        assert!(parse.pomodoro_start.is_none());
+        assert_eq!(
+            ranges(&parse),
+            vec![
+                (0, 5, SpanKind::ActiveTaskRoute),
+                (6, 14, SpanKind::ActiveTaskBlockId),
+            ]
+        );
+        assert!(parse.diagnostics.is_empty());
+
+        let named = editor("^SASE:deep-fix#bugs=3");
+        assert_eq!(named.mode, EditorMode::PomodoroLink);
+        assert_eq!(named.route.as_deref(), Some("sase"));
+        assert_eq!(named.section.as_deref(), Some("bugs"));
+        let start = named.pomodoro_start.clone().expect("start suffix");
+        assert_eq!(start.raw, "3");
+        assert_eq!(
+            ranges(&named),
+            vec![
+                (0, 5, SpanKind::ActiveTaskRoute),
+                (6, 14, SpanKind::ActiveTaskBlockId),
+                (15, 19, SpanKind::PomodoroName),
+                (19, 21, SpanKind::PomodoroStart),
+            ]
+        );
+        assert!(named.diagnostics.is_empty());
+
+        let plain_start = editor("^sase:deep-fix=");
+        assert_eq!(plain_start.mode, EditorMode::PomodoroLink);
+        assert!(plain_start.pomodoro_start.is_some());
+    }
+
+    #[test]
+    fn editor_reports_caret_partials_as_incomplete() {
+        for raw in ["^", "^frag", "^sase:"] {
+            let parse = editor(raw);
+            assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
+            assert_eq!(parse.body, "", "{raw}");
+            assert_eq!(parse.needs, vec![Need::ActiveTask], "{raw}");
+            assert_eq!(
+                ranges(&parse),
+                vec![(0, raw.len(), SpanKind::InteractivePlaceholder)],
+                "{raw}"
+            );
+            assert!(parse.diagnostics.is_empty(), "{raw}");
+        }
+        let routed = editor("^sase:");
+        assert_eq!(routed.route.as_deref(), Some("sase"));
+
+        let named = editor("^sase:deep-fix#");
+        assert_eq!(named.mode, EditorMode::Incomplete);
+        assert_eq!(named.needs, vec![Need::PomodoroName]);
+        assert_eq!(named.route.as_deref(), Some("sase"));
+        assert_eq!(named.block_id.as_deref(), Some("deep-fix"));
+        assert_eq!(
+            ranges(&named),
+            vec![
+                (0, 5, SpanKind::ActiveTaskRoute),
+                (6, 14, SpanKind::ActiveTaskBlockId),
+                (14, 15, SpanKind::InteractivePlaceholder),
+            ]
+        );
+    }
+
+    #[test]
+    fn editor_reports_caret_near_misses_and_conflicts() {
+        for (raw, message) in [
+            (
+                "^sase:deep-fix extra",
+                "`^route:block-id` must be the whole capture item",
+            ),
+            (
+                "^sase:deep-fix+",
+                "Pomodoro link `^route:block-id+` is a project note",
+            ),
+            (
+                "^sase:deep-fix!",
+                "Pomodoro link `^route:block-id!` is a task toggle",
+            ),
+            (
+                "^sase:deep-fix\n- child",
+                "Pomodoro link capture cannot be combined with authored child bullets",
+            ),
+            (
+                "^sase:deep-fix s:2",
+                "Pomodoro link capture cannot be combined with s:<N>",
+            ),
+            (
+                "^sase:deep-fix p:1",
+                "Pomodoro link capture cannot be combined with p:<N>",
+            ),
+            (
+                "^sase:deep-fix %",
+                "Pomodoro link capture cannot be combined with % clipboard markers",
+            ),
+            (
+                "^sase:deep-fix==",
+                "Pomodoro start suffix must mirror se<X>",
+            ),
+        ] {
+            let parse = editor(raw);
+            assert_eq!(parse.mode, EditorMode::PomodoroLink, "{raw}");
+            assert_eq!(codes(&parse), vec!["invalid_pomodoro_link"], "{raw}");
+            assert!(
+                parse.diagnostics[0].message.starts_with(message),
+                "{raw}: {}",
+                parse.diagnostics[0].message
+            );
+            let token_len =
+                raw.split_whitespace().next().expect("token").len();
+            assert_eq!(
+                parse.diagnostics[0].range,
+                Some((0, token_len)),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_leaves_caret_lookalikes_and_prose_literal() {
+        for raw in [
+            "^_^",
+            "^^",
+            "^.",
+            "^ text",
+            "^frag rest",
+            "^sase: rest",
+            "note ^sase:deep-fix",
+            "^sase:deep-fix#\n- child",
+        ] {
+            let parse = editor(raw);
+            assert_eq!(parse.mode, EditorMode::Task, "{raw}");
+            assert_eq!(codes(&parse), Vec::<&str>::new(), "{raw}");
+            assert!(
+                span_kinds(&parse).iter().all(|kind| !matches!(
+                    kind,
+                    SpanKind::ActiveTaskRoute | SpanKind::ActiveTaskBlockId
+                )),
+                "{raw}"
+            );
+        }
+        // `^` is only recognized as the first token of an item's first
+        // line: later lines and later items stay prose.
+        let child = editor("parent\n- ^sase:deep-fix");
+        assert_eq!(child.mode, EditorMode::Task);
+        let multi = editor("^sase:deep-fix\n\nsecond item");
+        assert_eq!(multi.items.len(), 2);
+        assert_eq!(multi.items[0].mode, EditorMode::PomodoroLink);
+        assert_eq!(multi.items[1].mode, EditorMode::Task);
+    }
+
+    #[test]
+    fn editor_never_applies_global_destination_to_caret_items() {
+        let parse = editor("@@foo\n^sase:deep-fix");
+        assert_eq!(parse.items.len(), 1);
+        assert_eq!(parse.items[0].mode, EditorMode::PomodoroLink);
+        assert_eq!(parse.items[0].route.as_deref(), Some("sase"));
+
+        let partial = editor("@@foo\n^frag");
+        assert_eq!(partial.items.len(), 1);
+        assert_eq!(partial.items[0].mode, EditorMode::Incomplete);
+        assert_eq!(partial.items[0].needs, vec![Need::ActiveTask]);
     }
 
     /// Every input `bob capture` resolves to a concrete capture must parse
@@ -9521,6 +10341,14 @@ were removed"
             ("note @dev^id+ @@", "cannot take a project note"),
             ("note @dev:id+ @@", "cannot take a project note"),
             ("note @dev:id+#bugs @@", "cannot take a project note"),
+            (
+                "@sase:deep-fix @@",
+                "@@ cannot take a Pomodoro link: leave @sase:deep-fix on this item, or delete it",
+            ),
+            (
+                "^sase:deep-fix @@",
+                "@@ cannot take a Pomodoro link: leave ^sase:deep-fix on this item, or delete it",
+            ),
         ] {
             let rewrite = rewrite_draft(raw, None);
             assert_eq!(rewrite.rule, None, "{raw}");

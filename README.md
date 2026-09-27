@@ -195,6 +195,8 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route:id=<X>` | Same, and atomically start the session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
 | `@route:id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
+| `@route:id[#pomodoro][=<X>]` with no other text | Link the existing task into today's ledger (no new task); `=<X>` starts the resolved session |
+| `^route:id[#pomodoro][=<X>]` with no other text | Identical execution; `^` completes only In Progress and Next tasks |
 | `+N` / `-N` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-2` shortens 10m); the item must contain only the signed count |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |

@@ -118,7 +118,17 @@ task completion candidates. \
 A '@^id+' or \
 '@:id+' marker already carries the project-note intent: it reports mode \
 'project_note' or 'pomodoro_project_note' with a 'route' need until the \
-route is typed. The retired \
+route is typed. A solo '@route:block-id[#pomodoro][=<X>]' item links an existing task into \
+today's Pomodoro ledger instead of creating one, and parses as \
+'pomodoro_link' with the same spans and `pomodoro_start` object; anything \
+else on the item is an `invalid_pomodoro_link` diagnostic. The '^' spelling \
+is identical except the marker resolves to `active_task_route` and \
+`active_task_block_id` spans: '^', '^fragment', and '^route:' parse as \
+'incomplete' needing `active_task` with one `interactive_placeholder` span, \
+'^route:block-id#' needs `pomodoro_name`, and near misses stay \
+`pomodoro_link` with an `invalid_pomodoro_link` diagnostic. Anything else \
+starting with '^' ('^_^', '^^', '^.') stays ordinary text, and '^' is only \
+recognized as the first token of an item's first line. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \
 'pomodoro_note' with no route, section, or block ID and an empty 'needs' list; \
@@ -140,7 +150,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_link, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task",
         )
         .disable_help_flag(true)
         .arg(format_arg())

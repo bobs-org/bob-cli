@@ -179,6 +179,21 @@ the new task beneath it; any open timed entry fails with 'finish the current \
 Pomodoro first'. For '=', the first open placeholder wins, else an unnamed entry \
 is created; for '#name=', an open name match wins, else a canonical named entry is \
 created. '=<X>' cannot combine with 's:<N>' or 'p:<N>'.\n\n\
+Capture a whole item '@<route>:<block-id>[#<pomodoro>][=<X>]' to link an \
+existing task into today's Pomodoro ledger instead of creating one, as in \
+`bob capture '@sase:deep-fix'` or `bob capture '@sase:deep-fix#bugs=-'`. \
+The marker must be the entire item: no body text, authored children, '%', \
+'s:<N>', 'p:<N>', or forced destination flags. Ready and Blocked tasks \
+become Next (a valid future schedule is retired with a pull-forward log \
+entry); Next and In Progress tasks keep their status. With '#<pomodoro>' \
+the link moves to that named entry (creating it when needed); without a \
+name an already-queued task stays in its Pomodoro and '=<X>' starts that \
+entry in place, otherwise the implicit current/next entry is used. The \
+'^' spelling ('bob capture '^sase:deep-fix='') executes identically and \
+exists so typing '^' completes only In Progress and Next tasks. JSON \
+reports a distinct 'pomodoro_link' kind with the status transition, the \
+ledger action (linked, moved, or already_current), and the resolved \
+destination.\n\n\
 Capture a whole item `+N` or `-N` (for example `+5` or `-2`) to adjust \
 today's current timed Pomodoro by N five-minute units: `+5` extends by 25 \
 minutes, `-2` shortens by 10 minutes. The item must contain only the signed \
