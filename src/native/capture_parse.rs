@@ -845,13 +845,13 @@ mod tests {
     fn json_reports_invalid_start_suffixes_as_diagnostics() {
         let value = json("Do work @sase:outline=abc");
         assert!(value.get("pomodoro_start").is_none(), "{value}");
-        assert_eq!(
-            value["diagnostics"][0]["code"],
-            "invalid_pomodoro_start"
-        );
+        assert_eq!(value["diagnostics"][0]["code"], "invalid_pomodoro_start");
 
         let project_note = json("note @sase:outline+=3");
-        assert!(project_note.get("pomodoro_start").is_none(), "{project_note}");
+        assert!(
+            project_note.get("pomodoro_start").is_none(),
+            "{project_note}"
+        );
         assert_eq!(
             project_note["diagnostics"][0]["code"],
             "invalid_pomodoro_start"
@@ -880,7 +880,10 @@ mod tests {
             })
         );
         // The top-level preview still describes the first item.
-        assert_eq!(value["pomodoro_start"], value["items"][0]["pomodoro_start"]);
+        assert_eq!(
+            value["pomodoro_start"],
+            value["items"][0]["pomodoro_start"]
+        );
     }
 
     #[test]

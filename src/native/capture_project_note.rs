@@ -31,7 +31,8 @@ use super::capture_language::{AuthoredDepth, AuthoredSubBullet};
 /// Placeholder task kept under `## Tasks` when no authored task children were
 /// rendered. Matches the template's `(REPLACE WITH TASK DESCRIPTION)` line
 /// that `replaceProjectTasksPlaceholder` leaves in place in that case.
-pub(crate) const PLACEHOLDER_TASK_BODY: &str = "(REPLACE WITH TASK DESCRIPTION)";
+pub(crate) const PLACEHOLDER_TASK_BODY: &str =
+    "(REPLACE WITH TASK DESCRIPTION)";
 
 /// Everything `render_project_note` needs. Dates arrive resolved: `scheduled`
 /// is `YYYY-MM-DD`, `priority` is the `(name, value)` field pair (for example
@@ -83,7 +84,9 @@ pub(crate) fn format_created_timestamp(now: NaiveDateTime) -> String {
     const FORMAT: &str = "%Y-%m-%dT%H:%M:%S%z";
     match Local.from_local_datetime(&now) {
         LocalResult::Single(datetime) => datetime.format(FORMAT).to_string(),
-        LocalResult::Ambiguous(earliest, _) => earliest.format(FORMAT).to_string(),
+        LocalResult::Ambiguous(earliest, _) => {
+            earliest.format(FORMAT).to_string()
+        }
         LocalResult::None => gap_offset_timestamp(now, FORMAT),
     }
 }
@@ -103,7 +106,9 @@ fn gap_offset_timestamp(now: NaiveDateTime, format: &str) -> String {
     offset
         .and_then(|offset| offset.from_local_datetime(&now).single())
         .map(|resolved| resolved.format(format).to_string())
-        .unwrap_or_else(|| format!("{}{FALLBACK_SUFFIX}", now.format("%Y-%m-%dT%H:%M:%S")))
+        .unwrap_or_else(|| {
+            format!("{}{FALLBACK_SUFFIX}", now.format("%Y-%m-%dT%H:%M:%S"))
+        })
 }
 
 /// Whether a trimmed authored body matches the ALL-CAPS section-title shape
@@ -116,7 +121,8 @@ pub(crate) fn is_project_section_title(body: &str) -> bool {
     }
     let mut chars = trimmed.chars();
     match chars.next() {
-        Some(first) if first.is_ascii_uppercase() || first.is_ascii_digit() => {}
+        Some(first) if first.is_ascii_uppercase() || first.is_ascii_digit() => {
+        }
         _ => return false,
     }
     for character in trimmed.chars() {
@@ -243,7 +249,11 @@ fn contains_task_tag(body: &str) -> bool {
 /// (defaulting to open), add `#task` unless present, and append
 /// `[created::DATE]` unless the body already carries one. Nested child lines
 /// are rendered by the caller as plain indented bullets.
-fn render_authored_task(status: char, body: &str, created_date: &str) -> String {
+fn render_authored_task(
+    status: char,
+    body: &str,
+    created_date: &str,
+) -> String {
     let task_body = if body.is_empty() {
         "#task".to_string()
     } else if contains_task_tag(body) {
@@ -270,7 +280,9 @@ struct SectionEntry {
 }
 
 /// Render the project note for `input`. See the module docs for the contract.
-pub(crate) fn render_project_note(input: &ProjectNoteRenderInput<'_>) -> RenderedProjectNote {
+pub(crate) fn render_project_note(
+    input: &ProjectNoteRenderInput<'_>,
+) -> RenderedProjectNote {
     let basename = project_note_basename(input.route, input.block_id);
     let created_date = input.now.format("%Y-%m-%d").to_string();
     let created_timestamp = format_created_timestamp(input.now);
@@ -282,7 +294,8 @@ pub(crate) fn render_project_note(input: &ProjectNoteRenderInput<'_>) -> Rendere
     } else {
         ' '
     };
-    let mut task_line = format!("- [{status}] #task #prj {}", input.body.trim());
+    let mut task_line =
+        format!("- [{status}] #task #prj {}", input.body.trim());
     if let Some((name, value)) = input.priority {
         task_line.push_str(&format!(" [{name}::{value}]"));
     }
@@ -307,7 +320,10 @@ pub(crate) fn render_project_note(input: &ProjectNoteRenderInput<'_>) -> Rendere
     for group in &groups {
         let owner_body = group.owner.body.trim();
         let (checkbox, bare) = split_leading_checkbox(owner_body);
-        if checkbox.is_none() && !group.nested.is_empty() && is_project_section_title(owner_body) {
+        if checkbox.is_none()
+            && !group.nested.is_empty()
+            && is_project_section_title(owner_body)
+        {
             let title = format_project_section_title(owner_body);
             let normalized = normalize_project_section_title(&title);
             let note_lines: Vec<String> = group
@@ -330,7 +346,11 @@ pub(crate) fn render_project_note(input: &ProjectNoteRenderInput<'_>) -> Rendere
             }
         } else {
             let task_status = checkbox.unwrap_or(' ');
-            tasks_block.push(render_authored_task(task_status, bare, &created_date));
+            tasks_block.push(render_authored_task(
+                task_status,
+                bare,
+                &created_date,
+            ));
             task_entries += 1;
             for nested in &group.nested {
                 tasks_block.push(format!("\t- {}", nested.body.trim()));
@@ -424,7 +444,9 @@ mod tests {
         }
     }
 
-    fn base_input<'a>(sub_bullets: &'a [AuthoredSubBullet]) -> ProjectNoteRenderInput<'a> {
+    fn base_input<'a>(
+        sub_bullets: &'a [AuthoredSubBullet],
+    ) -> ProjectNoteRenderInput<'a> {
         ProjectNoteRenderInput {
             route: "cash",
             block_id: "goog-exit",
@@ -504,11 +526,9 @@ mod tests {
         let mut input = base_input(&[]);
         input.scheduled = Some("2026-10-04");
         let rendered = render_project_note(&input);
-        assert!(
-            rendered
-                .contents
-                .contains("status: wip\nscheduled: 2026-10-04\n")
-        );
+        assert!(rendered
+            .contents
+            .contains("status: wip\nscheduled: 2026-10-04\n"));
         assert!(rendered.task_line.starts_with("- [?] "));
     }
 
@@ -537,7 +557,8 @@ mod tests {
     fn schedule_log_lines_land_directly_under_the_prj_task() {
         let log = vec![
             "\t- 🗓️ **SCHEDULE LOG**".to_string(),
-            "\t\t- *2026-11-02* — 🎲 P0 → P4 · in **91** (91–365) days".to_string(),
+            "\t\t- *2026-11-02* — 🎲 P0 → P4 · in **91** (91–365) days"
+                .to_string(),
         ];
         let mut input = base_input(&[]);
         input.priority = Some(("priority", "lowest"));
@@ -616,11 +637,9 @@ mod tests {
         let sub_bullets = vec![bullet("FUTURE WORK", AuthoredDepth::First)];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert!(!rendered.contents.contains("## Future Work"));
-        assert!(
-            rendered
-                .contents
-                .contains("- [ ] #task FUTURE WORK [created::2026-09-20]\n")
-        );
+        assert!(rendered
+            .contents
+            .contains("- [ ] #task FUTURE WORK [created::2026-09-20]\n"));
         assert_eq!(rendered.task_count, 1);
     }
 
@@ -656,11 +675,9 @@ mod tests {
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
         assert_eq!(rendered.contents.matches("## ").count(), 1);
-        assert!(
-            rendered
-                .contents
-                .contains("- [ ] #task 🗓️ **SCHEDULE LOG** [created::2026-09-20]\n")
-        );
+        assert!(rendered.contents.contains(
+            "- [ ] #task 🗓️ **SCHEDULE LOG** [created::2026-09-20]\n"
+        ));
         assert_eq!(rendered.task_count, 1);
     }
 }
