@@ -240,7 +240,8 @@ Append `=<X>` to a Pomodoro-linked marker to start its session in the same
 transaction: `bob capture 'Write outline @sase:outline=3'` starts a
 15-minute session on the next open slot, and
 `@sase:outline#deep-work=-2` starts the default 25-minute session with a
-10-minute offset. `<X>` is exactly the suffix of the `se<X>` snippet — empty,
+10-minute offset. The started entry moves ahead of every open Pomodoro, right
+after the last completed one. `<X>` is exactly the suffix of the `se<X>` snippet — empty,
 digits, `-`, `-digits`, or `digits-` with optional digits — and the range is
 rounded to 5 minutes like the snippet. A timed open Pomodoro stops the
 capture with a "finish the current Pomodoro first" error, and `=<X>` cannot

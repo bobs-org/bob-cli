@@ -580,7 +580,8 @@ Pomodoro — including one past its nominal end — stops the capture with a
 or double-starts an entry. A selected non-placeholder or structurally
 ambiguous ledger fails the same way. A newly created started entry uses the
 same placement as named creation: after the last completed Pomodoro's complete
-block, otherwise before the first Pomodoro in the section. JSON output keeps
+block, otherwise before the first Pomodoro in the section. Starting an existing
+placeholder moves it, with its child block, to that same slot. JSON output keeps
 every existing key and adds an additive `pomodoro_start` object (resolved
 `start`/`end`, `duration_minutes`, `offset_units`, destination name/line,
 whether the entry was created); human output names the Pomodoro and its time.
@@ -626,10 +627,12 @@ queue: the destination is _Q_ and nothing moves. Without a name and no _Q_,
 the implicit current/next Pomodoro is used, exactly like a new-task capture.
 `=<X>` uses the same `se<X>` math, clock, and guards: any open timed Pomodoro
 fails with "finish the current Pomodoro first"; `#name=<X>` needs an untimed
-open placeholder or creates a started entry; no-name with _Q_ starts _Q_ in
-place (it must be an untimed open placeholder); no-name without _Q_ uses the
-first open untimed placeholder or creates an unnamed started entry. The
-started entry keeps its position, and the ledger is never reordered.
+open placeholder or creates a started entry; no-name with _Q_ starts _Q_
+(it must be an untimed open placeholder); no-name without _Q_ uses the
+first open untimed placeholder or creates an unnamed started entry. Every
+started entry moves, with its child block, to the current slot: right after
+the last completed Pomodoro's complete block, otherwise before the first
+other open Pomodoro.
 
 With `BOB_NOW=2026-07-10 09:02:00` and a ledger holding completed `PLAN`,
 open `BUGS` (with `[[sase#^deep-fix]]` plus child notes), and an open unnamed

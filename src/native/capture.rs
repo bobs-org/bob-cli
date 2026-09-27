@@ -176,7 +176,8 @@ empty duration means 25 minutes, bare '-' means 5-minute offset, no '-' means ze
 offset). The start replaces the selected untimed '()' placeholder with \
 '(**HHMM-HHMM** [t:: Nm])' computed from BOB_NOW at 5-minute rounding, then links \
 the new task beneath it; any open timed entry fails with 'finish the current \
-Pomodoro first'. For '=', the first open placeholder wins, else an unnamed entry \
+Pomodoro first'. The started entry moves ahead of every open Pomodoro, right after \
+the last completed one. For '=', the first open placeholder wins, else an unnamed entry \
 is created; for '#name=', an open name match wins, else a canonical named entry is \
 created. '=<X>' cannot combine with 's:<N>' or 'p:<N>'.\n\n\
 Capture a whole item '@<route>:<block-id>[#<pomodoro>][=<X>]' to link an \
@@ -188,7 +189,7 @@ become Next (a valid future schedule is retired with a pull-forward log \
 entry); Next and In Progress tasks keep their status. With '#<pomodoro>' \
 the link moves to that named entry (creating it when needed); without a \
 name an already-queued task stays in its Pomodoro and '=<X>' starts that \
-entry in place, otherwise the implicit current/next entry is used. The \
+entry and moves it to the front of the queue, otherwise the implicit current/next entry is used. The \
 '^' spelling ('bob capture '^sase:deep-fix='') executes identically and \
 exists so typing '^' completes only In Progress and Next tasks. JSON \
 reports a distinct 'pomodoro_link' kind with the status transition, the \
@@ -2307,25 +2308,25 @@ fn plan_pomodoro_start(
                 let index = entry.line.checked_sub(1).ok_or_else(|| {
                     CaptureError::io("Pomodoro capture invariant failed: named entry has no line")
                 })?;
-                let (started_day, _) = replace_placeholder_range(
+                let (started_day, moved_index) = start_existing_pomodoro_entry(
                     original_day,
                     index,
                     &time_range,
                 )?;
                 let (updated_day, placement) = append_pomodoro_child_link(
                     &started_day,
-                    index,
+                    moved_index,
                     &section,
                     block_link,
                 )?;
                 let resolved_name = started_day
                     .lines()
-                    .nth(index)
+                    .nth(moved_index)
                     .and_then(|_| {
                         capture_pomodoros::scan(&started_day)
                             .entries
                             .iter()
-                            .find(|candidate| candidate.line == index + 1)
+                            .find(|candidate| candidate.line == moved_index + 1)
                             .and_then(|candidate| candidate.name.clone())
                     })
                     .or_else(|| {
@@ -2343,7 +2344,7 @@ fn plan_pomodoro_start(
                         duration_minutes,
                         offset_units: spec.offset_units,
                         pomodoro_name: resolved_name,
-                        pomodoro_line: index + 1,
+                        pomodoro_line: moved_index + 1,
                         created_pomodoro: false,
                         time_range,
                     },
@@ -2400,19 +2401,25 @@ fn plan_pomodoro_start(
                 "selected Pomodoro is not an untimed open placeholder",
             ));
         }
-        let (started_day, _) =
-            replace_placeholder_range(original_day, index, &time_range)?;
+        let (started_day, moved_index) =
+            start_existing_pomodoro_entry(original_day, index, &time_range)?;
         let (updated_day, placement) = append_pomodoro_child_link(
             &started_day,
-            index,
+            moved_index,
             &section,
             block_link,
         )?;
-        let resolved_name = scan
+        let resolved_name = capture_pomodoros::scan(&started_day)
             .entries
             .iter()
-            .find(|candidate| candidate.line == entry.line)
-            .and_then(|candidate| candidate.name.clone());
+            .find(|candidate| candidate.line == moved_index + 1)
+            .and_then(|candidate| candidate.name.clone())
+            .or_else(|| {
+                scan.entries
+                    .iter()
+                    .find(|candidate| candidate.line == entry.line)
+                    .and_then(|candidate| candidate.name.clone())
+            });
         return Ok((
             updated_day,
             placement,
@@ -2422,7 +2429,7 @@ fn plan_pomodoro_start(
                 duration_minutes,
                 offset_units: spec.offset_units,
                 pomodoro_name: resolved_name,
-                pomodoro_line: index + 1,
+                pomodoro_line: moved_index + 1,
                 created_pomodoro: false,
                 time_range,
             },
@@ -2540,18 +2547,14 @@ fn append_pomodoro_child_link(
     Ok((insert_at(contents, insertion_index, &addition), placement))
 }
 
-fn create_started_pomodoro_entry(
-    contents: &str,
+fn pomodoro_placement_scan(
     lines: &[LineSpan<'_>],
     section: &std::ops::Range<usize>,
-    name: Option<&str>,
-    time_range: &str,
-    block_link: &str,
-) -> Result<(String, Placement, usize), CaptureError> {
+) -> (Vec<usize>, Vec<usize>) {
     let line_text = lines.iter().map(|line| line.text).collect::<Vec<_>>();
     let fenced = super::markdown::fenced_lines(&line_text, section.clone());
     let mut completed = Vec::new();
-    let mut first_open = None;
+    let mut opens = Vec::new();
     for index in section.clone() {
         if fenced.contains(&index) {
             continue;
@@ -2561,17 +2564,132 @@ fn create_started_pomodoro_entry(
         }
         if pomodoro::completed_ledger_task(lines[index].text).is_some() {
             completed.push(index);
-        } else if first_open.is_none()
-            && pomodoro::open_ledger_task(lines[index].text).is_some()
-        {
-            first_open = Some(index);
+        } else if pomodoro::open_ledger_task(lines[index].text).is_some() {
+            opens.push(index);
         }
     }
+    (completed, opens)
+}
+
+fn move_started_pomodoro_to_current_slot(
+    contents: &str,
+    entry_index: usize,
+) -> Result<(String, usize), CaptureError> {
+    let lines = line_spans(contents);
+    let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+    let section =
+        pomodoro::pomodoros_section_range(&line_texts).ok_or_else(|| {
+            CaptureError::io("Bob daily note has no Pomodoros section")
+        })?;
+    if entry_index >= lines.len() {
+        return Err(CaptureError::io(
+            "Pomodoro capture invariant failed: started entry is out of range",
+        ));
+    }
+    let (completed, opens) = pomodoro_placement_scan(&lines, &section);
+    if completed.iter().any(|index| *index > entry_index) {
+        // A completed entry sits after the started one; fall through to move.
+    } else {
+        let anchor = completed.last().copied();
+        let between = opens.iter().any(|index| {
+            *index != entry_index
+                && anchor.map_or(true, |anchor| *index > anchor)
+                && *index < entry_index
+        });
+        if !between {
+            return Ok((contents.to_string(), entry_index));
+        }
+    }
+    let anchor = completed.last().copied();
+    let first_other_open =
+        opens.iter().find(|index| **index != entry_index).copied();
+    let slot = new_pomodoro_insertion_index(
+        &lines,
+        &section,
+        anchor,
+        first_other_open,
+    );
+    let block_start = line_start(&lines, entry_index);
+    let block_end = task_block_end(&lines, entry_index);
+    if slot == block_start || slot == block_end {
+        return Ok((contents.to_string(), entry_index));
+    }
+    let block_len = block_end - block_start;
+    let block_text = contents[block_start..block_end].to_string();
+    let without =
+        format!("{}{}", &contents[..block_start], &contents[block_end..]);
+    let slot_in_without = if slot <= block_start {
+        slot
+    } else {
+        slot - block_len
+    };
+    let without_lines = line_spans(&without);
+    let new_index = line_index_at_offset(&without_lines, slot_in_without);
+    let ending = document_line_ending(contents);
+    let has_final_newline = contents.ends_with('\n');
+    let updated = if has_final_newline {
+        format!(
+            "{}{}{}",
+            &without[..slot_in_without],
+            block_text,
+            &without[slot_in_without..]
+        )
+    } else {
+        let block_at_eof = block_end == contents.len();
+        let slot_at_eof = slot_in_without == without.len();
+        if block_at_eof && !slot_at_eof {
+            let mut moved = format!(
+                "{}{}{}{}",
+                &without[..slot_in_without],
+                block_text,
+                ending,
+                &without[slot_in_without..]
+            );
+            if let Some(stripped) = moved.strip_suffix(ending) {
+                moved = stripped.to_string();
+            }
+            moved
+        } else if !block_at_eof && slot_at_eof {
+            let mut moved = format!("{without}{ending}{block_text}");
+            if let Some(stripped) = moved.strip_suffix(ending) {
+                moved = stripped.to_string();
+            }
+            moved
+        } else {
+            format!(
+                "{}{}{}",
+                &without[..slot_in_without],
+                block_text,
+                &without[slot_in_without..]
+            )
+        }
+    };
+    Ok((updated, new_index))
+}
+
+fn start_existing_pomodoro_entry(
+    contents: &str,
+    index: usize,
+    time_range: &str,
+) -> Result<(String, usize), CaptureError> {
+    let (started, _) = replace_placeholder_range(contents, index, time_range)?;
+    move_started_pomodoro_to_current_slot(&started, index)
+}
+
+fn create_started_pomodoro_entry(
+    contents: &str,
+    lines: &[LineSpan<'_>],
+    section: &std::ops::Range<usize>,
+    name: Option<&str>,
+    time_range: &str,
+    block_link: &str,
+) -> Result<(String, Placement, usize), CaptureError> {
+    let (completed, opens) = pomodoro_placement_scan(lines, section);
     let insertion_index = new_pomodoro_insertion_index(
         lines,
         section,
         completed.last().copied(),
-        first_open,
+        opens.first().copied(),
     );
     let indentation = completed
         .last()
@@ -4066,20 +4184,21 @@ fn plan_pomodoro_link_with_start(
                 }
                 let dest_index = entry.line - 1;
                 if q_entry_index == dest_index {
-                    let (started_day, _) = replace_placeholder_range(
-                        day_contents,
-                        dest_index,
-                        &time_range,
-                    )?;
+                    let (started_day, moved_index) =
+                        start_existing_pomodoro_entry(
+                            day_contents,
+                            dest_index,
+                            &time_range,
+                        )?;
                     planner.stage(day_file, started_day.clone())?;
                     let after_scan = capture_pomodoros::scan(&started_day);
                     let dest_entry = after_scan
                         .entries
                         .iter()
-                        .find(|candidate| candidate.line == dest_index + 1)
+                        .find(|candidate| candidate.line == moved_index + 1)
                         .map(capture_task_toggle::endpoint_from_entry)
                         .unwrap_or(capture_task_toggle::PomodoroEndpoint {
-                            line: dest_index + 1,
+                            line: moved_index + 1,
                             name: entry.name.clone(),
                             time_range: None,
                         });
@@ -4090,7 +4209,7 @@ fn plan_pomodoro_link_with_start(
                         duration_minutes,
                         offset_units: spec.offset_units,
                         pomodoro_name: entry.name.clone(),
-                        pomodoro_line: dest_index + 1,
+                        pomodoro_line: dest_json.line,
                         created_pomodoro: false,
                         time_range: time_range.clone(),
                     };
@@ -4128,11 +4247,12 @@ fn plan_pomodoro_link_with_start(
                         }),
                     });
                 }
-                let (started_day, _) = replace_placeholder_range(
-                    day_contents,
-                    dest_index,
-                    &time_range,
-                )?;
+                let (started_day, moved_dest_index) =
+                    start_existing_pomodoro_entry(
+                        day_contents,
+                        dest_index,
+                        &time_range,
+                    )?;
                 let working_lines = line_spans(&started_day);
                 let working_texts = working_lines
                     .iter()
@@ -4165,7 +4285,7 @@ fn plan_pomodoro_link_with_start(
                         &started_day,
                         relocated.line_index,
                         relocated.subtree_end,
-                        dest_index,
+                        moved_dest_index,
                     )
                     .map_err(|error| {
                         relocation_plan_error(
@@ -4184,7 +4304,7 @@ fn plan_pomodoro_link_with_start(
                     })
                     .map(capture_task_toggle::endpoint_from_entry)
                     .unwrap_or(capture_task_toggle::PomodoroEndpoint {
-                        line: dest_index + 1,
+                        line: moved_dest_index + 1,
                         name: entry.name.clone(),
                         time_range: Some(format!("{start_text}-{end_text}")),
                     });
@@ -4376,17 +4496,20 @@ fn plan_pomodoro_link_with_start(
             "selected Pomodoro is not an untimed open placeholder; use `{suggestion}` to start a specific Pomodoro"
         )));
     }
-    let (started_day, _) =
-        replace_placeholder_range(day_contents, q_entry_index, &time_range)?;
+    let (started_day, moved_index) = start_existing_pomodoro_entry(
+        day_contents,
+        q_entry_index,
+        &time_range,
+    )?;
     planner.stage(day_file, started_day.clone())?;
     let after_scan = capture_pomodoros::scan(&started_day);
     let dest_entry = after_scan
         .entries
         .iter()
-        .find(|candidate| candidate.line - 1 == q_entry_index)
+        .find(|candidate| candidate.line - 1 == moved_index)
         .map(capture_task_toggle::endpoint_from_entry)
         .unwrap_or(capture_task_toggle::PomodoroEndpoint {
-            line: q_entry_index + 1,
+            line: moved_index + 1,
             name: q_scan_entry.name.clone(),
             time_range: Some(format!("{start_text}-{end_text}")),
         });
@@ -9670,6 +9793,248 @@ mod tests {
             super::insert_bullet_line(contents, BULLET, None, true),
             insert_bullet_line(contents, BULLET, None)
         );
+    }
+
+    #[test]
+    fn started_pomodoro_already_in_slot_keeps_blank_line() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] (**0715-0805** [t:: 50m]) — DONE\n",
+            "  - child\n",
+            "\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+            "  - [[sase_goals#^research]]\n",
+        );
+        let (updated, index) =
+            super::move_started_pomodoro_to_current_slot(contents, 4)
+                .expect("already in slot");
+        assert_eq!(updated, contents);
+        assert_eq!(index, 4);
+    }
+
+    #[test]
+    fn started_pomodoro_moves_before_first_open_without_completed() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] () — BUGS\n",
+            "  - [[sase#^bugs]]\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — FOCUS\n",
+            "  - [[sase#^focus]]\n",
+        );
+        let (updated, index) =
+            super::move_started_pomodoro_to_current_slot(contents, 3)
+                .expect("move before first open");
+        assert_eq!(index, 1);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] (**0905-0930** [t:: 25m]) — FOCUS\n",
+                "  - [[sase#^focus]]\n",
+                "- [ ] () — BUGS\n",
+                "  - [[sase#^bugs]]\n",
+            )
+        );
+    }
+
+    #[test]
+    fn started_pomodoro_moves_after_completed_with_grandchildren() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] (**0715-0805** [t:: 50m]) — DONE\n",
+            "  - child\n",
+            "    - grandchild\n",
+            "- [ ] () — PLANNED\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+            "  - [[sase_goals#^research]]\n",
+        );
+        let (updated, index) =
+            super::move_started_pomodoro_to_current_slot(contents, 5)
+                .expect("move after completed block");
+        assert_eq!(index, 4);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] (**0715-0805** [t:: 50m]) — DONE\n",
+                "  - child\n",
+                "    - grandchild\n",
+                "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+                "  - [[sase_goals#^research]]\n",
+                "- [ ] () — PLANNED\n",
+            )
+        );
+    }
+
+    #[test]
+    fn started_pomodoro_interleaved_moves_after_last_completed() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] Done A\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — X\n",
+            "- [x] Done B\n",
+            "  - child\n",
+            "- [ ] () — Y\n",
+        );
+        let (updated, index) =
+            super::move_started_pomodoro_to_current_slot(contents, 2)
+                .expect("interleaved move");
+        assert_eq!(index, 4);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] Done A\n",
+                "- [x] Done B\n",
+                "  - child\n",
+                "- [ ] (**0905-0930** [t:: 25m]) — X\n",
+                "- [ ] () — Y\n",
+            )
+        );
+    }
+
+    #[test]
+    fn started_pomodoro_ignores_cancelled_fenced_and_nested_anchors() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "```md\n",
+            "- [x] Fenced done\n",
+            "```\n",
+            "- [-] Cancelled\n",
+            "  - [x] Nested done\n",
+            "- [ ] () — FIRST\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — SECOND\n",
+        );
+        let (updated, index) =
+            super::move_started_pomodoro_to_current_slot(contents, 7)
+                .expect("lookalikes are not anchors");
+        assert_eq!(index, 6);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "```md\n",
+                "- [x] Fenced done\n",
+                "```\n",
+                "- [-] Cancelled\n",
+                "  - [x] Nested done\n",
+                "- [ ] (**0905-0930** [t:: 25m]) — SECOND\n",
+                "- [ ] () — FIRST\n",
+            )
+        );
+    }
+
+    #[test]
+    fn started_pomodoro_moves_interior_blank_line_and_keeps_trailing() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] Done\n",
+            "- [ ] () — PLANNED\n",
+            "\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+            "  - link\n",
+            "\n",
+            "  - notes\n",
+            "\n",
+            "- [ ] () — AFTER\n",
+        );
+        let (updated, index) =
+            super::move_started_pomodoro_to_current_slot(contents, 4)
+                .expect("interior blank moves");
+        assert_eq!(index, 2);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] Done\n",
+                "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+                "  - link\n",
+                "\n",
+                "  - notes\n",
+                "- [ ] () — PLANNED\n",
+                "\n",
+                "\n",
+                "- [ ] () — AFTER\n",
+            )
+        );
+    }
+
+    #[test]
+    fn started_pomodoro_move_preserves_crlf() {
+        let contents = concat!(
+            "## Pomodoros\r\n",
+            "- [x] Done\r\n",
+            "- [ ] () — PLANNED\r\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GOALS\r\n",
+            "  - link\r\n",
+        );
+        let (updated, index) =
+            super::move_started_pomodoro_to_current_slot(contents, 3)
+                .expect("crlf move");
+        assert_eq!(index, 2);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\r\n",
+                "- [x] Done\r\n",
+                "- [ ] (**0905-0930** [t:: 25m]) — GOALS\r\n",
+                "  - link\r\n",
+                "- [ ] () — PLANNED\r\n",
+            )
+        );
+        assert!(!updated.contains('\n') || updated.contains("\r\n"));
+    }
+
+    #[test]
+    fn started_pomodoro_eof_without_newline_moves_up() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] Done\n",
+            "  - child\n",
+            "- [ ] () — PLANNED\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+            "  - link",
+        );
+        let (updated, index) =
+            super::move_started_pomodoro_to_current_slot(contents, 4)
+                .expect("eof block moves up");
+        assert_eq!(index, 3);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] Done\n",
+                "  - child\n",
+                "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+                "  - link\n",
+                "- [ ] () — PLANNED",
+            )
+        );
+        assert!(!updated.ends_with('\n'));
+    }
+
+    #[test]
+    fn started_pomodoro_moves_down_to_eof_without_newline() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+            "  - link\n",
+            "- [x] Done",
+        );
+        let (updated, index) =
+            super::move_started_pomodoro_to_current_slot(contents, 1)
+                .expect("move down to eof");
+        assert_eq!(index, 2);
+        assert_eq!(
+            updated,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] Done\n",
+                "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+                "  - link",
+            )
+        );
+        assert!(!updated.ends_with('\n'));
     }
 
     #[test]

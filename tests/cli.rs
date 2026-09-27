@@ -30927,3 +30927,449 @@ fn capture_pomodoro_link_solo_grammar_and_atomic_execution() {
         serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["kind"], "pomodoro_task");
 }
+
+#[test]
+fn capture_pomodoro_start_moves_to_current_slot_screenshot_repro() {
+    fn repro_vault(
+        name: &str,
+    ) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let temp = TempDir::new(name);
+        let vault = temp.path().join("vault");
+        let day_file = vault.join("day.md");
+        write_toggle_task_settings(&vault);
+        write_file(
+            &vault.join("sase_goals.md"),
+            "- [*] #task Research goals ^research\n",
+        );
+        write_file(
+            &day_file,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] (**0715-0805** [t:: 50m]) — RELAUNCH\n",
+                "\t- [[sase#^relaunch-260927]]\n",
+                "- [x] (**1010-1030** [t:: 20m]) — SUBTABS\n",
+                "\t- \u{1F345} [[sase#^agents-sub-tabs]]\n",
+                "\t\t- Started 0t4!\n",
+                "- [ ] () — SUBTABS\n",
+                "\t- [[sase#^agents-sub-tabs]]\n",
+                "- [ ] () — GTD\n",
+                "\t- [[#^gtd]]\n",
+                "- [ ] () — GOALS\n",
+                "\t- [[sase_goals#^research]]\n",
+                "- [ ] () — SASE\n",
+                "\t- [[sase#^recovery-panel]]\n",
+            ),
+        );
+        (temp, vault, day_file)
+    }
+    fn expected_after() -> String {
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0715-0805** [t:: 50m]) — RELAUNCH\n",
+            "\t- [[sase#^relaunch-260927]]\n",
+            "- [x] (**1010-1030** [t:: 20m]) — SUBTABS\n",
+            "\t- \u{1F345} [[sase#^agents-sub-tabs]]\n",
+            "\t\t- Started 0t4!\n",
+            "- [ ] (**1315-1340** [t:: 25m]) — GOALS\n",
+            "\t- [[sase_goals#^research]]\n",
+            "- [ ] () — SUBTABS\n",
+            "\t- [[sase#^agents-sub-tabs]]\n",
+            "- [ ] () — GTD\n",
+            "\t- [[#^gtd]]\n",
+            "- [ ] () — SASE\n",
+            "\t- [[sase#^recovery-panel]]\n",
+        )
+        .to_string()
+    }
+    fn run_item(
+        vault: &std::path::Path,
+        day_file: &std::path::Path,
+        item: &str,
+    ) -> serde_json::Value {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(item)
+            .env("BOB_DAY_FILE", day_file)
+            .env("BOB_NOW", "2026-09-27 13:12:00")
+            .output()
+            .expect("run repro start");
+        assert_success(&output);
+        serde_json::from_str(stdout(&output).trim()).expect("repro JSON")
+    }
+
+    let (_t, vault, day_file) = repro_vault("bob-cli-start-slot-repro");
+    let day_before = fs::read_to_string(&day_file).expect("read before");
+    let target_before =
+        fs::read_to_string(vault.join("sase_goals.md")).expect("read target");
+    let json = run_item(&vault, &day_file, "^sase_goals:research=5");
+    assert_eq!(json["pomodoro_link_action"], "already_current");
+    assert_eq!(json["pomodoro_link_source"]["line"], 11);
+    assert_eq!(json["pomodoro_link_destination"]["line"], 7);
+    assert_eq!(json["pomodoro_start"]["pomodoro_line"], 7);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        expected_after()
+    );
+
+    let (_t, vault, day_file) = repro_vault("bob-cli-start-slot-at");
+    let json = run_item(&vault, &day_file, "@sase_goals:research=5");
+    assert_eq!(json["pomodoro_link_action"], "already_current");
+    assert_eq!(json["pomodoro_link_destination"]["line"], 7);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        expected_after()
+    );
+
+    let (_t, vault, day_file) = repro_vault("bob-cli-start-slot-named");
+    let json = run_item(&vault, &day_file, "^sase_goals:research#goals=5");
+    assert_eq!(json["pomodoro_link_action"], "already_current");
+    assert_eq!(json["pomodoro_link_destination"]["line"], 7);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        expected_after()
+    );
+
+    let (_t, vault, day_file) = repro_vault("bob-cli-start-slot-dry");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("^sase_goals:research=5")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-27 13:12:00")
+        .output()
+        .expect("dry run");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("dry JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["pomodoro_link_destination"]["line"], 7);
+    assert_eq!(json["pomodoro_start"]["pomodoro_line"], 7);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("untouched day"),
+        day_before
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase_goals.md")).expect("untouched"),
+        target_before
+    );
+}
+
+#[test]
+fn capture_pomodoro_start_moves_named_destination_before_link_move() {
+    let temp = TempDir::new("bob-cli-start-slot-q-ne-dest");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("sase_goals.md"),
+        "- [*] #task Research goals ^research\n",
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0800-0825** [t:: 25m]) — DONE\n",
+            "- [ ] () — GTD\n",
+            "\t- [[sase_goals#^research]]\n",
+            "\t\t- notes\n",
+            "- [ ] () — GOALS\n",
+            "- [ ] () — AFTER\n",
+        ),
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("^sase_goals:research#goals=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run named move");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(json["pomodoro_link_source"]["line"], 3);
+    assert_eq!(json["pomodoro_link_source"]["name"], "GTD");
+    assert_eq!(json["pomodoro_link_destination"]["name"], "GOALS");
+    assert_eq!(
+        json["pomodoro_link_destination"]["line"],
+        json["pomodoro_start"]["pomodoro_line"]
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0800-0825** [t:: 25m]) — DONE\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+            "\t- [[sase_goals#^research]]\n",
+            "\t\t- notes\n",
+            "- [ ] () — GTD\n",
+            "- [ ] () — AFTER\n",
+        )
+    );
+}
+
+#[test]
+fn capture_pomodoro_start_named_existing_moves_first() {
+    let temp = TempDir::new("bob-cli-start-slot-named-first");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () — BUGS\n- [ ] () — FOCUS\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:w1#focus=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run named first");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("named JSON");
+    assert_eq!(json["pomodoro_start"]["pomodoro_line"], 2);
+    assert_eq!(json["pomodoro_start"]["pomodoro_name"], "FOCUS");
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — FOCUS\n",
+            "  - [[sase#^w1]]\n",
+            "- [ ] () — BUGS\n",
+        )
+    );
+}
+
+#[test]
+fn capture_pomodoro_start_unnamed_moves_between_done_and_review() {
+    let temp = TempDir::new("bob-cli-start-slot-unnamed-between");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [x] Done\n- [ ] Review inbox\n- [ ] () — GTD\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:w2=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run unnamed between");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("unnamed JSON");
+    assert_eq!(json["pomodoro_start"]["pomodoro_line"], 3);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [x] Done\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GTD\n",
+            "  - [[sase#^w2]]\n",
+            "- [ ] Review inbox\n",
+        )
+    );
+
+    let temp2 = TempDir::new("bob-cli-start-slot-unnamed-no-done");
+    let vault2 = temp2.path().join("vault");
+    let day2 = vault2.join("day.md");
+    write_file(&vault2.join("sase.md"), "# S\n## Tasks\n");
+    write_file(&day2, "## Pomodoros\n- [ ] Review inbox\n- [ ] () — GTD\n");
+    let output2 = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault2)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:w2=")
+        .env("BOB_DAY_FILE", &day2)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run unnamed no done");
+    assert_success(&output2);
+    let json2: serde_json::Value =
+        serde_json::from_str(stdout(&output2).trim()).expect("unnamed2 JSON");
+    assert_eq!(json2["pomodoro_start"]["pomodoro_line"], 2);
+    assert_eq!(
+        fs::read_to_string(&day2).expect("read day2"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GTD\n",
+            "  - [[sase#^w2]]\n",
+            "- [ ] Review inbox\n",
+        )
+    );
+}
+
+#[test]
+fn capture_pomodoro_start_already_in_slot_keeps_blank_line() {
+    let temp = TempDir::new("bob-cli-start-slot-already");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [x] Done\n  - child\n\n- [ ] () — GOALS\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:w1#goals=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run already");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("already JSON");
+    assert_eq!(json["pomodoro_start"]["pomodoro_line"], 5);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [x] Done\n",
+            "  - child\n",
+            "\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
+            "  - [[sase#^w1]]\n",
+        )
+    );
+}
+
+#[test]
+fn capture_pomodoro_start_crlf_no_final_newline_moves_up() {
+    let temp = TempDir::new("bob-cli-start-slot-crlf-eof");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\r\n- [x] Done\r\n- [ ] () — PLANNED\r\n- [ ] () — GOALS",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("Work")
+        .arg("@sase:w1#goals=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:02:00")
+        .output()
+        .expect("run crlf");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("crlf JSON");
+    assert_eq!(json["pomodoro_start"]["pomodoro_line"], 3);
+    let day_after = fs::read(&day_file).expect("read day bytes");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\r\n",
+            "- [x] Done\r\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — GOALS\r\n",
+            "  - [[sase#^w1]]\r\n",
+            "- [ ] () — PLANNED",
+        )
+        .as_bytes()
+    );
+    assert!(!day_after.ends_with(b"\n"));
+}
+
+#[test]
+fn capture_pomodoro_start_batch_adjusts_moved_entry() {
+    let temp = TempDir::new("bob-cli-start-slot-batch");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("sase_goals.md"),
+        "- [*] #task Research goals ^research\n",
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0715-0805** [t:: 50m]) — RELAUNCH\n",
+            "\t- [[sase#^relaunch-260927]]\n",
+            "- [x] (**1010-1030** [t:: 20m]) — SUBTABS\n",
+            "\t- \u{1F345} [[sase#^agents-sub-tabs]]\n",
+            "\t\t- Started 0t4!\n",
+            "- [ ] () — SUBTABS\n",
+            "\t- [[sase#^agents-sub-tabs]]\n",
+            "- [ ] () — GTD\n",
+            "\t- [[#^gtd]]\n",
+            "- [ ] () — GOALS\n",
+            "\t- [[sase_goals#^research]]\n",
+            "- [ ] () — SASE\n",
+            "\t- [[sase#^recovery-panel]]\n",
+        ),
+    );
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-27 13:12:00"),
+        "^sase_goals:research=5\n\n+2\n",
+    );
+    assert_success(&output);
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0715-0805** [t:: 50m]) — RELAUNCH\n",
+            "\t- [[sase#^relaunch-260927]]\n",
+            "- [x] (**1010-1030** [t:: 20m]) — SUBTABS\n",
+            "\t- \u{1F345} [[sase#^agents-sub-tabs]]\n",
+            "\t\t- Started 0t4!\n",
+            "- [ ] (**1315-1350** [t:: 35m]) — GOALS\n",
+            "\t- [[sase_goals#^research]]\n",
+            "- [ ] () — SUBTABS\n",
+            "\t- [[sase#^agents-sub-tabs]]\n",
+            "- [ ] () — GTD\n",
+            "\t- [[#^gtd]]\n",
+            "- [ ] () — SASE\n",
+            "\t- [[sase#^recovery-panel]]\n",
+        )
+    );
+}
