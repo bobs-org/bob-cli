@@ -25,9 +25,10 @@ use super::{
         ProjectNotePomodoro, SubBulletTarget, TaskSectionSelector,
         TaskToggleIntent, POMODORO_START_FORCED_ERROR,
     },
-    capture_pomodoro_close, capture_pomodoros, capture_project_note,
-    capture_schedule_log, capture_task_sections, capture_task_toggle,
-    collect_done, config, env as bob_env, markdown, note_tasks,
+    capture_pomodoro_close, capture_pomodoro_start, capture_pomodoros,
+    capture_project_note, capture_schedule_log, capture_task_sections,
+    capture_task_toggle, collect_done, config, env as bob_env, markdown,
+    note_tasks,
     note_tasks::{BlockIdLookup, RefLookup},
     pomodoro,
     projects::{
@@ -2159,8 +2160,8 @@ struct PomodoroStartSummary {
     created_pomodoro: bool,
     time_range: String,
     /// Queued Task Link rows for a whole-item start only. `None` (omitted)
-    /// for link and task starts, which stay byte-stable, and for whole-item
-    /// starts until the lineup phase fills them.
+    /// for link and task starts, which stay byte-stable; whole-item starts
+    /// always report it, possibly empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     tasks: Option<Vec<PomodoroStartTaskJson>>,
 }
@@ -3575,6 +3576,30 @@ fn plan_pomodoro_start_item(
         .strip_prefix(&request.bob_dir)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| day_file.clone());
+    // Queued-task lineup: list the started entry's direct-child Task Links
+    // from the post-image day file and resolve them read-only through the
+    // batch planner's staged vault view, so a task captured earlier in the
+    // same draft resolves.
+    let staged_day = planner.read_existing(&day_file)?;
+    let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+    let tasks =
+        capture_pomodoro_start::list_queued_links(&staged_day, moved_index);
+    let tasks =
+        capture_pomodoro_start::resolve_queued_links(&vault, &day_file, &tasks)
+            .into_iter()
+            .map(|task| PomodoroStartTaskJson {
+                block_link: task.block_link,
+                embedded: task.embedded,
+                ledger_line: task.ledger_line,
+                resolved: task.resolved,
+                relative_target: task.relative_target,
+                block_id: task.block_id,
+                text: task.text,
+                status_symbol: task.status_symbol,
+                status_name: task.status_name,
+                warning: task.warning,
+            })
+            .collect::<Vec<_>>();
     let summary = PomodoroStartSummary {
         start,
         end,
@@ -3584,7 +3609,7 @@ fn plan_pomodoro_start_item(
         pomodoro_line: moved_index + 1,
         created_pomodoro: false,
         time_range,
-        tasks: None,
+        tasks: Some(tasks),
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -3668,6 +3693,39 @@ impl SnapshotCloseVault {
             .map(Some)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))
     }
+
+    /// The staged-new file a `[[target#^id]]` link names, if exactly one
+    /// exists. Only files absent from the filesystem qualify, so notes the
+    /// resolver already sees keep their existing resolution.
+    fn staged_new_target(&self, target: &str) -> Option<PathBuf> {
+        let direct = self.bob_dir.join(format!("{target}.md"));
+        if self
+            .staged
+            .get(&direct)
+            .is_some_and(|contents| contents.is_some())
+            && !direct.is_file()
+        {
+            return Some(direct);
+        }
+        if target.contains('/') || target.contains('\\') {
+            return None;
+        }
+        let mut matches = self
+            .staged
+            .iter()
+            .filter(|(path, contents)| {
+                contents.is_some()
+                    && !path.is_file()
+                    && path.file_stem().is_some_and(|stem| stem == target)
+            })
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            matches.pop()
+        } else {
+            None
+        }
+    }
 }
 
 impl capture_pomodoro_close::CloseVault for SnapshotCloseVault {
@@ -3682,6 +3740,13 @@ impl capture_pomodoro_close::CloseVault for SnapshotCloseVault {
     ) -> vault_links::LinkResolution {
         if target.is_empty() {
             return vault_links::LinkResolution::Found(from_path.to_path_buf());
+        }
+        // A note created earlier in the same batch exists only in the
+        // staged snapshot, where the filesystem resolver cannot see it.
+        // Mirror the resolver's direct-join-then-basename order over those
+        // staged-new files so same-draft tasks resolve.
+        if let Some(path) = self.staged_new_target(target) {
+            return vault_links::LinkResolution::Found(path);
         }
         match self.resolver.resolve(from_path, target) {
             vault_links::LinkResolution::Found(path) => {
@@ -8842,6 +8907,38 @@ fn print_human_pomodoro_start_success(
         ))
     );
     println!("  {}", styler.dim(&result.task_line));
+    // Queued-task lineup in the close's row style, with the unchanged
+    // status marker instead of a transition. Link and task starts carry no
+    // rows and print nothing here.
+    let Some(tasks) = start.tasks.as_ref() else {
+        return;
+    };
+    if tasks.is_empty() {
+        println!("  {}", styler.dim("nothing queued"));
+        return;
+    }
+    for task in tasks {
+        if !task.resolved {
+            let warning =
+                task.warning.as_deref().unwrap_or("unresolved target");
+            println!("  {}", styler.dim(&format!("warning: {warning}")));
+            continue;
+        }
+        let marker = task
+            .status_symbol
+            .map(|symbol| style_task_status_marker(styler, symbol))
+            .unwrap_or_else(|| "?".to_string());
+        let text = task.text.as_deref().unwrap_or("");
+        let locator = match &task.relative_target {
+            Some(target) => format!("{target} ^{}", task.block_id),
+            None => format!("^{}", task.block_id),
+        };
+        if text.is_empty() {
+            println!("  {marker} {locator}");
+        } else {
+            println!("  {marker} {text} {locator}");
+        }
+    }
 }
 
 fn print_human_task_toggle_success(

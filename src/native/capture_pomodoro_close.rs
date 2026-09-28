@@ -31,7 +31,7 @@ use super::{
 /// Task text without the `#task` tag. Embedded and subtask rows are looked
 /// up with the global filter cleared (resolution does not require `#task`),
 /// so their description keeps the tag; every other row filters it out.
-fn close_task_text(description: &str) -> String {
+pub(crate) fn close_task_text(description: &str) -> String {
     description
         .split_whitespace()
         .filter(|token| *token != "#task")
@@ -711,7 +711,7 @@ enum MarkerPolicy {
     Completed,
 }
 
-fn strip_pomodoro_markers(line: &str) -> String {
+pub(crate) fn strip_pomodoro_markers(line: &str) -> String {
     rewrite_markers(line, MarkerPolicy::Strip)
 }
 
@@ -797,13 +797,13 @@ fn apply_edits(line: &str, mut edits: Vec<(usize, usize, String)>) -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct WikiToken {
-    start: usize,
-    end: usize,
-    embedded: bool,
-    path_part: String,
-    block_id: String,
-    token: String,
+pub(crate) struct WikiToken {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) embedded: bool,
+    pub(crate) path_part: String,
+    pub(crate) block_id: String,
+    pub(crate) token: String,
 }
 
 struct ParsedTarget {
@@ -811,7 +811,7 @@ struct ParsedTarget {
     block_id: String,
 }
 
-fn wikilink_tokens(line: &str) -> Vec<WikiToken> {
+pub(crate) fn wikilink_tokens(line: &str) -> Vec<WikiToken> {
     let mut tokens = Vec::new();
     let mut cursor = 0;
     while let Some(relative) = line[cursor..].find("[[") {
@@ -933,7 +933,7 @@ fn strip_markdown_extension(path: &str) -> String {
     }
 }
 
-fn strikethrough_inner_spans(line: &str) -> Vec<Range<usize>> {
+pub(crate) fn strikethrough_inner_spans(line: &str) -> Vec<Range<usize>> {
     let mut delimiters = Vec::new();
     let mut cursor = 0;
     while let Some(relative) = line[cursor..].find("~~") {
@@ -947,13 +947,17 @@ fn strikethrough_inner_spans(line: &str) -> Vec<Range<usize>> {
         .collect()
 }
 
-fn range_is_struck(start: usize, end: usize, spans: &[Range<usize>]) -> bool {
+pub(crate) fn range_is_struck(
+    start: usize,
+    end: usize,
+    spans: &[Range<usize>],
+) -> bool {
     spans
         .iter()
         .any(|span| start >= span.start && end <= span.end)
 }
 
-fn exact_struck(token: &WikiToken, spans: &[Range<usize>]) -> bool {
+pub(crate) fn exact_struck(token: &WikiToken, spans: &[Range<usize>]) -> bool {
     spans
         .iter()
         .any(|span| span.start == token.start && span.end == token.end)
@@ -997,7 +1001,7 @@ fn move_only_destination(line: &str) -> Option<String> {
     Some(format!("{}{}", &line[..directive], &line[directive + 1..]))
 }
 
-fn bare_plain_link(line: &str) -> Option<WikiToken> {
+pub(crate) fn bare_plain_link(line: &str) -> Option<WikiToken> {
     let (body_start, body_end) = trimmed_body_range(line)?;
     let plains = wikilink_tokens(line)
         .into_iter()
@@ -1007,6 +1011,22 @@ fn bare_plain_link(line: &str) -> Option<WikiToken> {
         return None;
     }
     let target = plains.into_iter().next()?;
+    (target.start == body_start && target.end == body_end).then_some(target)
+}
+
+/// The embedded sibling of [`bare_plain_link`]: the trimmed body is exactly
+/// one `![[path#^id]]` transclusion. The start planner lists these alongside
+/// plain Task Links.
+pub(crate) fn bare_embedded_link(line: &str) -> Option<WikiToken> {
+    let (body_start, body_end) = trimmed_body_range(line)?;
+    let embeds = wikilink_tokens(line)
+        .into_iter()
+        .filter(|token| token.embedded)
+        .collect::<Vec<_>>();
+    if embeds.len() != 1 {
+        return None;
+    }
+    let target = embeds.into_iter().next()?;
     (target.start == body_start && target.end == body_end).then_some(target)
 }
 
@@ -2442,7 +2462,7 @@ fn close_role(role: LedgerLinkRole) -> CloseTaskRole {
     }
 }
 
-fn lookup_task(
+pub(crate) fn lookup_task(
     contents: &str,
     settings: &NoteTaskSettings,
     block_id: &str,

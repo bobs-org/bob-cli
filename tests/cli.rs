@@ -32570,8 +32570,9 @@ fn capture_pomodoro_whole_item_start_reports_json_and_human() {
             format!("(**{expect_start}-{expect_end}** [t:: {expect_dur}m])"),
             "{token}"
         );
-        // The lineup phase fills `tasks`; start_core omits it.
-        assert!(start.get("tasks").is_none(), "{token}: {json}");
+        // No Task Links under the started entry: the lineup is present
+        // but empty.
+        assert_eq!(start["tasks"], serde_json::json!([]), "{token}: {json}");
         assert_eq!(
             fs::read_to_string(&day_file).expect("read started day"),
             format!(
@@ -32603,7 +32604,8 @@ fn capture_pomodoro_whole_item_start_reports_json_and_human() {
         out.contains("would start")
             && out.contains("day.md")
             && out.contains("CAPTURE 0945-1000 (15m) at line 2")
-            && out.contains("- [ ] (**0945-1000** [t:: 15m]) — CAPTURE"),
+            && out.contains("- [ ] (**0945-1000** [t:: 15m]) — CAPTURE")
+            && out.contains("nothing queued"),
         "{out}"
     );
     assert_stdout_has_no_ansi(&human);
@@ -33381,6 +33383,265 @@ fn capture_pomodoro_whole_item_start_batches_compose_and_roll_back() {
     );
     assert!(!bad.status.success(), "{}", format_output(&bad));
     assert_eq!(fs::read_to_string(&day_r).expect("rolled back day"), before);
+}
+
+#[test]
+fn capture_pomodoro_whole_item_start_reports_queued_tasks() {
+    // Design clock: BOB_NOW 09:42 starts `=` as 0945-1010.
+    let temp = TempDir::new("bob-cli-capture-start-lineup");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — CAPTURE\n",
+            "\t- [[bob#^ready-task]]\n",
+            "\t- [[bob#^next-task]]\n",
+            "\t- [[bob#^progress-task]]\n",
+            "\t- [[bob#^blocked-task]]\n",
+            "\t- ![[bob#^embed-task]]\n",
+            "\t- [[bob#^gone]]\n",
+            "\t- [[missing#^nowhere]]\n",
+            "\t\t- [[bob#^nested]]\n",
+            "\t- a queued note\n",
+            "\t- [[bob#^mixed]] plus extra text\n",
+            "\t- ~~[[bob#^struck]]~~\n",
+            "- [ ] () — SASE\n",
+        ),
+    );
+    let bob_before = concat!(
+        "## Tasks\n",
+        "\n",
+        "- [ ] #task Ready work [created::2026-09-20] ^ready-task\n",
+        "- [*] #task Next work [created::2026-09-20] ^next-task\n",
+        "- [/] #task Progress work [created::2026-09-20] ^progress-task\n",
+        "- [?] #task Blocked work [created::2026-09-20] ^blocked-task\n",
+        "- [ ] #task Embedded work [created::2026-09-20] ^embed-task\n",
+    );
+    write_file(&vault.join("bob.md"), bob_before);
+    // Human output lists one row per queued task in the close's row style,
+    // with the unchanged marker and a dim warning for unresolved rows. This
+    // dry run goes first: the JSON capture below actually starts the
+    // session, after which a start preview reports it as running.
+    let human = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:42:00")
+        .output()
+        .expect("run lineup human");
+    assert_success(&human);
+    let out = stdout(&human);
+    for line in [
+        "would start",
+        "CAPTURE 0945-1010 (25m) at line 2",
+        "[ ] Ready work bob.md ^ready-task",
+        "[*] Next work bob.md ^next-task",
+        "[/] Progress work bob.md ^progress-task",
+        "[?] Blocked work bob.md ^blocked-task",
+        "[ ] Embedded work bob.md ^embed-task",
+        "warning: bob.md has no task with block ID ^gone",
+        "warning: [[missing#^nowhere]] does not resolve to a vault note",
+    ] {
+        assert!(out.contains(line), "{line}\n{out}");
+    }
+    assert!(!out.contains("nothing queued"), "{out}");
+    assert_stdout_has_no_ansi(&human);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:42:00")
+        .output()
+        .expect("run lineup capture");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("lineup JSON");
+    assert_eq!(json["kind"], "pomodoro_start");
+    let tasks = json["pomodoro_start"]["tasks"]
+        .as_array()
+        .expect("tasks array")
+        .clone();
+    // Only direct-child bare links, in ledger order: notes, mixed lines,
+    // struck links, and deeper descendants stay out.
+    assert_eq!(tasks.len(), 7, "{json}");
+    let row = |index: usize| &tasks[index];
+    assert_eq!(
+        row(0),
+        &serde_json::json!({
+            "block_link": "[[bob#^ready-task]]",
+            "embedded": false,
+            "ledger_line": 3,
+            "resolved": true,
+            "relative_target": "bob.md",
+            "block_id": "ready-task",
+            "text": "Ready work",
+            "status_symbol": " ",
+            "status_name": "Ready",
+            "warning": null,
+        }),
+        "{json}"
+    );
+    assert_eq!(row(1)["status_symbol"], "*");
+    assert_eq!(row(1)["status_name"], "Next");
+    assert_eq!(row(1)["text"], "Next work");
+    assert_eq!(row(1)["ledger_line"], 4);
+    assert_eq!(row(2)["status_symbol"], "/");
+    assert_eq!(row(2)["status_name"], "In Progress");
+    assert_eq!(row(2)["text"], "Progress work");
+    assert_eq!(row(3)["status_symbol"], "?");
+    assert_eq!(row(3)["status_name"], "Blocked");
+    assert_eq!(row(3)["text"], "Blocked work");
+    assert_eq!(
+        row(4),
+        &serde_json::json!({
+            "block_link": "[[bob#^embed-task]]",
+            "embedded": true,
+            "ledger_line": 7,
+            "resolved": true,
+            "relative_target": "bob.md",
+            "block_id": "embed-task",
+            "text": "Embedded work",
+            "status_symbol": " ",
+            "status_name": "Ready",
+            "warning": null,
+        }),
+        "{json}"
+    );
+    // Unresolved rows carry explicit nulls, never omitted keys.
+    for key in ["relative_target", "text", "status_symbol", "status_name"] {
+        assert!(row(5).get(key).is_some(), "{key} omitted: {json}");
+    }
+    assert_eq!(
+        row(5),
+        &serde_json::json!({
+            "block_link": "[[bob#^gone]]",
+            "embedded": false,
+            "ledger_line": 8,
+            "resolved": false,
+            "relative_target": "bob.md",
+            "block_id": "gone",
+            "text": null,
+            "status_symbol": null,
+            "status_name": null,
+            "warning": "bob.md has no task with block ID ^gone",
+        }),
+        "{json}"
+    );
+    assert_eq!(row(6)["resolved"], false);
+    assert!(row(6)["relative_target"].is_null(), "{json}");
+    assert_eq!(
+        row(6)["warning"],
+        "[[missing#^nowhere]] does not resolve to a vault note",
+        "{json}"
+    );
+    // Starting never touches task notes.
+    assert_eq!(
+        fs::read_to_string(vault.join("bob.md")).expect("read bob.md"),
+        bob_before
+    );
+
+    // A task captured earlier in the same draft resolves in the lineup.
+    let temp_s = TempDir::new("bob-cli-capture-start-staged-task");
+    let vault_s = temp_s.path().join("vault");
+    let day_s = vault_s.join("day.md");
+    write_toggle_task_settings(&vault_s);
+    // The task capture inserts its own `[[bob#^fresh]]` ledger link under
+    // the placeholder; the staged task note then resolves in the lineup.
+    write_file(&day_s, "## Pomodoros\n- [ ] () — SASE\n");
+    let staged = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault_s)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_s)
+            .env("BOB_NOW", "2026-09-28 09:42:00"),
+        "Fresh work @bob:fresh\n\n=\n",
+    );
+    assert_success(&staged);
+    let staged_json: serde_json::Value =
+        serde_json::from_str(stdout(&staged).trim())
+            .expect("staged lineup JSON");
+    assert_eq!(
+        staged_json["captures"][1]["pomodoro_start"]["tasks"],
+        serde_json::json!([{
+            "block_link": "[[bob#^fresh]]",
+            "embedded": false,
+            "ledger_line": 3,
+            "resolved": true,
+            "relative_target": "bob.md",
+            "block_id": "fresh",
+            "text": "Fresh work",
+            "status_symbol": "*",
+            "status_name": "Next",
+            "warning": null,
+        }]),
+        "{staged_json}"
+    );
+
+    // Link and task starts stay byte-stable: they omit `tasks`. The link
+    // check runs against the lineup vault's running session with a task
+    // that is not already queued there.
+    write_file(
+        &vault.join("bob.md"),
+        &format!(
+            "{bob_before}- [ ] #task Spare work [created::2026-09-20] ^spare\n"
+        ),
+    );
+    let link = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("^bob:spare")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:42:00")
+        .output()
+        .expect("run link start");
+    assert_success(&link);
+    let link_json: serde_json::Value =
+        serde_json::from_str(stdout(&link).trim()).expect("link JSON");
+    assert_eq!(link_json["kind"], "pomodoro_link");
+    assert!(
+        link_json["pomodoro_start"].get("tasks").is_none(),
+        "{link_json}"
+    );
+    let temp_t = TempDir::new("bob-cli-capture-start-task-omits");
+    let vault_t = temp_t.path().join("vault");
+    let day_t = vault_t.join("day.md");
+    write_toggle_task_settings(&vault_t);
+    write_file(&day_t, "## Pomodoros\n- [ ] () — SASE\n");
+    let task = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault_t)
+        .arg("-f")
+        .arg("json")
+        .arg("More @bob:tasked=")
+        .env("BOB_DAY_FILE", &day_t)
+        .env("BOB_NOW", "2026-09-28 09:42:00")
+        .output()
+        .expect("run task start");
+    assert_success(&task);
+    let task_json: serde_json::Value =
+        serde_json::from_str(stdout(&task).trim()).expect("task JSON");
+    assert_eq!(task_json["kind"], "pomodoro_task");
+    assert!(
+        task_json["pomodoro_start"].get("tasks").is_none(),
+        "{task_json}"
+    );
 }
 
 fn close_worked_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
