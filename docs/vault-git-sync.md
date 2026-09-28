@@ -18,9 +18,13 @@ default):
 6. Push, retrying bounded non-fast-forward races.
 7. Write the status record used by `bob vault-sync status`.
 
-The command shares the `bob_sync.lock` maintenance lock with `bob nightly` and live
-`bob task-status-hooks` runs, so background sync, nightly maintenance, and task-status
-writes do not mutate the vault concurrently.
+The command shares the `bob_sync.lock` maintenance lock with `bob nightly`, live
+`bob task-status-hooks` runs, and `bob randomize`, so background sync, nightly maintenance,
+task-status writes, and randomize re-rolls do not mutate the vault concurrently.
+`bob randomize` holds that lock across a sync-sandwiched scoped commit: it runs a
+vault-sync cycle, writes only the re-rolled notes, commits exactly those notes as one
+`bob randomize` commit, then runs a second vault-sync cycle. See
+[randomize.md](randomize.md#git-and-vault-sync).
 
 ## Conflict policy
 

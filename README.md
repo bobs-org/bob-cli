@@ -22,6 +22,7 @@ behavior.
 - [Query](#query)
 - [Task status hooks](#task-status-hooks)
 - [Projects](#projects)
+- [Randomize](#randomize)
 - [Plugins](#plugins)
 - [Highlights](#highlights)
 - [Nightly maintenance](#nightly-maintenance)
@@ -107,6 +108,8 @@ separate steps:
    create links.
 3. **Reconcile statuses** with `bob task-status-hooks` so Next, In Progress, and
    Blocked markers follow the ledger and any schedules changed outside capture.
+   After time away, preview the overdue backlog with
+   `bob randomize --dry-run`, then `bob randomize --seed <seed>` to re-roll it.
 4. **Nightly**, run `bob nightly` to reconcile the vault through Git, archive
    done and canceled tasks, and reconcile the vault again.
 
@@ -157,6 +160,7 @@ Bob's workflow commands are:
 | [`pomodoro`](#pomodoro-status) | Print the current Pomodoro status |
 | [`projects`](#projects) | Inspect and synchronize project lifecycle tasks |
 | [`query`](#query) | Run headless Dataview or Tasks queries, or live Dataview queries |
+| [`randomize`](#randomize) | Re-roll due prioritized tasks within their priority windows |
 | [`task-status-hooks`](#task-status-hooks) | Reconcile Pomodoro links, task ranks, and derived Blocked state |
 | [`tmux-pomodoro`](#pomodoro-status) | Print Pomodoro status for a tmux status line |
 | [`vault-sync`](#vault-sync) | Reconcile the Bob vault through Git |
@@ -390,6 +394,27 @@ or recover `[?]` Blocked markers. The property picker in Bob Navigation
 Hotkeys can propagate schedules and reconcile Blocked in the same editor
 transaction. The full project task contract lives in
 [`docs/projects.md`](docs/projects.md).
+
+## Randomize
+
+```bash
+bob randomize --dry-run
+bob randomize --seed 0x7f3a91c2
+```
+
+Re-rolls every due prioritized task to its own random date inside that
+task's configured priority window (P1 2–7 days through P4 91–365 days).
+Each re-roll replaces the `scheduled` date, flips a future-dated Ready task
+to Blocked, writes a 🎲 Schedule Log entry, and regroups eligible project
+notes in the same write. P0 tasks, Next and In Progress tasks, today's
+Pomodoro tasks, and `due`/`repeat` tasks are always left alone.
+
+Always preview first with `--dry-run`, then apply those exact dates with
+`--seed <seed>`. A live run holds the shared vault-maintenance lock while
+it syncs, plans, writes, commits exactly the rewritten notes as one
+`bob randomize` commit, and syncs again; undo with
+`git -C ~/bob revert <sha> && bob vault-sync`. The full contract lives in
+[`docs/randomize.md`](docs/randomize.md).
 
 ## Plugins
 
@@ -647,7 +672,7 @@ Rust binaries, and the binaries carry the script assets they need.
 ## Environment
 
 `BOB_VAULT_SYNC_LOCK_FILE` overrides the lock path used by `bob vault-sync`,
-`bob nightly`, and live `bob task-status-hooks` runs.
+`bob nightly`, live `bob task-status-hooks` runs, and `bob randomize`.
 The default path is the same shared `bob_sync.lock` path used by nightly
 maintenance.
 
@@ -685,8 +710,8 @@ platforms have no automatic history provider and report how to configure
 clipboard source alone.
 
 `BOB_CONFIG_FILE` sets the exact bullet-property config file used by `p:<N>`
-priority rolls. When unset, Bob uses `$XDG_CONFIG_HOME/bob/config.yml`, then
-`~/.config/bob/config.yml`.
+priority rolls and `bob randomize`. When unset, Bob uses
+`$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`.
 
 `BOB_DATAVIEW_OBSIDIAN_COMMAND` overrides the executable used by
 `bob query --engine obsidian`.
@@ -696,7 +721,8 @@ priority rolls. When unset, Bob uses `$XDG_CONFIG_HOME/bob/config.yml`, then
 
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`,
 `bob tmux-pomodoro`, `bob notify` (via the same status reader), Pomodoro-linked
-and Pomodoro-note `bob capture` requests, and `bob task-status-hooks`.
+and Pomodoro-note `bob capture` requests, `bob task-status-hooks`, and
+`bob randomize`.
 
 `BOB_DIR` sets the Bob vault directory. It defaults to `~/bob`.
 
@@ -745,7 +771,8 @@ to `~/projects/github/bobs-org/bob-plugins`.
 
 `BOB_PRIORITY_ROLL_SEED` pins the `p:<N>` scheduled-date roll to a decimal
 integer seed so a `--dry-run` preview matches a real capture. Unset means each
-capture rolls independently.
+capture rolls independently. `bob randomize` also reads it as the default base
+seed when `--seed` is omitted.
 
 `DATE` preserves the legacy date override behavior, including the date used by
 `bob capture` when `BOB_NOW` is unset. It can be a date command prefix such as

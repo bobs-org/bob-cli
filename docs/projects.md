@@ -419,11 +419,16 @@ they read as machine-written months later — 🎲 for a date the software rolle
 | Pinned roll suggestion chosen in the `scheduled` stage         | `🎲 <level> roll · in **<chosen>** (<min>–<max>) days` |
 | Reason prompt skipped on a task that already has a log         | `🤷 no reason given` |
 | `bob capture <text> p:<N>` rolls the scheduled date            | `🎲 P0 → <to> · in **<chosen>** (<min>–<max>) days` |
+| `bob randomize` re-rolls a due task                             | `🎲 <level> randomize · in **<chosen>** (<min>–<max>) days` |
 
 `bob capture` has no interactive stage, so it never prompts for a reason and
 never writes the `🤷 no reason given` fallback: a captured task is always a
 brand-new line, so it can never already keep a log for that fallback to
 append to.
+
+`bob randomize` rolls the same configured windows vault-wide for every due
+prioritized task and records the `🎲 <level> randomize` reason above; see
+[randomize.md](randomize.md).
 
 An automatic entry — a roll, or a skipped prompt on a task with a log — is
 skipped when the resulting date equals the date the task already has, because

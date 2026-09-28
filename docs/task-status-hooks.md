@@ -515,7 +515,12 @@ Grouping never creates a missing `Tasks` section. It excludes canonical daily
 notes, the selected current daily ledger even when `BOB_DAY_FILE` points
 outside the vault, the selected previous daily, ordinary notes, read-only
 archive references, hidden directories, `done/`, `_generated/`, and
-`_templates/`. `bob capture` keeps adding Ready tasks to the intake before
+`_templates/`.
+
+`bob randomize` composes derived Blocked status and this same grouping into
+its own write (see [randomize.md](randomize.md#what-a-re-roll-writes)), so
+after a randomize run this command has nothing left to change in those
+notes. `bob capture` keeps adding Ready tasks to the intake before
 generated group headings; a later `bob task-status-hooks` run moves that task
 only if its final status becomes Next, In Progress, Blocked, Done, or Canceled.
 

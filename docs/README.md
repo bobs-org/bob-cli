@@ -12,6 +12,7 @@ index, and environment variables.
 | [obsidian-sync-exclusions.md](obsidian-sync-exclusions.md) | Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only |
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
+| [randomize.md](randomize.md) | `bob randomize` bulk re-roll of due prioritized tasks |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task-status-hooks` Pomodoro-driven task status |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, and bridge policy |
 
