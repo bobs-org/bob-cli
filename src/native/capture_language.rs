@@ -3393,10 +3393,7 @@ pub(crate) enum EditorMode {
     PomodoroShift,
     PomodoroLink,
     PomodoroClose,
-    /// Whole-item `=`/`=<X>` start. The editor recognition, spans, and
-    /// diagnostics land with the editor contract; the variant exists now so
-    /// execution/editor parity maps it without a placeholder.
-    #[allow(dead_code)]
+    /// Whole-item `=`/`=<X>` start.
     PomodoroStart,
     Incomplete,
 }
@@ -3786,13 +3783,15 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         global_destination.as_ref().filter(|global| global.inherit)
     {
         for item in &mut items {
-            // Whole-item session operators and `=x` closes are their own
-            // mode: a `@@` declaration routes ordinary items in the same
-            // draft but never turns an operator or close into a task or
-            // changes its destination.
+            // Whole-item session operators, `=x` closes, and
+            // `=`/`=<X>` starts are their own mode: a `@@` declaration
+            // routes ordinary items in the same draft but never turns an
+            // operator, close, or start into a task or changes its
+            // destination.
             if item.mode == EditorMode::PomodoroAdjust
                 || item.mode == EditorMode::PomodoroShift
                 || item.mode == EditorMode::PomodoroClose
+                || item.mode == EditorMode::PomodoroStart
             {
                 continue;
             }
@@ -4140,23 +4139,116 @@ fn editor_operator_outcome<'a>(
     }
 }
 
-/// Whole-item `=x` close for the live editor. Mirrors
-/// [`parse_pomodoro_equals_item`]'s execution grammar but never fails: an
-/// exact `=x` reports `pomodoro_close` with a span covering the token and
-/// an additive spec, a standalone `=` is an incomplete editing state, and
-/// a leading `=x` token with extra text, markers, or child lines reports
-/// `pomodoro_close` plus an `invalid_pomodoro_close` diagnostic instead of
-/// becoming a task. Purely lexical: it never guesses current ledger times.
-/// Other `=`-prefixed tokens (`=3`, `=xx`, `=x!`, `==`) and mid-body `=x`
-/// stay ordinary prose.
-fn parse_editor_close_item<'a>(
+/// Build a whole-item start near-miss outcome: `pomodoro_start` mode, the
+/// token span, and one `invalid_pomodoro_start` diagnostic, with no spec.
+fn editor_start_invalid_outcome<'a>(
     item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    span: Span,
+    message: String,
+    range: Option<(usize, usize)>,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::PomodoroStart,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            spans: vec![span],
+            diagnostics: vec![Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_start",
+                message,
+                range,
+            }],
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    }
+}
+
+/// Whole-item `=`/`=<X>` start for the live editor. Mirrors the start
+/// branch of [`parse_pomodoro_equals_item`] but never fails: an exact
+/// single-token start reports `pomodoro_start` with its spec and one span
+/// over the whole token, while a counted token with extra text (or an
+/// exact token with child lines) reports `pomodoro_start` plus an
+/// `invalid_pomodoro_start` diagnostic. Bare tokens with prose stay prose.
+/// Range policy matches `invalid_pomodoro_close`: the extra text for
+/// trailing text, the child line for child-line misses, the token for
+/// overflow.
+fn parse_editor_start_item<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    suffix: String,
+    counted: bool,
+    len: usize,
 ) -> Option<EditorItemOutcome<'a>> {
     let parent = item.lines.first().expect("nonempty item");
-    let parent_text = parent.raw.text;
-    let parent_trimmed = parent_text.trim();
-    if parent_trimmed == "=" {
-        return Some(EditorItemOutcome {
+    let leading = parent.raw.text.len() - parent.raw.text.trim_start().len();
+    let token_start = parent.raw.start + leading;
+    let token_end = token_start + len;
+    let span = Span {
+        start: token_start,
+        end: token_end,
+        kind: SpanKind::PomodoroStart,
+    };
+    let exact = parent_trimmed.len() == len && item.lines.len() == 1;
+    if !exact {
+        if counted || (parent_trimmed.len() == len && item.lines.len() > 1) {
+            let token_text = &parent_trimmed[..len];
+            let message = pomodoro_start_shape_error(token_text, &suffix);
+            // Exact token with child lines: the child line is the range.
+            if parent_trimmed.len() == len {
+                let child = &item.lines[1];
+                return Some(editor_start_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    span,
+                    message,
+                    Some((child.raw.start, child.raw.end)),
+                ));
+            }
+            // Counted token with trailing text: the extra text is the
+            // range, mirroring the close's extra-text policy.
+            let rest_in_trimmed = &parent_trimmed[len..];
+            let rest_trimmed = rest_in_trimmed.trim_start();
+            if rest_trimmed.is_empty() {
+                return Some(editor_start_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    span,
+                    message,
+                    Some((item.start, item.end)),
+                ));
+            }
+            let offset_in_trimmed =
+                len + (rest_in_trimmed.len() - rest_trimmed.len());
+            let rest_start = token_start + offset_in_trimmed;
+            return Some(editor_start_invalid_outcome(
+                item,
+                parent_trimmed,
+                span,
+                message,
+                Some((rest_start, rest_start + rest_trimmed.len())),
+            ));
+        }
+        return None;
+    }
+    match parse_pomodoro_start_suffix(&suffix) {
+        Ok(spec) => Some(EditorItemOutcome {
             item: EditorItemParse {
                 index: item.index,
                 start: item.start,
@@ -4164,23 +4256,65 @@ fn parse_editor_close_item<'a>(
                 line_start: item.line_start,
                 line_end: item.line_end,
                 body: parent_trimmed.to_string(),
-                mode: EditorMode::Incomplete,
+                mode: EditorMode::PomodoroStart,
                 route: None,
                 section: None,
                 block_id: None,
                 needs: Vec::new(),
-                pomodoro_start: None,
+                pomodoro_start: Some(spec),
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
                 pomodoro_close: None,
-                spans: Vec::new(),
+                spans: vec![span],
                 diagnostics: Vec::new(),
                 sub_bullets: Vec::new(),
                 has_local_destination: false,
                 local_destination_markers: Vec::new(),
             },
             declarations: Vec::new(),
-        });
+        }),
+        Err(message) => Some(editor_start_invalid_outcome(
+            item,
+            parent_trimmed,
+            span,
+            message,
+            Some((token_start, token_end)),
+        )),
+    }
+}
+
+/// Whole-item `=`-family parser for the live editor. Mirrors
+/// [`parse_pomodoro_equals_item`]'s execution grammar but never fails: an
+/// exact `=x` reports `pomodoro_close` with a span covering the token and
+/// an additive spec, an exact `=`/`=<X>` reports `pomodoro_start` with its
+/// spec and one `PomodoroStart` span over the whole token, and every near
+/// miss reports its family mode plus an `invalid_pomodoro_*` diagnostic
+/// instead of becoming a task. A bare `=` is a complete start. Purely
+/// lexical: it never guesses current ledger times. Bare tokens with prose
+/// (`= foo`, `==`), other close shapes (`=xx`, `=x!`), and mid-body tokens
+/// (`Plan =3`, `a=3`) stay ordinary prose.
+fn parse_editor_close_item<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<EditorItemOutcome<'a>> {
+    let parent = item.lines.first().expect("nonempty item");
+    let parent_text = parent.raw.text;
+    let parent_trimmed = parent_text.trim();
+    let token = session_equals_token(parent_trimmed)?;
+    match token {
+        EqualsToken::Start {
+            suffix,
+            counted,
+            len,
+        } => {
+            return parse_editor_start_item(
+                item,
+                parent_trimmed,
+                suffix,
+                counted,
+                len,
+            );
+        }
+        EqualsToken::Close => {}
     }
     let leading = parent_text.len() - parent_text.trim_start().len();
     let token_start = parent.raw.start + leading;
@@ -5970,10 +6104,10 @@ pub(crate) fn completion_field_at(
             })
             .map(|(line_index, line)| (item, line_index, line.raw))
     })?;
-    // A whole-item `+[N]`/`-[N]` adjustment, `++[N]`/`--[N]` shift, or
-    // `=x` close is an action, never a routed capture: it requests no
-    // route or task completion candidates. A lone `=` is an incomplete
-    // close state and also requests nothing.
+    // A whole-item `+[N]`/`-[N]` adjustment, `++[N]`/`--[N]` shift,
+    // `=x` close, or `=`/`=<X>` start is an action, never a routed
+    // capture: it requests no route or task completion candidates. The
+    // `=`-family parser covers both closes and starts.
     if parse_editor_adjust_item(item).is_some()
         || parse_editor_close_item(item).is_some()
     {
@@ -8178,6 +8312,15 @@ mod tests {
             "--2",
             "  ++3  ",
             "++03",
+            "=",
+            "=3",
+            "=-",
+            "=-2",
+            "=3-",
+            "=2-1",
+            "=0",
+            "=03",
+            "  =3  ",
         ];
 
         for raw in inputs {
@@ -8284,6 +8427,12 @@ mod tests {
                 let actual = parse.pomodoro_close.as_ref().expect("close spec");
                 assert_eq!(actual.raw, spec.raw, "{raw}");
             }
+            if let CaptureKind::PomodoroStart { spec } = &executed.kind {
+                let actual = parse.pomodoro_start.as_ref().expect("start spec");
+                assert_eq!(actual.raw, spec.raw, "{raw}");
+                assert_eq!(actual.duration_units, spec.duration_units, "{raw}");
+                assert_eq!(actual.offset_units, spec.offset_units, "{raw}");
+            }
             assert!(parse.diagnostics.is_empty(), "{raw}");
         }
     }
@@ -8308,12 +8457,6 @@ mod tests {
             );
             assert!(parse.diagnostics.is_empty(), "{raw}");
         }
-        // Lone `=` is an incomplete editing state with no spans.
-        let incomplete = editor("=");
-        assert_eq!(incomplete.mode, EditorMode::Incomplete, "=");
-        assert!(incomplete.spans.is_empty(), "=");
-        assert!(incomplete.diagnostics.is_empty(), "=");
-        assert!(incomplete.pomodoro_close.is_none(), "=");
         // Close suffixes keep their link/task mode with a `pomodoro_close`
         // span and spec.
         for (raw, mode, body) in [
@@ -8367,11 +8510,13 @@ mod tests {
             "Text @r:id=x s:2"
         );
         // Prose lookalikes stay ordinary tasks with no diagnostics.
-        for raw in ["=3", "=xx", "=x!", "==", "Plan =x"] {
+        // `=3` is now a whole-item start, not prose.
+        for raw in ["=xx", "=x!", "==", "Plan =x", "= foo", "=- foo"] {
             let parse = editor(raw);
             assert_eq!(parse.mode, EditorMode::Task, "{raw}");
             assert!(parse.diagnostics.is_empty(), "{raw}");
             assert!(parse.pomodoro_close.is_none(), "{raw}");
+            assert!(parse.pomodoro_start.is_none(), "{raw}");
         }
         // A multi-item draft mixes an adjustment, a close, and a task.
         let mixed = parse_for_editor("+5\n\n=x\n\nCall bank @Cash+");
@@ -8379,6 +8524,79 @@ mod tests {
         assert_eq!(mixed.items[0].mode, EditorMode::PomodoroAdjust, "mixed");
         assert_eq!(mixed.items[1].mode, EditorMode::PomodoroClose, "mixed");
         assert!(mixed.items[1].pomodoro_close.is_some(), "mixed close spec");
+    }
+
+    #[test]
+    fn editor_reports_pomodoro_start_modes_spans_specs_and_diagnostics() {
+        // Exact whole-item starts: mode, span, and additive spec.
+        for (raw, suffix, duration, offset) in [
+            ("=", "", 5, 0),
+            ("=3", "3", 3, 0),
+            ("=-", "-", 5, 1),
+            ("=-2", "-2", 5, 2),
+            ("=3-", "3-", 3, 1),
+            ("=2-1", "2-1", 2, 1),
+            ("=0", "0", 0, 0),
+            ("=03", "03", 3, 0),
+            ("  =3  ", "3", 3, 0),
+        ] {
+            let parse = editor(raw);
+            assert_eq!(parse.mode, EditorMode::PomodoroStart, "{raw}");
+            assert_eq!(parse.body, raw.trim(), "{raw}");
+            assert!(parse.needs.is_empty(), "{raw}");
+            let start = parse.pomodoro_start.as_ref().expect("start spec");
+            assert_eq!(start.raw, suffix, "{raw}");
+            assert_eq!(start.duration_units, duration, "{raw}");
+            assert_eq!(start.offset_units, offset, "{raw}");
+            let token_start = raw.find('=').expect("=");
+            assert!(
+                ranges(&parse).contains(&(
+                    token_start,
+                    token_start + raw.trim_start().trim_end().len(),
+                    SpanKind::PomodoroStart
+                )),
+                "{raw}"
+            );
+            assert!(parse.diagnostics.is_empty(), "{raw}");
+            assert!(parse.pomodoro_close.is_none(), "{raw}");
+        }
+        // Counted tokens with extra text report `invalid_pomodoro_start`
+        // on the extra text, never a task.
+        let shape = editor("=3 more");
+        assert_eq!(shape.mode, EditorMode::PomodoroStart, "=3 more");
+        assert_eq!(codes(&shape), vec!["invalid_pomodoro_start"], "=3 more");
+        assert_eq!(shape.diagnostics[0].range, Some((3, 7)), "=3 more");
+        assert!(shape.pomodoro_start.is_none(), "=3 more");
+        let glued = editor("=3x");
+        assert_eq!(codes(&glued), vec!["invalid_pomodoro_start"], "=3x");
+        assert_eq!(glued.diagnostics[0].range, Some((2, 3)), "=3x");
+        // Exact tokens with child lines report on the child line.
+        let child = editor("=\n- child");
+        assert_eq!(child.mode, EditorMode::PomodoroStart, "= child");
+        assert_eq!(codes(&child), vec!["invalid_pomodoro_start"], "= child");
+        assert!(child.pomodoro_start.is_none(), "= child");
+        // Overflow reports on the token.
+        let overflow = editor("=99999999999999999999999");
+        assert_eq!(overflow.mode, EditorMode::PomodoroStart, "overflow");
+        assert_eq!(
+            codes(&overflow),
+            vec!["invalid_pomodoro_start"],
+            "overflow"
+        );
+        assert_eq!(overflow.diagnostics[0].range, Some((0, 24)), "overflow");
+        // Bare tokens with prose, close shapes, and mid-body tokens stay
+        // ordinary tasks.
+        for raw in ["= foo", "=- foo", "==", "=xx", "=x!", "Plan =3", "a=3"] {
+            let parse = editor(raw);
+            assert_eq!(parse.mode, EditorMode::Task, "{raw}");
+            assert!(parse.diagnostics.is_empty(), "{raw}");
+            assert!(parse.pomodoro_start.is_none(), "{raw}");
+        }
+        // A `@@` declaration never applies to start items.
+        let declared = parse_for_editor("@@work\nFirst task\n\n=3\n");
+        assert_eq!(declared.items[1].mode, EditorMode::PomodoroStart);
+        assert!(declared.items[1].route.is_none());
+        assert!(declared.items[1].pomodoro_start.is_some());
     }
 
     #[test]

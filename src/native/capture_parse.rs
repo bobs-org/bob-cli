@@ -125,19 +125,29 @@ strict execution errors for the same text. Other nonmatching words retain \
 normal task semantics: a bare sign run followed by more text (`- foo`, \
 `-- aside`), a run longer than two or mixed (`+++`, `+-`), and mid-body \
 tokens (`Plan +5`, `C++`) stay ordinary prose. An operator is an action and \
-requests no route or task completion candidates. A whole-item `=x` close (case-insensitive \
-`=X`) reports mode 'pomodoro_close' with a `pomodoro_close` object (`raw`) \
-and a `pomodoro_close` span covering the token; a lone `=` is an \
-'incomplete' editing state, while a leading `=x` token with extra text, \
-markers, or child lines reports 'pomodoro_close' plus an \
-`invalid_pomodoro_close` diagnostic on the extra text or child line. Other \
-`=`-prefixed tokens (`=3`, `=xx`, `=x!`, `==`) and mid-body `=x` stay \
-ordinary prose. On link items the `=x` suffix spans as `pomodoro_close` \
-instead of `pomodoro_start`: `@r:id=x` and `^r:id=x` stay 'pomodoro_link' \
-(or 'pomodoro_task' with body text) and carry the spec, while `#name=x`, \
-`s:<N>`/`p:<N>`/`%` conflicts, and project-note `=x` report \
-`invalid_pomodoro_close` on the conflicting component. A `@@` declaration \
-never applies to `=x` items, and `=x` is never rewritten. \
+requests no route or task completion candidates. A whole-item `=`/`=<X>` \
+start (for example `=` starts 25 minutes, `=3` starts 15 minutes, `=-2` \
+starts 25 minutes with a 10-minute offset) reports mode 'pomodoro_start' \
+with a `pomodoro_start` object (`raw` excludes `=`, plus 5-minute \
+`duration_units`/`offset_units`) and a `pomodoro_start` span covering the \
+whole token; the parse stays purely lexical and never guesses current \
+ledger times. A counted token with extra text, markers, or child lines \
+(`=3 more`, `=3x`), an exact token with child lines, and an oversized \
+suffix report 'pomodoro_start' plus an `invalid_pomodoro_start` diagnostic \
+(the extra text, the child line, or the token for overflow), while `bob \
+capture` keeps its strict execution errors for the same text. A whole-item \
+`=x` close (case-insensitive `=X`) reports mode 'pomodoro_close' with a \
+`pomodoro_close` object (`raw`) and a `pomodoro_close` span covering the \
+token; a leading `=x` token with extra text, markers, or child lines \
+reports 'pomodoro_close' plus an `invalid_pomodoro_close` diagnostic on the \
+extra text or child line. Other `=`-prefixed tokens (`=xx`, `=x!`, `==`, \
+`= foo`) and mid-body `=x` stay ordinary prose. On link items the `=x` \
+suffix spans as `pomodoro_close` instead of `pomodoro_start`: `@r:id=x` \
+and `^r:id=x` stay 'pomodoro_link' (or 'pomodoro_task' with body text) and \
+carry the spec, while `#name=x`, `s:<N>`/`p:<N>`/`%` conflicts, and \
+project-note `=x` report `invalid_pomodoro_close` on the conflicting \
+component. A `@@` declaration never applies to `=x` or `=`/`=<X>` items, \
+and neither is ever rewritten. \
 A '@^id+' or \
 '@:id+' marker already carries the project-note intent: it reports mode \
 'project_note' or 'pomodoro_project_note' with a 'route' need until the \
@@ -173,7 +183,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '@r:id=x'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '@r:id=x'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -994,10 +1004,6 @@ mod tests {
         assert_eq!(upper["mode"], "pomodoro_close");
         assert_eq!(upper["pomodoro_close"]["raw"], "=X");
 
-        let incomplete = json("=");
-        assert_eq!(incomplete["mode"], "incomplete");
-        assert!(incomplete.get("pomodoro_close").is_none(), "{incomplete}");
-
         let link = json("@r:id=x");
         assert_eq!(link["mode"], "pomodoro_link");
         assert_eq!(link["pomodoro_close"]["raw"], "=x");
@@ -1024,10 +1030,11 @@ mod tests {
             "invalid_pomodoro_close"
         );
 
-        for raw in ["=3", "Plan =x"] {
+        for raw in ["Plan =x"] {
             let prose = json(raw);
             assert_eq!(prose["mode"], "task", "{raw}");
             assert!(prose.get("pomodoro_close").is_none(), "{raw}");
+            assert!(prose.get("pomodoro_start").is_none(), "{raw}");
         }
 
         let raw = "+5\n\n=x\n\nCall bank @Cash+";
