@@ -21,6 +21,7 @@ mod capture_complete;
 mod capture_language;
 mod capture_links;
 mod capture_parse;
+mod capture_pomodoro_close;
 mod capture_pomodoro_name;
 mod capture_pomodoros;
 mod capture_project_note;

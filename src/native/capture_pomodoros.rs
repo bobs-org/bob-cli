@@ -604,7 +604,7 @@ fn placeholder_range_len(body: &str) -> Option<usize> {
         .map(|_| '('.len_utf8() + whitespace_len + ')'.len_utf8())
 }
 
-fn parse_name_tail(remaining_body: &str) -> Option<String> {
+pub(crate) fn parse_name_tail(remaining_body: &str) -> Option<String> {
     let trimmed = remaining_body.trim_start_matches([' ', '\t']);
     let rest = trimmed.strip_prefix('—')?;
     let name = rest.trim_start_matches([' ', '\t']).trim();

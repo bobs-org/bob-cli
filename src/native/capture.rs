@@ -3053,15 +3053,15 @@ fn plan_pomodoro_adjust_item(
 }
 
 #[derive(Debug, Clone)]
-struct AdjustRange {
-    start_ch: usize,
-    end_ch: usize,
-    start_minutes: u64,
-    end_minutes: u64,
-    metadata: String,
+pub(crate) struct AdjustRange {
+    pub(crate) start_ch: usize,
+    pub(crate) end_ch: usize,
+    pub(crate) start_minutes: u64,
+    pub(crate) end_minutes: u64,
+    pub(crate) metadata: String,
 }
 
-fn parse_adjustment_range(line: &str) -> Option<AdjustRange> {
+pub(crate) fn parse_adjustment_range(line: &str) -> Option<AdjustRange> {
     let bytes = line.as_bytes();
     let mut search = 0;
     while let Some(relative_open) = line[search..].find('(') {
@@ -3149,8 +3149,20 @@ fn parse_adjustment_time(text: &str) -> Option<(u64, usize)> {
     None
 }
 
-fn adjustment_duration_minutes(line: &str, range: &AdjustRange) -> Option<u64> {
-    let range_text = &line[range.start_ch..range.end_ch];
+pub(crate) fn adjustment_duration_minutes(
+    line: &str,
+    range: &AdjustRange,
+) -> Option<u64> {
+    duration_from_range_text(&line[range.start_ch..range.end_ch])
+}
+
+pub(crate) fn adjustment_duration_for_range(range: &AdjustRange) -> u64 {
+    duration_from_range_text(&range.metadata).unwrap_or_else(|| {
+        normalize_minutes(range.end_minutes as i64 - range.start_minutes as i64)
+    })
+}
+
+fn duration_from_range_text(range_text: &str) -> Option<u64> {
     if let Some(value) = duration_field_value(range_text)
         && let Some(minutes) = parse_adjustment_duration(&value)
     {
@@ -3390,7 +3402,7 @@ fn remove_legacy_stopwatch_fields(metadata: &str) -> String {
     output
 }
 
-fn format_adjusted_range(
+pub(crate) fn format_adjusted_range(
     start_minutes: u64,
     end_minutes: u16,
     duration_minutes: u64,
@@ -3406,7 +3418,7 @@ fn format_adjusted_range(
     }
 }
 
-fn normalize_minutes(value: i64) -> u64 {
+pub(crate) fn normalize_minutes(value: i64) -> u64 {
     (((value % 1440) + 1440) % 1440) as u64
 }
 
