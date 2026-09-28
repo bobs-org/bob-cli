@@ -111,7 +111,8 @@ fn top_level_options_match_list_and_default_to_list() {
         ],
     );
 
-    // No subcommand defaults to `list`, which is still a stub.
+    // No subcommand defaults to `list`: top-level flags reach it, and
+    // `-s vault` needs no Keep setup, so it succeeds on an empty vault.
     let output = env
         .command()
         .arg("gkeep")
@@ -119,9 +120,9 @@ fn top_level_options_match_list_and_default_to_list() {
         .arg("vault")
         .output()
         .expect("run bob gkeep -s vault");
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(0));
     assert!(
-        stderr(&output).contains("bob gkeep list: not implemented yet"),
+        stdout(&output).contains("gkeep_inbox.md"),
         "top-level flags must reach list:\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         stdout(&output),
@@ -268,10 +269,10 @@ fn subcommand_options_are_alphabetical() {
 #[test]
 fn stubs_report_not_implemented_with_exit_1() {
     let env = GkeepEnv::new("bob-cli-gkeep-stubs");
-    // Only `list` and `pull` are still stubs: the auth phase implemented
-    // `doctor` and `login` (covered in `gkeep_auth.rs`), and later phases
-    // narrow this loop further as they land.
-    for subcommand in ["list", "pull"] {
+    // Only `pull` is still a stub: the auth phase implemented
+    // `doctor` and `login` (covered in `gkeep_auth.rs`), and the list
+    // phase implemented `list`.
+    for subcommand in ["pull"] {
         let output = env
             .command()
             .arg("gkeep")

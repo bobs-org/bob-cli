@@ -241,6 +241,37 @@ fn text_children(note: &KeepNote, consumed_first_line: bool) -> Vec<String> {
         .collect()
 }
 
+/// Table counts for `list`: text lines beyond the title plus open and
+/// checked list items, using the same normalization as the renderer.
+pub(super) struct NoteCounts {
+    pub(super) extra_lines: usize,
+    pub(super) open_items: usize,
+    pub(super) checked_items: usize,
+}
+
+/// Count a note's table hints: extra text lines, open/checked items.
+pub(super) fn note_counts(note: &KeepNote) -> NoteCounts {
+    let (_, consumed_first_line) = raw_title(note);
+    let extra_lines = text_children(note, consumed_first_line).len();
+    let mut open_items = 0;
+    let mut checked_items = 0;
+    for item in &note.content.items {
+        if nonempty_item_text(&item.text).is_none() {
+            continue;
+        }
+        if item.checked {
+            checked_items += 1;
+        } else {
+            open_items += 1;
+        }
+    }
+    NoteCounts {
+        extra_lines,
+        open_items,
+        checked_items,
+    }
+}
+
 /// List items as `(indented, "- [ ] body")` in Keep display order.
 /// Empty items are skipped; `indented` items render one level deeper.
 fn list_children(note: &KeepNote) -> Vec<(bool, String)> {
