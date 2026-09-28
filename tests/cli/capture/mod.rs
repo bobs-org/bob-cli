@@ -1,0 +1,28 @@
+//! Capture command tests.
+
+mod authored;
+mod bare;
+mod batch;
+mod clip;
+mod complete_editor;
+mod complete_query;
+mod ensure_next;
+mod parse;
+mod parse_pomodoro;
+mod pomodoro_adjust;
+mod pomodoro_close;
+mod pomodoro_link;
+mod pomodoro_name;
+mod pomodoro_shift;
+mod pomodoro_start;
+mod pomodoro_whole_item;
+mod priority;
+mod project_note;
+mod rewrite;
+mod routing;
+mod sections;
+mod sub_bullet;
+mod targets;
+mod task_id;
+mod task_marker;
+mod task_toggle;

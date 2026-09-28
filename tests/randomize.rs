@@ -2,7 +2,7 @@
 //! previews, live rewrites, git cooperation, failure modes, the JSON
 //! contract, and `task-status-hooks` parity.
 //!
-//! The few helpers below are copied from `tests/cli.rs` on purpose so
+//! The few helpers below are copied from `tests/cli/support.rs` on purpose so
 //! this file stays self-contained instead of growing that file.
 
 use std::{
@@ -349,7 +349,7 @@ fn init_pair(temp: &TempDir) -> (PathBuf, PathBuf) {
 }
 
 /// Clone the peer only after the vault's initial push, mirroring
-/// `tests/cli.rs::init_vault_sync_pair`.
+/// `tests/cli/support.rs::init_vault_sync_pair`.
 fn clone_peer(temp: &TempDir, remote: &Path) -> PathBuf {
     let peer = temp.path().join("peer");
     git(["clone", "-q", path_str(remote), path_str(&peer)]);
