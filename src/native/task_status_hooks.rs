@@ -670,7 +670,7 @@ impl RankedStatus {
     }
 }
 
-fn daily_anchor_date(
+pub(crate) fn daily_anchor_date(
     daily_path: &Path,
     effective_date: NaiveDate,
 ) -> NaiveDate {
@@ -1960,7 +1960,9 @@ fn parse_tasks_settings(path: &Path, contents: Option<&str>) -> TasksSettings {
     settings
 }
 
-fn validate_blocked_status(settings: &TasksSettings) -> Result<(), SyncError> {
+pub(crate) fn validate_blocked_status(
+    settings: &TasksSettings,
+) -> Result<(), SyncError> {
     if let Some(error) = &settings.status_settings_error {
         return Err(SyncError::new(format!(
             "cannot reconcile Blocked [?] tasks: {error}; configure one custom status named Blocked with symbol '?', type ON_HOLD, next status ' ', and availableAsCommand true"
@@ -2470,7 +2472,7 @@ fn reindent_segment(
     )
 }
 
-fn markdown_files(vault: &Path) -> io::Result<Vec<PathBuf>> {
+pub(crate) fn markdown_files(vault: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     collect_markdown_files(vault, &mut files)?;
     Ok(files)
@@ -3454,7 +3456,9 @@ fn compose_outputs(
     }
 }
 
-fn task_group_classification(settings: &TasksSettings) -> TaskClassification {
+pub(crate) fn task_group_classification(
+    settings: &TasksSettings,
+) -> TaskClassification {
     TaskClassification::from_status_types(
         &settings.global_filter,
         settings.status_types.iter().map(|(symbol, status_type)| {
@@ -3472,12 +3476,35 @@ fn task_grouping_eligible(
     daily_path: &Path,
     previous_daily_path: Option<&Path>,
 ) -> bool {
-    if !file.note_kind.is_area_or_project() {
+    if !grouping_eligible_note(
+        &file.relative_path,
+        &file.path,
+        &file.contents,
+        daily_path,
+    ) {
         return false;
     }
-    if canonical_daily_date(&file.relative_path).is_some()
-        || paths_match(&file.path, daily_path)
-        || previous_daily_path.is_some_and(|path| paths_match(&file.path, path))
+    if previous_daily_path.is_some_and(|path| paths_match(&file.path, path)) {
+        return false;
+    }
+    true
+}
+
+/// Whether a note's contents are grouping-eligible: `[[area]]` or
+/// `[[project]]` frontmatter, not a canonical `YYYY/YYYYMMDD.md` daily note,
+/// and not today's day file. Shared with `bob randomize`, which composes
+/// status and grouping in the same write so hooks have nothing left to do.
+pub(crate) fn grouping_eligible_note(
+    relative_path: &Path,
+    path: &Path,
+    contents: &str,
+    daily_path: &Path,
+) -> bool {
+    if !note_kind(contents).is_area_or_project() {
+        return false;
+    }
+    if canonical_daily_date(relative_path).is_some()
+        || paths_match(path, daily_path)
     {
         return false;
     }
@@ -4089,7 +4116,7 @@ fn print_warnings(result: &SyncResult) {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SyncError {
+pub(crate) struct SyncError {
     message: String,
     reason: Option<String>,
     applied_files: Vec<String>,
@@ -4098,6 +4125,12 @@ struct SyncError {
 }
 
 impl SyncError {
+    // Read by the command phase when the Blocked registry check fails.
+    #[allow(dead_code)]
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),

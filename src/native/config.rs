@@ -110,6 +110,33 @@ impl PriorityProperty {
             .collect::<Vec<_>>()
             .join(", ")
     }
+
+    // Wired in by the command phase.
+    #[allow(dead_code)]
+    pub(crate) fn levels(&self) -> &[PriorityLevel] {
+        &self.levels
+    }
+
+    /// Exact match after trimming, against the configured level `value`
+    /// (what lands in notes).
+    pub(crate) fn level_for_value(
+        &self,
+        value: &str,
+    ) -> Option<&PriorityLevel> {
+        let value = value.trim();
+        self.levels.iter().find(|level| level.value == value)
+    }
+
+    /// ASCII case-insensitive match after trimming, against the configured
+    /// level label (what `--level` accepts).
+    // Wired in by the command phase.
+    #[allow(dead_code)]
+    pub(crate) fn level_by_label(&self, label: &str) -> Option<&PriorityLevel> {
+        let label = label.trim();
+        self.levels
+            .iter()
+            .find(|level| level.label.eq_ignore_ascii_case(label))
+    }
 }
 
 impl HighlightsConfig {
@@ -144,11 +171,33 @@ impl PriorityLevel {
 
 /// The splitmix64 finalizer, used only to spread a seed across a small span;
 /// not intended to be cryptographically secure.
-fn mix64(value: u64) -> u64 {
+pub(crate) fn mix64(value: u64) -> u64 {
     let mut z = value.wrapping_add(0x9E3779B97F4A7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
     z ^ (z >> 31)
+}
+
+/// Mix a base seed with stable per-task identity parts. The parts are
+/// hashed with FNV-1a over bytes (never `std::hash::DefaultHasher`, whose
+/// output is randomized per process), joined with a NUL separator so
+/// `("ab", "c")` and `("a", "bc")` cannot collide. The base seed is
+/// combined with xor so a zero base still spreads across the hash.
+pub(crate) fn derive_seed(base: u64, parts: &[&str]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            hash = fnv_feed(hash, 0);
+        }
+        for byte in part.as_bytes() {
+            hash = fnv_feed(hash, *byte);
+        }
+    }
+    base ^ hash
+}
+
+fn fnv_feed(hash: u64, byte: u8) -> u64 {
+    (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
 }
 
 pub(crate) fn roll_seed() -> u64 {
@@ -172,7 +221,7 @@ pub(crate) fn load_priority_property(
     let text = std::fs::read_to_string(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             ConfigError::Read(format!(
-                "p:<N> needs {}; run 'chezmoi apply ~/.config/bob/config.yml'",
+                "priority levels need {}; run 'chezmoi apply ~/.config/bob/config.yml'",
                 path.display()
             ))
         } else {
@@ -180,6 +229,46 @@ pub(crate) fn load_priority_property(
         }
     })?;
     parse_priority_property(&text, path)
+}
+
+/// The deployed four-level property, for unit tests that need a
+/// `PriorityProperty` without touching the filesystem.
+#[cfg(test)]
+pub(crate) fn test_property() -> PriorityProperty {
+    parse_test_property(
+        r#"
+properties:
+  - name: priority
+    values: priority
+    schedules: scheduled
+    levels:
+      - label: P1
+        value: high
+        min_days: 2
+        max_days: 7
+      - label: P2
+        value: medium
+        min_days: 8
+        max_days: 30
+      - label: P3
+        value: low
+        min_days: 31
+        max_days: 90
+      - label: P4
+        value: lowest
+        min_days: 91
+        max_days: 365
+"#,
+    )
+}
+
+/// Parse a `PriorityProperty` from YAML text, for unit tests that need a
+/// non-deployed window (a zero-width window, fixed offsets) without
+/// touching the filesystem.
+#[cfg(test)]
+pub(crate) fn parse_test_property(text: &str) -> PriorityProperty {
+    parse_priority_property(text, Path::new("test-config.yml"))
+        .expect("test property parses")
 }
 
 pub(crate) fn load_highlights_config(
@@ -292,6 +381,25 @@ fn parse_priority_property(
             parse_priority_level(level, index, &name, &path_display.to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    let mut seen_values = std::collections::HashSet::new();
+    for level in &levels {
+        if !seen_values.insert(level.value.clone()) {
+            return Err(ConfigError::Invalid(format!(
+                "priority property \"{name}\" in {path_display} configures duplicate value {:?}",
+                level.value
+            )));
+        }
+    }
+    let mut seen_labels = std::collections::HashSet::new();
+    for level in &levels {
+        if !seen_labels.insert(level.label.to_ascii_lowercase()) {
+            return Err(ConfigError::Invalid(format!(
+                "priority property \"{name}\" in {path_display} configures duplicate label {:?}",
+                level.label
+            )));
+        }
+    }
 
     Ok(PriorityProperty { name, levels })
 }
@@ -899,5 +1007,174 @@ properties:
         }
         assert!(hit_min, "never rolled the minimum offset");
         assert!(hit_max, "never rolled the maximum offset");
+    }
+
+    fn deployed_property() -> PriorityProperty {
+        parse(DEPLOYED_CONFIG).expect("deployed config parses")
+    }
+
+    #[test]
+    fn level_for_value_matches_exact_value_after_trim() {
+        let property = deployed_property();
+        assert_eq!(
+            property
+                .level_for_value("medium")
+                .map(|level| level.label()),
+            Some("P2")
+        );
+        assert_eq!(
+            property
+                .level_for_value("  medium  ")
+                .map(|level| level.label()),
+            Some("P2")
+        );
+        assert_eq!(property.level_for_value("Medium"), None);
+        assert_eq!(property.level_for_value("highest"), None);
+        assert_eq!(property.level_for_value(""), None);
+    }
+
+    #[test]
+    fn level_by_label_matches_ascii_case_insensitively() {
+        let property = deployed_property();
+        assert_eq!(
+            property.level_by_label("p2").map(|level| level.value()),
+            Some("medium")
+        );
+        assert_eq!(
+            property.level_by_label("P2").map(|level| level.value()),
+            Some("medium")
+        );
+        assert_eq!(
+            property.level_by_label("  p3 ").map(|level| level.value()),
+            Some("low")
+        );
+        assert_eq!(property.level_by_label("P5"), None);
+    }
+
+    #[test]
+    fn levels_exposes_every_configured_level() {
+        let property = deployed_property();
+        assert_eq!(
+            property
+                .levels()
+                .iter()
+                .map(|level| level.label())
+                .collect::<Vec<_>>(),
+            vec!["P1", "P2", "P3", "P4"]
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_level_values() {
+        let error = parse(
+            r#"
+properties:
+  - name: priority
+    values: priority
+    schedules: scheduled
+    levels:
+      - label: P1
+        value: high
+        min_days: 2
+        max_days: 7
+      - label: P1b
+        value: high
+        min_days: 2
+        max_days: 7
+"#,
+        )
+        .expect_err("duplicate values");
+        assert!(error.message().contains("duplicate value"));
+        assert!(error.message().contains("high"));
+    }
+
+    #[test]
+    fn rejects_duplicate_level_labels() {
+        let error = parse(
+            r#"
+properties:
+  - name: priority
+    values: priority
+    schedules: scheduled
+    levels:
+      - label: P1
+        value: high
+        min_days: 2
+        max_days: 7
+      - label: P1
+        value: urgent
+        min_days: 1
+        max_days: 1
+"#,
+        )
+        .expect_err("duplicate labels");
+        assert!(error.message().contains("duplicate label"));
+    }
+
+    #[test]
+    fn rejects_labels_that_differ_only_by_case() {
+        let error = parse(
+            r#"
+properties:
+  - name: priority
+    values: priority
+    schedules: scheduled
+    levels:
+      - label: P1
+        value: high
+        min_days: 2
+        max_days: 7
+      - label: p1
+        value: urgent
+        min_days: 1
+        max_days: 1
+"#,
+        )
+        .expect_err("case-only label difference");
+        assert!(error.message().contains("duplicate label"));
+    }
+
+    #[test]
+    fn missing_file_message_is_command_neutral() {
+        let error = load_priority_property(Path::new("/does/not/exist.yml"))
+            .expect_err("missing file");
+        assert_eq!(
+            error,
+            ConfigError::Read(
+                "priority levels need /does/not/exist.yml; run 'chezmoi apply ~/.config/bob/config.yml'".to_string()
+            )
+        );
+        assert!(
+            !error.message().contains("p:<N>"),
+            "message must not name a single command: {}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn derive_seed_is_deterministic_and_sensitive_to_every_part() {
+        let first = derive_seed(42, &["notes/sase.md", "1a2b3c4d", "0"]);
+        assert_eq!(first, derive_seed(42, &["notes/sase.md", "1a2b3c4d", "0"]));
+        assert_ne!(first, derive_seed(43, &["notes/sase.md", "1a2b3c4d", "0"]));
+        assert_ne!(
+            first,
+            derive_seed(42, &["notes/other.md", "1a2b3c4d", "0"])
+        );
+        assert_ne!(first, derive_seed(42, &["notes/sase.md", "9f8e7d6c", "0"]));
+        assert_ne!(first, derive_seed(42, &["notes/sase.md", "1a2b3c4d", "1"]));
+    }
+
+    #[test]
+    fn derive_seed_separator_prevents_part_boundary_collisions() {
+        assert_ne!(derive_seed(7, &["ab", "c"]), derive_seed(7, &["a", "bc"]));
+    }
+
+    #[test]
+    fn mix64_spreads_sequential_inputs() {
+        let mut seen = std::collections::HashSet::new();
+        for value in 0..1000u64 {
+            seen.insert(mix64(value));
+        }
+        assert_eq!(seen.len(), 1000);
     }
 }

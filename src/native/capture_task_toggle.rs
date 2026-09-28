@@ -14,10 +14,7 @@
 //! note and daily ledger behavior can be tested directly.
 #![allow(dead_code)]
 
-use std::sync::LazyLock;
-
-use chrono::{Datelike, NaiveDate};
-use regex::Regex;
+use chrono::NaiveDate;
 
 use super::{
     capture::{
@@ -28,6 +25,9 @@ use super::{
     capture_pomodoros::{self, NamedSelection, PomodoroEntry, PomodoroState},
     capture_schedule_log::{ScheduleLog, SEPARATOR, TRANSITION},
     markdown, pomodoro,
+    task_fields::{
+        format_calendar_date, inline_fields, parse_strict_calendar_date,
+    },
 };
 
 /// `SCHEDULE_LOG_ENTRY_EMPHASIS = "_"` in `plugins/block-id-prompt/main.js`,
@@ -1377,14 +1377,8 @@ pub(crate) fn set_task_line_status(
 }
 
 /// Recognizes the same task-level `scheduled` forms as `bob task-status-hooks`
-/// and `plugins/block-id-prompt/main.js`'s `SCHEDULED_FIELD_RE`:
-/// `[scheduled:: YYYY-MM-DD]` and `(scheduled:: YYYY-MM-DD)`, anywhere on the
-/// line and in any field order.
-static SCHEDULED_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[scheduled::([^\]\n]*)\]|\(scheduled::([^)\n]*)\)")
-        .expect("valid scheduled field regex")
-});
-
+/// and `plugins/block-id-prompt/main.js`'s `SCHEDULED_FIELD_RE`, shared with
+/// the other task-field consumers through `task_fields`.
 struct ScheduledFieldMatch {
     start: usize,
     end: usize,
@@ -1394,38 +1388,14 @@ struct ScheduledFieldMatch {
 /// Every recognized `scheduled` field on the line. A malformed or duplicate
 /// field still counts toward ambiguity, matching `findScheduledFieldMatches`.
 fn scheduled_field_matches(line: &str) -> Vec<ScheduledFieldMatch> {
-    SCHEDULED_FIELD_RE
-        .captures_iter(line)
-        .map(|captures| {
-            let whole = captures.get(0).expect("whole match");
-            let value = captures
-                .get(1)
-                .or_else(|| captures.get(2))
-                .expect("scheduled value group")
-                .as_str()
-                .trim()
-                .to_string();
-            ScheduledFieldMatch {
-                start: whole.start(),
-                end: whole.end(),
-                value,
-            }
+    inline_fields(line, "scheduled")
+        .into_iter()
+        .map(|field| ScheduledFieldMatch {
+            start: field.start,
+            end: field.end,
+            value: field.value,
         })
         .collect()
-}
-
-fn parse_strict_calendar_date(value: &str) -> Option<NaiveDate> {
-    let bytes = value.as_bytes();
-    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
-        return None;
-    }
-    let all_digits = |range: std::ops::Range<usize>| {
-        bytes[range].iter().all(u8::is_ascii_digit)
-    };
-    if !all_digits(0..4) || !all_digits(5..7) || !all_digits(8..10) {
-        return None;
-    }
-    NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
 }
 
 /// Exactly one recognized `scheduled` field, syntactically valid, and
@@ -1461,10 +1431,6 @@ fn remove_span_with_space_collapse(
     } else {
         format!("{before_trimmed}{after_trimmed}")
     }
-}
-
-fn format_calendar_date(date: NaiveDate) -> String {
-    format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day())
 }
 
 // ---------------------------------------------------------------------------
