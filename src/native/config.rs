@@ -111,8 +111,6 @@ impl PriorityProperty {
             .join(", ")
     }
 
-    // Wired in by the command phase.
-    #[allow(dead_code)]
     pub(crate) fn levels(&self) -> &[PriorityLevel] {
         &self.levels
     }
@@ -129,8 +127,6 @@ impl PriorityProperty {
 
     /// ASCII case-insensitive match after trimming, against the configured
     /// level label (what `--level` accepts).
-    // Wired in by the command phase.
-    #[allow(dead_code)]
     pub(crate) fn level_by_label(&self, label: &str) -> Option<&PriorityLevel> {
         let label = label.trim();
         self.levels

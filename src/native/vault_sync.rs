@@ -191,15 +191,19 @@ pub(crate) fn run_cycle_with_existing_lock(child_env: &ChildEnv) -> i32 {
 }
 
 /// Outcome of one in-process vault-sync cycle for programmatic callers.
-// Temporary until the `randomize` command phase wires in the plumbing.
-#[allow(dead_code)]
 pub(crate) struct CycleReport {
     pub ok: bool,
+    // Reserved for programmatic callers that need the raw process
+    // outcome; `bob randomize` renders `ok`/`error` instead.
+    #[allow(dead_code)]
     pub exit_code: i32,
     pub error: Option<String>,
     pub files_committed: usize,
     pub conflicts: Vec<String>,
     pub pushed: bool,
+    // Reserved for programmatic callers; `bob randomize` reads the
+    // commit it creates via `git rev-parse` in its own scoped step.
+    #[allow(dead_code)]
     pub local_sha: Option<String>,
 }
 
@@ -209,7 +213,6 @@ pub(crate) struct CycleReport {
 /// [`run_cycle_with_existing_lock`]. When `quiet` is set, the `print_log`
 /// stdout lines and the final stderr error print are suppressed (the caller
 /// renders the error from the report); warnings stay on stderr.
-#[allow(dead_code)]
 pub(crate) fn run_cycle_with_existing_lock_report(
     child_env: &ChildEnv,
     quiet: bool,

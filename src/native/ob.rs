@@ -203,8 +203,6 @@ fn report_lock(
 }
 
 /// Failure modes for the bounded maintenance-lock wait.
-// Temporary until the `randomize` command phase wires in the plumbing.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum LockWaitError {
     Timeout { path: PathBuf },
@@ -241,7 +239,6 @@ impl std::fmt::Display for LockWaitError {
 /// `on_first_wait` runs exactly once, when the first poll finds the lock
 /// contended, so callers can print a single "waiting…" line. A zero `timeout`
 /// fails fast without waiting.
-#[allow(dead_code)]
 pub(crate) fn acquire_lock_waiting(
     timeout: Duration,
     on_first_wait: impl FnOnce(),
@@ -279,7 +276,6 @@ pub(crate) fn acquire_lock_waiting(
 /// Returns `Ok(true)` when `vault` is inside a worktree, `Ok(false)` when git
 /// runs but reports it is not, and `Err` only when the git command itself
 /// cannot be started.
-#[allow(dead_code)]
 pub(crate) fn detect_git_worktree(
     vault: &Path,
     child_env: &ChildEnv,
@@ -301,7 +297,6 @@ pub(crate) fn detect_git_worktree(
 /// returns `Ok(None)` when the listed paths hold no staged change. Otherwise
 /// commits with `git commit -F - -- <paths>` (message on stdin) and returns
 /// the new `HEAD` sha.
-#[allow(dead_code)]
 pub(crate) fn commit_paths(
     vault: &Path,
     child_env: &ChildEnv,

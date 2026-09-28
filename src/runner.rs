@@ -145,6 +145,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Query,
     },
     Subcommand {
+        name: "randomize",
+        script_command: None,
+        about: "Re-roll due prioritized tasks within their priority windows",
+        native_command: NativeCommand::Randomize,
+    },
+    Subcommand {
         name: "task-status-hooks",
         script_command: None,
         about: "Sync active task dependencies and Pomodoro links",
@@ -336,6 +342,8 @@ Examples:
                                  List picker tasks for one capture target
   bob query --source '#project'
                                  Print matching note paths
+  bob randomize --dry-run
+                                 Preview bulk re-roll of due prioritized tasks
   bob highlights create report.md
                                  Render a Highlights-ready PDF
   bob highlights scan --dry-run

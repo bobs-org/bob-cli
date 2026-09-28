@@ -4,7 +4,6 @@
 //! schedule-log/priority-roll formatters; `scripts/test-navigation-hotkeys.cjs`
 //! keeps the picker's own fixture of the exact bytes reproduced here.
 
-#![allow(dead_code)]
 //! Randomize insertions and reasons live here too; see [`randomize_reason`]
 //! and [`plan_entry_insertion`].
 

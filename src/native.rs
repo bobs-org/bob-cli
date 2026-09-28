@@ -47,6 +47,7 @@ mod ob;
 mod plugins;
 mod pomodoro;
 mod projects;
+mod randomize;
 mod randomize_plan;
 mod style;
 mod task_fields;
@@ -77,6 +78,7 @@ pub(crate) enum NativeCommand {
     Plugins,
     Pomodoro,
     Projects,
+    Randomize,
     TaskStatusHooks,
     TmuxPomodoro,
     VaultSync,
@@ -114,6 +116,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Plugins => plugins::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),
         NativeCommand::Projects => projects::run(args),
+        NativeCommand::Randomize => randomize::run(args),
         NativeCommand::TaskStatusHooks => task_status_hooks::run(args),
         NativeCommand::TmuxPomodoro => pomodoro::run_tmux(args),
         NativeCommand::VaultSync => vault_sync::run(args),

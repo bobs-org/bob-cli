@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Pure `bob randomize` planner: note snapshots in, per-note postimages out.
 //!
 //! The planner turns note snapshots into per-note postimages, a reroll list,

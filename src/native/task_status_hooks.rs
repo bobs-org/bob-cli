@@ -4125,8 +4125,7 @@ pub(crate) struct SyncError {
 }
 
 impl SyncError {
-    // Read by the command phase when the Blocked registry check fails.
-    #[allow(dead_code)]
+    // Read by `bob randomize` when the Blocked registry check fails.
     pub(crate) fn message(&self) -> &str {
         &self.message
     }

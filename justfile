@@ -52,6 +52,7 @@ install-smoke:
     "${root}/bin/bob" capture-task-sections --help >/dev/null
     "${root}/bin/bob" capture-tasks --help >/dev/null
     "${root}/bin/bob" query --help >/dev/null
+    "${root}/bin/bob" randomize --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null
     "${root}/bin/bob" highlights create --help >/dev/null
     "${root}/bin/bob" task-status-hooks --help >/dev/null
