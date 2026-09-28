@@ -190,7 +190,46 @@ pub(crate) fn run_cycle_with_existing_lock(child_env: &ChildEnv) -> i32 {
     run_cycle_with_env(RunOptions::default(), child_env)
 }
 
+/// Outcome of one in-process vault-sync cycle for programmatic callers.
+// Temporary until the `randomize` command phase wires in the plumbing.
+#[allow(dead_code)]
+pub(crate) struct CycleReport {
+    pub ok: bool,
+    pub exit_code: i32,
+    pub error: Option<String>,
+    pub files_committed: usize,
+    pub conflicts: Vec<String>,
+    pub pushed: bool,
+    pub local_sha: Option<String>,
+}
+
+/// Structured report variant of the in-process vault-sync cycle.
+///
+/// Runs the same cycle and status-record writing as
+/// [`run_cycle_with_existing_lock`]. When `quiet` is set, the `print_log`
+/// stdout lines and the final stderr error print are suppressed (the caller
+/// renders the error from the report); warnings stay on stderr.
+#[allow(dead_code)]
+pub(crate) fn run_cycle_with_existing_lock_report(
+    child_env: &ChildEnv,
+    quiet: bool,
+) -> CycleReport {
+    let options = RunOptions {
+        quiet,
+        ..RunOptions::default()
+    };
+    run_cycle_with_env_report(options, child_env, quiet).1
+}
+
 fn run_cycle_with_env(options: RunOptions, child_env: &ChildEnv) -> i32 {
+    run_cycle_with_env_report(options, child_env, false).0
+}
+
+fn run_cycle_with_env_report(
+    options: RunOptions,
+    child_env: &ChildEnv,
+    suppress_error_print: bool,
+) -> (i32, CycleReport) {
     let vault = bob_env::bob_dir();
     let state_file = state_file_path();
     let styler = Styler::detect();
@@ -212,11 +251,22 @@ fn run_cycle_with_env(options: RunOptions, child_env: &ChildEnv) -> i32 {
     status.duration_ms = elapsed_ms(started);
     refresh_status_shas(&vault, child_env, &mut status);
 
+    let report_of =
+        |ok: bool, exit_code: i32, error: Option<String>| CycleReport {
+            ok,
+            exit_code,
+            error,
+            files_committed: status.files_committed,
+            conflicts: status.conflicts.clone(),
+            pushed: ok && !options.dry_run,
+            local_sha: status.local_sha.clone(),
+        };
+
     match outcome {
         Ok(()) => {
             if options.dry_run {
                 print_log(&options, "dry-run complete; status file unchanged");
-                return 0;
+                return (0, report_of(true, 0, None));
             }
             status.last_success_at = status.last_attempt_at.clone();
             status.last_error = None;
@@ -225,13 +275,23 @@ fn run_cycle_with_env(options: RunOptions, child_env: &ChildEnv) -> i32 {
                     "{COMMAND_NAME}: failed to write status file {}: {error}",
                     state_file.display()
                 );
-                return 1;
+                return (
+                    1,
+                    report_of(
+                        false,
+                        1,
+                        Some(format!(
+                            "failed to write status file {}: {error}",
+                            state_file.display()
+                        )),
+                    ),
+                );
             }
             print_log(
                 &options,
                 &format!("wrote status record {}", state_file.display()),
             );
-            0
+            (0, report_of(true, 0, None))
         }
         Err(error) => {
             status.last_error = Some(error.message.clone());
@@ -244,8 +304,12 @@ fn run_cycle_with_env(options: RunOptions, child_env: &ChildEnv) -> i32 {
                     state_file.display()
                 );
             }
-            eprintln!("{}: {}", styler.red("error"), error.message);
-            error.code
+            if !suppress_error_print {
+                eprintln!("{}: {}", styler.red("error"), error.message);
+            }
+            let code = error.code;
+            let message = error.message;
+            (code, report_of(false, code, Some(message)))
         }
     }
 }

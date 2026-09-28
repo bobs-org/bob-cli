@@ -23,7 +23,6 @@ use super::{env as bob_env, ob};
 
 const TOOL: &str = "task-status-hooks";
 const SCHEMA_VERSION: u32 = 1;
-const STATE_SUBDIR: &str = "task-status-hooks";
 pub(crate) const QUIET_PERIOD: Duration = Duration::from_secs(2);
 pub(crate) const RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
@@ -179,11 +178,21 @@ pub(crate) struct PlannedWrite {
 pub(crate) struct WritePlan {
     pub vault_canonical: PathBuf,
     pub inputs: Vec<InputSnapshot>,
+    /// Vault note membership captured at plan time, compared against a fresh
+    /// rescan during preflight.
+    ///
+    /// A caller whose plan does not depend on note membership may pass an
+    /// empty `scan_paths` with a `rescan` closure returning an empty list.
     pub scan_paths: Vec<PathBuf>,
     pub outputs: Vec<PlannedWrite>,
 }
 
 pub(crate) struct ApplySession {
+    /// Tool name owning this session. It selects the
+    /// `$XDG_STATE_HOME/bob-cli/<tool>/…` recovery root, the manifest `tool`
+    /// value, the `bob <tool>: warning:` prefixes, and the retention scope:
+    /// pruning only touches manifests recorded with the same tool.
+    pub tool: &'static str,
     pub state_home: PathBuf,
     pub quiet_period: Duration,
     pub retention: Duration,
@@ -202,6 +211,7 @@ impl ApplySession {
         rescan: Box<dyn Fn() -> io::Result<Vec<PathBuf>>>,
     ) -> Self {
         Self {
+            tool: TOOL,
             state_home: bob_env::state_home(),
             quiet_period: QUIET_PERIOD,
             retention: RETENTION,
@@ -531,7 +541,7 @@ pub(crate) fn apply_plan(
         callback();
     }
     if let Err(mut error) = preflight(plan, session, &[]) {
-        cleanup_temps(&staged);
+        cleanup_temps(&staged, session.tool);
         if error.recovery_directory.is_none() {
             error.recovery_directory = Some(recovery_dir);
         }
@@ -546,7 +556,7 @@ pub(crate) fn apply_plan(
             callback(&next.dest);
         }
         if let Err(error) = preflight_for_replacement(plan, &next, &applied) {
-            cleanup_temps(&remaining_temps);
+            cleanup_temps(&remaining_temps, session.tool);
             let _ = update_manifest(
                 &recovery_dir,
                 plan,
@@ -574,7 +584,7 @@ pub(crate) fn apply_plan(
             });
         }
         if let Err(error) = fs::rename(&next.temp, &next.dest) {
-            cleanup_temps(&remaining_temps);
+            cleanup_temps(&remaining_temps, session.tool);
             let _ = fs::remove_file(&next.temp);
             let _ = update_manifest(
                 &recovery_dir,
@@ -603,7 +613,8 @@ pub(crate) fn apply_plan(
             update_manifest(&recovery_dir, plan, session, "partial", &applied)
         {
             eprintln!(
-                "bob task-status-hooks: warning: failed to update recovery manifest {}: {error}",
+                "bob {}: warning: failed to update recovery manifest {}: {error}",
+                session.tool,
                 recovery_dir.display()
             );
         }
@@ -613,17 +624,20 @@ pub(crate) fn apply_plan(
         update_manifest(&recovery_dir, plan, session, "applied", &applied)
     {
         eprintln!(
-            "bob task-status-hooks: warning: failed to finalize recovery manifest {}: {error}",
+            "bob {}: warning: failed to finalize recovery manifest {}: {error}",
+            session.tool,
             recovery_dir.display()
         );
     }
     if let Err(error) = prune_completed(
-        &session.state_home.join("bob-cli").join(STATE_SUBDIR),
+        &session.state_home.join("bob-cli").join(session.tool),
+        session.tool,
         session.now(),
         session.retention,
     ) {
         eprintln!(
-            "bob task-status-hooks: warning: failed to prune old recovery records: {error}"
+            "bob {}: warning: failed to prune old recovery records: {error}",
+            session.tool
         );
     }
 
@@ -1032,10 +1046,10 @@ fn create_recovery(
     let recovery_dir = session
         .state_home
         .join("bob-cli")
-        .join(STATE_SUBDIR)
+        .join(session.tool)
         .join(hash)
         .join(&session.run_id);
-    ensure_private_dir(&session.state_home.join("bob-cli").join(STATE_SUBDIR))
+    ensure_private_dir(&session.state_home.join("bob-cli").join(session.tool))
         .and_then(|_| {
             ensure_private_dir(recovery_dir.parent().unwrap_or(&recovery_dir))
         })
@@ -1100,7 +1114,7 @@ fn recovery_manifest(
     let now = session.now();
     let completed = matches!(outcome, "applied");
     RecoveryManifest {
-        tool: TOOL.to_string(),
+        tool: session.tool.to_string(),
         schema_version: SCHEMA_VERSION,
         vault: plan.vault_canonical.display().to_string(),
         vault_hash: vault_hash(&plan.vault_canonical),
@@ -1177,7 +1191,7 @@ fn stage_outputs(
                     && let Err(error) = fail(&output.path)
                 {
                     staged.push(item);
-                    cleanup_temps(&staged);
+                    cleanup_temps(&staged, session.tool);
                     return Err(ApplyError::io(
                         format!(
                             "failed to stage {}: {error}",
@@ -1191,7 +1205,7 @@ fn stage_outputs(
                 staged.push(item);
             }
             Err(error) => {
-                cleanup_temps(&staged);
+                cleanup_temps(&staged, session.tool);
                 return Err(ApplyError::io(
                     format!(
                         "failed to stage {}: {error}",
@@ -1292,13 +1306,13 @@ fn copy_copied_metadata(from: &Path, to: &Path) -> io::Result<()> {
     copy_xattrs(from, to)
 }
 
-fn cleanup_temps(staged: &[StagedWrite]) {
+fn cleanup_temps(staged: &[StagedWrite], tool: &str) {
     for item in staged {
         if let Err(error) = fs::remove_file(&item.temp)
             && error.kind() != io::ErrorKind::NotFound
         {
             eprintln!(
-                "bob task-status-hooks: warning: failed to remove staging file {}: {error}",
+                "bob {tool}: warning: failed to remove staging file {}: {error}",
                 item.temp.display()
             );
         }
@@ -1335,6 +1349,7 @@ fn sync_dir(path: &Path) -> io::Result<()> {
 
 fn prune_completed(
     root: &Path,
+    tool: &str,
     now: SystemTime,
     retention: Duration,
 ) -> io::Result<()> {
@@ -1365,7 +1380,7 @@ fn prune_completed(
             else {
                 continue;
             };
-            if manifest.tool != TOOL
+            if manifest.tool != tool
                 || manifest.schema_version != SCHEMA_VERSION
             {
                 continue;
@@ -1618,6 +1633,7 @@ mod tests {
     ) -> ApplySession {
         let scan = Rc::new(RefCell::new(scan_paths));
         ApplySession {
+            tool: TOOL,
             state_home: temp.path().join("state"),
             quiet_period: QUIET_PERIOD,
             retention: RETENTION,
@@ -1642,6 +1658,7 @@ mod tests {
     ) -> ApplySession {
         let vault = vault.to_path_buf();
         ApplySession {
+            tool: TOOL,
             state_home: temp.path().join("state"),
             quiet_period: QUIET_PERIOD,
             retention: RETENTION,
@@ -2301,6 +2318,61 @@ mod tests {
         .expect_err("nlink");
         assert!(matches!(error, CaptureError::Unsupported { .. }));
         let _ = (temp, scan);
+    }
+
+    #[test]
+    fn tool_scopes_recovery_root_manifest_and_pruning() {
+        let (temp, vault, first, second) = fixture();
+        let scan = vec![first.clone(), second.clone()];
+        let plan = plan_for(
+            &vault,
+            vec![(first.as_path(), "alpha-new\n", false)],
+            Vec::new(),
+            scan.clone(),
+        );
+        let mut session = make_session(&temp, scan, "randomize-run");
+        session.tool = "randomize";
+        let outcome = apply_ok(&plan, &session);
+        let ApplyOutcome::Applied {
+            recovery_directory, ..
+        } = outcome
+        else {
+            panic!("expected applied outcome");
+        };
+        let expected_root = temp.path().join("state/bob-cli/randomize");
+        assert!(recovery_directory.starts_with(&expected_root));
+        let manifest: RecoveryManifest = serde_json::from_str(
+            &fs::read_to_string(recovery_directory.join("manifest.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest.tool, "randomize");
+
+        // Pruning under the randomize root removes an expired randomize
+        // manifest but leaves another tool's manifest alone.
+        let hash = vault_hash(&vault.canonicalize().unwrap());
+        let root = expected_root.join(&hash);
+        let now = SystemTime::now();
+        let old = unix_secs(now).saturating_sub(31 * 24 * 60 * 60);
+        let foreign = root.join("foreign-complete");
+        let own = root.join("own-complete");
+        fs::create_dir_all(&foreign).unwrap();
+        fs::create_dir_all(&own).unwrap();
+        write_file(
+            &foreign.join("manifest.json"),
+            &format!(
+                r#"{{"tool":"task-status-hooks","schema_version":1,"vault":"x","vault_hash":"{hash}","run_id":"foreign-complete","started_at":"{old}","started_at_unix":{old},"completed_at":"{old}","completed_at_unix":{old},"outcome":"applied","notes":[]}}"#
+            ),
+        );
+        write_file(
+            &own.join("manifest.json"),
+            &format!(
+                r#"{{"tool":"randomize","schema_version":1,"vault":"x","vault_hash":"{hash}","run_id":"own-complete","started_at":"{old}","started_at_unix":{old},"completed_at":"{old}","completed_at_unix":{old},"outcome":"applied","notes":[]}}"#
+            ),
+        );
+        prune_completed(&expected_root, "randomize", now, RETENTION).unwrap();
+        assert!(foreign.exists(), "other tool records must be kept");
+        assert!(!own.exists(), "expired own-tool records must be pruned");
     }
 
     #[test]
