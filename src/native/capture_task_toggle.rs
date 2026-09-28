@@ -1357,7 +1357,10 @@ fn current_status_symbol(line: &str) -> Option<char> {
     Some(status)
 }
 
-fn set_task_line_status(line: &str, new_status: char) -> Option<String> {
+pub(crate) fn set_task_line_status(
+    line: &str,
+    new_status: char,
+) -> Option<String> {
     let indent_len = leading_spaces_or_tabs_len(line);
     let after_indent = line.get(indent_len..)?;
     let after_open = after_indent.strip_prefix("- [")?;

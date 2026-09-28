@@ -37,6 +37,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 [dev-dependencies]
 plist = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
+tempfile = "3"
 
 [[bin]]
 name = "bob"

@@ -33,6 +33,7 @@ mod capture_task_id;
 mod capture_task_sections;
 mod capture_task_toggle;
 mod capture_tasks;
+mod capture_work_log;
 mod collect_done;
 mod config;
 mod dataview;
@@ -50,6 +51,7 @@ mod style;
 mod task_status_groups;
 mod task_status_hooks;
 mod task_status_hooks_write;
+mod vault_links;
 mod vault_sync;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

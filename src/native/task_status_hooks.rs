@@ -31,6 +31,7 @@ use super::{
         ApplyError, ApplyOutcome, ApplySession, CaptureError, InputKind,
         InputSnapshot, WritePlan,
     },
+    vault_links::{target_to_markdown_path, NoteIndex},
 };
 
 const COMMAND_NAME: &str = "bob task-status-hooks";
@@ -2750,92 +2751,6 @@ fn task_description(
         .replacen(global_filter, "", 1)
         .trim()
         .to_string()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct NoteIndex {
-    relative_paths: BTreeSet<PathBuf>,
-    basename_paths: BTreeMap<String, Option<PathBuf>>,
-}
-
-impl NoteIndex {
-    fn from_paths<I>(paths: I) -> Self
-    where
-        I: IntoIterator<Item = PathBuf>,
-    {
-        let mut relative_paths = BTreeSet::new();
-        let mut basename_paths = BTreeMap::new();
-        for path in paths {
-            if let Some(name) = markdown_basename(&path) {
-                match basename_paths.entry(name.to_lowercase()) {
-                    std::collections::btree_map::Entry::Vacant(entry) => {
-                        entry.insert(Some(path.clone()));
-                    }
-                    std::collections::btree_map::Entry::Occupied(mut entry) => {
-                        if entry.get().as_ref() != Some(&path) {
-                            entry.insert(None);
-                        }
-                    }
-                }
-            }
-            relative_paths.insert(path);
-        }
-        Self {
-            relative_paths,
-            basename_paths,
-        }
-    }
-
-    fn resolve(
-        &self,
-        current_path: Option<&Path>,
-        target: &str,
-    ) -> Option<PathBuf> {
-        if target.is_empty() {
-            return current_path.map(Path::to_path_buf);
-        }
-        let candidate = target_to_markdown_path(target)?;
-        if self.relative_paths.contains(&candidate) {
-            return Some(candidate);
-        }
-        if target.contains('/') || target.contains('\\') {
-            return None;
-        }
-        let basename = target
-            .strip_suffix(".md")
-            .or_else(|| target.strip_suffix(".MD"))
-            .unwrap_or(target)
-            .to_lowercase();
-        self.basename_paths
-            .get(&basename)
-            .and_then(|path| path.clone())
-    }
-}
-
-fn markdown_basename(path: &Path) -> Option<&str> {
-    let name = path.file_name()?.to_str()?;
-    name.strip_suffix(".md")
-        .or_else(|| name.strip_suffix(".MD"))
-        .or(Some(name))
-}
-
-fn target_to_markdown_path(target: &str) -> Option<PathBuf> {
-    let mut path = PathBuf::new();
-    for component in Path::new(target).components() {
-        match component {
-            Component::Normal(part) => path.push(part),
-            _ => return None,
-        }
-    }
-    if !path
-        .extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
-    {
-        let file_name = path.file_name()?.to_os_string();
-        path.set_file_name(format!("{}.md", file_name.to_string_lossy()));
-    }
-    Some(path)
 }
 
 fn task_blocks(files: &[FileScan]) -> BTreeMap<(PathBuf, String), Vec<char>> {
