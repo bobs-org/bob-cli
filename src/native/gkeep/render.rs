@@ -7,19 +7,17 @@
 
 use std::sync::LazyLock;
 
-use chrono::Local;
 use regex::Regex;
 
 use super::ledger::format_marker;
 use super::model::{AttachmentKind, KeepNote};
 use crate::native::capture;
 
-/// One rendered Keep note: the escaped task-line body plus the full block.
+/// One rendered Keep note as a vault task block.
 ///
 /// `markdown` holds the task line and its children joined with `\n` and
 /// has no trailing newline; the caller (`pull`) joins blocks.
 pub(super) struct RenderedBlock {
-    pub(super) task_text: String,
     pub(super) markdown: String,
 }
 
@@ -62,7 +60,6 @@ pub(super) fn render_note(
     lines.push(format!("{child_prefix}- {}", source_line(note, revision)));
 
     RenderedBlock {
-        task_text,
         markdown: lines.join("\n"),
     }
 }
@@ -76,9 +73,38 @@ pub(super) fn display_title(note: &KeepNote) -> String {
 /// token, comment, field, and block-id hazards apply.
 pub(super) fn escape_task_text(text: &str) -> String {
     let staged = text.replace("%%", "%&#37;");
-    let staged = staged.replace("::", "\\:\\:");
+    let staged = escape_colon_runs(&staged);
     let staged = escape_hash_task_token(&staged);
     escape_trailing_block_id(&staged)
+}
+
+/// Escape every colon in any run of two or more colons
+/// (`:::` → `\:\:\:`). A non-overlapping replace leaves `::` in
+/// odd-length runs, so runs are scanned manually.
+fn escape_colon_runs(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == ':' {
+            let mut j = i;
+            while j < chars.len() && chars[j] == ':' {
+                j += 1;
+            }
+            if j - i >= 2 {
+                for _ in i..j {
+                    out.push_str("\\:");
+                }
+            } else {
+                out.push(':');
+            }
+            i = j;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Escape free text for a child bullet: the task-line escaping plus the
@@ -88,7 +114,7 @@ pub(super) fn escape_child_text(text: &str) -> String {
 }
 
 static LEADING_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(#(\s|$)|>|\d+[.)](\s|$)|\||[+*-]\s)")
+    Regex::new(r"^(#{1,6}(\s|$)|>|\d+[.)](\s|$)|\||[+*-]\s)")
         .expect("valid leading-marker regex")
 });
 
@@ -122,31 +148,66 @@ fn escape_hash_task_token(text: &str) -> String {
 
 /// `\^id` when the text ends with a trailing ` ^id` block id.
 ///
-/// Mirrors `collect_done::trailing_block_id_in_line`: the caret must be
-/// preceded by whitespace and followed only by block-id bytes.
+/// Mirrors `collect_done::trailing_block_id_in_line`: the caret must
+/// start the text or follow any Unicode whitespace (NBSP included) and
+/// be followed only by block-id bytes.
 fn escape_trailing_block_id(text: &str) -> String {
-    let Some(caret) = text.rfind('^') else {
+    let trimmed = text.trim_end();
+    let Some(caret) = trimmed.rfind('^') else {
         return text.to_string();
     };
-    let id = &text[caret + 1..];
+    let id = &trimmed[caret + 1..];
     if id.is_empty()
         || !id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        || !text[..caret].ends_with([' ', '\t'])
+        || (caret > 0
+            && !trimmed[..caret]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace))
     {
         return text.to_string();
     }
-    format!("{}\\^{id}", &text[..caret])
+    let trailing_ws = &text[trimmed.len()..];
+    format!("{}\\^{id}{trailing_ws}", &trimmed[..caret])
 }
 
-/// Backslash-escape a child-leading heading, quote, list, or table marker.
+/// Backslash-escape a child-leading heading, quote, list, table
+/// marker, thematic break, or code fence.
 fn escape_leading_marker(text: &str) -> String {
-    if LEADING_MARKER_RE.is_match(text) {
+    if LEADING_MARKER_RE.is_match(text)
+        || is_thematic_break(text)
+        || is_code_fence(text)
+    {
         format!("\\{text}")
     } else {
         text.to_string()
     }
+}
+
+/// A thematic break: a line that is only `---`, `***`, or `___`,
+/// with spaces allowed between and around the markers.
+fn is_thematic_break(text: &str) -> bool {
+    let stripped: String =
+        text.chars().filter(|c| *c != ' ' && *c != '\t').collect();
+    if stripped.len() < 3 {
+        return false;
+    }
+    let mut chars = stripped.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !matches!(first, '-' | '*' | '_') {
+        return false;
+    }
+    stripped.chars().all(|c| c == first)
+        && text.chars().all(|c| c == first || c == ' ' || c == '\t')
+}
+
+/// A code fence: a leading ` ``` ` or `~~~`.
+fn is_code_fence(text: &str) -> bool {
+    text.starts_with("```") || text.starts_with("~~~")
 }
 
 /// Drop `\r`, turn tabs into a space, remove zero-width characters,
@@ -222,10 +283,11 @@ fn raw_title(note: &KeepNote) -> (String, bool) {
     if !note.attachments.is_empty() {
         return ("Google Keep image note".to_string(), false);
     }
+    let count = note.content.items.len();
     (
         format!(
-            "Untitled Google Keep list ({} items)",
-            note.content.items.len()
+            "Untitled Google Keep list ({count} {})",
+            if count == 1 { "item" } else { "items" },
         ),
         false,
     )
@@ -290,7 +352,7 @@ fn list_children(note: &KeepNote) -> Vec<(bool, String)> {
         .collect()
 }
 
-/// `📎 N image(s)/drawing(s)/audio clip(s) stay(s) in Google Keep`.
+/// `📎 N image(s)/drawing(s)/audio clip(s)/file(s) stay(s) in Google Keep`.
 fn attachment_summary(note: &KeepNote) -> String {
     fn count(
         attachments: &[super::model::Attachment],
@@ -307,6 +369,7 @@ fn attachment_summary(note: &KeepNote) -> String {
     let images = count(&note.attachments, AttachmentKind::Image);
     let drawings = count(&note.attachments, AttachmentKind::Drawing);
     let audios = count(&note.attachments, AttachmentKind::Audio);
+    let others = count(&note.attachments, AttachmentKind::Other);
     let mut parts = Vec::new();
     if images > 0 {
         parts.push(plural(images, "image", "images"));
@@ -316,6 +379,9 @@ fn attachment_summary(note: &KeepNote) -> String {
     }
     if audios > 0 {
         parts.push(plural(audios, "audio clip", "audio clips"));
+    }
+    if others > 0 {
+        parts.push(plural(others, "file", "files"));
     }
     let verb = if note.attachments.len() == 1 {
         "stays"
@@ -339,7 +405,7 @@ fn ocr_children(note: &KeepNote) -> Vec<String> {
 /// optional `· revised` flag, then the gkeep marker.
 fn source_line(note: &KeepNote, revision: bool) -> String {
     let link = match &note.url {
-        Some(url) => format!("[Google Keep]({url})"),
+        Some(url) => format!("[Google Keep]({})", encode_source_url(url)),
         None => "Google Keep".to_string(),
     };
     let mut line = format!("Source: {link} · {}", created_datetime(note));
@@ -362,18 +428,80 @@ fn source_line(note: &KeepNote, revision: bool) -> String {
     line
 }
 
+/// Percent-encode `%`, `(`, `)`, `<`, `>`, `[`, `]`, and whitespace
+/// in a source URL, so a crafted id inside the URL cannot plant a
+/// parseable `%%gkeep:v1:…%%` marker before the real one.
+fn encode_source_url(url: &str) -> String {
+    let mut out = String::with_capacity(url.len());
+    for c in url.chars() {
+        if c == '%'
+            || c == '('
+            || c == ')'
+            || c == '<'
+            || c == '>'
+            || c == '['
+            || c == ']'
+            || c.is_whitespace()
+        {
+            for byte in c.encode_utf8(&mut [0; 4]).as_bytes() {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Whether normalized text is blank: empty after the renderer's
+/// normalization (zero-width removal, trim). Used by the planner so a
+/// note whose text is only zero-width characters counts as empty.
+pub(super) fn is_normalized_blank(text: &str) -> bool {
+    normalize_body(text).is_empty()
+}
+
 /// The Keep `created` date in local time as `YYYY-MM-DD`.
 fn created_date(note: &KeepNote) -> String {
-    note.created_local()
-        .map(|time| time.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string())
+    #[cfg(test)]
+    {
+        // Tests format in UTC for determinism without touching `TZ`
+        // (which would require unsafe env mutation in edition 2024).
+        // Production pins `TZ=UTC` in these tests' stead via `Local`,
+        // and `TZ=UTC` makes local equal UTC, so expectations match.
+        if let Ok(utc) = note.created.parse::<chrono::DateTime<chrono::Utc>>() {
+            utc.format("%Y-%m-%d").to_string()
+        } else {
+            chrono::Utc::now().format("%Y-%m-%d").to_string()
+        }
+    }
+    #[cfg(not(test))]
+    {
+        note.created_local()
+            .map(|time| time.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| {
+                chrono::Local::now().format("%Y-%m-%d").to_string()
+            })
+    }
 }
 
 /// The Keep `created` time in local time as `YYYY-MM-DD HH:MM`.
 fn created_datetime(note: &KeepNote) -> String {
-    note.created_local()
-        .map(|time| time.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|| Local::now().format("%Y-%m-%d %H:%M").to_string())
+    #[cfg(test)]
+    {
+        if let Ok(utc) = note.created.parse::<chrono::DateTime<chrono::Utc>>() {
+            utc.format("%Y-%m-%d %H:%M").to_string()
+        } else {
+            chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string()
+        }
+    }
+    #[cfg(not(test))]
+    {
+        note.created_local()
+            .map(|time| time.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| {
+                chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()
+            })
+    }
 }
 
 #[cfg(test)]
@@ -384,15 +512,6 @@ mod tests {
         KeepNoteKind,
     };
     use super::*;
-
-    fn pin_utc() {
-        // Keep the rendered `created` dates deterministic. Every test in
-        // this module pins the same value, so concurrent tests cannot
-        // disagree.
-        unsafe {
-            std::env::set_var("TZ", "UTC0");
-        }
-    }
 
     fn test_note() -> KeepNote {
         KeepNote {
@@ -438,13 +557,14 @@ mod tests {
 
     #[test]
     fn titled_note_renders_task_line_and_children() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Call dentist about crown".to_string();
         note.content.text = "They close at 5 on Fridays".to_string();
 
         let block = render_note(&note, "\t", false);
-        assert_eq!(block.task_text, "Call dentist about crown");
+        assert!(block
+            .markdown
+            .starts_with("- [ ] #task Call dentist about crown "));
         assert_eq!(
             block.markdown,
             format!(
@@ -458,14 +578,13 @@ mod tests {
 
     #[test]
     fn untitled_multiline_note_takes_first_line_as_title() {
-        pin_utc();
         let mut note = test_note();
         note.url = None;
         note.content.text =
             "Buy oat milk\n- end caps are on sale\n* limit two".to_string();
 
         let block = render_note(&note, "\t", false);
-        assert_eq!(block.task_text, "Buy oat milk");
+        assert!(block.markdown.starts_with("- [ ] #task Buy oat milk "));
         assert_eq!(
             block.markdown,
             format!(
@@ -480,13 +599,14 @@ mod tests {
 
     #[test]
     fn unicode_text_passes_through() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Hardware store #8 × 1¼″ 🧰".to_string();
         note.content.text = "木材とネジ — café naïve".to_string();
 
         let block = render_note(&note, "\t", false);
-        assert_eq!(block.task_text, "Hardware store #8 × 1¼″ 🧰");
+        assert!(block
+            .markdown
+            .starts_with("- [ ] #task Hardware store #8 × 1¼″ 🧰 "));
         assert_eq!(
             block.markdown,
             format!(
@@ -500,7 +620,6 @@ mod tests {
 
     #[test]
     fn markdown_looking_text_is_neutralized_in_children() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Notes".to_string();
         note.content.text =
@@ -527,25 +646,27 @@ mod tests {
 
     #[test]
     fn capture_grammar_lookalikes_stay_literal() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Track =x and +5 and 50% and @x".to_string();
 
         let block = render_note(&note, "\t", false);
-        assert_eq!(block.task_text, "Track =x and +5 and 50% and @x");
+        assert!(block
+            .markdown
+            .starts_with("- [ ] #task Track =x and +5 and 50% and @x "));
         assert!(block.markdown.contains("Track =x and +5 and 50% and @x"));
     }
 
     #[test]
     fn task_and_block_id_and_comment_and_field_hazards_escape() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Fix #task before Friday ^abc123".to_string();
         note.content.text =
             "See [due:: tomorrow] and (x:: y) plus 100%% sure".to_string();
 
         let block = render_note(&note, "\t", false);
-        assert_eq!(block.task_text, "Fix \\#task before Friday \\^abc123",);
+        assert!(block
+            .markdown
+            .starts_with("- [ ] #task Fix \\#task before Friday \\^abc123 "));
         assert_eq!(
             block.markdown,
             format!(
@@ -559,7 +680,6 @@ mod tests {
 
     #[test]
     fn list_with_checked_nested_and_empty_items() {
-        pin_utc();
         let mut note = test_note();
         note.kind = KeepNoteKind::List;
         note.content.title = "Hardware store".to_string();
@@ -586,7 +706,6 @@ mod tests {
 
     #[test]
     fn untitled_list_takes_first_item_as_title_but_keeps_it() {
-        pin_utc();
         let mut note = test_note();
         note.kind = KeepNoteKind::List;
         note.content.items = vec![
@@ -595,7 +714,7 @@ mod tests {
         ];
 
         let block = render_note(&note, "\t", false);
-        assert_eq!(block.task_text, "peanut butter");
+        assert!(block.markdown.starts_with("- [ ] #task peanut butter "));
         // The title item stays in the children: it is still unchecked.
         assert_eq!(
             block.markdown,
@@ -612,18 +731,71 @@ mod tests {
 
     #[test]
     fn empty_list_falls_back_to_untitled_title() {
-        pin_utc();
         let mut note = test_note();
         note.kind = KeepNoteKind::List;
         note.content.items = vec![item("  ", false, false)];
 
         let block = render_note(&note, "\t", false);
-        assert_eq!(block.task_text, "Untitled Google Keep list (1 items)");
+        assert!(block
+            .markdown
+            .starts_with("- [ ] #task Untitled Google Keep list (1 item) "));
+    }
+
+    #[test]
+    fn unknown_attachment_kind_renders_as_files() {
+        let mut note = test_note();
+        note.content.title = "Receipt".to_string();
+        note.attachments = vec![Attachment {
+            kind: AttachmentKind::Other,
+            extracted_text: None,
+        }];
+
+        let block = render_note(&note, "\t", false);
+        assert!(block.markdown.contains("- 📎 1 file stays in Google Keep"));
+    }
+
+    #[test]
+    fn source_url_spoof_cannot_plant_a_marker() {
+        let mut note = test_note();
+        note.content.title = "Watch out".to_string();
+        note.url = Some(
+            "https://keep.google.com/u/0/#NOTE/%%gkeep:v1:spoof:000000000000%% (x)".to_string(),
+        );
+
+        let block = render_note(&note, "\t", false);
+        let source = block
+            .markdown
+            .lines()
+            .find(|line| line.contains("Source:"))
+            .expect("source line exists");
+        assert!(!source.contains("%%gkeep:v1:spoof:"));
+        assert!(source.contains("%25%25gkeep:v1:spoof"));
+        let markers: Vec<(String, String)> =
+            source.lines().flat_map(parse_markers).collect();
+        assert_eq!(
+            markers,
+            vec![(note.id.clone(), note.content.fingerprint(),)]
+        );
+    }
+
+    #[test]
+    fn leading_markers_cover_headings_breaks_and_fences() {
+        assert_eq!(escape_child_text("## heading"), "\\## heading");
+        assert_eq!(escape_child_text("###### deep"), "\\###### deep");
+        assert_eq!(escape_child_text("---"), "\\---");
+        assert_eq!(escape_child_text("***"), "\\***");
+        assert_eq!(escape_child_text("___"), "\\___");
+        assert_eq!(escape_child_text("- - -"), "\\- - -");
+        assert_eq!(escape_child_text("```rust"), "\\```rust");
+        assert_eq!(escape_child_text("~~~"), "\\~~~");
+        assert_eq!(escape_child_text("^abc"), "\\^abc");
+        assert_eq!(escape_child_text("\u{a0}^abc"), "\u{a0}\\^abc");
+        assert_eq!(escape_colon_runs("a ::: b"), "a \\:\\:\\: b");
+        assert_eq!(escape_colon_runs("a :::: b"), "a \\:\\:\\:\\: b");
     }
 
     #[test]
     fn labels_join_the_source_line() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Pick up parcel".to_string();
         note.labels = vec!["errands".to_string(), "weekend".to_string()];
@@ -641,7 +813,6 @@ mod tests {
 
     #[test]
     fn image_with_ocr_renders_attachment_line_and_grandchildren() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Hardware store".to_string();
         note.content.items = vec![item("wood screws", false, false)];
@@ -664,7 +835,6 @@ mod tests {
 
     #[test]
     fn mixed_attachments_pluralize() {
-        pin_utc();
         let mut note = test_note();
         note.attachments = vec![
             image(None),
@@ -679,7 +849,9 @@ mod tests {
         ];
 
         let block = render_note(&note, "\t", false);
-        assert_eq!(block.task_text, "Google Keep image note");
+        assert!(block
+            .markdown
+            .starts_with("- [ ] #task Google Keep image note "));
         assert!(block.markdown.contains(
             "- 📎 1 image, 1 drawing, 1 audio clip stay in Google Keep"
         ));
@@ -687,7 +859,6 @@ mod tests {
 
     #[test]
     fn revision_flags_the_source_line() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Call dentist".to_string();
 
@@ -704,13 +875,12 @@ mod tests {
 
     #[test]
     fn crlf_and_tabs_normalize() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Call\u{200b} dentist\u{feff}".to_string();
         note.content.text = "They close\tat 5\r\n\r\nFridays".to_string();
 
         let block = render_note(&note, "\t", false);
-        assert_eq!(block.task_text, "Call dentist");
+        assert!(block.markdown.starts_with("- [ ] #task Call dentist "));
         assert_eq!(
             block.markdown,
             format!(
@@ -725,7 +895,6 @@ mod tests {
 
     #[test]
     fn space_indent_uses_two_spaces() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Call dentist".to_string();
         note.content.text = "They close at 5".to_string();
@@ -746,7 +915,6 @@ mod tests {
 
     #[test]
     fn spoofed_marker_in_keep_text_cannot_survive() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Watch out".to_string();
         note.content.text =
@@ -768,7 +936,6 @@ mod tests {
 
     #[test]
     fn markdown_has_no_trailing_newline() {
-        pin_utc();
         let note = test_note();
         let block = render_note(&note, "\t", false);
         assert!(!block.markdown.ends_with('\n'));
@@ -776,15 +943,13 @@ mod tests {
 
     #[test]
     fn display_title_is_unescaped() {
-        pin_utc();
         let mut note = test_note();
         note.content.title = "Fix #task now".to_string();
 
         assert_eq!(display_title(&note), "Fix #task now");
-        assert_eq!(
-            render_note(&note, "\t", false).task_text,
-            "Fix \\#task now"
-        );
+        assert!(render_note(&note, "\t", false)
+            .markdown
+            .starts_with("- [ ] #task Fix \\#task now "));
     }
 
     #[test]

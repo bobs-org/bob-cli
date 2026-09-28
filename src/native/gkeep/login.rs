@@ -302,7 +302,7 @@ fn recovery_path() -> PathBuf {
         .join("master_token.recovered")
 }
 
-/// Write the token to the recovery path with 0600 permissions.
+/// Write the token to the recovery path with 0600 permissions at open.
 fn save_recovery_token(master_token: &str) -> Result<PathBuf, String> {
     let path = recovery_path();
     if let Some(parent) = path.parent() {
@@ -317,13 +317,27 @@ fn save_recovery_token(master_token: &str) -> Result<PathBuf, String> {
                 })?;
         }
     }
-    fs::write(&path, format!("{master_token}\n"))
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&path)
         .map_err(|error| format!("write {}: {error}", path.display()))?;
+    {
+        use std::io::Write as _;
+        file.write_all(format!("{master_token}\n").as_bytes())
+            .map_err(|error| format!("write {}: {error}", path.display()))?;
+        file.sync_all()
+            .map_err(|error| format!("write {}: {error}", path.display()))?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-            .map_err(|error| format!("chmod {}: {error}", path.display()))?;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
     }
     Ok(path)
 }

@@ -104,7 +104,13 @@ impl GkeepConfig {
         let target = settings
             .target
             .unwrap_or_else(|| DEFAULT_TARGET.to_string());
-        if Path::new(&target).is_absolute() || !target.ends_with(".md") {
+        let has_parent = Path::new(&target)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir));
+        if Path::new(&target).is_absolute()
+            || has_parent
+            || !target.ends_with(".md")
+        {
             return Err(GkeepError::setup(
                 "config",
                 format!(
@@ -192,9 +198,14 @@ impl GkeepConfig {
     /// The test hook: an executable speaking the adapter protocol that
     /// replaces `uv run --script …`, like `BOB_CLIPBOARD_CMD`.
     pub(crate) fn adapter_override() -> Option<PathBuf> {
-        std::env::var_os(ADAPTER_ENV_VAR)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
+        Self::adapter_override_from(std::env::var_os(ADAPTER_ENV_VAR))
+    }
+
+    /// Pure helper for tests: resolve the override from an env value.
+    pub(crate) fn adapter_override_from(
+        value: Option<std::ffi::OsString>,
+    ) -> Option<PathBuf> {
+        value.filter(|v| !v.is_empty()).map(PathBuf::from)
     }
 
     /// Run `token_command` with `sh -c` and return the master token plus
@@ -337,40 +348,6 @@ mod tests {
         assert!(!is_device_id("xyz"));
     }
 
-    struct EnvGuard {
-        key: &'static str,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = std::env::var_os(key);
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, prev }
-        }
-
-        fn remove(key: &'static str) -> Self {
-            let prev = std::env::var_os(key);
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.prev {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
-
     fn resolve_with(
         dir: &tempfile::TempDir,
         text: &str,
@@ -434,6 +411,14 @@ mod tests {
             (
                 "absolute target",
                 "gkeep:\n  email: a@b.c\n  target: /x.md\n",
+            ),
+            (
+                "parent target",
+                "gkeep:\n  email: a@b.c\n  target: ../escape.md\n",
+            ),
+            (
+                "nested parent target",
+                "gkeep:\n  email: a@b.c\n  target: sub/../../escape.md\n",
             ),
             (
                 "non-markdown target",
@@ -507,11 +492,17 @@ mod tests {
 
     #[test]
     fn adapter_override_reads_env() {
-        let _guard = EnvGuard::remove("BOB_GKEEP_ADAPTER");
-        assert_eq!(GkeepConfig::adapter_override(), None);
-        let _guard = EnvGuard::set("BOB_GKEEP_ADAPTER", "/tmp/fake-adapter");
+        assert_eq!(GkeepConfig::adapter_override_from(None), None);
         assert_eq!(
-            GkeepConfig::adapter_override(),
+            GkeepConfig::adapter_override_from(Some(std::ffi::OsString::from(
+                ""
+            ))),
+            None
+        );
+        assert_eq!(
+            GkeepConfig::adapter_override_from(Some(std::ffi::OsString::from(
+                "/tmp/fake-adapter"
+            ))),
             Some(PathBuf::from("/tmp/fake-adapter"))
         );
     }

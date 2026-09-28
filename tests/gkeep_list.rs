@@ -40,9 +40,9 @@ fn install_token_stub(env: &GkeepEnv) {
         permissions.set_mode(0o755);
         fs::set_permissions(&path, permissions).expect("chmod token stub");
     }
+    let quoted = path.to_string_lossy().replace('\'', "'\\''");
     env.write_config(&format!(
-        "gkeep:\n  email: bryanbugyi34@gmail.com\n  token_command: \"{}\"\n",
-        path.display()
+        "gkeep:\n  email: bryanbugyi34@gmail.com\n  token_command: \"sh '{quoted}'\"\n",
     ));
 }
 
@@ -582,5 +582,46 @@ fn ages_follow_bob_now() {
     assert!(
         vault_row.contains(" 2d "),
         "vault age honors BOB_NOW:\n{vault_row}"
+    );
+}
+
+#[test]
+fn keep_age_is_correct_outside_utc() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-tz");
+    install_token_stub(&env);
+    write_target(&env, "## Tasks\n");
+    let fake = FakeAdapter::new(&env, "adapter");
+    fake.respond(
+        "snapshot",
+        &snapshot_ok(
+            "bryanbugyi34@gmail.com",
+            vec![note("TZ probe note")
+                .id("keep-tz-1")
+                .created("2026-09-28T15:30:00Z")
+                .build()],
+        ),
+    );
+
+    // Local noon in New York (EDT, UTC-4) is 16:00 UTC; the note from
+    // 15:30 UTC is 30 minutes old. The old `.and_utc()` code treated
+    // local noon as 12:00 UTC and reported "now".
+    let mut command = env.command();
+    fake.install(&mut command);
+    command
+        .arg("gkeep")
+        .arg("list")
+        .env("TZ", "America/New_York")
+        .env("BOB_NOW", "2026-09-28 12:00:00")
+        .env("COLUMNS", "200");
+    let output = command.output().expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    let keep_row = text
+        .lines()
+        .find(|line| line.contains("TZ probe note"))
+        .expect("keep row");
+    assert!(
+        keep_row.contains(" 30m "),
+        "Keep age converts local time to UTC:\n{keep_row}"
     );
 }

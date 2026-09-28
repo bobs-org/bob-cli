@@ -77,11 +77,6 @@ impl KeepNote {
     pub(crate) fn created_local(&self) -> Option<DateTime<Local>> {
         parse_keep_time(&self.created)
     }
-
-    /// The Keep `edited` timestamp rendered in local time.
-    pub(crate) fn edited_local(&self) -> Option<DateTime<Local>> {
-        parse_keep_time(&self.edited)
-    }
 }
 
 fn parse_keep_time(value: &str) -> Option<DateTime<Local>> {
@@ -114,6 +109,8 @@ pub(crate) enum AttachmentKind {
     Image,
     Drawing,
     Audio,
+    #[serde(other)]
+    Other,
 }
 
 /// The Keep credentials every adapter request but `ping` carries.
@@ -245,32 +242,6 @@ impl ArchiveStatus {
     }
 }
 
-/// A failure response: `{"ok":false,"error":{"kind":…,"message":…}}`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct FailureResponse {
-    pub(crate) ok: bool,
-    pub(crate) error: AdapterError,
-}
-
-/// A typed adapter failure.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct AdapterError {
-    pub(crate) kind: AdapterErrorKind,
-    pub(crate) message: String,
-}
-
-/// Adapter failure kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum AdapterErrorKind {
-    Auth,
-    Network,
-    RateLimit,
-    Protocol,
-    Dependency,
-    Internal,
-}
-
 fn sha256_hex(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
@@ -395,7 +366,6 @@ mod tests {
         assert!(note.pinned);
         assert_eq!(note.labels, vec!["errands"]);
         assert!(note.created_local().is_some());
-        assert!(note.edited_local().is_some());
 
         let response: ArchiveResponse = serde_json::from_str(
             r#"{"ok":true,"results":[{"id":"n1","status":"already_archived"},{"id":"n2","status":"changed"}]}"#,
@@ -404,11 +374,13 @@ mod tests {
         assert!(response.results[0].status.is_success());
         assert!(!response.results[1].status.is_success());
 
-        let failure: FailureResponse = serde_json::from_str(
+        // `adapter::into_result` reads raw JSON on purpose; failures are
+        // asserted through the client error kinds.
+        let failure: serde_json::Value = serde_json::from_str(
             r#"{"ok":false,"error":{"kind":"auth","message":"bad token"}}"#,
         )
         .expect("failure parses");
-        assert_eq!(failure.error.kind, AdapterErrorKind::Auth);
+        assert_eq!(failure["error"]["kind"], serde_json::json!("auth"));
     }
 
     #[test]
@@ -418,5 +390,15 @@ mod tests {
         assert!(!ArchiveStatus::Changed.is_success());
         assert!(!ArchiveStatus::Missing.is_success());
         assert!(!ArchiveStatus::Error.is_success());
+    }
+
+    #[test]
+    fn unknown_attachment_kind_deserializes_to_other() {
+        let note: KeepNote = serde_json::from_str(
+            r#"{"id":"n1","kind":"note","content":{"title":"t","text":"","items":[]},"attachments":[{"kind":"nonetype"}],"created":"2026-09-27T21:14:03Z","edited":"2026-09-27T21:14:03Z"}"#,
+        )
+        .expect("note with unknown attachment kind parses");
+        assert_eq!(note.attachments.len(), 1);
+        assert_eq!(note.attachments[0].kind, AttachmentKind::Other);
     }
 }

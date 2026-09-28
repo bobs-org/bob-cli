@@ -349,7 +349,7 @@ Examples:
   bob query --source '#project'
                                  Print matching note paths
   bob gkeep
-                                 Drain the Google Keep inbox into Obsidian tasks
+                                 Show the Keep inbox and gkeep_inbox.md side by side
   bob gkeep pull --dry-run
                                  Preview the exact Markdown a pull would write
   bob randomize --dry-run

@@ -238,31 +238,46 @@ pub(super) struct Journal {
 
 impl Journal {
     /// Read the journal at `path`. A missing file gives an empty journal;
-    /// corrupt lines are skipped and counted in `skipped`.
+    /// corrupt lines (including non-UTF8) are skipped and counted.
     pub(super) fn read(path: &Path) -> io::Result<Journal> {
-        match fs::read_to_string(path) {
+        let bytes = match fs::read(path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                Ok(Journal::default())
+                return Ok(Journal::default());
             }
-            Err(error) => Err(error),
-            Ok(contents) => {
-                let mut journal = Journal::default();
-                for line in contents.lines() {
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    match serde_json::from_str::<JournalRecord>(line) {
-                        Ok(record) => journal.records.push(record),
-                        Err(_) => journal.skipped += 1,
-                    }
-                }
-                Ok(journal)
+            Err(error) => return Err(error),
+            Ok(bytes) => bytes,
+        };
+        let mut journal = Journal::default();
+        // Split on newlines at the byte level so invalid UTF-8 lines can
+        // be skipped without failing the whole read.
+        let mut start = 0;
+        for (i, b) in bytes.iter().enumerate().chain([(bytes.len(), &b'\n')]) {
+            if *b != b'\n' && i != bytes.len() {
+                continue;
+            }
+            let end = if i == bytes.len() { bytes.len() } else { i };
+            let slice = &bytes[start..end];
+            start = end + 1;
+            let Ok(line) = std::str::from_utf8(slice) else {
+                journal.skipped += 1;
+                continue;
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<JournalRecord>(line) {
+                Ok(record) => journal.records.push(record),
+                Err(_) => journal.skipped += 1,
             }
         }
+        Ok(journal)
     }
 
     /// Append `records` as one fsynced batch, creating the parent
-    /// directory (`0700`) and the file (`0600`) as needed.
+    /// directory (`0700`) and the file (`0600` at open) as needed. When
+    /// the existing file is non-empty and lacks a trailing newline, a
+    /// leading newline is written first so a torn previous append cannot
+    /// corrupt the next record.
     pub(super) fn append(
         path: &Path,
         records: &[JournalRecord],
@@ -277,14 +292,28 @@ impl Journal {
                 fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
             }
         }
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let needs_leading_newline = match fs::read(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(_) => false,
+            Ok(bytes) => !bytes.is_empty() && !bytes.ends_with(b"\n"),
+        };
+        let mut options = fs::OpenOptions::new();
+        options.create(true).append(true);
         #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path)?;
+        #[cfg(unix)]
+        {
+            // Mode at open covers creation; keep tight permissions.
             use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+            let _ =
+                fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        }
+        if needs_leading_newline {
+            io::Write::write_all(&mut file, b"\n")?;
         }
         for record in records {
             let mut line =

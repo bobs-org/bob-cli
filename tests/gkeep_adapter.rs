@@ -14,13 +14,28 @@ use gkeep_support::{
 };
 
 /// Pipe `request` into the fake adapter and collect its output.
+///
+/// A just-written executable can report transient `ETXTBSY` under
+/// concurrent load; that one error retries like `spawn_adapter`.
 fn run_fake(path: &std::path::Path, request: &str) -> std::process::Output {
-    let mut child = Command::new(path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn fake adapter");
+    let mut attempts = 0;
+    let mut child = loop {
+        match Command::new(path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => break child,
+            Err(error)
+                if error.raw_os_error() == Some(26) && attempts < 100 =>
+            {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(error) => panic!("spawn fake adapter: {error}"),
+        }
+    };
     child
         .stdin
         .take()

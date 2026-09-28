@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::ledger::{DuplicateGroup, Journal, Ledger};
+use super::ledger::{Journal, Ledger};
 use super::model::{note_ref, KeepNote};
 use super::GkeepError;
 
@@ -86,11 +86,10 @@ pub(super) struct PlannedNote {
     pub(super) skip_reason: Option<String>,
 }
 
-/// The classified plan plus vault-integrity warnings and counts.
+/// The classified plan plus per-state counts.
 #[derive(Debug, Clone)]
 pub(super) struct Plan {
     pub(super) notes: Vec<PlannedNote>,
-    pub(super) duplicates: Vec<DuplicateGroup>,
     pub(super) summary: PlanSummary,
 }
 
@@ -102,7 +101,6 @@ pub(super) struct PlanSummary {
     pub(super) revised: usize,
     pub(super) skipped: usize,
     pub(super) archived: usize,
-    pub(super) duplicates: usize,
 }
 
 /// Classify `notes` against the ledger and journal.
@@ -150,11 +148,7 @@ pub(super) fn classify(
         });
     }
 
-    let duplicates = ledger.duplicates();
-    let mut summary = PlanSummary {
-        duplicates: duplicates.len(),
-        ..PlanSummary::default()
-    };
+    let mut summary = PlanSummary::default();
     for planned in &planned {
         match planned.state {
             NoteState::New => summary.new += 1,
@@ -169,7 +163,6 @@ pub(super) fn classify(
 
     Plan {
         notes: planned,
-        duplicates,
         summary,
     }
 }
@@ -208,12 +201,25 @@ fn classify_one(
         return skip(NoteState::Shared);
     }
     let fp = note.content.fingerprint();
-    if ledger.has(&note.id, &fp) || journal.has(&note.id, &fp) {
+    if ledger.has(&note.id, &fp) {
         planned.state = NoteState::Pending;
         planned.action = PlanAction::ArchiveOnly;
         return planned;
     }
-    if ledger.has_id(&note.id) || journal.has_id(&note.id) {
+    if ledger.has_id(&note.id) {
+        planned.state = NoteState::Revised;
+        planned.action = PlanAction::WriteRevision;
+        return planned;
+    }
+    // The journal is a lower-priority ledger: it only covers ids with
+    // no ledger entry at all (the backstop for markers deleted during
+    // triage while the note was still in Keep).
+    if journal.has(&note.id, &fp) {
+        planned.state = NoteState::Pending;
+        planned.action = PlanAction::ArchiveOnly;
+        return planned;
+    }
+    if journal.has_id(&note.id) {
         planned.state = NoteState::Revised;
         planned.action = PlanAction::WriteRevision;
         return planned;
@@ -222,13 +228,18 @@ fn classify_one(
 }
 
 /// No title, text, items, or attachments. Attachments count even when
-/// their OCR text is missing: an image note is never empty.
+/// their OCR text is missing: an image note is never empty. Uses the
+/// renderer's normalization, so zero-width-only text counts as empty.
 fn is_empty(note: &KeepNote) -> bool {
-    let blank = |text: &str| text.trim().is_empty();
-    blank(&note.content.title)
-        && note.content.text.lines().all(|line| blank(line))
-        && blank(&note.content.text)
-        && note.content.items.iter().all(|item| blank(&item.text))
+    use super::render::is_normalized_blank;
+    is_normalized_blank(&note.content.title)
+        && note.content.text.lines().all(is_normalized_blank)
+        && is_normalized_blank(&note.content.text)
+        && note
+            .content
+            .items
+            .iter()
+            .all(|item| is_normalized_blank(&item.text))
         && note.attachments.is_empty()
 }
 
@@ -273,6 +284,13 @@ pub(super) fn resolve_ids(
 ) -> Result<Vec<usize>, GkeepError> {
     let mut resolved = Vec::new();
     for raw in ids {
+        if raw.is_empty() {
+            return Err(GkeepError::setup(
+                "unknown_id",
+                "unknown note id: ".to_string(),
+            )
+            .with_hint("run `bob gkeep list` to see REF ids"));
+        }
         if let Some(exact) = notes.iter().position(|note| note.id == *raw) {
             if !resolved.contains(&exact) {
                 resolved.push(exact);
@@ -472,6 +490,38 @@ mod tests {
     }
 
     #[test]
+    fn zero_width_only_text_is_empty() {
+        let (ledger, journal, opts) = empty_plan();
+        let mut blank = note("n1", "2026-09-27T21:14:03Z");
+        blank.content.title = "\u{200b}\u{feff}".to_string();
+        blank.content.text = "\u{200c}".to_string();
+        let plan =
+            classify(std::slice::from_ref(&blank), &ledger, &journal, &opts);
+        assert_eq!(states(&plan), vec![("n1", "empty", "skip")]);
+    }
+
+    #[test]
+    fn ledger_wins_over_journal() {
+        let current = note("n1", "2026-09-27T21:14:03Z");
+        let current_fp = current.content.fingerprint();
+        let (mut ledger, mut journal, opts) = empty_plan();
+        ledger.entries.push(entry("n1", "000000000000"));
+        journal.records.push(written("n1", &current_fp));
+        let plan =
+            classify(std::slice::from_ref(&current), &ledger, &journal, &opts);
+        assert_eq!(states(&plan), vec![("n1", "revised", "write_revision")]);
+    }
+
+    #[test]
+    fn empty_id_is_unknown() {
+        let notes = vec![note("keep-a", "2026-09-21T08:00:00Z")];
+        let error = resolve_ids(&notes, &["".to_string()])
+            .expect_err("empty must fail");
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.message().contains("unknown note id"));
+    }
+
+    #[test]
     fn pinned_and_shared_notes_stay_unless_included_or_selected() {
         let (ledger, journal, _) = empty_plan();
         let mut pinned = note("pinned", "2026-09-27T21:14:03Z");
@@ -593,24 +643,6 @@ mod tests {
     }
 
     #[test]
-    fn duplicates_flow_into_the_plan() {
-        let (mut ledger, journal, opts) = empty_plan();
-        ledger.entries.push(entry("n1", "0123456789ab"));
-        ledger.entries.push(LedgerEntry {
-            path: "done/old.md".to_string(),
-            line: 9,
-            ..entry("n1", "0123456789ab")
-        });
-        let plan = classify(&[], &ledger, &journal, &opts);
-        assert_eq!(plan.duplicates.len(), 1);
-        assert_eq!(
-            plan.duplicates[0].locations,
-            vec!["gkeep_inbox.md:1".to_string(), "done/old.md:9".to_string()],
-        );
-        assert_eq!(plan.summary.duplicates, 1);
-    }
-
-    #[test]
     fn resolve_ids_prefers_exact_ids() {
         let notes = vec![
             note("keep-a", "2026-09-21T08:00:00Z"),
@@ -658,8 +690,8 @@ mod tests {
             }
         }
         let prefix = shared_prefix.expect("a shared prefix exists");
-        let error =
-            resolve_ids(&candidates, &[prefix.clone()]).expect_err("ambiguous");
+        let error = resolve_ids(&candidates, std::slice::from_ref(&prefix))
+            .expect_err("ambiguous");
         assert_eq!(error.exit_code(), 2);
         assert!(error.message().contains("ambiguous"));
         assert!(error.message().contains(&prefix));

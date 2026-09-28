@@ -1,7 +1,8 @@
 //! `bob gkeep` UI helpers: ages, glyphs, status colors, errors.
 //!
-//! Glyphs show only when `Styler::is_color()`, the same rule as
-//! `bob plugins`: piped output stays plain.
+//! Status glyphs (`✓ ! ✗ ·`) are always shown: the epic plan pins those
+//! literal outputs, piped-output tests expect them, and a doctor row
+//! without a glyph would lose its status.
 
 use std::{
     io::{IsTerminal, Write},
@@ -62,11 +63,6 @@ impl Spinner {
             }),
         }
     }
-
-    /// Whether the spinner thread is drawing (false without a TTY).
-    pub(crate) fn is_running(&self) -> bool {
-        self.running.is_some()
-    }
 }
 
 impl Drop for Spinner {
@@ -80,6 +76,28 @@ impl Drop for Spinner {
             let _ = std::io::stderr().flush();
         }
     }
+}
+
+/// Convert local wall-clock `NaiveDateTime` (from
+/// `bob_env::current_datetime()`) to UTC.
+///
+/// Outside UTC, `.and_utc()` treats local time as UTC and shifts every
+/// Keep age by the UTC offset. `Local.from_local_datetime` interprets it
+/// in the local zone first.
+pub(crate) fn local_naive_to_utc(
+    naive: &chrono::NaiveDateTime,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::{Local, TimeZone};
+    Local
+        .from_local_datetime(naive)
+        .earliest()
+        .map(|local| local.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|| naive.and_utc())
+}
+
+/// The current moment in UTC, converted from local wall-clock time.
+pub(crate) fn now_utc() -> chrono::DateTime<chrono::Utc> {
+    local_naive_to_utc(&crate::native::env::current_datetime())
 }
 
 /// Format the age between two unix timestamps: `now`, `12m`, `3h`, `2d`,
@@ -108,26 +126,6 @@ pub(crate) fn format_age(now: i64, then: i64) -> String {
         return format!("{}mo", days / 30);
     }
     format!("{}y", days / 365)
-}
-
-/// A status glyph shown only on a color terminal, else `None`.
-pub(crate) fn status_glyph(
-    ok: Option<bool>,
-    styler: Styler,
-) -> Option<&'static str> {
-    if !styler.is_color() {
-        return None;
-    }
-    match ok {
-        Some(true) => Some("✓"),
-        Some(false) => Some("✗"),
-        None => Some("·"),
-    }
-}
-
-/// A warning glyph shown only on a color terminal, else `None`.
-pub(crate) fn warning_glyph(styler: Styler) -> Option<&'static str> {
-    styler.is_color().then_some("!")
 }
 
 /// Paint a task status symbol: `[x]` green, `[/]` and `[?]` yellow,
@@ -206,13 +204,6 @@ mod tests {
     }
 
     #[test]
-    fn glyphs_hide_without_color() {
-        let plain = Styler::plain();
-        assert_eq!(status_glyph(Some(true), plain), None);
-        assert_eq!(warning_glyph(plain), None);
-    }
-
-    #[test]
     fn spinner_frames_are_braille() {
         assert_eq!(SPINNER_FRAMES.len(), 10);
         assert_eq!(SPINNER_FRAMES[0], "⠋");
@@ -220,7 +211,6 @@ mod tests {
 
     #[test]
     fn spinner_start_and_drop_never_panics() {
-        let spinner = Spinner::start("Syncing Google Keep");
-        let _ = spinner.is_running();
+        let _spinner = Spinner::start("Syncing Google Keep");
     }
 }

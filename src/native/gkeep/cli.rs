@@ -27,7 +27,7 @@ pub(crate) fn build_cli() -> ClapCommand {
              Running `bob gkeep` with no command runs `bob gkeep list`.",
         )
         .after_help(
-            "Examples:\n  bob gkeep                    Show both inboxes and what `pull` would do\n  bob gkeep list -s vault      Show only gkeep_inbox.md tasks (no network)\n  bob gkeep pull -d            Preview the exact Markdown a pull would write\n  bob gkeep pull -n            Write and verify tasks, but leave notes in Keep\n  bob gkeep pull               Write, verify, commit, then archive in Keep\n  bob gkeep pull -i 3f9c2e1    Pull one note by its REF from `bob gkeep list`\n  bob gkeep doctor             Diagnose credentials, adapter, and connectivity\n  bob gkeep login              One-time setup of the Keep master token",
+            "Running `bob gkeep` with no command runs `bob gkeep list`.\n\nExamples:\n  bob gkeep                    Show both inboxes and what `pull` would do\n  bob gkeep list -s vault      Show only gkeep_inbox.md tasks (no network)\n  bob gkeep pull -d            Preview the exact Markdown a pull would write\n  bob gkeep pull -n            Write and verify tasks, but leave notes in Keep\n  bob gkeep pull               Write, verify, commit, then archive in Keep\n  bob gkeep pull -i 3f9c2e1    Pull one note by its REF from `bob gkeep list`\n  bob gkeep doctor             Diagnose credentials, adapter, and connectivity\n  bob gkeep login              One-time setup of the Keep master token\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`",
         )
         .disable_help_flag(true)
         .arg(all_arg())
@@ -346,15 +346,6 @@ impl ListSource {
             _ => Self::Both,
         }
     }
-
-    /// The source name.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Both => "both",
-            Self::Keep => "keep",
-            Self::Vault => "vault",
-        }
-    }
 }
 
 /// Typed `list` arguments (also carried by top-level `bob gkeep`).
@@ -471,11 +462,6 @@ impl DoctorArgs {
     pub(crate) fn bob_dir(&self) -> PathBuf {
         self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
     }
-
-    /// The error-reporting format name.
-    pub(crate) fn error_format(&self) -> &'static str {
-        self.format.as_str()
-    }
 }
 
 /// Typed `login` arguments.
@@ -539,7 +525,6 @@ mod tests {
         assert_eq!(args.format, ListFormat::Json);
         assert!(args.format.is_json());
         assert_eq!(args.source, ListSource::Vault);
-        assert_eq!(args.source.as_str(), "vault");
         assert_eq!(args.error_format(), "json");
     }
 
@@ -595,7 +580,7 @@ mod tests {
             "doctor",
         ));
         assert_eq!(args.format, HumanFormat::Json);
-        assert_eq!(args.error_format(), "json");
+        assert!(args.format.is_json());
         assert_eq!(args.bob_dir(), bob_env::bob_dir());
 
         let args = LoginArgs::from_matches(&sub_matches_for(

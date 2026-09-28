@@ -103,7 +103,6 @@ impl AdapterClient {
         if let Some(path) = adapter_override {
             return Ok(Self::new(path, Vec::new(), timeout));
         }
-        let script = materialized_adapter_script()?;
         let uv = find_on_path("uv").ok_or_else(|| {
             GkeepError::setup("uv", "uv was not found on PATH".to_string())
                 .with_hint(
@@ -111,6 +110,7 @@ impl AdapterClient {
                  its pinned Google Keep adapter with it",
                 )
         })?;
+        let script = materialized_adapter_script()?;
         Ok(Self::new(
             uv,
             vec![
@@ -231,9 +231,13 @@ impl AdapterClient {
 
     /// Spawn the adapter, write one request, and read one response.
     ///
-    /// Stdout and stderr drain on threads while the main thread polls
-    /// `try_wait` against the configured deadline. On timeout the child
-    /// is killed and reported with `timed out after Ns`.
+    /// Stdin, stdout, and stderr each drain on their own thread while the
+    /// main thread polls `try_wait` against the configured deadline. The
+    /// deadline starts before any blocking I/O, so a request larger than
+    /// the pipe buffer cannot block past it when the child never reads.
+    /// On timeout the whole adapter process group is killed, so an
+    /// orphaned `uv` child (e.g. Python) cannot hold the pipes open and
+    /// block the reader joins. Reported with `timed out after Ns`.
     fn run_request(
         &self,
         request: &impl serde::Serialize,
@@ -243,21 +247,22 @@ impl AdapterClient {
             serde_json::to_string(request).expect("adapter request serializes");
         let _spinner = spinner_label.map(Spinner::start);
         let mut child = spawn_adapter(&self.program, &self.args)?;
-        // A write failure usually means the child died before reading
-        // the request; keep going so the exit status below reports the
-        // real crash instead of a broken pipe.
-        let mut stdin_error: Option<std::io::Error> = None;
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            if let Err(error) = stdin.write_all(payload.as_bytes()) {
-                stdin_error = Some(error);
-            }
-        }
+        let deadline = Instant::now() + self.timeout;
+        let stdin_pipe = child.stdin.take();
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
+        let stdin_writer = thread::spawn(move || {
+            let mut stdin = stdin_pipe?;
+            {
+                use std::io::Write;
+                if let Err(error) = stdin.write_all(payload.as_bytes()) {
+                    return Some(error);
+                }
+            }
+            None
+        });
         let stdout_reader = thread::spawn(move || drain_pipe(stdout_pipe));
         let stderr_reader = thread::spawn(move || drain_pipe(stderr_pipe));
-        let deadline = Instant::now() + self.timeout;
         let status = loop {
             match child.try_wait().map_err(|error| {
                 GkeepError::runtime(
@@ -268,8 +273,8 @@ impl AdapterClient {
                 Some(status) => break status,
                 None => {
                     if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        kill_adapter_tree(&mut child);
+                        let _ = stdin_writer.join();
                         let _ = stdout_reader.join();
                         let _ = stderr_reader.join();
                         return Err(GkeepError::runtime(
@@ -288,24 +293,44 @@ impl AdapterClient {
                 }
             }
         };
+        let stdin_error = stdin_writer.join().unwrap_or(None);
         let stdout_text = stdout_reader.join().unwrap_or_default();
         let stderr_text = stderr_reader.join().unwrap_or_default();
         match status.code() {
             Some(0) => {
-                if let Some(error) = stdin_error {
+                // The child exited cleanly without reading: ignore the
+                // stdin EPIPE and evaluate stdout normally (garbage gives
+                // "invalid JSON", a valid response succeeds).
+            }
+            Some(code) => {
+                // A write failure is only reported when the child failed
+                // with no stdout and no stderr: otherwise the exit status
+                // and stderr report the real crash (an EPIPE merely means
+                // the child exited before reading).
+                if let Some(error) = stdin_error
+                    && stdout_text.trim().is_empty()
+                    && stderr_text.trim().is_empty()
+                {
                     return Err(adapter_crash(
                         format!("write the adapter request: {error}"),
                         stderr_text,
                     ));
                 }
-            }
-            Some(code) => {
                 return Err(adapter_crash(
                     format!("the Keep adapter crashed (exit {code})"),
                     stderr_text,
                 ));
             }
             None => {
+                if let Some(error) = stdin_error
+                    && stdout_text.trim().is_empty()
+                    && stderr_text.trim().is_empty()
+                {
+                    return Err(adapter_crash(
+                        format!("write the adapter request: {error}"),
+                        stderr_text,
+                    ));
+                }
                 return Err(adapter_crash(
                     "the Keep adapter was terminated by a signal".to_string(),
                     stderr_text,
@@ -321,6 +346,34 @@ impl AdapterClient {
     }
 }
 
+/// Kill the whole adapter process tree on timeout.
+///
+/// `uv run --script` starts Python as a child process; `child.kill()`
+/// kills only `uv`, and the orphaned Python keeps the stdout/stderr
+/// pipes open, so the reader joins block forever. The child runs in its
+/// own process group (see `spawn_adapter`), so killing the negative pid
+/// kills the group. Falls back to `child.kill()`, then waits.
+fn kill_adapter_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id();
+        let target = format!("-{pid}");
+        let killed = Command::new("kill")
+            .args(["-KILL", "--", &target])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !killed {
+            let _ = child.kill();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
 /// Spawn the adapter program with `args` and piped stdio.
 ///
 /// A just-written executable can report a transient `ETXTBSY` ("Text
@@ -328,18 +381,23 @@ impl AdapterClient {
 /// concurrent load; that one error retries a few times before giving
 /// up, so script-based adapters stay reliable under `cargo test`.
 fn spawn_adapter(
-    program: &PathBuf,
+    program: &std::path::Path,
     args: &[OsString],
 ) -> Result<std::process::Child, GkeepError> {
     let mut attempts = 0;
     loop {
-        match Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
         {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        match command.spawn() {
             Ok(child) => return Ok(child),
             Err(error)
                 if error.raw_os_error() == Some(26) && attempts < 100 =>
@@ -373,11 +431,11 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
         .map(|dir| dir.join(name))
-        .find(|path| is_executable_file(path))
+        .find(|path| is_executable_file(path.as_path()))
 }
 
 #[cfg(unix)]
-fn is_executable_file(path: &PathBuf) -> bool {
+fn is_executable_file(path: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     path.is_file()
         && path
@@ -387,7 +445,7 @@ fn is_executable_file(path: &PathBuf) -> bool {
 }
 
 #[cfg(not(unix))]
-fn is_executable_file(path: &PathBuf) -> bool {
+fn is_executable_file(path: &std::path::Path) -> bool {
     path.is_file()
 }
 
@@ -631,6 +689,60 @@ mod tests {
             "timeout names the deadline: {}",
             error.message()
         );
+    }
+
+    #[test]
+    fn timeout_kills_grandchild_holding_stdout() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        // The adapter backgrounds a grandchild that inherits stdout and
+        // sleeps: killing only the direct child would leave the pipes
+        // open and block the reader joins forever.
+        let hanging = write_script(
+            &dir,
+            "hang.sh",
+            "#!/bin/sh\n(sleep 30 & wait) &\nwait\n",
+        );
+        let client =
+            AdapterClient::new(hanging, Vec::new(), Duration::from_secs(2));
+        let start = Instant::now();
+        let error = client.ping(None).expect_err("hang must time out");
+        assert_eq!(error.kind(), "timeout");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "timeout returns within a few seconds despite the grandchild",
+        );
+    }
+
+    #[test]
+    fn exiting_without_reading_reports_stdout_not_stdin() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        // Exits 0 with garbage stdout without reading stdin: the stdin
+        // EPIPE is ignored and stdout evaluates normally.
+        let garbage = write_script(
+            &dir,
+            "fast-garbage.sh",
+            "#!/bin/sh\nprintf '%s' 'not json'\nexit 0\n",
+        );
+        let client =
+            AdapterClient::new(garbage, Vec::new(), Duration::from_secs(30));
+        let error = client.ping(None).expect_err("garbage must fail");
+        assert_eq!(error.kind(), "adapter");
+        assert!(
+            error.message().contains("invalid JSON"),
+            "fast exit reports stdout: {}",
+            error.message()
+        );
+
+        // Exits 0 with a valid response without reading stdin: success.
+        let valid = write_script(
+            &dir,
+            "fast-valid.sh",
+            "#!/bin/sh\nprintf '%s' '{\"ok\":true,\"protocol\":1,\"python\":\"3.12.3\",\"gkeepapi\":\"0.17.1\",\"gpsoauth\":\"2.0.0\"}'\nexit 0\n",
+        );
+        let client =
+            AdapterClient::new(valid, Vec::new(), Duration::from_secs(30));
+        let ping = client.ping(None).expect("fast valid succeeds");
+        assert_eq!(ping.gkeepapi, "0.17.1");
     }
 
     #[test]

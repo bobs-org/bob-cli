@@ -134,10 +134,28 @@ by `pull -i`. States, oldest first:
 | `shared` | Shared with collaborators; skipped unless `--include-shared` or selected with `-i` |
 | `archived` | Already archived (only with `--all`) |
 
+Keep `NOTE` hints: `+N lines` for extra text lines, `☐ n ☑ m` for list
+items, `📎 n` for attachments (images, drawings, audio, and `other` files
+all count).
+
+The vault table has `AGE`, `STATUS`, and `TASK` columns, oldest first by
+`[created::…]` date then line; rows without a date go last, in file order.
+`STATUS` is the task checkbox (`[ ]`, `[x]`, etc.). `TASK` hints mirror Keep:
+`☐ n ☑ m` for descendants, plus `↺ still in Keep` for any vault task whose
+marker id is a non-archived note in the snapshot (pinned, shared, and empty
+notes count too).
+
+Empty states: a missing target file shows a dim
+`gkeep_inbox.md not found · create it or set gkeep.target` line; otherwise an
+empty vault shows `No open tasks`, or `No tasks` with `--all`. An empty Keep
+shows `Keep inbox is empty`.
+
 Explicit selection with `-i` overrides pinned/shared skips. An exact Keep id
 always wins; otherwise the value is a prefix match on REF, and zero or
-multiple matches exit 2 listing the candidates. The footer names non-zero
-state counts and the next command to run.
+multiple matches (including an empty `-i ""`) exit 2 listing the candidates.
+The footer names non-zero state counts and the next command to run
+(`→ bob gkeep pull`), or the all-clear `✓ Keep inbox is clear` with
+`· N pinned stays in Keep` / `· N shared stays in Keep` suffixes as needed.
 
 ## Pull
 
@@ -172,15 +190,28 @@ Failure matrix:
 
 One Keep note becomes one top-level task. Keep text is data — never markup
 and never capture grammar — so everything from the note is normalized and
-escaped. The task line comes from `capture::format_task_line` with the Keep
+escaped. Normalization drops `\r`, turns tabs into a space, removes
+zero-width characters (U+200B–U+200D, U+FEFF), trims each line, and drops
+blank lines. A note whose text is only zero-width characters counts as
+`empty`. The task line comes from `capture::format_task_line` with the Keep
 **created** date in local time; status is always `[ ]`. The note title comes
 first, else the first non-blank text line (removed from the children), else
-the first list item, else an `Untitled Google Keep list (N items)` fallback.
-Children use the target note's indent unit (what `bob capture` would use);
-list children nest one level deeper when indented or checked; OCR text nests
-under an attachment summary line; the `Source:` child links back to Keep with
-the edited date, labels, and the marker (with a `· revised` flag for
-revisions).
+the first list item, else an `Untitled Google Keep list (N items)` fallback
+(`1 item` singular). Children use the target note's indent unit (what
+`bob capture` would use); list children nest one level deeper when indented
+or checked; OCR text nests under an attachment summary line
+(`📎 N image(s)/drawing(s)/audio clip(s)/file(s) stay(s) in Google Keep`,
+with unknown kinds as `other` → `file(s)`); the `Source:` child links back
+to Keep with the local created time, labels, and the marker (with a
+`· revised` flag for revisions). Source URLs percent-encode `%`, `(`, `)`,
+`<`, `>`, `[`, `]`, and whitespace, so a crafted id cannot plant a marker.
+
+Escaping: `#task` tokens → `\#task`; trailing ` ^id` block ids (including a
+caret starting the text or following Unicode whitespace/NBSP) → `\^id`;
+`%%` → `%&#37;`; every colon in runs of two or more (`:::` → `\:\:\:`);
+child-leading `#{1,6} ` headings, `>`, `N.`/`N)`, `|`, `+ `/`- `/`* `,
+thematic breaks (`---`/`***`/`___`, spaces allowed), and code fences
+(leading ` ``` `/`~~~`) gain a leading backslash.
 
 ```markdown
 - [ ] #task Call dentist about crown [created::2026-09-27]
@@ -241,14 +272,65 @@ stdout.
 
 ## JSON output
 
-Every JSON document carries `schema_version: 1`. `list -f json` reports the
-planned notes with `id`, `ref`, `state`, and titles plus the vault tasks.
-`pull -f json` reports per-note `id`, `ref`, `title`, `state`, `action`,
-`written`, `archive` status with `detail`, the `markdown` that was (or would
-be) written, the commit SHA (null outside a Git worktree or with
-`--no-commit`), and a `written / archived / skipped / failed` summary.
-`doctor -f json` reports each checklist row (`config`, `account`, `token`,
-`adapter`, `keep`, `target`, `git`) with `ok`, `warn`, `fail`, or `skip`.
+Every JSON document carries `schema_version: 1`.
+
+`list -f json`:
+
+```json
+{
+  "schema_version": 1, "ok": true,
+  "keep": {
+    "account": "bryanbugyi34@gmail.com", "fetched_at": "2026-09-27T21:14:03Z",
+    "notes": [{
+      "id": "…", "ref": "3f9c2e1", "kind": "note|list",
+      "title": "…", "state": "new|pending|revised|empty|pinned|shared|archived",
+      "pinned": false, "shared": false, "archived": false,
+      "labels": ["errands"], "created": "2026-09-27T21:14:03Z",
+      "edited": "…Z", "url": "https://keep.google.com/…|null",
+      "fingerprint": "3f9c2e1d0a7b",
+      "lines": 0, "items_open": 0, "items_checked": 0, "attachments": 0
+    }]
+  } | {"error": {"kind": "…", "message": "…", "hint": "…|null"}} | null,
+  "vault": {"path": "gkeep_inbox.md", "tasks": [{
+    "line": 7, "status": "[ ]", "description": "…",
+    "created": "2026-09-27|null",
+    "keep_id": "…|null", "keep_state": "new|…|null"
+  }]} | null,
+  "summary": {"new": 0, "pending": 0, "revised": 0, "skipped": 0, "duplicates": 0}
+}
+```
+
+`keep` is `null` for `-s vault`; `vault` is `null` for `-s keep`. A Keep
+failure reports `{"error": …}` with `ok: false` and still prints the vault.
+
+`pull -f json`:
+
+```json
+{
+  "schema_version": 1, "ok": true, "dry_run": false,
+  "archive_enabled": true, "commit_enabled": true,
+  "target": "gkeep_inbox.md", "commit": "4e1f2a9|null",
+  "notes": [{
+    "id": "…", "ref": "3f9c2e1", "title": "…",
+    "state": "new|pending|revised|empty|pinned|shared|archived",
+    "action": "write|write_revision|archive_only|skip",
+    "skip_reason": "pinned|…|null", "written": true,
+    "archive": "archived|already_archived|changed|missing|error|not_requested|not_attempted",
+    "detail": "…|null"
+  }],
+  "markdown": "…|null",
+  "summary": {"written": 0, "archived": 0, "skipped": 0, "failed": 0},
+  "error": {"kind": "…", "message": "…", "hint": "…|null"}
+}
+```
+
+Dry runs report `written: false` per note and `summary.written: 0` with the
+preview in `markdown`. An archive crash reports exactly one document with
+`ok: false`, every due note as `archive: "error"` with the adapter message
+as `detail`, and the top-level `error` object.
+
+`doctor -f json` reports `checks[]` with
+`{name, status: "ok|warn|fail|skip", summary, hint}`.
 
 ## Security
 

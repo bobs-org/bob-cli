@@ -70,6 +70,12 @@ fn top_help_pins_the_command_surface() {
         ),
         "expected default-command note:\n{help}"
     );
+    for key in ["BOB_DIR", "BOB_CONFIG_FILE", "BOB_GKEEP_ADAPTER"] {
+        assert!(
+            help.contains(key),
+            "expected Environment {key} in top help:\n{help}"
+        );
+    }
     for example in [
         "bob gkeep list -s vault",
         "bob gkeep pull -d",

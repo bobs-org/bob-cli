@@ -193,7 +193,7 @@ def _attachment_kind(blob: object) -> str:
         return "drawing"
     if cls == "NodeAudio":
         return "audio"
-    return cls.removeprefix("Node").lower() or "image"
+    return "other"
 
 
 def serialize_note(note: object) -> dict:
@@ -334,16 +334,20 @@ def require_auth(request: dict) -> dict:
     }
 
 
-def op_ping(request: dict) -> dict:
-    """No auth, no network: report interpreter and dependency versions."""
+def _package_version(name: str) -> str:
+    """Best-effort version lookup: ``"unknown"`` when it fails."""
     try:
         from importlib import metadata
 
-        gkeepapi_version = metadata.version("gkeepapi")
-        gpsoauth_version = metadata.version("gpsoauth")
+        return metadata.version(name)
     except Exception:  # noqa: BLE001 - version lookup is best effort
-        gkeepapi_version = PINNED_GKEEPAPI
-        gpsoauth_version = PINNED_GPSOAUTH
+        return "unknown"
+
+
+def op_ping(request: dict) -> dict:
+    """No auth, no network: report interpreter and dependency versions."""
+    gkeepapi_version = _package_version("gkeepapi")
+    gpsoauth_version = _package_version("gpsoauth")
     return {
         "ok": True,
         "protocol": PROTOCOL_VERSION,
@@ -376,13 +380,11 @@ def op_snapshot(request: dict) -> dict:
         except AdapterFail:
             raise
         except Exception as exc:  # noqa: BLE001 - classified below
-            kind, message = classify_error(exc)
-            raise AdapterFail(kind, scrub(message, secrets)) from exc
+            raise _report_internal(exc, secrets) from exc
     except AdapterFail:
         raise
     except Exception as exc:  # noqa: BLE001 - classified below
-        kind, message = classify_error(exc)
-        raise AdapterFail(kind, scrub(message, [auth["master_token"]])) from exc
+        raise _report_internal(exc, [auth["master_token"]]) from exc
     return {"ok": True, "account": auth["email"], "notes": notes}
 
 
@@ -416,10 +418,11 @@ def op_archive(request: dict) -> dict:
                 else:
                     results.append({"id": target["id"], "status": status})
             keep.sync()  # type: ignore[union-attr]
+            keep.sync()  # type: ignore[union-attr]
             for note_id, _note in pending:
                 fresh = keep.get(note_id)  # type: ignore[union-attr]
-                if fresh is not None and bool(
-                    getattr(fresh, "archived", False)
+                if fresh is not None and (
+                    getattr(fresh, "archived", False) is True
                 ):
                     results.append({"id": note_id, "status": "archived"})
                 else:
@@ -434,13 +437,11 @@ def op_archive(request: dict) -> dict:
         except AdapterFail:
             raise
         except Exception as exc:  # noqa: BLE001 - classified below
-            kind, message = classify_error(exc)
-            raise AdapterFail(kind, scrub(message, secrets)) from exc
+            raise _report_internal(exc, secrets) from exc
     except AdapterFail:
         raise
     except Exception as exc:  # noqa: BLE001 - classified below
-        kind, message = classify_error(exc)
-        raise AdapterFail(kind, scrub(message, [auth["master_token"]])) from exc
+        raise _report_internal(exc, [auth["master_token"]]) from exc
     return {"ok": True, "results": results}
 
 
@@ -459,8 +460,7 @@ def op_exchange(request: dict) -> dict:
             request["email"], cookie, request["device_id"]
         )
     except Exception as exc:  # noqa: BLE001 - classified below
-        kind, message = classify_error(exc)
-        raise AdapterFail(kind, scrub(message, [cookie])) from exc
+        raise _report_internal(exc, [cookie]) from exc
     if isinstance(response, dict) and response.get("Error"):
         raise AdapterFail(
             "auth", scrub(str(response["Error"]), [cookie])
@@ -481,6 +481,14 @@ OPS = {
 }
 
 
+def _report_internal(exc: BaseException, secrets: list[str]) -> AdapterFail:
+    """Shape a classified error, printing a traceback for internal errors."""
+    kind, message = classify_error(exc)
+    if kind == "internal":
+        traceback.print_exc(file=sys.stderr)
+    return AdapterFail(kind, scrub(message, secrets))
+
+
 def validate_request(data: object) -> dict:
     """Check the request envelope and return it, or raise ``AdapterFail``."""
     if not isinstance(data, dict):
@@ -493,7 +501,7 @@ def validate_request(data: object) -> dict:
             f"protocol {PROTOCOL_VERSION}",
         )
     op = data.get("op")
-    if op not in OPS:
+    if not isinstance(op, str) or op not in OPS:
         raise AdapterFail(
             "protocol",
             f"unknown op {op!r}: expected one of "
@@ -631,6 +639,36 @@ def self_test() -> int:
         == "token <redacted> here",
     )
 
+    class UnknownBlob:
+        pass
+
+    class NoneBlob:
+        blob = None
+
+    check("unknown attachment kind is other", _attachment_kind(object()) == "other")
+    check(
+        "none attachment kind is other",
+        _attachment_kind(type("B", (), {})()) == "other",
+    )
+    check("unknown blob instance is other", _attachment_kind(UnknownBlob()) == "other")
+
+    try:
+        validate_request({"protocol": 1, "op": ["ping"]})
+        check("non-string op rejection", False)
+    except AdapterFail as exc:
+        check("non-string op rejection", exc.kind == "protocol")
+
+    check(
+        "missing package version is unknown",
+        _package_version("definitely-not-a-real-package-xyz") == "unknown",
+    )
+
+    internal = _report_internal(ValueError("boom"), [])
+    check(
+        "internal error response shape",
+        isinstance(internal, AdapterFail) and internal.kind == "internal",
+    )
+
     if failures:
         for failure in failures:
             print(f"self-test failure: {failure}", file=sys.stderr)
@@ -663,9 +701,17 @@ def main(argv: list[str]) -> int:
     except AdapterFail as fail:
         print(json.dumps(fail_response(fail.kind, fail.message)))
         return 0
-    except Exception:  # noqa: BLE001 - unexpected: crash with a traceback
-        traceback.print_exc()
-        return 1
+    except Exception as exc:  # noqa: BLE001 - unexpected: traceback + ok:false
+        traceback.print_exc(file=sys.stderr)
+        secrets: list[str] = []
+        if isinstance(data, dict):
+            for key in ("master_token", "oauth_token"):
+                value = data.get(key)
+                if isinstance(value, str) and value:
+                    secrets.append(value)
+        kind, message = classify_error(exc)
+        print(json.dumps(fail_response(kind, scrub(message, secrets))))
+        return 0
 
 
 if __name__ == "__main__":

@@ -41,9 +41,9 @@ fn write_token_script(vault: &Path) -> PathBuf {
 }
 
 fn configure(env: &GkeepEnv, token_script: &Path) {
+    let quoted = token_script.to_string_lossy().replace('\'', "'\\''");
     let text = format!(
-        "gkeep:\n  email: bryanbugyi34@gmail.com\n  token_command: \"{}\"\n",
-        token_script.to_string_lossy().replace('"', "\\\"")
+        "gkeep:\n  email: bryanbugyi34@gmail.com\n  token_command: \"sh '{quoted}'\"\n",
     );
     env.write_config(&text);
 }
@@ -107,6 +107,20 @@ fn init_git(vault: &Path) {
     run(&["config", "user.email", "test@example.com"]);
     run(&["config", "user.name", "Test"]);
     run(&["config", "commit.gpgsign", "false"]);
+}
+
+fn git_rev_list_count(vault: &Path) -> usize {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(vault)
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .expect("git rev-list");
+    assert!(out.status.success());
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .expect("rev-list count parses")
 }
 
 fn git_log_names(vault: &Path) -> Vec<String> {
@@ -208,8 +222,15 @@ fn normal_pull_writes_verifies_commits_and_archives() {
     titles.sort();
     assert_eq!(titles, vec!["Call dentist about crown", "Hardware store"]);
 
-    // One commit touching only the target.
+    // Exactly one new commit touching only the target.
+    assert_eq!(git_rev_list_count(env.vault()), 1);
     assert_eq!(git_log_names(env.vault()), vec!["gkeep_inbox.md"]);
+    // Byte-exact: both markers present exactly once, in oldest-first order.
+    assert_eq!(target.matches("%%gkeep:v1:note-1:").count(), 1);
+    assert_eq!(target.matches("%%gkeep:v1:note-2:").count(), 1);
+    let pos1 = target.find("%%gkeep:v1:note-2:").unwrap();
+    let pos2 = target.find("%%gkeep:v1:note-1:").unwrap();
+    assert!(pos1 < pos2, "oldest first:\n{target}");
 
     let journal = journal_records(&state);
     assert!(
@@ -267,6 +288,22 @@ fn second_pull_after_success_is_archive_only_with_no_duplicate_write() {
         "{}",
         stdout(&second)
     );
+    // A second pull makes no new commit.
+    assert_eq!(git_rev_list_count(env.vault()), 1);
+
+    // When the snapshot no longer returns the pulled notes: nothing to
+    // pull, no archive call.
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![]));
+    let calls_before = fake.call_count();
+    let third = run_pull(&env, &fake, &state, &[], &[]);
+    assert_eq!(third.status.code(), Some(0), "{}", stderr(&third));
+    assert_eq!(read_target(env.vault()), after_second);
+    assert_eq!(git_rev_list_count(env.vault()), 1, "no new commit");
+    assert_eq!(
+        fake.call_count(),
+        calls_before + 1,
+        "snapshot only, no archive"
+    );
 }
 
 #[test]
@@ -294,12 +331,20 @@ fn dry_run_previews_exact_markdown_without_writing_or_archiving() {
     assert_eq!(real.status.code(), Some(0));
     let after = read_target(env.vault());
     // The dry-run preview lines appear verbatim in the real write.
+    let mut preview_lines = Vec::new();
     for line in dry_out.lines().filter_map(|line| line.split_once("│ ")) {
         let preview = line.1.trim();
         if preview.starts_with("- [ ]") {
             assert!(after.contains(preview), "missing {preview} in:\n{after}");
+            preview_lines.push(preview.to_string());
         }
     }
+    // The full dry-run Markdown equals the bytes the real run inserts.
+    let inserted = after.strip_prefix(&before).unwrap_or(&after).to_string();
+    for preview in &preview_lines {
+        assert!(inserted.contains(preview), "missing {preview} in insert");
+    }
+    assert!(!preview_lines.is_empty());
 }
 
 #[test]
@@ -641,6 +686,12 @@ fn crlf_endings_preserved_and_space_indent_used() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let raw = fs::read(env.vault().join("gkeep_inbox.md")).expect("read raw");
     assert!(raw.windows(2).any(|pair| pair == b"\r\n"), "CRLF preserved");
+    // No bare `\n`: every newline is part of `\r\n`.
+    for (i, byte) in raw.iter().enumerate() {
+        if *byte == b'\n' {
+            assert!(i > 0 && raw[i - 1] == b'\r', "bare \\n at {i}");
+        }
+    }
     let text = String::from_utf8_lossy(&raw).into_owned();
     // The space-indented target uses two spaces for the new children.
     assert!(text.contains("\n  - Source:"), "{text}");
@@ -710,5 +761,106 @@ fn quiet_success_is_silent_and_target_race_aborts() {
     assert_eq!(raced.status.code(), Some(1), "{}", stderr(&raced));
     // No archive call happened after the abort.
     assert_eq!(fake2.call_count(), before_calls + 1, "snapshot only");
-    let _ = before;
+    // The target equals the externally modified bytes (intruder kept).
+    let after = read_target(env2.vault());
+    assert!(after.contains("- intruder"), "{after}");
+    assert!(!after.contains("Racy"), "{after}");
+    assert!(after.starts_with(&before) || after.len() > before.len());
+}
+
+#[test]
+fn archive_only_pull_reports_no_failure() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-archonly");
+    init_git(env.vault());
+    let n1 = note("Call dentist")
+        .id("note-1")
+        .created("2026-09-27T21:14:03Z")
+        .build();
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![n1.clone()]),
+    );
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let first = run_pull(&env, &fake, &state, &[], &[]);
+    assert_eq!(first.status.code(), Some(0));
+
+    // Second pull sees the ledger hit as pending (archive-only).
+    let second = run_pull(&env, &fake, &state, &["-f", "json"], &[]);
+    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&second)).expect("json parses");
+    assert_eq!(doc["ok"], true);
+    assert_eq!(doc["summary"]["failed"], 0);
+}
+
+#[test]
+fn archive_crash_reports_once_in_both_modes() {
+    for mode in [&["-f", "json"][..], &[][..]] {
+        let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-crash");
+        let n1 = note("Crash note")
+            .id("note-1")
+            .created("2026-09-27T21:14:03Z")
+            .build();
+        fake.respond(
+            "snapshot",
+            &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]),
+        );
+        fake.set_exit("archive", 3);
+        let out = run_pull(&env, &fake, &state, mode, &[]);
+        assert_eq!(out.status.code(), Some(1), "mode {mode:?}");
+        if mode.contains(&"json") {
+            let text = stdout(&out);
+            let docs: Vec<&str> = text.lines().collect();
+            assert_eq!(docs.len(), 1, "exactly one JSON doc: {docs:?}");
+            let doc: serde_json::Value =
+                serde_json::from_str(docs[0]).expect("json parses");
+            assert_eq!(doc["ok"], false);
+            assert_eq!(doc["notes"][0]["archive"], "error");
+            assert!(doc.get("error").is_some(), "{doc}");
+        } else {
+            let body = stdout(&out);
+            assert!(body.contains("NOT archived"), "{body}");
+        }
+    }
+}
+
+#[test]
+fn dry_run_json_reports_unwritten() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-dryjson");
+    let n1 = note("Dry note")
+        .id("note-1")
+        .created("2026-09-27T21:14:03Z")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    let out = run_pull(&env, &fake, &state, &["-d", "-f", "json"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json parses");
+    assert_eq!(doc["notes"][0]["written"], false);
+    assert_eq!(doc["summary"]["written"], 0);
+}
+
+#[test]
+fn dry_run_with_lock_held_still_succeeds() {
+    use fs2::FileExt;
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-drylock");
+    let n1 = note("Locked dry")
+        .id("note-1")
+        .created("2026-09-27T21:14:03Z")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    // Hold pull.lock in this process; -d must still succeed (no lock).
+    let lock_path =
+        state.path().join("bob-cli").join("gkeep").join("pull.lock");
+    std::fs::create_dir_all(lock_path.parent().unwrap()).expect("lock dir");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open lock");
+    lock_file.lock_exclusive().expect("hold lock");
+    let out = run_pull(&env, &fake, &state, &["-d"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 }

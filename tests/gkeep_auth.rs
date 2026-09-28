@@ -158,11 +158,9 @@ fn login_via_stdin_exchanges_stores_and_verifies() {
     )
     .expect("rewrite token reader");
     chmod_exec(&reader);
-    write_auth_config(
-        &env,
-        &reader.to_string_lossy(),
-        &store.to_string_lossy(),
-    );
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    let store_cmd = format!("sh {}", shell_quote(&store));
+    write_auth_config(&env, &reader_cmd, &store_cmd);
 
     let fake = FakeAdapter::new(&env, "login-ok");
     fake.respond("exchange", &exchange_ok("aas_et/fresh-token"));
@@ -226,11 +224,9 @@ fn login_email_override_wins_and_warns_on_cookie_shape() {
     )
     .expect("write token reader");
     chmod_exec(&reader);
-    write_auth_config(
-        &env,
-        &reader.to_string_lossy(),
-        &store.to_string_lossy(),
-    );
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    let store_cmd = format!("sh {}", shell_quote(&store));
+    write_auth_config(&env, &reader_cmd, &store_cmd);
 
     let fake = FakeAdapter::new(&env, "login-override");
     fake.respond("exchange", &exchange_ok("aas_et/fresh-token"));
@@ -308,11 +304,9 @@ fn login_store_failure_writes_a_recovery_file() {
     let root = root_of(&env);
     let reader = write_token_reader(&root, "aas_et/stale");
     let store = write_failing_store(&root);
-    write_auth_config(
-        &env,
-        &reader.to_string_lossy(),
-        &store.to_string_lossy(),
-    );
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    let store_cmd = format!("sh {}", shell_quote(&store));
+    write_auth_config(&env, &reader_cmd, &store_cmd);
     let fake = FakeAdapter::new(&env, "login-recovery");
     fake.respond("exchange", &exchange_ok("aas_et/fresh-token"));
 
@@ -358,11 +352,9 @@ fn login_readback_mismatch_writes_a_recovery_file() {
     fs::write(&store, "#!/bin/sh\ncat >/dev/null\nexit 0\n")
         .expect("write store stub");
     chmod_exec(&store);
-    write_auth_config(
-        &env,
-        &reader.to_string_lossy(),
-        &store.to_string_lossy(),
-    );
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    let store_cmd = format!("sh {}", shell_quote(&store));
+    write_auth_config(&env, &reader_cmd, &store_cmd);
     let fake = FakeAdapter::new(&env, "login-mismatch");
     fake.respond("exchange", &exchange_ok("aas_et/fresh-token"));
 
@@ -387,7 +379,8 @@ fn doctor_all_ok_reports_the_checklist() {
     let env = GkeepEnv::new("bob-cli-gkeep-doctor-ok");
     let root = root_of(&env);
     let reader = write_token_reader(&root, "aas_et/test-master-token");
-    write_auth_config(&env, &reader.to_string_lossy(), "true");
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    write_auth_config(&env, &reader_cmd, "true");
     write_target(&env);
     assert!(
         Command::new("git")
@@ -458,7 +451,8 @@ fn doctor_cookie_token_fails_and_keep_skips() {
     let env = GkeepEnv::new("bob-cli-gkeep-doctor-cookie");
     let root = root_of(&env);
     let reader = write_token_reader(&root, "oauth2_4/stale-cookie");
-    write_auth_config(&env, &reader.to_string_lossy(), "true");
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    write_auth_config(&env, &reader_cmd, "true");
     write_target(&env);
 
     let fake = FakeAdapter::new(&env, "doctor-cookie");
@@ -493,7 +487,8 @@ fn doctor_adapter_crash_skips_keep() {
     let env = GkeepEnv::new("bob-cli-gkeep-doctor-crash");
     let root = root_of(&env);
     let reader = write_token_reader(&root, "aas_et/test-master-token");
-    write_auth_config(&env, &reader.to_string_lossy(), "true");
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    write_auth_config(&env, &reader_cmd, "true");
     write_target(&env);
 
     let fake = FakeAdapter::new(&env, "doctor-crash");
@@ -512,7 +507,8 @@ fn doctor_missing_target_fails() {
     let env = GkeepEnv::new("bob-cli-gkeep-doctor-target");
     let root = root_of(&env);
     let reader = write_token_reader(&root, "aas_et/test-master-token");
-    write_auth_config(&env, &reader.to_string_lossy(), "true");
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    write_auth_config(&env, &reader_cmd, "true");
     // No gkeep_inbox.md on purpose.
 
     let fake = FakeAdapter::new(&env, "doctor-target");
@@ -543,7 +539,8 @@ fn doctor_json_reports_the_check_shape() {
     let env = GkeepEnv::new("bob-cli-gkeep-doctor-json");
     let root = root_of(&env);
     let reader = write_token_reader(&root, "aas_et/test-master-token");
-    write_auth_config(&env, &reader.to_string_lossy(), "true");
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    write_auth_config(&env, &reader_cmd, "true");
     write_target(&env);
 
     let fake = FakeAdapter::new(&env, "doctor-json");

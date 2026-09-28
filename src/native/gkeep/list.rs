@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use super::{
     adapter::{AdapterClient, Credentials},
-    cli::{ListFormat, ListSource},
+    cli::ListSource,
     config::{GkeepConfig, DEFAULT_TARGET},
     ledger::{read_target_tasks, Journal, Ledger, VaultTask},
     model::{KeepNote, KeepNoteKind},
@@ -57,7 +57,7 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
     };
 
     if !show_keep {
-        if args.format == ListFormat::Json {
+        if args.format.is_json() {
             print_json(args, &vault, None, None);
         } else {
             print_vault_table(&vault, None, args.all, &styler);
@@ -78,7 +78,7 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
             return report_error("list", &error, args.error_format());
         }
     };
-    let spinner_label = if args.format == ListFormat::Json {
+    let spinner_label = if args.format.is_json() {
         None
     } else {
         Some("Syncing Google Keep")
@@ -101,7 +101,7 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
         &vault.journal,
         &PlanOptions::default(),
     );
-    let fetched_at = bob_env::current_datetime()
+    let fetched_at = super::ui::now_utc()
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
     let keep = KeepView {
@@ -110,7 +110,7 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
         plan,
     };
 
-    if args.format == ListFormat::Json {
+    if args.format.is_json() {
         print_json(args, &vault, Some(&keep), None);
     } else {
         print_keep_table(&keep, &styler);
@@ -138,6 +138,7 @@ struct VaultData {
     tasks: Vec<VaultTask>,
     ledger: Ledger,
     journal: Journal,
+    missing_target: bool,
 }
 
 /// Scan the ledger and journal, warn about integrity issues, and read
@@ -172,18 +173,33 @@ fn read_vault(
         ));
     }
     let target_path = bob_dir.join(target_rel);
-    let contents = fs::read_to_string(&target_path).unwrap_or_default();
+    let (contents, missing_target) = match fs::read_to_string(&target_path) {
+        Ok(contents) => (contents, false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (String::new(), true)
+        }
+        Err(_) => (String::new(), false),
+    };
     let settings = note_tasks::read_settings(bob_dir);
     let mut tasks = read_target_tasks(&contents, &settings);
     if !show_all {
         tasks.retain(|task| is_open_status(task.status_symbol));
     }
+    // Vault rows oldest first: by `created`, then line. Rows without
+    // `created` go last, in file order.
+    tasks.sort_by(|a, b| match (a.created, b.created) {
+        (Some(da), Some(db)) => (da, a.line).cmp(&(db, b.line)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.line.cmp(&b.line),
+    });
     Ok(VaultData {
         target_rel: target_rel.to_string(),
         target_path,
         tasks,
         ledger,
         journal,
+        missing_target,
     })
 }
 
@@ -200,7 +216,7 @@ fn print_keep_failure(
     vault: &VaultData,
     error: &GkeepError,
 ) -> i32 {
-    if args.format == ListFormat::Json {
+    if args.format.is_json() {
         print_json(args, vault, None, Some(error));
         return 1;
     }
@@ -306,7 +322,7 @@ struct KeepRow {
 
 impl KeepRow {
     fn new(note: KeepNote, planned: &super::plan::PlannedNote) -> Self {
-        let now = bob_env::current_datetime().and_utc().timestamp();
+        let now = super::ui::now_utc().timestamp();
         let age = match note.created_local() {
             Some(created) => format_age(now, created.timestamp()),
             None => "—".to_string(),
@@ -364,7 +380,7 @@ impl KeepRow {
     }
 }
 
-/// The vault section: one row per target-note task, in file order.
+/// The vault section: one row per target-note task, oldest first.
 fn print_vault_table(
     vault: &VaultData,
     plan: Option<&Plan>,
@@ -391,10 +407,22 @@ fn print_vault_table(
     println!("{}", styler.cyan(&title));
     println!();
     if vault.tasks.is_empty() {
-        println!("{}", styler.dim("  No open tasks"));
+        if vault.missing_target {
+            println!(
+                "{}",
+                styler.dim(&format!(
+                    "  {} not found · create it or set gkeep.target",
+                    vault.target_rel
+                ))
+            );
+        } else if show_all {
+            println!("{}", styler.dim("  No tasks"));
+        } else {
+            println!("{}", styler.dim("  No open tasks"));
+        }
         return;
     }
-    let now = bob_env::current_datetime().and_utc().timestamp();
+    let now = super::ui::now_utc().timestamp();
     let ages: Vec<String> = vault
         .tasks
         .iter()
@@ -423,7 +451,7 @@ fn print_vault_table(
         }
         if active
             .get(task.marker.as_ref().map_or("", |(id, _)| id.as_str()))
-            .is_some_and(|state| state.is_actionable())
+            .is_some_and(|state| *state != NoteState::Archived)
         {
             hints.push("↺ still in Keep".to_string());
         }
@@ -462,7 +490,7 @@ fn vault_age(task: &VaultTask, now: i64) -> String {
         Some(date) => {
             let then = date
                 .and_hms_opt(0, 0, 0)
-                .map(|start| start.and_utc().timestamp())
+                .map(|start| super::ui::local_naive_to_utc(&start).timestamp())
                 .unwrap_or(now);
             format_age(now, then)
         }

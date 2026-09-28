@@ -16,7 +16,6 @@ use serde_json::json;
 
 use super::{
     adapter::{AdapterClient, Credentials},
-    cli::HumanFormat,
     config::GkeepConfig,
     ledger::{Journal, JournalEvent, JournalRecord, Ledger},
     model::{note_ref, KeepContent},
@@ -59,9 +58,7 @@ fn journal_path() -> PathBuf {
 }
 
 fn current_ts() -> String {
-    bob_env::current_datetime()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string()
+    ui::now_utc().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 pub(crate) fn run(args: &PullArgs) -> i32 {
@@ -69,22 +66,15 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     let styler = Styler::detect();
     let format_name = args.error_format();
 
-    // Guard: per-host pull lock, skipped for dry runs.
+    // Guard: per-host pull lock, skipped for dry runs. Contention
+    // reports "already running"; other I/O errors report the real error.
     let _pull_guard = if args.dry_run {
         None
     } else {
         match acquire_pull_lock() {
             Ok(guard) => Some(guard),
-            Err(code) => {
-                return ui::report_error(
-                    "pull",
-                    &GkeepError::runtime(
-                        "lock",
-                        "another bob gkeep pull is already running".to_string(),
-                    ),
-                    format_name,
-                )
-                .max(code);
+            Err(error) => {
+                return ui::report_error("pull", &error, format_name);
             }
         }
     };
@@ -119,6 +109,42 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     {
         return ui::report_error("pull", &error, format_name);
     }
+
+    // Take `bob_sync.lock` before reading the target and scanning the
+    // ledger/journal. Dry runs take no lock. (Obsidian ignores the lock,
+    // so CAS still guards the write.)
+    let _vault_guard = if args.dry_run {
+        None
+    } else {
+        let waiting = format!(
+            "  {}",
+            styler.dim("waiting for another vault maintenance run…")
+        );
+        let json_mode = is_json;
+        let on_first_wait = move || {
+            if json_mode {
+                eprintln!("waiting for another vault maintenance run…");
+            } else {
+                eprintln!("{waiting}");
+            }
+        };
+        match ob::acquire_lock_waiting(
+            std::time::Duration::from_secs(60),
+            on_first_wait,
+        ) {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                return ui::report_error(
+                    "pull",
+                    &GkeepError::runtime(
+                        "lock",
+                        format!("acquire vault maintenance lock: {error}"),
+                    ),
+                    format_name,
+                );
+            }
+        }
+    };
 
     let bob_dir = args.bob_dir();
     let target_rel = PathBuf::from(config.target());
@@ -232,9 +258,11 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         return print_dry_run(args, &config, &plan, &writes, &styler);
     }
 
-    // Nothing to write (only pending/skipped): skip lock, write, verify,
-    // and commit; go straight to the guarded archive.
+    // Nothing to write (only pending/skipped): skip write, verify,
+    // and commit; drop the vault lock and go straight to the guarded
+    // archive.
     if nothing_to_write {
+        drop(_vault_guard);
         return finish_with_archive(
             args,
             &config,
@@ -249,39 +277,8 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         );
     }
 
-    // Lock the vault (Obsidian ignores it, so CAS still guards Verify).
-    let _vault_guard = {
-        let waiting = format!(
-            "  {}",
-            styler.dim("waiting for another vault maintenance run…")
-        );
-        let json_mode = is_json;
-        let on_first_wait = move || {
-            if json_mode {
-                eprintln!("waiting for another vault maintenance run…");
-            } else {
-                eprintln!("{waiting}");
-            }
-        };
-        match ob::acquire_lock_waiting(
-            std::time::Duration::from_secs(60),
-            on_first_wait,
-        ) {
-            Ok(guard) => guard,
-            Err(error) => {
-                return ui::report_error(
-                    "pull",
-                    &GkeepError::runtime(
-                        "lock",
-                        format!("acquire vault maintenance lock: {error}"),
-                    ),
-                    format_name,
-                );
-            }
-        }
-    };
-
-    // Build the insertion once; CAS re-reads before the rename.
+    // Build the insertion once; CAS re-reads immediately before the
+    // rename, after the temp file is written and synced.
     let joined = writes
         .iter()
         .map(|item| item.markdown.as_str())
@@ -289,11 +286,37 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         .join("\n");
     let (first_contents, _) =
         capture::insert_task_line(&target_contents, &joined);
-
+    let perms = match fs::metadata(&target_path) {
+        Ok(meta) => meta.permissions(),
+        Err(error) => {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    format!("stat {}: {error}", target_path.display()),
+                ),
+                format_name,
+            );
+        }
+    };
+    let mut temp = match write_temp(&target_path, &first_contents, &perms) {
+        Ok(temp) => temp,
+        Err(error) => {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    format!("write {}: {error}", target_path.display()),
+                ),
+                format_name,
+            );
+        }
+    };
     maybe_run_before_rename_hook();
     let current_bytes = match fs::read(&target_path) {
         Ok(bytes) => bytes,
         Err(error) => {
+            let _ = fs::remove_file(&temp);
             return ui::report_error(
                 "pull",
                 &GkeepError::runtime(
@@ -304,12 +327,9 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             );
         }
     };
-    let (final_contents, final_bytes_snapshot) = if current_bytes
-        == target_bytes
-    {
-        (first_contents, target_bytes.clone())
-    } else {
-        // The vault changed under us: re-plan the insertion once.
+    if current_bytes != target_bytes {
+        // The vault changed under us: delete the temp, re-plan once.
+        let _ = fs::remove_file(&temp);
         let fresh = String::from_utf8_lossy(&current_bytes).into_owned();
         let fresh_indent =
             capture::dominant_indent_unit(&capture::line_spans(&fresh))
@@ -332,10 +352,24 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             .collect::<Vec<_>>()
             .join("\n");
         let (replanned, _) = capture::insert_task_line(&fresh, &fresh_joined);
+        temp = match write_temp(&target_path, &replanned, &perms) {
+            Ok(temp) => temp,
+            Err(error) => {
+                return ui::report_error(
+                    "pull",
+                    &GkeepError::runtime(
+                        "vault",
+                        format!("write {}: {error}", target_path.display()),
+                    ),
+                    format_name,
+                );
+            }
+        };
         maybe_run_before_rename_hook();
         let second = match fs::read(&target_path) {
             Ok(bytes) => bytes,
             Err(error) => {
+                let _ = fs::remove_file(&temp);
                 return ui::report_error(
                     "pull",
                     &GkeepError::runtime(
@@ -347,6 +381,7 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             }
         };
         if second != current_bytes {
+            let _ = fs::remove_file(&temp);
             return ui::report_error(
                 "pull",
                 &GkeepError::runtime(
@@ -359,11 +394,10 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         }
         // Use the fresh rendering from here on (indent may differ).
         writes = fresh_writes;
-        (replanned, current_bytes.clone())
-    };
-
-    // Durable write: temp + create_new, same-dir rename, dir fsync.
-    if let Err(error) = durable_write(&target_path, &final_contents) {
+    }
+    // Rename the synced temp immediately after the successful re-read.
+    if let Err(error) = finish_rename(&temp, &target_path) {
+        let _ = fs::remove_file(&temp);
         return ui::report_error(
             "pull",
             &GkeepError::runtime(
@@ -373,8 +407,6 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             format_name,
         );
     }
-    let _ = final_bytes_snapshot;
-
     // Verify: each block exactly once, open top-level #task, marker.
     let settings = note_tasks::read_settings(&bob_dir);
     let verified_contents = match fs::read_to_string(&target_path) {
@@ -400,16 +432,22 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     let verify_failed = writes.len() - verified.len();
 
     // Commit when the vault is a Git worktree, unless --no-commit.
+    // When `git` cannot be started, treat it as a commit failure:
+    // archive nothing and exit 1.
     let mut commit_sha: Option<String> = None;
     if !args.no_commit {
         let child_env = ob::child_env();
         let worktree = match ob::detect_git_worktree(&bob_dir, &child_env) {
             Ok(inside) => inside,
             Err(error) => {
-                ui::warn(&format!(
-                    "git is unavailable ({error}); skipping commit"
-                ));
-                false
+                return ui::report_error(
+                    "pull",
+                    &GkeepError::runtime(
+                        "commit",
+                        format!("detect the vault Git worktree: {error}"),
+                    ),
+                    format_name,
+                );
             }
         };
         if worktree {
@@ -488,14 +526,16 @@ struct WriteItem {
     fp: String,
 }
 
-fn acquire_pull_lock() -> Result<File, i32> {
+fn acquire_pull_lock() -> Result<File, GkeepError> {
     let path = pull_lock_path();
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
         && let Err(error) = fs::create_dir_all(parent)
     {
-        eprintln!("bob gkeep pull: create pull lock dir: {error}");
-        return Err(1);
+        return Err(GkeepError::runtime(
+            "lock",
+            format!("create pull lock dir {}: {error}", parent.display()),
+        ));
     }
     let file = OpenOptions::new()
         .create(true)
@@ -504,25 +544,35 @@ fn acquire_pull_lock() -> Result<File, i32> {
         .write(true)
         .open(&path)
         .map_err(|error| {
-            eprintln!(
-                "bob gkeep pull: open pull lock {}: {error}",
-                path.display()
-            );
-            1
+            GkeepError::runtime(
+                "lock",
+                format!("open pull lock {}: {error}", path.display()),
+            )
         })?;
     match file.try_lock_exclusive() {
         Ok(()) => Ok(file),
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Err(1),
-        Err(error) => {
-            eprintln!("bob gkeep pull: lock {}: {error}", path.display());
-            Err(1)
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(GkeepError::runtime(
+                "lock",
+                "another bob gkeep pull is already running".to_string(),
+            ))
         }
+        Err(error) => Err(GkeepError::runtime(
+            "lock",
+            format!("lock {}: {error}", path.display()),
+        )),
     }
 }
 
-fn durable_write(target: &Path, contents: &str) -> io::Result<()> {
+/// Write `contents` to a same-dir temp file, set permissions before
+/// syncing, sync, and return the temp path. The caller re-reads the
+/// target for CAS and renames with [`finish_rename`] immediately after.
+fn write_temp(
+    target: &Path,
+    contents: &str,
+    perms: &std::fs::Permissions,
+) -> io::Result<PathBuf> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    let perms = fs::metadata(target)?.permissions();
     let file_name = target
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -551,17 +601,23 @@ fn durable_write(target: &Path, contents: &str) -> io::Result<()> {
     };
     let outcome = (|| -> io::Result<()> {
         fs::write(&temp, contents)?;
+        fs::set_permissions(&temp, perms.clone())?;
         let file = File::open(&temp)?;
         file.sync_all()?;
-        fs::set_permissions(&temp, perms)?;
-        fs::rename(&temp, target)?;
-        File::open(parent)?.sync_all()?;
         Ok(())
     })();
     if outcome.is_err() {
         let _ = fs::remove_file(&temp);
     }
-    outcome
+    outcome.map(|()| temp)
+}
+
+/// Rename a synced temp file onto `target` and fsync the parent dir.
+fn finish_rename(temp: &Path, target: &Path) -> io::Result<()> {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    fs::rename(temp, target)?;
+    File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 struct VerifyOutcome {
@@ -628,7 +684,7 @@ fn finish_with_archive(
     config: &GkeepConfig,
     client: &AdapterClient,
     creds: &Credentials,
-    bob_dir: &Path,
+    _bob_dir: &Path,
     target_rel: &Path,
     plan: &Plan,
     verified: &[WriteItem],
@@ -677,20 +733,33 @@ fn finish_with_archive(
                     let hit = results.iter().find(|row| row.id == *id);
                     match hit {
                         Some(row) => {
-                            let status = match row.status {
-                                super::model::ArchiveStatus::Archived => {
-                                    "archived"
+                            let status = if row.status.is_success() {
+                                match row.status {
+                                    super::model::ArchiveStatus::Archived => {
+                                        "archived"
+                                    }
+                                    super::model::ArchiveStatus::AlreadyArchived => {
+                                        "already_archived"
+                                    }
+                                    _ => unreachable!(
+                                        "is_success implies archived"
+                                    ),
                                 }
-                                super::model::ArchiveStatus::AlreadyArchived => {
-                                    "already_archived"
+                            } else {
+                                match row.status {
+                                    super::model::ArchiveStatus::Changed => {
+                                        "changed"
+                                    }
+                                    super::model::ArchiveStatus::Missing => {
+                                        "missing"
+                                    }
+                                    super::model::ArchiveStatus::Error => {
+                                        "error"
+                                    }
+                                    _ => unreachable!(
+                                        "non-success implies refused"
+                                    ),
                                 }
-                                super::model::ArchiveStatus::Changed => {
-                                    "changed"
-                                }
-                                super::model::ArchiveStatus::Missing => {
-                                    "missing"
-                                }
-                                super::model::ArchiveStatus::Error => "error",
                             };
                             archive_status.insert(
                                 id.clone(),
@@ -720,34 +789,72 @@ fn finish_with_archive(
         }
     }
     if let Some(error) = adapter_failed {
+        // Every note due for archive gets `archive: error` with the
+        // adapter message as detail, so both modes report one failure
+        // per note.
+        let mut failed_status = archive_status;
+        for (id, _) in &archive_notes {
+            failed_status.insert(
+                id.clone(),
+                ("error".to_string(), Some(error.message().to_string())),
+            );
+        }
         // Writes are committed; journal the writes so the next pull can
         // archive them as pending with no duplicate write.
         append_journal(
             plan,
             verified,
-            &archive_status,
+            &failed_status,
             target_rel,
             commit_sha.clone(),
             true,
         );
         if is_json {
-            if !args.quiet {
+            // Exactly one JSON document on stdout, with `ok: false` and
+            // a top-level `error`. Quiet still prints it only when the
+            // run failed (it did): stdout gets the document, never empty.
+            if args.quiet {
+                eprintln!(
+                    "bob gkeep pull: {}: {}",
+                    error.kind(),
+                    error.message()
+                );
+                if let Some(hint) = error.hint() {
+                    eprintln!("  hint: {hint}");
+                }
                 println!(
                     "{}",
-                    json_pull_report(
+                    json_pull_report_with_error(
                         args,
                         config,
                         plan,
                         verified,
-                        &archive_status,
+                        &failed_status,
                         None,
                         target_rel,
                         commit_sha.clone(),
                         false,
+                        Some(&error),
                     )
                 );
+                return 1;
             }
-            return ui::report_error("pull", &error, args.error_format());
+            println!(
+                "{}",
+                json_pull_report_with_error(
+                    args,
+                    config,
+                    plan,
+                    verified,
+                    &failed_status,
+                    None,
+                    target_rel,
+                    commit_sha.clone(),
+                    false,
+                    Some(&error),
+                )
+            );
+            return 1;
         }
         if !args.quiet {
             print_human_report(
@@ -755,12 +862,26 @@ fn finish_with_archive(
                 config,
                 plan,
                 verified,
-                &archive_status,
+                &failed_status,
                 target_rel,
                 commit_sha.clone(),
                 styler,
                 false,
             );
+        } else {
+            // Quiet failures go to stderr only; stdout stays empty.
+            for planned in &plan.notes {
+                if failed_status
+                    .get(&planned.note.id)
+                    .is_some_and(|(s, _)| s == "error")
+                {
+                    eprintln!(
+                        "bob gkeep pull: NOT archived {}: {}",
+                        planned.note.id,
+                        error.message()
+                    );
+                }
+            }
         }
         ui::report_error("pull", &error, "human");
         return 1;
@@ -811,8 +932,42 @@ fn finish_with_archive(
         return if ok { 0 } else { 1 };
     }
 
-    if args.quiet && ok {
-        return 0;
+    if args.quiet {
+        if ok {
+            return 0;
+        }
+        // Quiet failures go to stderr only; stdout stays empty.
+        for planned in &plan.notes {
+            let id = planned.note.id.as_str();
+            if matches!(planned.action, PlanAction::Skip) {
+                continue;
+            }
+            let verified_ok = verified
+                .iter()
+                .any(|item| item.planned.note.id.as_str() == id);
+            if !verified_ok
+                && matches!(
+                    planned.action,
+                    PlanAction::Write | PlanAction::WriteRevision
+                )
+            {
+                eprintln!(
+                    "bob gkeep pull: NOT written: verification failed for {id}"
+                );
+                continue;
+            }
+            if let Some((status, detail)) = archive_status.get(id)
+                && matches!(status.as_str(), "changed" | "missing" | "error")
+            {
+                let extra = detail.clone().unwrap_or_default();
+                if extra.is_empty() {
+                    eprintln!("bob gkeep pull: NOT archived {id}: {status}");
+                } else {
+                    eprintln!("bob gkeep pull: NOT archived {id}: {extra}");
+                }
+            }
+        }
+        return 1;
     }
     // Human: nothing-to-do line when no actionable notes.
     let actionable = plan
@@ -859,7 +1014,6 @@ fn finish_with_archive(
             if changed == 1 { "it stays" } else { "they stay" },
         );
     }
-    let _ = bob_dir;
     if ok {
         0
     } else {
@@ -1057,26 +1211,23 @@ fn print_dry_run(
     println!("[dry-run] Google Keep → {target} · {actionable} to pull");
     for planned in &plan.notes {
         let title = truncate_title(&display_title(&planned.note), styler);
-        // Leak-free: build the owned string for the skip arm.
-        let detail_owned;
-        let detail: &str = match planned.action {
-            PlanAction::Skip => {
-                detail_owned = format!(
-                    "skipped · {}",
-                    planned.skip_reason.as_deref().unwrap_or("skipped")
-                );
-                &detail_owned
-            }
+        let detail = match planned.action {
+            PlanAction::Skip => format!(
+                "skipped · {}",
+                planned.skip_reason.as_deref().unwrap_or("skipped")
+            ),
             PlanAction::Write | PlanAction::WriteRevision => {
-                "would write · would archive"
+                if args.no_archive {
+                    "would write · left in Keep (--no-archive)".to_string()
+                } else {
+                    "would write · would archive".to_string()
+                }
             }
-            PlanAction::ArchiveOnly => "would archive · already in vault",
+            PlanAction::ArchiveOnly => {
+                "would archive · already in vault".to_string()
+            }
         };
-        let _ = detail;
-        let glyph = match planned.action {
-            PlanAction::Skip => styler.dim("·"),
-            _ => styler.dim("·"),
-        };
+        let glyph = styler.dim("·");
         println!("  {glyph} {title}  {detail}");
     }
     if !writes.is_empty() {
@@ -1090,12 +1241,15 @@ fn print_dry_run(
             println!("{}", styler.dim(&format!("│ {line}")));
         }
     }
-    let written = writes.len();
-    let archived = plan
-        .notes
-        .iter()
-        .filter(|item| item.state.is_actionable())
-        .count();
+    let written = 0;
+    let archived = if args.no_archive {
+        0
+    } else {
+        plan.notes
+            .iter()
+            .filter(|item| item.state.is_actionable())
+            .count()
+    };
     let skipped = plan.notes.len() - actionable;
     println!(
         "{} {written} written · {archived} archived · {skipped} skipped",
@@ -1122,7 +1276,7 @@ fn print_human_report(
     target_rel: &Path,
     commit_sha: Option<String>,
     styler: &Styler,
-    _ok: bool,
+    ok: bool,
 ) {
     let target = target_rel.to_string_lossy();
     let actionable = plan
@@ -1220,18 +1374,14 @@ fn print_human_report(
                 _ => "written · archiving skipped".to_string(),
             }
         };
-        let glyph = if detail.contains("NOT") {
-            styler.yellow("!")
-        } else {
-            styler.green("✓")
-        };
-        // `!` rows use the warning color; successes use green.
+        // `NOT archived: edited` uses the warning color; other `NOT`
+        // failures use red; successes use green.
         let glyph = if detail.contains("NOT archived: edited") {
             styler.yellow("!")
         } else if detail.contains("NOT") {
             styler.red("✗")
         } else {
-            glyph
+            styler.green("✓")
         };
         println!("  {glyph} {title}  {detail}");
     }
@@ -1248,9 +1398,13 @@ fn print_human_report(
         .iter()
         .filter(|item| matches!(item.action, PlanAction::Skip))
         .count();
-    let mut summary = format!(
-        "{} {written} written · {archived} archived · {skipped} skipped",
+    let prefix = if ok {
         styler.success_prefix(false)
+    } else {
+        styler.warning_prefix()
+    };
+    let mut summary = format!(
+        "{prefix} {written} written · {archived} archived · {skipped} skipped"
     );
     if let Some(sha) = commit_sha {
         let short: String = sha.chars().take(7).collect();
@@ -1274,21 +1428,49 @@ fn json_pull_report(
     commit: Option<String>,
     ok: bool,
 ) -> serde_json::Value {
+    json_pull_report_with_error(
+        args,
+        config,
+        plan,
+        verified,
+        archive_status,
+        markdown,
+        target_rel,
+        commit,
+        ok,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn json_pull_report_with_error(
+    args: &PullArgs,
+    config: &GkeepConfig,
+    plan: &Plan,
+    verified: &[WriteItem],
+    archive_status: &std::collections::BTreeMap<
+        String,
+        (String, Option<String>),
+    >,
+    markdown: Option<String>,
+    _target_rel: &Path,
+    commit: Option<String>,
+    ok: bool,
+    adapter_error: Option<&GkeepError>,
+) -> serde_json::Value {
     let verified_ids: std::collections::BTreeSet<&str> = verified
         .iter()
         .map(|item| item.planned.note.id.as_str())
         .collect();
+    // Dry runs write nothing: every note reports `written: false`.
+    let dry = args.dry_run;
     let notes: Vec<serde_json::Value> = plan
         .notes
         .iter()
         .map(|planned| {
-            let action = match planned.action {
-                PlanAction::Write => "write",
-                PlanAction::WriteRevision => "write_revision",
-                PlanAction::ArchiveOnly => "archive_only",
-                PlanAction::Skip => "skip",
-            };
-            let written = verified_ids.contains(planned.note.id.as_str());
+            let action = planned.action.as_str();
+            let written =
+                !dry && verified_ids.contains(planned.note.id.as_str());
             let (archive, detail) =
                 archive_status.get(&planned.note.id).cloned().unwrap_or((
                     if matches!(planned.action, PlanAction::Skip) {
@@ -1311,7 +1493,7 @@ fn json_pull_report(
             })
         })
         .collect();
-    let written = verified.len();
+    let written = if dry { 0 } else { verified.len() };
     let archived = archive_status
         .values()
         .filter(|(status, _)| {
@@ -1323,15 +1505,8 @@ fn json_pull_report(
         .iter()
         .filter(|item| matches!(item.action, PlanAction::Skip))
         .count();
-    let failed = notes.len() - written - skipped
-        + archive_status
-            .values()
-            .filter(|(status, _)| {
-                matches!(status.as_str(), "changed" | "missing" | "error")
-            })
-            .count();
-    let _ = target_rel;
-    json!({
+    let failed = count_failed(plan, verified, archive_status);
+    let mut document = json!({
         "schema_version": 1,
         "ok": ok,
         "dry_run": args.dry_run,
@@ -1347,10 +1522,13 @@ fn json_pull_report(
             "skipped": skipped,
             "failed": failed,
         }
-    })
-}
-
-#[allow(dead_code)]
-fn human_format_of(args: &PullArgs) -> HumanFormat {
-    args.format
+    });
+    if let Some(error) = adapter_error {
+        document["error"] = json!({
+            "kind": error.kind(),
+            "message": error.message(),
+            "hint": error.hint(),
+        });
+    }
+    document
 }
