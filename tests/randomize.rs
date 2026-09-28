@@ -923,6 +923,126 @@ fn randomize_seed_replays_dry_run_dates_filters_levels_and_until() {
 }
 
 #[test]
+fn randomize_date_bounds_reject_unrepresentable_offsets_and_windows() {
+    let temp = TempDir::new("bob-cli-randomize-date-bounds");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    write_priority_config(&config);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("2026/20260928.md"),
+        "# 2026-09-28\n\n## Pomodoros\n\n- [ ] Focus (0900-0930)\n",
+    );
+    let note = vault.join("note.md");
+    let body =
+        "- [ ] Due P2 [priority:: medium] [scheduled:: 2026-09-10] #task\n";
+    write_file(&note, body);
+
+    // An offset that cannot fit in the supported date range is a usage
+    // error (exit 2), like any other bad --until: the u64 no longer
+    // wraps to a past date, and even i64::MAX no longer panics.
+    for huge in ["+18446744073709551615", "+9223372036854775807"] {
+        let output = run_randomize(
+            &temp,
+            &vault,
+            &config,
+            &["--dry-run", "--until", huge],
+        );
+        assert_exit(&output, 2);
+        assert!(
+            stderr(&output).contains("invalid --until"),
+            "expected usage hint for {huge}:\n{}",
+            format_output(&output)
+        );
+    }
+
+    // Ordinary offsets are unchanged.
+    let ordinary = run_randomize(
+        &temp,
+        &vault,
+        &config,
+        &[
+            "--dry-run",
+            "--format",
+            "json",
+            "--seed",
+            SEED,
+            "--until",
+            "+7",
+        ],
+    );
+    assert_success(&ordinary);
+    assert_eq!(parse_json(&ordinary)["until"], "2026-10-05");
+
+    // A far-future ISO date at the parser boundary is accepted and rolls
+    // without wrapping: the chrono range extends far past year 9999.
+    let boundary = run_randomize(
+        &temp,
+        &vault,
+        &config,
+        &[
+            "--dry-run",
+            "--format",
+            "json",
+            "--seed",
+            SEED,
+            "--until",
+            "9999-12-31",
+        ],
+    );
+    assert_success(&boundary);
+    let boundary_json = parse_json(&boundary);
+    assert_eq!(boundary_json["until"], "9999-12-31");
+    assert_eq!(boundary_json["summary"]["rerolled"], 1);
+
+    // An extreme configured priority window fails deterministically
+    // before any write, keeping the JSON failure contract (exit 1,
+    // stage "plan") instead of panicking.
+    let wild = temp.path().join("wild.yml");
+    write_file(
+        &wild,
+        concat!(
+            "properties:\n",
+            "  - name: priority\n",
+            "    values: priority\n",
+            "    schedules: scheduled\n",
+            "    levels:\n",
+            "      - label: P1\n",
+            "        value: high\n",
+            "        min_days: 9223372036854775807\n",
+            "        max_days: 9223372036854775807\n",
+        ),
+    );
+    write_file(
+        &vault.join("wild.md"),
+        "- [ ] Far out [priority:: high] [scheduled:: 2026-09-10] #task\n",
+    );
+    let failed = run_randomize(
+        &temp,
+        &vault,
+        &wild,
+        &["--dry-run", "--format", "json", "--seed", SEED],
+    );
+    assert_exit(&failed, 1);
+    let failed_json = parse_json(&failed);
+    assert_eq!(failed_json["ok"], false);
+    assert_eq!(failed_json["error"]["stage"], "plan");
+    assert!(
+        failed_json["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("supported date range"),
+        "expected range error:\n{}",
+        format_output(&failed)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note"),
+        body,
+        "a failed plan must not write"
+    );
+}
+
+#[test]
 fn randomize_bare_remote_syncs_scoped_commit_and_push() {
     let temp = TempDir::new("bob-cli-randomize-remote");
     let (vault, remote) = init_pair(&temp);

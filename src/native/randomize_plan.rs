@@ -149,26 +149,44 @@ pub(crate) struct Plan {
     pub(crate) needs_blocked_status: bool,
 }
 
+/// Add `days` to `date` without wrapping or panicking. Returns `None`
+/// when `days` does not fit in the signed range or the sum leaves the
+/// representable calendar range.
+fn checked_add_days(date: NaiveDate, days: u64) -> Option<NaiveDate> {
+    let days: i64 = days.try_into().ok()?;
+    // `try_days` instead of `days`: the latter panics on out-of-bounds
+    // spans (for example `i64::MAX`), while the former reports `None`.
+    let delta = chrono::Duration::try_days(days)?;
+    date.checked_add_signed(delta)
+}
+
 /// Plan every snapshot: classify each open task, roll the candidates, and
-/// compose one postimage per changed note.
+/// compose one postimage per changed note. Fails deterministically before
+/// any write when a cutoff plus a configured priority roll (or the 35-day
+/// load horizon) leaves the representable date range.
 pub(crate) fn plan_notes(
     snapshots: &[NoteSnapshot],
     ctx: &PlanContext<'_>,
-) -> Plan {
+) -> Result<Plan, String> {
     let pomodoro_links = open_pomodoro_block_links(ctx);
     let mut plan = Plan::default();
     let mut load_counts: BTreeMap<NaiveDate, usize> = BTreeMap::new();
     for snapshot in snapshots {
-        plan_note(snapshot, ctx, &pomodoro_links, &mut plan, &mut load_counts);
+        plan_note(snapshot, ctx, &pomodoro_links, &mut plan, &mut load_counts)?;
     }
     for offset in 1..=35u64 {
-        let date = ctx.today + chrono::Duration::days(offset as i64);
+        let Some(date) = checked_add_days(ctx.today, offset) else {
+            return Err(format!(
+                "priority window rolls beyond the supported date range from {}",
+                ctx.today.format("%Y-%m-%d")
+            ));
+        };
         plan.load.push(LoadDay {
             date,
             count: load_counts.get(&date).copied().unwrap_or(0),
         });
     }
-    plan
+    Ok(plan)
 }
 
 struct PomodoroBlockLink {
@@ -300,7 +318,7 @@ fn plan_note(
     pomodoro_links: &[PomodoroBlockLink],
     plan: &mut Plan,
     load_counts: &mut BTreeMap<NaiveDate, usize>,
-) {
+) -> Result<(), String> {
     let scan = note_tasks::scan(&snapshot.contents, ctx.tasks_settings);
     let display = display_path(&snapshot.relative_path);
     let mut digest_ordinals: HashMap<String, usize> = HashMap::new();
@@ -436,7 +454,12 @@ fn plan_note(
             ],
         );
         let offset = level.roll_offset(task_seed);
-        let new_date = ctx.until + chrono::Duration::days(offset as i64);
+        let Some(new_date) = checked_add_days(ctx.until, offset) else {
+            return Err(format!(
+                "priority window rolls beyond the supported date range from {}",
+                ctx.until.format("%Y-%m-%d")
+            ));
+        };
         if new_date == old_date {
             plan.unchanged += 1;
             count_load(line, None, load_counts, ctx);
@@ -492,7 +515,7 @@ fn plan_note(
     }
 
     if jobs.is_empty() {
-        return;
+        return Ok(());
     }
 
     let original = snapshot.contents.clone();
@@ -552,7 +575,7 @@ fn plan_note(
     }
 
     if current == original {
-        return;
+        return Ok(());
     }
     if note_rerolls.iter().any(|reroll| reroll.status_to == '?') {
         plan.needs_blocked_status = true;
@@ -566,6 +589,7 @@ fn plan_note(
         rerolls: note_rerolls,
         regrouped,
     });
+    Ok(())
 }
 
 fn display_path(path: &Path) -> String {
@@ -605,9 +629,12 @@ fn count_load(
             .then(|| task_fields::parse_strict_calendar_date(&single[0].value))
             .flatten()
     });
+    let Some(horizon_end) = checked_add_days(ctx.today, 35) else {
+        return;
+    };
     if let Some(date) = date
         && date > ctx.today
-        && date <= ctx.today + chrono::Duration::days(35)
+        && date <= horizon_end
     {
         *load_counts.entry(date).or_insert(0) += 1;
     }
@@ -662,6 +689,7 @@ mod tests {
         let daily = PathBuf::from("/vault/2026/20260928.md");
         let ctx = context(settings, property, &daily, None);
         plan_notes(&[snapshot("note.md", contents)], &ctx)
+            .expect("test plan succeeds")
     }
 
     fn skip_reasons(plan: &Plan) -> Vec<&'static str> {
@@ -919,7 +947,8 @@ mod tests {
                 snapshot("2026/20260928.md", &daily_contents),
             ],
             &ctx,
-        );
+        )
+        .expect("test plan succeeds");
         let pomodoros = plan
             .skipped
             .iter()
@@ -982,7 +1011,8 @@ mod tests {
                 ),
             ],
             &ctx,
-        );
+        )
+        .expect("test plan succeeds");
         assert_eq!(plan.skipped.len(), 3);
         assert!(plan
             .skipped
@@ -999,13 +1029,15 @@ mod tests {
         let line =
             "- [ ] Later [priority:: medium] [scheduled:: 2026-10-02] #task\n";
         let today_ctx = context(&settings, &property, &daily, None);
-        let today_plan = plan_notes(&[snapshot("note.md", line)], &today_ctx);
+        let today_plan = plan_notes(&[snapshot("note.md", line)], &today_ctx)
+            .expect("test plan succeeds");
         assert!(today_plan.rerolls.is_empty());
         assert!(today_plan.skipped.is_empty());
 
         let mut until_ctx = context(&settings, &property, &daily, None);
         until_ctx.until = day("2026-10-05");
-        let plan = plan_notes(&[snapshot("note.md", line)], &until_ctx);
+        let plan = plan_notes(&[snapshot("note.md", line)], &until_ctx)
+            .expect("test plan succeeds");
         assert_eq!(plan.rerolls.len(), 1);
         let reroll = &plan.rerolls[0];
         assert_eq!(reroll.from, "2026-10-02");
@@ -1036,7 +1068,8 @@ mod tests {
                 ),
             )],
             &ctx,
-        );
+        )
+        .expect("test plan succeeds");
         assert_eq!(plan.rerolls.len(), 1);
         assert_eq!(plan.rerolls[0].level, "P2");
         assert_eq!(skip_reasons(&plan), vec!["not_selected"]);
@@ -1059,7 +1092,8 @@ mod tests {
                 "- [ ] P1 task [priority:: high] [scheduled:: 2026-09-10] #task\n",
             )],
             &ctx,
-        );
+        )
+        .expect("test plan succeeds");
         assert_eq!(plan.rerolls.len(), 1);
         assert_eq!(plan.not_selected, 0);
     }
@@ -1089,7 +1123,8 @@ properties:
                 "- [ ] Same day [priority:: high] [scheduled:: 2026-09-28] #task\n",
             )],
             &ctx,
-        );
+        )
+        .expect("test plan succeeds");
         assert_eq!(plan.unchanged, 1);
         assert!(plan.rerolls.is_empty());
         assert!(plan.notes.is_empty());
@@ -1163,7 +1198,8 @@ properties:
                 ),
             )],
             &ctx,
-        );
+        )
+        .expect("test plan succeeds");
         assert_eq!(plan.rerolls.len(), 2);
         assert_eq!(plan.rerolls[0].line, 1);
         assert_eq!(plan.rerolls[1].line, 2);
@@ -1216,7 +1252,8 @@ properties:
                     ),
                 )],
                 &ctx,
-            );
+            )
+            .expect("test plan succeeds");
             assert_eq!(plan.rerolls.len(), 1, "until {until}");
             assert_eq!(plan.rerolls[0].offset_days, 4);
             assert_eq!(plan.rerolls[0].to, expected, "until {until}");
@@ -1239,7 +1276,8 @@ properties:
             "\n",
             "- [ ] Ship it [priority:: medium] [scheduled:: 2026-09-10] #task\n",
         );
-        let plan = plan_notes(&[snapshot("proj.md", contents)], &ctx);
+        let plan = plan_notes(&[snapshot("proj.md", contents)], &ctx)
+            .expect("test plan succeeds");
         assert_eq!(plan.rerolls.len(), 1);
         let reroll = &plan.rerolls[0];
         assert_eq!(reroll.status_to, '?');
@@ -1281,7 +1319,8 @@ properties:
             "\n",
             "- [ ] Ship it [priority:: medium] [scheduled:: 2026-09-10] #task\n",
         );
-        let plan = plan_notes(&[snapshot("proj.md", contents)], &ctx);
+        let plan = plan_notes(&[snapshot("proj.md", contents)], &ctx)
+            .expect("test plan succeeds");
         // Seed 0x7f3a91c2 rolls this task 16 days out, to 2026-10-14.
         assert_eq!(plan.rerolls[0].to, "2026-10-14");
         assert_eq!(
@@ -1349,7 +1388,8 @@ properties:
                 snapshot("2026/20260928.md", canonical_daily),
             ],
             &ctx,
-        );
+        )
+        .expect("test plan succeeds");
         assert_eq!(plan.rerolls.len(), 3);
         assert_eq!(plan.notes.len(), 3);
         for note in &plan.notes {
@@ -1388,7 +1428,8 @@ properties:
                 ),
             )],
             &ctx,
-        );
+        )
+        .expect("test plan succeeds");
         assert_eq!(plan.rerolls.len(), 1);
         assert_eq!(plan.rerolls[0].to, "2026-10-02");
         assert_eq!(plan.load.len(), 35);
@@ -1443,5 +1484,102 @@ properties:
         let note = &plan.notes[0];
         assert_eq!(note.original.lines().count(), 1);
         assert!(note.updated.lines().count() > 1);
+    }
+
+    #[test]
+    fn extreme_priority_window_fails_before_any_write() {
+        let settings = settings();
+        let property = config::parse_test_property(
+            r#"
+properties:
+  - name: priority
+    values: priority
+    schedules: scheduled
+    levels:
+      - label: P1
+        value: high
+        min_days: 9223372036854775807
+        max_days: 9223372036854775807
+"#,
+        );
+        let daily = PathBuf::from("/vault/2026/20260928.md");
+        let ctx = context(&settings, &property, &daily, None);
+        let error = plan_notes(
+            &[snapshot(
+                "note.md",
+                "- [ ] Far out [priority:: high] [scheduled:: 2026-09-10] #task\n",
+            )],
+            &ctx,
+        )
+        .expect_err("extreme roll must not produce a date");
+        assert!(
+            error.contains("supported date range"),
+            "unexpected planner error: {error}"
+        );
+    }
+
+    #[test]
+    fn roll_at_the_representable_boundary_succeeds_and_past_it_fails() {
+        let settings = settings();
+        let arrival = config::parse_test_property(
+            r#"
+properties:
+  - name: priority
+    values: priority
+    schedules: scheduled
+    levels:
+      - label: P1
+        value: high
+        min_days: 0
+        max_days: 0
+"#,
+        );
+        let daily = PathBuf::from("/vault/2026/20260928.md");
+        let mut ctx = context(&settings, &arrival, &daily, None);
+        ctx.until = NaiveDate::MAX;
+        let plan = plan_notes(
+            &[snapshot(
+                "note.md",
+                "- [ ] Edge [priority:: high] [scheduled:: 2026-09-10] #task\n",
+            )],
+            &ctx,
+        )
+        .expect("a roll landing exactly on the boundary succeeds");
+        assert_eq!(plan.rerolls.len(), 1);
+        assert_eq!(
+            plan.rerolls[0].to,
+            task_fields::format_calendar_date(NaiveDate::MAX)
+        );
+
+        let departure = config::parse_test_property(
+            r#"
+properties:
+  - name: priority
+    values: priority
+    schedules: scheduled
+    levels:
+      - label: P1
+        value: high
+        min_days: 1
+        max_days: 1
+"#,
+        );
+        let ctx = PlanContext {
+            priority: &departure,
+            until: NaiveDate::MAX,
+            ..context(&settings, &arrival, &daily, None)
+        };
+        let error = plan_notes(
+            &[snapshot(
+                "note.md",
+                "- [ ] Edge [priority:: high] [scheduled:: 2026-09-10] #task\n",
+            )],
+            &ctx,
+        )
+        .expect_err("a roll past the boundary must fail");
+        assert!(
+            error.contains("supported date range"),
+            "unexpected planner error: {error}"
+        );
     }
 }

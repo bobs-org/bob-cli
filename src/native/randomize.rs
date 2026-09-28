@@ -190,7 +190,24 @@ fn parse_until(
         let days: u64 = plus.parse().map_err(|_| {
             format!("invalid --until {text:?}: expected YYYY-MM-DD or +N")
         })?;
-        return Ok(today + chrono::Duration::days(days as i64));
+        let days: i64 = days.try_into().map_err(|_| {
+            format!("invalid --until {text:?}: date out of range")
+        })?;
+        // `try_days` instead of `days`: the latter panics on huge spans
+        // such as `i64::MAX`, while the former reports `None`.
+        let delta = chrono::Duration::try_days(days).ok_or_else(|| {
+            format!("invalid --until {text:?}: date out of range")
+        })?;
+        let date = today.checked_add_signed(delta).ok_or_else(|| {
+            format!("invalid --until {text:?}: date out of range")
+        })?;
+        if date < today {
+            return Err(format!(
+                "invalid --until {}: expected today or later",
+                date.format("%Y-%m-%d")
+            ));
+        }
+        return Ok(date);
     }
     let date = NaiveDate::parse_from_str(&text, "%Y-%m-%d").map_err(|_| {
         format!("invalid --until {text:?}: expected YYYY-MM-DD or +N")
@@ -788,6 +805,14 @@ fn paths_match(left: &Path, right: &Path) -> bool {
 /// Plan, validate the Blocked registry when needed, and apply with
 /// retries. Returns the applied absolute paths; an empty plan (nothing
 /// due) succeeds with an empty vec.
+/// A planning failure with its own actionable hint. Date-range
+/// overflows carry no hint; only the Blocked registry check points at
+/// the Tasks settings.
+struct PlanFailure {
+    message: String,
+    hint: Option<String>,
+}
+
 fn plan_and_apply(
     report: &mut Report,
     property: &config::PriorityProperty,
@@ -798,10 +823,8 @@ fn plan_and_apply(
             report.fail("plan", message, None);
             1
         })?;
-        let plan = plan_once(report, &scan, property).map_err(|message| {
-            report.fail("plan", message, Some(
-                "configure one custom Tasks status named Blocked with symbol '?', type ON_HOLD, next status ' ', and availableAsCommand true",
-            ));
+        let plan = plan_once(report, &scan, property).map_err(|failure| {
+            report.fail("plan", failure.message, failure.hint.as_deref());
             1
         })?;
         report.plan = Some(plan);
@@ -814,10 +837,8 @@ fn plan_and_apply(
             report.fail("plan", message, None);
             1
         })?;
-        let plan = plan_once(report, &scan, property).map_err(|message| {
-            report.fail("plan", message, Some(
-                "configure one custom Tasks status named Blocked with symbol '?', type ON_HOLD, next status ' ', and availableAsCommand true",
-            ));
+        let plan = plan_once(report, &scan, property).map_err(|failure| {
+            report.fail("plan", failure.message, failure.hint.as_deref());
             1
         })?;
         if plan.rerolls.is_empty() {
@@ -921,12 +942,14 @@ fn plan_and_apply(
 }
 
 /// Scan-free plan over one snapshot set, plus the Blocked registry
-/// check. Fails before any write when new Blocked statuses appear.
+/// check. Fails before any write when new Blocked statuses appear or
+/// when a cutoff plus a configured roll leaves the representable date
+/// range.
 fn plan_once(
     report: &Report,
     scan: &Scan,
     property: &config::PriorityProperty,
-) -> Result<Plan, String> {
+) -> Result<Plan, PlanFailure> {
     let settings = read_tasks_settings(&report.vault);
     let context = PlanContext {
         today: report.today,
@@ -938,10 +961,20 @@ fn plan_once(
         daily_path: report.daily_path.as_path(),
         daily_contents: scan.daily_contents.as_deref(),
     };
-    let plan = randomize_plan::plan_notes(&scan.snapshots, &context);
+    let plan = randomize_plan::plan_notes(&scan.snapshots, &context).map_err(
+        |message| PlanFailure {
+            message,
+            hint: None,
+        },
+    )?;
     if plan.needs_blocked_status {
-        validate_blocked_status(&settings)
-            .map_err(|error| error.message().to_string())?;
+        validate_blocked_status(&settings).map_err(|error| PlanFailure {
+            message: error.message().to_string(),
+            hint: Some(
+                "configure one custom Tasks status named Blocked with symbol '?', type ON_HOLD, next status ' ', and availableAsCommand true"
+                    .to_string(),
+            ),
+        })?;
     }
     Ok(plan)
 }
