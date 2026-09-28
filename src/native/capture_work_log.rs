@@ -266,10 +266,11 @@ fn insert_lines(contents: &str, index: usize, added: &[String]) -> String {
         })
         .collect::<Vec<_>>();
 
-    if index == lines.len() && !final_newline {
-        if let Some((_, previous_ending)) = lines.last_mut() {
-            *previous_ending = ending.to_string();
-        }
+    if index == lines.len()
+        && !final_newline
+        && let Some((_, previous_ending)) = lines.last_mut()
+    {
+        *previous_ending = ending.to_string();
     }
     lines.splice(index..index, inserted);
     lines

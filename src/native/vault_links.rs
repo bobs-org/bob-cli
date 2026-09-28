@@ -120,10 +120,6 @@ impl VaultLinkResolver {
         }
     }
 
-    pub(crate) fn root(&self) -> &Path {
-        &self.root
-    }
-
     pub(crate) fn resolve(
         &self,
         current_path: &Path,
@@ -191,10 +187,9 @@ fn collect_markdown_paths(
                 .extension()
                 .and_then(OsStr::to_str)
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+            && let Ok(relative) = path.strip_prefix(root)
         {
-            if let Ok(relative) = path.strip_prefix(root) {
-                paths.push(relative.to_path_buf());
-            }
+            paths.push(relative.to_path_buf());
         }
     }
 }

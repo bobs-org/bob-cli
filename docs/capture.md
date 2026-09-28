@@ -22,6 +22,7 @@ workflow guide.
   - [Clipboard](#clipboard)
   - [Task with a requested block ID](#task-with-a-requested-block-id)
   - [Pomodoro-linked tasks](#pomodoro-linked-tasks)
+  - [Closing the running Pomodoro](#closing-the-running-pomodoro)
   - [Project notes](#project-notes)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
   - [Task status toggle](#task-status-toggle)
@@ -784,12 +785,93 @@ without decrementing. The start guards now append ``(close it with `=x`)``.
 
 JSON keeps schema version 1 and reports kind `"pomodoro_close"` (link and
 task forms keep their kind) with an additive `pomodoro_close` object
-(timing, per-target transitions, carried links, notes, next session); human
-output prints `closed NAME old → new (Nm, −Xm) · file line N` (or a single
-range with no decrement, plus `(ran Nm over)` on overruns), one line per
-task transition plus Work Log counts, and the next session. The "switch
-tasks" batch idiom is `=x`, blank line, `^route:id=` — close the running
-session, then start the next one through the existing start rules.
+(timing, per-target transitions, carried links, notes, next session).
+Field notes:
+
+- `pomodoro_close.raw` is the typed token including `=` (`=x`, `=X` when
+  typed that way), on every form.
+- `tasks[].carried` is true only when that target's line was actually
+  carried into the new placeholder, and agrees with the top-level
+  `carried` list.
+- Link forms (`pomodoro_link`, `pomodoro_task`) keep the placement their
+  non-close counterpart reports; only whole-item `=x` uses
+  `placement: "closed"`.
+- Inside `pomodoro_close`, explicitly `null` (not omitted) appears for
+  `tasks[].warning`, for `tasks[].relative_target`, `text`,
+  `previous_status_symbol`, `previous_status_name`, `status_symbol`, and
+  `status_name` on unresolved rows, for `next_pomodoro.time_range`, and for
+  `next_pomodoro` itself when null — matching the top-level
+  `route: null` / `scheduled: null` convention.
+- Embedded and subtask row `text` omits the `#task` tag, like every other
+  row.
+- Whole-item `=x` reports `created` as the clock's date string, as every
+  other kind does.
+
+Human output prints `closed NAME old → new (Nm, −Xm) · file line N` (or a
+single range with no decrement, plus `(ran Nm over)` on overruns), always
+naming the day file; one line per task as `transition text route ^id`
+plus `+N Work Log` counts; and the next session. The "switch tasks" batch
+idiom is `=x`, blank line, `^route:id=` — close the running session,
+then start the next one through the existing start rules.
+
+Worked example (`BOB_NOW=2026-09-28 09:37:00`, day file
+`2026/20260928.md`, TAB indentation):
+
+```markdown
+## Pomodoros
+
+- [x] (**0830-0855** [t:: 25m]) — PLAN
+	- 🍅 [[bob#^capture-stop]]
+- [ ] (**0920-0950** [t:: 30m]) — CAPTURE
+	- [[bob#^capture-stop]]
+		- Designed the `=x` grammar
+			- chose `x` for done
+		- Wrote the plan
+	- [[bob#^web-capture]]#
+	- ~~[[sase#^axe-restart]]~~
+		- Restarted axe
+	- quick note
+- [ ] () — SASE
+	- [[sase#^recovery-panel]]
+```
+
+`bob capture =x` rewrites the day file to:
+
+```markdown
+## Pomodoros
+
+- [x] (**0830-0855** [t:: 25m]) — PLAN
+	- 🍅 [[bob#^capture-stop]]
+- [x] (**0920-0940** [t:: 20m]) — CAPTURE
+	- 🍅 [[bob#^capture-stop]]
+		- Designed the `=x` grammar
+			- chose `x` for done
+		- Wrote the plan
+	- ~~[[sase#^axe-restart]]~~
+		- Restarted axe
+	- quick note
+- [ ] () — CAPTURE
+	- [[bob#^capture-stop]]
+	- [[bob#^web-capture]]
+- [ ] () — SASE
+	- [[sase#^recovery-panel]]
+```
+
+`bob.md` starts `^capture-stop` (`[*]` → `[/]`) with a `🛠️ **WORK LOG**`
+of the two dated design notes; `^web-capture` was deferred so it stays
+`[*]`. `sase.md` prepends `*2026-09-28* — Restarted axe` under the
+existing Work Log marker.
+
+Other rows on the same fixture: `=x` at 09:49 keeps `0920-0950 [t::
+30m]`; `^bob:ready=x` appends after `quick note` (`linked`, carried
+second); `^sase:recovery-panel=x` moves the subtree from SASE
+(`moved`); `^bob:capture-stop=x` is `already_current` and identical to
+plain `=x`; `Draft docs @bob:draft-docs=x` creates the new task;
+`-2`, blank line, `=x` decrements once; `=x`, blank line,
+`^sase:recovery-panel=` switches tasks; `^bob:ready#capture=x` errors
+with "remove `#capture`"; a second `=x` reports "no running Pomodoro to
+close… next up is CAPTURE at line 13"; `=x more` (or a child line) is an
+`invalid_pomodoro_close` error.
 
 ### Project notes
 
@@ -1570,8 +1652,8 @@ each item's own `pomodoro_adjust` alongside the top-level preview of the
 first item; adjustment items never inherit a `@@` declaration.
 
 `pomodoro_close` is an optional object, omitted for every input without a
-close, with the typed `raw` close text (`=x` for a whole-item close, `x` for
-a `=x` suffix), so schema version 1 is unchanged for older inputs.
+close, with the typed `raw` close text including the `=` (`=x`, and `=X`
+when typed that way), so schema version 1 is unchanged for older inputs.
 Multi-item drafts report each item's own `pomodoro_close` alongside the
 top-level preview of the first item; close items never inherit a `@@`
 declaration.

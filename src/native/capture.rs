@@ -618,11 +618,22 @@ fn forced_task_section_from_matches(
 }
 
 fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
-    matches
+    let bob_dir = matches
         .get_one::<OsString>("bob-dir")
         .map(PathBuf::from)
         .map(|path| bob_env::expand_tilde(&path))
-        .unwrap_or_else(bob_env::bob_dir)
+        .unwrap_or_else(bob_env::bob_dir);
+    // Normalize once so the close vault and the batch planner key every
+    // file the same way. A relative `-b` would otherwise double-join the
+    // vault dir: `resolve_target` joins it onto the vault-relative path and
+    // `read_latest` would join it again.
+    if bob_dir.is_absolute() {
+        bob_dir
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&bob_dir))
+            .unwrap_or(bob_dir)
+    }
 }
 
 fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, CaptureError> {
@@ -3185,12 +3196,14 @@ impl capture_pomodoro_close::CloseVault for SnapshotCloseVault {
             return Ok(cached.clone());
         }
         // Not yet loaded by the batch planner: the planner has staged
-        // nothing for it, so the filesystem is current.
-        let filesystem_path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.bob_dir.join(path)
-        };
+        // nothing for it, so the filesystem is current. A planner-keyed
+        // path already carries the vault dir and must not be joined again.
+        let filesystem_path =
+            if path.is_absolute() || path.starts_with(&self.bob_dir) {
+                path.to_path_buf()
+            } else {
+                self.bob_dir.join(path)
+            };
         Self::read_filesystem(&filesystem_path)
     }
 }
@@ -3257,6 +3270,40 @@ fn close_no_running_error(
     CaptureError::io(message)
 }
 
+/// Pre-image running-entry diagnostics for link/body closes. The link step
+/// inserts into _R_'s sub-bullet range, so a close planned afterwards would
+/// report shifted line numbers; check before linking instead.
+fn pre_link_running_error(
+    day_contents: &str,
+    rel: &str,
+    link_hint: &str,
+) -> Option<CaptureError> {
+    match capture_pomodoro_close::find_running_pomodoro(day_contents) {
+        Ok(_) => None,
+        Err(find_error) => Some(map_close_plan_error(
+            capture_pomodoro_close::PomodoroClosePlanError::FindRunning(
+                find_error,
+            ),
+            rel,
+            Some(link_hint),
+        )),
+    }
+}
+
+/// Next-placeholder context from pre-link contents, so link forms keep the
+/// "; next up is NAME at line N" tail of the none-running diagnostic.
+fn close_next_from_contents(
+    day_contents: &str,
+) -> (Option<String>, Option<usize>) {
+    match capture_pomodoro_close::find_running_pomodoro(day_contents) {
+        Err(capture_pomodoro_close::FindRunningError::NoneRunning {
+            next_name,
+            next_line,
+        }) => (next_name, next_line),
+        _ => (None, None),
+    }
+}
+
 fn map_close_plan_error(
     error: capture_pomodoro_close::PomodoroClosePlanError,
     rel: &str,
@@ -3304,6 +3351,7 @@ fn map_close_plan_error(
 
 fn build_close_summary_json(
     raw: &str,
+    day_relative: &str,
     plan: &capture_pomodoro_close::PomodoroClosePlan,
     now: chrono::NaiveDateTime,
 ) -> (PomodoroCloseSummaryJson, Vec<String>) {
@@ -3444,6 +3492,7 @@ fn build_close_summary_json(
         raw: raw.to_string(),
         pomodoro_line: running.line,
         pomodoro_name: running.name.clone(),
+        day_relative: day_relative.to_string(),
         entry_line,
         planned,
         closed,
@@ -3560,7 +3609,7 @@ fn plan_pomodoro_close_item(
     )
     .map_err(|error| map_close_plan_error(error, &rel, None))?;
     let (summary, extra_warnings) =
-        build_close_summary_json(&spec.raw, &plan, now);
+        build_close_summary_json(&spec.raw, &rel, &plan, now);
     warnings.extend(plan.warnings.clone());
     warnings.extend(extra_warnings.clone());
     // Surface close warnings at the top level as well.
@@ -3700,6 +3749,17 @@ fn append_link_to_running(
     ))
 }
 
+/// Outcome of linking an existing task into the running Pomodoro: the
+/// updated day contents, the link action, the move source, the destination,
+/// and the ledger placement.
+type RunningLinkOutcome = (
+    String,
+    &'static str,
+    Option<PomodoroLinkEndpoint>,
+    PomodoroLinkEndpoint,
+    Option<Placement>,
+);
+
 #[allow(clippy::too_many_arguments)]
 fn link_existing_task_into_running(
     _planner: &mut CaptureBatchPlanner,
@@ -3712,16 +3772,7 @@ fn link_existing_task_into_running(
     _day_file: &Path,
     day_contents: &str,
     block_link: &str,
-) -> Result<
-    (
-        String,
-        &'static str,
-        Option<PomodoroLinkEndpoint>,
-        PomodoroLinkEndpoint,
-        Option<Placement>,
-    ),
-    CaptureError,
-> {
+) -> Result<RunningLinkOutcome, CaptureError> {
     let scan = capture_pomodoros::scan(day_contents);
     let running = scan
         .entries
@@ -3922,12 +3973,6 @@ fn plan_pomodoro_close_link_item(
     }
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     let rel = close_day_relative(&request.bob_dir, &day_file);
-    if !day_file.is_file() && !planner.currently_exists(&day_file)? {
-        return Err(CaptureError::io(format!(
-            "Bob daily note does not exist: {}",
-            day_file.display()
-        )));
-    }
     if paths_refer_to_same_file(&target, &day_file) {
         return Err(CaptureError::io(
             "routed note and Bob daily note must be different files",
@@ -3939,6 +3984,12 @@ fn plan_pomodoro_close_link_item(
         )));
     }
     let mut day_contents = planner.read_existing(&day_file)?;
+    // Surface section, none-running, and multiple-entry diagnostics from
+    // pre-image lines before the link step shifts them.
+    if let Some(error) = pre_link_running_error(&day_contents, &rel, &link_hint)
+    {
+        return Err(error);
+    }
     let block_link = format!("[[{route}#^{block_id}]]");
     let day_file_label = day_file.display().to_string();
     // Link into _R_ (destination always the running entry).
@@ -3956,19 +4007,33 @@ fn plan_pomodoro_close_link_item(
             &block_link,
         )
         .map_err(|error| {
-            // Attach the start-hint to the none-running case.
+            // Attach the start-hint to the none-running case, keeping the
+            // next-placeholder tail from the pre-link contents.
             let message = error.message.clone();
             if message.contains("has no open timed entry")
                 || message.contains("running entry disappeared")
             {
-                close_no_running_error(&rel, None, None, Some(&link_hint))
+                let (next_name, next_line) =
+                    close_next_from_contents(&day_contents);
+                close_no_running_error(
+                    &rel,
+                    next_name.as_deref(),
+                    next_line,
+                    Some(&link_hint),
+                )
             } else {
                 error
             }
         })?;
     // The running entry must exist; surface the full none-running diagnostic.
     if linked_day.is_empty() {
-        return Err(close_no_running_error(&rel, None, None, Some(&link_hint)));
+        let (next_name, next_line) = close_next_from_contents(&day_contents);
+        return Err(close_no_running_error(
+            &rel,
+            next_name.as_deref(),
+            next_line,
+            Some(&link_hint),
+        ));
     }
     planner.stage(&day_file, linked_day.clone())?;
     day_contents = linked_day;
@@ -3982,7 +4047,7 @@ fn plan_pomodoro_close_link_item(
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
     let (summary, extra_warnings) =
-        build_close_summary_json(&close_spec.raw, &plan, now);
+        build_close_summary_json(&close_spec.raw, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings.contains(warning) {
             warnings.push(warning.clone());
@@ -4032,7 +4097,9 @@ fn plan_pomodoro_close_link_item(
             scheduled: None,
             priority: None,
             priority_label: None,
-            placement: Placement::Closed,
+            // Link forms stay strictly additive: keep the non-close
+            // counterpart's placement. Only whole-item `=x` is "closed".
+            placement: Placement::Linked,
             sub_bullets: Vec::new(),
             clip: None,
             schedule_log: task_plan.schedule_log.clone(),
@@ -4093,16 +4160,23 @@ fn plan_pomodoro_close_task_item(
     let target = request.bob_dir.join(relative_target(Some(route)));
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     let rel = close_day_relative(&request.bob_dir, &day_file);
-    if !day_file.is_file() && !planner.currently_exists(&day_file)? {
-        return Err(CaptureError::io(format!(
-            "Bob daily note does not exist: {}",
-            day_file.display()
-        )));
-    }
+    // Name the item's own spelling in the start-hint, not the solo form
+    // that would fail with a missing-ID error.
+    let body_text = parsed.body.trim();
+    let link_hint = if body_text.is_empty() {
+        format!("@{route}:{block_id}")
+    } else {
+        format!("{body_text} @{route}:{block_id}")
+    };
     if paths_refer_to_same_file(&target, &day_file) {
         return Err(CaptureError::io(
             "routed note and Bob daily note must be different files",
         ));
+    }
+    if !planner.currently_exists(&day_file)? {
+        return Err(CaptureError::io(format!(
+            "no running Pomodoro to close: today's daily note `{rel}` does not exist"
+        )));
     }
     let target_existed = planner.currently_exists(&target)?;
     let original_target =
@@ -4115,14 +4189,14 @@ fn plan_pomodoro_close_task_item(
         (format!("{capture_block}\n"), Placement::Created)
     };
     planner.stage(&target, updated_target)?;
-    if !planner.currently_exists(&day_file)? {
-        return Err(CaptureError::io(format!(
-            "no running Pomodoro to close: today's daily note `{rel}` does not exist"
-        )));
-    }
     let day_contents = planner.read_existing(&day_file)?;
+    // Surface section, none-running, and multiple-entry diagnostics from
+    // pre-image lines before the link step shifts them.
+    if let Some(error) = pre_link_running_error(&day_contents, &rel, &link_hint)
+    {
+        return Err(error);
+    }
     let block_link = format!("[[{route}#^{block_id}]]");
-    let link_hint = format!("@{route}:{block_id}");
     let (linked_day, _action, _source, _dest, _placement) =
         link_existing_task_into_running(
             planner,
@@ -4141,7 +4215,14 @@ fn plan_pomodoro_close_task_item(
             if message.contains("has no open timed entry")
                 || message.contains("running entry disappeared")
             {
-                close_no_running_error(&rel, None, None, Some(&link_hint))
+                let (next_name, next_line) =
+                    close_next_from_contents(&day_contents);
+                close_no_running_error(
+                    &rel,
+                    next_name.as_deref(),
+                    next_line,
+                    Some(&link_hint),
+                )
             } else {
                 error
             }
@@ -4156,7 +4237,7 @@ fn plan_pomodoro_close_task_item(
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
     let (summary, extra_warnings) =
-        build_close_summary_json(&close_spec.raw, &plan, now);
+        build_close_summary_json(&close_spec.raw, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings.contains(warning) {
             warnings.push(warning.clone());
@@ -4225,7 +4306,9 @@ fn plan_pomodoro_close_task_item(
             scheduled: None,
             priority: None,
             priority_label: None,
-            placement: Placement::Closed,
+            // Body-bearing closes keep the new-task placement, like the
+            // non-close counterpart. Only whole-item `=x` is "closed".
+            placement,
             sub_bullets: Vec::new(),
             clip: None,
             schedule_log: None,
@@ -7542,24 +7625,19 @@ struct PomodoroCloseTaskJson {
     block_link: String,
     ledger_line: usize,
     resolved: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Explicit nulls on unresolved rows, matching the top-level
+    // `route: null` / `scheduled: null` convention.
     relative_target: Option<String>,
     block_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     previous_status_symbol: Option<char>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     previous_status_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     status_symbol: Option<char>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     status_name: Option<String>,
     status_changed: bool,
     carried: bool,
     work_log: Vec<String>,
     work_log_created: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     warning: Option<String>,
 }
 
@@ -7574,7 +7652,6 @@ struct PomodoroCloseNextJson {
     line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     time_range: Option<String>,
     created: bool,
 }
@@ -7585,6 +7662,9 @@ struct PomodoroCloseSummaryJson {
     pomodoro_line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_name: Option<String>,
+    // Vault-relative day file, so human output and clients name the day
+    // file even on link forms (whose `relative_target` is the route note).
+    day_relative: String,
     entry_line: String,
     planned: PomodoroCloseTimingJson,
     closed: PomodoroCloseTimingJson,
@@ -7594,7 +7674,6 @@ struct PomodoroCloseSummaryJson {
     tasks: Vec<PomodoroCloseTaskJson>,
     carried: Vec<PomodoroCloseCarriedJson>,
     notes: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     next_pomodoro: Option<PomodoroCloseNextJson>,
 }
 
@@ -8001,7 +8080,7 @@ fn print_human_pomodoro_close_success(
     };
     let mut header = format!(
         "{verb} {name} {range_text} · {} line {}",
-        result.relative_target, close.pomodoro_line
+        close.day_relative, close.pomodoro_line
     );
     if close.remaining_minutes < 0 {
         header.push_str(&format!(
@@ -8011,29 +8090,28 @@ fn print_human_pomodoro_close_success(
     }
     println!("{prefix} {ordinal}{header}");
     // Link forms: existing link status and ledger lines.
-    if result.routed {
-        if let (Some(action), Some(dest)) = (
+    if result.routed
+        && let (Some(action), Some(dest)) = (
             result.pomodoro_link_action,
             result.pomodoro_link_destination.as_ref(),
-        ) {
-            let dest_name = dest.name.as_deref().unwrap_or("session");
-            let source_text = result
-                .pomodoro_link_source
-                .as_ref()
-                .map(|source| {
-                    let source_name =
-                        source.name.as_deref().unwrap_or("session");
-                    format!(" from {source_name}")
-                })
-                .unwrap_or_default();
-            println!(
-                "  {}",
-                styler.dim(&format!(
-                    "{action} into {dest_name} at line {}{source_text}",
-                    dest.line
-                ))
-            );
-        }
+        )
+    {
+        let dest_name = dest.name.as_deref().unwrap_or("session");
+        let source_text = result
+            .pomodoro_link_source
+            .as_ref()
+            .map(|source| {
+                let source_name = source.name.as_deref().unwrap_or("session");
+                format!(" from {source_name}")
+            })
+            .unwrap_or_default();
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "{action} into {dest_name} at line {}{source_text}",
+                dest.line
+            ))
+        );
     }
     for task in &close.tasks {
         if !task.resolved {
@@ -8068,15 +8146,14 @@ fn print_human_pomodoro_close_success(
         };
         let text = task.text.as_deref().unwrap_or("");
         let locator = match &task.relative_target {
-            Some(target) => format!("{target} · ^{}", task.block_id),
+            Some(target) => format!("{target} ^{}", task.block_id),
             None => format!("^{}", task.block_id),
         };
-        let mut line =
-            format!("{transition} {text} note ^{} · {locator}", task.block_id);
-        // Avoid duplicating the block ID when the locator already names it.
-        if text.is_empty() {
-            line = format!("{transition} {locator}");
-        }
+        let mut line = if text.is_empty() {
+            format!("{transition} {locator}")
+        } else {
+            format!("{transition} {text} {locator}")
+        };
         if task.work_log_created {
             let count = task.work_log.len();
             if count > 0 {

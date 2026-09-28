@@ -28,6 +28,17 @@ use super::{
     vault_links::LinkResolution,
 };
 
+/// Task text without the `#task` tag. Embedded and subtask rows are looked
+/// up with the global filter cleared (resolution does not require `#task`),
+/// so their description keeps the tag; every other row filters it out.
+fn close_task_text(description: &str) -> String {
+    description
+        .split_whitespace()
+        .filter(|token| *token != "#task")
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 const POMODORO_MARKER: &str = "🍅";
 const PLACEHOLDER_LINE: &str = "- [ ] ()";
 const EMPTY_SUB_BULLET: &str = "\t- ";
@@ -1466,6 +1477,7 @@ mod tests {
             "\t- ~~[[bob#^unmarked]]~~",
             "\t- 🍅 ~~[[bob#^marked]]~~",
             "\t- 🍅 🍅 [[bob#^collapse]]",
+            "\t- 🍅🍅 [[bob#^nospace]]",
             "\t- 🍅 ![[bob#^embed]]",
             "- [ ] () — LATER",
         ]);
@@ -1474,6 +1486,9 @@ mod tests {
         assert!(plan.contents.contains("\t- 🍅 ~~[[bob#^marked]]~~"));
         assert!(plan.contents.contains("\t- 🍅 [[bob#^collapse]]"));
         assert!(!plan.contents.contains("🍅 🍅 [[bob#^collapse]]"));
+        // No space between the pair: only the last 🍅 counts as a marker,
+        // so the line is already canonical and keeps its bytes.
+        assert!(plan.contents.contains("\t- 🍅🍅 [[bob#^nospace]]"));
         assert!(plan.contents.contains("\t- ![[bob#^embed]]"));
         assert!(!plan.contents.contains("🍅 ![[bob#^embed]]"));
         assert_eq!(
@@ -1485,6 +1500,7 @@ mod tests {
                 (LedgerLinkRole::Struck, "unmarked", false),
                 (LedgerLinkRole::Struck, "marked", false),
                 (LedgerLinkRole::Worked, "collapse", true),
+                (LedgerLinkRole::Mentioned, "nospace", true),
                 (LedgerLinkRole::Embedded, "embed", false),
             ]
         );
@@ -1723,6 +1739,18 @@ pub(crate) trait CloseVault {
 
 type TaskKey = (PathBuf, String);
 
+/// Identity of one close task row: where its link was found and how the
+/// row reports. Groups the `register_reference` arguments.
+struct CloseTaskRef<'a> {
+    from_path: &'a Path,
+    path_part: &'a str,
+    block_id: &'a str,
+    role: CloseTaskRole,
+    block_link: &'a str,
+    ledger_line: usize,
+    carried: bool,
+}
+
 struct ClosePlanner<'a, V> {
     vault: &'a V,
     day_path: &'a Path,
@@ -1810,10 +1838,10 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
 
     fn row_warning(&mut self, index: usize, message: String) {
         self.warn(message.clone());
-        if let Some(task) = self.tasks.get_mut(index) {
-            if task.warning.is_none() {
-                task.warning = Some(message);
-            }
+        if let Some(task) = self.tasks.get_mut(index)
+            && task.warning.is_none()
+        {
+            task.warning = Some(message);
         }
     }
 
@@ -1826,28 +1854,26 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
 
     fn register_reference(
         &mut self,
-        from_path: &Path,
-        path_part: &str,
-        block_id: &str,
-        role: CloseTaskRole,
-        block_link: &str,
-        ledger_line: usize,
-        carried: bool,
+        target: CloseTaskRef<'_>,
         allow_non_task: bool,
     ) -> Result<Option<TaskKey>, PomodoroClosePlanError> {
-        let path = match self.vault.resolve_target(from_path, path_part) {
+        let path = match self
+            .vault
+            .resolve_target(target.from_path, target.path_part)
+        {
             LinkResolution::Found(path) => path,
             LinkResolution::Ambiguous => {
                 let warning = format!(
-                    "{block_link} has an ambiguous note basename; the target was left unchanged"
-                );
+                        "{} has an ambiguous note basename; the target was left unchanged",
+                        target.block_link
+                    );
                 self.register_unresolved(
-                    path_part,
-                    block_id,
-                    role,
-                    block_link,
-                    ledger_line,
-                    carried,
+                    target.path_part,
+                    target.block_id,
+                    target.role,
+                    target.block_link,
+                    target.ledger_line,
+                    target.carried,
                     None,
                     warning,
                 );
@@ -1855,25 +1881,26 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             }
             LinkResolution::Missing => {
                 let warning = format!(
-                    "{block_link} does not resolve to a vault note; the target was left unchanged"
-                );
+                        "{} does not resolve to a vault note; the target was left unchanged",
+                        target.block_link
+                    );
                 self.register_unresolved(
-                    path_part,
-                    block_id,
-                    role,
-                    block_link,
-                    ledger_line,
-                    carried,
+                    target.path_part,
+                    target.block_id,
+                    target.role,
+                    target.block_link,
+                    target.ledger_line,
+                    target.carried,
                     None,
                     warning,
                 );
                 return Ok(None);
             }
         };
-        let key = (path.clone(), block_id.to_string());
+        let key = (path.clone(), target.block_id.to_string());
         if let Some(index) = self.task_indices.get(&key).copied() {
             if let Some(task) = self.tasks.get_mut(index) {
-                task.carried |= carried;
+                task.carried |= target.carried;
             }
             return Ok(self.tasks[index].resolved.then_some(key));
         }
@@ -1882,15 +1909,16 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         let contents = self.read_file(&path)?;
         let Some(contents) = contents else {
             let warning = format!(
-                "{block_link} resolves to {relative_target}, which cannot be read; the target was left unchanged"
+                "{} resolves to {relative_target}, which cannot be read; the target was left unchanged",
+                target.block_link
             );
             self.register_unresolved(
-                path_part,
-                block_id,
-                role,
-                block_link,
-                ledger_line,
-                carried,
+                target.path_part,
+                target.block_id,
+                target.role,
+                target.block_link,
+                target.ledger_line,
+                target.carried,
                 Some(path),
                 warning,
             );
@@ -1901,23 +1929,23 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         } else {
             &self.settings
         };
-        match lookup_task(&contents, settings, block_id) {
+        match lookup_task(&contents, settings, target.block_id) {
             Ok(note_task) => {
                 let index = self.tasks.len();
                 self.tasks.push(PomodoroCloseTask {
-                    role,
-                    block_link: block_link.to_string(),
-                    ledger_line,
+                    role: target.role,
+                    block_link: target.block_link.to_string(),
+                    ledger_line: target.ledger_line,
                     resolved: true,
                     relative_target: Some(relative_target),
-                    block_id: block_id.to_string(),
-                    text: Some(note_task.description.clone()),
+                    block_id: target.block_id.to_string(),
+                    text: Some(close_task_text(&note_task.description)),
                     previous_status_symbol: Some(note_task.status_symbol),
                     previous_status_name: Some(note_task.status_name.clone()),
                     status_symbol: Some(note_task.status_symbol),
                     status_name: Some(note_task.status_name.clone()),
                     status_changed: false,
-                    carried,
+                    carried: target.carried,
                     work_log: Vec::new(),
                     work_log_created: false,
                     warning: None,
@@ -1928,23 +1956,24 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             }
             Err(reason) => {
                 let warning = format!(
-                    "{block_link} in {relative_target} {reason}; the target was left unchanged"
+                    "{} in {relative_target} {reason}; the target was left unchanged",
+                    target.block_link
                 );
                 let index = self.tasks.len();
                 self.tasks.push(PomodoroCloseTask {
-                    role,
-                    block_link: block_link.to_string(),
-                    ledger_line,
+                    role: target.role,
+                    block_link: target.block_link.to_string(),
+                    ledger_line: target.ledger_line,
                     resolved: false,
                     relative_target: Some(relative_target),
-                    block_id: block_id.to_string(),
+                    block_id: target.block_id.to_string(),
                     text: None,
                     previous_status_symbol: None,
                     previous_status_name: None,
                     status_symbol: None,
                     status_name: None,
                     status_changed: false,
-                    carried,
+                    carried: target.carried,
                     work_log: Vec::new(),
                     work_log_created: false,
                     warning: Some(warning.clone()),
@@ -2053,7 +2082,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         };
         if let Some(row) = self.tasks.get_mut(index) {
             row.resolved = true;
-            row.text = Some(task.description.clone());
+            row.text = Some(close_task_text(&task.description));
             row.status_symbol = Some(task.status_symbol);
             row.status_name = Some(task.status_name.clone());
             row.status_changed =
@@ -2068,13 +2097,15 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
     ) -> Result<(), PomodoroClosePlanError> {
         let link = &target.wikilink;
         let Some(key) = self.register_reference(
-            self.day_path,
-            &target.path_part,
-            &target.block_id,
-            CloseTaskRole::Worked,
-            link,
-            target.line,
-            true,
+            CloseTaskRef {
+                from_path: self.day_path,
+                path_part: &target.path_part,
+                block_id: &target.block_id,
+                role: CloseTaskRole::Worked,
+                block_link: link,
+                ledger_line: target.line,
+                carried: true,
+            },
             false,
         )?
         else {
@@ -2117,13 +2148,15 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             return Ok(());
         }
         let Some(key) = self.register_reference(
-            from_path,
-            &target.path_part,
-            &target.block_id,
-            role,
-            &target.wikilink,
-            ledger_line,
-            false,
+            CloseTaskRef {
+                from_path,
+                path_part: &target.path_part,
+                block_id: &target.block_id,
+                role,
+                block_link: &target.wikilink,
+                ledger_line,
+                carried: false,
+            },
             true,
         )?
         else {
@@ -2198,7 +2231,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         for group in &ledger.work_log_groups {
             let block_link =
                 format!("[[{}#^{}]]", group.path_part, group.block_id);
-            let role = ledger
+            let (role, carried) = ledger
                 .classified_links
                 .iter()
                 .find(|link| {
@@ -2206,16 +2239,18 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                         && link.path_part == group.path_part
                         && link.block_id == group.block_id
                 })
-                .map(|link| close_role(link.role))
-                .unwrap_or(CloseTaskRole::Mentioned);
+                .map(|link| (close_role(link.role), link.carried))
+                .unwrap_or((CloseTaskRole::Mentioned, false));
             let Some(key) = self.register_reference(
-                self.day_path,
-                &group.path_part,
-                &group.block_id,
-                role,
-                &block_link,
-                group.source_line,
-                true,
+                CloseTaskRef {
+                    from_path: self.day_path,
+                    path_part: &group.path_part,
+                    block_id: &group.block_id,
+                    role,
+                    block_link: &block_link,
+                    ledger_line: group.source_line,
+                    carried,
+                },
                 false,
             )?
             else {
@@ -2253,11 +2288,11 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     continue;
                 };
                 self.save_file(&key.0, write.contents);
-                if let Some(index) = self.task_indices.get(&key).copied() {
-                    if let Some(row) = self.tasks.get_mut(index) {
-                        row.work_log.extend(write.entries);
-                        row.work_log_created = true;
-                    }
+                if let Some(index) = self.task_indices.get(&key).copied()
+                    && let Some(row) = self.tasks.get_mut(index)
+                {
+                    row.work_log.extend(write.entries);
+                    row.work_log_created = true;
                 }
                 cursor = Some(write.next_cursor);
             }
@@ -2349,15 +2384,18 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
         ClosePlanner::new(vault, day_path, day_contents, &ledger, now);
 
     for link in &ledger.classified_links {
+        let allow_non_task = link.role == LedgerLinkRole::Embedded;
         let _ = planner.register_reference(
-            day_path,
-            &link.path_part,
-            &link.block_id,
-            close_role(link.role),
-            &link.raw_target,
-            link.line,
-            link.carried,
-            link.role == LedgerLinkRole::Embedded,
+            CloseTaskRef {
+                from_path: day_path,
+                path_part: &link.path_part,
+                block_id: &link.block_id,
+                role: close_role(link.role),
+                block_link: &link.raw_target,
+                ledger_line: link.line,
+                carried: link.carried,
+            },
+            allow_non_task,
         )?;
     }
     for target in &ledger.startable_targets {
@@ -2381,10 +2419,10 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
     let changed_files = planner
         .staged
         .iter()
-        .filter_map(|(path, contents)| {
-            (planner.originals.get(path) != Some(contents))
-                .then(|| (path.clone(), contents.clone()))
+        .filter(|(path, contents)| {
+            planner.originals.get(*path) != Some(*contents)
         })
+        .map(|(path, contents)| (path.clone(), contents.clone()))
         .collect();
     Ok(PomodoroClosePlan {
         changed_files,
@@ -2434,12 +2472,12 @@ fn lookup_task(
 fn embedded_children(contents: &str, task: &NoteTask) -> Vec<BlockLinkTarget> {
     let spans = line_spans(contents);
     let mut children = Vec::new();
-    for index in task.line_index + 1..spans.len() {
-        if spans[index].end > task.block_end {
+    for (index, span) in spans.iter().enumerate().skip(task.line_index + 1) {
+        if span.end > task.block_end {
             break;
         }
         children.extend(
-            wikilink_tokens(spans[index].text)
+            wikilink_tokens(span.text)
                 .iter()
                 .filter(|token| token.embedded)
                 .map(|token| target_from_token(index + 1, token)),
@@ -2883,8 +2921,8 @@ mod linked_task_tests {
             .warnings
             .iter()
             .any(|message| message.contains("non-task")));
-        assert!(plan.changed_files.get(Path::new("duplicates.md")).is_none());
-        assert!(plan.changed_files.get(Path::new("not-task.md")).is_none());
+        assert!(!plan.changed_files.contains_key(Path::new("duplicates.md")));
+        assert!(!plan.changed_files.contains_key(Path::new("not-task.md")));
     }
 
     #[test]

@@ -952,16 +952,16 @@ mod tests {
 
         let link = json("@r:id=x");
         assert_eq!(link["mode"], "pomodoro_link");
-        assert_eq!(link["pomodoro_close"]["raw"], "x");
+        assert_eq!(link["pomodoro_close"]["raw"], "=x");
         assert!(link["diagnostics"].as_array().expect("diags").is_empty());
 
         let caret = json("^r:id=x");
         assert_eq!(caret["mode"], "pomodoro_link");
-        assert_eq!(caret["pomodoro_close"]["raw"], "x");
+        assert_eq!(caret["pomodoro_close"]["raw"], "=x");
 
         let task = json("Text @r:id=x");
         assert_eq!(task["mode"], "pomodoro_task");
-        assert_eq!(task["pomodoro_close"]["raw"], "x");
+        assert_eq!(task["pomodoro_close"]["raw"], "=x");
 
         let shape = json("=x more");
         assert_eq!(shape["mode"], "pomodoro_close");

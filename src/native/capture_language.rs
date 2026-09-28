@@ -2025,7 +2025,7 @@ fn parse_colon_link_tail(
         None => None,
         Some(raw) if raw.eq_ignore_ascii_case("x") => {
             Some(SessionSuffix::Close(PomodoroCloseSpec {
-                raw: raw.to_string(),
+                raw: format!("={raw}"),
             }))
         }
         Some(raw) => {
@@ -5047,7 +5047,7 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         None => None,
         Some(raw) if raw.eq_ignore_ascii_case("x") => {
             close_spec = Some(PomodoroCloseSpec {
-                raw: raw.to_string(),
+                raw: format!("={raw}"),
             });
             None
         }
@@ -5102,7 +5102,7 @@ fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         kind: SpanKind::PomodoroStart,
     });
     let close_suffix = close_spec.as_ref().map(|spec| MarkerSuffix {
-        len: 1 + spec.raw.len(),
+        len: spec.raw.len(),
         kind: SpanKind::PomodoroClose,
     });
     let mut marker_parse = marker_parse(
@@ -7959,6 +7959,22 @@ mod tests {
                         .and_then(|pomodoro| pomodoro.name.as_deref()),
                     "{raw}"
                 );
+            }
+            // The close `raw` keeps the typed `=`, so parse and execution
+            // agree on link forms as well as whole-item closes.
+            if let CaptureKind::Pomodoro { close, .. } = &executed.kind {
+                match close {
+                    Some(expected) => {
+                        let actual =
+                            parse.pomodoro_close.as_ref().expect("close spec");
+                        assert_eq!(actual.raw, expected.raw, "{raw}");
+                    }
+                    None => assert!(parse.pomodoro_close.is_none(), "{raw}"),
+                }
+            }
+            if let CaptureKind::PomodoroClose { spec } = &executed.kind {
+                let actual = parse.pomodoro_close.as_ref().expect("close spec");
+                assert_eq!(actual.raw, spec.raw, "{raw}");
             }
             assert!(parse.diagnostics.is_empty(), "{raw}");
         }
