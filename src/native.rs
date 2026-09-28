@@ -39,6 +39,7 @@ mod collect_done;
 mod config;
 mod dataview;
 mod env;
+mod gkeep;
 mod highlights_ref;
 mod markdown;
 mod nightly;
@@ -71,6 +72,7 @@ pub(crate) enum NativeCommand {
     CaptureTaskId,
     CaptureTaskSections,
     CaptureTasks,
+    Gkeep,
     Query,
     Highlights,
     MoveDoneTasks,
@@ -109,6 +111,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::CaptureTaskId => capture_task_id::run(args),
         NativeCommand::CaptureTaskSections => capture_task_sections::run(args),
         NativeCommand::CaptureTasks => capture_tasks::run(args),
+        NativeCommand::Gkeep => gkeep::run(args),
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),
         NativeCommand::MoveDoneTasks => collect_done::run(args),

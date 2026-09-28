@@ -51,6 +51,11 @@ install-smoke:
     "${root}/bin/bob" capture-task-id --help >/dev/null
     "${root}/bin/bob" capture-task-sections --help >/dev/null
     "${root}/bin/bob" capture-tasks --help >/dev/null
+    "${root}/bin/bob" gkeep --help >/dev/null
+    "${root}/bin/bob" gkeep doctor --help >/dev/null
+    "${root}/bin/bob" gkeep list --help >/dev/null
+    "${root}/bin/bob" gkeep login --help >/dev/null
+    "${root}/bin/bob" gkeep pull --help >/dev/null
     "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" randomize --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null

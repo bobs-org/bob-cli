@@ -97,6 +97,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::CaptureTasks,
     },
     Subcommand {
+        name: "gkeep",
+        script_command: None,
+        about: "Drain the Google Keep inbox into Obsidian tasks",
+        native_command: NativeCommand::Gkeep,
+    },
+    Subcommand {
         name: "highlights",
         script_command: None,
         about: "Sync Highlights PDF annotations into reference notes",
@@ -342,6 +348,10 @@ Examples:
                                  List picker tasks for one capture target
   bob query --source '#project'
                                  Print matching note paths
+  bob gkeep
+                                 Drain the Google Keep inbox into Obsidian tasks
+  bob gkeep pull --dry-run
+                                 Preview the exact Markdown a pull would write
   bob randomize --dry-run
                                  Preview bulk re-roll of due prioritized tasks
   bob highlights create report.md

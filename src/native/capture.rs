@@ -1824,7 +1824,7 @@ pub(crate) fn route_label(route: &str) -> String {
     format!("{route}.md")
 }
 
-fn format_task_line(
+pub(crate) fn format_task_line(
     body: &str,
     created: &str,
     priority: Option<(&str, &str)>,

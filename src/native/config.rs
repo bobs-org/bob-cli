@@ -66,6 +66,16 @@ pub(crate) struct HighlightsConfig {
     pre_scan_hook: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct GkeepSettings {
+    pub(crate) email: Option<String>,
+    pub(crate) token_command: Option<String>,
+    pub(crate) token_store_command: Option<String>,
+    pub(crate) device_id: Option<String>,
+    pub(crate) target: Option<String>,
+    pub(crate) timeout_secs: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PriorityLevel {
     label: String,
@@ -291,6 +301,8 @@ struct RawConfig {
     properties: Vec<RawProperty>,
     #[serde(default)]
     highlights: Option<RawHighlights>,
+    #[serde(default)]
+    gkeep: Option<RawGkeep>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,6 +335,22 @@ struct RawHighlights {
     pre_scan_hook: Option<String>,
     #[serde(default)]
     pre_scan_command: Option<serde_yaml::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGkeep {
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    token_command: Option<String>,
+    #[serde(default)]
+    token_store_command: Option<String>,
+    #[serde(default)]
+    device_id: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
 }
 
 fn parse_priority_property(
@@ -398,6 +426,45 @@ fn parse_priority_property(
     }
 
     Ok(PriorityProperty { name, levels })
+}
+
+pub(crate) fn load_gkeep_config(
+    path: &Path,
+) -> Result<GkeepSettings, ConfigError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(GkeepSettings::default());
+        }
+        Err(error) => {
+            return Err(ConfigError::Read(format!(
+                "read {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    parse_gkeep_config(&text, path)
+}
+
+fn parse_gkeep_config(
+    text: &str,
+    path: &Path,
+) -> Result<GkeepSettings, ConfigError> {
+    let config: RawConfig = serde_yaml::from_str(text).map_err(|error| {
+        ConfigError::Invalid(format!("parse {}: {error}", path.display()))
+    })?;
+
+    Ok(config
+        .gkeep
+        .map(|raw| GkeepSettings {
+            email: raw.email,
+            token_command: raw.token_command,
+            token_store_command: raw.token_store_command,
+            device_id: raw.device_id,
+            target: raw.target,
+            timeout_secs: raw.timeout_secs,
+        })
+        .unwrap_or_default())
 }
 
 fn parse_highlights_config(
@@ -608,6 +675,92 @@ properties:
         .expect("valid config without highlights block");
 
         assert_eq!(config.pre_scan_hook(), None);
+    }
+
+    #[test]
+    fn missing_gkeep_file_loads_defaults() {
+        let settings =
+            load_gkeep_config(Path::new("/definitely/missing/config.yml"))
+                .expect("missing file gives defaults");
+        assert_eq!(settings, GkeepSettings::default());
+    }
+
+    #[test]
+    fn parses_full_gkeep_section_and_ignores_unknown_keys() {
+        let settings = parse_gkeep_config(
+            r#"
+unknown_top_level: ignored
+gkeep:
+  email: bryanbugyi34@gmail.com
+  token_command: "pass show gkeep/master_token"
+  token_store_command: "pass insert -m -f gkeep/master_token"
+  device_id: 3f9c0a1b2c3d4e5f
+  target: gkeep_inbox.md
+  timeout_secs: 300
+  future_key: ignored
+"#,
+            Path::new("/config.yml"),
+        )
+        .expect("valid gkeep config");
+
+        assert_eq!(
+            settings,
+            GkeepSettings {
+                email: Some("bryanbugyi34@gmail.com".to_string()),
+                token_command: Some("pass show gkeep/master_token".to_string()),
+                token_store_command: Some(
+                    "pass insert -m -f gkeep/master_token".to_string()
+                ),
+                device_id: Some("3f9c0a1b2c3d4e5f".to_string()),
+                target: Some("gkeep_inbox.md".to_string()),
+                timeout_secs: Some(300),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_absent_gkeep_section_as_defaults() {
+        let settings = parse_gkeep_config(
+            r#"
+properties:
+  - name: priority
+    values: priority
+"#,
+            Path::new("/config.yml"),
+        )
+        .expect("valid config without gkeep block");
+
+        assert_eq!(settings, GkeepSettings::default());
+    }
+
+    #[test]
+    fn rejects_invalid_gkeep_yaml() {
+        let error = parse_gkeep_config(
+            "gkeep:\n\ttimeout_secs: [unclosed",
+            Path::new("/config.yml"),
+        )
+        .expect_err("invalid YAML must be rejected");
+
+        assert!(
+            error.message().contains("parse /config.yml"),
+            "invalid YAML must name the file: {}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn rejects_non_numeric_gkeep_timeout() {
+        let error = parse_gkeep_config(
+            "gkeep:\n  timeout_secs: soon\n",
+            Path::new("/config.yml"),
+        )
+        .expect_err("non-numeric timeout must be rejected");
+
+        assert!(
+            error.message().contains("parse /config.yml"),
+            "bad value must name the file: {}",
+            error.message()
+        );
     }
 
     #[test]

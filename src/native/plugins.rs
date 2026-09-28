@@ -16,7 +16,7 @@ use similar::{ChangeTag, TextDiff};
 
 use super::{
     env as bob_env, ob,
-    style::{display_width, pad_right, Styler},
+    style::{display_width, pad_right, terminal_width, truncate, Styler},
 };
 
 const COMMAND_NAME: &str = "bob plugins";
@@ -25,8 +25,6 @@ const VAULT_PLUGINS_SUBDIR: &str = ".obsidian/plugins";
 const COMMUNITY_PLUGINS_FILE: &str = ".obsidian/community-plugins.json";
 /// Files the repo owns and `bob plugins sync` deploys; never `data.json`.
 const MANAGED_FILES: &[&str] = &["manifest.json", "main.js", "styles.css"];
-/// Width target for the human table when `$COLUMNS` is unavailable.
-const DEFAULT_TERM_WIDTH: usize = 100;
 const DIFF_CONTEXT_LINES: usize = 3;
 const DIFF_BODY_LINE_LIMIT: usize = 60;
 const MINIFIED_BYTE_THRESHOLD: usize = 16 * 1024;
@@ -1520,25 +1518,6 @@ impl ColumnWidths {
 
 fn max_width<'a>(values: impl Iterator<Item = &'a str>) -> usize {
     values.map(display_width).max().unwrap_or(0)
-}
-
-fn terminal_width() -> usize {
-    std::env::var("COLUMNS")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|width| *width > 0)
-        .unwrap_or(DEFAULT_TERM_WIDTH)
-}
-
-fn truncate(text: &str, width: usize) -> String {
-    if display_width(text) <= width {
-        return text.to_string();
-    }
-    if width == 0 {
-        return String::new();
-    }
-    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
-    format!("{kept}\u{2026}")
 }
 
 fn success_json(result: &PluginsResult) -> String {

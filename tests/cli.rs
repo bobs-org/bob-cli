@@ -502,6 +502,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
             "bob capture-task-sections",
         ),
         (&["capture-tasks", "--help"], "bob capture-tasks"),
+        (&["gkeep", "--help"], "bob gkeep"),
         (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob highlights"),
         (
@@ -564,6 +565,11 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             "bob capture-task-sections --help",
         ),
         (&["capture-tasks", "--help"], "bob capture-tasks --help"),
+        (&["gkeep", "--help"], "bob gkeep --help"),
+        (&["gkeep", "doctor", "--help"], "bob gkeep doctor --help"),
+        (&["gkeep", "list", "--help"], "bob gkeep list --help"),
+        (&["gkeep", "login", "--help"], "bob gkeep login --help"),
+        (&["gkeep", "pull", "--help"], "bob gkeep pull --help"),
         (&["query", "--help"], "bob query --help"),
         (&["highlights", "--help"], "bob highlights --help"),
         (

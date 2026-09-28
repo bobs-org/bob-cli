@@ -91,3 +91,28 @@ pub(crate) fn pad_right(text: &str, width: usize) -> String {
 pub(crate) fn display_width(text: &str) -> usize {
     text.chars().count()
 }
+
+/// Width target for human tables when `$COLUMNS` is unavailable.
+pub(crate) const DEFAULT_TERM_WIDTH: usize = 100;
+
+/// The terminal width for table layout: `$COLUMNS` when set, else the
+/// default target.
+pub(crate) fn terminal_width() -> usize {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|width| *width > 0)
+        .unwrap_or(DEFAULT_TERM_WIDTH)
+}
+
+/// Shorten `text` to `width` display columns with a trailing ellipsis.
+pub(crate) fn truncate(text: &str, width: usize) -> String {
+    if display_width(text) <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
+    format!("{kept}\u{2026}")
+}
