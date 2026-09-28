@@ -23,6 +23,7 @@ behavior.
 - [Task status hooks](#task-status-hooks)
 - [Projects](#projects)
 - [Randomize](#randomize)
+- [Gkeep](#gkeep)
 - [Plugins](#plugins)
 - [Highlights](#highlights)
 - [Nightly maintenance](#nightly-maintenance)
@@ -152,6 +153,7 @@ Bob's workflow commands are:
 | `capture-task-id` | Assign a user-authored block ID to an open capture task |
 | `capture-task-sections` | List the ALL-CAPS child sections of a capture task |
 | `capture-tasks` | List the open tasks in a routed note |
+| [`gkeep`](#gkeep) | Drain the Google Keep inbox into Obsidian tasks |
 | [`highlights`](#highlights) | Synchronize Highlights PDF annotations with reference notes |
 | [`move-done-tasks`](#move-done-tasks) | Archive done and canceled task blocks and repair their links |
 | [`nightly`](#nightly-maintenance) | Run the Git sync and maintenance workflow |
@@ -447,6 +449,26 @@ changes unless `-F, --force` is set, and writes timestamped backups first.
 
 The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 
+## Gkeep
+
+```bash
+bob gkeep [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
+bob gkeep list [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
+bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-q|--quiet]
+bob gkeep login [-e|--email EMAIL]
+bob gkeep doctor [-b|--bob-dir DIR] [-f|--format human|json]
+```
+
+Moves every Google Keep inbox note into `gkeep_inbox.md` as an Obsidian task
+and archives each note in Keep only after its current content is provably in
+the vault. Running `bob gkeep` with no subcommand runs `list`: Keep notes
+and vault tasks side by side with per-note pull states. `pull -d` previews
+the exact Markdown, `pull -n` writes without archiving, and `pull` writes,
+verifies, commits, then archives. `login` is the one-time token setup and
+`doctor` diagnoses the whole chain.
+
+The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
+
 ## Highlights
 
 ```bash
@@ -672,6 +694,10 @@ The documented workflows use these external-tool integrations:
   `BOB_PANDOC_COMMAND`
 - `bash` for the embedded shell fallback and for sourcing
   `~/.ssh-agent-thing`; the Pomodoro shell fallback additionally uses `perl`
+- `uv` for `bob gkeep`: it fetches Python ≥3.10 and the pinned `gkeepapi` on
+  first run (override the whole spawn with `BOB_GKEEP_ADAPTER`)
+- `pass` for the default `bob gkeep` token store (`token_command` and
+  `token_store_command` in the `gkeep:` config section)
 
 No old chezmoi script files are required after installation. Cargo installs the
 Rust binaries, and the binaries carry the script assets they need.
@@ -732,6 +758,11 @@ and Pomodoro-note `bob capture` requests, `bob task-status-hooks`, and
 `bob randomize`.
 
 `BOB_DIR` sets the Bob vault directory. It defaults to `~/bob`.
+
+`BOB_GKEEP_ADAPTER` is the path of an executable that speaks the Keep adapter
+protocol and replaces `uv run --script …` for `bob gkeep`. It is the test
+hook: tests point it at a fake adapter and configure everything else through
+a temporary config file.
 
 `BOB_HIGHLIGHTS_LIB_DIR` sets the Highlights PDF library directory used by
 `bob highlights`. It defaults to `lib` under `BOB_DIR`. Relative values are
@@ -871,4 +902,5 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |
 | Custom plugin list and vault deploy | [`docs/plugins.md`](docs/plugins.md) |
 | Project `^prj` lifecycle and schedules | [`docs/projects.md`](docs/projects.md) |
+| Google Keep inbox drain into Obsidian tasks | [`docs/gkeep.md`](docs/gkeep.md) |
 | Pomodoro-driven task status sync | [`docs/task-status-hooks.md`](docs/task-status-hooks.md) |

@@ -8,6 +8,7 @@ index, and environment variables.
 | --- | --- |
 | [capture.md](capture.md) | Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery) |
 | [dataview.md](dataview.md) | `bob query` Dataview and Tasks |
+| [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into Obsidian tasks |
 | [highlights-ref-sync.md](highlights-ref-sync.md) | `bob highlights` PDF intake and reference notes |
 | [obsidian-sync-exclusions.md](obsidian-sync-exclusions.md) | Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only |
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
