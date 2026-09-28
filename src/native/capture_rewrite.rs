@@ -430,6 +430,19 @@ mod tests {
     }
 
     #[test]
+    fn close_items_are_never_rewritten() {
+        for raw in ["=x", "=X", "=", "@r:id=x", "^r:id=x", "Text @r:id=x"] {
+            let value = json(raw, None);
+            assert_eq!(value["changed"], false, "{raw}");
+            assert_eq!(value["text"], raw, "{raw}");
+        }
+        // A `@@` declaration leaves a close item alone with a notice.
+        let value = json("@@foo\n=x", None);
+        assert_eq!(value["changed"], false);
+        assert_eq!(value["text"], "@@foo\n=x");
+    }
+
+    #[test]
     fn missing_text_reports_a_usage_error() {
         assert_eq!(
             missing_text_error(),

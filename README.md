@@ -198,6 +198,9 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id[#pomodoro][=<X>]` with no other text | Link the existing task into today's ledger (no new task); `=<X>` starts the resolved session |
 | `^route:id[#pomodoro][=<X>]` with no other text | Identical execution; `^` completes only In Progress and Next tasks |
 | `+N` / `-N` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-2` shortens 10m); the item must contain only the signed count |
+| `=x` | Close today's running timed Pomodoro (case-insensitive `=X`); the item must contain only `=x` |
+| `@route:id=x` / `^route:id=x` with no other text | Put that existing task into the running session, then close it |
+| `<text> @route:id=x` | Create the new task in the running session, then close it |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
@@ -254,6 +257,15 @@ adjustment with an ordinary item across blank lines. The item must contain
 only the signed count; `Plan +5` stays prose, and forced route/task/clipboard
 options are rejected on adjustments.
 
+Capture a whole item `=x` to close today's running timed Pomodoro the way
+Obsidian's Ctrl+Enter completion does, plus an auto-decrement that shortens
+an early-stopped session to the earliest five-minute step at or after now:
+`bob capture =x` closes the session, `bob capture '^bob:capture-stop=x'`
+puts that task into the running session then closes it, and
+`printf -- '-2\n\n=x\n' | bob capture` adjusts then closes atomically. See
+`docs/capture.md` for the classification, carry, Work Log, link-form,
+diagnostic, JSON, and batch rules.
+
 ```bash
 bob capture buy milk @groceries
 bob capture '@dev^foobar' 'Some ordinary task.'
@@ -262,6 +274,8 @@ bob capture '@dev:foobar#bugs' 'Some foobar task.'
 bob capture 'Write outline @sase:outline=3'
 bob capture +5
 bob capture -- -2
+bob capture =x
+bob capture '^bob:capture-stop=x'
 bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'
 bob capture '@cash+goog-exit'
 bob capture '@cash+goog-exit!'

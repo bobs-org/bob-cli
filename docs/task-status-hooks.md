@@ -8,6 +8,9 @@ Progress, and Blocked markers consistent with today's ledger.
 
 In practice it:
 
+- Owns vault-wide Blocked recovery and completed-reference retirement,
+  including after a `bob capture =x` close, which deliberately leaves both
+  to this command
 - Promotes tasks linked under today's open Pomodoros to Next (`[*]`), leaving
   In Progress (`[/]`) alone
 - Follows transcluded dependency bullets (`![[note#^id]]` as the entire child)

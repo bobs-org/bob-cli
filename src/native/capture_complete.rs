@@ -129,7 +129,10 @@ missing daily note, a missing Pomodoros section, and multiple open timed \
 Pomodoros stay write-free warnings without a create row. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` start suffix is \
 never completable: block and Pomodoro-name replacement ranges end before \
 the `=`, a cursor inside the suffix returns an empty success, and accepting \
-a candidate preserves the typed suffix. A whole-item `+N`/`-N` Pomodoro adjustment is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Pomodoro block-ID \
+a candidate preserves the typed suffix. The `=x` close suffix behaves the \
+same way: it is never a completion field, replacements still stop before \
+`#`/`=`, and a cursor inside `=x` returns an empty success. A whole-item \
+`+N`/`-N` Pomodoro adjustment or `=x`/`=` close is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
 `bob capture-tasks` and, by default, only offer tasks that already carry a \
@@ -146,8 +149,8 @@ each group. A solo leading '^' token completes active tasks instead: the \
 IDs, ordered by today's open-Pomodoro Task Links, and accepting a row \
 inserts the full `route:block-id` in one step while a typed `#name`/`=<X>` \
 suffix survives. A `#name` after `^route:block-id` completes Pomodoro names \
-exactly as it does after `@route:block-id`, and a cursor inside `=<X>` \
-offers nothing. The authored ID portion of '@route^block-id' has no \
+exactly as it does after `@route:block-id`, and a cursor inside `=<X>` or \
+`=x` offers nothing. The authored ID portion of '@route^block-id' has no \
 completion source and returns an empty success. An empty block-ID component \
 ('@route+#') returns a successful empty task-section list; an unresolvable \
 parent task returns a successful empty list plus one bounded warning. Other \
@@ -1667,6 +1670,35 @@ mod tests {
         });
         assert_eq!(empty.context, None);
         assert_eq!(empty.candidates.len(), 0);
+    }
+
+    #[test]
+    fn close_items_and_suffixes_request_no_completion() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-close");
+        let day_file = active_task_fixture(temp.path());
+        // Whole-item `=x`/`=` are actions: empty success everywhere.
+        for (raw, cursor) in [("=x", 2), ("=", 1), ("=x more", 3)] {
+            let empty = with_env("BOB_DAY_FILE", &day_file, || {
+                result(temp.path(), raw, cursor)
+            });
+            assert_eq!(empty.context, None, "{raw}");
+            assert_eq!(empty.candidates.len(), 0, "{raw}");
+        }
+        // Inside a `=x` suffix there is no completion field.
+        for raw in ["^sase:deep-fix=x", "Text @sase:deep-fix=x"] {
+            let empty = with_env("BOB_DAY_FILE", &day_file, || {
+                result(temp.path(), raw, raw.len())
+            });
+            assert_eq!(empty.context, None, "{raw}");
+            assert_eq!(empty.candidates.len(), 0, "{raw}");
+        }
+        // Before the `=` the link still completes.
+        let raw = "^sase:deep-fix=x";
+        let link = with_env("BOB_DAY_FILE", &day_file, || {
+            result(temp.path(), raw, 14)
+        });
+        assert_eq!(link.context, Some(CompletionContext::ActiveTask));
     }
 
     #[test]

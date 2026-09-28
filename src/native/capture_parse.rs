@@ -15,7 +15,7 @@ use super::{
     capture_language::{
         self, AuthoredSubBullet, Diagnostic, EditorGlobalDestination,
         EditorItemParse, EditorMode, Need, PomodoroAdjustSpec,
-        PomodoroStartSpec, Severity, Span,
+        PomodoroCloseSpec, PomodoroStartSpec, Severity, Span,
     },
     capture_links,
     style::Styler,
@@ -79,7 +79,8 @@ declaration token anywhere in the draft, ordered blank-line-separated item summa
 inheritance, the UTF-8 byte spans of every recognized token, Obsidian wikilink \
 component spans, every authored sub-bullet's normalized body plus depth, \
 an optional pomodoro_start object for a `@<route>:<block-id>[#<name>]=<X>` \
-start suffix, and structured diagnostics. \
+start suffix, an optional pomodoro_close object for a `=x` close suffix or \
+whole-item close, and structured diagnostics. \
 Wikilink highlighting is syntax-only and never touches the vault. Byte \
 offsets index the original TEXT before whitespace normalization, are \
 half-open [start, end), never overlap, and always land on a character \
@@ -114,7 +115,19 @@ standalone counts (`+0`, overflow) and malformed adjustment-first items \
 `+`/`-` is an incomplete editing state, while `bob capture` keeps its \
 strict execution errors for the same text. Other nonmatching words retain \
 normal task semantics. An adjustment is an action and requests no route or \
-task completion candidates. \
+task completion candidates. A whole-item `=x` close (case-insensitive \
+`=X`) reports mode 'pomodoro_close' with a `pomodoro_close` object (`raw`) \
+and a `pomodoro_close` span covering the token; a lone `=` is an \
+'incomplete' editing state, while a leading `=x` token with extra text, \
+markers, or child lines reports 'pomodoro_close' plus an \
+`invalid_pomodoro_close` diagnostic on the extra text or child line. Other \
+`=`-prefixed tokens (`=3`, `=xx`, `=x!`, `==`) and mid-body `=x` stay \
+ordinary prose. On link items the `=x` suffix spans as `pomodoro_close` \
+instead of `pomodoro_start`: `@r:id=x` and `^r:id=x` stay 'pomodoro_link' \
+(or 'pomodoro_task' with body text) and carry the spec, while `#name=x`, \
+`s:<N>`/`p:<N>`/`%` conflicts, and project-note `=x` report \
+`invalid_pomodoro_close` on the conflicting component. A `@@` declaration \
+never applies to `=x` items, and `=x` is never rewritten. \
 A '@^id+' or \
 '@:id+' marker already carries the project-note intent: it reports mode \
 'project_note' or 'pomodoro_project_note' with a 'route' need until the \
@@ -150,7 +163,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_link, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '@r:id=x'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_link, pomodoro_close, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -273,6 +286,12 @@ struct CaptureParseResult {
     /// ledger times.
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_adjust: Option<PomodoroAdjustSpec>,
+    /// Validated additive `=x` close suffix: the typed `x` text as `raw`.
+    /// Omitted for every older input, so schema version 1 is unchanged
+    /// for inputs without a close. Purely lexical and never guesses
+    /// current ledger times.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_close: Option<PomodoroCloseSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -305,6 +324,8 @@ struct CaptureParseItem {
     pomodoro_start: Option<PomodoroStartSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_adjust: Option<PomodoroAdjustSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_close: Option<PomodoroCloseSpec>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -342,6 +363,7 @@ impl CaptureParseResult {
                 .map(global_destination_parse),
             pomodoro_start: parse.pomodoro_start,
             pomodoro_adjust: parse.pomodoro_adjust,
+            pomodoro_close: parse.pomodoro_close,
         }
     }
 }
@@ -386,6 +408,7 @@ fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
             sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
             pomodoro_start: item.pomodoro_start.clone(),
             pomodoro_adjust: item.pomodoro_adjust.clone(),
+            pomodoro_close: item.pomodoro_close.clone(),
         })
         .collect()
 }
@@ -467,6 +490,9 @@ fn print_human_success_with_styler(
     if let Some(adjust) = result.pomodoro_adjust.as_ref() {
         print_field(styler, "adjust", &format_pomodoro_adjust(adjust));
     }
+    if let Some(close) = result.pomodoro_close.as_ref() {
+        print_field(styler, "close", &format_pomodoro_close(close));
+    }
     if !result.needs.is_empty() {
         let needs = result
             .needs
@@ -541,6 +567,15 @@ fn format_pomodoro_adjust(adjust: &PomodoroAdjustSpec) -> String {
         adjust.units.saturating_mul(5),
         adjust.units
     )
+}
+
+/// Render a validated `=x` close suffix for human output: the typed token.
+fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
+    if close.raw.starts_with('=') {
+        close.raw.clone()
+    } else {
+        format!("={}", close.raw)
+    }
 }
 
 fn print_field(styler: &Styler, label: &str, value: &str) {
@@ -894,6 +929,65 @@ mod tests {
             value["pomodoro_start"],
             value["items"][0]["pomodoro_start"]
         );
+    }
+
+    #[test]
+    fn json_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
+        let value = json("=x");
+        assert_eq!(value["mode"], "pomodoro_close");
+        assert_eq!(value["body"], "=x");
+        assert_eq!(value["pomodoro_close"]["raw"], "=x");
+        assert_eq!(value["spans"][0]["kind"], "pomodoro_close");
+        assert_eq!(value["spans"][0]["start"], 0);
+        assert_eq!(value["spans"][0]["end"], 2);
+        assert!(value["diagnostics"].as_array().expect("diags").is_empty());
+
+        let upper = json("=X");
+        assert_eq!(upper["mode"], "pomodoro_close");
+        assert_eq!(upper["pomodoro_close"]["raw"], "=X");
+
+        let incomplete = json("=");
+        assert_eq!(incomplete["mode"], "incomplete");
+        assert!(incomplete.get("pomodoro_close").is_none(), "{incomplete}");
+
+        let link = json("@r:id=x");
+        assert_eq!(link["mode"], "pomodoro_link");
+        assert_eq!(link["pomodoro_close"]["raw"], "x");
+        assert!(link["diagnostics"].as_array().expect("diags").is_empty());
+
+        let caret = json("^r:id=x");
+        assert_eq!(caret["mode"], "pomodoro_link");
+        assert_eq!(caret["pomodoro_close"]["raw"], "x");
+
+        let task = json("Text @r:id=x");
+        assert_eq!(task["mode"], "pomodoro_task");
+        assert_eq!(task["pomodoro_close"]["raw"], "x");
+
+        let shape = json("=x more");
+        assert_eq!(shape["mode"], "pomodoro_close");
+        assert_eq!(shape["diagnostics"][0]["code"], "invalid_pomodoro_close");
+
+        let named = json("@r:id#n=x");
+        assert_eq!(named["diagnostics"][0]["code"], "invalid_pomodoro_close");
+
+        let scheduled = json("Text @r:id=x s:2");
+        assert_eq!(
+            scheduled["diagnostics"][0]["code"],
+            "invalid_pomodoro_close"
+        );
+
+        for raw in ["=3", "Plan =x"] {
+            let prose = json(raw);
+            assert_eq!(prose["mode"], "task", "{raw}");
+            assert!(prose.get("pomodoro_close").is_none(), "{raw}");
+        }
+
+        let raw = "+5\n\n=x\n\nCall bank @Cash+";
+        let mixed = json(raw);
+        assert_eq!(mixed["items"].as_array().expect("items").len(), 3);
+        assert_eq!(mixed["items"][0]["mode"], "pomodoro_adjust");
+        assert_eq!(mixed["items"][1]["mode"], "pomodoro_close");
+        assert_eq!(mixed["items"][1]["pomodoro_close"]["raw"], "=x");
     }
 
     #[test]
