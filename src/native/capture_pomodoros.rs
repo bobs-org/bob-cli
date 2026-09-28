@@ -447,6 +447,20 @@ pub(crate) fn scan(contents: &str) -> PomodoroScan {
     }
 }
 
+/// The next future Pomodoro in document order: the first entry the scan
+/// reports as open, a placeholder, and untimed. This single rule selects
+/// the unnamed link start's target, the whole-item `=` start's target, and
+/// the `=x` diagnostic's "next up" entry, so the three can never drift.
+pub(crate) fn next_future_pomodoro(
+    scan: &PomodoroScan,
+) -> Option<&PomodoroEntry> {
+    scan.entries.iter().find(|entry| {
+        entry.state == PomodoroState::Open
+            && entry.placeholder
+            && entry.time_range.is_none()
+    })
+}
+
 pub(crate) fn select_named<'a>(
     scan: &'a PomodoroScan,
     selector: &str,

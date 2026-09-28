@@ -23,7 +23,7 @@ use super::{
         ParsedCaptureItem, ParsedCaptureText, PomodoroAdjustSpec,
         PomodoroCloseSpec, PomodoroShiftSpec, PomodoroStartSpec,
         ProjectNotePomodoro, SubBulletTarget, TaskSectionSelector,
-        TaskToggleIntent,
+        TaskToggleIntent, POMODORO_START_FORCED_ERROR,
     },
     capture_pomodoro_close, capture_pomodoros, capture_project_note,
     capture_schedule_log, capture_task_sections, capture_task_toggle,
@@ -771,6 +771,11 @@ fn plan_capture_item(
             request, parsed, spec, now, today, planner, warnings,
         );
     }
+    if let CaptureKind::PomodoroStart { spec } = parsed.kind.clone() {
+        return plan_pomodoro_start_item(
+            request, parsed, spec, now, today, planner,
+        );
+    }
     if let CaptureKind::PomodoroAdjust { spec } = parsed.kind.clone() {
         return plan_pomodoro_adjust_item(
             request, parsed, spec, today, planner,
@@ -1090,6 +1095,9 @@ fn plan_capture_item(
         }
         CaptureKind::PomodoroClose { .. } => {
             unreachable!("pomodoro close capture is planned before this point")
+        }
+        CaptureKind::PomodoroStart { .. } => {
+            unreachable!("pomodoro start capture is planned before this point")
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);
@@ -1712,6 +1720,7 @@ fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::PomodoroShift { .. } => "pomodoro_shift",
         CaptureKind::PomodoroLink { .. } => "pomodoro_link",
         CaptureKind::PomodoroClose { .. } => "pomodoro_close",
+        CaptureKind::PomodoroStart { .. } => "pomodoro_start",
     }
 }
 
@@ -2071,6 +2080,11 @@ fn plan_capture_to_target(
                 "pomodoro close capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::PomodoroStart { .. } => {
+            return Err(CaptureError::io(
+                "pomodoro start capture invariant failed: wrong write planner",
+            ));
+        }
     };
     planner.stage(target, updated)?;
     Ok(CaptureWritePlan {
@@ -2144,6 +2158,28 @@ struct PomodoroStartSummary {
     pomodoro_line: usize,
     created_pomodoro: bool,
     time_range: String,
+    /// Queued Task Link rows for a whole-item start only. `None` (omitted)
+    /// for link and task starts, which stay byte-stable, and for whole-item
+    /// starts until the lineup phase fills them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tasks: Option<Vec<PomodoroStartTaskJson>>,
+}
+
+/// One queued Task Link row on a started Pomodoro, following the close
+/// row's explicit-null convention: unresolved rows carry `None` fields and
+/// a `warning` instead of failing the start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PomodoroStartTaskJson {
+    block_link: String,
+    embedded: bool,
+    ledger_line: usize,
+    resolved: bool,
+    relative_target: Option<String>,
+    block_id: String,
+    text: Option<String>,
+    status_symbol: Option<char>,
+    status_name: Option<String>,
+    warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2470,6 +2506,7 @@ fn plan_pomodoro_start(
                         pomodoro_line: moved_index + 1,
                         created_pomodoro: false,
                         time_range,
+                        tasks: None,
                     },
                 ));
             }
@@ -2503,16 +2540,13 @@ fn plan_pomodoro_start(
                         pomodoro_line: created_line + 1,
                         created_pomodoro: true,
                         time_range,
+                        tasks: None,
                     },
                 ));
             }
         }
     }
-    if let Some(entry) = scan.entries.iter().find(|entry| {
-        entry.state == capture_pomodoros::PomodoroState::Open
-            && entry.placeholder
-            && entry.time_range.is_none()
-    }) {
+    if let Some(entry) = capture_pomodoros::next_future_pomodoro(&scan) {
         let index = entry.line.checked_sub(1).ok_or_else(|| {
             CaptureError::io("Pomodoro capture invariant failed: placeholder entry has no line")
         })?;
@@ -2555,6 +2589,7 @@ fn plan_pomodoro_start(
                 pomodoro_line: moved_index + 1,
                 created_pomodoro: false,
                 time_range,
+                tasks: None,
             },
         ));
     }
@@ -2578,6 +2613,7 @@ fn plan_pomodoro_start(
             pomodoro_line: created_line + 1,
             created_pomodoro: true,
             time_range,
+            tasks: None,
         },
     ))
 }
@@ -3004,9 +3040,21 @@ fn select_running_session(
         })
         .collect::<Vec<_>>();
     if timed_open.is_empty() {
-        return Err(CaptureError::io(format!(
-            "Bob daily note has no open timed Pomodoro to {verb}"
-        )));
+        let mut message =
+            format!("Bob daily note has no open timed Pomodoro to {verb}");
+        if let Some(next) = capture_pomodoros::next_future_pomodoro(&scan) {
+            match next.name.as_deref().filter(|name| !name.is_empty()) {
+                Some(name) => message.push_str(&format!(
+                    "; next up is {name} at line {} (start it with `=`)",
+                    next.line,
+                )),
+                None => message.push_str(&format!(
+                    "; next up at line {} (start it with `=`)",
+                    next.line,
+                )),
+            }
+        }
+        return Err(CaptureError::io(message));
     }
     if timed_open.len() > 1 {
         return Err(CaptureError::io(format!(
@@ -3431,6 +3479,170 @@ fn plan_pomodoro_shift_item(
     })
 }
 
+fn reject_pomodoro_start_conflicts(
+    _parsed: &ParsedCaptureText,
+    request: &CaptureRequest,
+) -> Result<(), CaptureError> {
+    if !request.forced_destination_flags.is_empty()
+        || request.forced_route.is_some()
+        || request.forced_section.is_some()
+        || request.forced_sub_bullet_target.is_some()
+        || request.forced_task_section.is_some()
+        || request.forced_clip.is_some()
+    {
+        return Err(CaptureError::usage(
+            POMODORO_START_FORCED_ERROR.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn plan_pomodoro_start_item(
+    request: &CaptureRequest,
+    parsed: ParsedCaptureText,
+    spec: PomodoroStartSpec,
+    now: chrono::NaiveDateTime,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    reject_pomodoro_start_conflicts(&parsed, request)?;
+    let (start, end, duration_minutes, time_range) =
+        compute_pomodoro_start_range(now, &spec)?;
+    let day_file = pomodoro::day_file_for(&request.bob_dir);
+    let rel = close_day_relative(&request.bob_dir, &day_file);
+    if !planner.currently_exists(&day_file)? {
+        return Err(CaptureError::io(format!(
+            "no future Pomodoro to start: today's daily note `{rel}` does not exist"
+        )));
+    }
+    let staged = planner.read_existing(&day_file)?;
+    let scan = capture_pomodoros::scan(&staged);
+    if !scan.has_section {
+        return Err(CaptureError::io(
+            "Bob daily note has no Pomodoros section",
+        ));
+    }
+    let timed_open = scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == capture_pomodoros::PomodoroState::Open
+                && entry.time_range.is_some()
+        })
+        .collect::<Vec<_>>();
+    if timed_open.len() == 1 {
+        let running = timed_open[0];
+        let range = running.time_range.clone().unwrap_or_default();
+        let subject =
+            match running.name.as_deref().filter(|name| !name.is_empty()) {
+                Some(name) => format!("{name} {range}"),
+                None => format!("the current session {range}"),
+            };
+        let token = format!("={}", spec.raw);
+        return Err(CaptureError::io(format!(
+            "cannot start the next Pomodoro: {subject} is still running at line {}; close it with `=x` first, or capture `=x`, a blank line, then `{token}` to switch sessions",
+            running.line,
+        )));
+    }
+    if timed_open.len() > 1 {
+        return Err(CaptureError::io(
+            "cannot start the next Pomodoro: today's ledger has multiple open timed Pomodoros; finish all but one first",
+        ));
+    }
+    let Some(entry) = capture_pomodoros::next_future_pomodoro(&scan) else {
+        return Err(CaptureError::io(format!(
+            "no future Pomodoro to start: today's ledger (`{rel}`) has no open `- [ ] ()` placeholder (to start a task's session instead, use `^route:block-id=`)"
+        )));
+    };
+    let index = entry.line.checked_sub(1).ok_or_else(|| {
+        CaptureError::io(
+            "Pomodoro capture invariant failed: started entry is out of range",
+        )
+    })?;
+    let entry_name = entry.name.clone();
+    let (updated, moved_index) =
+        start_existing_pomodoro_entry(&staged, index, &time_range)?;
+    let task_line = line_spans(&updated)
+        .get(moved_index)
+        .map(|line| line.text.to_string())
+        .ok_or_else(|| {
+            CaptureError::io(
+                "Pomodoro capture invariant failed: started entry is out of range",
+            )
+        })?;
+    planner.stage(&day_file, updated)?;
+    let relative_target = day_file
+        .strip_prefix(&request.bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.clone());
+    let summary = PomodoroStartSummary {
+        start,
+        end,
+        duration_minutes,
+        offset_units: spec.offset_units,
+        pomodoro_name: entry_name.clone(),
+        pomodoro_line: moved_index + 1,
+        created_pomodoro: false,
+        time_range,
+        tasks: None,
+    };
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: false,
+            route: None,
+            route_label: String::new(),
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            target: day_file.display().to_string(),
+            text: parsed.body.clone(),
+            task_line,
+            kind: capture_kind_label(&parsed.kind),
+            created: date_string(today),
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: Placement::Started,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: None,
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: None,
+            status_symbol: None,
+            status_name: None,
+            previous_status_symbol: None,
+            previous_status_name: None,
+            pomodoro_name: entry_name,
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: Some(summary),
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            toggle_task_description: None,
+        },
+        clip_plan: None,
+    })
+}
+
 struct SnapshotCloseVault {
     bob_dir: PathBuf,
     resolver: vault_links::VaultLinkResolver,
@@ -3560,6 +3772,9 @@ fn close_no_running_error(
         message.push_str(&format!("; next up is {display} at line {line}"));
     } else if let Some(line) = next_line {
         message.push_str(&format!("; next up at line {line}"));
+    }
+    if link_hint.is_none() && next_line.is_some() {
+        message.push_str(" (start it with `=`)");
     }
     if let Some(hint) = link_hint {
         message.push_str(&format!(
@@ -5822,6 +6037,7 @@ fn plan_pomodoro_link_with_start(
                         pomodoro_line: dest_json.line,
                         created_pomodoro: false,
                         time_range: time_range.clone(),
+                        tasks: None,
                     };
                     return Ok(CaptureWritePlan {
                         placement: Placement::Linked,
@@ -5928,6 +6144,7 @@ fn plan_pomodoro_link_with_start(
                     pomodoro_line: dest_json.line,
                     created_pomodoro: false,
                     time_range: time_range.clone(),
+                    tasks: None,
                 };
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
@@ -6047,6 +6264,7 @@ fn plan_pomodoro_link_with_start(
                     pomodoro_line: dest_json.line,
                     created_pomodoro: true,
                     time_range: time_range.clone(),
+                    tasks: None,
                 };
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
@@ -6133,6 +6351,7 @@ fn plan_pomodoro_link_with_start(
         pomodoro_line: dest_json.line,
         created_pomodoro: false,
         time_range: time_range.clone(),
+        tasks: None,
     };
     let _ = (q_line_index, q_subtree_end);
     Ok(CaptureWritePlan {
@@ -7911,6 +8130,7 @@ enum Placement {
     Toggled,
     Linked,
     Closed,
+    Started,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -8253,6 +8473,19 @@ fn print_human_item_success(
         );
         return;
     }
+    if result.kind == "pomodoro_start" {
+        if let Some(start) = result.pomodoro_start.as_ref() {
+            print_human_pomodoro_start_success(
+                result,
+                start,
+                &styler,
+                &prefix,
+                &ordinal,
+                &target_label,
+            );
+            return;
+        }
+    }
     let verb = if result.dry_run {
         "would capture"
     } else {
@@ -8575,6 +8808,39 @@ fn print_human_pomodoro_shift_success(
         shift.pomodoro_line,
     );
     println!("  {}", styler.dim(&detail));
+    println!("  {}", styler.dim(&result.task_line));
+}
+
+fn print_human_pomodoro_start_success(
+    result: &CaptureItemResult,
+    start: &PomodoroStartSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let verb = if result.dry_run {
+        "would start"
+    } else {
+        "started"
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    let name = start
+        .pomodoro_name
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("next session");
+    println!(
+        "  {}",
+        styler.dim(&format!(
+            "{} {}-{} ({}m) at line {}",
+            name,
+            start.start,
+            start.end,
+            start.duration_minutes,
+            start.pomodoro_line,
+        ))
+    );
     println!("  {}", styler.dim(&result.task_line));
 }
 

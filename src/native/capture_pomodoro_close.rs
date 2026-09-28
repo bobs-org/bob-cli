@@ -169,10 +169,7 @@ pub(crate) fn find_running_pomodoro(
             time_range: entry.time_range.clone().unwrap_or_default(),
         }),
         [] => {
-            let next = scan.entries.iter().find(|entry| {
-                entry.state == capture_pomodoros::PomodoroState::Open
-                    && entry.placeholder
-            });
+            let next = capture_pomodoros::next_future_pomodoro(&scan);
             Err(FindRunningError::NoneRunning {
                 next_name: next.and_then(|entry| entry.name.clone()),
                 next_line: next.map(|entry| entry.line),

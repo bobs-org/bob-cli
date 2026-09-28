@@ -92,6 +92,13 @@ pub(crate) enum CaptureKind {
     PomodoroClose {
         spec: PomodoroCloseSpec,
     },
+    /// A whole-item `=`/`=<X>` Pomodoro start. The item must contain only
+    /// the start token and have exactly one physical line; any extra text,
+    /// marker, or child line on a counted token is an invalid start, never
+    /// a task. The suffix mirrors the `se<X>` snippet timing.
+    PomodoroStart {
+        spec: PomodoroStartSpec,
+    },
 }
 
 /// Which sigil spelled a solo Pomodoro-link item.
@@ -927,7 +934,7 @@ fn parse_capture_item<'a>(
     if parent_normalized.is_empty() {
         return Err(missing_text_error());
     }
-    if let Some(outcome) = parse_pomodoro_close_item(
+    if let Some(outcome) = parse_pomodoro_equals_item(
         item,
         parent_line,
         forced_route,
@@ -1347,6 +1354,58 @@ pub(crate) fn session_operator_token(
     None
 }
 
+/// A whole-item `=`-family token: either a close (`=x`) or a start
+/// (`=` plus an `se<X>`-shaped suffix).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EqualsToken {
+    /// A leading `=x`/`=X`. The caller keeps today's close recognition
+    /// (exact token, first-token near miss, otherwise prose) because `x`
+    /// is never a start-suffix character.
+    Close,
+    /// `=` plus the longest `[0-9]*(-[0-9]*)?` run. `suffix` excludes the
+    /// `=`, `counted` is true when the suffix holds at least one digit,
+    /// and `len` is the token's byte length.
+    Start {
+        suffix: String,
+        counted: bool,
+        len: usize,
+    },
+}
+
+/// Lex the `=`-family token at the start of trimmed item text, mirroring
+/// [`session_operator_token`]. Returns `None` when the text does not start
+/// with `=`, so ordinary parsing continues. A bare token (`=`, `=-`) has
+/// an empty or digit-free suffix; a counted token (`=3`, `=-2`, `=3-`,
+/// `=2-1`, `=0`) carries at least one digit.
+pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
+    let rest = text.strip_prefix('=')?;
+    if rest
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'x'))
+    {
+        return Some(EqualsToken::Close);
+    }
+    let bytes = rest.as_bytes();
+    let mut len = 0;
+    while len < bytes.len() && bytes[len].is_ascii_digit() {
+        len += 1;
+    }
+    if bytes.get(len) == Some(&b'-') {
+        len += 1;
+        while len < bytes.len() && bytes[len].is_ascii_digit() {
+            len += 1;
+        }
+    }
+    let suffix = rest[..len].to_string();
+    let counted = suffix.bytes().any(|byte| byte.is_ascii_digit());
+    Some(EqualsToken::Start {
+        suffix,
+        counted,
+        len: len + 1,
+    })
+}
+
 /// Whole-item session-operator grammar: one sign resizes, two signs shift.
 ///
 /// Returns `Ok(None)` when the item does not start with an operator token
@@ -1463,55 +1522,109 @@ fn parse_pomodoro_adjust_item<'a>(
     )))
 }
 
-/// Whole-item `=x` close grammar.
+/// Whole-item `=`-family grammar: `=x` closes, `=`/`=<X>` starts.
 ///
-/// Returns `Ok(None)` when the item is not close-shaped and ordinary parsing
-/// should continue. Returns `Ok(Some(outcome))` for an exact single-token
-/// close. Returns `Err` for every close near miss: a lone `=`, or a leading
-/// `=x` token with extra text, markers, or child lines. Near misses never
-/// fall through as ordinary tasks. Other `=`-prefixed tokens (`=3`, `=xx`,
-/// `=x!`, `==`) and mid-body `=x` stay ordinary prose.
-fn parse_pomodoro_close_item<'a>(
+/// Runs first (before session operators, caret links, and ordinary
+/// parsing). Returns `Ok(None)` when the item is not `=`-shaped and
+/// ordinary parsing should continue. Returns `Ok(Some(outcome))` for an
+/// exact single-token close or start. Returns `Err` for every near miss: a
+/// leading `=x` token with extra text, markers, or child lines; a counted
+/// start token (`=3`, `=-2`, `=3-`, `=2-1`, `=0`) with anything else; or an
+/// exact start token with child lines. Near misses never fall through as
+/// ordinary tasks. A bare token followed by more text on the same line
+/// (`= foo`, `=- foo`, `==`, `=-)`), every other close shape (`=xx`, `=x!`),
+/// and mid-body tokens (`Plan =3`, `a=3`) stay ordinary prose: a bare sign
+/// run followed by prose stays prose while a counted token claims its item.
+fn parse_pomodoro_equals_item<'a>(
     item: &CaptureItem<'a>,
     parent_line: &ItemLine<'a>,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
 ) -> Result<Option<ParsedCaptureItemOutcome<'a>>, String> {
     let parent_trimmed = parent_line.raw.text.trim();
-    if parent_trimmed == "=" {
-        return Err(POMODORO_CLOSE_INCOMPLETE_ERROR.to_string());
-    }
-    if parent_trimmed.eq_ignore_ascii_case("=x") && item.lines.len() == 1 {
-        if forced_route.is_some() || forced_section.is_some() {
-            return Err(POMODORO_CLOSE_FORCED_ERROR.to_string());
-        }
-        let raw = parent_trimmed.to_string();
-        return Ok(Some(parsed_capture_item_outcome(
-            item,
-            ParsedCaptureText {
-                body: raw.clone(),
-                clip: None,
-                route: None,
-                kind: CaptureKind::PomodoroClose {
-                    spec: PomodoroCloseSpec { raw },
-                },
-                scheduled_offset: None,
-                priority_level: None,
-                sub_bullets: Vec::new(),
-            },
-            Vec::new(),
-            None,
-        )));
-    }
-    // Near miss: first token is exactly `=x` but the item has anything else.
-    let mut tokens = parent_trimmed.split_whitespace();
-    let Some(first) = tokens.next() else {
+    let Some(token) = session_equals_token(parent_trimmed) else {
         return Ok(None);
     };
-    if first.eq_ignore_ascii_case("=x") {
-        return Err(POMODORO_CLOSE_SHAPE_ERROR.to_string());
+    match token {
+        EqualsToken::Close => {
+            if parent_trimmed.eq_ignore_ascii_case("=x")
+                && item.lines.len() == 1
+            {
+                if forced_route.is_some() || forced_section.is_some() {
+                    return Err(POMODORO_CLOSE_FORCED_ERROR.to_string());
+                }
+                let raw = parent_trimmed.to_string();
+                return Ok(Some(parsed_capture_item_outcome(
+                    item,
+                    ParsedCaptureText {
+                        body: raw.clone(),
+                        clip: None,
+                        route: None,
+                        kind: CaptureKind::PomodoroClose {
+                            spec: PomodoroCloseSpec { raw },
+                        },
+                        scheduled_offset: None,
+                        priority_level: None,
+                        sub_bullets: Vec::new(),
+                    },
+                    Vec::new(),
+                    None,
+                )));
+            }
+            // Near miss: first token is exactly `=x` but the item has
+            // anything else.
+            let mut tokens = parent_trimmed.split_whitespace();
+            let Some(first) = tokens.next() else {
+                return Ok(None);
+            };
+            if first.eq_ignore_ascii_case("=x") {
+                return Err(POMODORO_CLOSE_SHAPE_ERROR.to_string());
+            }
+            Ok(None)
+        }
+        EqualsToken::Start {
+            suffix,
+            counted,
+            len,
+        } => {
+            let exact = parent_trimmed.len() == len && item.lines.len() == 1;
+            if !exact {
+                // A counted token claims the item even with extra text:
+                // `=3 more`, `=-2 @work`, `=3s:1`, `=2-1-`, `=3x`. An
+                // exact token with child lines claims it too, bare or
+                // counted. A bare token with more text on the same line
+                // (`= foo`, `==`) stays prose.
+                if counted
+                    || (parent_trimmed.len() == len && item.lines.len() > 1)
+                {
+                    let token_text = &parent_trimmed[..len];
+                    return Err(pomodoro_start_shape_error(
+                        token_text, &suffix,
+                    ));
+                }
+                return Ok(None);
+            }
+            let spec = parse_pomodoro_start_suffix(&suffix)?;
+            if forced_route.is_some() || forced_section.is_some() {
+                return Err(POMODORO_START_FORCED_ERROR.to_string());
+            }
+            let raw = parent_trimmed.to_string();
+            Ok(Some(parsed_capture_item_outcome(
+                item,
+                ParsedCaptureText {
+                    body: raw,
+                    clip: None,
+                    route: None,
+                    kind: CaptureKind::PomodoroStart { spec },
+                    scheduled_offset: None,
+                    priority_level: None,
+                    sub_bullets: Vec::new(),
+                },
+                Vec::new(),
+                None,
+            )))
+        }
     }
-    Ok(None)
 }
 
 /// One physical line's resolved item-wide markers and (when a route was
@@ -3128,9 +3241,17 @@ const POMODORO_SHIFT_OVERFLOW_ERROR: &str =
 const POMODORO_SHIFT_SHAPE_ERROR: &str = "Pomodoro shift items must contain only the operator (for example `++3` or `--`); remove extra text, markers, or child lines";
 const POMODORO_SHIFT_FORCED_ERROR: &str = "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the shift alone";
 const POMODORO_CLOSE_SHAPE_ERROR: &str = "`=x` must be the whole capture item; to log a task while closing, use `@route:block-id=x`";
-const POMODORO_CLOSE_INCOMPLETE_ERROR: &str =
-    "`=` is incomplete: type `=x` to close the running Pomodoro";
+pub(crate) const POMODORO_START_FORCED_ERROR: &str = "Pomodoro start `=<X>` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the start alone";
 const POMODORO_CLOSE_FORCED_ERROR: &str = "Pomodoro close `=x` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the close alone";
+
+/// Whole-item start shape error, formatted with the typed token: a counted
+/// token with extra text, markers, or child lines, or an exact token with
+/// child lines, is never a task.
+fn pomodoro_start_shape_error(token: &str, suffix: &str) -> String {
+    format!(
+        "Pomodoro start `{token}` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session instead, use `^route:block-id={suffix}`)"
+    )
+}
 const POMODORO_CLOSE_PROJECT_NOTE_ERROR: &str = "Pomodoro close suffix `=x` applies only to `@<route>:<block-id>` task captures, not project-note `+` forms";
 pub(crate) const POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `s:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
 pub(crate) const POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `p:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
@@ -3272,6 +3393,11 @@ pub(crate) enum EditorMode {
     PomodoroShift,
     PomodoroLink,
     PomodoroClose,
+    /// Whole-item `=`/`=<X>` start. The editor recognition, spans, and
+    /// diagnostics land with the editor contract; the variant exists now so
+    /// execution/editor parity maps it without a placeholder.
+    #[allow(dead_code)]
+    PomodoroStart,
     Incomplete,
 }
 
@@ -3290,6 +3416,7 @@ impl EditorMode {
             Self::PomodoroShift => "pomodoro_shift",
             Self::PomodoroLink => "pomodoro_link",
             Self::PomodoroClose => "pomodoro_close",
+            Self::PomodoroStart => "pomodoro_start",
             Self::Incomplete => "incomplete",
         }
     }
@@ -4014,7 +4141,7 @@ fn editor_operator_outcome<'a>(
 }
 
 /// Whole-item `=x` close for the live editor. Mirrors
-/// [`parse_pomodoro_close_item`]'s execution grammar but never fails: an
+/// [`parse_pomodoro_equals_item`]'s execution grammar but never fails: an
 /// exact `=x` reports `pomodoro_close` with a span covering the token and
 /// an additive spec, a standalone `=` is an incomplete editing state, and
 /// a leading `=x` token with extra text, markers, or child lines reports
@@ -6473,6 +6600,7 @@ fn classify_local_marker(
         | EditorMode::PomodoroShift
         | EditorMode::PomodoroLink
         | EditorMode::PomodoroClose
+        | EditorMode::PomodoroStart
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
@@ -6522,6 +6650,10 @@ fn non_absorbable_marker_notice(marker: &LocalDestinationMarker) -> String {
         ),
         EditorMode::PomodoroClose => format!(
             "@@ cannot take a Pomodoro close: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::PomodoroStart => format!(
+            "@@ cannot take a Pomodoro start: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::Incomplete => {
@@ -8077,6 +8209,7 @@ mod tests {
                 CaptureKind::PomodoroShift { .. } => EditorMode::PomodoroShift,
                 CaptureKind::PomodoroLink { .. } => EditorMode::PomodoroLink,
                 CaptureKind::PomodoroClose { .. } => EditorMode::PomodoroClose,
+                CaptureKind::PomodoroStart { .. } => EditorMode::PomodoroStart,
             };
             assert_eq!(parse.mode, expected_mode, "{raw}");
             if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {
@@ -10167,6 +10300,91 @@ were removed"
         ] {
             let error = execute(raw).expect_err(raw);
             assert_eq!(error, RETIRED_DOUBLE_COLON_ERROR, "{raw}");
+        }
+    }
+
+    #[test]
+    fn execution_parses_equals_family_starts_alongside_close() {
+        // Exact starts: bare and counted suffixes mirror `se<X>` timing.
+        for (raw, suffix, duration, offset) in [
+            ("=", "", 5, 0),
+            ("  =  ", "", 5, 0),
+            ("=-", "-", 5, 1),
+            ("=3", "3", 3, 0),
+            ("=-2", "-2", 5, 2),
+            ("=3-", "3-", 3, 1),
+            ("=2-1", "2-1", 2, 1),
+            ("=0", "0", 0, 0),
+            ("=03", "03", 3, 0),
+        ] {
+            let parsed =
+                execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+            assert_eq!(parsed.body, raw.trim(), "{raw}");
+            match parsed.kind {
+                CaptureKind::PomodoroStart { spec } => {
+                    assert_eq!(spec.raw, suffix, "{raw}");
+                    assert_eq!(spec.duration_units, duration, "{raw}");
+                    assert_eq!(spec.offset_units, offset, "{raw}");
+                }
+                other => panic!("{raw}: expected start, got {other:?}"),
+            }
+        }
+        // A counted token with extra text, markers, or child lines echoes
+        // the typed token in its shape error; an exact token with child
+        // lines fails bare or counted. Never a task.
+        for (raw, token, suffix) in [
+            ("=3 more", "=3", "3"),
+            ("=-2 @work", "=-2", "-2"),
+            ("=3s:1", "=3", "3"),
+            ("=2-1-", "=2-1", "2-1"),
+            ("=3x", "=3", "3"),
+            ("=\n- child", "=", ""),
+            ("=2\n- child", "=2", "2"),
+        ] {
+            let error = execute(raw).expect_err(raw);
+            assert_eq!(
+                error,
+                format!(
+                    "Pomodoro start `{token}` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session instead, use `^route:block-id={suffix}`)"
+                ),
+                "{raw}"
+            );
+        }
+        // Oversized values fail the shared start overflow before any write.
+        let overflow =
+            execute("=99999999999999999999999").expect_err("overflow");
+        assert_eq!(overflow, POMODORO_START_OVERFLOW_ERROR, "{overflow}");
+        // Bare tokens with prose, other close shapes, and mid-body tokens
+        // stay ordinary tasks.
+        for raw in ["= foo", "=- foo", "==", "=-)", "Plan =3", "a=3"] {
+            let parsed =
+                execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+            assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
+        }
+        // A forced route rejects an exact start with the start copy.
+        let forced = parse_capture_text_with_clip_control(
+            "=3",
+            Some("work"),
+            None,
+            true,
+        )
+        .expect_err("forced");
+        assert_eq!(forced, POMODORO_START_FORCED_ERROR, "{forced}");
+        // Close shapes keep today's meaning.
+        let close = execute("=x").expect("close");
+        assert!(
+            matches!(close.kind, CaptureKind::PomodoroClose { .. }),
+            "=x"
+        );
+        let close_shape = execute("=x more").expect_err("close shape");
+        assert!(
+            close_shape.contains("`=x` must be the whole"),
+            "{close_shape}"
+        );
+        for raw in ["=xx", "=x!"] {
+            let parsed =
+                execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+            assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
         }
     }
 
