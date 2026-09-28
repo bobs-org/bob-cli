@@ -5843,10 +5843,10 @@ pub(crate) fn completion_field_at(
             })
             .map(|(line_index, line)| (item, line_index, line.raw))
     })?;
-    // A whole-item `+N`/`-N` adjustment or `=x` close is an action,
-    // never a routed capture: it requests no route or task completion
-    // candidates. A lone `=` is an incomplete close state and also
-    // requests nothing.
+    // A whole-item `+[N]`/`-[N]` adjustment, `++[N]`/`--[N]` shift, or
+    // `=x` close is an action, never a routed capture: it requests no
+    // route or task completion candidates. A lone `=` is an incomplete
+    // close state and also requests nothing.
     if parse_editor_adjust_item(item).is_some()
         || parse_editor_close_item(item).is_some()
     {
@@ -8036,6 +8036,16 @@ mod tests {
             "^r:id=x",
             "Text @r:id=x",
             "Text @r:id=X",
+            "+",
+            "-",
+            "++",
+            "--",
+            "+5",
+            "-2",
+            "++3",
+            "--2",
+            "  ++3  ",
+            "++03",
         ];
 
         for raw in inputs {

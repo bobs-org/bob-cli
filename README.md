@@ -197,7 +197,8 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
 | `@route:id[#pomodoro][=<X>]` with no other text | Link the existing task into today's ledger (no new task); `=<X>` starts the resolved session |
 | `^route:id[#pomodoro][=<X>]` with no other text | Identical execution; `^` completes only In Progress and Next tasks |
-| `+N` / `-N` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-2` shortens 10m); the item must contain only the signed count |
+| `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-` shortens 5m; the count defaults to 1); the item must contain only the signed count |
+| `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
 | `=x` | Close today's running timed Pomodoro (case-insensitive `=X`); the item must contain only `=x` |
 | `@route:id=x` / `^route:id=x` with no other text | Put that existing task into the running session, then close it |
 | `<text> @route:id=x` | Create the new task in the running session, then close it |

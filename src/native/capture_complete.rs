@@ -132,7 +132,7 @@ the `=`, a cursor inside the suffix returns an empty success, and accepting \
 a candidate preserves the typed suffix. The `=x` close suffix behaves the \
 same way: it is never a completion field, replacements still stop before \
 `#`/`=`, and a cursor inside `=x` returns an empty success. A whole-item \
-`+N`/`-N` Pomodoro adjustment or `=x`/`=` close is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Pomodoro block-ID \
+`+[N]`/`-[N]` Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`, or `--` is one unit), or `=x`/`=` close is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
 `bob capture-tasks` and, by default, only offer tasks that already carry a \

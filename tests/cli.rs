@@ -31244,6 +31244,336 @@ fn capture_complete_and_rewrite_ignore_adjustments() {
     assert_eq!(json["changed"], false);
     assert_eq!(json["text"], "+5");
 }
+
+#[test]
+fn capture_parse_pomodoro_shift_protocol() {
+    let parse = |text: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+    let parse_stdin = |draft: &str| {
+        let output = run_with_stdin(
+            bob_command().arg("capture-parse").arg("-f").arg("json"),
+            draft,
+        );
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    // Exact-unit recognition: `++3` is three 5-minute units later.
+    let later = parse("++3");
+    assert_eq!(later["schema_version"], 1);
+    assert_eq!(later["mode"], "pomodoro_shift");
+    assert_eq!(later["body"], "++3");
+    assert!(later["route"].is_null());
+    assert!(later["section"].is_null());
+    assert!(later["block_id"].is_null());
+    assert_eq!(later["needs"], serde_json::json!([]));
+    assert_eq!(
+        later["spans"],
+        serde_json::json!([{ "start": 0, "end": 3, "kind": "pomodoro_shift" }])
+    );
+    assert_eq!(later["diagnostics"], serde_json::json!([]));
+    assert_eq!(
+        later["pomodoro_shift"],
+        serde_json::json!({ "raw": "++3", "later": true, "units": 3 })
+    );
+    assert!(later.get("pomodoro_adjust").is_none(), "{later}");
+    assert!(later.get("pomodoro_start").is_none(), "{later}");
+    assert!(later.get("items").is_none(), "{later}");
+
+    let earlier = parse("--2");
+    assert_eq!(earlier["mode"], "pomodoro_shift");
+    assert_eq!(
+        earlier["pomodoro_shift"],
+        serde_json::json!({ "raw": "--2", "later": false, "units": 2 })
+    );
+    assert_eq!(
+        earlier["spans"],
+        serde_json::json!([{ "start": 0, "end": 3, "kind": "pomodoro_shift" }])
+    );
+    assert!(earlier.get("pomodoro_adjust").is_none(), "{earlier}");
+
+    // A bare doubled sign is one unit, never incomplete.
+    for (text, later) in [("++", true), ("--", false)] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_shift", "{text}");
+        assert_eq!(value["needs"], serde_json::json!([]));
+        assert_eq!(
+            value["pomodoro_shift"],
+            serde_json::json!({ "raw": text, "later": later, "units": 1 }),
+            "{text}"
+        );
+        assert_eq!(value["diagnostics"], serde_json::json!([]));
+    }
+
+    // Whitespace around the token is fine; the span covers only the token.
+    let padded = parse("  ++3  ");
+    assert_eq!(padded["mode"], "pomodoro_shift");
+    assert_eq!(padded["body"], "++3");
+    assert_eq!(
+        padded["spans"],
+        serde_json::json!([{ "start": 2, "end": 5, "kind": "pomodoro_shift" }])
+    );
+    assert_eq!(
+        padded["pomodoro_shift"],
+        serde_json::json!({ "raw": "++3", "later": true, "units": 3 })
+    );
+
+    // Mixed drafts use blank lines; top level previews the first item.
+    let mixed = parse_stdin("++3\n\nCall bank @Cash+\n");
+    assert_eq!(mixed["mode"], "pomodoro_shift");
+    assert_eq!(
+        mixed["pomodoro_shift"],
+        serde_json::json!({ "raw": "++3", "later": true, "units": 3 })
+    );
+    assert_eq!(mixed["items"].as_array().expect("items").len(), 2);
+    assert_eq!(mixed["items"][0]["mode"], "pomodoro_shift");
+    assert_eq!(
+        mixed["items"][0]["pomodoro_shift"],
+        serde_json::json!({ "raw": "++3", "later": true, "units": 3 })
+    );
+    assert_eq!(mixed["items"][1]["mode"], "incomplete");
+    assert_eq!(mixed["items"][1]["route"], "cash");
+
+    // A `@@` declaration routes ordinary items but never a shift.
+    let declared = parse_stdin("@@work\nFirst task\n\n++3\n");
+    assert_eq!(declared["global_destination"]["route"], "work");
+    assert_eq!(declared["items"][0]["mode"], "task");
+    assert_eq!(declared["items"][0]["route"], "work");
+    assert_eq!(declared["items"][1]["mode"], "pomodoro_shift");
+    assert!(declared["items"][1]["route"].is_null());
+    assert_eq!(
+        declared["items"][1]["pomodoro_shift"],
+        serde_json::json!({ "raw": "++3", "later": true, "units": 3 })
+    );
+
+    let lone_declared = parse_stdin("@@work\n++3\n");
+    assert_eq!(lone_declared["mode"], "pomodoro_shift");
+    assert!(lone_declared["route"].is_null(), "{lone_declared}");
+    assert_eq!(
+        lone_declared["pomodoro_shift"],
+        serde_json::json!({ "raw": "++3", "later": true, "units": 3 })
+    );
+
+    // Prose lookalikes stay ordinary tasks with no diagnostics.
+    for text in [
+        "- foo", "-- aside", "++ plan", "+++", "---", "+-", "-+3", "Plan ++3",
+        "C++",
+    ] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "task", "{text}");
+        assert!(value.get("pomodoro_shift").is_none(), "{text}: {value}");
+        assert!(value.get("pomodoro_adjust").is_none(), "{text}: {value}");
+        assert_eq!(value["diagnostics"], serde_json::json!([]), "{text}");
+    }
+
+    // Operator-first items with extra text, markers, or children are
+    // invalid shifts, never tasks; the range covers the item.
+    for text in ["++3 more", "++3@work", "--2 s:1", "++3++"] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_shift", "{text}");
+        assert!(value.get("pomodoro_shift").is_none(), "{text}: {value}");
+        assert_eq!(
+            value["diagnostics"][0]["code"], "invalid_pomodoro_shift",
+            "{text}: {value}"
+        );
+    }
+    let shape = parse("++3 more");
+    assert_eq!(
+        shape["diagnostics"][0]["range"],
+        serde_json::json!([0, 8]),
+        "{shape}"
+    );
+    let child = parse_stdin("++3\n- detail\n");
+    assert_eq!(child["mode"], "pomodoro_shift");
+    assert!(child.get("pomodoro_shift").is_none(), "{child}");
+    assert_eq!(
+        child["diagnostics"][0]["code"], "invalid_pomodoro_shift",
+        "{child}"
+    );
+
+    // Invalid standalone counts produce a diagnostic on the token range.
+    for text in ["++0", "--0"] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_shift", "{text}");
+        assert!(value.get("pomodoro_shift").is_none(), "{text}: {value}");
+        assert_eq!(
+            value["diagnostics"][0]["code"], "invalid_pomodoro_shift",
+            "{text}: {value}"
+        );
+        assert_eq!(
+            value["diagnostics"][0]["range"],
+            serde_json::json!([0, 3]),
+            "{text}: {value}"
+        );
+    }
+    let overflow = parse("++99999999999999999999999");
+    assert_eq!(overflow["mode"], "pomodoro_shift");
+    assert!(overflow.get("pomodoro_shift").is_none(), "{overflow}");
+    assert_eq!(
+        overflow["diagnostics"][0]["code"], "invalid_pomodoro_shift",
+        "{overflow}"
+    );
+
+    // JSON stays additive at schema version 1.
+    assert_eq!(later["schema_version"], 1);
+    let ordinary = parse("Call bank @Cash+");
+    assert!(ordinary.get("pomodoro_shift").is_none(), "{ordinary}");
+    assert!(ordinary.get("pomodoro_adjust").is_none(), "{ordinary}");
+    let adjust = parse("+5");
+    assert!(adjust.get("pomodoro_shift").is_none(), "{adjust}");
+    let pomodoro = parse("Do work @dev:id#bugs");
+    assert!(pomodoro.get("pomodoro_shift").is_none(), "{pomodoro}");
+    assert!(pomodoro.get("pomodoro_start").is_none(), "{pomodoro}");
+}
+
+#[test]
+fn capture_parse_pomodoro_shift_human_and_help() {
+    let human = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("++3")
+        .output()
+        .expect("run capture-parse human");
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(out.contains("pomodoro_shift"), "{out}");
+    assert!(out.contains("++3 (15m later, 3 units)"), "{out}");
+    assert_stdout_has_no_ansi(&human);
+
+    let bare = run_with_stdin(bob_command().arg("capture-parse"), "--\n");
+    assert_success(&bare);
+    assert!(
+        stdout(&bare).contains("-- (5m earlier, 1 unit)"),
+        "{}",
+        stdout(&bare)
+    );
+
+    let singular = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("-")
+        .output()
+        .expect("run singular human");
+    assert_success(&singular);
+    assert!(
+        stdout(&singular).contains("- (5m, 1 unit)"),
+        "{}",
+        stdout(&singular)
+    );
+
+    let plain = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("Do work @dev:id#bugs")
+        .output()
+        .expect("run plain human");
+    assert_success(&plain);
+    assert!(!stdout(&plain).contains("shift"), "{}", stdout(&plain));
+
+    let parse_help = bob_command()
+        .arg("capture-parse")
+        .arg("--help")
+        .output()
+        .expect("run capture-parse help");
+    assert_success(&parse_help);
+    let help = stdout(&parse_help);
+    assert!(
+        help.contains("pomodoro_shift")
+            && help.contains("++3")
+            && help.contains("'--'")
+            && help.contains("Modes:")
+            && help.contains("pomodoro_shift, pomodoro_link"),
+        "expected shift help:\n{help}"
+    );
+
+    let capture_help = bob_command()
+        .arg("capture")
+        .arg("--help")
+        .output()
+        .expect("run capture help");
+    assert_success(&capture_help);
+    let capture = stdout(&capture_help);
+    assert!(
+        capture.contains("++3")
+            && capture.contains("--1")
+            && capture.contains("bob capture -- --2"),
+        "expected capture shift help:\n{capture}"
+    );
+
+    let complete_help = bob_command()
+        .arg("capture-complete")
+        .arg("--help")
+        .output()
+        .expect("run capture-complete help");
+    assert_success(&complete_help);
+    assert!(
+        stdout(&complete_help).contains("Pomodoro shift"),
+        "{}",
+        stdout(&complete_help)
+    );
+}
+
+#[test]
+fn capture_complete_and_rewrite_ignore_shifts() {
+    for (text, cursor) in [("++3", 2), ("--", 1), ("++", 1)] {
+        let complete = bob_command()
+            .arg("capture-complete")
+            .arg("-c")
+            .arg(cursor.to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-complete");
+        assert_success(&complete);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&complete).trim())
+                .expect("complete JSON");
+        assert!(json["context"].is_null(), "{text}: {json}");
+        assert_eq!(json["candidates"], serde_json::json!([]), "{text}");
+    }
+
+    for text in ["++3", "--"] {
+        let rewrite = bob_command()
+            .arg("capture-rewrite")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-rewrite");
+        assert_success(&rewrite);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&rewrite).trim())
+                .expect("rewrite JSON");
+        assert_eq!(json["changed"], false, "{text}");
+        assert_eq!(json["text"], text, "{text}");
+    }
+
+    // A `@@` declaration leaves a shift item alone, like an adjustment.
+    let declared = run_with_stdin(
+        bob_command().arg("capture-rewrite").arg("-f").arg("json"),
+        "@@foo\n++3",
+    );
+    assert_success(&declared);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&declared).trim()).expect("rewrite JSON");
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], "@@foo\n++3", "{json}");
+}
 #[test]
 fn capture_pomodoro_link_solo_grammar_and_atomic_execution() {
     fn link_vault(
