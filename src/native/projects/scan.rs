@@ -1,0 +1,576 @@
+//! Directory scanning and project/task/wikilink parsing.
+use super::*;
+
+pub(super) fn scan_projects(bob_dir: &Path) -> ScanReport {
+    let mut projects = Vec::new();
+    let mut issues = Vec::new();
+    scan_directory(bob_dir, bob_dir, &mut projects, &mut issues);
+    projects.sort_by(|left, right| {
+        left.status
+            .sort_rank()
+            .cmp(&right.status.sort_rank())
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    ScanReport { projects, issues }
+}
+
+pub(super) fn scan_directory(
+    root: &Path,
+    directory: &Path,
+    projects: &mut Vec<Project>,
+    issues: &mut Vec<ScanIssue>,
+) {
+    let entries = match read_sorted_directory(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            issues.push(ScanIssue::path(
+                relative_or_original(root, directory),
+                format!("failed to read directory: {error}"),
+            ));
+            return;
+        }
+    };
+
+    for entry in entries {
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                issues.push(ScanIssue::path(
+                    relative_or_original(root, &path),
+                    format!("failed to inspect path: {error}"),
+                ));
+                continue;
+            }
+        };
+
+        if file_type.is_dir() {
+            if is_excluded_directory(&path) {
+                continue;
+            }
+            scan_directory(root, &path, projects, issues);
+            continue;
+        }
+
+        if file_type.is_file() && is_markdown_file(&path) {
+            scan_markdown_file(root, &path, projects, issues);
+        }
+    }
+}
+
+pub(super) fn read_sorted_directory(
+    directory: &Path,
+) -> io::Result<Vec<fs::DirEntry>> {
+    let mut entries =
+        fs::read_dir(directory)?.collect::<Result<Vec<_>, io::Error>>()?;
+    entries.sort_by_key(|entry| entry.path());
+    Ok(entries)
+}
+
+pub(super) fn scan_markdown_file(
+    root: &Path,
+    path: &Path,
+    projects: &mut Vec<Project>,
+    issues: &mut Vec<ScanIssue>,
+) {
+    let relative_path = relative_or_original(root, path);
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            issues.push(ScanIssue::path(
+                relative_path,
+                format!("failed to read file: {error}"),
+            ));
+            return;
+        }
+    };
+
+    let Some(project) = parse_project(&relative_path, &contents, issues) else {
+        return;
+    };
+    projects.push(project);
+}
+
+pub(super) fn parse_project(
+    relative_path: &Path,
+    contents: &str,
+    issues: &mut Vec<ScanIssue>,
+) -> Option<Project> {
+    let frontmatter = parse_frontmatter(contents)?;
+    if !frontmatter_is_project(&frontmatter) {
+        return None;
+    }
+
+    let status =
+        ProjectStatus::parse(frontmatter_value(&frontmatter, "status"));
+    let parent_target =
+        frontmatter_value(&frontmatter, "parent").and_then(wikilink_target);
+    let scheduled = parse_project_schedule(relative_path, &frontmatter, issues);
+    let mut open_task_count = 0;
+    let mut open_unhidden_count = 0;
+    let mut dash_visible_count = 0;
+    let mut task_lines = Vec::new();
+    let mut prj_candidates = Vec::new();
+    let lines = line_spans(contents);
+    let mut fence = None;
+    let today = bob_env::current_datetime().date();
+
+    for (line_index, line_span) in lines.iter().enumerate() {
+        if line_span.line_number <= frontmatter.body_start_line {
+            continue;
+        }
+        let line = trim_cr(&contents[line_span.start..line_span.end]);
+        if markdown_fence_line(line, &mut fence) {
+            continue;
+        }
+        let has_prj_anchor = has_trailing_prj_anchor(line);
+        if has_prj_anchor {
+            prj_candidates.push(PrjCandidate {
+                line_number: line_span.line_number,
+                line_index,
+                line,
+            });
+        }
+
+        let Some(task) = parse_task_line(line) else {
+            continue;
+        };
+        let scheduled_fields = inline_field_spans(task.text, "scheduled");
+        let scheduled_date = (scheduled_fields.len() == 1)
+            .then(|| {
+                let field = scheduled_fields[0];
+                parse_inline_schedule_date(
+                    task.text[field.value_start..field.value_end].trim(),
+                )
+            })
+            .flatten();
+        task_lines.push(ProjectTaskLine {
+            line_number: line_span.line_number,
+            mark: task.mark,
+            hide_tag_count: tag_spans(task.text, HIDE_TAG).len(),
+            is_prj: is_valid_prj_task_line(line, task),
+            scheduled_field_count: scheduled_fields.len(),
+            scheduled_date,
+        });
+        if !contains_task_tag(task.text) || !task.status.is_open() {
+            continue;
+        }
+
+        open_task_count += 1;
+        if !has_prj_anchor && !contains_hide_tag(task.text) {
+            open_unhidden_count += 1;
+            let future_scheduled = scheduled_fields.iter().any(|field| {
+                parse_inline_schedule_date(
+                    task.text[field.value_start..field.value_end].trim(),
+                )
+                .is_some_and(|date| date > today)
+            });
+            if task.mark != '?' && !future_scheduled {
+                dash_visible_count += 1;
+            }
+        }
+    }
+
+    let sub_block = if prj_candidates.len() == 1 {
+        parse_prj_sub_block(contents, &lines, prj_candidates[0].line_index)
+    } else {
+        PrjSubBlock::default()
+    };
+    let prj_task =
+        classify_prj_task(relative_path, &prj_candidates, sub_block, issues);
+
+    Some(Project {
+        relative_path: relative_path.to_path_buf(),
+        name: project_name(relative_path),
+        link_name: project_link_name(relative_path),
+        link_stem: project_link_stem(relative_path),
+        parent_target,
+        scheduled,
+        status,
+        open_task_count,
+        open_unhidden_count,
+        dash_visible_count,
+        task_lines,
+        prj_task,
+    })
+}
+
+pub(super) fn parse_project_schedule(
+    relative_path: &Path,
+    frontmatter: &Frontmatter<'_>,
+    issues: &mut Vec<ScanIssue>,
+) -> Option<ProjectSchedule> {
+    let fields = frontmatter
+        .lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let rest = line.strip_prefix("scheduled")?;
+            let value = rest.strip_prefix(':')?;
+            Some((index + 2, value.trim()))
+        })
+        .collect::<Vec<_>>();
+
+    let Some(&(line_number, raw_value)) = fields.first() else {
+        return None;
+    };
+    if fields.len() > 1 {
+        issues.push(ScanIssue::line(
+            relative_path,
+            fields[1].0,
+            "multiple scheduled properties found; keep exactly one",
+        ));
+        return None;
+    }
+
+    let value = trim_yaml_scalar(raw_value);
+    if !is_exact_date_shape(value) {
+        issues.push(ScanIssue::line(
+            relative_path,
+            line_number,
+            "scheduled must be a calendar date in YYYY-MM-DD format",
+        ));
+        return None;
+    }
+
+    let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") else {
+        issues.push(ScanIssue::line(
+            relative_path,
+            line_number,
+            format!("scheduled is not a valid calendar date: {value}"),
+        ));
+        return None;
+    };
+
+    Some(ProjectSchedule {
+        raw: value.to_string(),
+        date,
+    })
+}
+
+pub(super) fn is_exact_date_shape(value: &str) -> bool {
+    value.len() == 10
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            4 | 7 => byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
+}
+
+pub(crate) fn parse_frontmatter(contents: &str) -> Option<Frontmatter<'_>> {
+    let mut lines = contents.lines();
+    let first = lines.next()?;
+    if trim_cr(first) != "---" {
+        return None;
+    }
+
+    let mut frontmatter_lines = Vec::new();
+    for (line_count, line) in (2..).zip(lines) {
+        let line = trim_cr(line);
+        if line == "---" {
+            return Some(Frontmatter {
+                lines: frontmatter_lines,
+                body_start_line: line_count,
+            });
+        }
+        frontmatter_lines.push(line);
+    }
+
+    None
+}
+
+pub(crate) fn frontmatter_is_project(frontmatter: &Frontmatter<'_>) -> bool {
+    frontmatter_has_type(frontmatter, "[[project]]")
+}
+
+pub(crate) fn frontmatter_is_area(frontmatter: &Frontmatter<'_>) -> bool {
+    frontmatter_has_type(frontmatter, "[[area]]")
+}
+
+pub(super) fn frontmatter_has_type(
+    frontmatter: &Frontmatter<'_>,
+    expected: &str,
+) -> bool {
+    frontmatter_value(frontmatter, "type")
+        .map(trim_yaml_scalar)
+        .is_some_and(|value| value == expected)
+}
+
+pub(crate) fn frontmatter_value<'a>(
+    frontmatter: &'a Frontmatter<'a>,
+    key: &str,
+) -> Option<&'a str> {
+    for line in &frontmatter.lines {
+        let Some(rest) = line.strip_prefix(key) else {
+            continue;
+        };
+        let Some(value) = rest.strip_prefix(':') else {
+            continue;
+        };
+        return Some(value.trim());
+    }
+    None
+}
+
+pub(crate) fn trim_yaml_scalar(value: &str) -> &str {
+    let value = value.trim();
+    if value.len() >= 2 {
+        let bytes = value.as_bytes();
+        if (bytes[0] == b'"' && bytes[value.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[value.len() - 1] == b'\'')
+        {
+            return &value[1..value.len() - 1];
+        }
+    }
+    value
+}
+
+pub(super) fn wikilink_target(value: &str) -> Option<String> {
+    wikilink_ref(value).map(|target| target.link_name)
+}
+
+pub(super) fn wikilink_ref(value: &str) -> Option<WikilinkRef> {
+    let value = trim_yaml_scalar(value);
+    let inner = value.strip_prefix("[[")?.strip_suffix("]]")?.trim();
+    wikilink_ref_from_inner(inner)
+}
+
+pub(super) fn wikilink_ref_from_inner(inner: &str) -> Option<WikilinkRef> {
+    let before_alias =
+        inner.split_once('|').map_or(inner, |(target, _)| target);
+    let before_heading = before_alias
+        .split_once('#')
+        .map_or(before_alias, |(target, _)| target);
+    let stem = before_heading.rsplit('/').next()?.trim();
+    if stem.is_empty() {
+        return None;
+    }
+    Some(WikilinkRef {
+        link_name: stem.to_ascii_lowercase(),
+        stem: stem.to_string(),
+    })
+}
+
+pub(super) fn wikilink_refs_in_line(line: &str) -> Vec<WikilinkRef> {
+    wikilink_spans_in_line(line)
+        .into_iter()
+        .map(|span| span.link)
+        .collect()
+}
+
+pub(super) fn wikilink_spans_in_line(line: &str) -> Vec<WikilinkSpan> {
+    let mut spans = Vec::new();
+    let mut offset = 0;
+    while let Some(open_relative) = line[offset..].find("[[") {
+        let open = offset + open_relative;
+        let Some(close_relative) = line[open + 2..].find("]]") else {
+            break;
+        };
+        let close = open + 2 + close_relative;
+        if let Some(target) = wikilink_ref_from_inner(&line[open + 2..close]) {
+            spans.push(WikilinkSpan {
+                link: target,
+                start: open,
+                end: close + 2,
+            });
+        }
+        offset = close + 2;
+    }
+    spans
+}
+
+pub(super) fn parse_prj_sub_block(
+    contents: &str,
+    lines: &[LineSpan],
+    prj_line_index: usize,
+) -> PrjSubBlock {
+    let prj_line = lines[prj_line_index];
+    let prj_text = trim_cr(&contents[prj_line.start..prj_line.end]);
+    let prj_indent = leading_whitespace(prj_text);
+    let mut block = PrjSubBlock {
+        prj_indent: prj_indent.to_string(),
+        lines: Vec::new(),
+    };
+
+    for line in lines.iter().skip(prj_line_index + 1) {
+        let line_text = trim_cr(&contents[line.start..line.end]);
+        if line_text.trim().is_empty() {
+            break;
+        }
+        let indentation = leading_whitespace(line_text);
+        if indentation.len() <= prj_indent.len()
+            || !indentation.starts_with(prj_indent)
+        {
+            break;
+        }
+        let trimmed_text = line_text.trim_start().to_string();
+        let is_marker = list_item_content(line_text).is_some_and(|content| {
+            content.starts_with(SUBPROJECTS_MARKER_PREFIX)
+        });
+        block.lines.push(PrjSubBlockLine {
+            line_number: line.line_number,
+            indentation: indentation.to_string(),
+            trimmed_text,
+            is_marker,
+            links: wikilink_refs_in_line(line_text),
+        });
+    }
+
+    block
+}
+
+pub(super) fn leading_whitespace(line: &str) -> &str {
+    let end = line
+        .char_indices()
+        .find_map(|(index, character)| {
+            (!character.is_whitespace()).then_some(index)
+        })
+        .unwrap_or(line.len());
+    &line[..end]
+}
+
+pub(super) fn list_item_content(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let bullet = trimmed.chars().next()?;
+    if !matches!(bullet, '-' | '*' | '+') {
+        return None;
+    }
+    let after_bullet = &trimmed[bullet.len_utf8()..];
+    if !after_bullet.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    Some(after_bullet.trim_start())
+}
+
+pub(super) fn classify_prj_task(
+    relative_path: &Path,
+    candidates: &[PrjCandidate<'_>],
+    sub_block: PrjSubBlock,
+    issues: &mut Vec<ScanIssue>,
+) -> PrjTask {
+    if candidates.is_empty() {
+        return PrjTask::missing();
+    }
+
+    if candidates.len() > 1 {
+        issues.push(ScanIssue::line(
+            relative_path,
+            candidates[1].line_number,
+            "multiple ^prj tasks found; keep exactly one project completion task",
+        ));
+        return PrjTask::invalid(PrjTaskState::Multiple);
+    }
+
+    let candidate = &candidates[0];
+    let Some(task) = parse_task_line(candidate.line) else {
+        issues.push(malformed_prj_issue(relative_path, candidate.line_number));
+        return PrjTask::invalid(PrjTaskState::Malformed);
+    };
+    if !contains_task_tag(task.text) {
+        issues.push(malformed_prj_issue(relative_path, candidate.line_number));
+        return PrjTask::invalid(PrjTaskState::Malformed);
+    }
+
+    let description = task_description(task.text);
+    let placeholder = description == PLACEHOLDER_CRITERIA;
+    PrjTask {
+        state: match task.status {
+            TaskStatus::Open => PrjTaskState::Open,
+            TaskStatus::Done => PrjTaskState::Done,
+            TaskStatus::Canceled => PrjTaskState::Canceled,
+        },
+        scheduled: inline_field_value(task.text, "scheduled"),
+        hidden: contains_hide_tag(task.text),
+        description,
+        placeholder,
+        sub_block,
+    }
+}
+
+pub(super) fn is_valid_prj_task_line(
+    line: &str,
+    task: ParsedTaskLine<'_>,
+) -> bool {
+    has_trailing_prj_anchor(line) && contains_task_tag(task.text)
+}
+
+pub(super) fn malformed_prj_issue(
+    relative_path: &Path,
+    line_number: usize,
+) -> ScanIssue {
+    ScanIssue::line(
+        relative_path,
+        line_number,
+        format!("malformed ^prj task; expected `{PROJECT_TASK_SHAPE}`"),
+    )
+}
+
+pub(super) fn parse_task_line(line: &str) -> Option<ParsedTaskLine<'_>> {
+    let mut trimmed = line.trim_start();
+    while let Some(after_quote) = trimmed.strip_prefix('>') {
+        trimmed = after_quote.trim_start_matches([' ', '\t']);
+    }
+    let marker_end = markdown_list_marker_end(trimmed)?;
+    let after_marker = &trimmed[marker_end..];
+    if !after_marker.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+
+    let after_marker = after_marker.trim_start();
+    let after_open_bracket = after_marker.strip_prefix('[')?;
+    let mark = after_open_bracket.chars().next()?;
+    let after_mark = &after_open_bracket[mark.len_utf8()..];
+    let after_close_bracket = after_mark.strip_prefix(']')?;
+    if !after_close_bracket.is_empty()
+        && !after_close_bracket
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+    {
+        return None;
+    }
+
+    Some(ParsedTaskLine {
+        mark,
+        status: TaskStatus::from_mark(mark),
+        text: after_close_bracket.trim_start(),
+    })
+}
+
+pub(super) fn is_propagated_schedule_mark(mark: char) -> bool {
+    matches!(mark, ' ' | '*' | '/' | '?')
+}
+
+pub(super) fn markdown_list_marker_end(line: &str) -> Option<usize> {
+    let first = line.chars().next()?;
+    if matches!(first, '-' | '*' | '+') {
+        return Some(first.len_utf8());
+    }
+
+    let digit_end = line
+        .char_indices()
+        .take_while(|(_, character)| character.is_ascii_digit())
+        .map(|(index, character)| index + character.len_utf8())
+        .last()?;
+    matches!(line[digit_end..].chars().next(), Some('.' | ')'))
+        .then_some(digit_end + 1)
+}
+
+pub(crate) fn is_markdown_file(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "md")
+}
+
+pub(super) fn is_excluded_directory(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        is_always_excluded_note_directory_name(name)
+            || name.to_str() == Some("done")
+    })
+}
+
+pub(super) fn trim_cr(value: &str) -> &str {
+    value.strip_suffix('\r').unwrap_or(value)
+}
+
+pub(super) fn is_inline_field_space(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t')
+}
