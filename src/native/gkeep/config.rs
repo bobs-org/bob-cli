@@ -162,6 +162,11 @@ impl GkeepConfig {
         &self.token_store_command
     }
 
+    /// The command that prints the stored master token.
+    pub(crate) fn token_command(&self) -> &str {
+        &self.token_command
+    }
+
     /// A config for tests: no file or environment reads.
     #[cfg(test)]
     pub(crate) fn for_tests(

@@ -268,7 +268,10 @@ fn subcommand_options_are_alphabetical() {
 #[test]
 fn stubs_report_not_implemented_with_exit_1() {
     let env = GkeepEnv::new("bob-cli-gkeep-stubs");
-    for subcommand in ["doctor", "list", "login", "pull"] {
+    // Only `list` and `pull` are still stubs: the auth phase implemented
+    // `doctor` and `login` (covered in `gkeep_auth.rs`), and later phases
+    // narrow this loop further as they land.
+    for subcommand in ["list", "pull"] {
         let output = env
             .command()
             .arg("gkeep")
