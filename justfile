@@ -31,6 +31,11 @@ _banner color icon label:
 check-scripts:
     bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh
 
+# Type-check the pinned Keep adapter and run its offline self-test.
+# Not part of `all`: the first run fetches the pinned Python deps.
+check-adapter:
+    python3 -m py_compile scripts/gkeep_adapter.py && uv run --quiet --script scripts/gkeep_adapter.py --self-test
+
 package-list:
     cargo package --list
 

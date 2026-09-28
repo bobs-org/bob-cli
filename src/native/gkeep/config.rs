@@ -162,6 +162,23 @@ impl GkeepConfig {
         &self.token_store_command
     }
 
+    /// A config for tests: no file or environment reads.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        email: &str,
+        device_id: &str,
+        timeout_secs: u64,
+    ) -> Self {
+        Self {
+            email: email.to_string(),
+            token_command: DEFAULT_TOKEN_COMMAND.to_string(),
+            token_store_command: DEFAULT_TOKEN_STORE_COMMAND.to_string(),
+            device_id: device_id.to_string(),
+            target: DEFAULT_TARGET.to_string(),
+            timeout_secs,
+        }
+    }
+
     /// The target note path under `bob_dir`.
     pub(crate) fn target_path(&self, bob_dir: &Path) -> PathBuf {
         bob_dir.join(&self.target)

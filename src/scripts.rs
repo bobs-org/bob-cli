@@ -55,12 +55,20 @@ pub const SCRIPT_ASSETS: &[ScriptAsset] = &[
     },
 ];
 
-pub const SUPPORT_ASSETS: &[EmbeddedAsset] = &[EmbeddedAsset {
-    source_path: "scripts/lib/bob_shell.sh",
-    install_path: "lib/bob_shell.sh",
-    contents: include_bytes!("../scripts/lib/bob_shell.sh"),
-    executable: false,
-}];
+pub const SUPPORT_ASSETS: &[EmbeddedAsset] = &[
+    EmbeddedAsset {
+        source_path: "scripts/lib/bob_shell.sh",
+        install_path: "lib/bob_shell.sh",
+        contents: include_bytes!("../scripts/lib/bob_shell.sh"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/gkeep_adapter.py",
+        install_path: "gkeep/gkeep_adapter.py",
+        contents: include_bytes!("../scripts/gkeep_adapter.py"),
+        executable: false,
+    },
+];
 
 pub fn script_names() -> impl Iterator<Item = &'static str> {
     SCRIPT_ASSETS.iter().map(|asset| asset.command)

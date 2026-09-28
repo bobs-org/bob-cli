@@ -3,10 +3,84 @@
 //! Glyphs show only when `Styler::is_color()`, the same rule as
 //! `bob plugins`: piped output stays plain.
 
+use std::{
+    io::{IsTerminal, Write},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread::{self, JoinHandle},
+    time::Duration,
+};
+
 use serde_json::json;
 
 use super::super::style::Styler;
 use crate::native::gkeep::GkeepError;
+
+/// Braille progress frames drawn by [`Spinner`].
+const SPINNER_FRAMES: &[&str] =
+    &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// A stderr progress spinner, stopped by clearing the line on drop.
+///
+/// `Spinner::start` is a no-op returning an idle spinner when stderr is
+/// not a TTY. Callers pass no label at all in JSON mode or with
+/// `--quiet`, so construction itself stays unconditional here.
+pub(crate) struct Spinner {
+    running: Option<RunningSpinner>,
+}
+
+struct RunningSpinner {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Spinner {
+    /// Start spinning `label` on stderr, unless stderr is not a TTY.
+    pub(crate) fn start(label: &str) -> Self {
+        if !std::io::stderr().is_terminal() {
+            return Self { running: None };
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let label = label.to_string();
+        let handle = thread::spawn(move || {
+            let mut frame = 0;
+            while !thread_stop.load(Ordering::Relaxed) {
+                let glyph = SPINNER_FRAMES[frame % SPINNER_FRAMES.len()];
+                eprint!("\r{glyph} {label}…");
+                let _ = std::io::stderr().flush();
+                frame += 1;
+                thread::sleep(Duration::from_millis(80));
+            }
+        });
+        Self {
+            running: Some(RunningSpinner {
+                stop,
+                handle: Some(handle),
+            }),
+        }
+    }
+
+    /// Whether the spinner thread is drawing (false without a TTY).
+    pub(crate) fn is_running(&self) -> bool {
+        self.running.is_some()
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        if let Some(running) = self.running.as_mut() {
+            running.stop.store(true, Ordering::Relaxed);
+            if let Some(handle) = running.handle.take() {
+                let _ = handle.join();
+            }
+            eprint!("\r\x1b[K");
+            let _ = std::io::stderr().flush();
+        }
+    }
+}
 
 /// Format the age between two unix timestamps: `now`, `12m`, `3h`, `2d`,
 /// `5w`, `4mo`, `2y` (minutes `m`, months `mo`).
@@ -136,5 +210,17 @@ mod tests {
         let plain = Styler::plain();
         assert_eq!(status_glyph(Some(true), plain), None);
         assert_eq!(warning_glyph(plain), None);
+    }
+
+    #[test]
+    fn spinner_frames_are_braille() {
+        assert_eq!(SPINNER_FRAMES.len(), 10);
+        assert_eq!(SPINNER_FRAMES[0], "⠋");
+    }
+
+    #[test]
+    fn spinner_start_and_drop_never_panics() {
+        let spinner = Spinner::start("Syncing Google Keep");
+        let _ = spinner.is_running();
     }
 }

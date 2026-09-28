@@ -3,6 +3,7 @@
 //! The skeleton pins the CLI surface and shared types; the four
 //! subcommand modules start as stubs that later phases implement.
 
+mod adapter;
 mod cli;
 mod config;
 mod doctor;
