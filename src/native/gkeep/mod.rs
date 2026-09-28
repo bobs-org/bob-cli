@@ -6,10 +6,13 @@
 mod cli;
 mod config;
 mod doctor;
+mod ledger;
 mod list;
 mod login;
 mod model;
+mod plan;
 mod pull;
+mod render;
 mod ui;
 
 use std::{ffi::OsString, iter};

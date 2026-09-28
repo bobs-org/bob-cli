@@ -108,6 +108,11 @@ pub(crate) enum RefLookup<'a> {
 }
 
 impl NoteTaskScan {
+    /// Every scanned task, including done and cancelled ones.
+    pub(crate) fn tasks(&self) -> &[NoteTask] {
+        &self.tasks
+    }
+
     pub(crate) fn open_tasks(&self) -> impl Iterator<Item = &NoteTask> {
         self.tasks.iter().filter(|task| task.status_type.is_open())
     }
