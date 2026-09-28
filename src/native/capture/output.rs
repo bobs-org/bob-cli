@@ -1,0 +1,1172 @@
+//! Capture result/error types and human/JSON output.
+use super::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Placement {
+    Created,
+    Inserted,
+    Appended,
+    Toggled,
+    Linked,
+    Closed,
+    Started,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseTimingJson {
+    pub(super) start: String,
+    pub(super) end: String,
+    pub(super) duration_minutes: u64,
+    pub(super) time_range: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseTaskJson {
+    pub(super) role: &'static str,
+    pub(super) block_link: String,
+    pub(super) ledger_line: usize,
+    pub(super) resolved: bool,
+    // Explicit nulls on unresolved rows, matching the top-level
+    // `route: null` / `scheduled: null` convention.
+    pub(super) relative_target: Option<String>,
+    pub(super) block_id: String,
+    pub(super) text: Option<String>,
+    pub(super) previous_status_symbol: Option<char>,
+    pub(super) previous_status_name: Option<String>,
+    pub(super) status_symbol: Option<char>,
+    pub(super) status_name: Option<String>,
+    pub(super) status_changed: bool,
+    pub(super) carried: bool,
+    pub(super) work_log: Vec<String>,
+    pub(super) work_log_created: bool,
+    pub(super) warning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseCarriedJson {
+    pub(super) kind: &'static str,
+    pub(super) text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseNextJson {
+    pub(super) line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
+    pub(super) time_range: Option<String>,
+    pub(super) created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseSummaryJson {
+    pub(super) raw: String,
+    pub(super) pomodoro_line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_name: Option<String>,
+    // Vault-relative day file, so human output and clients name the day
+    // file even on link forms (whose `relative_target` is the route note).
+    pub(super) day_relative: String,
+    pub(super) entry_line: String,
+    pub(super) planned: PomodoroCloseTimingJson,
+    pub(super) closed: PomodoroCloseTimingJson,
+    pub(super) closed_at: String,
+    pub(super) remaining_minutes: i64,
+    pub(super) decremented_minutes: u64,
+    pub(super) tasks: Vec<PomodoroCloseTaskJson>,
+    pub(super) carried: Vec<PomodoroCloseCarriedJson>,
+    pub(super) notes: Vec<String>,
+    pub(super) next_pomodoro: Option<PomodoroCloseNextJson>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CaptureResult {
+    #[serde(flatten)]
+    pub(super) item: CaptureItemResult,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) captures: Vec<CaptureItemResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) global_destination: Option<GlobalDestinationSummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct GlobalDestinationSummary {
+    pub(super) mode: &'static str,
+    pub(super) route: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_id: Option<String>,
+}
+
+impl CaptureResult {
+    pub(super) fn from_items(
+        items: Vec<CaptureItemResult>,
+        global_destination: Option<GlobalDestinationSummary>,
+        warnings: Vec<String>,
+    ) -> Self {
+        let item = items
+            .first()
+            .cloned()
+            .expect("capture batch always contains at least one item");
+        let captures = if items.len() > 1 { items } else { Vec::new() };
+        Self {
+            item,
+            captures,
+            global_destination,
+            warnings,
+        }
+    }
+}
+
+impl std::ops::Deref for CaptureResult {
+    type Target = CaptureItemResult;
+
+    fn deref(&self) -> &Self::Target {
+        &self.item
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectNoteSummary {
+    pub(super) basename: String,
+    pub(super) parent_route: String,
+    pub(super) parent_link: String,
+    pub(super) tasks: usize,
+    pub(super) sections: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CaptureItemResult {
+    pub(super) ok: bool,
+    pub(super) dry_run: bool,
+    pub(super) routed: bool,
+    pub(super) route: Option<String>,
+    pub(super) route_label: String,
+    pub(super) relative_target: String,
+    pub(super) target: String,
+    pub(super) text: String,
+    pub(super) task_line: String,
+    pub(super) kind: &'static str,
+    pub(super) created: String,
+    pub(super) scheduled: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) priority: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) priority_label: Option<String>,
+    pub(super) placement: Placement,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) sub_bullets: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) clip: Option<capture_clip::ClipOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) schedule_log: Option<capture_schedule_log::ScheduleLog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) day_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_link: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_link_placement: Option<Placement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) parent_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) parent_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) parent_section: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) parent_status_symbol: Option<char>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) parent_status_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) toggle_direction: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous_task_line: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) status_symbol: Option<char>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) status_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous_status_symbol: Option<char>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous_status_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) creates_pomodoro: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_already_linked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) removed_pomodoro_links: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) removed_scheduled: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_selector_unused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) toggle_behavior: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) status_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_link_action: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_link_source: Option<PomodoroLinkEndpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_link_destination: Option<PomodoroLinkEndpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project_note: Option<ProjectNoteSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_start: Option<PomodoroStartSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_adjust: Option<PomodoroAdjustSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_shift: Option<PomodoroShiftSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_close: Option<PomodoroCloseSummaryJson>,
+    #[serde(skip)]
+    pub(super) toggle_task_description: Option<String>,
+}
+
+pub(super) fn print_success(
+    result: &CaptureResult,
+    output_format: OutputFormat,
+) {
+    match output_format {
+        OutputFormat::Human => {
+            print_capture_warnings(result);
+            print_human_success(result);
+        }
+        OutputFormat::Json => println!("{}", success_json(result)),
+    }
+}
+
+pub(super) fn print_capture_warnings(result: &CaptureResult) {
+    if result.warnings.is_empty() {
+        return;
+    }
+    let styler = Styler::detect();
+    for warning in &result.warnings {
+        eprintln!("{COMMAND_NAME}: {}: {warning}", styler.warning_prefix());
+    }
+}
+
+pub(super) fn print_human_success(result: &CaptureResult) {
+    if let Some(global) = &result.global_destination {
+        print_global_destination_summary(global);
+    }
+    if result.captures.is_empty() {
+        print_human_item_success(result, None);
+        return;
+    }
+
+    let total = result.captures.len();
+    for (index, item) in result.captures.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        print_human_item_success(item, Some((index + 1, total)));
+    }
+}
+
+pub(super) fn print_global_destination_summary(
+    global: &GlobalDestinationSummary,
+) {
+    let styler = Styler::detect();
+    let route_label = format!("{}.md", global.route);
+    match global.block_id.as_deref() {
+        Some(block_id) => println!(
+            "{}  {} · under {}",
+            styler.dim("global"),
+            styler.cyan(&route_label),
+            styler.cyan(&format!("^{block_id}")),
+        ),
+        None => {
+            println!("{}  {}", styler.dim("global"), styler.cyan(&route_label),)
+        }
+    }
+}
+
+pub(super) fn print_human_item_success(
+    result: &CaptureItemResult,
+    ordinal: Option<(usize, usize)>,
+) {
+    let styler = Styler::detect();
+    let target_label = if result.route_label.is_empty() {
+        result.relative_target.as_str()
+    } else {
+        result.route_label.as_str()
+    };
+    let target_label = styler.cyan(target_label);
+    let prefix = if result.dry_run {
+        styler.success_prefix(true)
+    } else {
+        styler.green("\u{2713}")
+    };
+    let ordinal = ordinal
+        .map(|(index, total)| format!("{index}/{total}  "))
+        .unwrap_or_default();
+    if let Some(close) = result.pomodoro_close.as_ref() {
+        print_human_pomodoro_close_success(
+            result,
+            close,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
+    if result.kind == "pomodoro_link" {
+        print_human_pomodoro_link_success(
+            result,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
+    if result.toggle_direction.is_some() {
+        print_human_task_toggle_success(
+            result,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
+    if let Some(adjust) = result.pomodoro_adjust.as_ref() {
+        print_human_pomodoro_adjust_success(
+            result,
+            adjust,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
+    if let Some(shift) = result.pomodoro_shift.as_ref() {
+        print_human_pomodoro_shift_success(
+            result,
+            shift,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
+    if result.kind == "pomodoro_start" {
+        if let Some(start) = result.pomodoro_start.as_ref() {
+            print_human_pomodoro_start_success(
+                result,
+                start,
+                &styler,
+                &prefix,
+                &ordinal,
+                &target_label,
+            );
+            return;
+        }
+    }
+    let verb = if result.dry_run {
+        "would capture"
+    } else {
+        "captured"
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    if let Some(note) = result.project_note.as_ref() {
+        println!("  parent  {}", styler.cyan(&note.parent_link));
+    }
+    if let Some(parent_text) = result.parent_text.as_deref() {
+        let marker = result
+            .parent_status_symbol
+            .map(|symbol| {
+                format!("{} ", style_task_status_marker(&styler, symbol))
+            })
+            .unwrap_or_default();
+        let block_id = result
+            .block_id
+            .as_deref()
+            .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
+            .unwrap_or_default();
+        let parent_section = result
+            .parent_section
+            .as_deref()
+            .map(|title| format!(" · {}", styler.cyan(title)))
+            .unwrap_or_default();
+        println!("  under {marker}{parent_text}{block_id}{parent_section}");
+    }
+    println!("  {}", styler.dim(&result.task_line));
+    if let Some(note) = result.project_note.as_ref() {
+        let sections = if note.sections.is_empty() {
+            "—".to_string()
+        } else {
+            note.sections.join(", ")
+        };
+        let task_word = if note.tasks == 1 { "task" } else { "tasks" };
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "{} {task_word} · sections {sections}",
+                note.tasks
+            ))
+        );
+    }
+    for line in &result.sub_bullets {
+        println!("  {}", styler.dim(line));
+    }
+    if let Some(clip) = &result.clip {
+        for line in &clip.lines {
+            println!("  {}", styler.dim(line));
+        }
+        for (saved, reused) in clip.file_confirmations() {
+            print_clip_file_confirmation(
+                &styler,
+                result.dry_run,
+                &saved,
+                reused,
+            );
+        }
+    }
+    if let Some(schedule_log) = &result.schedule_log {
+        for line in &schedule_log.lines {
+            println!("  {}", styler.dim(line));
+        }
+    }
+    if let (Some(day_file), Some(block_link)) =
+        (&result.day_file, &result.block_link)
+    {
+        let link_verb = if result.dry_run {
+            "would link"
+        } else {
+            "linked"
+        };
+        println!("{prefix} {link_verb}   {}", styler.cyan(day_file));
+        println!("  {}", styler.dim(&format!("- {block_link}")));
+    }
+    if let Some(start) = result.pomodoro_start.as_ref() {
+        let name = start.pomodoro_name.as_deref().unwrap_or("next session");
+        let created = if start.created_pomodoro {
+            " (created)"
+        } else {
+            ""
+        };
+        let verb = if result.dry_run {
+            "would start"
+        } else {
+            "started"
+        };
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "{verb} {name} {}-{} ({}m){created} at line {}",
+                start.start,
+                start.end,
+                start.duration_minutes,
+                start.pomodoro_line,
+            ))
+        );
+    }
+    if result.project_note.is_some() {
+        println!(
+            "  {}",
+            styler.dim(
+                "hint: 'bob projects sync' adds the parent's Sub-projects line; 'bob task-status-hooks' reconciles Blocked state"
+            )
+        );
+    }
+}
+
+pub(super) fn print_human_pomodoro_close_success(
+    result: &CaptureItemResult,
+    close: &PomodoroCloseSummaryJson,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    _target_label: &str,
+) {
+    let verb = if result.dry_run {
+        "would close"
+    } else {
+        "closed"
+    };
+    let name = close.pomodoro_name.as_deref().unwrap_or("session");
+    let decremented = close.decremented_minutes;
+    let range_text = if decremented > 0 {
+        format!(
+            "{}-{} → {}-{} ({}m, −{}m)",
+            close.planned.start,
+            close.planned.end,
+            close.closed.start,
+            close.closed.end,
+            close.closed.duration_minutes,
+            decremented
+        )
+    } else {
+        format!(
+            "{}-{} ({}m)",
+            close.closed.start, close.closed.end, close.closed.duration_minutes
+        )
+    };
+    let mut header = format!(
+        "{verb} {name} {range_text} · {} line {}",
+        close.day_relative, close.pomodoro_line
+    );
+    if close.remaining_minutes < 0 {
+        header.push_str(&format!(
+            " (ran {}m over)",
+            close.remaining_minutes.abs()
+        ));
+    }
+    println!("{prefix} {ordinal}{header}");
+    // Link forms: existing link status and ledger lines.
+    if result.routed
+        && let (Some(action), Some(dest)) = (
+            result.pomodoro_link_action,
+            result.pomodoro_link_destination.as_ref(),
+        )
+    {
+        let dest_name = dest.name.as_deref().unwrap_or("session");
+        let source_text = result
+            .pomodoro_link_source
+            .as_ref()
+            .map(|source| {
+                let source_name = source.name.as_deref().unwrap_or("session");
+                format!(" from {source_name}")
+            })
+            .unwrap_or_default();
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "{action} into {dest_name} at line {}{source_text}",
+                dest.line
+            ))
+        );
+    }
+    for task in &close.tasks {
+        if !task.resolved {
+            let warning =
+                task.warning.as_deref().unwrap_or("unresolved target");
+            println!("  {}", styler.dim(&format!("warning: {warning}")));
+            continue;
+        }
+        let transition = match (
+            task.previous_status_symbol,
+            task.status_symbol,
+            task.role,
+        ) {
+            (Some(previous), Some(current), _) if previous != current => {
+                let previous_marker =
+                    style_task_status_marker(styler, previous);
+                let current_marker = style_task_status_marker(styler, current);
+                format!("{previous_marker} → {current_marker}")
+            }
+            (_, _, "deferred") => {
+                let marker = task
+                    .previous_status_symbol
+                    .or(task.status_symbol)
+                    .map(|symbol| style_task_status_marker(styler, symbol))
+                    .unwrap_or_else(|| "?".to_string());
+                format!("{marker} deferred")
+            }
+            (Some(symbol), _, _) | (_, Some(symbol), _) => {
+                style_task_status_marker(styler, symbol)
+            }
+            _ => "?".to_string(),
+        };
+        let text = task.text.as_deref().unwrap_or("");
+        let locator = match &task.relative_target {
+            Some(target) => format!("{target} ^{}", task.block_id),
+            None => format!("^{}", task.block_id),
+        };
+        let mut line = if text.is_empty() {
+            format!("{transition} {locator}")
+        } else {
+            format!("{transition} {text} {locator}")
+        };
+        if task.work_log_created {
+            let count = task.work_log.len();
+            if count > 0 {
+                line.push_str(&format!(" +{count} Work Log"));
+            }
+        }
+        println!("  {line}");
+        for entry in task.work_log.iter().take(2) {
+            println!("    {}", styler.dim(entry));
+        }
+    }
+    if let Some(next) = close.next_pomodoro.as_ref() {
+        let next_name = next.name.as_deref().unwrap_or("session");
+        let created_text = if next.created { " (created)" } else { "" };
+        let carries = close.carried.len();
+        let carries_text = if next.created {
+            format!(" · carries {carries} links")
+        } else {
+            String::new()
+        };
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "next: {next_name}{created_text} at line {}{carries_text}",
+                next.line
+            ))
+        );
+    }
+}
+
+pub(super) fn print_human_pomodoro_adjust_success(
+    result: &CaptureItemResult,
+    adjust: &PomodoroAdjustSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let verb = if result.dry_run {
+        "would adjust"
+    } else {
+        "adjusted"
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    let name = adjust.pomodoro_name.as_deref().unwrap_or("current session");
+    let sign = if adjust.delta_minutes >= 0 { "+" } else { "-" };
+    let effect = adjust.delta_minutes.abs();
+    let requested_sign = if adjust.direction == "plus" { "+" } else { "-" };
+    let mut detail = format!(
+        "{} {}-{} ({}m) to {}-{} ({}m), {}{}m at line {}",
+        name,
+        adjust.before_start,
+        adjust.before_end,
+        adjust.before_duration_minutes,
+        adjust.after_start,
+        adjust.after_end,
+        adjust.after_duration_minutes,
+        sign,
+        effect,
+        adjust.pomodoro_line,
+    );
+    if adjust.clamped {
+        detail.push_str(&format!(
+            " (requested {}{}m in {} units clamped)",
+            requested_sign,
+            adjust.requested_minutes.abs(),
+            adjust.requested_units,
+        ));
+    }
+    println!("  {}", styler.dim(&detail));
+    println!("  {}", styler.dim(&result.task_line));
+}
+
+pub(super) fn print_human_pomodoro_shift_success(
+    result: &CaptureItemResult,
+    shift: &PomodoroShiftSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let verb = if result.dry_run {
+        "would shift"
+    } else {
+        "shifted"
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    let name = shift.pomodoro_name.as_deref().unwrap_or("current session");
+    let direction_word = if shift.direction == "later" {
+        "later"
+    } else {
+        "earlier"
+    };
+    let detail = format!(
+        "{} {}-{} to {}-{} ({}m), {}m {} at line {}",
+        name,
+        shift.before_start,
+        shift.before_end,
+        shift.after_start,
+        shift.after_end,
+        shift.duration_minutes,
+        shift.delta_minutes.abs(),
+        direction_word,
+        shift.pomodoro_line,
+    );
+    println!("  {}", styler.dim(&detail));
+    println!("  {}", styler.dim(&result.task_line));
+}
+
+pub(super) fn print_human_pomodoro_start_success(
+    result: &CaptureItemResult,
+    start: &PomodoroStartSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let verb = if result.dry_run {
+        "would start"
+    } else {
+        "started"
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    let name = start
+        .pomodoro_name
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("next session");
+    println!(
+        "  {}",
+        styler.dim(&format!(
+            "{} {}-{} ({}m) at line {}",
+            name,
+            start.start,
+            start.end,
+            start.duration_minutes,
+            start.pomodoro_line,
+        ))
+    );
+    println!("  {}", styler.dim(&result.task_line));
+    // Queued-task lineup in the close's row style, with the unchanged
+    // status marker instead of a transition. Link and task starts carry no
+    // rows and print nothing here.
+    let Some(tasks) = start.tasks.as_ref() else {
+        return;
+    };
+    if tasks.is_empty() {
+        println!("  {}", styler.dim("nothing queued"));
+        return;
+    }
+    for task in tasks {
+        if !task.resolved {
+            let warning =
+                task.warning.as_deref().unwrap_or("unresolved target");
+            println!("  {}", styler.dim(&format!("warning: {warning}")));
+            continue;
+        }
+        let marker = task
+            .status_symbol
+            .map(|symbol| style_task_status_marker(styler, symbol))
+            .unwrap_or_else(|| "?".to_string());
+        let text = task.text.as_deref().unwrap_or("");
+        let locator = match &task.relative_target {
+            Some(target) => format!("{target} ^{}", task.block_id),
+            None => format!("^{}", task.block_id),
+        };
+        if text.is_empty() {
+            println!("  {marker} {locator}");
+        } else {
+            println!("  {marker} {text} {locator}");
+        }
+    }
+}
+
+pub(super) fn print_human_task_toggle_success(
+    result: &CaptureItemResult,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let ensure_next = result.toggle_behavior == Some("ensure_next");
+    let verb = match (result.dry_run, ensure_next) {
+        (true, true) => "would ensure",
+        (false, true) => "ensured",
+        (true, false) => "would toggle",
+        (false, false) => "toggled",
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+
+    let previous_marker = result
+        .previous_status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| styler.dim("[?]"));
+    let next_marker = result
+        .status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| styler.dim("[?]"));
+    let description = result
+        .toggle_task_description
+        .as_deref()
+        .unwrap_or(result.task_line.as_str());
+    let block_id = result
+        .block_id
+        .as_deref()
+        .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
+        .unwrap_or_default();
+    if ensure_next && result.status_changed == Some(false) {
+        println!("  {next_marker} already Next  {description}{block_id}");
+    } else {
+        println!(
+            "  {previous_marker} → {next_marker}  {description}{block_id}"
+        );
+    }
+
+    let mut chips = Vec::new();
+    if result.removed_scheduled.is_some() {
+        chips.push("removed future schedule".to_string());
+    }
+    if result.schedule_log.is_some() {
+        chips.push("logged schedule change".to_string());
+    }
+    if !ensure_next && result.pomodoro_already_linked == Some(true) {
+        chips.push("already linked".to_string());
+    }
+    if result.pomodoro_selector_unused == Some(true) {
+        let selector = result
+            .pomodoro_name
+            .as_deref()
+            .map(|name| format!("#{name}"))
+            .unwrap_or_else(|| "#name".to_string());
+        chips.push(format!("{selector} not used when clearing"));
+    }
+    if !chips.is_empty() {
+        println!("  {}", styler.dim(&chips.join(" · ")));
+    }
+
+    if ensure_next {
+        print_human_ensure_next_ledger(result, styler);
+        return;
+    }
+
+    if let Some(day_file) = result.day_file.as_deref() {
+        let under = result
+            .pomodoro_name
+            .as_deref()
+            .filter(|_| result.toggle_direction == Some("next"))
+            .map(|name| format!(" · under {}", styler.cyan(name)))
+            .unwrap_or_default();
+        println!("  {}{under}", styler.cyan(day_file));
+    }
+
+    match result.toggle_direction {
+        Some("next") => {
+            if let Some(block_link) = result.block_link.as_deref() {
+                let marker = styler.green("+");
+                println!("  {marker} {block_link}");
+            }
+            if result.removed_pomodoro_links.unwrap_or(0) > 0 {
+                print_removed_pomodoro_links(
+                    styler,
+                    result.removed_pomodoro_links.unwrap_or(0),
+                    "later ",
+                );
+            }
+        }
+        Some("open") => {
+            print_removed_pomodoro_links(
+                styler,
+                result.removed_pomodoro_links.unwrap_or(0),
+                "",
+            );
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn print_human_ensure_next_ledger(
+    result: &CaptureItemResult,
+    styler: &Styler,
+) {
+    match result.pomodoro_link_action {
+        Some("moved") => {
+            if let Some(day_file) = result.day_file.as_deref() {
+                let under = result
+                    .pomodoro_name
+                    .as_deref()
+                    .map(|name| format!(" · under {}", styler.cyan(name)))
+                    .unwrap_or_default();
+                println!("  {}{under}", styler.cyan(day_file));
+            }
+            let source = result
+                .pomodoro_link_source
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "source".to_string());
+            let destination = result
+                .pomodoro_link_destination
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "current/next".to_string());
+            println!(
+                "  {} moved Task Link {} → {}",
+                styler.green("↗"),
+                styler.cyan(&source),
+                styler.cyan(&destination),
+            );
+            if result.creates_pomodoro == Some(true) {
+                println!(
+                    "  {} created {}",
+                    styler.green("+"),
+                    styler.cyan(&destination)
+                );
+            }
+        }
+        _ => {
+            let already = result
+                .pomodoro_name
+                .as_deref()
+                .or_else(|| {
+                    result
+                        .pomodoro_link_destination
+                        .as_ref()
+                        .and_then(|endpoint| endpoint.name.as_deref())
+                })
+                .map(|name| format!("Task Link already in {name}; no ledger change."))
+                .unwrap_or_else(|| {
+                    "Task Link already in current/next Pomodoro; no ledger change.".to_string()
+                });
+            println!("  {}", styler.dim(&already));
+        }
+    }
+}
+
+pub(super) fn format_pomodoro_endpoint(
+    endpoint: &PomodoroLinkEndpoint,
+) -> String {
+    if let Some(name) = endpoint.name.as_deref() {
+        name.to_string()
+    } else if let Some(range) = endpoint.time_range.as_deref() {
+        range.to_string()
+    } else {
+        format!("line {}", endpoint.line)
+    }
+}
+
+pub(super) fn print_human_pomodoro_link_success(
+    result: &CaptureItemResult,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let has_start = result.pomodoro_start.is_some();
+    let verb = match (result.dry_run, has_start) {
+        (true, true) => "would start",
+        (false, true) => "start",
+        (true, false) => "would link",
+        (false, false) => "link",
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+
+    let previous_marker = result
+        .previous_status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| styler.dim("[?]"));
+    let next_marker = result
+        .status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| styler.dim("[?]"));
+    let description = result
+        .toggle_task_description
+        .as_deref()
+        .unwrap_or(result.task_line.as_str());
+    let block_id = result
+        .block_id
+        .as_deref()
+        .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
+        .unwrap_or_default();
+    let previous_symbol = result.previous_status_symbol.unwrap_or(' ');
+    let current_symbol = result.status_symbol.unwrap_or(' ');
+    if previous_symbol == '*' && current_symbol == '*' {
+        println!("  {next_marker} already Next  {description}{block_id}");
+    } else if previous_symbol == '/' && current_symbol == '/' {
+        println!("  {next_marker} stays In Progress  {description}{block_id}");
+    } else {
+        println!(
+            "  {previous_marker} → {next_marker}  {description}{block_id}"
+        );
+    }
+
+    let mut chips = Vec::new();
+    if result.removed_scheduled.is_some() {
+        chips.push("removed future schedule".to_string());
+    }
+    if result.schedule_log.is_some() {
+        chips.push("logged schedule change".to_string());
+    }
+    if !chips.is_empty() {
+        println!("  {}", styler.dim(&chips.join(" · ")));
+    }
+
+    match result.pomodoro_link_action {
+        Some("moved") => {
+            let source = result
+                .pomodoro_link_source
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "source".to_string());
+            let destination = result
+                .pomodoro_link_destination
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "current/next".to_string());
+            let created = if result.creates_pomodoro == Some(true) {
+                format!(" (created {destination})")
+            } else {
+                String::new()
+            };
+            println!(
+                "  {}",
+                styler.dim(&format!(
+                    "Moved Task Link {source} → {destination}{created}"
+                ))
+            );
+        }
+        Some("linked") => {
+            let destination = result
+                .pomodoro_link_destination
+                .as_ref()
+                .map(format_pomodoro_endpoint)
+                .unwrap_or_else(|| "current/next".to_string());
+            println!(
+                "  {}",
+                styler.dim(&format!("Linked under {destination}"))
+            );
+            if result.creates_pomodoro == Some(true) {
+                println!("  {}", styler.dim(&format!("created {destination}")));
+            }
+        }
+        _ => {
+            let already = result
+                .pomodoro_name
+                .as_deref()
+                .or_else(|| {
+                    result
+                        .pomodoro_link_destination
+                        .as_ref()
+                        .and_then(|endpoint| endpoint.name.as_deref())
+                })
+                .map(|name| format!("Task Link already in {name}; no ledger change."))
+                .unwrap_or_else(|| {
+                    "Task Link already in current/next Pomodoro; no ledger change.".to_string()
+                });
+            println!("  {}", styler.dim(&already));
+        }
+    }
+
+    if let Some(start) = result.pomodoro_start.as_ref() {
+        let name = start.pomodoro_name.as_deref().unwrap_or("next session");
+        let created = if start.created_pomodoro {
+            " (created)"
+        } else {
+            ""
+        };
+        let verb = if result.dry_run {
+            "would start"
+        } else {
+            "started"
+        };
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "{verb} {name} {}-{} ({}m){created} at line {}",
+                start.start,
+                start.end,
+                start.duration_minutes,
+                start.pomodoro_line,
+            ))
+        );
+    }
+}
+
+pub(super) fn print_removed_pomodoro_links(
+    styler: &Styler,
+    count: usize,
+    qualifier: &str,
+) {
+    let marker = styler.red("−");
+    let plural = if count == 1 { "" } else { "s" };
+    println!(
+        "  {marker} removed {count} {qualifier}Pomodoro task link{plural}"
+    );
+}
+
+pub(super) fn style_task_status_marker(
+    styler: &Styler,
+    symbol: char,
+) -> String {
+    let marker = format!("[{symbol}]");
+    match symbol {
+        '/' => styler.blue(&marker),
+        '*' => styler.yellow(&marker),
+        '?' => styler.red(&marker),
+        _ => styler.dim(&marker),
+    }
+}
+
+pub(super) fn print_clip_file_confirmation(
+    styler: &Styler,
+    dry_run: bool,
+    saved: &str,
+    reused: bool,
+) {
+    let prefix = if dry_run {
+        styler.success_prefix(true)
+    } else {
+        styler.green("\u{2713}")
+    };
+    let verb = if dry_run {
+        "would save"
+    } else if reused {
+        "reused"
+    } else {
+        "saved"
+    };
+    let note = if reused && dry_run { " (reused)" } else { "" };
+    println!("{prefix} {verb:<10}{}{note}", styler.cyan(saved));
+}
+
+pub(super) fn success_json(result: &CaptureResult) -> String {
+    serde_json::to_string(result).expect("serialize capture result")
+}
+
+pub(super) fn print_capture_error(
+    error: CaptureError,
+    output_format: OutputFormat,
+) -> i32 {
+    match output_format {
+        OutputFormat::Human => eprintln!("{COMMAND_NAME}: {}", error.message),
+        OutputFormat::Json => {
+            println!("{}", json!({ "ok": false, "error": error.message }))
+        }
+    }
+    error.kind.exit_code()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CaptureError {
+    pub(super) kind: CaptureErrorKind,
+    pub(super) message: String,
+}
+
+impl CaptureError {
+    pub(super) fn usage(message: impl Into<String>) -> Self {
+        Self {
+            kind: CaptureErrorKind::Usage,
+            message: message.into(),
+        }
+    }
+
+    pub(super) fn io(message: impl Into<String>) -> Self {
+        Self {
+            kind: CaptureErrorKind::Io,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CaptureErrorKind {
+    Usage,
+    Io,
+}
+
+impl CaptureErrorKind {
+    pub(super) fn exit_code(self) -> i32 {
+        match self {
+            Self::Usage => 2,
+            Self::Io => 1,
+        }
+    }
+}

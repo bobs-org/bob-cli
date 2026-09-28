@@ -275,7 +275,7 @@ pub(crate) enum LinkPlanError {
 /// (open or completed) matched the requested name and the caller must
 /// create a named future Pomodoro first -- reusing the existing
 /// `select_named_pomodoro`/`insert_named_pomodoro_child_block` machinery in
-/// `capture.rs`, which already knows how to select-or-create and insert a
+/// `capture/`, which already knows how to select-or-create and insert a
 /// child block in one step. A freshly created entry can never already carry
 /// the link, so the caller does not need to call back into this module for
 /// it.

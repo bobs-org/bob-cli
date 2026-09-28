@@ -2,15 +2,15 @@
 //!
 //! This module owns every position-agnostic classification rule for capture
 //! text: draft-wide `@@` declarations, whitespace normalization, terminal
-//! marker extraction, and `@token` routing. `capture.rs` layers execution
+//! marker extraction, and `@token` routing. `capture/` layers execution
 //! (files, clipboard, note mutation) on top of it, and `capture_parse.rs`
 //! layers a span-aware, read-only editor view on the same functions. There
 //! is exactly one grammar here; the editor path never re-implements token
 //! classification.
 //!
 //! Fallible functions return `Result<T, String>` because this module has no
-//! file I/O and therefore no use for `capture.rs`'s `CaptureError` kinds.
-//! `capture.rs` wraps the returned message in `CaptureError::usage(...)`, so
+//! file I/O and therefore no use for `capture/`'s `CaptureError` kinds.
+//! `capture/` wraps the returned message in `CaptureError::usage(...)`, so
 //! the message text is the single source of truth for both callers.
 
 use std::num::NonZeroUsize;
