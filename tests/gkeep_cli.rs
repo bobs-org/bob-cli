@@ -267,33 +267,6 @@ fn subcommand_options_are_alphabetical() {
 }
 
 #[test]
-fn stubs_report_not_implemented_with_exit_1() {
-    let env = GkeepEnv::new("bob-cli-gkeep-stubs");
-    // Only `pull` is still a stub: the auth phase implemented
-    // `doctor` and `login` (covered in `gkeep_auth.rs`), and the list
-    // phase implemented `list`.
-    for subcommand in ["pull"] {
-        let output = env
-            .command()
-            .arg("gkeep")
-            .arg(subcommand)
-            .output()
-            .unwrap_or_else(|error| {
-                panic!("run bob gkeep {subcommand}: {error}")
-            });
-        assert_eq!(output.status.code(), Some(1));
-        assert!(
-            stderr(&output)
-                .contains(&format!("bob gkeep {subcommand}: not implemented yet")),
-            "expected stub error for {subcommand}:\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            stdout(&output),
-            stderr(&output)
-        );
-    }
-}
-
-#[test]
 fn usage_errors_exit_2() {
     let env = GkeepEnv::new("bob-cli-gkeep-usage");
     let output = env

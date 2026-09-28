@@ -7696,7 +7696,10 @@ fn extract_trailing_schedule(tokens: &mut Vec<&str>) -> Option<u64> {
         .scheduled_offset
 }
 
-fn insert_task_line(contents: &str, task_line: &str) -> (String, Placement) {
+pub(crate) fn insert_task_line(
+    contents: &str,
+    task_line: &str,
+) -> (String, Placement) {
     let lines = line_spans(contents);
     if let Some(section) = tasks_section(&lines) {
         let index = last_task_block_insert_index_in_range(
@@ -8210,7 +8213,7 @@ fn is_blank_line(line: &str) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum Placement {
+pub(crate) enum Placement {
     Created,
     Inserted,
     Appended,
