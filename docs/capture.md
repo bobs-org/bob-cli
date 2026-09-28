@@ -740,7 +740,7 @@ Pomodoro N five-minute units later or earlier, keeping its duration:
 ```bash
 bob capture ++3
 bob capture -- --2
-bob capture --
+bob capture --1
 printf -- '--2\n\n+\n' | bob capture
 ```
 
