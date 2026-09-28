@@ -21,8 +21,9 @@ use super::{
     capture_language::{
         is_block_id, AuthoredSubBullet, CaptureKind, ClipRequest,
         ParsedCaptureItem, ParsedCaptureText, PomodoroAdjustSpec,
-        PomodoroCloseSpec, PomodoroStartSpec, ProjectNotePomodoro,
-        SubBulletTarget, TaskSectionSelector, TaskToggleIntent,
+        PomodoroCloseSpec, PomodoroShiftSpec, PomodoroStartSpec,
+        ProjectNotePomodoro, SubBulletTarget, TaskSectionSelector,
+        TaskToggleIntent,
     },
     capture_pomodoro_close, capture_pomodoros, capture_project_note,
     capture_schedule_log, capture_task_sections, capture_task_toggle,
@@ -197,26 +198,34 @@ ledger action (linked, moved, or already_current), and the resolved \
 destination.\n\n\
 Capture a whole item `+N` or `-N` (for example `+5` or `-2`) to adjust \
 today's current timed Pomodoro by N five-minute units: `+5` extends by 25 \
-minutes, `-2` shortens by 10 minutes. The item must contain only the signed \
-count (leading/trailing whitespace is fine); any extra text, marker, or \
-child line fails instead of creating a task, and `Plan +5` stays ordinary \
-prose. A standalone `+`/`-` is incomplete, `+0`/`-0` fail, and oversized \
-magnitudes fail checked arithmetic before any write. The adjustment selects \
-the single open timed entry in today's `## Pomodoros` section, keeps the \
-start fixed, recomputes `new_end = (start + new_duration) modulo 24 hours` \
-with `new_duration = max(0, old + signed_units*5)`, and rewrites only that \
-ledger line to Bob's canonical `(**HHMM-HHMM** [t:: Nm])` form, preserving \
-other metadata, child bullets, and newline style. A `@@` declaration still \
-routes ordinary items in the same draft but never turns an adjustment into \
-a task. Forced destination, task, section, and clipboard options \
-(`--route`, `--section`, `--task`, `--task-section`, \
-`--clip`, `%`, `s:<N>`, `p:<N>`) are rejected on adjustment items. Later \
-items observe earlier staged edits to the same daily file, dry-run reports \
-without writing, and any failure rolls the whole batch back. JSON reports a \
-distinct `pomodoro_adjust` kind with an additive `pomodoro_adjust` object \
-(direction, requested units/minutes, actual delta, before/after timing, \
-line/name, rendered range); human output names what changed and where, and \
-dry-run says what would change.\n\n\
+minutes, `-2` shortens by 10 minutes. The count is optional and defaults \
+to 1, so `+`, `-`, `++`, and `--` all work. The item must contain only the \
+signed count (leading/trailing whitespace is fine); any extra text, \
+marker, or child line fails instead of creating a task, and `Plan +5` \
+stays ordinary prose. `+0`/`-0` fail, and oversized magnitudes fail checked \
+arithmetic before any write. The adjustment selects the single open timed \
+entry in today's `## Pomodoros` section, keeps the start fixed, recomputes \
+`new_end = (start + new_duration) modulo 24 hours` with `new_duration = \
+max(0, old + signed_units*5)`, and rewrites only that ledger line to Bob's \
+canonical `(**HHMM-HHMM** [t:: Nm])` form, preserving other metadata, child \
+bullets, and newline style. A `@@` declaration still routes ordinary items \
+in the same draft but never turns an adjustment into a task. Forced \
+destination, task, section, and clipboard options (`--route`, `--section`, \
+`--task`, `--task-section`, `--clip`, `%`, `s:<N>`, `p:<N>`) are rejected \
+on adjustment items. Later items observe earlier staged edits to the same \
+daily file, dry-run reports without writing, and any failure rolls the \
+whole batch back. JSON reports a distinct `pomodoro_adjust` kind with an \
+additive `pomodoro_adjust` object (direction, requested units/minutes, \
+actual delta, before/after timing, line/name, rendered range); human output \
+names what changed and where, and dry-run says what would change.\n\n\
+Capture a whole item `++N` or `--N` (for example `++3` or `--2`) to shift \
+today's running timed Pomodoro N five-minute units later or earlier, \
+keeping its duration: both endpoints translate modulo 24 hours like \
+Obsidian's `N\\o` / `N\\O`. The count defaults to 1 (`++` / `--` move one \
+unit); `++0` / `--0` and oversized magnitudes fail before any write, and \
+the item must contain only the operator. JSON reports a distinct \
+`pomodoro_shift` kind with an additive `pomodoro_shift` object; human \
+output names what shifted and where, and dry-run says what would shift.\n\n\
 Capture a whole item `=x` (case-insensitive `=X`) to close today's running \
 timed Pomodoro the way Obsidian's Ctrl+Enter completion does, plus an \
 auto-decrement that shortens an early-stopped session to the earliest \
@@ -764,6 +773,9 @@ fn plan_capture_item(
             request, parsed, spec, today, planner,
         );
     }
+    if let CaptureKind::PomodoroShift { spec } = parsed.kind.clone() {
+        return plan_pomodoro_shift_item(request, parsed, spec, today, planner);
+    }
     if let Some(target) = request.forced_sub_bullet_target.as_ref() {
         parsed.kind = CaptureKind::SubBullet {
             target: target.clone(),
@@ -870,6 +882,7 @@ fn plan_capture_item(
                 project_note: None,
                 pomodoro_start: None,
                 pomodoro_adjust: None,
+                pomodoro_shift: None,
                 pomodoro_close: None,
                 toggle_task_description: Some(toggle.task_description.clone()),
             },
@@ -967,6 +980,7 @@ fn plan_capture_item(
                 project_note: None,
                 pomodoro_start: link.pomodoro_start.clone(),
                 pomodoro_adjust: None,
+                pomodoro_shift: None,
                 pomodoro_close: None,
                 toggle_task_description: Some(link.task_description.clone()),
             },
@@ -1064,6 +1078,9 @@ fn plan_capture_item(
             unreachable!(
                 "pomodoro adjustment capture is planned before this point"
             )
+        }
+        CaptureKind::PomodoroShift { .. } => {
+            unreachable!("pomodoro shift capture is planned before this point")
         }
         CaptureKind::PomodoroLink { .. } => {
             unreachable!("pomodoro link capture is planned before this point")
@@ -1319,6 +1336,7 @@ fn plan_capture_item(
                 .as_ref()
                 .and_then(|edit| edit.start.clone()),
             pomodoro_adjust: None,
+            pomodoro_shift: None,
             pomodoro_close: None,
             toggle_task_description: None,
         },
@@ -1564,6 +1582,7 @@ fn plan_project_note_item(
             }),
             pomodoro_start: None,
             pomodoro_adjust: None,
+            pomodoro_shift: None,
             pomodoro_close: None,
             toggle_task_description: None,
         },
@@ -1687,6 +1706,7 @@ fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::ProjectNote { .. } => "project_note",
         CaptureKind::TaskToggle { .. } => "task_toggle",
         CaptureKind::PomodoroAdjust { .. } => "pomodoro_adjust",
+        CaptureKind::PomodoroShift { .. } => "pomodoro_shift",
         CaptureKind::PomodoroLink { .. } => "pomodoro_link",
         CaptureKind::PomodoroClose { .. } => "pomodoro_close",
     }
@@ -2033,6 +2053,11 @@ fn plan_capture_to_target(
                 "pomodoro adjustment capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::PomodoroShift { .. } => {
+            return Err(CaptureError::io(
+                "pomodoro shift capture invariant failed: wrong write planner",
+            ));
+        }
         CaptureKind::PomodoroLink { .. } => {
             return Err(CaptureError::io(
                 "pomodoro link capture invariant failed: wrong write planner",
@@ -2135,6 +2160,22 @@ struct PomodoroAdjustSummary {
     pomodoro_name: Option<String>,
     time_range: String,
     clamped: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PomodoroShiftSummary {
+    direction: &'static str,
+    requested_units: u64,
+    delta_minutes: i64,
+    before_start: String,
+    before_end: String,
+    after_start: String,
+    after_end: String,
+    duration_minutes: u64,
+    pomodoro_line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_name: Option<String>,
+    time_range: String,
 }
 
 #[derive(Debug)]
@@ -2911,14 +2952,32 @@ fn reject_pomodoro_adjust_conflicts(
     Ok(())
 }
 
-fn plan_pomodoro_adjust_item(
+/// The running session both Pomodoro operators act on: today's single
+/// open, timed, column-zero entry, plus its line span and parsed range.
+struct RunningSessionTarget {
+    day_file: PathBuf,
+    staged: String,
+    line: usize,
+    name: Option<String>,
+    line_text: String,
+    segment_start: usize,
+    range: AdjustRange,
+}
+
+/// Select today's running session through the staged daily file: day-file
+/// existence, `## Pomodoros` section, exactly one open timed entry, line
+/// span/segment start, and parsed range. `verb` is `adjust` or `shift` and
+/// only changes the error copy.
+fn select_running_session(
     request: &CaptureRequest,
-    parsed: ParsedCaptureText,
-    spec: PomodoroAdjustSpec,
-    today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
-) -> Result<PlannedCaptureItem, CaptureError> {
-    reject_pomodoro_adjust_conflicts(&parsed, request)?;
+    verb: &str,
+) -> Result<RunningSessionTarget, CaptureError> {
+    let invariant = if verb == "shift" {
+        "Pomodoro shift invariant failed: target line is out of range"
+    } else {
+        "Pomodoro adjustment invariant failed: target line is out of range"
+    };
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     if !planner.currently_exists(&day_file)? {
         return Err(CaptureError::io(format!(
@@ -2942,27 +3001,24 @@ fn plan_pomodoro_adjust_item(
         })
         .collect::<Vec<_>>();
     if timed_open.is_empty() {
-        return Err(CaptureError::io(
-            "Bob daily note has no open timed Pomodoro to adjust",
-        ));
+        return Err(CaptureError::io(format!(
+            "Bob daily note has no open timed Pomodoro to {verb}"
+        )));
     }
     if timed_open.len() > 1 {
-        return Err(CaptureError::io(
-            "Bob daily note has multiple open timed Pomodoros; finish all but one before adjusting",
-        ));
+        return Err(CaptureError::io(format!(
+            "Bob daily note has multiple open timed Pomodoros; finish all but one before {verb}ing"
+        )));
     }
     let target = timed_open[0];
-    let line_index = target.line.checked_sub(1).ok_or_else(|| {
-        CaptureError::io(
-            "Pomodoro adjustment invariant failed: target line is out of range",
-        )
-    })?;
+    let line_index = target
+        .line
+        .checked_sub(1)
+        .ok_or_else(|| CaptureError::io(invariant))?;
     let lines = line_spans(&staged);
-    let line = lines.get(line_index).ok_or_else(|| {
-        CaptureError::io(
-            "Pomodoro adjustment invariant failed: target line is out of range",
-        )
-    })?;
+    let line = lines
+        .get(line_index)
+        .ok_or_else(|| CaptureError::io(invariant))?;
     let line_text = line.text.to_string();
     let segment_start = if line_index == 0 {
         0
@@ -2970,8 +3026,89 @@ fn plan_pomodoro_adjust_item(
         lines[line_index - 1].end
     };
     let range = parse_adjustment_range(&line_text).ok_or_else(|| {
-        CaptureError::io("selected Pomodoro has an unparseable time range and cannot be adjusted")
+        CaptureError::io(format!(
+            "selected Pomodoro has an unparseable time range and cannot be {verb}ed"
+        ))
     })?;
+    Ok(RunningSessionTarget {
+        day_file,
+        staged,
+        line: target.line,
+        name: target.name.clone(),
+        line_text,
+        segment_start,
+        range,
+    })
+}
+
+fn reject_pomodoro_shift_conflicts(
+    parsed: &ParsedCaptureText,
+    request: &CaptureRequest,
+) -> Result<(), CaptureError> {
+    if !request.forced_destination_flags.is_empty() {
+        return Err(CaptureError::usage(format!(
+            "Pomodoro shift `++N`/`--N` cannot be combined with {}; capture the shift alone",
+            request.forced_destination_flags.join(", ")
+        )));
+    }
+    if request.forced_route.is_some()
+        || request.forced_section.is_some()
+        || request.forced_sub_bullet_target.is_some()
+        || request.forced_task_section.is_some()
+    {
+        return Err(CaptureError::usage(
+            "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, or --task-section; capture the shift alone",
+        ));
+    }
+    if request.forced_clip.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro shift `++N`/`--N` cannot be combined with --clip; capture the shift alone",
+        ));
+    }
+    if parsed.route.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro shift items must contain only the operator (for example `++3` or `--`); remove extra text, markers, or child lines",
+        ));
+    }
+    if parsed.clip.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro shift `++N`/`--N` cannot be combined with % clipboard markers; capture the shift alone",
+        ));
+    }
+    if parsed.scheduled_offset.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro shift `++N`/`--N` cannot be combined with s:<N>; capture the shift alone",
+        ));
+    }
+    if parsed.priority_level.is_some() {
+        return Err(CaptureError::usage(
+            "Pomodoro shift `++N`/`--N` cannot be combined with p:<N>; capture the shift alone",
+        ));
+    }
+    if !parsed.sub_bullets.is_empty() {
+        return Err(CaptureError::usage(
+            "Pomodoro shift items must contain only the operator (for example `++3` or `--`); remove extra text, markers, or child lines",
+        ));
+    }
+    Ok(())
+}
+
+fn plan_pomodoro_adjust_item(
+    request: &CaptureRequest,
+    parsed: ParsedCaptureText,
+    spec: PomodoroAdjustSpec,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    reject_pomodoro_adjust_conflicts(&parsed, request)?;
+    let session = select_running_session(request, planner, "adjust")?;
+    let day_file = session.day_file;
+    let staged = session.staged;
+    let target_line = session.line;
+    let target_name = session.name;
+    let line_text = session.line_text;
+    let segment_start = session.segment_start;
+    let range = session.range;
     let old_duration = adjustment_duration_minutes(&line_text, &range)
         .unwrap_or_else(|| {
             normalize_minutes(
@@ -3071,8 +3208,8 @@ fn plan_pomodoro_adjust_item(
         after_start,
         after_end,
         after_duration_minutes: new_duration,
-        pomodoro_line: target.line,
-        pomodoro_name: target.name.clone(),
+        pomodoro_line: target_line,
+        pomodoro_name: target_name.clone(),
         time_range: new_range_text.clone(),
         clamped: actual_minutes != requested_minutes,
     };
@@ -3111,7 +3248,7 @@ fn plan_pomodoro_adjust_item(
             status_name: None,
             previous_status_symbol: None,
             previous_status_name: None,
-            pomodoro_name: target.name.clone(),
+            pomodoro_name: target_name.clone(),
             creates_pomodoro: None,
             pomodoro_already_linked: None,
             removed_pomodoro_links: None,
@@ -3125,6 +3262,165 @@ fn plan_pomodoro_adjust_item(
             project_note: None,
             pomodoro_start: None,
             pomodoro_adjust: Some(summary),
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            toggle_task_description: None,
+        },
+        clip_plan: None,
+    })
+}
+
+fn plan_pomodoro_shift_item(
+    request: &CaptureRequest,
+    parsed: ParsedCaptureText,
+    spec: PomodoroShiftSpec,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    reject_pomodoro_shift_conflicts(&parsed, request)?;
+    let session = select_running_session(request, planner, "shift")?;
+    let day_file = session.day_file;
+    let staged = session.staged;
+    let target_line = session.line;
+    let target_name = session.name;
+    let segment_start = session.segment_start;
+    let line_text = session.line_text;
+    let range = session.range;
+    let duration = adjustment_duration_minutes(&line_text, &range)
+        .unwrap_or_else(|| {
+            normalize_minutes(
+                range.end_minutes as i64 - range.start_minutes as i64,
+            )
+        });
+    let units_delta = spec.units.checked_mul(5).ok_or_else(|| {
+        CaptureError::usage(
+            "Pomodoro shift is too large; use a smaller unit count",
+        )
+    })?;
+    let delta_minutes: i64 = if spec.later {
+        units_delta.try_into().map_err(|_| {
+            CaptureError::usage(
+                "Pomodoro shift is too large; use a smaller unit count",
+            )
+        })?
+    } else {
+        -(i64::try_from(units_delta).map_err(|_| {
+            CaptureError::usage(
+                "Pomodoro shift is too large; use a smaller unit count",
+            )
+        })?)
+    };
+    let new_start_minutes =
+        (((range.start_minutes as i64 + delta_minutes) % 1440 + 1440) % 1440)
+            as u64;
+    let new_end_minutes = (((range.end_minutes as i64 + delta_minutes) % 1440
+        + 1440)
+        % 1440) as u64;
+    let new_range_text = format_adjusted_range(
+        new_start_minutes,
+        new_end_minutes as u16,
+        duration,
+        &range.metadata,
+    );
+    let global_start = segment_start + range.start_ch;
+    let global_end = segment_start + range.end_ch;
+    if !staged.is_char_boundary(global_start)
+        || !staged.is_char_boundary(global_end)
+    {
+        return Err(CaptureError::io(
+            "Pomodoro shift invariant failed: target range is not on a character boundary",
+        ));
+    }
+    let mut updated =
+        String::with_capacity(staged.len() + new_range_text.len());
+    updated.push_str(&staged[..global_start]);
+    updated.push_str(&new_range_text);
+    updated.push_str(&staged[global_end..]);
+    planner.stage(&day_file, updated)?;
+    let before_start = format!(
+        "{:02}{:02}",
+        range.start_minutes / 60,
+        range.start_minutes % 60
+    );
+    let before_end =
+        format!("{:02}{:02}", range.end_minutes / 60, range.end_minutes % 60);
+    let after_start =
+        format!("{:02}{:02}", new_start_minutes / 60, new_start_minutes % 60);
+    let after_end =
+        format!("{:02}{:02}", new_end_minutes / 60, new_end_minutes % 60);
+    let new_line = format!(
+        "{}{}{}",
+        &line_text[..range.start_ch],
+        new_range_text,
+        &line_text[range.end_ch..]
+    );
+    let relative_target = day_file
+        .strip_prefix(&request.bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.clone());
+    let summary = PomodoroShiftSummary {
+        direction: if spec.later { "later" } else { "earlier" },
+        requested_units: spec.units,
+        delta_minutes,
+        before_start,
+        before_end,
+        after_start,
+        after_end,
+        duration_minutes: duration,
+        pomodoro_line: target_line,
+        pomodoro_name: target_name.clone(),
+        time_range: new_range_text.clone(),
+    };
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: false,
+            route: None,
+            route_label: String::new(),
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            target: day_file.display().to_string(),
+            text: spec.raw.clone(),
+            task_line: new_line,
+            kind: capture_kind_label(&parsed.kind),
+            created: date_string(today),
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: Placement::Toggled,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: None,
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: None,
+            status_symbol: None,
+            status_name: None,
+            previous_status_symbol: None,
+            previous_status_name: None,
+            pomodoro_name: target_name.clone(),
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: Some(summary),
             pomodoro_close: None,
             toggle_task_description: None,
         },
@@ -3674,6 +3970,7 @@ fn plan_pomodoro_close_item(
             project_note: None,
             pomodoro_start: None,
             pomodoro_adjust: None,
+            pomodoro_shift: None,
             pomodoro_close: Some(summary),
             toggle_task_description: None,
         },
@@ -4132,6 +4429,7 @@ fn plan_pomodoro_close_link_item(
             project_note: None,
             pomodoro_start: None,
             pomodoro_adjust: None,
+            pomodoro_shift: None,
             pomodoro_close: Some(summary),
             toggle_task_description: Some(task_description),
         },
@@ -4341,6 +4639,7 @@ fn plan_pomodoro_close_task_item(
             project_note: None,
             pomodoro_start: None,
             pomodoro_adjust: None,
+            pomodoro_shift: None,
             pomodoro_close: Some(summary),
             toggle_task_description: None,
         },
@@ -5392,7 +5691,7 @@ fn plan_pomodoro_link_with_start(
                 .clone()
                 .unwrap_or_else(|| "current".to_string());
             return Err(CaptureError::io(format!(
-                "Pomodoro {name} is already running; finish the current Pomodoro first (close it with `=x`) or use `+N`/`-N` to adjust it"
+                "Pomodoro {name} is already running; finish the current Pomodoro first (close it with `=x`) or use `+N`/`-N` to adjust it or `++N`/`--N` to shift it"
             )));
         }
         return Err(CaptureError::io(
@@ -7818,6 +8117,8 @@ struct CaptureItemResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_adjust: Option<PomodoroAdjustSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_shift: Option<PomodoroShiftSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_close: Option<PomodoroCloseSummaryJson>,
     #[serde(skip)]
     toggle_task_description: Option<String>,
@@ -7931,6 +8232,17 @@ fn print_human_item_success(
         print_human_pomodoro_adjust_success(
             result,
             adjust,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
+    if let Some(shift) = result.pomodoro_shift.as_ref() {
+        print_human_pomodoro_shift_success(
+            result,
+            shift,
             &styler,
             &prefix,
             &ordinal,
@@ -8223,6 +8535,42 @@ fn print_human_pomodoro_adjust_success(
             adjust.requested_units,
         ));
     }
+    println!("  {}", styler.dim(&detail));
+    println!("  {}", styler.dim(&result.task_line));
+}
+
+fn print_human_pomodoro_shift_success(
+    result: &CaptureItemResult,
+    shift: &PomodoroShiftSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let verb = if result.dry_run {
+        "would shift"
+    } else {
+        "shifted"
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    let name = shift.pomodoro_name.as_deref().unwrap_or("current session");
+    let direction_word = if shift.direction == "later" {
+        "later"
+    } else {
+        "earlier"
+    };
+    let detail = format!(
+        "{} {}-{} to {}-{} ({}m), {}m {} at line {}",
+        name,
+        shift.before_start,
+        shift.before_end,
+        shift.after_start,
+        shift.after_end,
+        shift.duration_minutes,
+        shift.delta_minutes.abs(),
+        direction_word,
+        shift.pomodoro_line,
+    );
     println!("  {}", styler.dim(&detail));
     println!("  {}", styler.dim(&result.task_line));
 }
@@ -10845,6 +11193,7 @@ mod tests {
                 project_note: None,
                 pomodoro_start: None,
                 pomodoro_adjust: None,
+                pomodoro_shift: None,
                 pomodoro_close: None,
                 toggle_task_description: None,
             }],

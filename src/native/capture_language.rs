@@ -62,9 +62,18 @@ pub(crate) enum CaptureKind {
     /// A whole-item `+N`/`-N` Pomodoro duration adjustment (for example
     /// `+5` extends today's current timed Pomodoro by 25 minutes). The item
     /// must contain only the signed count; any extra text, marker, or child
-    /// line is an invalid adjustment, never a task.
+    /// line is an invalid adjustment, never a task. The count is optional
+    /// and defaults to 1, so a bare `+` or `-` is one unit.
     PomodoroAdjust {
         spec: PomodoroAdjustSpec,
+    },
+    /// A whole-item `++N`/`--N` Pomodoro session shift (for example `++3`
+    /// moves today's running timed Pomodoro 15 minutes later). The item
+    /// must contain only the operator; any extra text, marker, or child
+    /// line is an invalid shift, never a task. The count is optional and
+    /// defaults to 1, so a bare `++` or `--` is one unit.
+    PomodoroShift {
+        spec: PomodoroShiftSpec,
     },
     /// A solo `@route:block-id[#pomodoro][=<X>]` or
     /// `^route:block-id[#pomodoro][=<X>]` Task Link: link the existing task
@@ -93,7 +102,8 @@ pub(crate) enum PomodoroLinkSpelling {
 }
 
 /// Whole-item `+N`/`-N` adjustment: a sign plus a positive ASCII-decimal
-/// magnitude in 5-minute units (`+5` is five units, 25 minutes).
+/// magnitude in 5-minute units (`+5` is five units, 25 minutes). The count
+/// is optional and defaults to 1 (a bare `+` is one unit).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroAdjustSpec {
     /// Trimmed signed token exactly as typed (for example `+5`).
@@ -102,6 +112,30 @@ pub(crate) struct PomodoroAdjustSpec {
     pub(crate) plus: bool,
     /// Number of 5-minute units (always positive; `+0`/`-0` is rejected).
     pub(crate) units: u64,
+}
+
+/// Whole-item `++N`/`--N` shift: a doubled sign plus a positive
+/// ASCII-decimal magnitude in 5-minute units (`++3` is three units,
+/// 15 minutes). The count is optional and defaults to 1 (a bare `++` is
+/// one unit).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PomodoroShiftSpec {
+    /// Trimmed operator token exactly as typed (for example `++3`).
+    pub(crate) raw: String,
+    /// `true` for `++N` (later), `false` for `--N` (earlier).
+    pub(crate) later: bool,
+    /// Number of 5-minute units (always positive; `++0`/`--0` is rejected).
+    pub(crate) units: u64,
+}
+
+/// A whole-item Pomodoro session operator: one sign resizes (moves the
+/// end), two identical signs shift (moves the whole session).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionOperator {
+    /// One sign: `+N` extends, `-N` shortens.
+    Resize { plus: bool },
+    /// Two signs: `++N` moves later, `--N` moves earlier.
+    Shift { later: bool },
 }
 
 /// Typed `@<route>:<block-id>=x` close specification. `x` is
@@ -1247,14 +1281,83 @@ fn global_declarations_from_tokens<'a>(
         .collect()
 }
 
-/// Whole-item `+N`/`-N` adjustment grammar.
+/// One small lexer for whole-item Pomodoro session operators: one sign
+/// resizes, two identical signs shift, and the ASCII-digit count is
+/// optional. Returns the operator, the digit text, and the token length in
+/// bytes, or `None` when `text` does not start with an operator token.
 ///
-/// Returns `Ok(None)` when the item does not start with a signed count and
-/// ordinary parsing should continue. Returns `Ok(Some(outcome))` for an
-/// exact single-token adjustment. Returns `Err` for every adjustment-shaped
-/// near miss: a standalone sign, a zero magnitude, an overflow, or a valid
-/// signed-count prefix with extra text, markers, or child lines. Near misses
-/// are never allowed to fall through as ordinary tasks.
+/// A token is a sign run of exactly `+`, `-`, `++`, or `--` followed by
+/// zero or more ASCII digits. Longer or mixed runs (`+++`, `---`, `+-`,
+/// `-+3`) are not tokens, so they stay ordinary prose.
+pub(crate) fn session_operator_token(
+    text: &str,
+) -> Option<(SessionOperator, &str, usize)> {
+    let bytes = text.as_bytes();
+    if bytes.len() >= 2 && text.starts_with("++") {
+        if bytes
+            .get(2)
+            .is_some_and(|byte| *byte == b'+' || *byte == b'-')
+        {
+            return None;
+        }
+        let mut len = 2;
+        while len < bytes.len() && bytes[len].is_ascii_digit() {
+            len += 1;
+        }
+        return Some((
+            SessionOperator::Shift { later: true },
+            &text[2..len],
+            len,
+        ));
+    }
+    if bytes.len() >= 2 && text.starts_with("--") {
+        if bytes
+            .get(2)
+            .is_some_and(|byte| *byte == b'+' || *byte == b'-')
+        {
+            return None;
+        }
+        let mut len = 2;
+        while len < bytes.len() && bytes[len].is_ascii_digit() {
+            len += 1;
+        }
+        return Some((
+            SessionOperator::Shift { later: false },
+            &text[2..len],
+            len,
+        ));
+    }
+    if bytes
+        .first()
+        .is_some_and(|byte| *byte == b'+' || *byte == b'-')
+    {
+        if bytes
+            .get(1)
+            .is_some_and(|byte| *byte == b'+' || *byte == b'-')
+        {
+            return None;
+        }
+        let plus = bytes[0] == b'+';
+        let mut len = 1;
+        while len < bytes.len() && bytes[len].is_ascii_digit() {
+            len += 1;
+        }
+        return Some((SessionOperator::Resize { plus }, &text[1..len], len));
+    }
+    None
+}
+
+/// Whole-item session-operator grammar: one sign resizes, two signs shift.
+///
+/// Returns `Ok(None)` when the item does not start with an operator token
+/// and ordinary parsing should continue. Returns `Ok(Some(outcome))` for
+/// an exact single-token operator (an omitted count means 1). Returns
+/// `Err` for every operator-shaped near miss: a zero magnitude, an
+/// overflow, a counted token with extra text, or a bare-or-counted token
+/// with child lines. Near misses are never allowed to fall through as
+/// ordinary tasks. A bare sign run followed by more text on the same line
+/// (`- foo`, `++ plan`), a longer or mixed run (`+++`, `+-`), and any
+/// mid-body token (`Plan ++3`, `C++`) stay ordinary prose.
 fn parse_pomodoro_adjust_item<'a>(
     item: &CaptureItem<'a>,
     parent_line: &ItemLine<'a>,
@@ -1262,38 +1365,95 @@ fn parse_pomodoro_adjust_item<'a>(
     forced_section: Option<&str>,
 ) -> Result<Option<ParsedCaptureItemOutcome<'a>>, String> {
     let parent_trimmed = parent_line.raw.text.trim();
-    if parent_trimmed == "+" || parent_trimmed == "-" {
-        return Err(POMODORO_ADJUST_INCOMPLETE_ERROR.to_string());
-    }
-    let Some(prefix_len) = signed_count_prefix_len(parent_trimmed) else {
+    let Some((operator, digits, prefix_len)) =
+        session_operator_token(parent_trimmed)
+    else {
         return Ok(None);
     };
     let exact = parent_trimmed.len() == prefix_len && item.lines.len() == 1;
     if !exact {
-        return Err(POMODORO_ADJUST_SHAPE_ERROR.to_string());
+        // A counted token claims the item even with extra text: `+5 more`,
+        // `++3@work`, `--2 s:1`, `++3++`. A bare token claims only a child
+        // line; bare text on the same line (`- foo`, `-- aside`) stays
+        // prose.
+        if !digits.is_empty() {
+            return Err(match operator {
+                SessionOperator::Resize { .. } => {
+                    POMODORO_ADJUST_SHAPE_ERROR.to_string()
+                }
+                SessionOperator::Shift { .. } => {
+                    POMODORO_SHIFT_SHAPE_ERROR.to_string()
+                }
+            });
+        }
+        if parent_trimmed.len() == prefix_len && item.lines.len() > 1 {
+            return Err(match operator {
+                SessionOperator::Resize { .. } => {
+                    POMODORO_ADJUST_SHAPE_ERROR.to_string()
+                }
+                SessionOperator::Shift { .. } => {
+                    POMODORO_SHIFT_SHAPE_ERROR.to_string()
+                }
+            });
+        }
+        return Ok(None);
     }
-    let sign = parent_trimmed.as_bytes()[0];
-    let magnitude_text = &parent_trimmed[1..];
-    let units = magnitude_text
-        .parse::<u64>()
-        .map_err(|_| POMODORO_ADJUST_OVERFLOW_ERROR.to_string())?;
+    let units = if digits.is_empty() {
+        1
+    } else {
+        digits.parse::<u64>().map_err(|_| match operator {
+            SessionOperator::Resize { .. } => {
+                POMODORO_ADJUST_OVERFLOW_ERROR.to_string()
+            }
+            SessionOperator::Shift { .. } => {
+                POMODORO_SHIFT_OVERFLOW_ERROR.to_string()
+            }
+        })?
+    };
     if units == 0 {
-        return Err(POMODORO_ADJUST_ZERO_ERROR.to_string());
+        return Err(match operator {
+            SessionOperator::Resize { .. } => {
+                POMODORO_ADJUST_ZERO_ERROR.to_string()
+            }
+            SessionOperator::Shift { .. } => {
+                POMODORO_SHIFT_ZERO_ERROR.to_string()
+            }
+        });
     }
     if forced_route.is_some() || forced_section.is_some() {
-        return Err(POMODORO_ADJUST_FORCED_ERROR.to_string());
+        return Err(match operator {
+            SessionOperator::Resize { .. } => {
+                POMODORO_ADJUST_FORCED_ERROR.to_string()
+            }
+            SessionOperator::Shift { .. } => {
+                POMODORO_SHIFT_FORCED_ERROR.to_string()
+            }
+        });
     }
     let raw = parent_trimmed.to_string();
-    let plus = sign == b'+';
+    let kind = match operator {
+        SessionOperator::Resize { plus } => CaptureKind::PomodoroAdjust {
+            spec: PomodoroAdjustSpec {
+                raw: raw.clone(),
+                plus,
+                units,
+            },
+        },
+        SessionOperator::Shift { later } => CaptureKind::PomodoroShift {
+            spec: PomodoroShiftSpec {
+                raw: raw.clone(),
+                later,
+                units,
+            },
+        },
+    };
     Ok(Some(parsed_capture_item_outcome(
         item,
         ParsedCaptureText {
-            body: raw.clone(),
+            body: raw,
             clip: None,
             route: None,
-            kind: CaptureKind::PomodoroAdjust {
-                spec: PomodoroAdjustSpec { raw, plus, units },
-            },
+            kind,
             scheduled_offset: None,
             priority_level: None,
             sub_bullets: Vec::new(),
@@ -1352,23 +1512,6 @@ fn parse_pomodoro_close_item<'a>(
         return Err(POMODORO_CLOSE_SHAPE_ERROR.to_string());
     }
     Ok(None)
-}
-
-/// Length in bytes of a leading `^[+-][0-9]+` prefix, or `None` when the
-/// text does not start with a sign followed by ASCII digits.
-fn signed_count_prefix_len(text: &str) -> Option<usize> {
-    let bytes = text.as_bytes();
-    if bytes.len() < 2 {
-        return None;
-    }
-    if !matches!(bytes[0], b'+' | b'-') {
-        return None;
-    }
-    let mut len = 1;
-    while len < bytes.len() && bytes[len].is_ascii_digit() {
-        len += 1;
-    }
-    (len > 1).then_some(len)
 }
 
 /// One physical line's resolved item-wide markers and (when a route was
@@ -2974,12 +3117,16 @@ const POMODORO_LINK_INCOMPLETE_ERROR: &str = "incomplete Pomodoro link; finish t
 const POMODORO_LINK_NAME_INCOMPLETE_ERROR: &str = "incomplete Pomodoro link; finish the Pomodoro name `^<route>:<block-id>#<pomodoro>`";
 const POMODORO_LINK_PROJECT_ERROR: &str = "Pomodoro link `^route:block-id+` is a project note; use `@route:block-id+` to create the project note";
 const POMODORO_LINK_TOGGLE_ERROR: &str = "Pomodoro link `^route:block-id!` is a task toggle; use `@route+block-id!` for the explicit toggle";
-const POMODORO_ADJUST_INCOMPLETE_ERROR: &str = "Pomodoro adjustment needs a unit count; use `+N` or `-N` with a positive number (for example `+5` extends today's Pomodoro by 25 minutes)";
 const POMODORO_ADJUST_ZERO_ERROR: &str = "Pomodoro adjustment magnitude must be positive; `+0` and `-0` adjust nothing (for example `+5` extends by 25 minutes)";
 const POMODORO_ADJUST_OVERFLOW_ERROR: &str =
     "Pomodoro adjustment is too large; use a smaller unit count";
-const POMODORO_ADJUST_SHAPE_ERROR: &str = "Pomodoro adjustment items must contain only the signed count (for example `+5`); remove extra text, markers, or child lines";
+const POMODORO_ADJUST_SHAPE_ERROR: &str = "Pomodoro adjustment items must contain only the signed count (for example `+5` or `-`); remove extra text, markers, or child lines";
 const POMODORO_ADJUST_FORCED_ERROR: &str = "Pomodoro adjustment `+N`/`-N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the adjustment alone";
+const POMODORO_SHIFT_ZERO_ERROR: &str = "Pomodoro shift magnitude must be positive; `++0` and `--0` move nothing (for example `++3` moves today's Pomodoro 15 minutes later)";
+const POMODORO_SHIFT_OVERFLOW_ERROR: &str =
+    "Pomodoro shift is too large; use a smaller unit count";
+const POMODORO_SHIFT_SHAPE_ERROR: &str = "Pomodoro shift items must contain only the operator (for example `++3` or `--`); remove extra text, markers, or child lines";
+const POMODORO_SHIFT_FORCED_ERROR: &str = "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the shift alone";
 const POMODORO_CLOSE_SHAPE_ERROR: &str = "`=x` must be the whole capture item; to log a task while closing, use `@route:block-id=x`";
 const POMODORO_CLOSE_INCOMPLETE_ERROR: &str =
     "`=` is incomplete: type `=x` to close the running Pomodoro";
@@ -3007,6 +3154,7 @@ pub(crate) enum SpanKind {
     ActiveTaskRoute,
     ActiveTaskBlockId,
     PomodoroAdjust,
+    PomodoroShift,
     SubBulletRoute,
     SubBulletBlockId,
     SubBulletSection,
@@ -3045,6 +3193,7 @@ impl SpanKind {
             Self::ActiveTaskRoute => "active_task_route",
             Self::ActiveTaskBlockId => "active_task_block_id",
             Self::PomodoroAdjust => "pomodoro_adjust",
+            Self::PomodoroShift => "pomodoro_shift",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
             Self::SubBulletSection => "sub_bullet_section",
@@ -3120,6 +3269,7 @@ pub(crate) enum EditorMode {
     ProjectNote,
     PomodoroProjectNote,
     PomodoroAdjust,
+    PomodoroShift,
     PomodoroLink,
     PomodoroClose,
     Incomplete,
@@ -3137,6 +3287,7 @@ impl EditorMode {
             Self::ProjectNote => "project_note",
             Self::PomodoroProjectNote => "pomodoro_project_note",
             Self::PomodoroAdjust => "pomodoro_adjust",
+            Self::PomodoroShift => "pomodoro_shift",
             Self::PomodoroLink => "pomodoro_link",
             Self::PomodoroClose => "pomodoro_close",
             Self::Incomplete => "incomplete",
@@ -3189,6 +3340,10 @@ pub(crate) struct EditorParse {
     /// input, so version-tolerant readers see no change. Purely lexical:
     /// it never guesses current ledger times.
     pub(crate) pomodoro_adjust: Option<PomodoroAdjustSpec>,
+    /// Validated additive whole-item `++N`/`--N` shift spec, when the item
+    /// is an exact session-operator shift. `None` for every older input,
+    /// so version-tolerant readers see no change. Purely lexical.
+    pub(crate) pomodoro_shift: Option<PomodoroShiftSpec>,
     /// Validated additive `=x` close suffix, when the resolved marker or
     /// whole item carries one. `None` for every older input, so
     /// version-tolerant readers see no change. Purely lexical.
@@ -3231,6 +3386,7 @@ pub(crate) struct EditorItemParse {
     pub(crate) needs: Vec<Need>,
     pub(crate) pomodoro_start: Option<PomodoroStartSpec>,
     pub(crate) pomodoro_adjust: Option<PomodoroAdjustSpec>,
+    pub(crate) pomodoro_shift: Option<PomodoroShiftSpec>,
     pub(crate) pomodoro_close: Option<PomodoroCloseSpec>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
@@ -3503,17 +3659,13 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         global_destination.as_ref().filter(|global| global.inherit)
     {
         for item in &mut items {
-            // Whole-item `+N`/`-N` adjustments and `=x` closes are their
-            // own mode: a `@@` declaration routes ordinary items in the
-            // same draft but never turns an adjustment or close into a
-            // task or changes its destination.
+            // Whole-item session operators and `=x` closes are their own
+            // mode: a `@@` declaration routes ordinary items in the same
+            // draft but never turns an operator or close into a task or
+            // changes its destination.
             if item.mode == EditorMode::PomodoroAdjust
+                || item.mode == EditorMode::PomodoroShift
                 || item.mode == EditorMode::PomodoroClose
-            {
-                continue;
-            }
-            if item.mode == EditorMode::Incomplete
-                && (item.body == "+" || item.body == "-")
             {
                 continue;
             }
@@ -3543,6 +3695,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
                 .unwrap_or_default(),
             pomodoro_start: None,
             pomodoro_adjust: None,
+            pomodoro_shift: None,
             pomodoro_close: None,
             spans,
             diagnostics: global_diagnostics,
@@ -3560,6 +3713,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
     let needs = first.needs.clone();
     let pomodoro_start = first.pomodoro_start.clone();
     let pomodoro_adjust = first.pomodoro_adjust.clone();
+    let pomodoro_shift = first.pomodoro_shift.clone();
     let pomodoro_close = first.pomodoro_close.clone();
     let sub_bullets = first.sub_bullets.clone();
     let mut spans = global_spans;
@@ -3581,6 +3735,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         needs,
         pomodoro_start,
         pomodoro_adjust,
+        pomodoro_shift,
         pomodoro_close,
         spans,
         diagnostics,
@@ -3679,159 +3834,114 @@ fn rekind_sub_bullet_spans(spans: &mut [Span]) {
     }
 }
 
-/// Whole-item `+N`/`-N` adjustment for the live editor. Mirrors
-/// [`parse_pomodoro_adjust_item`]'s execution grammar but never fails: an
-/// exact signed count reports `pomodoro_adjust` with a span covering only
-/// the signed token and an additive spec, a standalone `+`/`-` is an
-/// incomplete editing state, and zero/overflow/shape near misses report
-/// `pomodoro_adjust` (or `incomplete` for a bare sign) plus an
-/// `invalid_pomodoro_adjustment` diagnostic instead of becoming a task.
-/// Purely lexical: it never guesses current ledger times.
+/// Whole-item session operator for the live editor: one sign resizes,
+/// two signs shift. Mirrors [`parse_pomodoro_adjust_item`]'s execution
+/// grammar but never fails: an exact operator reports `pomodoro_adjust`
+/// or `pomodoro_shift` with a span covering only the token and an additive
+/// spec (a bare sign is one unit, never incomplete), and zero/overflow/
+/// shape near misses report the family mode plus an
+/// `invalid_pomodoro_adjustment` / `invalid_pomodoro_shift` diagnostic
+/// instead of becoming a task. Purely lexical: it never guesses current
+/// ledger times.
 fn parse_editor_adjust_item<'a>(
     item: &CaptureItem<'a>,
 ) -> Option<EditorItemOutcome<'a>> {
     let parent = item.lines.first().expect("nonempty item");
     let parent_text = parent.raw.text;
     let parent_trimmed = parent_text.trim();
-    if parent_trimmed == "+" || parent_trimmed == "-" {
-        return Some(EditorItemOutcome {
-            item: EditorItemParse {
-                index: item.index,
-                start: item.start,
-                end: item.end,
-                line_start: item.line_start,
-                line_end: item.line_end,
-                body: parent_trimmed.to_string(),
-                mode: EditorMode::Incomplete,
-                route: None,
-                section: None,
-                block_id: None,
-                needs: Vec::new(),
-                pomodoro_start: None,
-                pomodoro_adjust: None,
-                pomodoro_close: None,
-                spans: Vec::new(),
-                diagnostics: Vec::new(),
-                sub_bullets: Vec::new(),
-                has_local_destination: false,
-                local_destination_markers: Vec::new(),
-            },
-            declarations: Vec::new(),
-        });
-    }
-    let prefix_len = signed_count_prefix_len(parent_trimmed)?;
+    let (operator, digits, prefix_len) =
+        session_operator_token(parent_trimmed)?;
     let leading = parent_text.len() - parent_text.trim_start().len();
     let token_start = parent.raw.start + leading;
     let token_end = token_start + prefix_len;
+    let (mode, span_kind, shape_message, overflow_message, zero_message, code) =
+        match operator {
+            SessionOperator::Resize { .. } => (
+                EditorMode::PomodoroAdjust,
+                SpanKind::PomodoroAdjust,
+                POMODORO_ADJUST_SHAPE_ERROR,
+                POMODORO_ADJUST_OVERFLOW_ERROR,
+                POMODORO_ADJUST_ZERO_ERROR,
+                "invalid_pomodoro_adjustment",
+            ),
+            SessionOperator::Shift { .. } => (
+                EditorMode::PomodoroShift,
+                SpanKind::PomodoroShift,
+                POMODORO_SHIFT_SHAPE_ERROR,
+                POMODORO_SHIFT_OVERFLOW_ERROR,
+                POMODORO_SHIFT_ZERO_ERROR,
+                "invalid_pomodoro_shift",
+            ),
+        };
     let span = Span {
         start: token_start,
         end: token_end,
-        kind: SpanKind::PomodoroAdjust,
+        kind: span_kind,
     };
     let exact = parent_trimmed.len() == prefix_len && item.lines.len() == 1;
     if !exact {
-        return Some(EditorItemOutcome {
-            item: EditorItemParse {
-                index: item.index,
-                start: item.start,
-                end: item.end,
-                line_start: item.line_start,
-                line_end: item.line_end,
-                body: parent_trimmed.to_string(),
-                mode: EditorMode::PomodoroAdjust,
-                route: None,
-                section: None,
-                block_id: None,
-                needs: Vec::new(),
-                pomodoro_start: None,
-                pomodoro_adjust: None,
-                pomodoro_close: None,
-                spans: vec![span],
-                diagnostics: vec![Diagnostic {
-                    severity: Severity::Error,
-                    code: "invalid_pomodoro_adjustment",
-                    message: POMODORO_ADJUST_SHAPE_ERROR.to_string(),
-                    range: Some((item.start, item.end)),
-                }],
-                sub_bullets: Vec::new(),
-                has_local_destination: false,
-                local_destination_markers: Vec::new(),
-            },
-            declarations: Vec::new(),
-        });
+        if digits.is_empty()
+            && !(parent_trimmed.len() == prefix_len && item.lines.len() > 1)
+        {
+            return None;
+        }
+        return Some(editor_operator_outcome(
+            item,
+            parent_trimmed,
+            mode,
+            span,
+            code,
+            shape_message,
+            Some((item.start, item.end)),
+        ));
     }
-    let magnitude_text = &parent_trimmed[1..];
-    let units = match magnitude_text.parse::<u64>() {
-        Ok(units) => units,
-        Err(_) => {
-            return Some(EditorItemOutcome {
-                item: EditorItemParse {
-                    index: item.index,
-                    start: item.start,
-                    end: item.end,
-                    line_start: item.line_start,
-                    line_end: item.line_end,
-                    body: parent_trimmed.to_string(),
-                    mode: EditorMode::PomodoroAdjust,
-                    route: None,
-                    section: None,
-                    block_id: None,
-                    needs: Vec::new(),
-                    pomodoro_start: None,
-                    pomodoro_adjust: None,
-                    pomodoro_close: None,
-                    spans: vec![span],
-                    diagnostics: vec![Diagnostic {
-                        severity: Severity::Error,
-                        code: "invalid_pomodoro_adjustment",
-                        message: POMODORO_ADJUST_OVERFLOW_ERROR.to_string(),
-                        range: Some((token_start, token_end)),
-                    }],
-                    sub_bullets: Vec::new(),
-                    has_local_destination: false,
-                    local_destination_markers: Vec::new(),
-                },
-                declarations: Vec::new(),
-            });
+    let units = if digits.is_empty() {
+        1
+    } else {
+        match digits.parse::<u64>() {
+            Ok(units) => units,
+            Err(_) => {
+                return Some(editor_operator_outcome(
+                    item,
+                    parent_trimmed,
+                    mode,
+                    span,
+                    code,
+                    overflow_message,
+                    Some((token_start, token_end)),
+                ));
+            }
         }
     };
     if units == 0 {
-        return Some(EditorItemOutcome {
-            item: EditorItemParse {
-                index: item.index,
-                start: item.start,
-                end: item.end,
-                line_start: item.line_start,
-                line_end: item.line_end,
-                body: parent_trimmed.to_string(),
-                mode: EditorMode::PomodoroAdjust,
-                route: None,
-                section: None,
-                block_id: None,
-                needs: Vec::new(),
-                pomodoro_start: None,
-                pomodoro_adjust: None,
-                pomodoro_close: None,
-                spans: vec![span],
-                diagnostics: vec![Diagnostic {
-                    severity: Severity::Error,
-                    code: "invalid_pomodoro_adjustment",
-                    message: POMODORO_ADJUST_ZERO_ERROR.to_string(),
-                    range: Some((token_start, token_end)),
-                }],
-                sub_bullets: Vec::new(),
-                has_local_destination: false,
-                local_destination_markers: Vec::new(),
-            },
-            declarations: Vec::new(),
-        });
+        return Some(editor_operator_outcome(
+            item,
+            parent_trimmed,
+            mode,
+            span,
+            code,
+            zero_message,
+            Some((token_start, token_end)),
+        ));
     }
     let raw = parent_trimmed.to_string();
-    let plus = parent_trimmed.as_bytes()[0] == b'+';
-    let spec = PomodoroAdjustSpec {
-        raw: raw.clone(),
-        plus,
-        units,
+    let (pomodoro_adjust, pomodoro_shift) = match operator {
+        SessionOperator::Resize { plus } => (
+            Some(PomodoroAdjustSpec {
+                raw: raw.clone(),
+                plus,
+                units,
+            }),
+            None,
+        ),
+        SessionOperator::Shift { later } => (
+            None,
+            Some(PomodoroShiftSpec {
+                raw: raw.clone(),
+                later,
+                units,
+            }),
+        ),
     };
     Some(EditorItemOutcome {
         item: EditorItemParse {
@@ -3841,13 +3951,14 @@ fn parse_editor_adjust_item<'a>(
             line_start: item.line_start,
             line_end: item.line_end,
             body: raw,
-            mode: EditorMode::PomodoroAdjust,
+            mode,
             route: None,
             section: None,
             block_id: None,
             needs: Vec::new(),
             pomodoro_start: None,
-            pomodoro_adjust: Some(spec),
+            pomodoro_adjust,
+            pomodoro_shift,
             pomodoro_close: None,
             spans: vec![span],
             diagnostics: Vec::new(),
@@ -3857,6 +3968,49 @@ fn parse_editor_adjust_item<'a>(
         },
         declarations: Vec::new(),
     })
+}
+
+/// Build an operator near-miss outcome: the family mode, the token span,
+/// and one diagnostic, with no spec.
+fn editor_operator_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    mode: EditorMode,
+    span: Span,
+    code: &'static str,
+    message: &str,
+    range: Option<(usize, usize)>,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            spans: vec![span],
+            diagnostics: vec![Diagnostic {
+                severity: Severity::Error,
+                code,
+                message: message.to_string(),
+                range,
+            }],
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    }
 }
 
 /// Whole-item `=x` close for the live editor. Mirrors
@@ -3890,6 +4044,7 @@ fn parse_editor_close_item<'a>(
                 needs: Vec::new(),
                 pomodoro_start: None,
                 pomodoro_adjust: None,
+                pomodoro_shift: None,
                 pomodoro_close: None,
                 spans: Vec::new(),
                 diagnostics: Vec::new(),
@@ -3922,6 +4077,7 @@ fn parse_editor_close_item<'a>(
                     needs: Vec::new(),
                     pomodoro_start: None,
                     pomodoro_adjust: None,
+                    pomodoro_shift: None,
                     pomodoro_close: Some(spec),
                     spans: vec![Span {
                         start: token_start,
@@ -3954,6 +4110,7 @@ fn parse_editor_close_item<'a>(
                 needs: Vec::new(),
                 pomodoro_start: None,
                 pomodoro_adjust: None,
+                pomodoro_shift: None,
                 pomodoro_close: None,
                 spans: vec![Span {
                     start: token_start,
@@ -4007,6 +4164,7 @@ fn parse_editor_close_item<'a>(
             needs: Vec::new(),
             pomodoro_start: None,
             pomodoro_adjust: None,
+            pomodoro_shift: None,
             pomodoro_close: None,
             spans: vec![Span {
                 start: token_start,
@@ -4569,6 +4727,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
             needs,
             pomodoro_start,
             pomodoro_adjust: None,
+            pomodoro_shift: None,
             pomodoro_close,
             spans,
             diagnostics,
@@ -6311,6 +6470,7 @@ fn classify_local_marker(
         | EditorMode::ProjectNote
         | EditorMode::PomodoroProjectNote
         | EditorMode::PomodoroAdjust
+        | EditorMode::PomodoroShift
         | EditorMode::PomodoroLink
         | EditorMode::PomodoroClose
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
@@ -6350,6 +6510,10 @@ fn non_absorbable_marker_notice(marker: &LocalDestinationMarker) -> String {
         ),
         EditorMode::PomodoroAdjust => format!(
             "@@ cannot take a Pomodoro adjustment: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::PomodoroShift => format!(
+            "@@ cannot take a Pomodoro shift: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::PomodoroLink => format!(
@@ -7900,6 +8064,7 @@ mod tests {
                 CaptureKind::PomodoroAdjust { .. } => {
                     EditorMode::PomodoroAdjust
                 }
+                CaptureKind::PomodoroShift { .. } => EditorMode::PomodoroShift,
                 CaptureKind::PomodoroLink { .. } => EditorMode::PomodoroLink,
                 CaptureKind::PomodoroClose { .. } => EditorMode::PomodoroClose,
             };
