@@ -33,6 +33,7 @@ pub(crate) enum CaptureKind {
         block_id: String,
         pomodoro_name: Option<String>,
         start: Option<PomodoroStartSpec>,
+        close: Option<PomodoroCloseSpec>,
     },
     /// `@<route>^<block-id>+` (create the note only) or
     /// `@<route>:<block-id>+[#[<pomodoro>]]` (also link its `^prj` task under
@@ -73,7 +74,14 @@ pub(crate) enum CaptureKind {
         block_id: String,
         pomodoro_name: Option<String>,
         start: Option<PomodoroStartSpec>,
+        close: Option<PomodoroCloseSpec>,
         spelling: PomodoroLinkSpelling,
+    },
+    /// A whole-item `=x` Pomodoro close. The item must contain only the
+    /// close token; any extra text, marker, or child line is an invalid
+    /// close, never a task.
+    PomodoroClose {
+        spec: PomodoroCloseSpec,
     },
 }
 
@@ -94,6 +102,22 @@ pub(crate) struct PomodoroAdjustSpec {
     pub(crate) plus: bool,
     /// Number of 5-minute units (always positive; `+0`/`-0` is rejected).
     pub(crate) units: u64,
+}
+
+/// Typed `@<route>:<block-id>=x` close specification. `x` is
+/// case-insensitive; `raw` preserves what was typed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PomodoroCloseSpec {
+    /// Raw `x` text after `=`, exactly as typed.
+    pub(crate) raw: String,
+}
+
+/// Session suffix on a `@<route>:<block-id>` marker: either a start
+/// (`=<X>`) or a close (`=x`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SessionSuffix {
+    Start(PomodoroStartSpec),
+    Close(PomodoroCloseSpec),
 }
 
 /// Typed `@<route>:<block-id>[#<name>]=<X>` start specification, where `<X>`
@@ -869,6 +893,14 @@ fn parse_capture_item<'a>(
     if parent_normalized.is_empty() {
         return Err(missing_text_error());
     }
+    if let Some(outcome) = parse_pomodoro_close_item(
+        item,
+        parent_line,
+        forced_route,
+        forced_section,
+    )? {
+        return Ok(outcome);
+    }
     if let Some(outcome) = parse_pomodoro_adjust_item(
         item,
         parent_line,
@@ -1006,6 +1038,7 @@ fn parse_capture_item<'a>(
             block_id,
             pomodoro_name,
             start,
+            close,
         } = kind
         else {
             return Err(missing_text_error());
@@ -1020,6 +1053,7 @@ fn parse_capture_item<'a>(
                     block_id,
                     pomodoro_name,
                     start,
+                    close,
                     spelling: PomodoroLinkSpelling::At,
                 },
                 scheduled_offset: None,
@@ -1112,6 +1146,14 @@ fn parse_capture_item<'a>(
         }
         if aggregate.priority_level.is_some() {
             return Err(POMODORO_START_PRIORITY_CONFLICT_ERROR.to_string());
+        }
+    }
+    if let CaptureKind::Pomodoro { close: Some(_), .. } = &kind {
+        if aggregate.scheduled_offset.is_some() {
+            return Err(POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR.to_string());
+        }
+        if aggregate.priority_level.is_some() {
+            return Err(POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR.to_string());
         }
     }
     Ok(parsed_capture_item_outcome(
@@ -1259,6 +1301,57 @@ fn parse_pomodoro_adjust_item<'a>(
         Vec::new(),
         None,
     )))
+}
+
+/// Whole-item `=x` close grammar.
+///
+/// Returns `Ok(None)` when the item is not close-shaped and ordinary parsing
+/// should continue. Returns `Ok(Some(outcome))` for an exact single-token
+/// close. Returns `Err` for every close near miss: a lone `=`, or a leading
+/// `=x` token with extra text, markers, or child lines. Near misses never
+/// fall through as ordinary tasks. Other `=`-prefixed tokens (`=3`, `=xx`,
+/// `=x!`, `==`) and mid-body `=x` stay ordinary prose.
+fn parse_pomodoro_close_item<'a>(
+    item: &CaptureItem<'a>,
+    parent_line: &ItemLine<'a>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+) -> Result<Option<ParsedCaptureItemOutcome<'a>>, String> {
+    let parent_trimmed = parent_line.raw.text.trim();
+    if parent_trimmed == "=" {
+        return Err(POMODORO_CLOSE_INCOMPLETE_ERROR.to_string());
+    }
+    if parent_trimmed.eq_ignore_ascii_case("=x") && item.lines.len() == 1 {
+        if forced_route.is_some() || forced_section.is_some() {
+            return Err(POMODORO_CLOSE_FORCED_ERROR.to_string());
+        }
+        let raw = parent_trimmed.to_string();
+        return Ok(Some(parsed_capture_item_outcome(
+            item,
+            ParsedCaptureText {
+                body: raw.clone(),
+                clip: None,
+                route: None,
+                kind: CaptureKind::PomodoroClose {
+                    spec: PomodoroCloseSpec { raw },
+                },
+                scheduled_offset: None,
+                priority_level: None,
+                sub_bullets: Vec::new(),
+            },
+            Vec::new(),
+            None,
+        )));
+    }
+    // Near miss: first token is exactly `=x` but the item has anything else.
+    let mut tokens = parent_trimmed.split_whitespace();
+    let Some(first) = tokens.next() else {
+        return Ok(None);
+    };
+    if first.eq_ignore_ascii_case("=x") {
+        return Err(POMODORO_CLOSE_SHAPE_ERROR.to_string());
+    }
+    Ok(None)
 }
 
 /// Length in bytes of a leading `^[+-][0-9]+` prefix, or `None` when the
@@ -1910,27 +2003,39 @@ struct ColonLinkParts {
     block_id: String,
     pomodoro_name: Option<String>,
     start: Option<PomodoroStartSpec>,
+    close: Option<PomodoroCloseSpec>,
     project_note: bool,
 }
 
 /// Shared post-sigil `@route:…` / `^route:…` component parser: block ID,
-/// optional `#pomodoro` name, and optional `=<X>` start suffix. Both sigils
-/// share this so their validation stays identical.
+/// optional `#pomodoro` name, and optional session suffix (`=<X>` start or
+/// `=x` close). Both sigils share this so their validation stays identical.
 fn parse_colon_link_tail(
     route: &str,
     rest: &str,
 ) -> Result<ColonLinkParts, String> {
-    // Split the additive start suffix `=<X>` before `#` handling: the first
-    // `=` separates the old marker from `<X>` (empty, digits, `-`,
-    // `-digits`, or digits-then-`-`-plus-optional-digits). Any extra `=`
-    // inside `<X>` is malformed.
-    let (rest_before_start, start_suffix) = match rest.split_once('=') {
+    // Split the additive session suffix before `#` handling: the first `=`
+    // separates the old marker from the suffix. `x`/`X` is a close; anything
+    // else follows the `=<X>` start shape. Any extra `=` inside is malformed.
+    let (rest_before_start, suffix) = match rest.split_once('=') {
         Some((before, suffix)) => (before, Some(suffix)),
         None => (rest, None),
     };
-    let start = match start_suffix {
+    let session: Option<SessionSuffix> = match suffix {
         None => None,
-        Some(raw) => Some(parse_pomodoro_start_suffix(raw)?),
+        Some(raw) if raw.eq_ignore_ascii_case("x") => {
+            Some(SessionSuffix::Close(PomodoroCloseSpec {
+                raw: raw.to_string(),
+            }))
+        }
+        Some(raw) => {
+            Some(SessionSuffix::Start(parse_pomodoro_start_suffix(raw)?))
+        }
+    };
+    let (start, close) = match session {
+        None => (None, None),
+        Some(SessionSuffix::Start(spec)) => (Some(spec), None),
+        Some(SessionSuffix::Close(spec)) => (None, Some(spec)),
     };
     let (block_id, pomodoro_name) = match rest_before_start.split_once('#') {
         Some((block_id, name)) => (block_id, Some(name)),
@@ -1971,10 +2076,20 @@ fn parse_colon_link_tail(
     if project_note && start.is_some() {
         return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
     }
+    if project_note && close.is_some() {
+        return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
+    }
+    if close.is_some() && pomodoro_name.is_some() {
+        let name = pomodoro_name.as_deref().unwrap_or_default();
+        return Err(format!(
+            "`=x` always closes the running Pomodoro; remove `#{name}` (drop `=x` to link under a named Pomodoro instead)"
+        ));
+    }
     Ok(ColonLinkParts {
         block_id: block_id.to_string(),
         pomodoro_name,
         start,
+        close,
         project_note,
     })
 }
@@ -2005,6 +2120,7 @@ fn parse_pomodoro_route_token(token: &str) -> Result<RouteToken, String> {
                 block_id: parts.block_id,
                 pomodoro_name: parts.pomodoro_name,
                 start: parts.start,
+                close: parts.close,
             }
         },
     })
@@ -2139,12 +2255,13 @@ enum CaretTokenShape {
     NamePartial { route: String, block_id: String },
     /// A complete `^route:block-id[#name][=<X>]` token. `link_end` ends the
     /// `route:block-id` part (before any `#`/`=`); `name_range` covers the
-    /// name text after `#`; `start_offset` starts the `=<X>` suffix.
+    /// name text after `#`; `start_offset` starts the `=<X>`/`=x` suffix.
     Complete {
         route: String,
         block_id: String,
         pomodoro_name: Option<String>,
         start: Option<PomodoroStartSpec>,
+        close: Option<PomodoroCloseSpec>,
         link_end: usize,
         name_range: Option<(usize, usize)>,
         start_offset: Option<usize>,
@@ -2218,6 +2335,7 @@ fn classify_caret_token(text: &str) -> CaretTokenShape {
                 block_id: parts.block_id,
                 pomodoro_name: parts.pomodoro_name,
                 start: parts.start,
+                close: parts.close,
                 link_end,
                 name_range,
                 start_offset,
@@ -2268,6 +2386,7 @@ enum CaretItemKind {
         block_id: String,
         pomodoro_name: Option<String>,
         start: Option<PomodoroStartSpec>,
+        close: Option<PomodoroCloseSpec>,
         link_end: usize,
         name_range: Option<(usize, usize)>,
         start_offset: Option<usize>,
@@ -2330,6 +2449,7 @@ fn classify_caret_item<'a>(
             block_id,
             pomodoro_name,
             start,
+            close,
             link_end,
             name_range,
             start_offset,
@@ -2368,6 +2488,7 @@ fn classify_caret_item<'a>(
                     block_id,
                     pomodoro_name,
                     start,
+                    close,
                     link_end,
                     name_range,
                     start_offset,
@@ -2488,6 +2609,7 @@ fn parse_pomodoro_link_item<'a>(
                         block_id: parts.block_id,
                         pomodoro_name: parts.pomodoro_name,
                         start: parts.start,
+                        close: parts.close,
                         spelling: PomodoroLinkSpelling::Caret,
                     },
                     scheduled_offset: None,
@@ -2858,6 +2980,13 @@ const POMODORO_ADJUST_OVERFLOW_ERROR: &str =
     "Pomodoro adjustment is too large; use a smaller unit count";
 const POMODORO_ADJUST_SHAPE_ERROR: &str = "Pomodoro adjustment items must contain only the signed count (for example `+5`); remove extra text, markers, or child lines";
 const POMODORO_ADJUST_FORCED_ERROR: &str = "Pomodoro adjustment `+N`/`-N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the adjustment alone";
+const POMODORO_CLOSE_SHAPE_ERROR: &str = "`=x` must be the whole capture item; to log a task while closing, use `@route:block-id=x`";
+const POMODORO_CLOSE_INCOMPLETE_ERROR: &str =
+    "`=` is incomplete: type `=x` to close the running Pomodoro";
+const POMODORO_CLOSE_FORCED_ERROR: &str = "Pomodoro close `=x` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the close alone";
+const POMODORO_CLOSE_PROJECT_NOTE_ERROR: &str = "Pomodoro close suffix `=x` applies only to `@<route>:<block-id>` task captures, not project-note `+` forms";
+pub(crate) const POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `s:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
+pub(crate) const POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `p:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
 
 // ---------------------------------------------------------------------------
 // Editor-facing parse
@@ -2990,6 +3119,7 @@ pub(crate) enum EditorMode {
     PomodoroProjectNote,
     PomodoroAdjust,
     PomodoroLink,
+    PomodoroClose,
     Incomplete,
 }
 
@@ -3006,6 +3136,7 @@ impl EditorMode {
             Self::PomodoroProjectNote => "pomodoro_project_note",
             Self::PomodoroAdjust => "pomodoro_adjust",
             Self::PomodoroLink => "pomodoro_link",
+            Self::PomodoroClose => "pomodoro_close",
             Self::Incomplete => "incomplete",
         }
     }
@@ -3707,7 +3838,46 @@ fn parse_editor_adjust_item<'a>(
     })
 }
 
+fn parse_editor_close_item<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<EditorItemOutcome<'a>> {
+    // Minimal close-capture editor support: an exact whole-item `=x`
+    // reports `pomodoro_close` so it is never mistaken for a start.
+    // Full spans, specs, and diagnostics belong to close-editor-contract.
+    let parent = item.lines.first().expect("nonempty item");
+    let parent_trimmed = parent.raw.text.trim();
+    if !parent_trimmed.eq_ignore_ascii_case("=x") || item.lines.len() != 1 {
+        return None;
+    }
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::PomodoroClose,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            spans: Vec::new(),
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    })
+}
+
 fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
+    if let Some(close) = parse_editor_close_item(item) {
+        return close;
+    }
     if let Some(adjustment) = parse_editor_adjust_item(item) {
         return adjustment;
     }
@@ -4000,6 +4170,7 @@ fn parse_editor_item<'a>(item: &CaptureItem<'a>) -> EditorItemOutcome<'a> {
                 block_id: caret_block,
                 pomodoro_name: caret_name,
                 start: caret_start,
+                close: _,
                 link_end,
                 name_range,
                 start_offset,
@@ -5867,6 +6038,7 @@ fn classify_local_marker(
         | EditorMode::PomodoroProjectNote
         | EditorMode::PomodoroAdjust
         | EditorMode::PomodoroLink
+        | EditorMode::PomodoroClose
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
@@ -5908,6 +6080,10 @@ fn non_absorbable_marker_notice(marker: &LocalDestinationMarker) -> String {
         ),
         EditorMode::PomodoroLink => format!(
             "@@ cannot take a Pomodoro link: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::PomodoroClose => format!(
+            "@@ cannot take a Pomodoro close: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::Incomplete => {
@@ -7445,6 +7621,7 @@ mod tests {
                     EditorMode::PomodoroAdjust
                 }
                 CaptureKind::PomodoroLink { .. } => EditorMode::PomodoroLink,
+                CaptureKind::PomodoroClose { .. } => EditorMode::PomodoroClose,
             };
             assert_eq!(parse.mode, expected_mode, "{raw}");
             if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {
@@ -7989,6 +8166,7 @@ mod tests {
                 block_id: "deep-fix".to_string(),
                 pomodoro_name: Some("c++".to_string()),
                 start: None,
+                close: None,
             }
         );
 
@@ -8005,6 +8183,7 @@ mod tests {
                 block_id: "deep-fix".to_string(),
                 pomodoro_name: Some("bob+sase".to_string()),
                 start: None,
+                close: None,
             }
         );
 
@@ -9662,6 +9841,7 @@ were removed"
                 block_id: "deep-fix".to_string(),
                 pomodoro_name: Some("bugs+".to_string()),
                 start: None,
+                close: None,
             }
         );
     }
