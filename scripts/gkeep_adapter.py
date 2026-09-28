@@ -27,17 +27,18 @@ Run ``python3 -m py_compile`` plus ``--self-test`` via ``just check-adapter``.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
+import io
 import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import traceback
 
 PROTOCOL_VERSION = 1
-
-PINNED_GKEEPAPI = "0.17.1"
-PINNED_GPSOAUTH = "2.0.0"
 
 STATE_DIR_MODE = 0o700
 STATE_FILE_MODE = 0o600
@@ -481,11 +482,52 @@ OPS = {
 }
 
 
+def _parent_alive(pid: int) -> bool:
+    """Whether the parent process still exists (for the watchdog)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _maybe_start_parent_watchdog() -> None:
+    """Exit when the Rust parent is gone (Ctrl-C orphan fix).
+
+    `spawn_adapter` sets `BOB_GKEEP_PARENT_PID`; a daemon thread checks
+    every 0.5s and exits when the parent disappears. Unset or invalid
+    values start no watchdog.
+    """
+    raw = os.environ.get("BOB_GKEEP_PARENT_PID")
+    if not raw:
+        return
+    try:
+        pid = int(raw)
+    except ValueError:
+        return
+    if pid <= 0:
+        return
+
+    def _watch() -> None:
+        while True:
+            time.sleep(0.5)
+            if not _parent_alive(pid):
+                os._exit(1)
+
+    thread = threading.Thread(target=_watch, daemon=True)
+    thread.start()
+
+
 def _report_internal(exc: BaseException, secrets: list[str]) -> AdapterFail:
     """Shape a classified error, printing a traceback for internal errors."""
     kind, message = classify_error(exc)
-    if kind == "internal":
-        traceback.print_exc(file=sys.stderr)
+    if kind == "internal" and sys.exc_info()[0] is not None:
+        sys.stderr.write(scrub(traceback.format_exc(), secrets))
+        sys.stderr.write("\n")
     return AdapterFail(kind, scrub(message, secrets))
 
 
@@ -663,11 +705,37 @@ def self_test() -> int:
         _package_version("definitely-not-a-real-package-xyz") == "unknown",
     )
 
-    internal = _report_internal(ValueError("boom"), [])
-    check(
-        "internal error response shape",
-        isinstance(internal, AdapterFail) and internal.kind == "internal",
-    )
+    secret = "aas_et/self-test-secret"
+    try:
+        raise ValueError(f"boom {secret}")
+    except ValueError as exc:
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            internal = _report_internal(exc, [secret])
+        captured = buf.getvalue()
+        check(
+            "internal error response shape",
+            isinstance(internal, AdapterFail)
+            and internal.kind == "internal"
+            and "<redacted>" in internal.message
+            and secret not in internal.message,
+        )
+        check(
+            "internal traceback is scrubbed",
+            "<redacted>" in captured and secret not in captured,
+        )
+        check(
+            "internal stderr is not empty",
+            "ValueError" in captured or "Traceback" in captured,
+        )
+
+    check("_parent_alive self", _parent_alive(os.getpid()) is True)
+    import subprocess
+
+    with subprocess.Popen(["true"]) as child:
+        dead_pid = child.pid
+    # Reaped after context exit.
+    check("_parent_alive dead", _parent_alive(dead_pid) is False)
 
     if failures:
         for failure in failures:
@@ -681,6 +749,7 @@ def main(argv: list[str]) -> int:
     """Read one request from stdin, write one response to stdout."""
     if "--self-test" in argv[1:]:
         return self_test()
+    _maybe_start_parent_watchdog()
     try:
         raw = sys.stdin.read()
     except Exception as exc:  # noqa: BLE001 - stdin is best effort
@@ -702,7 +771,6 @@ def main(argv: list[str]) -> int:
         print(json.dumps(fail_response(fail.kind, fail.message)))
         return 0
     except Exception as exc:  # noqa: BLE001 - unexpected: traceback + ok:false
-        traceback.print_exc(file=sys.stderr)
         secrets: list[str] = []
         if isinstance(data, dict):
             for key in ("master_token", "oauth_token"):
@@ -710,6 +778,9 @@ def main(argv: list[str]) -> int:
                 if isinstance(value, str) and value:
                     secrets.append(value)
         kind, message = classify_error(exc)
+        if kind == "internal":
+            sys.stderr.write(scrub(traceback.format_exc(), secrets))
+            sys.stderr.write("\n")
         print(json.dumps(fail_response(kind, scrub(message, secrets))))
         return 0
 

@@ -240,6 +240,17 @@ impl ArchiveStatus {
     pub(crate) fn is_success(self) -> bool {
         matches!(self, Self::Archived | Self::AlreadyArchived)
     }
+
+    /// The wire string for JSON and human output.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Archived => "archived",
+            Self::AlreadyArchived => "already_archived",
+            Self::Changed => "changed",
+            Self::Missing => "missing",
+            Self::Error => "error",
+        }
+    }
 }
 
 fn sha256_hex(text: &str) -> String {

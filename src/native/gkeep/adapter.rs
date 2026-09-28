@@ -128,8 +128,9 @@ impl AdapterClient {
         &self,
         spinner_label: Option<&str>,
     ) -> Result<PingResponse, GkeepError> {
-        let response =
-            into_result(self.run_request(&PingRequest::new(), spinner_label)?)?;
+        let (value, stderr_text) =
+            self.run_request(&PingRequest::new(), spinner_label)?;
+        let response = into_result(value, &stderr_text)?;
         let protocol =
             response.get("protocol").and_then(serde_json::Value::as_u64);
         if protocol != Some(u64::from(ADAPTER_PROTOCOL_VERSION)) {
@@ -162,7 +163,8 @@ impl AdapterClient {
             auth: credentials.auth(),
             include_archived,
         };
-        let response = into_result(self.run_request(&request, spinner_label)?)?;
+        let (value, stderr_text) = self.run_request(&request, spinner_label)?;
+        let response = into_result(value, &stderr_text)?;
         let snapshot: SnapshotResponse = serde_json::from_value(response)
             .map_err(|error| {
                 GkeepError::runtime(
@@ -192,7 +194,8 @@ impl AdapterClient {
                 })
                 .collect(),
         };
-        let response = into_result(self.run_request(&request, spinner_label)?)?;
+        let (value, stderr_text) = self.run_request(&request, spinner_label)?;
+        let response = into_result(value, &stderr_text)?;
         let archive: ArchiveResponse = serde_json::from_value(response)
             .map_err(|error| {
                 GkeepError::runtime(
@@ -218,7 +221,8 @@ impl AdapterClient {
             oauth_token: cookie.to_string(),
             device_id: device_id.to_string(),
         };
-        let response = into_result(self.run_request(&request, spinner_label)?)?;
+        let (value, stderr_text) = self.run_request(&request, spinner_label)?;
+        let response = into_result(value, &stderr_text)?;
         let exchange: ExchangeResponse = serde_json::from_value(response)
             .map_err(|error| {
                 GkeepError::runtime(
@@ -238,11 +242,14 @@ impl AdapterClient {
     /// On timeout the whole adapter process group is killed, so an
     /// orphaned `uv` child (e.g. Python) cannot hold the pipes open and
     /// block the reader joins. Reported with `timed out after Ns`.
+    /// After the leader exits, with any status, the rest of its process
+    /// group is killed before joining the readers, so a straggler holding
+    /// the pipes cannot hang the joins.
     fn run_request(
         &self,
         request: &impl serde::Serialize,
         spinner_label: Option<&str>,
-    ) -> Result<serde_json::Value, GkeepError> {
+    ) -> Result<(serde_json::Value, String), GkeepError> {
         let payload =
             serde_json::to_string(request).expect("adapter request serializes");
         let _spinner = spinner_label.map(Spinner::start);
@@ -293,6 +300,9 @@ impl AdapterClient {
                 }
             }
         };
+        // The leader exited: kill any straggler holding the pipes
+        // before joining the readers. Normally the group is empty.
+        kill_stragglers(child.id());
         let stdin_error = stdin_writer.join().unwrap_or(None);
         let stdout_text = stdout_reader.join().unwrap_or_default();
         let stderr_text = stderr_reader.join().unwrap_or_default();
@@ -337,12 +347,26 @@ impl AdapterClient {
                 ));
             }
         }
-        serde_json::from_str(&stdout_text).map_err(|error| {
-            adapter_crash(
-                format!("the Keep adapter returned invalid JSON: {error}"),
-                stderr_text,
-            )
-        })
+        let value: serde_json::Value = serde_json::from_str(&stdout_text)
+            .map_err(|error| {
+                adapter_crash(
+                    format!("the Keep adapter returned invalid JSON: {error}"),
+                    stderr_text.clone(),
+                )
+            })?;
+        Ok((value, stderr_text))
+    }
+}
+
+/// Kill stragglers in the adapter's process group after the leader exits.
+///
+/// The group leader is already reaped, so a failed `kill` (ESRCH) is
+/// ignored. This never falls back to `child.kill()` on the reaped child.
+fn kill_stragglers(pid: u32) {
+    #[cfg(unix)]
+    {
+        let target = format!("-{pid}");
+        let _ = Command::new("kill").args(["-KILL", "--", &target]).output();
     }
 }
 
@@ -391,7 +415,8 @@ fn spawn_adapter(
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .env("BOB_GKEEP_PARENT_PID", std::process::id().to_string());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -472,8 +497,13 @@ fn adapter_crash(reason: String, stderr_text: String) -> GkeepError {
 }
 
 /// Split an `ok:false` response into a typed error with targeted hints.
+///
+/// An `internal` error carries the adapter's stderr tail (the last 20
+/// lines, the same as `adapter_crash`), so the scrubbed traceback reaches
+/// the user. Other kinds are unchanged.
 fn into_result(
     value: serde_json::Value,
+    stderr_text: &str,
 ) -> Result<serde_json::Value, GkeepError> {
     let ok = value
         .get("ok")
@@ -486,10 +516,19 @@ fn into_result(
         .pointer("/error/kind")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("internal");
-    let message = value
+    let mut message = value
         .pointer("/error/message")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("the Keep adapter reported an error");
+        .unwrap_or("the Keep adapter reported an error")
+        .to_string();
+    if kind == "internal" {
+        let mut tail: Vec<&str> = stderr_text.lines().rev().take(20).collect();
+        tail.reverse();
+        if !tail.is_empty() {
+            message.push('\n');
+            message.push_str(&tail.join("\n"));
+        }
+    }
     let hint = match kind {
         "auth" => Some("run `bob gkeep doctor`, then `bob gkeep login`"),
         "rate_limit" => Some("wait a few minutes"),
@@ -497,7 +536,7 @@ fn into_result(
         "network" => Some("check your network connection and try again"),
         _ => None,
     };
-    let mut error = GkeepError::runtime(kind, message.to_string());
+    let mut error = GkeepError::runtime(kind, message);
     if let Some(hint) = hint {
         error = error.with_hint(hint);
     }
@@ -830,13 +869,130 @@ mod tests {
         assert_request_protocol(&stdin_path, "exchange");
     }
 
-    fn assert_request_protocol(stdin_path: &PathBuf, op: &str) {
+    fn assert_request_protocol(stdin_path: &std::path::Path, op: &str) {
         let text =
             std::fs::read_to_string(stdin_path).expect("read stdin dump");
         let value: serde_json::Value =
             serde_json::from_str(&text).expect("request is JSON");
         assert_eq!(value["protocol"], serde_json::json!(1), "{op} protocol");
         assert_eq!(value["op"], serde_json::json!(op), "{op} name");
+    }
+
+    #[test]
+    fn spawn_sets_parent_pid_env() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let pid_path = dir.path().join("parent_pid");
+        let script = format!(
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s' {dollar}BOB_GKEEP_PARENT_PID > '{pid}'\nprintf '%s' '{{\"ok\":true,\"protocol\":1,\"python\":\"3.12.3\",\"gkeepapi\":\"0.17.1\",\"gpsoauth\":\"2.0.0\"}}'\n",
+            dollar = "$",
+            pid = pid_path.display(),
+        );
+        let path = write_script(&dir, "pid.sh", &script);
+        let client =
+            AdapterClient::new(path, Vec::new(), Duration::from_secs(30));
+        client.ping(None).expect("ping succeeds");
+        let recorded =
+            std::fs::read_to_string(&pid_path).expect("read parent pid");
+        assert_eq!(
+            recorded,
+            std::process::id().to_string(),
+            "adapter sees the Rust parent pid"
+        );
+    }
+
+    #[test]
+    fn normal_exit_with_pipe_holding_straggler_returns_quickly() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = write_script(
+            &dir,
+            "straggler.sh",
+            "#!/bin/sh\nsleep 30 &\nprintf '%s' '{\"ok\":true,\"protocol\":1,\"python\":\"3.12.3\",\"gkeepapi\":\"0.17.1\",\"gpsoauth\":\"2.0.0\"}'\nexit 0\n",
+        );
+        let client =
+            AdapterClient::new(path, Vec::new(), Duration::from_secs(2));
+        let start = Instant::now();
+        let ping = client.ping(None).expect("straggler still succeeds");
+        assert_eq!(ping.gkeepapi, "0.17.1");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "returns within a few seconds despite the straggler",
+        );
+    }
+
+    #[test]
+    fn internal_ok_false_carries_stderr_tail() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = write_script(
+            &dir,
+            "internal.sh",
+            "#!/bin/sh\necho 'MARKER_stderr_tail_123' >&2\nprintf '%s' '{\"ok\":false,\"error\":{\"kind\":\"internal\",\"message\":\"boom\"}}'\n",
+        );
+        let client =
+            AdapterClient::new(path, Vec::new(), Duration::from_secs(30));
+        let error = client.ping(None).expect_err("internal must fail");
+        assert_eq!(error.kind(), "internal");
+        assert!(
+            error.message().contains("MARKER_stderr_tail_123"),
+            "stderr tail reaches the user: {}",
+            error.message()
+        );
+        // Non-internal kinds are unchanged (no stderr tail).
+        let path = write_script(
+            &dir,
+            "auth.sh",
+            "#!/bin/sh\necho 'MARKER_should_not_appear' >&2\nprintf '%s' '{\"ok\":false,\"error\":{\"kind\":\"auth\",\"message\":\"bad\"}}'\n",
+        );
+        let client =
+            AdapterClient::new(path, Vec::new(), Duration::from_secs(30));
+        let error = client.ping(None).expect_err("auth must fail");
+        assert_eq!(error.kind(), "auth");
+        assert!(
+            !error.message().contains("MARKER_should_not_appear"),
+            "auth keeps no tail: {}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn large_request_with_fast_exit_succeeds() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = write_script(
+            &dir,
+            "fast.sh",
+            "#!/bin/sh\nprintf '%s' '{\"ok\":true,\"protocol\":1,\"python\":\"3.12.3\",\"gkeepapi\":\"0.17.1\",\"gpsoauth\":\"2.0.0\"}'\nexit 0\n",
+        );
+        let client =
+            AdapterClient::new(path, Vec::new(), Duration::from_secs(30));
+        let big = serde_json::json!({
+            "protocol": 1,
+            "op": "ping",
+            "pad": "x".repeat(2 * 1024 * 1024),
+        });
+        let (value, _) =
+            client.run_request(&big, None).expect("fast exit succeeds");
+        assert_eq!(value["ok"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn large_request_with_hanging_adapter_times_out() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = write_script(&dir, "hang.sh", "#!/bin/sh\nsleep 30\n");
+        let client =
+            AdapterClient::new(path, Vec::new(), Duration::from_secs(2));
+        let big = serde_json::json!({
+            "protocol": 1,
+            "op": "ping",
+            "pad": "y".repeat(2 * 1024 * 1024),
+        });
+        let start = Instant::now();
+        let error = client
+            .run_request(&big, None)
+            .expect_err("hang must time out");
+        assert_eq!(error.kind(), "timeout");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "large hanging request times out quickly",
+        );
     }
 
     #[test]

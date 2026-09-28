@@ -304,14 +304,15 @@ impl Journal {
             use std::os::unix::fs::OpenOptionsExt as _;
             options.mode(0o600);
         }
-        let mut file = options.open(path)?;
+        let file = options.open(path)?;
         #[cfg(unix)]
         {
-            // Mode at open covers creation; keep tight permissions.
+            // Mode at open covers creation; tighten existing files too,
+            // before writing any bytes.
             use std::os::unix::fs::PermissionsExt as _;
-            let _ =
-                fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
+        let mut file = file;
         if needs_leading_newline {
             io::Write::write_all(&mut file, b"\n")?;
         }
@@ -664,6 +665,45 @@ mod tests {
         };
         assert!(!archived_only.has("n1", "0123456789ab"));
         assert!(!archived_only.has_id("n1"));
+    }
+
+    #[test]
+    fn journal_read_skips_non_utf8_lines() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("journal.jsonl");
+        let good = b"{\"ts\":\"2026-09-28T00:00:00Z\",\"event\":\"written\",\"id\":\"n1\",\"ref\":\"abc1234\",\"fp\":\"0123456789ab\",\"path\":\"gkeep_inbox.md\",\"commit\":null,\"status\":null}\n";
+        let bad: &[u8] = &[0xff, 0xfe, b'\n'];
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(good);
+        bytes.extend_from_slice(bad);
+        bytes.extend_from_slice(good);
+        fs::write(&path, &bytes).expect("write journal");
+        let journal = Journal::read(&path).expect("read");
+        assert_eq!(journal.records.len(), 2);
+        assert_eq!(journal.skipped, 1);
+    }
+
+    #[test]
+    fn journal_append_writes_leading_newline_after_torn_record() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("journal.jsonl");
+        // Torn record with no trailing newline.
+        fs::write(&path, "{\"torn\": true}").expect("write torn");
+        let records = vec![JournalRecord {
+            ts: "2026-09-28T00:00:01Z".to_string(),
+            event: JournalEvent::Written,
+            id: "n1".to_string(),
+            ref_: "abc1234".to_string(),
+            fp: "0123456789ab".to_string(),
+            path: "gkeep_inbox.md".to_string(),
+            commit: None,
+            status: None,
+        }];
+        Journal::append(&path, &records).expect("append");
+        let journal = Journal::read(&path).expect("read back");
+        assert_eq!(journal.records.len(), 1);
+        assert_eq!(journal.records[0].id, "n1");
+        assert_eq!(journal.skipped, 1);
     }
 
     #[test]

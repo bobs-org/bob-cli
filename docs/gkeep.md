@@ -58,6 +58,12 @@ note and archives it only when its current content still equals what Rust saw.
 Notes edited in Keep during a pull stay in Keep; the next pull writes the
 revision. Nothing is ever deleted from Keep.
 
+The adapter runs in its own process group so a timeout can kill the whole
+tree. `BOB_GKEEP_PARENT_PID` carries the Rust parent pid to the adapter;
+a watchdog thread exits the adapter when the parent disappears, so Ctrl-C
+cannot orphan it. `internal` adapter errors include the adapter's stderr
+tail (last 20 lines).
+
 ## Setup and rollout
 
 Roll out against the live account in this order. Bryan runs these steps; no
@@ -98,8 +104,8 @@ gkeep:
 Parsing follows the `highlights` pattern exactly: a missing file gives the
 defaults, unknown keys are ignored, and invalid YAML is an error. Resolving
 validates: `email` must contain `@`; `device_id` must be 1–16 hex digits;
-`target` must be vault-relative and end in `.md`; `timeout_secs` must be
-greater than 0.
+`target` must be vault-relative and end in `.md` (a `..` component is
+rejected); `timeout_secs` must be greater than 0.
 
 The default device id is `hex(sha256("bob-gkeep-device:" +
 lowercase(email)))[..16]`, so every host presents one stable Android device
@@ -134,26 +140,27 @@ by `pull -i`. States, oldest first:
 | `shared` | Shared with collaborators; skipped unless `--include-shared` or selected with `-i` |
 | `archived` | Already archived (only with `--all`) |
 
-Keep `NOTE` hints: `+N lines` for extra text lines, `☐ n ☑ m` for list
-items, `📎 n` for attachments (images, drawings, audio, and `other` files
-all count).
+Keep `NOTE` hints: `+N lines` for extra text lines (`+1 line`
+singular), `☐ n ☑ m` for list items, `📎 n` for attachments (images,
+drawings, audio, and `other` files all count).
 
 The vault table has `AGE`, `STATUS`, and `TASK` columns, oldest first by
 `[created::…]` date then line; rows without a date go last, in file order.
 `STATUS` is the task checkbox (`[ ]`, `[x]`, etc.). `TASK` hints mirror Keep:
 `☐ n ☑ m` for descendants, plus `↺ still in Keep` for any vault task whose
 marker id is a non-archived note in the snapshot (pinned, shared, and empty
-notes count too).
+notes count too). `↺ still in Keep` never appears with `-s vault`.
 
 Empty states: a missing target file shows a dim
 `gkeep_inbox.md not found · create it or set gkeep.target` line; otherwise an
 empty vault shows `No open tasks`, or `No tasks` with `--all`. An empty Keep
-shows `Keep inbox is empty`.
+shows `Keep inbox is empty ✓`.
 
 Explicit selection with `-i` overrides pinned/shared skips. An exact Keep id
 always wins; otherwise the value is a prefix match on REF, and zero or
 multiple matches (including an empty `-i ""`) exit 2 listing the candidates.
-The footer names non-zero state counts and the next command to run
+The footer names non-zero state counts (`N new · M pending · K revised`,
+skipped states only when non-zero) and the next command to run
 (`→ bob gkeep pull`), or the all-clear `✓ Keep inbox is clear` with
 `· N pinned stays in Keep` / `· N shared stays in Keep` suffixes as needed.
 
@@ -181,7 +188,9 @@ Failure matrix:
 | Unknown or ambiguous `--id` | Exit 2 listing the candidates |
 | Missing target note | Exit 2 |
 | No stored token, `uv` missing, bad config | Exit 2 |
-| Verify or commit failure | Exit 1; nothing is archived |
+| Verify failure | Exit 1; only failing notes stay unarchived; verified notes still archive |
+| Commit failure | Exit 1; nothing is archived |
+| Missing `git` with no `.git` ancestor | Writes and verifies, `commit: null`, archives |
 | A note changed in Keep during the pull | Left in Keep (`changed`); exit 1 |
 | A note gone, trashed, or deleted | Reported (`missing`); exit 1 |
 | Vault not a Git worktree | Writes and verifies, `commit: null`, archives |
@@ -195,8 +204,10 @@ zero-width characters (U+200B–U+200D, U+FEFF), trims each line, and drops
 blank lines. A note whose text is only zero-width characters counts as
 `empty`. The task line comes from `capture::format_task_line` with the Keep
 **created** date in local time; status is always `[ ]`. The note title comes
-first, else the first non-blank text line (removed from the children), else
-the first list item, else an `Untitled Google Keep list (N items)` fallback
+first, else the first non-blank text line (inner whitespace collapsed, one
+leading `- `/`* `/`• ` bullet stripped, then removed from the children), else
+the first list item, else a `Google Keep image note` fallback when attachments
+exist, else an `Untitled Google Keep list (N items)` fallback
 (`1 item` singular). Children use the target note's indent unit (what
 `bob capture` would use); list children nest one level deeper when indented
 or checked; OCR text nests under an attachment summary line
@@ -209,8 +220,9 @@ to Keep with the local created time, labels, and the marker (with a
 Escaping: `#task` tokens → `\#task`; trailing ` ^id` block ids (including a
 caret starting the text or following Unicode whitespace/NBSP) → `\^id`;
 `%%` → `%&#37;`; every colon in runs of two or more (`:::` → `\:\:\:`);
-child-leading `#{1,6} ` headings, `>`, `N.`/`N)`, `|`, `+ `/`- `/`* `,
-thematic breaks (`---`/`***`/`___`, spaces allowed), and code fences
+child-leading `#{1,6} ` headings (including a bare `#`–`######` with nothing
+after it), `>`, `N.`/`N)`, `|`, `+ `/`- `/`* ` (including a bare `-`/`*`/`+`
+child), thematic breaks (`---`/`***`/`___`, spaces allowed), and code fences
 (leading ` ``` `/`~~~`) gain a leading backslash.
 
 ```markdown
@@ -301,7 +313,9 @@ Every JSON document carries `schema_version: 1`.
 ```
 
 `keep` is `null` for `-s vault`; `vault` is `null` for `-s keep`. A Keep
-failure reports `{"error": …}` with `ok: false` and still prints the vault.
+snapshot failure reports `keep: {"error": …}` with `ok: false` and still
+prints the vault; config, token, and adapter-resolve failures print the
+generic error document instead. A missing target in JSON gives `tasks: []`.
 
 `pull -f json`:
 
@@ -309,12 +323,12 @@ failure reports `{"error": …}` with `ok: false` and still prints the vault.
 {
   "schema_version": 1, "ok": true, "dry_run": false,
   "archive_enabled": true, "commit_enabled": true,
-  "target": "gkeep_inbox.md", "commit": "4e1f2a9|null",
+  "target": "gkeep_inbox.md", "commit": "<40-char-sha>|null",
   "notes": [{
     "id": "…", "ref": "3f9c2e1", "title": "…",
     "state": "new|pending|revised|empty|pinned|shared|archived",
     "action": "write|write_revision|archive_only|skip",
-    "skip_reason": "pinned|…|null", "written": true,
+    "skip_reason": "empty|pinned|shared|archived|null", "written": true,
     "archive": "archived|already_archived|changed|missing|error|not_requested|not_attempted",
     "detail": "…|null"
   }],
@@ -324,13 +338,24 @@ failure reports `{"error": …}` with `ok: false` and still prints the vault.
 }
 ```
 
+`commit` is the full 40-character SHA, or `null`; never a short SHA.
+`error` appears only when the adapter fails during archive. `markdown` is
+the inserted block (also on archive failure); it is `null` when nothing was
+written. `skip_reason` is `empty|pinned|shared|archived|null`. The `archive`
+values mean: `not_requested` for skipped notes and whenever archiving is
+disabled with `-n` (including dry runs); `not_attempted` for dry runs with
+archiving enabled and whenever archiving was never reached; the rest as
+listed. `-q -f json` prints nothing on success.
+
 Dry runs report `written: false` per note and `summary.written: 0` with the
 preview in `markdown`. An archive crash reports exactly one document with
 `ok: false`, every due note as `archive: "error"` with the adapter message
 as `detail`, and the top-level `error` object.
 
-`doctor -f json` reports `checks[]` with
-`{name, status: "ok|warn|fail|skip", summary, hint}`.
+`doctor -f json` reports `{ok, checks[]}` with
+`checks[]: {name, status: "ok|warn|fail|skip", summary, hint}` where `hint`
+may be `null` and `ok` is false (with exit 1) when any check fails. Check
+names are `config|account|token|adapter|keep|target|git`.
 
 ## Security
 

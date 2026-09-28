@@ -625,3 +625,148 @@ fn keep_age_is_correct_outside_utc() {
         "Keep age converts local time to UTC:\n{keep_row}"
     );
 }
+
+#[test]
+fn dst_gap_reports_45m_not_now() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-dst");
+    install_token_stub(&env);
+    write_target(&env, "## Tasks\n");
+    let fake = FakeAdapter::new(&env, "adapter");
+    fake.respond(
+        "snapshot",
+        &snapshot_ok(
+            "bryanbugyi34@gmail.com",
+            vec![note("DST probe")
+                .id("keep-dst-1")
+                .created("2026-03-08T06:45:00Z")
+                .build()],
+        ),
+    );
+    let mut command = env.command();
+    fake.install(&mut command);
+    command
+        .arg("gkeep")
+        .arg("list")
+        .env("TZ", "America/New_York")
+        .env("BOB_NOW", "2026-03-08 02:30")
+        .env("COLUMNS", "200");
+    let output = command.output().expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    let row = text
+        .lines()
+        .find(|line| line.contains("DST probe"))
+        .expect("keep row");
+    assert!(
+        row.contains(" 45m "),
+        "DST gap retries +1h (old fallback shows now):\n{row}"
+    );
+}
+
+#[test]
+fn still_in_keep_covers_pinned_shared_and_empty() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-still");
+    install_token_stub(&env);
+    // Vault tasks whose markers match pinned, shared, and empty Keep notes.
+    let pinned_fp = fingerprint("Pinned note", "");
+    let shared_fp = fingerprint("Shared note", "");
+    // Empty note has no title/text/items; fingerprint of empty content.
+    let empty_fp = fingerprint("", "");
+    let target = format!(
+        "## Tasks\n\n- [ ] #task Pinned note [created::2026-09-27]\n\t- Source: Google Keep · 2026-09-27 21:14 %%gkeep:v1:keep-pinned-1:{pinned_fp}%%\n- [ ] #task Shared note [created::2026-09-27]\n\t- Source: Google Keep · 2026-09-27 21:14 %%gkeep:v1:keep-shared-1:{shared_fp}%%\n- [ ] #task Empty [created::2026-09-27]\n\t- Source: Google Keep · 2026-09-27 21:14 %%gkeep:v1:keep-empty-1:{empty_fp}%%\n"
+    );
+    write_target(&env, &target);
+    let fake = FakeAdapter::new(&env, "adapter");
+    fake.respond(
+        "snapshot",
+        &snapshot_ok(
+            "bryanbugyi34@gmail.com",
+            vec![
+                note("Pinned note").id("keep-pinned-1").pinned().build(),
+                note("Shared note").id("keep-shared-1").shared().build(),
+                note("").id("keep-empty-1").build(),
+            ],
+        ),
+    );
+    let output = list_command(&env, &fake, &[]).output().expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    // All three vault rows show the footer hint.
+    assert_eq!(
+        text.matches("↺ still in Keep").count(),
+        3,
+        "pinned, shared, empty show still in Keep:\n{text}"
+    );
+    // With -s vault the hint never appears.
+    let output = list_command(&env, &fake, &["-s", "vault"])
+        .output()
+        .expect("run vault");
+    assert!(
+        !stdout(&output).contains("↺ still in Keep"),
+        "no still-in-Keep with -s vault:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn vault_rows_sort_oldest_first_with_missing_last() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-sort");
+    install_token_stub(&env);
+    write_target(
+        &env,
+        "## Tasks\n\n- [ ] #task Newest [created::2026-09-27]\n- [ ] #task No date\n- [ ] #task Oldest [created::2026-09-20]\n- [ ] #task Middle [created::2026-09-25]\n",
+    );
+    let fake = FakeAdapter::new(&env, "adapter");
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![]));
+    let output = list_command(&env, &fake, &["-s", "vault"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    let pos_old = text.find("Oldest").expect("oldest");
+    let pos_mid = text.find("Middle").expect("middle");
+    let pos_new = text.find("Newest").expect("newest");
+    let pos_nodate = text.find("No date").expect("nodate");
+    assert!(
+        pos_old < pos_mid && pos_mid < pos_new && pos_new < pos_nodate,
+        "oldest first, nodate last:\n{text}"
+    );
+}
+
+#[test]
+fn missing_target_prints_exact_line() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-missing");
+    install_token_stub(&env);
+    // No target file.
+    let fake = FakeAdapter::new(&env, "adapter");
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![]));
+    let output = list_command(&env, &fake, &["-s", "vault"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    assert!(
+        text.contains(
+            "  gkeep_inbox.md not found · create it or set gkeep.target"
+        ),
+        "exact missing line:\n{text}"
+    );
+}
+
+#[test]
+fn all_with_no_tasks_prints_no_tasks() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-empty-all");
+    install_token_stub(&env);
+    write_target(&env, "## Tasks\n");
+    let fake = FakeAdapter::new(&env, "adapter");
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![]));
+    let output = list_command(&env, &fake, &["-s", "vault", "--all"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        stdout(&output).contains("No tasks"),
+        "expected No tasks:\n{}",
+        stdout(&output)
+    );
+}

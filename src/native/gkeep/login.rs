@@ -324,20 +324,22 @@ fn save_recovery_token(master_token: &str) -> Result<PathBuf, String> {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600);
     }
-    let mut file = options
+    let file = options
         .open(&path)
         .map_err(|error| format!("write {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("write {}: {error}", path.display()))?;
+    }
     {
         use std::io::Write as _;
+        let mut file = file;
         file.write_all(format!("{master_token}\n").as_bytes())
             .map_err(|error| format!("write {}: {error}", path.display()))?;
         file.sync_all()
             .map_err(|error| format!("write {}: {error}", path.display()))?;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
     }
     Ok(path)
 }

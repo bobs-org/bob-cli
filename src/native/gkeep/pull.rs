@@ -18,7 +18,7 @@ use super::{
     adapter::{AdapterClient, Credentials},
     config::GkeepConfig,
     ledger::{Journal, JournalEvent, JournalRecord, Ledger},
-    model::{note_ref, KeepContent},
+    model::{note_ref, ArchiveStatus, KeepContent},
     plan::{NoteState, Plan, PlanAction, PlanOptions, PlannedNote},
     render::{display_title, render_note},
     ui,
@@ -110,6 +110,24 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         return ui::report_error("pull", &error, format_name);
     }
 
+    let bob_dir = args.bob_dir();
+    let target_rel = PathBuf::from(config.target());
+    let target_path = config.target_path(&bob_dir);
+    if !target_path.is_file() {
+        return ui::report_error(
+            "pull",
+            &GkeepError::setup(
+                "target",
+                format!(
+                    "target note {} does not exist",
+                    target_rel.to_string_lossy()
+                ),
+            )
+            .with_hint("create it or set gkeep.target"),
+            format_name,
+        );
+    }
+
     // Take `bob_sync.lock` before reading the target and scanning the
     // ledger/journal. Dry runs take no lock. (Obsidian ignores the lock,
     // so CAS still guards the write.)
@@ -145,24 +163,6 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             }
         }
     };
-
-    let bob_dir = args.bob_dir();
-    let target_rel = PathBuf::from(config.target());
-    let target_path = config.target_path(&bob_dir);
-    if !target_path.is_file() {
-        return ui::report_error(
-            "pull",
-            &GkeepError::setup(
-                "target",
-                format!(
-                    "target note {} does not exist",
-                    target_rel.to_string_lossy()
-                ),
-            )
-            .with_hint("create it or set gkeep.target"),
-            format_name,
-        );
-    }
 
     let target_bytes = match fs::read(&target_path) {
         Ok(bytes) => bytes,
@@ -268,7 +268,6 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             &config,
             &client,
             &creds,
-            &bob_dir,
             &target_rel,
             &plan,
             &[],
@@ -432,22 +431,25 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     let verify_failed = writes.len() - verified.len();
 
     // Commit when the vault is a Git worktree, unless --no-commit.
-    // When `git` cannot be started, treat it as a commit failure:
-    // archive nothing and exit 1.
+    // When `git` cannot be started, only vaults that really are repos
+    // fail: without a `.git` ancestor the vault simply is not a worktree.
     let mut commit_sha: Option<String> = None;
     if !args.no_commit {
         let child_env = ob::child_env();
         let worktree = match ob::detect_git_worktree(&bob_dir, &child_env) {
             Ok(inside) => inside,
             Err(error) => {
-                return ui::report_error(
-                    "pull",
-                    &GkeepError::runtime(
-                        "commit",
-                        format!("detect the vault Git worktree: {error}"),
-                    ),
-                    format_name,
-                );
+                if has_git_ancestor(&bob_dir) {
+                    return ui::report_error(
+                        "pull",
+                        &GkeepError::runtime(
+                            "commit",
+                            format!("detect the vault Git worktree: {error}"),
+                        ),
+                        format_name,
+                    );
+                }
+                false
             }
         };
         if worktree {
@@ -483,23 +485,26 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             &config,
             &client,
             &creds,
-            &bob_dir,
             &target_rel,
             &plan,
             &verified,
             commit_sha.clone(),
             &styler,
         );
-        for item in &writes {
-            let idx = writes
-                .iter()
-                .position(|other| other.planned.note.id == item.planned.note.id)
-                .unwrap_or(0);
-            if !verify_outcome.ok[idx] {
-                eprintln!(
-                    "bob gkeep pull: verification failed for {}",
-                    item.planned.note.id
-                );
+        if !args.quiet {
+            for item in &writes {
+                let idx = writes
+                    .iter()
+                    .position(|other| {
+                        other.planned.note.id == item.planned.note.id
+                    })
+                    .unwrap_or(0);
+                if !verify_outcome.ok[idx] {
+                    eprintln!(
+                        "bob gkeep pull: verification failed for {}",
+                        item.planned.note.id
+                    );
+                }
             }
         }
         return code.max(1);
@@ -510,7 +515,6 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         &config,
         &client,
         &creds,
-        &bob_dir,
         &target_rel,
         &plan,
         &verified,
@@ -562,6 +566,23 @@ fn acquire_pull_lock() -> Result<File, GkeepError> {
             format!("lock {}: {error}", path.display()),
         )),
     }
+}
+
+/// Whether `dir` or any ancestor contains a `.git` entry.
+///
+/// Used when `git` cannot be started: a vault with no `.git` ancestor is
+/// simply not a worktree, while one with an ancestor keeps the commit
+/// failure.
+fn has_git_ancestor(dir: &Path) -> bool {
+    let mut current = Some(dir);
+    while let Some(path) = current {
+        let dot_git = path.join(".git");
+        if dot_git.is_dir() || dot_git.is_file() {
+            return true;
+        }
+        current = path.parent();
+    }
+    false
 }
 
 /// Write `contents` to a same-dir temp file, set permissions before
@@ -684,7 +705,6 @@ fn finish_with_archive(
     config: &GkeepConfig,
     client: &AdapterClient,
     creds: &Credentials,
-    _bob_dir: &Path,
     target_rel: &Path,
     plan: &Plan,
     verified: &[WriteItem],
@@ -718,7 +738,7 @@ fn finish_with_archive(
     // Archive unless --no-archive.
     let mut archive_status: std::collections::BTreeMap<
         String,
-        (String, Option<String>),
+        (ArchiveStatus, Option<String>),
     > = std::collections::BTreeMap::new();
     let mut adapter_failed: Option<GkeepError> = None;
     if !args.no_archive && !archive_notes.is_empty() {
@@ -733,44 +753,16 @@ fn finish_with_archive(
                     let hit = results.iter().find(|row| row.id == *id);
                     match hit {
                         Some(row) => {
-                            let status = if row.status.is_success() {
-                                match row.status {
-                                    super::model::ArchiveStatus::Archived => {
-                                        "archived"
-                                    }
-                                    super::model::ArchiveStatus::AlreadyArchived => {
-                                        "already_archived"
-                                    }
-                                    _ => unreachable!(
-                                        "is_success implies archived"
-                                    ),
-                                }
-                            } else {
-                                match row.status {
-                                    super::model::ArchiveStatus::Changed => {
-                                        "changed"
-                                    }
-                                    super::model::ArchiveStatus::Missing => {
-                                        "missing"
-                                    }
-                                    super::model::ArchiveStatus::Error => {
-                                        "error"
-                                    }
-                                    _ => unreachable!(
-                                        "non-success implies refused"
-                                    ),
-                                }
-                            };
                             archive_status.insert(
                                 id.clone(),
-                                (status.to_string(), row.detail.clone()),
+                                (row.status, row.detail.clone()),
                             );
                         }
                         None => {
                             archive_status.insert(
                                 id.clone(),
                                 (
-                                    "error".to_string(),
+                                    ArchiveStatus::Error,
                                     Some(
                                         "adapter omitted the note".to_string(),
                                     ),
@@ -782,11 +774,6 @@ fn finish_with_archive(
             }
             Err(error) => adapter_failed = Some(error),
         }
-    } else {
-        for (id, _) in &archive_notes {
-            archive_status
-                .insert(id.clone(), ("not_requested".to_string(), None));
-        }
     }
     if let Some(error) = adapter_failed {
         // Every note due for archive gets `archive: error` with the
@@ -796,9 +783,20 @@ fn finish_with_archive(
         for (id, _) in &archive_notes {
             failed_status.insert(
                 id.clone(),
-                ("error".to_string(), Some(error.message().to_string())),
+                (ArchiveStatus::Error, Some(error.message().to_string())),
             );
         }
+        let failed_markdown = if verified.is_empty() {
+            None
+        } else {
+            Some(
+                verified
+                    .iter()
+                    .map(|item| item.markdown.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        };
         // Writes are committed; journal the writes so the next pull can
         // archive them as pending with no duplicate write.
         append_journal(
@@ -830,8 +828,7 @@ fn finish_with_archive(
                         plan,
                         verified,
                         &failed_status,
-                        None,
-                        target_rel,
+                        failed_markdown.clone(),
                         commit_sha.clone(),
                         false,
                         Some(&error),
@@ -847,8 +844,7 @@ fn finish_with_archive(
                     plan,
                     verified,
                     &failed_status,
-                    None,
-                    target_rel,
+                    failed_markdown.clone(),
                     commit_sha.clone(),
                     false,
                     Some(&error),
@@ -859,7 +855,6 @@ fn finish_with_archive(
         if !args.quiet {
             print_human_report(
                 args,
-                config,
                 plan,
                 verified,
                 &failed_status,
@@ -873,7 +868,7 @@ fn finish_with_archive(
             for planned in &plan.notes {
                 if failed_status
                     .get(&planned.note.id)
-                    .is_some_and(|(s, _)| s == "error")
+                    .is_some_and(|(status, _)| *status == ArchiveStatus::Error)
                 {
                     eprintln!(
                         "bob gkeep pull: NOT archived {}: {}",
@@ -924,7 +919,6 @@ fn finish_with_archive(
                 verified,
                 &archive_status,
                 inserted,
-                target_rel,
                 commit_sha,
                 ok,
             )
@@ -957,11 +951,14 @@ fn finish_with_archive(
                 continue;
             }
             if let Some((status, detail)) = archive_status.get(id)
-                && matches!(status.as_str(), "changed" | "missing" | "error")
+                && !status.is_success()
             {
                 let extra = detail.clone().unwrap_or_default();
                 if extra.is_empty() {
-                    eprintln!("bob gkeep pull: NOT archived {id}: {status}");
+                    eprintln!(
+                        "bob gkeep pull: NOT archived {id}: {}",
+                        status.as_str()
+                    );
                 } else {
                     eprintln!("bob gkeep pull: NOT archived {id}: {extra}");
                 }
@@ -993,7 +990,6 @@ fn finish_with_archive(
     }
     print_human_report(
         args,
-        config,
         plan,
         verified,
         &archive_status,
@@ -1005,7 +1001,7 @@ fn finish_with_archive(
     // Changed notes get the documented next-pull hint on stderr.
     let changed = archive_status
         .values()
-        .filter(|(status, _)| *status == "changed")
+        .filter(|entry| entry.0 == ArchiveStatus::Changed)
         .count();
     if changed > 0 {
         eprintln!(
@@ -1026,7 +1022,7 @@ fn count_failed(
     verified: &[WriteItem],
     archive_status: &std::collections::BTreeMap<
         String,
-        (String, Option<String>),
+        (ArchiveStatus, Option<String>),
     >,
 ) -> usize {
     // Writes planned but not verified.
@@ -1045,7 +1041,7 @@ fn count_failed(
         }
     }
     for (status, _) in archive_status.values() {
-        if matches!(status.as_str(), "changed" | "missing" | "error") {
+        if !status.is_success() {
             failed += 1;
         }
     }
@@ -1057,7 +1053,7 @@ fn append_journal(
     verified: &[WriteItem],
     archive_status: &std::collections::BTreeMap<
         String,
-        (String, Option<String>),
+        (ArchiveStatus, Option<String>),
     >,
     target_rel: &Path,
     commit: Option<String>,
@@ -1093,32 +1089,28 @@ fn append_journal(
                 })
                 .unwrap_or_default();
             let ref_ = note_ref(id);
-            match status.as_str() {
-                "archived" | "already_archived" => {
-                    records.push(JournalRecord {
-                        ts: ts.clone(),
-                        event: JournalEvent::Archived,
-                        id: id.clone(),
-                        ref_,
-                        fp,
-                        path: target.clone(),
-                        commit: commit.clone(),
-                        status: Some(status.clone()),
-                    });
-                }
-                "changed" | "missing" | "error" => {
-                    records.push(JournalRecord {
-                        ts: ts.clone(),
-                        event: JournalEvent::ArchiveRefused,
-                        id: id.clone(),
-                        ref_,
-                        fp,
-                        path: target.clone(),
-                        commit: commit.clone(),
-                        status: Some(status.clone()),
-                    });
-                }
-                _ => {}
+            if status.is_success() {
+                records.push(JournalRecord {
+                    ts: ts.clone(),
+                    event: JournalEvent::Archived,
+                    id: id.clone(),
+                    ref_,
+                    fp,
+                    path: target.clone(),
+                    commit: commit.clone(),
+                    status: Some(status.as_str().to_string()),
+                });
+            } else {
+                records.push(JournalRecord {
+                    ts: ts.clone(),
+                    event: JournalEvent::ArchiveRefused,
+                    id: id.clone(),
+                    ref_,
+                    fp,
+                    path: target.clone(),
+                    commit: commit.clone(),
+                    status: Some(status.as_str().to_string()),
+                });
             }
         }
         // Pending-only archives have no verified write to supply the fp;
@@ -1158,27 +1150,12 @@ fn print_dry_run(
         };
         let empty: std::collections::BTreeMap<
             String,
-            (String, Option<String>),
-        > = plan
-            .notes
-            .iter()
-            .filter(|item| item.state.is_actionable())
-            .map(|item| {
-                (item.note.id.clone(), ("not_attempted".to_string(), None))
-            })
-            .collect();
+            (ArchiveStatus, Option<String>),
+        > = std::collections::BTreeMap::new();
         println!(
             "{}",
             json_pull_report(
-                args,
-                config,
-                plan,
-                writes,
-                &empty,
-                inserted,
-                &PathBuf::from(config.target()),
-                None,
-                true,
+                args, config, plan, writes, &empty, inserted, None, true,
             )
         );
         return 0;
@@ -1210,7 +1187,7 @@ fn print_dry_run(
     }
     println!("[dry-run] Google Keep → {target} · {actionable} to pull");
     for planned in &plan.notes {
-        let title = truncate_title(&display_title(&planned.note), styler);
+        let title = truncate_title(&display_title(&planned.note));
         let detail = match planned.action {
             PlanAction::Skip => format!(
                 "skipped · {}",
@@ -1224,7 +1201,11 @@ fn print_dry_run(
                 }
             }
             PlanAction::ArchiveOnly => {
-                "would archive · already in vault".to_string()
+                if args.no_archive {
+                    "already in vault · left in Keep (--no-archive)".to_string()
+                } else {
+                    "would archive · already in vault".to_string()
+                }
             }
         };
         let glyph = styler.dim("·");
@@ -1258,7 +1239,7 @@ fn print_dry_run(
     0
 }
 
-fn truncate_title(title: &str, _styler: &Styler) -> String {
+fn truncate_title(title: &str) -> String {
     let available = style::terminal_width().saturating_sub(40).max(20);
     style::truncate(title, available)
 }
@@ -1266,12 +1247,11 @@ fn truncate_title(title: &str, _styler: &Styler) -> String {
 #[allow(clippy::too_many_arguments)]
 fn print_human_report(
     args: &PullArgs,
-    _config: &GkeepConfig,
     plan: &Plan,
     verified: &[WriteItem],
     archive_status: &std::collections::BTreeMap<
         String,
-        (String, Option<String>),
+        (ArchiveStatus, Option<String>),
     >,
     target_rel: &Path,
     commit_sha: Option<String>,
@@ -1291,7 +1271,7 @@ fn print_human_report(
         .map(|item| item.planned.note.id.as_str())
         .collect();
     for planned in &plan.notes {
-        let title = truncate_title(&display_title(&planned.note), styler);
+        let title = truncate_title(&display_title(&planned.note));
         let id = planned.note.id.as_str();
         if matches!(planned.action, PlanAction::Skip) {
             let reason = planned.skip_reason.as_deref().unwrap_or("skipped");
@@ -1299,33 +1279,30 @@ fn print_human_report(
             continue;
         }
         if matches!(planned.action, PlanAction::ArchiveOnly) {
-            let (status, _) = archive_status
-                .get(id)
-                .cloned()
-                .unwrap_or(("not_requested".to_string(), None));
-            let detail = match status.as_str() {
-                "not_requested" if args.no_archive => {
+            let entry = archive_status.get(id).cloned();
+            let detail = match entry {
+                None if args.no_archive => {
                     "left in Keep (--no-archive)".to_string()
                 }
-                "archived" | "already_archived" => {
+                None => "would archive".to_string(),
+                Some((status, _)) if status.is_success() => {
                     "archived · already in vault".to_string()
                 }
-                "changed" => {
+                Some((ArchiveStatus::Changed, _)) => {
                     "NOT archived: edited in Keep during pull".to_string()
                 }
-                "missing" => "NOT archived: note is gone".to_string(),
-                "error" => {
-                    let detail = archive_status
-                        .get(id)
-                        .and_then(|(_, detail)| detail.clone())
-                        .unwrap_or_default();
-                    if detail.is_empty() {
+                Some((ArchiveStatus::Missing, _)) => {
+                    "NOT archived: note is gone".to_string()
+                }
+                Some((ArchiveStatus::Error, detail)) => {
+                    let text = detail.unwrap_or_default();
+                    if text.is_empty() {
                         "NOT archived: adapter error".to_string()
                     } else {
-                        format!("NOT archived: {detail}")
+                        format!("NOT archived: {text}")
                     }
                 }
-                _ => "would archive".to_string(),
+                Some((_, _)) => "would archive".to_string(),
             };
             let glyph = if detail.starts_with("NOT") {
                 styler.red("✗")
@@ -1345,33 +1322,33 @@ fn print_human_report(
             );
             continue;
         }
-        let (status, detail_opt) = archive_status
-            .get(id)
-            .cloned()
-            .unwrap_or(("not_requested".to_string(), None));
+        let entry = archive_status.get(id).cloned();
         let detail = if args.no_archive {
             "written · left in Keep (--no-archive)".to_string()
         } else {
-            match status.as_str() {
-                "archived" => "written · archived".to_string(),
-                "already_archived" => "written · already archived".to_string(),
-                "changed" => {
+            match entry {
+                Some((ArchiveStatus::Archived, _)) => {
+                    "written · archived".to_string()
+                }
+                Some((ArchiveStatus::AlreadyArchived, _)) => {
+                    "written · already archived".to_string()
+                }
+                Some((ArchiveStatus::Changed, _)) => {
                     "written · NOT archived: edited in Keep during pull"
                         .to_string()
                 }
-                "missing" => "written · NOT archived: note is gone".to_string(),
-                "error" => {
-                    let extra = detail_opt.unwrap_or_default();
-                    if extra.is_empty() {
+                Some((ArchiveStatus::Missing, _)) => {
+                    "written · NOT archived: note is gone".to_string()
+                }
+                Some((ArchiveStatus::Error, extra)) => {
+                    let text = extra.unwrap_or_default();
+                    if text.is_empty() {
                         "written · NOT archived: adapter error".to_string()
                     } else {
-                        format!("written · NOT archived: {extra}")
+                        format!("written · NOT archived: {text}")
                     }
                 }
-                "not_requested" => {
-                    "written · left in Keep (--no-archive)".to_string()
-                }
-                _ => "written · archiving skipped".to_string(),
+                None => "written · archiving skipped".to_string(),
             }
         };
         // `NOT archived: edited` uses the warning color; other `NOT`
@@ -1389,9 +1366,7 @@ fn print_human_report(
     let written = verified.len();
     let archived = archive_status
         .values()
-        .filter(|(status, _)| {
-            matches!(status.as_str(), "archived" | "already_archived")
-        })
+        .filter(|(status, _)| status.is_success())
         .count();
     let skipped = plan
         .notes
@@ -1421,10 +1396,9 @@ fn json_pull_report(
     verified: &[WriteItem],
     archive_status: &std::collections::BTreeMap<
         String,
-        (String, Option<String>),
+        (ArchiveStatus, Option<String>),
     >,
     markdown: Option<String>,
-    target_rel: &Path,
     commit: Option<String>,
     ok: bool,
 ) -> serde_json::Value {
@@ -1435,7 +1409,6 @@ fn json_pull_report(
         verified,
         archive_status,
         markdown,
-        target_rel,
         commit,
         ok,
         None,
@@ -1450,10 +1423,9 @@ fn json_pull_report_with_error(
     verified: &[WriteItem],
     archive_status: &std::collections::BTreeMap<
         String,
-        (String, Option<String>),
+        (ArchiveStatus, Option<String>),
     >,
     markdown: Option<String>,
-    _target_rel: &Path,
     commit: Option<String>,
     ok: bool,
     adapter_error: Option<&GkeepError>,
@@ -1471,15 +1443,21 @@ fn json_pull_report_with_error(
             let action = planned.action.as_str();
             let written =
                 !dry && verified_ids.contains(planned.note.id.as_str());
-            let (archive, detail) =
-                archive_status.get(&planned.note.id).cloned().unwrap_or((
-                    if matches!(planned.action, PlanAction::Skip) {
+            let (archive, detail) = match archive_status.get(&planned.note.id) {
+                Some((status, detail)) => {
+                    (status.as_str().to_string(), detail.clone())
+                }
+                None => (
+                    if matches!(planned.action, PlanAction::Skip)
+                        || args.no_archive
+                    {
                         "not_requested".to_string()
                     } else {
                         "not_attempted".to_string()
                     },
                     None,
-                ));
+                ),
+            };
             json!({
                 "id": planned.note.id,
                 "ref": note_ref(&planned.note.id),
@@ -1496,9 +1474,7 @@ fn json_pull_report_with_error(
     let written = if dry { 0 } else { verified.len() };
     let archived = archive_status
         .values()
-        .filter(|(status, _)| {
-            matches!(status.as_str(), "archived" | "already_archived")
-        })
+        .filter(|(status, _)| status.is_success())
         .count();
     let skipped = plan
         .notes
@@ -1531,4 +1507,27 @@ fn json_pull_report_with_error(
         });
     }
     document
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_ancestor_checks_dot_git_files_and_dirs() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        assert!(!has_git_ancestor(root));
+        let sub = root.join("a").join("b");
+        std::fs::create_dir_all(&sub).expect("mkdir");
+        assert!(!has_git_ancestor(&sub));
+        std::fs::create_dir_all(root.join(".git")).expect("mkdir .git");
+        assert!(has_git_ancestor(root));
+        assert!(has_git_ancestor(&sub));
+        std::fs::remove_dir_all(root.join(".git")).expect("rm .git");
+        std::fs::write(root.join(".git"), "gitdir: elsewhere\n")
+            .expect("write .git file");
+        assert!(has_git_ancestor(root));
+        assert!(has_git_ancestor(&sub));
+    }
 }

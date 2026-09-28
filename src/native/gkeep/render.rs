@@ -31,9 +31,21 @@ pub(super) fn render_note(
     indent: &str,
     revision: bool,
 ) -> RenderedBlock {
+    render_note_in(note, indent, revision, &chrono::Local)
+}
+
+fn render_note_in<Tz: chrono::TimeZone>(
+    note: &KeepNote,
+    indent: &str,
+    revision: bool,
+    tz: &Tz,
+) -> RenderedBlock
+where
+    Tz::Offset: std::fmt::Display,
+{
     let (title_raw, consumed_first_line) = raw_title(note);
     let task_text = escape_task_text(&title_raw);
-    let created = created_date(note);
+    let created = created_date_in(note, tz);
     let task_line = capture::format_task_line(&task_text, &created, None, None);
 
     let child_prefix = indent.to_string();
@@ -57,7 +69,10 @@ pub(super) fn render_note(
             lines.push(format!("{grandchild_prefix}- {ocr}"));
         }
     }
-    lines.push(format!("{child_prefix}- {}", source_line(note, revision)));
+    lines.push(format!(
+        "{child_prefix}- {}",
+        source_line_in(note, revision, tz)
+    ));
 
     RenderedBlock {
         markdown: lines.join("\n"),
@@ -114,7 +129,7 @@ pub(super) fn escape_child_text(text: &str) -> String {
 }
 
 static LEADING_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(#{1,6}(\s|$)|>|\d+[.)](\s|$)|\||[+*-]\s)")
+    Regex::new(r"^(#{1,6}(\s|$)|>|\d+[.)](\s|$)|\||[+*-](\s|$))")
         .expect("valid leading-marker regex")
 });
 
@@ -403,12 +418,20 @@ fn ocr_children(note: &KeepNote) -> Vec<String> {
 
 /// The trailing `Source:` child: link, local created time, labels, an
 /// optional `· revised` flag, then the gkeep marker.
-fn source_line(note: &KeepNote, revision: bool) -> String {
+fn source_line_in<Tz: chrono::TimeZone>(
+    note: &KeepNote,
+    revision: bool,
+    tz: &Tz,
+) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
     let link = match &note.url {
         Some(url) => format!("[Google Keep]({})", encode_source_url(url)),
         None => "Google Keep".to_string(),
     };
-    let mut line = format!("Source: {link} · {}", created_datetime(note));
+    let mut line =
+        format!("Source: {link} · {}", created_datetime_in(note, tz));
     if !note.labels.is_empty() {
         let labels = note
             .labels
@@ -461,46 +484,32 @@ pub(super) fn is_normalized_blank(text: &str) -> bool {
 }
 
 /// The Keep `created` date in local time as `YYYY-MM-DD`.
-fn created_date(note: &KeepNote) -> String {
-    #[cfg(test)]
-    {
-        // Tests format in UTC for determinism without touching `TZ`
-        // (which would require unsafe env mutation in edition 2024).
-        // Production pins `TZ=UTC` in these tests' stead via `Local`,
-        // and `TZ=UTC` makes local equal UTC, so expectations match.
-        if let Ok(utc) = note.created.parse::<chrono::DateTime<chrono::Utc>>() {
-            utc.format("%Y-%m-%d").to_string()
-        } else {
-            chrono::Utc::now().format("%Y-%m-%d").to_string()
-        }
-    }
-    #[cfg(not(test))]
-    {
-        note.created_local()
-            .map(|time| time.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| {
-                chrono::Local::now().format("%Y-%m-%d").to_string()
-            })
+fn created_date_in<Tz: chrono::TimeZone>(note: &KeepNote, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    if let Ok(utc) = note.created.parse::<chrono::DateTime<chrono::Utc>>() {
+        utc.with_timezone(tz).format("%Y-%m-%d").to_string()
+    } else {
+        chrono::Utc::now()
+            .with_timezone(tz)
+            .format("%Y-%m-%d")
+            .to_string()
     }
 }
 
 /// The Keep `created` time in local time as `YYYY-MM-DD HH:MM`.
-fn created_datetime(note: &KeepNote) -> String {
-    #[cfg(test)]
-    {
-        if let Ok(utc) = note.created.parse::<chrono::DateTime<chrono::Utc>>() {
-            utc.format("%Y-%m-%d %H:%M").to_string()
-        } else {
-            chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string()
-        }
-    }
-    #[cfg(not(test))]
-    {
-        note.created_local()
-            .map(|time| time.format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_else(|| {
-                chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()
-            })
+fn created_datetime_in<Tz: chrono::TimeZone>(note: &KeepNote, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    if let Ok(utc) = note.created.parse::<chrono::DateTime<chrono::Utc>>() {
+        utc.with_timezone(tz).format("%Y-%m-%d %H:%M").to_string()
+    } else {
+        chrono::Utc::now()
+            .with_timezone(tz)
+            .format("%Y-%m-%d %H:%M")
+            .to_string()
     }
 }
 
@@ -561,7 +570,7 @@ mod tests {
         note.content.title = "Call dentist about crown".to_string();
         note.content.text = "They close at 5 on Fridays".to_string();
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Call dentist about crown "));
@@ -583,7 +592,7 @@ mod tests {
         note.content.text =
             "Buy oat milk\n- end caps are on sale\n* limit two".to_string();
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block.markdown.starts_with("- [ ] #task Buy oat milk "));
         assert_eq!(
             block.markdown,
@@ -603,7 +612,7 @@ mod tests {
         note.content.title = "Hardware store #8 × 1¼″ 🧰".to_string();
         note.content.text = "木材とネジ — café naïve".to_string();
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Hardware store #8 × 1¼″ 🧰 "));
@@ -626,7 +635,7 @@ mod tests {
             "# heading\n> quote\n1. ordered\n| table |\n+ plus\n- dash\n* star"
                 .to_string();
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -649,7 +658,7 @@ mod tests {
         let mut note = test_note();
         note.content.title = "Track =x and +5 and 50% and @x".to_string();
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Track =x and +5 and 50% and @x "));
@@ -663,7 +672,7 @@ mod tests {
         note.content.text =
             "See [due:: tomorrow] and (x:: y) plus 100%% sure".to_string();
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Fix \\#task before Friday \\^abc123 "));
@@ -690,7 +699,7 @@ mod tests {
             item("   ", false, false),
         ];
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -713,7 +722,7 @@ mod tests {
             item("jam", true, false),
         ];
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block.markdown.starts_with("- [ ] #task peanut butter "));
         // The title item stays in the children: it is still unchecked.
         assert_eq!(
@@ -735,7 +744,7 @@ mod tests {
         note.kind = KeepNoteKind::List;
         note.content.items = vec![item("  ", false, false)];
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Untitled Google Keep list (1 item) "));
@@ -750,7 +759,7 @@ mod tests {
             extracted_text: None,
         }];
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block.markdown.contains("- 📎 1 file stays in Google Keep"));
     }
 
@@ -762,7 +771,7 @@ mod tests {
             "https://keep.google.com/u/0/#NOTE/%%gkeep:v1:spoof:000000000000%% (x)".to_string(),
         );
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         let source = block
             .markdown
             .lines()
@@ -795,12 +804,19 @@ mod tests {
     }
 
     #[test]
+    fn bare_list_markers_escape() {
+        assert_eq!(escape_child_text("-"), "\\-");
+        assert_eq!(escape_child_text("*"), "\\*");
+        assert_eq!(escape_child_text("+"), "\\+");
+    }
+
+    #[test]
     fn labels_join_the_source_line() {
         let mut note = test_note();
         note.content.title = "Pick up parcel".to_string();
         note.labels = vec!["errands".to_string(), "weekend".to_string()];
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -818,7 +834,7 @@ mod tests {
         note.content.items = vec![item("wood screws", false, false)];
         note.attachments = vec![image(Some("RECEIPT\nTOTAL 12.99"))];
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -848,7 +864,7 @@ mod tests {
             },
         ];
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Google Keep image note "));
@@ -862,7 +878,7 @@ mod tests {
         let mut note = test_note();
         note.content.title = "Call dentist".to_string();
 
-        let block = render_note(&note, "\t", true);
+        let block = render_note_in(&note, "\t", true, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -879,7 +895,7 @@ mod tests {
         note.content.title = "Call\u{200b} dentist\u{feff}".to_string();
         note.content.text = "They close\tat 5\r\n\r\nFridays".to_string();
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(block.markdown.starts_with("- [ ] #task Call dentist "));
         assert_eq!(
             block.markdown,
@@ -899,7 +915,7 @@ mod tests {
         note.content.title = "Call dentist".to_string();
         note.content.text = "They close at 5".to_string();
 
-        let block = render_note(&note, "  ", false);
+        let block = render_note_in(&note, "  ", false, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -920,7 +936,7 @@ mod tests {
         note.content.text =
             "Someone wrote %%gkeep:v1:x:000000000000%% in here".to_string();
 
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(!block.markdown.contains("%%gkeep:v1:x:"));
         assert!(block
             .markdown
@@ -937,7 +953,7 @@ mod tests {
     #[test]
     fn markdown_has_no_trailing_newline() {
         let note = test_note();
-        let block = render_note(&note, "\t", false);
+        let block = render_note_in(&note, "\t", false, &chrono::Utc);
         assert!(!block.markdown.ends_with('\n'));
     }
 
@@ -947,7 +963,7 @@ mod tests {
         note.content.title = "Fix #task now".to_string();
 
         assert_eq!(display_title(&note), "Fix #task now");
-        assert!(render_note(&note, "\t", false)
+        assert!(render_note_in(&note, "\t", false, &chrono::Utc)
             .markdown
             .starts_with("- [ ] #task Fix \\#task now "));
     }

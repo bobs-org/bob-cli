@@ -23,8 +23,7 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Google Keep → Obsidian inbox drain: move every Keep inbox \
              note into gkeep_inbox.md as Obsidian tasks and archive each \
              note in Keep only after its current content is provably in \
-             the vault.\n\n\
-             Running `bob gkeep` with no command runs `bob gkeep list`.",
+             the vault.",
         )
         .after_help(
             "Running `bob gkeep` with no command runs `bob gkeep list`.\n\nExamples:\n  bob gkeep                    Show both inboxes and what `pull` would do\n  bob gkeep list -s vault      Show only gkeep_inbox.md tasks (no network)\n  bob gkeep pull -d            Preview the exact Markdown a pull would write\n  bob gkeep pull -n            Write and verify tasks, but leave notes in Keep\n  bob gkeep pull               Write, verify, commit, then archive in Keep\n  bob gkeep pull -i 3f9c2e1    Pull one note by its REF from `bob gkeep list`\n  bob gkeep doctor             Diagnose credentials, adapter, and connectivity\n  bob gkeep login              One-time setup of the Keep master token\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`",

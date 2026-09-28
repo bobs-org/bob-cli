@@ -70,6 +70,10 @@ fn top_help_pins_the_command_surface() {
         ),
         "expected default-command note:\n{help}"
     );
+    assert!(
+        help.contains("Environment:"),
+        "expected Environment header in top help:\n{help}"
+    );
     for key in ["BOB_DIR", "BOB_CONFIG_FILE", "BOB_GKEEP_ADAPTER"] {
         assert!(
             help.contains(key),
@@ -293,4 +297,29 @@ fn usage_errors_exit_2() {
         .output()
         .expect("run bob gkeep pull --format yaml");
     assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn default_command_note_appears_exactly_once_in_short_and_long_help() {
+    let env = GkeepEnv::new("bob-cli-gkeep-help-once");
+    let sentence = "Running `bob gkeep` with no command runs `bob gkeep list`.";
+    for flag in ["-h", "--help"] {
+        let output = env
+            .command()
+            .arg("gkeep")
+            .arg(flag)
+            .output()
+            .expect("run bob gkeep help");
+        assert!(
+            output.status.success(),
+            "expected success for {flag}:\n{}",
+            stderr(&output)
+        );
+        let help = stdout(&output);
+        let count = help.matches(sentence).count();
+        assert_eq!(
+            count, 1,
+            "expected sentence exactly once in {flag}:\n{help}"
+        );
+    }
 }

@@ -88,11 +88,16 @@ pub(crate) fn local_naive_to_utc(
     naive: &chrono::NaiveDateTime,
 ) -> chrono::DateTime<chrono::Utc> {
     use chrono::{Local, TimeZone};
-    Local
-        .from_local_datetime(naive)
-        .earliest()
-        .map(|local| local.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|| naive.and_utc())
+    if let Some(local) = Local.from_local_datetime(naive).earliest() {
+        return local.with_timezone(&chrono::Utc);
+    }
+    // A wall-clock time that never existed (spring-forward DST gap):
+    // retry one hour later before falling back to treating it as UTC.
+    let shifted = *naive + chrono::Duration::hours(1);
+    if let Some(local) = Local.from_local_datetime(&shifted).earliest() {
+        return local.with_timezone(&chrono::Utc);
+    }
+    naive.and_utc()
 }
 
 /// The current moment in UTC, converted from local wall-clock time.
@@ -176,7 +181,7 @@ pub(crate) fn report_error(cmd: &str, error: &GkeepError, format: &str) -> i32 {
     error.exit_code()
 }
 
-/// Print a plain `bob gkeep <cmd>: warning: <message>` line to stderr.
+/// Print a `bob gkeep: warning: <message>` line to stderr.
 pub(crate) fn warn(message: &str) {
     let styler = Styler::detect();
     let prefix = if styler.is_color() {
