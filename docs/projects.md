@@ -218,7 +218,9 @@ valid `[scheduled:: YYYY-MM-DD]` source-task field into the new project's
 frontmatter and removes it from the completion criteria. Invalid or duplicate
 schedule fields stop creation with a focused notice. `bob capture` can create
 the same kind of project note directly, with no Obsidian window open: see
-[Project notes](capture.md#project-notes). In the `<ctrl+=>` child
+[Project notes](capture.md#project-notes). Task bullets in that capture can
+name their IDs with a trailing ` ^<id>`, or name them and link them into the
+Pomodoro with a trailing ` :<id>`. In the `<ctrl+=>` child
 note picker, future-scheduled projects show a `calendar-clock` chip immediately
 before the status pill; the chip says `Tomorrow`, `Jul 16`, or `Jul 16, 2027`
 while its tooltip and accessible label expose the full date. Today, past,
