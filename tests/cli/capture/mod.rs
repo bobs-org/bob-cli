@@ -4,6 +4,7 @@ mod authored;
 mod bare;
 mod batch;
 mod clip;
+mod complete_block_id;
 mod complete_editor;
 mod complete_query;
 mod ensure_next;

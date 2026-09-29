@@ -229,18 +229,21 @@ fn routable_routes(bob_dir: &Path, warnings: &mut Vec<String>) -> Vec<String> {
     routes
 }
 
-type TaskKey = (String, String);
+pub(crate) type TaskKey = (String, String);
 
 #[derive(Debug, Default)]
-struct Ledger {
+pub(crate) struct Ledger {
     /// First open entry (in ledger order) holding each link.
-    owners: HashMap<TaskKey, ActiveTaskPomodoro>,
+    pub(crate) owners: HashMap<TaskKey, ActiveTaskPomodoro>,
     /// Ledger order per link: entry order, then child order.
     positions: HashMap<TaskKey, (usize, usize)>,
 }
 
 /// Today's open entries and their dedicated links.
-fn read_ledger(day_file: &Path, warnings: &mut Vec<String>) -> Ledger {
+pub(crate) fn read_ledger(
+    day_file: &Path,
+    warnings: &mut Vec<String>,
+) -> Ledger {
     let contents = match fs::read_to_string(day_file) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {

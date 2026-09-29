@@ -485,12 +485,19 @@ fn capture_complete_task_block_id_marker_completes_only_route_side() {
     assert_success(&id_side);
     let json: serde_json::Value = serde_json::from_str(stdout(&id_side).trim())
         .expect("capture-complete JSON");
-    assert!(json["context"].is_null(), "{json}");
+    assert_eq!(json["context"], "task_block_id", "{json}");
     assert_eq!(
         json["replacement"],
-        serde_json::json!({"start": 10, "end": 10})
+        serde_json::json!({"start": 7, "end": 13})
     );
     assert_eq!(json["candidates"].as_array().expect("candidates").len(), 0);
+    assert_eq!(json["block_id"]["route"], "ca");
+    assert_eq!(json["block_id"]["marker"], "^");
+    assert_eq!(json["block_id"]["intent"], "new");
+    assert_eq!(json["block_id"]["relative_target"], "ca.md");
+    assert_eq!(json["block_id"]["note_exists"], false);
+    assert_eq!(json["block_id"]["allowed_character"], "[A-Za-z0-9-]");
+    assert!(json.get("warnings").is_none(), "{json}");
 }
 
 #[test]

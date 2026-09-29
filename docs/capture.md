@@ -2073,10 +2073,19 @@ carry a block ID so older callers stay compatible. Pass `-a`/`--all-tasks` to
 include open tasks that still need an ID, but only in the `task` / `@route+`
 context. Pomodoro `@route:` completion stays identified-only even when
 `--all-tasks` is set. Missing-ID discovery is therefore opt-in and
-plus-context-only.
-The right-hand side of `@route^block-id` is a new user-authored ID, so it has no
-completion context and returns an empty successful result while the caret is
-inside it. A solo leading `^` token instead completes active tasks: while the
+plus-context-only. For `link` intent, `@route:` candidates are further
+restricted to statuses the link path accepts (Ready, Blocked, Next, In
+Progress), carry an additive 1-based `line` and a nullable `pomodoro` object
+with the exact `active_task` shape, and rank exactly as before (document order
+on an empty query). For `new` and `project_note` intents, `candidates` is
+`[]`: every existing ID would be a duplicate-ID error.
+The right-hand side of `@route^block-id` completes as `task_block_id` once
+the route resolves, with empty `candidates` and the additive `block_id`
+object below. A project-note `+` directly after either block-ID part is the
+sigil, never part of the replacement: `@sase:x+` at cursor 7 returns
+`{6, 7}`, a cursor after the sigil (and before `#` for `:`) returns an empty
+success, and a `+` after `#name` stays part of the Pomodoro name. A solo
+leading `^` token instead completes active tasks: while the
 cursor is in the `route:block-id` part (including an empty part) the context
 is `active_task`, offering only In Progress and Next tasks with block IDs
 backed by the active-task discovery scan — queued tasks in ledger order, then
@@ -2088,7 +2097,9 @@ part and always stops before `#`/`=`, so typed suffixes survive an accept,
 and `query` is the text from after `^` to the cursor. A `#name` after
 `^route:block-id` completes Pomodoro names exactly as it does after
 `@route:block-id`, and a cursor inside `=<X>` or `=x` returns an empty success.
-Existing `@route:` (`pomodoro_block_id`) completion is unchanged. An empty block-ID component (`@route+#`) returns a successful empty
+`@route:` (`pomodoro_block_id`) completion now carries the `block_id` object
+and link-only filtering above; an empty-query marker-only `@route:` still
+lists that note's linkable tasks in document order. An empty block-ID component (`@route+#`) returns a successful empty
 task-section list. An unresolvable parent task returns a successful empty list
 plus one bounded `warnings` entry; the warning names the route and block ID
 without logging draft text or the task description.
@@ -2131,9 +2142,41 @@ JSON output is a single versioned object:
 `replacement` is the half-open UTF-8 byte range a chosen candidate replaces in
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
-`context` is `route`, `section`, `pomodoro_block_id`, `pomodoro_name`, `task`,
+`context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `pomodoro_name`, `task`,
 `task_section`, `active_task`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
-active. Each candidate's `replacement` is the exact text to insert; wikilink
+active. `task_block_id` covers `@route^prefix` once the route resolves;
+`candidates` is always `[]`. Both block-ID contexts carry an additive
+top-level `block_id` object with `route`, `relative_target` (for example
+`sase.md`), `note_exists` (false for a missing note, which is not an error),
+`marker` (`:` or `^`), `marker_range` (the whole marker token's draft-global
+UTF-8 byte range, for highlighting), `intent` (`link`, `new`, or
+`project_note`), `body` (the item's normalized parent-line body, or `""`),
+`allowed_character` (a one-character regex: `[A-Za-z0-9_-]` for `:` and
+`[A-Za-z0-9-]` for `^`), `allowed_description` (the human wording from the
+matching validator), `suggestions` (at most 3, deterministic, for `new` and
+`project_note` intents with a non-empty body), and `used` (every ID the
+duplicate check sees, deduplicated by first occurrence in document order with
+1-based `line`; task lines carry `task: true` plus `status_symbol`,
+`status_name`, and the description as `text`, while other lines carry
+`task: false`, null status fields, and the line with its list marker and
+trailing `^id` removed, trimmed to 160 characters; `[]` when the note is
+missing and for `project_note` intent). Intent is `project_note` when `+`
+follows the ID part; `^` is otherwise always `new`; `:` is `link` exactly when
+the whole-item parse would classify the item as `pomodoro_link` once a valid
+ID fills the part (marker-only items), else `new` (items with text, `s:`/`p:`
+/`%` markers, child-line and batch positions behave the same way).
+Suggestions derive from the task text: the first phrase with a word (code
+spans, quoted phrases with mixed `"`/`“` quotes, parentheticals, and
+`[[wikilink]]` alias-or-target, in text order) as its first 4 words, then the
+first 3 prose words, then — when the first prose word is a leading verb — the
+next 3 words; words are ASCII alphanumeric runs, lowercased, minus stopwords;
+joined with `-`, truncated at a word boundary to at most 32 bytes, validated,
+deduplicated, and suffixed with the first free `-2`…`-9` when taken (dropped
+when none is free). For example `Fix flaky gkeep test` suggests
+`fix-flaky-gkeep` and `flaky-gkeep-test`. Older clients without the
+`block_id` object treat `pomodoro_block_id` as a link list and see no picker
+for `task_block_id`; the app never falls back to the inline list for these
+two contexts. Each candidate's `replacement` is the exact text to insert; wikilink
 candidates also include `cursor_after`, the post-accept UTF-8 byte offset after
 deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
 `label`, `kind` (`inbox`, `area`, or `project`), and nullable `status`. A
@@ -2150,7 +2193,10 @@ sets `creates_pomodoro: true`, and uses the canonical selector as
 `replacement`. Older clients may treat that row as an ordinary replacement. A task candidate
 (`pomodoro_block_id` or `task` context) has `ref`, nullable `block_id`,
 `route`, `requires_block_id`, `status_symbol`, `status_name`, `status_type`,
-`text`, nullable `section`, `depth`, and `child_count`. Identified tasks keep
+`text`, nullable `section`, `depth`, `child_count`, additive 1-based `line`,
+and nullable `pomodoro` (`line`, nullable `name`, nullable `time_range`,
+`is_current`; `null` when the task is not queued or outside the link
+context). Identified tasks keep
 their normal block-ID `replacement`. An active-task candidate (`active_task`
 context) has `replacement` (`route:block-id`), `ref`, `route`, `block_id`,
 `status_symbol`, `status_name`, `status_type`, `text`, nullable `section`, and

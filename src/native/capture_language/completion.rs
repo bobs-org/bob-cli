@@ -18,6 +18,7 @@ pub(crate) enum CompletionContext {
     Route,
     Section,
     PomodoroBlockId,
+    TaskBlockId,
     PomodoroName,
     Task,
     TaskSection,
@@ -398,7 +399,7 @@ pub(super) fn marker_field_at_cursor(
                 route_part,
                 separator_len: 1,
                 right_part: block_part,
-                right_context: None,
+                right_context: Some(CompletionContext::TaskBlockId),
                 third: None,
             },
             cursor,
@@ -578,16 +579,63 @@ pub(super) fn completion_field_from_parts(
     }
 
     let right_end = right_start + parts.right_part.len();
+    // A single trailing `+` immediately after the block-ID part is the
+    // project-note sigil. It is never part of the block replacement: a
+    // cursor inside the ID completes the ID, while a cursor just after the
+    // sigil (and before any `#`) is an empty success. A `+` inside a
+    // Pomodoro name stays ordinary name charset.
+    let right_is_block_id = matches!(
+        parts.right_context,
+        Some(CompletionContext::PomodoroBlockId)
+            | Some(CompletionContext::TaskBlockId)
+    );
+    let (right_core, has_plus) = if right_is_block_id {
+        match parts.right_part.strip_suffix('+') {
+            Some(core) => (core, true),
+            None => (parts.right_part, false),
+        }
+    } else {
+        (parts.right_part, false)
+    };
+    let core_end = right_start + right_core.len();
+    if has_plus {
+        if cursor <= core_end {
+            let right_context = parts.right_context?;
+            if !is_route_token(parts.route_part) {
+                return None;
+            }
+            let split = cursor.clamp(right_start, core_end) - right_start;
+            return Some(CompletionField {
+                context: right_context,
+                route: Some(parts.route_part.to_ascii_lowercase()),
+                block_id: None,
+                query: right_core[..split].to_string(),
+                replacement: (right_start, core_end),
+            });
+        }
+        if cursor <= right_end {
+            return None;
+        }
+    }
     let in_right = parts.third.is_none() || cursor <= right_end;
     if in_right {
         // Past the first separator: complete the middle component when that
-        // component is backed by a discovery source. Authored ID-only task
-        // block IDs intentionally have no right-hand completion source.
+        // component is backed by a discovery source.
         let right_context = parts.right_context?;
         // The right-hand component only makes sense once the route it
         // belongs to already resolves.
         if !is_route_token(parts.route_part) {
             return None;
+        }
+        if has_plus {
+            let split = cursor.clamp(right_start, core_end) - right_start;
+            return Some(CompletionField {
+                context: right_context,
+                route: Some(parts.route_part.to_ascii_lowercase()),
+                block_id: None,
+                query: right_core[..split].to_string(),
+                replacement: (right_start, core_end),
+            });
         }
         let split = cursor.clamp(right_start, right_end) - right_start;
         return Some(CompletionField {
@@ -609,11 +657,17 @@ pub(super) fn completion_field_from_parts(
     }
     let third_end = third_start + third.part.len();
     let split = cursor.clamp(third_start, third_end) - third_start;
+    // Strip the project-note sigil from the block ID handed to Pomodoro-name
+    // completion, so `@route:id+#name` reports `id` rather than `id+`.
+    let third_block = if right_is_block_id {
+        right_core
+    } else {
+        parts.right_part
+    };
     Some(CompletionField {
         context: third.context,
         route: Some(parts.route_part.to_ascii_lowercase()),
-        block_id: (!parts.right_part.is_empty())
-            .then(|| parts.right_part.to_string()),
+        block_id: (!third_block.is_empty()).then(|| third_block.to_string()),
         query: third.part[..split].to_string(),
         replacement: (third_start, third_end),
     })

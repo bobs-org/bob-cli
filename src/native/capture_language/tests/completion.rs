@@ -161,14 +161,45 @@ fn pomodoro_completion_ranges_end_before_the_start_suffix() {
 }
 
 #[test]
-fn task_block_id_route_completes_but_authored_id_does_not() {
+fn task_block_id_route_and_authored_id_both_complete() {
     let route = field("Do work @Dev^new-id", 12).expect("route field");
     assert_eq!(route.context, CompletionContext::Route);
     assert_eq!(route.query, "Dev");
     assert_eq!(route.replacement, (9, 12));
 
-    assert_eq!(field("Do work @Dev^new-id", 13), None);
-    assert_eq!(field("Do work @Dev^new-id", 19), None);
+    let id = field("Do work @Dev^new-id", 13).expect("task block id");
+    assert_eq!(id.context, CompletionContext::TaskBlockId);
+    assert_eq!(id.route.as_deref(), Some("dev"));
+    assert_eq!(id.query, "");
+    assert_eq!(id.replacement, (13, 19));
+
+    let end = field("Do work @Dev^new-id", 19).expect("task block id end");
+    assert_eq!(end.context, CompletionContext::TaskBlockId);
+    assert_eq!(end.query, "new-id");
+    assert_eq!(end.replacement, (13, 19));
+}
+
+#[test]
+fn block_id_project_note_sigil_is_excluded_from_replacement() {
+    let colon = field("@sase:x+", 7).expect("colon block id");
+    assert_eq!(colon.context, CompletionContext::PomodoroBlockId);
+    assert_eq!(colon.query, "x");
+    assert_eq!(colon.replacement, (6, 7));
+    assert_eq!(field("@sase:x+", 8), None);
+
+    let caret = field("@sase^x+", 7).expect("caret block id");
+    assert_eq!(caret.context, CompletionContext::TaskBlockId);
+    assert_eq!(caret.query, "x");
+    assert_eq!(caret.replacement, (6, 7));
+    assert_eq!(field("@sase^x+", 8), None);
+
+    let named = field("@cash:goog-exit+#bugs", 10).expect("colon block id");
+    assert_eq!(named.context, CompletionContext::PomodoroBlockId);
+    assert_eq!(named.query, "goog");
+    // Plus is excluded: replacement ends before the sigil.
+    assert_eq!(named.replacement, (6, 15));
+    let hash = "@cash:goog-exit+#bugs".find('#').expect("hash");
+    assert_eq!(field("@cash:goog-exit+#bugs", hash), None);
 }
 
 #[test]

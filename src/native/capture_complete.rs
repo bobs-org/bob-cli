@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture, capture_active_tasks,
+    capture, capture_active_tasks, capture_block_ids,
     capture_language::{self, CompletionContext},
     capture_links::{
         self, WikilinkBlockCandidate, WikilinkHeadingCandidate,
@@ -150,8 +150,9 @@ IDs, ordered by today's open-Pomodoro Task Links, and accepting a row \
 inserts the full `route:block-id` in one step while a typed `#name`/`=<X>` \
 suffix survives. A `#name` after `^route:block-id` completes Pomodoro names \
 exactly as it does after `@route:block-id`, and a cursor inside `=<X>` or \
-`=x` offers nothing. The authored ID portion of '@route^block-id' has no \
-completion source and returns an empty success. An empty block-ID component \
+`=x` offers nothing. The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
+candidates and an additive `block_id` object carrying intent, used IDs, and suggestions. A project-note `+` \
+directly after either block-ID part is never part of the replacement. An empty block-ID component \
 ('@route+#') returns a successful empty task-section list; an unresolvable \
 parent task returns a successful empty list plus one bounded warning. Other \
 contexts still rank \
@@ -168,7 +169,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n\nContexts:\n  route, section, pomodoro_block_id, pomodoro_name, task, task_section, active_task, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, pomodoro_name, task, task_section, active_task, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -330,6 +331,8 @@ struct TaskCandidate {
     section: Option<String>,
     depth: usize,
     child_count: usize,
+    line: usize,
+    pomodoro: Option<ActiveTaskPomodoroCandidate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -425,6 +428,8 @@ struct CaptureCompleteResult {
     replacement: Replacement,
     context: Option<CompletionContext>,
     candidates: Candidates,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block_id: Option<capture_block_ids::BlockIdField>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
 }
@@ -441,6 +446,7 @@ impl CaptureCompleteResult {
             },
             context: None,
             candidates: Candidates::Route(Vec::new()),
+            block_id: None,
             warnings: Vec::new(),
         }
     }
@@ -476,6 +482,7 @@ fn build_result(
             CompletionContext::Route
             | CompletionContext::Section
             | CompletionContext::PomodoroBlockId
+            | CompletionContext::TaskBlockId
             | CompletionContext::PomodoroName
             | CompletionContext::Task
             | CompletionContext::TaskSection
@@ -494,6 +501,7 @@ fn build_result(
             },
             context: Some(field.context),
             candidates,
+            block_id: None,
             warnings: index.warnings(),
         });
     }
@@ -502,6 +510,65 @@ fn build_result(
     else {
         return Ok(CaptureCompleteResult::empty(cursor));
     };
+
+    if matches!(
+        field.context,
+        CompletionContext::PomodoroBlockId | CompletionContext::TaskBlockId
+    ) {
+        let route = field.route.as_deref().expect("route resolved");
+        let block_field = capture_block_ids::build_block_id_field(
+            bob_dir,
+            raw_text,
+            cursor,
+            &capture_block_ids::BlockIdRequest {
+                route,
+                replacement: field.replacement,
+                context: field.context,
+            },
+        );
+        let (candidates, mut warnings) = match block_field.intent {
+            capture_block_ids::BlockIdIntent::Link => {
+                if matches!(field.context, CompletionContext::PomodoroBlockId) {
+                    link_candidates(bob_dir, route, &field.query)?
+                } else {
+                    (Candidates::Task(Vec::new()), Vec::new())
+                }
+            }
+            capture_block_ids::BlockIdIntent::New
+            | capture_block_ids::BlockIdIntent::ProjectNote => {
+                (Candidates::Task(Vec::new()), Vec::new())
+            }
+        };
+        // Surface bounded ledger warnings for link candidates.
+        if matches!(block_field.intent, capture_block_ids::BlockIdIntent::Link)
+            && matches!(field.context, CompletionContext::PomodoroBlockId)
+        {
+            let day_file = pomodoro::day_file_for(bob_dir);
+            let mut ledger_warnings = Vec::new();
+            let _ = capture_active_tasks::read_ledger(
+                &day_file,
+                &mut ledger_warnings,
+            );
+            for warning in ledger_warnings {
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
+                }
+            }
+        }
+        return Ok(CaptureCompleteResult {
+            ok: true,
+            schema_version: SCHEMA_VERSION,
+            cursor,
+            replacement: Replacement {
+                start: field.replacement.0,
+                end: field.replacement.1,
+            },
+            context: Some(field.context),
+            candidates,
+            block_id: Some(block_field),
+            warnings,
+        });
+    }
 
     let (candidates, warnings) = match field.context {
         CompletionContext::Route => {
@@ -514,18 +581,8 @@ fn build_result(
                 Vec::new(),
             )
         }
-        CompletionContext::PomodoroBlockId => {
-            let route = field.route.as_deref().expect("route resolved");
-            (
-                task_candidates(
-                    bob_dir,
-                    route,
-                    &field.query,
-                    false,
-                    TaskSearch::BlockIdOnly,
-                )?,
-                Vec::new(),
-            )
+        CompletionContext::PomodoroBlockId | CompletionContext::TaskBlockId => {
+            unreachable!("block-id handled above")
         }
         CompletionContext::Task => {
             let route = field.route.as_deref().expect("route resolved");
@@ -572,6 +629,7 @@ fn build_result(
         },
         context: Some(field.context),
         candidates,
+        block_id: None,
         warnings,
     })
 }
@@ -666,10 +724,68 @@ fn task_candidates(
                     section: task.section.clone(),
                     depth: capture_tasks::indentation_depth(&task.indentation),
                     child_count: task.child_count,
+                    line: task.line_index + 1,
+                    pomodoro: None,
                 }
             })
             .collect(),
     ))
+}
+
+/// Link-only candidates for `pomodoro_block_id` with `link` intent:
+/// identified open tasks the link path accepts (Ready, Blocked, Next, In
+/// Progress via the same predicate the link resolver uses), annotated with
+/// the queued Pomodoro from today's ledger.
+fn link_candidates(
+    bob_dir: &Path,
+    route: &str,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let contents = read_target(bob_dir, route)?;
+    let settings = note_tasks::read_settings(bob_dir);
+    let scan = note_tasks::scan(&contents, &settings);
+    let linkable = scan.open_tasks().filter(|task| {
+        task.block_id.is_some()
+            && matches!(task.status_symbol, ' ' | '?' | '*' | '/')
+    });
+    let ranked =
+        rank_task_group(linkable.collect(), query, TaskSearch::BlockIdOnly);
+    let day_file = pomodoro::day_file_for(bob_dir);
+    let mut warnings = Vec::new();
+    let ledger = capture_active_tasks::read_ledger(&day_file, &mut warnings);
+    let candidates = ranked
+        .into_iter()
+        .map(|task| {
+            let block_id =
+                task.block_id.clone().expect("filtered to identified tasks");
+            let pomodoro = ledger
+                .owners
+                .get(&(route.to_string(), block_id.clone()))
+                .map(|entry| ActiveTaskPomodoroCandidate {
+                    line: entry.line,
+                    name: entry.name.clone(),
+                    time_range: entry.time_range.clone(),
+                    is_current: entry.is_current,
+                });
+            TaskCandidate {
+                replacement: block_id.clone(),
+                task_ref: task.task_ref(),
+                block_id: Some(block_id),
+                route: route.to_string(),
+                requires_block_id: false,
+                status_symbol: task.status_symbol,
+                status_name: task.status_name.clone(),
+                status_type: capture_tasks::status_type_label(task.status_type),
+                text: task.description.clone(),
+                section: task.section.clone(),
+                depth: capture_tasks::indentation_depth(&task.indentation),
+                child_count: task.child_count,
+                line: task.line_index + 1,
+                pomodoro,
+            }
+        })
+        .collect();
+    Ok((Candidates::Task(candidates), warnings))
 }
 
 fn rank_open_tasks<'a>(
@@ -1174,6 +1290,10 @@ fn print_human_success_with_styler(
         result.replacement.start,
         result.replacement.end
     );
+    if let Some(block_id) = &result.block_id {
+        println!();
+        println!("  {}", styler.dim(&block_id_summary(block_id)));
+    }
 
     if result.candidates.len() == 0 {
         println!();
@@ -1192,6 +1312,23 @@ fn print_human_success_with_styler(
     print_warnings(result, styler);
     println!();
     println!("{} {}", result.candidates.len(), plural_candidates(result));
+}
+
+fn block_id_summary(block_id: &capture_block_ids::BlockIdField) -> String {
+    let intent = match block_id.intent {
+        capture_block_ids::BlockIdIntent::Link => "link",
+        capture_block_ids::BlockIdIntent::New => "new",
+        capture_block_ids::BlockIdIntent::ProjectNote => "project_note",
+    };
+    let count = block_id.used.len();
+    let ids = if count == 1 { "ID" } else { "IDs" };
+    let mut summary =
+        format!("{} {intent} {count} {ids} in use", block_id.relative_target);
+    if !block_id.suggestions.is_empty() {
+        summary.push_str("  suggestions: ");
+        summary.push_str(&block_id.suggestions.join(", "));
+    }
+    summary
 }
 
 fn print_warnings(result: &CaptureCompleteResult, styler: &Styler) {
@@ -1236,7 +1373,14 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
                 } else {
                     item.replacement.clone()
                 };
-                (label, item.text.clone())
+                let detail = match item.pomodoro.as_ref() {
+                    Some(pomodoro) => pomodoro.name.clone().map_or_else(
+                        || format!("{}  · Planned", item.text),
+                        |name| format!("{}  · {name}", item.text),
+                    ),
+                    None => item.text.clone(),
+                };
+                (label, detail)
             })
             .collect(),
         Candidates::TaskSection(items) => items
@@ -1345,6 +1489,7 @@ fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::Route => "route",
         CompletionContext::Section => "section",
         CompletionContext::PomodoroBlockId => "pomodoro_block_id",
+        CompletionContext::TaskBlockId => "task_block_id",
         CompletionContext::PomodoroName => "pomodoro_name",
         CompletionContext::Task => "task",
         CompletionContext::TaskSection => "task_section",
@@ -1537,7 +1682,8 @@ mod tests {
             ),
         );
 
-        let value = result(temp.path(), "Do work @Dev:foc", 16);
+        // Marker-only `@route:` is link intent: identified linkable tasks.
+        let value = result(temp.path(), "@Dev:foc", 8);
         assert_eq!(value.context, Some(CompletionContext::PomodoroBlockId));
         let Candidates::Task(tasks) = &value.candidates else {
             panic!("expected task candidates");
@@ -1548,6 +1694,16 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["focus-123", "focus-999"]);
         assert!(tasks.iter().all(|task| !task.requires_block_id));
+        assert!(tasks.iter().all(|task| task.line > 0));
+        let block_id = value.block_id.as_ref().expect("block_id object");
+        assert_eq!(block_id.intent, capture_block_ids::BlockIdIntent::Link);
+
+        // The same marker on an item with text is new intent: no candidates.
+        let with_text = result(temp.path(), "Do work @Dev:foc", 16);
+        assert_eq!(with_text.context, Some(CompletionContext::PomodoroBlockId));
+        assert_eq!(with_text.candidates.len(), 0);
+        let block_id = with_text.block_id.as_ref().expect("block_id object");
+        assert_eq!(block_id.intent, capture_block_ids::BlockIdIntent::New);
     }
 
     fn active_task_fixture(root: &Path) -> PathBuf {
@@ -2360,7 +2516,8 @@ mod tests {
             ),
         );
 
-        let value = result_all(temp.path(), "Do work @Dev:foc", 16);
+        // Link intent stays identified-only even with `--all-tasks`.
+        let value = result_all(temp.path(), "@Dev:foc", 8);
         assert_eq!(value.context, Some(CompletionContext::PomodoroBlockId));
         let Candidates::Task(tasks) = &value.candidates else {
             panic!("expected task candidates");
@@ -2368,6 +2525,10 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].block_id.as_deref(), Some("focus-123"));
         assert!(!tasks[0].requires_block_id);
+
+        // New intent stays empty even with `--all-tasks`.
+        let with_text = result_all(temp.path(), "Do work @Dev:foc", 16);
+        assert_eq!(with_text.candidates.len(), 0);
     }
 
     #[test]
@@ -2411,9 +2572,16 @@ mod tests {
         };
         assert_eq!(routes[0].route, "cash");
 
+        // The right-hand side of `@route^` is now a `task_block_id`
+        // completion with empty candidates and a `new`-intent block object.
         let id_side = result(temp.path(), "Do @dev^new-id", 14);
-        assert_eq!(id_side.context, None);
+        assert_eq!(id_side.context, Some(CompletionContext::TaskBlockId));
         assert_eq!(id_side.candidates.len(), 0);
+        let block_id = id_side.block_id.as_ref().expect("block_id object");
+        assert_eq!(block_id.route, "dev");
+        assert_eq!(block_id.marker, "^");
+        assert_eq!(block_id.intent, capture_block_ids::BlockIdIntent::New);
+        assert_eq!(block_id.allowed_character, "[A-Za-z0-9-]");
     }
 
     #[test]
@@ -2511,6 +2679,7 @@ mod tests {
             replacement: Replacement { start: 9, end: 10 },
             context: Some(CompletionContext::PomodoroName),
             candidates: Candidates::PomodoroName(vec![pomodoro_name]),
+            block_id: None,
             warnings: Vec::new(),
         })
         .expect("pomodoro json");
@@ -2548,6 +2717,7 @@ mod tests {
                 kind: CaptureTargetKind::Area,
                 status: None,
             }]),
+            block_id: None,
             warnings: Vec::new(),
         })
         .expect("json");
@@ -2594,6 +2764,7 @@ mod tests {
                     kind: CaptureTargetKind::Area,
                     status: None,
                 }]),
+                block_id: None,
                 warnings: Vec::new(),
             },
             &styler,
@@ -2653,6 +2824,7 @@ mod tests {
             replacement: Replacement { start: 9, end: 10 },
             context: Some(CompletionContext::PomodoroName),
             candidates: Candidates::PomodoroName(vec![creation]),
+            block_id: None,
             warnings: Vec::new(),
         })
         .expect("creation json");
