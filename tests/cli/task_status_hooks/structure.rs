@@ -182,6 +182,7 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
         .as_str()
         .unwrap()
         .contains("has no Pomodoros section"));
+    assert_eq!(json["plan_budget"], serde_json::Value::Null);
     assert_eq!(
         fs::read_to_string(&task_file).unwrap(),
         "- [*] #task Must remain next ^keep\n"
@@ -206,7 +207,19 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
         .output()
         .expect("run with multiple current Pomodoros");
     assert_eq!(multiple.status.code(), Some(1));
-    assert!(stderr(&multiple).contains("multiple open timed Pomodoros"));
+    let multiple_stderr = stderr(&multiple);
+    assert!(
+        multiple_stderr.contains("multiple open timed Pomodoros"),
+        "unexpected multiple-timed report:\n{}",
+        format_output(&multiple)
+    );
+    assert!(
+        multiple_stderr.contains("First (line 3, 0900-0930)")
+            && multiple_stderr.contains("Second (line 5, 0930-1000)")
+            && multiple_stderr.contains("bob capture -- =x"),
+        "multiple-timed error should name each entry and suggest =x:\n{}",
+        format_output(&multiple)
+    );
     assert_eq!(
         fs::read_to_string(&task_file).unwrap(),
         "- [*] #task Must remain next ^keep\n"

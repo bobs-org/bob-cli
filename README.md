@@ -709,7 +709,11 @@ bob tmux-pomodoro
 ```
 
 Prints Pomodoro status in tmux status-line format: the regular status followed
-by ` | `. Missing or stale Pomodoros produce no output.
+by ` | `. Missing or stale Pomodoros produce no status. When today's daily
+note has a Pomodoros section, the plan-budget meter `plan T/Tc · L/Lc` is
+appended after the status (or alone when there is no status), wrapped in
+`#[reverse]...#[noreverse]` when over the cap. With `BOB_CLI_USE_SCRIPT=1`
+the script fallback stays budget-less.
 
 ## Compatibility shims
 

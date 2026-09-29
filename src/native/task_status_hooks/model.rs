@@ -143,6 +143,7 @@ pub(super) struct SyncResult {
     pub(super) kept_next: usize,
     pub(super) kept_in_progress: usize,
     pub(super) unresolved_references: Vec<UnresolvedReference>,
+    pub(super) plan_budget: Option<plan_budget::PlanReport>,
 }
 
 #[derive(Debug, Clone)]

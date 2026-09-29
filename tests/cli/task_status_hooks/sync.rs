@@ -1148,3 +1148,111 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
         format_output(&second)
     );
 }
+
+#[test]
+fn task_status_hooks_reports_plan_budget_in_json_and_human() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-plan-budget");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    write_file(
+        &daily,
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] () — GOALS\n",
+            "  - [[tasks#^one]]\n",
+            "  - [[tasks#^two]]\n",
+            "- [ ] () — DECKS\n",
+            "  - [[tasks#^three]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task One ^one\n",
+            "- [ ] #task Two ^two\n",
+            "- [ ] #task Three ^three\n",
+        ),
+    );
+
+    let dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run plan budget JSON");
+    assert_success(&dry_run);
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
+        .expect("plan budget dry-run JSON");
+    assert_eq!(
+        json["plan_budget"]["themes"],
+        serde_json::json!({"count": 2, "cap": 3, "over": false})
+    );
+    assert_eq!(
+        json["plan_budget"]["links"],
+        serde_json::json!({"count": 3, "cap": 10, "over": false})
+    );
+    assert_eq!(json["plan_budget"]["now"]["count"], 0);
+    assert_eq!(json["plan_budget"]["now"]["cap"], 15);
+    assert_eq!(json["plan_budget"]["status"], "ok");
+
+    let human = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run plan budget human output");
+    assert_success(&human);
+    assert!(
+        stdout(&human).contains("plan 2/3 themes · 3/10 links · NOW 0/15"),
+        "expected a plan budget stats line:\n{}",
+        format_output(&human)
+    );
+}
+
+#[test]
+fn task_status_hooks_nulls_plan_budget_on_invalid_config() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-plan-invalid");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    write_file(
+        &daily,
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] () — GOALS\n",
+            "  - [[tasks#^one]]\n",
+        ),
+    );
+    write_file(&vault.join("tasks.md"), "- [ ] #task One ^one\n");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "plan:\n  max_themes: 0\n");
+
+    let dry_run = bob_command()
+        .arg("task-status-hooks")
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("dry-run with invalid plan config");
+    assert_success(&dry_run);
+    let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
+        .expect("invalid-config dry-run JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["plan_budget"], serde_json::Value::Null);
+    assert!(
+        stderr(&dry_run).contains("invalid plan config"),
+        "expected a single invalid-config warning:\n{}",
+        format_output(&dry_run)
+    );
+}

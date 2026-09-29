@@ -20,8 +20,8 @@ use super::{
         env as bob_env, pomodoro,
         style::Styler,
     },
-    compute, count_now, LedgerBudget, NowBudget, PlanReport, PlanStatus,
-    LINT_NOW_CAP,
+    assemble_report, compute, count_now, LedgerBudget, NowBudget, PlanReport,
+    PlanStatus,
 };
 
 const COMMAND_NAME: &str = "bob plan";
@@ -251,44 +251,6 @@ fn report_without_ledger(
         warnings: Vec::new(),
     };
     assemble_report(today, relative_day_file, config, &ledger, now)
-}
-
-fn assemble_report(
-    today: NaiveDate,
-    relative_day_file: &str,
-    config: &PlanConfig,
-    ledger: &LedgerBudget,
-    now: NowBudget,
-) -> PlanReport {
-    let mut warnings = ledger.warnings.clone();
-    if now.over {
-        warnings.push(super::PlanLint {
-            code: LINT_NOW_CAP.to_string(),
-            message: format!(
-                "this week's NOW has {}/{cap} tasks",
-                now.count,
-                cap = now.cap
-            ),
-            line: None,
-        });
-    }
-    let status = if ledger.status == PlanStatus::Over || now.over {
-        PlanStatus::Over
-    } else {
-        PlanStatus::Ok
-    };
-    PlanReport {
-        date: today.format("%Y-%m-%d").to_string(),
-        daily_file: relative_day_file.to_string(),
-        caps: PlanReport::caps_of(config),
-        status,
-        themes: ledger.themes.clone(),
-        links: ledger.links.clone(),
-        now,
-        theme_names: ledger.theme_names.clone(),
-        entries: ledger.entries.clone(),
-        warnings,
-    }
 }
 
 fn print_success(result: &PlanSuccess, output_format: OutputFormat) {

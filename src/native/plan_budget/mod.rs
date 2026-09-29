@@ -120,6 +120,48 @@ impl PlanReport {
     }
 }
 
+/// The full report shared by `bob plan`, the hooks, and capture:
+/// the pure ledger half plus the NOW count. NOW over-cap appends
+/// `now_cap_exceeded`, and any over-cap half sets `status` to
+/// `over`. Being exactly at a cap is fine.
+pub(crate) fn assemble_report(
+    today: NaiveDate,
+    daily_file: &str,
+    config: &PlanConfig,
+    ledger: &LedgerBudget,
+    now: NowBudget,
+) -> PlanReport {
+    let mut warnings = ledger.warnings.clone();
+    if now.over {
+        warnings.push(PlanLint {
+            code: LINT_NOW_CAP.to_string(),
+            message: format!(
+                "this week's NOW has {}/{cap} tasks",
+                now.count,
+                cap = now.cap
+            ),
+            line: None,
+        });
+    }
+    let status = if ledger.status == PlanStatus::Over || now.over {
+        PlanStatus::Over
+    } else {
+        PlanStatus::Ok
+    };
+    PlanReport {
+        date: today.format("%Y-%m-%d").to_string(),
+        daily_file: daily_file.to_string(),
+        caps: PlanReport::caps_of(config),
+        status,
+        themes: ledger.themes.clone(),
+        links: ledger.links.clone(),
+        now,
+        theme_names: ledger.theme_names.clone(),
+        entries: ledger.entries.clone(),
+        warnings,
+    }
+}
+
 /// Case-insensitive component key: collapsed whitespace, lowercased.
 pub(crate) fn normalize_component(value: &str) -> String {
     value

@@ -49,6 +49,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
             "{prefix} {COMMAND_NAME}  {} \u{2014} already in sync, no changes \u{b7} {previous_context}",
             styler.cyan(&result.daily_file),
         );
+        print_plan_budget_line(result);
         return;
     }
 
@@ -64,6 +65,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.dependency_references,
         result.scanned_files
     );
+    print_plan_budget_line(result);
     print_change_section(
         &styler,
         if result.dry_run {
@@ -450,6 +452,44 @@ pub(super) fn print_change_section(
     }
 }
 
+/// One plan-budget stats line after the sync stats. Over-cap meters
+/// are red. Individual plan lints are never printed here: this command
+/// runs every 15 minutes, so it points at `bob plan` instead.
+pub(super) fn print_plan_budget_line(result: &SyncResult) {
+    let Some(budget) = &result.plan_budget else {
+        return;
+    };
+    let styler = Styler::detect();
+    let themes =
+        format!("{}/{} themes", budget.themes.count, budget.themes.cap);
+    let links = format!("{}/{} links", budget.links.count, budget.links.cap);
+    let now = format!("{}/{}", budget.now.count, budget.now.cap);
+    let themes = if budget.themes.over {
+        styler.red(&themes)
+    } else {
+        themes
+    };
+    let links = if budget.links.over {
+        styler.red(&links)
+    } else {
+        links
+    };
+    let now = if budget.now.over {
+        styler.red(&now)
+    } else {
+        now
+    };
+    let mut line = format!("  plan {themes} \u{b7} {links} \u{b7} NOW {now}");
+    if !budget.warnings.is_empty() {
+        let count = budget.warnings.len();
+        line.push_str(&format!(
+            " \u{b7} {count} plan {} (run bob plan)",
+            if count == 1 { "warning" } else { "warnings" }
+        ));
+    }
+    println!("{line}");
+}
+
 pub(super) fn print_warnings(result: &SyncResult) {
     let styler = Styler::detect();
     for warning in &result.unresolved_references {
@@ -559,6 +599,7 @@ pub(super) fn print_error(error: SyncError, format: OutputFormat) -> i32 {
                     "applied_files": error.applied_files,
                     "deferred_files": error.deferred_files,
                     "recovery_directory": error.recovery_directory,
+                    "plan_budget": serde_json::Value::Null,
                 })
             )
         }

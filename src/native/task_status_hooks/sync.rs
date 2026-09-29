@@ -52,6 +52,123 @@ pub(super) fn previous_daily_path(
         .map(|(_, path)| path.clone())
 }
 
+/// The multiple-open-timed guard names each conflicting entry so the
+/// 15-minute failure is actionable: name (or `(unnamed)`), 1-based line,
+/// and time range, plus how to leave exactly one entry open.
+pub(super) fn multiple_timed_error(
+    daily_contents: &str,
+    model: &PomodoroModel,
+) -> SyncError {
+    const PREFIX: &str = "Bob daily note has multiple open timed Pomodoros";
+    let scan = capture_pomodoros::scan(daily_contents);
+    let mut details = Vec::new();
+    for entry in &model.entries {
+        if !(entry.open && entry.timed && entry.has_child) {
+            continue;
+        }
+        let line = entry.line_index + 1;
+        let scanned = scan.entries.iter().find(|scanned| scanned.line == line);
+        let (mut name, mut range) = scanned
+            .map(|scanned| (scanned.name.clone(), scanned.time_range.clone()))
+            .unwrap_or((None, None));
+        // The capture scan only recognizes leading ranges, while this
+        // guard accepts a range anywhere in the entry. Fall back to the
+        // ledger parse so legacy `First (0900-0930)` lines still name
+        // their entry and range.
+        if name.is_none() || range.is_none() {
+            let (fallback_name, fallback_range) =
+                native_entry_name_and_range(&entry.context);
+            if name.is_none() {
+                name = fallback_name;
+            }
+            if range.is_none() {
+                range = fallback_range;
+            }
+        }
+        let name =
+            name.unwrap_or_else(|| plan_budget::UNNAMED_THEME.to_string());
+        details.push(match range {
+            Some(range) => format!("{name} (line {line}, {range})"),
+            None => format!("{name} (line {line})"),
+        });
+    }
+    if details.is_empty() {
+        return SyncError::new(PREFIX);
+    }
+    SyncError::new(format!(
+        "{PREFIX}: {}; close all but one with `bob capture -- =x`, or mark it `[x]`",
+        details.join(", ")
+    ))
+}
+
+/// Entry name and time range from the hooks' own ledger parse: the
+/// task text with its time range removed, minus a leading `()` placeholder
+/// and `—` name marker. Returns `(None, range)` when only a range parses,
+/// so the caller prints `(unnamed)` with the range.
+fn native_entry_name_and_range(
+    context: &str,
+) -> (Option<String>, Option<String>) {
+    let Some(task) = native_pomodoro::open_ledger_task(context) else {
+        return (None, None);
+    };
+    let Some((raw_range, start, end)) = native_pomodoro::task_time_range(task)
+    else {
+        return (None, None);
+    };
+    let mut candidate = task.replacen(raw_range, "", 1).trim().to_string();
+    if let Some(rest) = candidate.strip_prefix("()") {
+        candidate = rest.trim().to_string();
+    }
+    if let Some(rest) = candidate.strip_prefix('—') {
+        candidate = rest.trim().to_string();
+    }
+    let name = (!candidate.is_empty()).then_some(candidate);
+    (name, Some(format!("{start}-{end}")))
+}
+
+/// The read-only plan budget for a successful sync: the pure ledger
+/// half plus the NOW count. It never changes the exit code and never
+/// writes. An invalid plan config yields `None` (JSON `null`) and a
+/// single stderr warning; a missing Pomodoros section also yields
+/// `None`.
+pub(super) fn plan_budget_for_sync(
+    bob_dir: &Path,
+    daily_contents: &str,
+    anchor: NaiveDate,
+    daily_path: &Path,
+) -> Option<plan_budget::PlanReport> {
+    let config = match bob_config::load_plan_config(&bob_config::config_path())
+    {
+        Ok(config) => config,
+        Err(error) => {
+            let message = match error {
+                bob_config::ConfigError::Read(message)
+                | bob_config::ConfigError::Invalid(message) => message,
+            };
+            eprintln!(
+                    "{COMMAND_NAME}: warning: invalid plan config: {message}; plan_budget is null"
+                );
+            return None;
+        }
+    };
+    let ledger = plan_budget::compute(daily_contents, &config);
+    if !ledger.has_section {
+        return None;
+    }
+    let now = plan_budget::count_now(bob_dir, anchor, &config);
+    let daily_file = daily_path
+        .strip_prefix(bob_dir)
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| daily_path.display().to_string());
+    Some(plan_budget::assemble_report(
+        anchor,
+        &daily_file,
+        &config,
+        &ledger,
+        now,
+    ))
+}
+
 pub(super) fn note_kind(contents: &str) -> NoteKind {
     let Some(frontmatter) = projects::parse_frontmatter(contents) else {
         return NoteKind::Other;
@@ -105,9 +222,7 @@ pub(super) fn sync_task_statuses(
         .filter(|entry| entry.open && entry.timed && entry.has_child)
         .count();
     if timed_open > 1 {
-        return Err(SyncError::new(
-            "Bob daily note has multiple open timed Pomodoros",
-        ));
+        return Err(multiple_timed_error(&daily_contents, &pomodoro_model));
     }
 
     let settings_path = request.bob_dir.join(TASKS_SETTINGS);
@@ -519,6 +634,13 @@ pub(super) fn sync_task_statuses(
         )?
     };
 
+    let plan_budget = plan_budget_for_sync(
+        &request.bob_dir,
+        &daily_contents,
+        anchor,
+        &daily_path,
+    );
+
     Ok(SyncResult {
         ok: true,
         dry_run: request.dry_run,
@@ -556,6 +678,7 @@ pub(super) fn sync_task_statuses(
         kept_next,
         kept_in_progress,
         unresolved_references: unresolved,
+        plan_budget,
     })
 }
 

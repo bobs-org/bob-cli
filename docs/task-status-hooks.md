@@ -612,7 +612,11 @@ remains untouched.
 
 The command exits with status 1 and writes nothing when the current daily note
 is missing, has no `## Pomodoros` section, or contains multiple non-empty open
-timed Pomodoros. Empty timed entries are pruned instead of making the current
+timed Pomodoros. The multiple-open-timed error names each conflicting entry
+with its one-based line and time range, for example
+``Bob daily note has multiple open timed Pomodoros: First (line 3, 0900-0930),
+Second (line 5, 0930-1000); close all but one with `bob capture -- =x`, or
+mark it `[x]` ``. Empty timed entries are pruned instead of making the current
 Pomodoro ambiguous. A valid but empty current section is a valid source of
 truth: it clears every scanned `[*]` task and applies scoped stale-In-Progress
 rollback using the optional previous source. This distinction prevents a
@@ -755,6 +759,14 @@ directory. Dry-run uses the same planning path and reports what would happen
 without changing any file. Warnings go to stderr. A no-op prints a single
 `already in sync` line only when task statuses, daily-note links, grouping,
 and grouping diagnostics are all unchanged.
+
+Both the changed and no-op reports end with one plan-budget stats line, for
+example `plan 3/3 themes · 7/10 links · NOW 12/15`. Over-cap meters are red.
+When the report carries plan warnings, the line appends the count and points
+at `bob plan`, for example `· 2 plan warnings (run bob plan)`; individual
+plan lints are never printed here. The budget is read-only: it never changes
+the exit code and never writes anything. An invalid plan config prints a
+single stderr warning and reports `plan_budget` as `null`.
 
 JSON mode prints one object on stdout with these stable fields:
 
@@ -974,6 +986,32 @@ are empty and `recovery_directory` is `null`; on a successful live write,
 `applied_files` lists the vault-relative notes replaced and
 `recovery_directory` points to the recovery record. JSON failures also remain
 machine-readable as `{ "ok": false, "error": "...", "reason": "..." }` and
-include applied/deferred paths plus recovery directory when available.
+include applied/deferred paths plus recovery directory when available; they
+carry `"plan_budget": null`.
 `embedded_completed_references` is a deprecated, always-empty compatibility
 field for one contract cycle.
+
+`plan_budget` holds the shared plan report from `docs/plan.md` (date, daily
+file, caps, status, themes/links/NOW meters, entries, and warnings),
+computed read-only from the daily note before the sync rewrites it. It is
+`null` when there is no daily note or no Pomodoros section, and on an invalid
+plan config. A typical on-cap report trims to its meters like this:
+
+```json
+{
+  "plan_budget": {
+    "date": "2026-07-10",
+    "daily_file": "2026/20260710.md",
+    "caps": {
+      "max_themes": 3,
+      "max_links": 10,
+      "max_now": 15,
+      "strict": false
+    },
+    "status": "ok",
+    "themes": { "count": 2, "cap": 3, "over": false },
+    "links": { "count": 3, "cap": 10, "over": false },
+    "now": { "count": 0, "cap": 15, "over": false }
+  }
+}
+```

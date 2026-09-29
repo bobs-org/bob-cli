@@ -37,7 +37,92 @@ fn tmux_pomodoro_formats_native_pomodoro_status() {
         .expect("run bob tmux-pomodoro");
 
     assert_success(&output);
-    assert_eq!(stdout(&output), "[<65m] 0945-1015 Review crate skeleton | ");
+    assert_eq!(
+        stdout(&output),
+        "[<65m] 0945-1015 Review crate skeleton · plan 0/3 · 0/10 | "
+    );
+}
+
+#[test]
+fn tmux_pomodoro_appends_named_budget_meter() {
+    let temp = TempDir::new("bob-cli-tmux-named");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("2026/20260601.md"),
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] () — GOALS\n",
+            "  - [[tasks#^one]]\n",
+            "  - [[tasks#^two]]\n",
+            "- [ ] () — DECKS\n",
+            "  - [[tasks#^three]]\n",
+        ),
+    );
+    write_file(&vault.join("tasks.md"), "- [ ] #task One ^one\n");
+
+    let output = bob_command()
+        .arg("tmux-pomodoro")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260601.md"))
+        .env("BOB_NOW", "2026-06-01 09:10:01")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob tmux-pomodoro with a named ledger");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "plan 2/3 · 3/10 | ");
+}
+
+#[test]
+fn tmux_pomodoro_reverses_over_cap_meter() {
+    let temp = TempDir::new("bob-cli-tmux-over");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("2026/20260601.md"),
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] () — ONE\n",
+            "- [ ] () — TWO\n",
+            "- [ ] () — THREE\n",
+            "- [ ] () — FOUR\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("tmux-pomodoro")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260601.md"))
+        .env("BOB_NOW", "2026-06-01 09:10:01")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob tmux-pomodoro over the theme cap");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "#[reverse]plan 4/3 · 0/10#[noreverse] | ");
+}
+
+#[test]
+fn tmux_pomodoro_omits_meter_without_pomodoros_section() {
+    let temp = TempDir::new("bob-cli-tmux-no-section");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("2026/20260601.md"),
+        "# Daily\n\nNo ledger here.\n",
+    );
+
+    let output = bob_command()
+        .arg("tmux-pomodoro")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260601.md"))
+        .env("BOB_NOW", "2026-06-01 09:10:01")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob tmux-pomodoro without a section");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "");
 }
 
 #[test]

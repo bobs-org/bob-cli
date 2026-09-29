@@ -276,6 +276,7 @@ mod tests {
             kept_next: 0,
             kept_in_progress: 0,
             unresolved_references: Vec::new(),
+            plan_budget: None,
         }
     }
 
