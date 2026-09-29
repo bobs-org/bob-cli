@@ -18,6 +18,7 @@ mod pomodoro_link;
 mod pomodoro_name;
 mod pomodoro_shift;
 mod pomodoro_start;
+mod pomodoro_start_named;
 mod pomodoro_whole_item;
 mod priority;
 mod project_note;

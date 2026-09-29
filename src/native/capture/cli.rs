@@ -166,8 +166,9 @@ The shell sees a leading `-` as a flag, so spell an earlier shift as \
 `bob capture -- --2` (or `bob capture --1` for one unit); a bare `--` \
 stays the end-of-options marker and carries no text.\n\n\
 Pomodoro sessions form a lifecycle: `=`/`=<X>` starts the next session, \
-`+[N]`/`-[N]` resizes the running session, `++[N]`/`--[N]` shifts it, and \
-`=x` stops the running one (`=` starts the next session, `=x` stops the \
+`=<X>#<pomodoro>` starts that named session, `+[N]`/`-[N]` resizes the \
+running session, `++[N]`/`--[N]` shifts it, and `=x` stops the running one \
+(`=` starts the next session, `=#name` starts that one, `=x` stops the \
 running one). Session operators may share one line when whitespace \
 separates them: `+2 =x` means `+2`, blank line, `=x`, and `=x =` closes \
 then starts the next session. Quote `=` items in zsh, which expands a \
@@ -175,16 +176,22 @@ leading `=word` to a command path.\n\n\
 Capture a whole item `=`/`=<X>` (for example `=`, `=3`, `=-2`, `=2-1`) to \
 start today's next future Pomodoro now with the same timing as the `se<X>` \
 snippet: empty is 25 minutes, `3` is 15 minutes, `-` is 25 minutes with a \
-5-minute offset, `2-1` is 10 minutes with a 5-minute offset. The item must \
-contain only the start token (leading/trailing whitespace is fine) and have \
-exactly one physical line; a counted token with extra text, markers, or \
-child lines (`=3 more`, `=3x`) and an exact token with child lines fail \
-instead of creating a task, while a bare token with prose (`= foo`, `==`) \
-and mid-body tokens (`Plan =3`) stay ordinary prose. The start needs a \
-future `- [ ] ()` placeholder and no running timed entry; a running session \
-names itself and teaches the `=x`-then-`=` switch idiom. The started entry \
-moves to the current slot and reports its queued Task Links. A `@@` \
-declaration never applies to start items, and forced \
+5-minute offset, `2-1` is 10 minutes with a 5-minute offset. Write \
+``=`<X>`#<pomodoro>`` (for example `=#deep-work`, `=3#bugs`) to start the \
+named Pomodoro now with `se<X>` timing: an open match (whole slug, else \
+prefix) starts in place, a completed match starts a new session with that \
+name (an \"again\" start), and otherwise a new named session is created \
+and started. `<X>` goes before `#`; `=#bugs=3` teaches `=3#bugs`. The item \
+must contain only the start token (leading/trailing whitespace is fine) \
+and have exactly one physical line; a counted token with extra text, \
+markers, or child lines (`=3 more`, `=3x`) and an exact token with child \
+lines fail instead of creating a task, while a bare token with prose \
+(`= foo`, `==`) and mid-body tokens (`Plan =3`) stay ordinary prose. The \
+start needs a future `- [ ] ()` placeholder and no running timed entry; a \
+running session names itself and teaches the `=x`-then-`=` switch idiom \
+(`=x =#name` switches sessions in one line). The started entry moves to \
+the current slot and reports its queued Task Links. A `@@` declaration \
+never applies to start items, and forced \
 destination/task/section/clipboard options are rejected on them. Later items \
 see earlier staged edits, dry-run reports without writing, and any failure \
 rolls the whole batch back, so `=x`, blank line, `=` switches sessions \
@@ -310,7 +317,7 @@ prefix-matched, so --task-section future-work does not match FUTURE WORK.",
         )
         .after_help(
             "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash^goog-exit+' 'Finish the Google exit packet!'\n  printf 'Finish the Google exit packet! @cash^goog-exit+\\n- Draft the resignation memo\\n' | bob capture
-  printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture '=x'\n  bob capture '=x2'\n  bob capture '=x1!2'\n  bob capture '=x0'\n  bob capture '='\n  bob capture '=3'\n  printf '=x\\n\\n=\\n' | bob capture\n  bob capture '+2 =x'\n  bob capture '=x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  printf -- '-2\\n\\n=x\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+  printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture '=x'\n  bob capture '=x2'\n  bob capture '=x1!2'\n  bob capture '=x0'\n  bob capture '='\n  bob capture '=3'\n  bob capture '=#deep-work'\n  bob capture '=3#bugs'\n  bob capture '=x =#bugs'\n  printf '=x\\n\\n=\\n' | bob capture\n  bob capture '+2 =x'\n  bob capture '=x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  printf -- '-2\\n\\n=x\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())

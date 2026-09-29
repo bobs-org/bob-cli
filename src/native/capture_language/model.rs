@@ -83,6 +83,7 @@ pub(crate) enum CaptureKind {
     /// a task. The suffix mirrors the `se<X>` snippet timing.
     PomodoroStart {
         spec: PomodoroStartSpec,
+        pomodoro_name: Option<String>,
     },
 }
 

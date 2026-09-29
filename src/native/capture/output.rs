@@ -821,10 +821,15 @@ pub(super) fn print_human_pomodoro_start_success(
         .as_deref()
         .filter(|name| !name.is_empty())
         .unwrap_or("next session");
+    let created = if start.created_pomodoro {
+        " (created)"
+    } else {
+        ""
+    };
     println!(
         "  {}",
         styler.dim(&format!(
-            "{} {}-{} ({}m) at line {}",
+            "{} {}-{} ({}m){created} at line {}",
             name,
             start.start,
             start.end,

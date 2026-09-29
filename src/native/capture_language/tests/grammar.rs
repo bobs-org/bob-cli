@@ -975,7 +975,7 @@ fn execution_parses_equals_family_starts_alongside_close() {
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
         assert_eq!(parsed.body, raw.trim(), "{raw}");
         match parsed.kind {
-            CaptureKind::PomodoroStart { spec } => {
+            CaptureKind::PomodoroStart { spec, .. } => {
                 assert_eq!(spec.raw, suffix, "{raw}");
                 assert_eq!(spec.duration_units, duration, "{raw}");
                 assert_eq!(spec.offset_units, offset, "{raw}");

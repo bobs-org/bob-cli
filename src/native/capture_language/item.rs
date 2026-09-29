@@ -493,20 +493,23 @@ pub(crate) fn session_operator_token(
 }
 
 /// A whole-item `=`-family token: either a close (`=x`) or a start
-/// (`=` plus an `se<X>`-shaped suffix).
+/// (`=` plus an `se<X>`-shaped suffix, plus an optional `#name` part).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EqualsToken {
     /// A leading `=x`/`=X`. The caller keeps today's close recognition
     /// (exact token, first-token near miss, otherwise prose) because `x`
-    /// is never a start-suffix character.
+    /// is never a start-suffix character. `=x#…` still lexes as `Close`.
     Close,
-    /// `=` plus the longest `[0-9]*(-[0-9]*)?` run. `suffix` excludes the
-    /// `=`, `counted` is true when the suffix holds at least one digit,
-    /// and `len` is the token's byte length.
+    /// `=` plus the longest `[0-9]*(-[0-9]*)?` run, plus an optional
+    /// `#name` part. `suffix` excludes the `=`, `counted` is true when the
+    /// suffix holds at least one digit, `name` is `Some` when a `#`
+    /// immediately follows the suffix (possibly empty, as in `=#`), and
+    /// `len` is the token's byte length including the name part.
     Start {
         suffix: String,
         counted: bool,
         len: usize,
+        name: Option<String>,
     },
 }
 
@@ -514,7 +517,10 @@ pub(crate) enum EqualsToken {
 /// [`session_operator_token`]. Returns `None` when the text does not start
 /// with `=`, so ordinary parsing continues. A bare token (`=`, `=-`) has
 /// an empty or digit-free suffix; a counted token (`=3`, `=-2`, `=3-`,
-/// `=2-1`, `=0`) carries at least one digit.
+/// `=2-1`, `=0`) carries at least one digit. An optional `#name` part
+/// immediately after the suffix extends the token to the next ASCII
+/// whitespace (or end of line); the `#` must come immediately after the
+/// suffix.
 pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     let rest = text.strip_prefix('=')?;
     if rest
@@ -537,10 +543,21 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     }
     let suffix = rest[..len].to_string();
     let counted = suffix.bytes().any(|byte| byte.is_ascii_digit());
+    let mut token_len = len + 1;
+    let mut name: Option<String> = None;
+    if rest.as_bytes().get(len) == Some(&b'#') {
+        let after_hash = &rest[len + 1..];
+        let name_len = after_hash
+            .find(|character: char| character.is_ascii_whitespace())
+            .unwrap_or(after_hash.len());
+        name = Some(after_hash[..name_len].to_string());
+        token_len += 1 + name_len;
+    }
     Some(EqualsToken::Start {
         suffix,
         counted,
-        len: len + 1,
+        len: token_len,
+        name,
     })
 }
 
@@ -562,15 +579,31 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
         return len == token.len() || !digits.is_empty();
     }
     match session_equals_token(token) {
-        Some(EqualsToken::Start { counted, len, .. }) => {
+        Some(EqualsToken::Start {
+            counted, len, name, ..
+        }) => {
+            if name.is_some() {
+                return true;
+            }
             len == token.len() || counted
         }
         Some(EqualsToken::Close) => {
             token.eq_ignore_ascii_case("=x")
                 || whole_item_close_after_x(token).is_some()
+                || is_close_hash_token(token)
         }
         None => false,
     }
+}
+
+/// Whether a whitespace-free token is a `=x#…` close near miss: `=x`/`=X`
+/// immediately followed by `#`.
+pub(super) fn is_close_hash_token(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    bytes.len() >= 3
+        && bytes[0] == b'='
+        && bytes[1].eq_ignore_ascii_case(&b'x')
+        && bytes[2] == b'#'
 }
 
 /// Whole-item session-operator grammar: one sign resizes, two signs shift.
@@ -693,6 +726,72 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
     )))
 }
 
+/// A named start token's own error, in E1/E3/E2/overflow order. `None`
+/// when the token itself is well-formed (callers then report E4 for extra
+/// text or accept the exact token).
+fn named_token_error(token: &str, suffix: &str, name: &str) -> Option<String> {
+    if name.is_empty() {
+        return Some(pomodoro_named_start_incomplete_error(token));
+    }
+    if let Some((before, after)) = name.split_once('=')
+        && suffix.is_empty()
+        && parse_pomodoro_start_suffix(after).is_ok()
+    {
+        return Some(pomodoro_named_start_order_error(token, before, after));
+    }
+    if !is_pomodoro_selector_component(name) {
+        return Some(pomodoro_named_start_name_error(name, token));
+    }
+    if let Err(message) = parse_pomodoro_start_suffix(suffix) {
+        return Some(message);
+    }
+    None
+}
+
+/// E4 for a well-formed named token with extra text or child lines.
+fn named_shape_error(
+    token: &str,
+    suffix: &str,
+    name: &str,
+    parent_trimmed: &str,
+    len: usize,
+) -> String {
+    if name.is_empty()
+        && let Some(nospace) = named_nospace_error(suffix, parent_trimmed, len)
+    {
+        return nospace;
+    }
+    let mut message = pomodoro_named_start_shape_error(token, suffix, name);
+    if !name.is_empty() && parent_trimmed.len() > len {
+        let extra = parent_trimmed[len..].trim_start();
+        let words: Vec<&str> = extra.split_whitespace().collect();
+        if !words.is_empty()
+            && words
+                .iter()
+                .all(|word| is_pomodoro_selector_component(word))
+        {
+            message.push_str(&pomodoro_named_start_multiword_hint(
+                suffix, name, &words,
+            ));
+        }
+    }
+    message
+}
+
+/// E4 no-space variant for `=# <word>`: the name must follow `#` directly.
+fn named_nospace_error(
+    suffix: &str,
+    parent_trimmed: &str,
+    len: usize,
+) -> Option<String> {
+    let extra = parent_trimmed.get(len..)?.trim_start();
+    let word = extra.split_whitespace().next()?;
+    if word.is_empty() {
+        return None;
+    }
+    Some(pomodoro_named_start_nospace_error(suffix, word))
+}
+
 /// Absolute byte offset of a whole-item close token's `after_x` text (the
 /// lists after `=x`/`=X`), so selection diagnostics point at the original
 /// input. `first` is the parent line's first whitespace-delimited token.
@@ -745,6 +844,13 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             let Some(first) = parent_trimmed.split_whitespace().next() else {
                 return Ok(None);
             };
+            if is_close_hash_token(first) {
+                let name = first
+                    .find('#')
+                    .map(|hash| first[hash + 1..].to_string())
+                    .unwrap_or_default();
+                return Err(pomodoro_close_hash_error(&name));
+            }
             let selection_after_x = whole_item_close_after_x(first);
             if selection_after_x.is_none() && !first.eq_ignore_ascii_case("=x")
             {
@@ -829,7 +935,70 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             suffix,
             counted,
             len,
+            name,
         } => {
+            if let Some(selector) = name {
+                let token_text =
+                    parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+                let exact =
+                    parent_trimmed.len() == len && item.lines.len() == 1;
+                if !exact {
+                    let has_extra = parent_trimmed.len() > len;
+                    let has_children = item.lines.len() > 1;
+                    if has_extra || has_children {
+                        if let Some(error) =
+                            named_token_error(token_text, &suffix, &selector)
+                        {
+                            if selector.is_empty()
+                                && has_extra
+                                && let Some(nospace) = named_nospace_error(
+                                    &suffix,
+                                    parent_trimmed,
+                                    len,
+                                )
+                            {
+                                return Err(nospace);
+                            }
+                            return Err(error);
+                        }
+                        return Err(named_shape_error(
+                            token_text,
+                            &suffix,
+                            &selector,
+                            parent_trimmed,
+                            len,
+                        ));
+                    }
+                    return Ok(None);
+                }
+                if let Some(error) =
+                    named_token_error(token_text, &suffix, &selector)
+                {
+                    return Err(error);
+                }
+                let spec = parse_pomodoro_start_suffix(&suffix)?;
+                if forced_route.is_some() || forced_section.is_some() {
+                    return Err(POMODORO_START_FORCED_ERROR.to_string());
+                }
+                let raw = parent_trimmed.to_string();
+                return Ok(Some(parsed_capture_item_outcome(
+                    item,
+                    ParsedCaptureText {
+                        body: raw,
+                        clip: None,
+                        route: None,
+                        kind: CaptureKind::PomodoroStart {
+                            spec,
+                            pomodoro_name: Some(selector),
+                        },
+                        scheduled_offset: None,
+                        priority_level: None,
+                        sub_bullets: Vec::new(),
+                    },
+                    Vec::new(),
+                    None,
+                )));
+            }
             let exact = parent_trimmed.len() == len && item.lines.len() == 1;
             if !exact {
                 // A counted token claims the item even with extra text:
@@ -858,7 +1027,10 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     body: raw,
                     clip: None,
                     route: None,
-                    kind: CaptureKind::PomodoroStart { spec },
+                    kind: CaptureKind::PomodoroStart {
+                        spec,
+                        pomodoro_name: None,
+                    },
                     scheduled_offset: None,
                     priority_level: None,
                     sub_bullets: Vec::new(),

@@ -35,6 +35,13 @@ fn chain_token_predicate_covers_the_documented_table() {
         "=2-1",
         "=3x",
         "=99999999999999999999999",
+        "=#bugs",
+        "=3#bugs",
+        "=-2#bugs",
+        "=#",
+        "=#bugs=3",
+        "=#b!",
+        "=x#bugs",
         "=x",
         "=X",
         "=x2",
@@ -50,7 +57,7 @@ fn chain_token_predicate_covers_the_documented_table() {
     }
     for token in [
         "foo", "==", "=xx", "=xa", "+++", "+-", "-foo", "--aside", "1,3", "!2",
-        "^r:id=", "@r:id=x", "s:1", "p:2", "%", "#", "@@r",
+        "^r:id=", "@r:id=x", "s:1", "p:2", "%", "#", "@@r", "#bugs", "bugs",
     ] {
         assert!(!is_session_chain_token(token), "{token}");
     }
@@ -74,6 +81,13 @@ fn chain_token_predicate_equals_claimed_for_single_tokens() {
         "=2-1",
         "=3x",
         "=99999999999999999999999",
+        "=#bugs",
+        "=3#bugs",
+        "=-2#bugs",
+        "=#",
+        "=#bugs=3",
+        "=#b!",
+        "=x#bugs",
         "=x",
         "=X",
         "=x2",
@@ -101,6 +115,8 @@ fn chain_token_predicate_equals_claimed_for_single_tokens() {
         "%",
         "#",
         "@@r",
+        "#bugs",
+        "bugs",
     ];
     for token in tokens {
         let draft = split_capture_draft(token);
@@ -228,7 +244,7 @@ fn execution_distinguishes_spaced_start_adjust_from_offset_start() {
     let spaced = execute_draft("= -2").expect("spaced executes");
     assert_eq!(spaced.items.len(), 2);
     match &spaced.items[0].parsed.kind {
-        CaptureKind::PomodoroStart { spec } => {
+        CaptureKind::PomodoroStart { spec, .. } => {
             assert_eq!(spec.raw, "");
         }
         other => panic!("expected start, got {other:?}"),
@@ -243,7 +259,7 @@ fn execution_distinguishes_spaced_start_adjust_from_offset_start() {
     let single = execute_draft("=-2").expect("single executes");
     assert_eq!(single.items.len(), 1);
     match &single.items[0].parsed.kind {
-        CaptureKind::PomodoroStart { spec } => {
+        CaptureKind::PomodoroStart { spec, .. } => {
             assert_eq!(spec.raw, "-2");
             assert_eq!(spec.offset_units, 2);
         }

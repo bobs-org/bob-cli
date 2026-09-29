@@ -379,7 +379,7 @@ fn capture_pomodoro_whole_item_start_guards_fail_write_free() {
         let error = stdout(&output);
         assert!(
             error.contains(
-                "no future Pomodoro to start: today's ledger (`day.md`) has no open `- [ ] ()` placeholder (to start a task's session instead, use `^route:block-id=`)"
+                "no future Pomodoro to start: today's ledger (`day.md`) has no open `- [ ] ()` placeholder (start a new named session with `=#<name>`, or a task's session with `^route:block-id=`)"
             ),
             "{day}: {error}"
         );

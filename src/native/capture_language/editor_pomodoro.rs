@@ -359,7 +359,11 @@ pub(super) fn parse_editor_close_item<'a>(
             suffix,
             counted,
             len,
+            name,
         } => {
+            if name.is_some() {
+                return None;
+            }
             return parse_editor_start_item(
                 item,
                 parent_trimmed,

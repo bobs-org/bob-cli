@@ -92,9 +92,20 @@ pub(super) fn plan_capture_item(
             request, parsed, spec, now, today, planner, warnings,
         );
     }
-    if let CaptureKind::PomodoroStart { spec } = parsed.kind.clone() {
+    if let CaptureKind::PomodoroStart {
+        spec,
+        pomodoro_name,
+    } = parsed.kind.clone()
+    {
         return plan_pomodoro_start_item(
-            request, parsed, spec, now, today, planner,
+            request,
+            parsed,
+            spec,
+            pomodoro_name,
+            now,
+            today,
+            planner,
+            warnings,
         );
     }
     if let CaptureKind::PomodoroAdjust { spec } = parsed.kind.clone() {

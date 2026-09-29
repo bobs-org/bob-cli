@@ -396,6 +396,81 @@ pub(super) fn pomodoro_start_shape_error(token: &str, suffix: &str) -> String {
     )
 }
 
+/// Named-start E1: `=#` / `=3#` with an empty name part.
+pub(super) fn pomodoro_named_start_incomplete_error(token: &str) -> String {
+    format!(
+        "`{token}` is incomplete: type a Pomodoro name after `#` (for example `{token}deep-work`)"
+    )
+}
+
+/// Named-start E2: invalid name characters.
+pub(super) fn pomodoro_named_start_name_error(
+    name: &str,
+    token: &str,
+) -> String {
+    format!(
+        "Pomodoro name `{name}` in `{token}` may contain only A-Z, a-z, 0-9 or `& ' ( ) + , . / -`; write spaces as `-`"
+    )
+}
+
+/// Named-start E3: link-form order (`#name=<X>`). `before` is the text
+/// before the first `=` in the name, `after` the text after it.
+pub(super) fn pomodoro_named_start_order_error(
+    token: &str,
+    before: &str,
+    after: &str,
+) -> String {
+    format!(
+        "write the duration before the name: `={after}#{before}` instead of `{token}`"
+    )
+}
+
+/// Named-start E4 base: extra text or child lines on a named start.
+pub(super) fn pomodoro_named_start_shape_error(
+    token: &str,
+    suffix: &str,
+    name: &str,
+) -> String {
+    format!(
+        "Pomodoro start `{token}` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session in a named Pomodoro instead, use `^route:block-id#{name}={suffix}`)"
+    )
+}
+
+/// Named-start E4 hint when the extra text is all valid name components:
+/// join multi-word names with `-`.
+pub(super) fn pomodoro_named_start_multiword_hint(
+    suffix: &str,
+    name: &str,
+    words: &[&str],
+) -> String {
+    let joined = words.join("-");
+    format!(
+        "; to name a multi-word Pomodoro, join the words with `-`: `={suffix}#{name}-{joined}`"
+    )
+}
+
+/// Named-start E4 variant when the name is empty and extra text follows
+/// (`=# bugs`): no space after `#`.
+pub(super) fn pomodoro_named_start_nospace_error(
+    suffix: &str,
+    word: &str,
+) -> String {
+    format!(
+        "write the Pomodoro name right after `#`, with no space: `={suffix}#{word}`"
+    )
+}
+
+/// Named-start E5: `=x#…` close near miss.
+pub(super) fn pomodoro_close_hash_error(name: &str) -> String {
+    if name.is_empty() {
+        "`=x` always closes the running Pomodoro; remove `#`".to_string()
+    } else {
+        format!(
+            "`=x` always closes the running Pomodoro; remove `#{name}`, or write `=x =#{name}` to close it and then start that Pomodoro"
+        )
+    }
+}
+
 pub(super) const POMODORO_CLOSE_PROJECT_NOTE_ERROR: &str = "Pomodoro close suffix `=x` applies only to `@<route>:<block-id>` task captures, not project-note `@<route>^<block-id>+` forms";
 
 pub(crate) const POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `s:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";

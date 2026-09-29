@@ -961,7 +961,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             assert_eq!(actual.in_progress, spec.in_progress, "{raw}");
             assert_eq!(actual.complete, spec.complete, "{raw}");
         }
-        if let CaptureKind::PomodoroStart { spec } = &executed.kind {
+        if let CaptureKind::PomodoroStart { spec, .. } = &executed.kind {
             let actual = parse.pomodoro_start.as_ref().expect("start spec");
             assert_eq!(actual.raw, spec.raw, "{raw}");
             assert_eq!(actual.duration_units, spec.duration_units, "{raw}");
