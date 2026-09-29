@@ -36,7 +36,7 @@ bob randomize [-d|--dry-run] [-f|--format human|json] [-l|--level LABEL]...
 | `-o, --offline` | Skip both vault-sync cycles; commit locally without pushing |
 | `-r, --retry-timeout SECONDS` | Budget for waiting on the maintenance lock and for re-planning after concurrent-edit races (default `60`; `0` = fail fast) |
 | `-s, --seed SEED` | Base seed (decimal or `0x` hex). A dry run prints the seed that reproduces its dates |
-| `-u, --until DATE\|+N` | Treat tasks scheduled through DATE (or N days from today) as due and roll their windows from that date. Must be today or later (exit 2 otherwise) |
+| `-u, --until DATE\|+N` | Treat tasks scheduled through DATE (or N days from today) as due and roll their windows from that date. Must be today or later. An offset that cannot be represented on the calendar, including a day count that does not fit in a signed duration, exits 2 with stderr `bob randomize: invalid --until "…": date out of range` |
 
 There is no `--bob-dir`. The in-process vault-sync cycle is bound to
 `BOB_DIR`, and a flag would let edits and sync target different vaults;
@@ -178,6 +178,19 @@ the `BOB_DAY_FILE` filename when it parses, otherwise the current date
 defaulting to today; it must be today or later. It is both the cutoff and
 the base the windows are rolled from: **new date** = `until +
 level.roll_offset(task_seed)`.
+
+`--until +N` that cannot be added to today is a usage error (exit 2).
+Stdout stays empty under `--format json` as well; the stderr line is
+`bob randomize: invalid --until "…": date out of range`. A priority window
+whose rolled date (`until` plus the level's offset) cannot be represented,
+or a today so close to the end of the calendar that the 35-day load horizon
+cannot be represented, fails the plan before any write (exit 1). The message
+is `priority window rolls beyond the supported date range from <date>`,
+where `<date>` is the cutoff for a rolled date and today for the load
+horizon. JSON reports `error.stage` of `plan` and `error.message` with that
+text. That plan failure has no `hint:` line. Ordinary windows (P1 2–7
+through P4 91–365) and dates such as `9999-12-31` stay inside the calendar
+and roll normally.
 
 **task_seed** mixes the base seed with a stable 64-bit hash (FNV-1a) of
 three inputs: the vault-relative path, the task line's digest, and the
@@ -356,13 +369,16 @@ Nothing due prints
 `✓ Nothing to re-roll — no prioritized tasks are due by <until>.` plus the
 "Left alone", "Still due", and "Needs a look" lines, and exits 0.
 
-Errors go to stderr as `✗ <what failed>: <why>`, followed by one actionable
-hint, such as "re-run with --offline to commit locally without syncing" or
-"another maintenance run held the lock for 60 s; try again".
+Errors go to stderr as `✗ <stage>: <message>`. When the failure has an
+actionable next step, a `hint:` line follows, such as "re-run with
+--offline to commit locally without syncing" or "another maintenance run
+held the lock for 60 s; try again". A date-range plan failure has no hint.
 
 ### JSON (`--format json`)
 
-One document on stdout, even on failure. All progress and warnings go to
+One document on stdout for a run that gets past argument parsing, including
+runtime failure. Usage errors (exit 2) print one stderr line and leave
+stdout empty. All progress and warnings go to
 stderr in this mode. `line` and `ref` use the task's original (pre-edit)
 position. `schedule_log` is `prepended` or `created`. `git.mode` is `sync`,
 `offline`, `not_a_worktree`, or `dry_run`; sections that did not run are
@@ -438,6 +454,10 @@ position. `schedule_log` is `prepended` or `created`. `git.mode` is `sync`,
 
 ## Failure modes
 
+- An unrepresentable `--until +N` is a usage error (exit 2) before any plan.
+  A representable cutoff fails at stage `plan` (exit 1), with nothing
+  written, when its priority roll or the 35-day load horizon leaves the
+  calendar.
 - Missing or invalid priority config, or a missing/incompatible Blocked
   (`?`) Tasks status definition, fails before any write (exit 1).
 - A lock held past `--retry-timeout` fails with exit 1 and no writes.
@@ -459,7 +479,9 @@ Environment: `BOB_DIR`, `BOB_NOW`, `BOB_DAY_FILE`, `BOB_CONFIG_FILE`,
 one-line role of each.
 
 Exit codes: `0` is success, including "nothing to re-roll". `1` is runtime
-failure: config errors, a missing Blocked status, lock timeout, pre-sync
-failure, a partial apply, commit failure, a post-sync conflict, or a push
-failure. `2` is usage error: clap errors, an unknown `--level`,
-`--until` in the past, or an unparsable `--seed` or `--until`.
+failure: config errors, a missing Blocked status, an unrepresentable
+priority roll or load horizon, lock timeout, pre-sync failure, a partial
+apply, commit failure, a post-sync conflict, or a push failure. `2` is a
+usage error: clap errors, an unknown `--level`, `--until` in the past, an
+unrepresentable `--until` offset, or an unparsable `--seed` or `--until`.
+Usage errors print one stderr line and leave stdout empty.

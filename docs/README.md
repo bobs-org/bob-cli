@@ -17,5 +17,6 @@ index, and environment variables.
 | [task-status-hooks.md](task-status-hooks.md) | `bob task-status-hooks` Pomodoro-driven task status |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, and bridge policy |
 
-`bob --help` and `bob <command> --help` are the concise usage source. If this
-documentation and the running command disagree, trust the command.
+`bob <command> --help` is the concise usage source for that command, and
+these guides follow it. The one-line labels in `bob --help` are a short
+index.

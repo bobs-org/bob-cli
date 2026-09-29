@@ -71,9 +71,9 @@ bob capture-targets
 bob projects list
 ```
 
-Priority rolls (`p:<N>`) and Highlights pre-scan hooks read
-`~/.config/bob/config.yml`. Override that path with `BOB_CONFIG_FILE` or
-`XDG_CONFIG_HOME`; see [Environment](#environment).
+Priority rolls (`p:<N>`), `bob randomize`, Highlights pre-scan hooks, and
+`bob gkeep` read `~/.config/bob/config.yml`. Override that path with
+`BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`; see [Environment](#environment).
 
 ## Terms
 
@@ -124,9 +124,13 @@ Paths below are relative to `BOB_DIR` (`~/bob` by default):
 | Path | Role |
 | --- | --- |
 | `mac_inbox.md` | Default capture target |
+| `gkeep_inbox.md` | Default target for `bob gkeep pull` (`gkeep.target` can name another vault-relative note) |
 | `<route>.md` | Area or project note selected by an `@route` token |
+| `<route>_<id>.md` | Project note created by `@route^id+` or `@route:id+`; hyphens in the block ID become underscores |
 | `YYYY/YYYYMMDD.md` | Daily note; the `Pomodoros` section is the session ledger |
 | `done/` | Archive notes written by `bob move-done-tasks` |
+| `img/`, `file/` | Images and saved clipboard snippets written by `bob capture` |
+| `_conflicts/` | Local copies of vault files `bob vault-sync` could not merge |
 | `.obsidian/plugins/` | Installed community plugins, including Bob's custom plugins |
 | `xlib/` | Highlights intake PDFs from `bob highlights create` |
 | `lib/` | Highlights library PDFs after `bob highlights scan` |
@@ -209,6 +213,9 @@ typed on that same item. The whole batch is planned before anything is written.
 | `=x[<N>][!<M>]` | Close today's running timed Pomodoro (case-insensitive `=X`); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, a lone `0` means none; the item must contain only the token (quote in zsh, since `!` history expansion also applies) |
 | `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it; numbers refer to the post-link lineup |
 | `<text> @route:id=x…` | Create the new task in the running session, then close it |
+| `@route^id+` | New project note `<route>_<id>.md`; the daily note and the parent note are left unchanged |
+| `@route:id+` | Same project note, and link its `^prj` task from today's implicit current/next Pomodoro |
+| `@route:id+#pomodoro` | Same, targeting a named open Pomodoro or creating that named future Pomodoro |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
@@ -226,6 +233,16 @@ task once the item has body text, but selects a Pomodoro name when
 Pomodoro or creates a named future Pomodoro. A `#` in the middle of the body
 stays ordinary text. The retired `@route::id` spelling is not accepted; use
 `@route^id` for an ordinary task with a block ID.
+
+`+` has two positions. `@route+id` is a child bullet, or an Ensure Next
+request, under an existing task. `@route^id+` and `@route:id+` put `+`
+immediately after the block ID and create `<route>_<id>.md` at the vault root,
+replacing every `-` in the block ID with `_`. Capture leaves the parent note
+unchanged; `bob projects sync` owns its Sub-projects line. The `^` form writes
+only the new project note. The `:` form also links that note's `^prj` task from
+today's ledger. A `+` after a Pomodoro name, as in `@sase:deep-fix#bugs+`,
+stays part of the name. Route names may contain letters, digits, `_`, and `-`.
+Block IDs may contain letters, digits, and `-`.
 
 A bare `@route+id` marker-only capture is the default Ensure Next operation:
 Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and Next `[*]` all end as Next,
@@ -285,6 +302,7 @@ Log, link-form, diagnostic, JSON, and batch rules.
 ```bash
 bob capture buy milk @groceries
 bob capture '@dev^foobar' 'Some ordinary task.'
+bob capture '@cash^goog-exit+' 'Finish the Google exit packet!'
 bob capture '@dev:foobar' 'Some foobar task.'
 bob capture '@dev:foobar#bugs' 'Some foobar task.'
 bob capture 'Write outline @sase:outline=3'
@@ -411,23 +429,30 @@ transaction. The full project task contract lives in
 ## Randomize
 
 ```bash
-bob randomize --dry-run
-bob randomize --seed 0x7f3a91c2
+bob randomize [-d|--dry-run] [-f|--format human|json] [-l|--level LABEL]...
+              [-o|--offline] [-r|--retry-timeout SECONDS] [-s|--seed SEED]
+              [-u|--until DATE|+N]
 ```
 
 Re-rolls every due prioritized task to its own random date inside that
 task's configured priority window (P1 2–7 days through P4 91–365 days).
 Each re-roll replaces the `scheduled` date, flips a future-dated Ready task
 to Blocked, writes a 🎲 Schedule Log entry, and regroups eligible project
-notes in the same write. P0 tasks, Next and In Progress tasks, today's
-Pomodoro tasks, and `due`/`repeat` tasks are always left alone.
+notes in the same write. P0 tasks, Next and In Progress tasks, tasks linked
+from today's open Pomodoros, `^prj` lifecycle tasks, and `due`/`repeat`
+tasks are always left alone. `--level` limits the roll to those labels.
+`--until` treats tasks scheduled through that date as due and rolls windows
+from it. An offset that cannot be represented on the calendar is a usage
+error (exit 2): `bob randomize: invalid --until "…": date out of range`.
 
 Always preview first with `--dry-run`, then apply those exact dates with
-`--seed <seed>`. A live run holds the shared vault-maintenance lock while
-it syncs, plans, writes, commits exactly the rewritten notes as one
-`bob randomize` commit, and syncs again; undo with
-`git -C ~/bob revert <sha> && bob vault-sync`. The full contract lives in
-[`docs/randomize.md`](docs/randomize.md).
+the printed `--seed`, repeating `--level` and `--until` when you used them.
+Omit `--seed` to use `BOB_PRIORITY_ROLL_SEED` or a generated seed. A live
+run holds the shared vault-maintenance lock while it syncs, plans, writes,
+commits exactly the rewritten notes as one `bob randomize` commit, and
+syncs again. `--offline` skips both sync cycles and still commits locally.
+Undo with `git -C ~/bob revert <sha> && bob vault-sync`. The full contract
+lives in [`docs/randomize.md`](docs/randomize.md).
 
 ## Plugins
 
@@ -476,11 +501,11 @@ The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
 ## Highlights
 
 ```bash
-bob highlights create <md-file> [-d|--dry-run] [-f|--force] [-i|--include-id] [-o|--output PDF] [-P|--parent NOTE] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights doctor [-n|--no-hooks] [-x|--xlib-dir PATH]
-bob highlights marker <pdf> [-x|--xlib-dir PATH]
-bob highlights scan [-d|--dry-run] [-j|--jobs N] [-n|--no-hooks] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
-bob highlights sync <pdf> [-d|--dry-run] [-w|--write-pdf] [-p|--prefer marker|frontmatter] [-x|--xlib-dir PATH]
+bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
 Turns Markdown into Highlights-ready PDFs and turns Highlights annotations into
@@ -497,8 +522,10 @@ Obsidian reference notes.
   directories needs `bob highlights sync <PDF>`.
 - `scan` runs the configured `highlights.pre_scan_hook` on writing runs, then
   moves pending PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs
-  the library. Pass `-n, --no-hooks` to ignore the hook. By default it does
-  not write PDF markers; use `scan --dry-run --write-pdfs`, review, then
+  the library. Pass `-n, --no-hooks` on `scan` or `doctor`, or before the
+  subcommand as `bob highlights --no-hooks scan`, to ignore the hook. By
+  default it does not write PDF markers; use `scan --dry-run --write-pdfs`,
+  review, then
   `scan --write-pdfs`. `-v, --verbose` prints the detailed per-PDF plan instead
   of the concise report.
 - `sync <pdf>` updates one reference note from the page-1 marker and sidecar.
@@ -746,9 +773,16 @@ platforms have no automatic history provider and report how to configure
 `BOB_CLIPBOARD_HISTORY_CMD`; `%` and `%1` continue to use the portable live
 clipboard source alone.
 
-`BOB_CONFIG_FILE` sets the exact bullet-property config file used by `p:<N>`
-priority rolls and `bob randomize`. When unset, Bob uses
-`$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`.
+`BOB_CONFIG_FILE` sets the exact Bob config file. When unset, Bob uses
+`$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`. That
+file holds the priority windows for `p:<N>` and `bob randomize`,
+`highlights.pre_scan_hook` for `bob highlights scan` and
+`bob highlights doctor`, and the `gkeep:` section for `bob gkeep`.
+
+`COLUMNS`, when set to a positive integer, is the width `bob plugins list`
+and `bob gkeep` use when they shorten human table text so each row fits.
+Otherwise Bob uses 100 columns. `bob randomize` lays its task lines out for
+a fixed 100 columns.
 
 `BOB_DATAVIEW_OBSIDIAN_COMMAND` overrides the executable used by
 `bob query --engine obsidian`.
@@ -906,5 +940,6 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |
 | Custom plugin list and vault deploy | [`docs/plugins.md`](docs/plugins.md) |
 | Project `^prj` lifecycle and schedules | [`docs/projects.md`](docs/projects.md) |
+| Bulk re-roll of due prioritized tasks | [`docs/randomize.md`](docs/randomize.md) |
 | Google Keep inbox drain into Obsidian tasks | [`docs/gkeep.md`](docs/gkeep.md) |
 | Pomodoro-driven task status sync | [`docs/task-status-hooks.md`](docs/task-status-hooks.md) |

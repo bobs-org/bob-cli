@@ -73,7 +73,7 @@ Two roots feed the report:
 | `VERSION`     | manifest `version`                                                     |
 | `SYNC`        | repo files vs. vault files                                             |
 | `VAULT`       | `community-plugins.json` plus the installed-folder check               |
-| `DESCRIPTION` | manifest `description`, truncated to the remaining terminal width      |
+| `DESCRIPTION` | manifest `description`, truncated to the remaining terminal width (`COLUMNS` when it is a positive integer, otherwise 100 columns) |
 
 ### SYNC state
 

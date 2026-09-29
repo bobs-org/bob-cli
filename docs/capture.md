@@ -261,6 +261,13 @@ side of a trailing route marker. The token is removed from the body and adds
 `[scheduled::YYYY-MM-DD]` after the created stamp. Checkbox-bearing captures
 with a resolved scheduled property start Blocked (`[?]`), including `s:0`.
 Ordinary bullet and sub-bullet captures still render without a checkbox.
+`N` is a non-negative integer. An offset that cannot be added to today
+inside the representable calendar — for example `s:9999999999` — fails
+before any write. Human output is
+`bob capture: scheduled offset is out of range` (exit 2). With
+`--format json`, stdout is
+`{"ok": false, "error": "scheduled offset is out of range"}`. A `p:<N>`
+roll that lands outside that calendar uses the same error.
 
 Append a lowercase `p:<N>` token to write a priority level, where `N` selects
 the Nth level in the bullet-property config file. Bob looks for that file at
@@ -296,10 +303,12 @@ The bold number is the exact relative day offset selected for that scheduled
 date. The parenthesized range is the configured priority window.
 
 A `p:<N> s:<N>` capture writes no entry, since `s:<N>` wins the scheduled date
-and no roll happened. An out-of-range `p:<N>` fails with a usage error naming
-the configured levels instead of staying literal. Any resolved scheduled
-property makes a checkbox-bearing capture start Blocked (`[?]`); `bob
-task-status-hooks` still reconciles tasks whose schedules are edited later.
+and no roll happened. A `p:<N>` past the configured level count is a usage
+error (exit 2). The message is
+`p:<N> is not a configured priority level; use p:1 through p:<count> (<labels>)`.
+Any resolved scheduled property makes a checkbox-bearing capture start Blocked
+(`[?]`); `bob task-status-hooks` still reconciles tasks whose schedules are
+edited later.
 
 ### Multi-item capture
 
@@ -523,8 +532,9 @@ Pomodoro-linked next task. For example,
 ```
 
 It also adds `[[dev#^foobar]]` as a child bullet of an eligible open Pomodoro
-in today's daily note. The route is lower-cased; route and block-ID characters
-are limited to letters, digits, `_`, and `-`. Scheduled offsets work in either
+in today's daily note. The route is lower-cased and may contain letters,
+digits, `_`, and `-`. The block ID may contain letters, digits, and `-`,
+the same rule as `@route^id`. Scheduled offsets work in either
 terminal order; a scheduled Pomodoro-linked task starts `[?]`, and the block ID
 remains the final task token after any `[scheduled::YYYY-MM-DD]` property.
 

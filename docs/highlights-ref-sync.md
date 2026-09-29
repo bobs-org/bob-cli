@@ -46,7 +46,10 @@ the same marker without writing.
 `scan` runs the configured pre-scan hook on writing runs, then moves pending
 PDFs from the configured intake directory into the mirrored library path,
 recursively finds PDFs under the configured library directory, and processes
-them in stable path order. Pass `-n, --no-hooks` to ignore the hook. Per-PDF
+them in stable path order. Pass `-n, --no-hooks` on `scan`, or before the
+subcommand as `bob highlights --no-hooks scan`, to ignore the hook. Only
+`scan` and `doctor` honor that flag. A parent `--no-hooks` before `create`,
+`marker`, or `sync` is accepted and ignored. Per-PDF
 validation or write failures are reported without stopping unrelated PDFs; the
 final command status is still non-zero when any PDF fails. It refuses intake
 destinations that already exist and duplicate output paths such as two PDFs
@@ -55,7 +58,8 @@ that would both write the same `ref/<ref_type>/<basename>.md` target.
 `doctor` checks vault paths, library/ref/xlib directories, pending intake,
 the configured pre-scan hook, sidecar presence, marker readability, Git
 worktree status, and optional `ob` availability. It never writes files. Pass
-`-n, --no-hooks` to skip the pre-scan hook check.
+`-n, --no-hooks` on `doctor`, or before the subcommand as
+`bob highlights --no-hooks doctor`, to skip the pre-scan hook check.
 
 Available commands:
 
@@ -201,7 +205,9 @@ from `BOB_DIR` and inherits stdout/stderr, so scheduled logs include its output.
 Bob exports `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` to the hook child. If it exits
 non-zero, `scan` reports the exit code and aborts before intake.
 `scan --dry-run` reports the hook it would run without executing it. Pass
-`-n, --no-hooks` to `scan` or `doctor` to ignore the hook from every source.
+`-n, --no-hooks` to `scan` or `doctor`, or place it on the parent command
+before that subcommand, to ignore the hook from every source. The same
+parent flag before `create`, `marker`, or `sync` is accepted and ignored.
 The legacy `highlights.pre_scan_command` key and
 `BOB_HIGHLIGHTS_PRE_SCAN_COMMAND` variable are hard errors.
 

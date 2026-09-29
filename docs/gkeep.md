@@ -126,9 +126,11 @@ only Keep (still needs the network); `-s vault` shows only vault tasks with
 no network. `-a, --all` also lists archived Keep notes and done/canceled
 vault tasks.
 
-The Keep table has `REF`, `AGE`, `KIND`, `STATE`, and `NOTE` columns. `REF`
-is the first 7 hex digits of `sha256(id)`; it is shown in `list` and accepted
-by `pull -i`. States, oldest first:
+Human tables shorten the text column so each row fits the terminal width:
+`COLUMNS` when it is a positive integer, otherwise 100 columns. The Keep
+table has `REF`, `AGE`, `KIND`, `STATE`, and `NOTE` columns. `REF` is the
+first 7 hex digits of `sha256(id)`; it is shown in `list` and accepted by
+`pull -i`. States, oldest first:
 
 | State | Meaning |
 | --- | --- |
