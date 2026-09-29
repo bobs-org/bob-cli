@@ -18,6 +18,10 @@ use super::super::{
 };
 use super::ledger::target_from_token;
 use super::links::{apply_edits, pomodoro_marker_prefix};
+use super::selection::{
+    apply_close_selection, number_task_links, CloseSelection,
+    CloseSelectionError, NumberedTaskLink, TaskLinkSource,
+};
 use super::{
     close_task_text, find_running_pomodoro, plan_ledger_close,
     sub_bullet_range, wikilink_tokens, BlockLinkTarget, FindRunningError,
@@ -65,6 +69,7 @@ pub(crate) struct PomodoroCloseTask {
     pub work_log: Vec<String>,
     pub work_log_created: bool,
     pub warning: Option<String>,
+    pub index: Option<u32>,
     resolved_path: Option<PathBuf>,
 }
 
@@ -73,6 +78,7 @@ pub(crate) struct PomodoroCloseSummary {
     pub running: RunningPomodoro,
     pub ledger: LedgerClosePlan,
     pub tasks: Vec<PomodoroCloseTask>,
+    pub task_links: Vec<NumberedTaskLink>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +93,7 @@ pub(crate) struct PomodoroClosePlan {
 pub(crate) enum PomodoroClosePlanError {
     FindRunning(FindRunningError),
     VaultRead(String),
+    Selection(CloseSelectionError),
 }
 
 /// Read-only access to the vault view used by a close plan. Implementations
@@ -310,6 +317,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     work_log: Vec::new(),
                     work_log_created: false,
                     warning: None,
+                    index: None,
                     resolved_path: Some(path.clone()),
                 });
                 self.task_indices.insert(key.clone(), index);
@@ -338,6 +346,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     work_log: Vec::new(),
                     work_log_created: false,
                     warning: Some(warning.clone()),
+                    index: None,
                     resolved_path: Some(path.clone()),
                 });
                 self.task_indices.insert(key, index);
@@ -386,6 +395,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             work_log: Vec::new(),
             work_log_created: false,
             warning: Some(warning.clone()),
+            index: None,
             resolved_path,
         });
         self.unresolved_indices.insert(key, index);
@@ -737,10 +747,19 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
     day_contents: &str,
     now: NaiveDateTime,
     vault: &V,
+    selection: Option<&CloseSelection>,
 ) -> Result<PomodoroClosePlan, PomodoroClosePlanError> {
     let running = find_running_pomodoro(day_contents)
         .map_err(PomodoroClosePlanError::FindRunning)?;
-    let mut ledger = plan_ledger_close(day_contents, &running, now);
+    let (working_contents, task_links) = match selection {
+        Some(sel) => apply_close_selection(day_contents, &running, sel)
+            .map_err(PomodoroClosePlanError::Selection)?,
+        None => (
+            day_contents.to_string(),
+            number_task_links(day_contents, &running),
+        ),
+    };
+    let mut ledger = plan_ledger_close(&working_contents, &running, now);
     let mut planner =
         ClosePlanner::new(vault, day_path, day_contents, &ledger, now);
 
@@ -773,6 +792,8 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
     }
     planner.write_logs(&ledger)?;
     planner.retire_closed_embeds(&ledger, running.line.saturating_sub(1))?;
+    assign_task_indices(&mut planner.tasks, &task_links);
+    emit_listed_status_warnings(&mut planner, &task_links);
 
     if let Some(contents) = planner.staged.get(day_path) {
         ledger.contents = contents.clone();
@@ -791,9 +812,91 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
             running,
             ledger,
             tasks: planner.tasks,
+            task_links,
         },
         warnings: planner.warnings,
     })
+}
+
+fn assign_task_indices(
+    tasks: &mut [PomodoroCloseTask],
+    task_links: &[NumberedTaskLink],
+) {
+    for task in tasks.iter_mut() {
+        if task.role == CloseTaskRole::Subtask {
+            task.index = None;
+            continue;
+        }
+        let mut best: Option<u32> = None;
+        for link in task_links {
+            if link.line == task.ledger_line && link.block_id == task.block_id {
+                best = Some(match best {
+                    Some(current) => current.min(link.index),
+                    None => link.index,
+                });
+            }
+        }
+        task.index = best;
+    }
+}
+
+fn emit_listed_status_warnings<V: CloseVault>(
+    planner: &mut ClosePlanner<'_, V>,
+    task_links: &[NumberedTaskLink],
+) {
+    let mut by_index = BTreeMap::<u32, &NumberedTaskLink>::new();
+    for link in task_links {
+        if link.source == TaskLinkSource::Listed {
+            by_index.insert(link.index, link);
+        }
+    }
+    for row in 0..planner.tasks.len() {
+        let (resolved, status_symbol, status_name, index) =
+            match planner.tasks.get(row) {
+                Some(task) => (
+                    task.resolved,
+                    task.status_symbol,
+                    task.status_name.clone(),
+                    task.index,
+                ),
+                None => continue,
+            };
+        if !resolved {
+            continue;
+        }
+        let Some(number) = index else {
+            continue;
+        };
+        let Some(link) = by_index.get(&number) else {
+            continue;
+        };
+        let status_name = status_name.unwrap_or_else(|| "Unknown".to_string());
+        match link.outcome {
+            super::selection::TaskLinkOutcome::InProgress
+                if status_symbol != Some('/') =>
+            {
+                planner.row_warning(
+                    row,
+                    format!(
+                        "task {number} `{}` is {status_name}, so it was not started",
+                        link.block_link
+                    ),
+                );
+            }
+            super::selection::TaskLinkOutcome::Complete
+                if status_symbol != Some('x') =>
+            {
+                planner.row_warning(
+                    row,
+                    format!(
+                        "task {number} `{}` is {status_name}, so it was not completed",
+                        link.block_link
+                    ),
+                );
+            }
+            _ => {}
+        }
+    }
 }
 
 fn close_role(role: LedgerLinkRole) -> CloseTaskRole {

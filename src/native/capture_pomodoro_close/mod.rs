@@ -17,9 +17,12 @@ pub(crate) fn close_task_text(description: &str) -> String {
 mod ledger;
 mod linked_tasks;
 mod links;
+mod selection;
 
 #[cfg(test)]
 mod linked_task_tests;
+#[cfg(test)]
+mod selection_tests;
 #[cfg(test)]
 mod tests;
 

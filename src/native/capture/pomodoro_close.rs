@@ -263,6 +263,9 @@ pub(super) fn map_close_plan_error(
         capture_pomodoro_close::PomodoroClosePlanError::VaultRead(message) => {
             CaptureError::io(message)
         }
+        capture_pomodoro_close::PomodoroClosePlanError::Selection(error) => {
+            CaptureError::io(error.to_string())
+        }
     }
 }
 
@@ -523,6 +526,7 @@ pub(super) fn plan_pomodoro_close_item(
         &day_contents,
         now,
         &vault,
+        None,
     )
     .map_err(|error| map_close_plan_error(error, &rel, None))?;
     let (summary, extra_warnings) =
@@ -962,6 +966,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         &day_contents,
         now,
         &vault,
+        None,
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
     let (summary, extra_warnings) =
@@ -1153,6 +1158,7 @@ pub(super) fn plan_pomodoro_close_task_item(
         &linked_day,
         now,
         &vault,
+        None,
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
     let (summary, extra_warnings) =

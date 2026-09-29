@@ -80,7 +80,7 @@ fn run_close(
     day_path: &Path,
     day_contents: &str,
 ) -> PomodoroClosePlan {
-    plan_pomodoro_close(day_path, day_contents, at(9, 37), vault)
+    plan_pomodoro_close(day_path, day_contents, at(9, 37), vault, None)
         .expect("close plan")
 }
 
@@ -338,4 +338,106 @@ fn close_plan_preserves_crlf_in_changed_task_notes() {
         .contents
         .replace("\r\n", "")
         .contains('\n'));
+}
+
+fn close_with_selection(
+    vault: &MemoryVault,
+    day_path: &Path,
+    day_contents: &str,
+    selection: &super::selection::CloseSelection,
+) -> PomodoroClosePlan {
+    plan_pomodoro_close(
+        day_path,
+        day_contents,
+        at(9, 37),
+        vault,
+        Some(selection),
+    )
+    .expect("close plan")
+}
+
+fn selection(
+    in_progress: Option<Vec<u32>>,
+    complete: Vec<u32>,
+    raw: &str,
+) -> super::selection::CloseSelection {
+    use std::collections::BTreeSet;
+    super::selection::CloseSelection {
+        in_progress: in_progress
+            .map(|list| list.into_iter().collect::<BTreeSet<u32>>()),
+        complete: complete.into_iter().collect::<BTreeSet<u32>>(),
+        raw: raw.to_string(),
+    }
+}
+
+fn worked_vault() -> MemoryVault {
+    let mut vault = MemoryVault::new();
+    vault.insert(
+        "bob.md",
+        concat!(
+            "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
+            "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
+        ),
+    );
+    vault.insert(
+        "sase.md",
+        concat!(
+            "- [x] #task Restart axe [created::2026-09-27] [completion:: 2026-09-28] ^axe-restart\n",
+            "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
+            "\t\t- _2026-09-27_ \u{2014} Diagnosed the hang\n",
+            "- [ ] #task Recovery panel [created::2026-09-25] ^recovery-panel\n",
+        ),
+    );
+    vault
+}
+
+#[test]
+fn selection_complete_writes_done_task_with_completion_date() {
+    let vault = worked_vault();
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        &worked_example_day(),
+        &selection(None, vec![1], "=x!1"),
+    );
+    assert_eq!(
+        plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
+        Some(concat!(
+            "- [x] #task Add support for `=x` syntax! [created::2026-09-26]  [completion:: 2026-09-28] ^capture-stop\n",
+            "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
+            "\t\t- *2026-09-28* \u{2014} Designed the `=x` grammar\n",
+            "\t\t\t- chose `x` for done\n",
+            "\t\t- *2026-09-28* \u{2014} Wrote the plan\n",
+            "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
+            "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
+        ))
+    );
+    assert_eq!(plan.summary.tasks[0].index, Some(1));
+    assert_eq!(plan.summary.tasks[1].index, Some(2));
+}
+
+#[test]
+fn selection_in_progress_and_complete_updates_both_tasks() {
+    let vault = worked_vault();
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        &worked_example_day(),
+        &selection(Some(vec![1]), vec![2], "=x1!2"),
+    );
+    assert_eq!(
+        plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
+        Some(concat!(
+            "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
+            "\t\t- *2026-09-28* \u{2014} Designed the `=x` grammar\n",
+            "\t\t\t- chose `x` for done\n",
+            "\t\t- *2026-09-28* \u{2014} Wrote the plan\n",
+            "- [x] #task Add capture support for web URLs! [created::2026-09-21]  [completion:: 2026-09-28] ^web-capture\n",
+            "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
+        ))
+    );
 }
