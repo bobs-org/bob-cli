@@ -227,7 +227,8 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         global_destination.as_ref().filter(|global| global.inherit)
     {
         for item in &mut items {
-            // Whole-item session operators, `=x` closes, and
+            // Whole-item session operators, `=x[<N>][!<M>]` closes
+            // (including dangling-separator editing states), and
             // `=`/`=<X>` starts are their own mode: a `@@` declaration
             // routes ordinary items in the same draft but never turns an
             // operator, close, or start into a task or changes its
@@ -236,6 +237,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
                 || item.mode == EditorMode::PomodoroShift
                 || item.mode == EditorMode::PomodoroClose
                 || item.mode == EditorMode::PomodoroStart
+                || item.pomodoro_close.is_some()
             {
                 continue;
             }
@@ -756,6 +758,8 @@ pub(super) fn parse_editor_item<'a>(
                 link_end,
                 name_range,
                 start_offset,
+                close_in_progress,
+                close_complete,
                 conflict,
             } => {
                 mode = EditorMode::PomodoroLink;
@@ -791,16 +795,33 @@ pub(super) fn parse_editor_item<'a>(
                     });
                 }
                 if let Some(offset) = start_offset {
-                    let kind = if pomodoro_close.is_some() {
-                        SpanKind::PomodoroClose
+                    if pomodoro_close.is_some() {
+                        spans.push(Span {
+                            start: token_start + offset,
+                            end: token_start + offset + 2,
+                            kind: SpanKind::PomodoroClose,
+                        });
+                        if let Some((start, end)) = close_in_progress {
+                            spans.push(Span {
+                                start: token_start + start,
+                                end: token_start + end,
+                                kind: SpanKind::PomodoroCloseInProgress,
+                            });
+                        }
+                        if let Some((start, end)) = close_complete {
+                            spans.push(Span {
+                                start: token_start + start,
+                                end: token_start + end,
+                                kind: SpanKind::PomodoroCloseComplete,
+                            });
+                        }
                     } else {
-                        SpanKind::PomodoroStart
-                    };
-                    spans.push(Span {
-                        start: token_start + offset,
-                        end: token_end,
-                        kind,
-                    });
+                        spans.push(Span {
+                            start: token_start + offset,
+                            end: token_end,
+                            kind: SpanKind::PomodoroStart,
+                        });
+                    }
                 }
                 local_destination_markers.push(LocalDestinationMarker {
                     start: token_start,
@@ -820,6 +841,125 @@ pub(super) fn parse_editor_item<'a>(
                         code: "invalid_pomodoro_link",
                         message,
                         range: Some((token_start, token_end)),
+                    });
+                }
+            }
+            CaretItemKind::CloseIncomplete {
+                route: caret_route,
+                block_id: caret_block,
+                close: caret_close,
+                link_end,
+                suffix_offset,
+                close_in_progress,
+                close_complete,
+                separator_range,
+                conflict,
+            } => {
+                // A dangling separator is an editing state: mode
+                // `incomplete` needing `pomodoro_close_task`, the partial
+                // spec, the spans typed so far, and one
+                // `interactive_placeholder` span over the separator. An item
+                // conflict (extra text, child lines) wins instead and
+                // reports like a complete link conflict.
+                mode = EditorMode::PomodoroLink;
+                body = if caret.solo_parent {
+                    String::new()
+                } else {
+                    body
+                };
+                let route_end = token_start + 1 + caret_route.len();
+                route = Some(caret_route);
+                section = None;
+                block_id = Some(caret_block);
+                pomodoro_start = None;
+                pomodoro_close = Some(caret_close);
+                spans.push(Span {
+                    start: token_start,
+                    end: route_end,
+                    kind: SpanKind::ActiveTaskRoute,
+                });
+                spans.push(Span {
+                    start: route_end + 1,
+                    end: token_start + link_end,
+                    kind: SpanKind::ActiveTaskBlockId,
+                });
+                spans.push(Span {
+                    start: token_start + suffix_offset,
+                    end: token_start + suffix_offset + 2,
+                    kind: SpanKind::PomodoroClose,
+                });
+                if let Some((start, end)) = close_in_progress {
+                    spans.push(Span {
+                        start: token_start + start,
+                        end: token_start + end,
+                        kind: SpanKind::PomodoroCloseInProgress,
+                    });
+                }
+                if let Some((start, end)) = close_complete {
+                    spans.push(Span {
+                        start: token_start + start,
+                        end: token_start + end,
+                        kind: SpanKind::PomodoroCloseComplete,
+                    });
+                }
+                spans.push(Span {
+                    start: token_start + separator_range.0,
+                    end: token_start + separator_range.1,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+                local_destination_markers.push(LocalDestinationMarker {
+                    start: token_start,
+                    end: token_end,
+                    text: caret.token.text.to_string(),
+                    mode: EditorMode::PomodoroLink,
+                    route: route.clone(),
+                    block_id: block_id.clone(),
+                    section: section.clone(),
+                });
+                local_destination_marker = local_destination_markers
+                    .last()
+                    .map(|marker| marker.text.clone());
+                if let Some(message) = conflict {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_link",
+                        message,
+                        range: Some((token_start, token_end)),
+                    });
+                } else {
+                    mode = EditorMode::Incomplete;
+                    needs = vec![Need::PomodoroCloseTask];
+                }
+            }
+            CaretItemKind::CloseInvalid {
+                message,
+                range,
+                conflict,
+            } => {
+                // A malformed selection reports `pomodoro_link` with a
+                // precise `invalid_pomodoro_close` diagnostic and no spec.
+                // An item conflict (extra text, child lines) wins instead,
+                // exactly like execution.
+                mode = EditorMode::PomodoroLink;
+                if caret.solo_parent {
+                    body = String::new();
+                }
+                if let Some(conflict) = conflict {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_link",
+                        message: conflict,
+                        range: Some((token_start, token_end)),
+                    });
+                } else {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_close",
+                        message,
+                        range: Some((
+                            token_start + range.0,
+                            token_start + range.1,
+                        )),
                     });
                 }
             }

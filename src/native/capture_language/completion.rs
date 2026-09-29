@@ -98,7 +98,27 @@ pub(super) fn caret_completion_field_at(
     }
     let relative = cursor - first.start;
     match classify_caret_token(first.text) {
-        CaretTokenShape::Prose | CaretTokenShape::Invalid(_) => None,
+        CaretTokenShape::Prose
+        | CaretTokenShape::Invalid(_)
+        | CaretTokenShape::CloseInvalid { .. } => None,
+        // A dangling separator still completes the link part it hangs off;
+        // a cursor inside the typed suffix (or the separator) offers
+        // nothing, so the typed lists survive an accept.
+        CaretTokenShape::CloseIncomplete {
+            route,
+            block_id,
+            link_end,
+            suffix_offset,
+            ..
+        } => caret_link_field(
+            first,
+            route,
+            block_id,
+            link_end,
+            Some((link_end, link_end)),
+            cursor,
+        )
+        .filter(|_| cursor <= first.start + suffix_offset),
         CaretTokenShape::Partial { .. } => {
             if item.lines.len() != 1 {
                 return None;

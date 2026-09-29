@@ -1,5 +1,6 @@
 //! Capture-item and session-operator parsing.
 
+use super::close_selection::*;
 use super::draft::*;
 use super::editor_parse::*;
 use super::line::*;
@@ -612,7 +613,20 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
     )))
 }
 
-/// Whole-item `=`-family grammar: `=x` closes, `=`/`=<X>` starts.
+/// Absolute byte offset of a whole-item close token's `after_x` text (the
+/// lists after `=x`/`=X`), so selection diagnostics point at the original
+/// input. `first` is the parent line's first whitespace-delimited token.
+fn close_after_x_offset(
+    parent_line: &ItemLine<'_>,
+    first: &str,
+    after_x: &str,
+) -> usize {
+    let leading =
+        parent_line.raw.text.len() - parent_line.raw.text.trim_start().len();
+    parent_line.raw.start + leading + (first.len() - after_x.len())
+}
+
+/// Whole-item `=`-family grammar: `=x[<N>][!<M>]` closes, `=`/`=<X>` starts.
 ///
 /// Runs first (before session operators, caret links, and ordinary
 /// parsing). Returns `Ok(None)` when the item is not `=`-shaped and
@@ -622,9 +636,16 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
 /// start token (`=3`, `=-2`, `=3-`, `=2-1`, `=0`) with anything else; or an
 /// exact start token with child lines. Near misses never fall through as
 /// ordinary tasks. A bare token followed by more text on the same line
-/// (`= foo`, `=- foo`, `==`, `=-)`), every other close shape (`=xx`, `=x!`),
-/// and mid-body tokens (`Plan =3`, `a=3`) stay ordinary prose: a bare sign
-/// run followed by prose stays prose while a counted token claims its item.
+/// (`= foo`, `=- foo`, `==`, `=-)`), every other close shape (`=xx`, `=xa`,
+/// `=x.`), and mid-body tokens (`Plan =3`, `a=3`, `Plan =x1`) stay ordinary
+/// prose: a bare sign run followed by prose stays prose while a counted
+/// token claims its item.
+///
+/// A selection-shaped first token (`=x`/`=X` followed by a digit, `,`, or
+/// `!`) claims the item the same way: an exact single-line item lexes its
+/// lists (a dangling separator is an incomplete error here), while anything
+/// else reports the list's own diagnostic, the no-spaces hint when the
+/// spaceless join forms a selection, or the close shape error.
 pub(super) fn parse_pomodoro_equals_item<'a>(
     item: &CaptureItem<'a>,
     parent_line: &ItemLine<'a>,
@@ -637,22 +658,48 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
     };
     match token {
         EqualsToken::Close => {
-            if parent_trimmed.eq_ignore_ascii_case("=x")
-                && item.lines.len() == 1
+            let Some(first) = parent_trimmed.split_whitespace().next() else {
+                return Ok(None);
+            };
+            let selection_after_x = whole_item_close_after_x(first);
+            if selection_after_x.is_none() && !first.eq_ignore_ascii_case("=x")
             {
+                return Ok(None);
+            }
+            let single_token_parent = parent_trimmed == first;
+            if single_token_parent && item.lines.len() == 1 {
                 if forced_route.is_some() || forced_section.is_some() {
                     return Err(POMODORO_CLOSE_FORCED_ERROR.to_string());
                 }
                 let raw = parent_trimmed.to_string();
+                let spec = match selection_after_x {
+                    None => PomodoroCloseSpec::plain(raw.clone()),
+                    Some(after_x) => {
+                        let offset =
+                            close_after_x_offset(parent_line, first, after_x);
+                        match lex_close_selection(after_x, offset, first) {
+                            Ok(CloseSelectionOutcome::Valid(lex)) => {
+                                close_spec_from_lex(raw.clone(), &lex)
+                            }
+                            Ok(CloseSelectionOutcome::Incomplete(
+                                incomplete,
+                            )) => {
+                                return Err(close_selection_incomplete_error(
+                                    first,
+                                    incomplete.separator,
+                                ));
+                            }
+                            Err(error) => return Err(error.message),
+                        }
+                    }
+                };
                 return Ok(Some(parsed_capture_item_outcome(
                     item,
                     ParsedCaptureText {
-                        body: raw.clone(),
+                        body: raw,
                         clip: None,
                         route: None,
-                        kind: CaptureKind::PomodoroClose {
-                            spec: PomodoroCloseSpec { raw },
-                        },
+                        kind: CaptureKind::PomodoroClose { spec },
                         scheduled_offset: None,
                         priority_level: None,
                         sub_bullets: Vec::new(),
@@ -661,16 +708,38 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     None,
                 )));
             }
-            // Near miss: first token is exactly `=x` but the item has
-            // anything else.
-            let mut tokens = parent_trimmed.split_whitespace();
-            let Some(first) = tokens.next() else {
-                return Ok(None);
-            };
-            if first.eq_ignore_ascii_case("=x") {
+            if single_token_parent {
+                // A single-token parent with child lines: a broken list
+                // reports its own diagnostic, anything else the shape error.
+                if let Some(after_x) = selection_after_x {
+                    let offset =
+                        close_after_x_offset(parent_line, first, after_x);
+                    if let Err(error) =
+                        lex_close_selection(after_x, offset, first)
+                    {
+                        return Err(error.message);
+                    }
+                }
                 return Err(POMODORO_CLOSE_SHAPE_ERROR.to_string());
             }
-            Ok(None)
+            // Extra text on the parent line: a broken first token reports
+            // its own diagnostic first.
+            if let Some(after_x) = selection_after_x {
+                let offset = close_after_x_offset(parent_line, first, after_x);
+                if let Err(error) = lex_close_selection(after_x, offset, first)
+                {
+                    return Err(error.message);
+                }
+            }
+            // A spaceless join that forms a selection (`=x 1,3`, `=x1, 3`)
+            // gets the no-spaces hint instead of the shape error.
+            let nospace: String = parent_trimmed.split_whitespace().collect();
+            if whole_item_close_after_x(&nospace).is_some_and(|after_x| {
+                lex_close_selection(after_x, 0, &nospace).is_ok()
+            }) {
+                return Err(close_selection_no_spaces_error());
+            }
+            Err(POMODORO_CLOSE_SHAPE_ERROR.to_string())
         }
         EqualsToken::Start {
             suffix,

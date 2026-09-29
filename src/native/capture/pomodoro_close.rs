@@ -502,6 +502,23 @@ pub(super) fn final_task_line_for(
     }
 }
 
+/// Temporary refusal for a selection-bearing close: the grammar parses
+/// `=x[<N>][!<M>]` everywhere, but the planner cannot apply a selection
+/// until the selection-capture phase wires it in. Failing here (before any
+/// write or stage) keeps a parsed selection from ever being silently
+/// ignored.
+fn reject_selection_bearing_close(
+    spec: &PomodoroCloseSpec,
+) -> Result<(), CaptureError> {
+    if spec.has_selection() {
+        return Err(CaptureError::usage(
+            capture_language::POMODORO_CLOSE_SELECTION_UNSUPPORTED_ERROR
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn plan_pomodoro_close_item(
     request: &CaptureRequest,
     parsed: ParsedCaptureText,
@@ -512,6 +529,7 @@ pub(super) fn plan_pomodoro_close_item(
     warnings: &mut Vec<String>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_close_conflicts(&parsed, request)?;
+    reject_selection_bearing_close(&spec)?;
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     let rel = close_day_relative(&request.bob_dir, &day_file);
     if !planner.currently_exists(&day_file)? {
@@ -795,6 +813,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     close_spec: PomodoroCloseSpec,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_link_conflicts(&parsed, request)?;
+    reject_selection_bearing_close(&close_spec)?;
     let route = parsed.route.clone().ok_or_else(|| {
         CaptureError::io(
             "pomodoro link capture invariant failed: route is missing",
@@ -1076,6 +1095,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     close_spec: &PomodoroCloseSpec,
     capture_block: &str,
 ) -> Result<PlannedCaptureItem, CaptureError> {
+    reject_selection_bearing_close(close_spec)?;
     // Body-bearing `<text> @route:block-id=x`: today's `:` new-task capture
     // forced into _R_, then close. This helper stages the new task and the
     // link into _R_, then returns a write plan; the caller closes afterwards.

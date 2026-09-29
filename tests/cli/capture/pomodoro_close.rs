@@ -527,6 +527,40 @@ fn capture_pomodoro_close_diagnostics() {
         serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["kind"], "pomodoro_close");
 
+    // A selection-bearing close parses but is refused until the
+    // selection-capture phase wires it in: nothing is written.
+    for args in [
+        vec!["=x1"],
+        vec!["=x1,3!2"],
+        vec!["=x0"],
+        vec!["^bob:ready=x3"],
+        vec!["Draft docs @bob:draft-docs=x0"],
+    ] {
+        let error = run_close_expect_error(
+            &vault,
+            &day_file,
+            "2026-09-28 09:37:00",
+            &args,
+        );
+        assert!(
+            error.contains(
+                "task numbers after `=x` are not supported by this build yet"
+            ),
+            "{args:?}: {error}"
+        );
+    }
+    // A dangling separator is rejected as incomplete, never closed.
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x1,"],
+    );
+    assert!(
+        error.contains("is incomplete: type a task number"),
+        "{error}"
+    );
+
     // Prose lookalikes stay prose; =X is accepted. `=3` is a start, not
     // a task, and is covered by the start tests below.
     for (input, kind) in [("=xx", "task"), ("Plan =x", "task")] {

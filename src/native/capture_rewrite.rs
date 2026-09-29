@@ -89,7 +89,9 @@ declaration -- '@route#Section', '@route+block-id#section', \
 or a trailing bare '#' -- is left untouched with a notice explaining why; an item \
 with more than one local marker is left untouched with no notice, since \
 'bob capture-parse' already reports that duplicate. Feeding a rewrite's own \
-output back in is a no-op, because the claiming token is no longer bare.\n\n\
+output back in is a no-op, because the claiming token is no longer bare. \
+A whole-item `=x[<N>][!<M>]` close item is never rewritten or absorbed, and \
+a `@@` declaration never applies to it.\n\n\
 Only a missing TEXT or a bad flag is an error; every other input succeeds \
 with 'changed: false' when nothing needed to change. If TEXT is omitted and \
 stdin is piped, it reads the complete piped stdin stream.",

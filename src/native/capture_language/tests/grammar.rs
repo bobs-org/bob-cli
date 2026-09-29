@@ -1029,11 +1029,18 @@ fn execution_parses_equals_family_starts_alongside_close() {
         close_shape.contains("`=x` must be the whole"),
         "{close_shape}"
     );
-    for raw in ["=xx", "=x!"] {
+    for raw in ["=xx", "=xa"] {
         let parsed =
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
         assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
     }
+    // A dangling separator is an editing state: strict execution rejects
+    // it instead of guessing.
+    let dangling = execute("=x!").expect_err("dangling close");
+    assert!(
+        dangling.contains("`=x!` is incomplete: type a task number after `!`"),
+        "{dangling}"
+    );
 }
 
 #[test]

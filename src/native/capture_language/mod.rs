@@ -13,6 +13,7 @@
 //! `capture/` wraps the returned message in `CaptureError::usage(...)`, so
 //! the message text is the single source of truth for both callers.
 
+mod close_selection;
 mod completion;
 mod draft;
 mod editor_classify;
@@ -62,6 +63,7 @@ pub(crate) use self::markers::is_route_token;
 pub(crate) use self::markers::parse_priority_token;
 #[cfg(test)]
 pub(crate) use self::markers::parse_schedule_token;
+pub(crate) use self::markers::POMODORO_CLOSE_SELECTION_UNSUPPORTED_ERROR;
 pub(crate) use self::markers::POMODORO_START_FORCED_ERROR;
 pub(crate) use self::model::AuthoredDepth;
 pub(crate) use self::model::AuthoredSubBullet;

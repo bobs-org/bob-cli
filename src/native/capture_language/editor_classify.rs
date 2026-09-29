@@ -1,10 +1,27 @@
 //! Editor token classification and diagnostics.
 
+use super::close_selection::*;
 use super::editor_model::*;
 use super::line::*;
 use super::markers::*;
 use super::model::*;
 use super::tokens::*;
+
+/// A lexed `@<route>:<block-id>=x…` close suffix: either a valid selection
+/// with its list spans, or a dangling separator with the partial spec and
+/// the spans typed so far. Ranges are absolute byte offsets.
+enum EditorCloseSuffix {
+    Valid {
+        in_progress: Option<(usize, usize)>,
+        complete: Option<(usize, usize)>,
+    },
+    Incomplete {
+        spec: PomodoroCloseSpec,
+        in_progress: Option<(usize, usize)>,
+        complete: Option<(usize, usize)>,
+        separator: (usize, usize),
+    },
+}
 
 /// Mirror `parse_capture_text_with_clip_control`'s precedence: the leading
 /// token wins when `leading` is set (only ever true for the parent line),
@@ -424,12 +441,47 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         ));
     }
     let mut close_spec = None;
+    let mut close_suffix: Option<EditorCloseSuffix> = None;
     let start_spec = match start_part {
         None => None,
-        Some(raw) if raw.eq_ignore_ascii_case("x") => {
-            close_spec = Some(PomodoroCloseSpec {
-                raw: format!("={raw}"),
-            });
+        Some(raw)
+            if raw.eq_ignore_ascii_case("x")
+                || link_close_after_x(raw).is_some() =>
+        {
+            // A close-shaped suffix lexes through the shared selection
+            // lexer: a valid selection reports the spec plus list spans, a
+            // dangling separator reports the partial spec as an incomplete
+            // state below, and a malformed list is an
+            // `invalid_pomodoro_close` diagnostic with its precise range.
+            let display = format!("={raw}");
+            let after_x = link_close_after_x(raw).unwrap_or("");
+            let eq_rel = token.text.find('=').unwrap_or(token.text.len());
+            let after_x_base = token.start + eq_rel + 2;
+            match lex_close_selection(after_x, after_x_base, &display) {
+                Ok(CloseSelectionOutcome::Valid(lex)) => {
+                    close_suffix = Some(EditorCloseSuffix::Valid {
+                        in_progress: lex.in_progress_range,
+                        complete: lex.complete_range,
+                    });
+                    close_spec = Some(close_spec_from_lex(display, &lex));
+                }
+                Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+                    close_suffix = Some(EditorCloseSuffix::Incomplete {
+                        spec: close_spec_from_incomplete(display, &incomplete),
+                        in_progress: incomplete.in_progress_range,
+                        complete: incomplete.complete_range,
+                        separator: incomplete.separator_range,
+                    });
+                }
+                Err(error) => {
+                    return TokenParse::Invalid(Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_close",
+                        message: error.message,
+                        range: Some(error.range),
+                    });
+                }
+            }
             None
         }
         Some(raw) => match parse_pomodoro_start_suffix(raw) {
@@ -482,8 +534,19 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         len: 1 + spec.raw.len(),
         kind: SpanKind::PomodoroStart,
     });
-    let close_suffix = close_spec.as_ref().map(|spec| MarkerSuffix {
-        len: spec.raw.len(),
+    // The typed suffix length: the full `=x…` selection for a valid close,
+    // or what was typed so far for a dangling separator.
+    let close_suffix_len = match &close_suffix {
+        Some(EditorCloseSuffix::Valid { .. }) => {
+            close_spec.as_ref().map(|spec| spec.raw.len())
+        }
+        Some(EditorCloseSuffix::Incomplete { spec, .. }) => {
+            Some(spec.raw.len())
+        }
+        None => None,
+    };
+    let close_suffix_span = close_suffix_len.map(|len| MarkerSuffix {
+        len,
         kind: SpanKind::PomodoroClose,
     });
     let mut marker_parse = marker_parse(
@@ -509,7 +572,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                 kind: SpanKind::PomodoroName,
                 need: Need::PomodoroName,
             }),
-            suffix: start_suffix.or(close_suffix).or((project_note
+            suffix: start_suffix.or(close_suffix_span).or((project_note
                 && name_part.is_none())
             .then_some(MarkerSuffix {
                 len: 1,
@@ -518,7 +581,95 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         },
     );
     marker_parse.pomodoro_start = start_spec;
-    marker_parse.pomodoro_close = close_spec;
+    match close_suffix {
+        Some(EditorCloseSuffix::Valid {
+            in_progress,
+            complete,
+        }) => {
+            // Split the whole-suffix `pomodoro_close` span into `=x` plus
+            // the list spans. (A plain `=x` re-emits the identical single
+            // span.)
+            let spec = close_spec.expect("valid close spec");
+            let suffix_start = token.end - spec.raw.len();
+            if marker_parse
+                .spans
+                .last()
+                .is_some_and(|span| span.kind == SpanKind::PomodoroClose)
+            {
+                marker_parse.spans.pop();
+            }
+            marker_parse.spans.push(Span {
+                start: suffix_start,
+                end: suffix_start + 2,
+                kind: SpanKind::PomodoroClose,
+            });
+            if let Some((start, end)) = in_progress {
+                marker_parse.spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::PomodoroCloseInProgress,
+                });
+            }
+            if let Some((start, end)) = complete {
+                marker_parse.spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::PomodoroCloseComplete,
+                });
+            }
+            marker_parse.pomodoro_close = Some(spec);
+        }
+        Some(EditorCloseSuffix::Incomplete {
+            spec,
+            in_progress,
+            complete,
+            separator,
+        }) => {
+            // The dangling separator is an editing state: the partial spec,
+            // the spans typed so far, and one `interactive_placeholder`
+            // span over the separator.
+            let suffix_start = token.end - spec.raw.len();
+            if marker_parse
+                .spans
+                .last()
+                .is_some_and(|span| span.kind == SpanKind::PomodoroClose)
+            {
+                marker_parse.spans.pop();
+            }
+            marker_parse.spans.push(Span {
+                start: suffix_start,
+                end: suffix_start + 2,
+                kind: SpanKind::PomodoroClose,
+            });
+            if let Some((start, end)) = in_progress {
+                marker_parse.spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::PomodoroCloseInProgress,
+                });
+            }
+            if let Some((start, end)) = complete {
+                marker_parse.spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::PomodoroCloseComplete,
+                });
+            }
+            marker_parse.spans.push(Span {
+                start: separator.0,
+                end: separator.1,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+            marker_parse.pomodoro_close = Some(spec);
+            marker_parse.mode = EditorMode::Incomplete;
+            if !marker_parse.needs.contains(&Need::PomodoroCloseTask) {
+                marker_parse.needs.push(Need::PomodoroCloseTask);
+            }
+        }
+        None => {
+            marker_parse.pomodoro_close = close_spec;
+        }
+    }
     if project_note && name_part.is_some() {
         // `marker_parse` leaves the `+#` separator bytes uncovered, so span
         // the `+` sigil explicitly: ahead of the Pomodoro name, or split out

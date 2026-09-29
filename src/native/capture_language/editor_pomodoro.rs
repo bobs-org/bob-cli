@@ -1,5 +1,6 @@
 //! Special Pomodoro item parsing for the editor view.
 
+use super::close_selection::*;
 use super::editor_model::*;
 use super::editor_parse::*;
 use super::item::*;
@@ -332,14 +333,16 @@ pub(super) fn parse_editor_start_item<'a>(
 
 /// Whole-item `=`-family parser for the live editor. Mirrors
 /// [`parse_pomodoro_equals_item`]'s execution grammar but never fails: an
-/// exact `=x` reports `pomodoro_close` with a span covering the token and
-/// an additive spec, an exact `=`/`=<X>` reports `pomodoro_start` with its
-/// spec and one `PomodoroStart` span over the whole token, and every near
-/// miss reports its family mode plus an `invalid_pomodoro_*` diagnostic
-/// instead of becoming a task. A bare `=` is a complete start. Purely
-/// lexical: it never guesses current ledger times. Bare tokens with prose
-/// (`= foo`, `==`), other close shapes (`=xx`, `=x!`), and mid-body tokens
-/// (`Plan =3`, `a=3`) stay ordinary prose.
+/// exact `=x[<N>][!<M>]` reports `pomodoro_close` with spans covering `=x`
+/// plus each typed list and an additive spec, an exact `=`/`=<X>` reports
+/// `pomodoro_start` with its spec and one `PomodoroStart` span over the
+/// whole token, a dangling separator reports `incomplete` needing
+/// `pomodoro_close_task` with the partial spec and a placeholder span, and
+/// every near miss reports its family mode plus an `invalid_pomodoro_*`
+/// diagnostic instead of becoming a task. A bare `=` is a complete start.
+/// Purely lexical: it never guesses current ledger times. Bare tokens with
+/// prose (`= foo`, `==`), other close shapes (`=xx`, `=xa`), and mid-body
+/// tokens (`Plan =3`, `a=3`, `Plan =x1`) stay ordinary prose.
 pub(super) fn parse_editor_close_item<'a>(
     item: &CaptureItem<'a>,
 ) -> Option<EditorItemOutcome<'a>> {
@@ -363,88 +366,160 @@ pub(super) fn parse_editor_close_item<'a>(
         }
         EqualsToken::Close => {}
     }
+    let first = parent_trimmed.split_whitespace().next()?;
+    let selection_after_x = whole_item_close_after_x(first);
+    if selection_after_x.is_none() && !first.eq_ignore_ascii_case("=x") {
+        return None;
+    }
     let leading = parent_text.len() - parent_text.trim_start().len();
     let token_start = parent.raw.start + leading;
     let token_end = token_start + 2;
-    if parent_trimmed.eq_ignore_ascii_case("=x") {
-        if item.lines.len() == 1 {
-            let raw = parent_trimmed.to_string();
-            let spec = PomodoroCloseSpec { raw: raw.clone() };
-            return Some(EditorItemOutcome {
-                item: EditorItemParse {
-                    index: item.index,
-                    start: item.start,
-                    end: item.end,
-                    line_start: item.line_start,
-                    line_end: item.line_end,
-                    body: raw,
-                    mode: EditorMode::PomodoroClose,
-                    route: None,
-                    section: None,
-                    block_id: None,
-                    needs: Vec::new(),
-                    pomodoro_start: None,
-                    pomodoro_adjust: None,
-                    pomodoro_shift: None,
-                    pomodoro_close: Some(spec),
-                    spans: vec![Span {
-                        start: token_start,
-                        end: token_end,
-                        kind: SpanKind::PomodoroClose,
-                    }],
-                    diagnostics: Vec::new(),
-                    sub_bullets: Vec::new(),
-                    has_local_destination: false,
-                    local_destination_markers: Vec::new(),
-                },
-                declarations: Vec::new(),
-            });
-        }
-        // Exact `=x` parent with authored child lines: the child line is
-        // the precise diagnostic range.
-        let child = &item.lines[1];
-        return Some(EditorItemOutcome {
-            item: EditorItemParse {
-                index: item.index,
-                start: item.start,
-                end: item.end,
-                line_start: item.line_start,
-                line_end: item.line_end,
-                body: parent_trimmed.to_string(),
-                mode: EditorMode::PomodoroClose,
-                route: None,
-                section: None,
-                block_id: None,
-                needs: Vec::new(),
-                pomodoro_start: None,
-                pomodoro_adjust: None,
-                pomodoro_shift: None,
-                pomodoro_close: None,
-                spans: vec![Span {
-                    start: token_start,
-                    end: token_end,
-                    kind: SpanKind::PomodoroClose,
-                }],
-                diagnostics: vec![Diagnostic {
-                    severity: Severity::Error,
-                    code: "invalid_pomodoro_close",
-                    message: POMODORO_CLOSE_SHAPE_ERROR.to_string(),
-                    range: Some((child.raw.start, child.raw.end)),
-                }],
-                sub_bullets: Vec::new(),
-                has_local_destination: false,
-                local_destination_markers: Vec::new(),
-            },
-            declarations: Vec::new(),
+    let close_span = Span {
+        start: token_start,
+        end: token_end,
+        kind: SpanKind::PomodoroClose,
+    };
+    let single_token_parent = parent_trimmed == first;
+    if single_token_parent && item.lines.len() == 1 {
+        // An exact close: plain `=x`, a valid selection, or a dangling
+        // separator (an editing state, never a mistake).
+        let lexed = selection_after_x.map(|after_x| {
+            let base = token_start + (first.len() - after_x.len());
+            lex_close_selection(after_x, base, first)
         });
+        match lexed {
+            None => {
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroClose,
+                    Some(PomodoroCloseSpec::plain(first.to_string())),
+                    vec![close_span],
+                    Vec::new(),
+                    Vec::new(),
+                ));
+            }
+            Some(Ok(CloseSelectionOutcome::Valid(lex))) => {
+                let mut spans = vec![close_span];
+                if let Some((start, end)) = lex.in_progress_range {
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::PomodoroCloseInProgress,
+                    });
+                }
+                if let Some((start, end)) = lex.complete_range {
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::PomodoroCloseComplete,
+                    });
+                }
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroClose,
+                    Some(close_spec_from_lex(first.to_string(), &lex)),
+                    spans,
+                    Vec::new(),
+                    Vec::new(),
+                ));
+            }
+            Some(Ok(CloseSelectionOutcome::Incomplete(incomplete))) => {
+                let mut spans = vec![close_span];
+                if let Some((start, end)) = incomplete.in_progress_range {
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::PomodoroCloseInProgress,
+                    });
+                }
+                if let Some((start, end)) = incomplete.complete_range {
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::PomodoroCloseComplete,
+                    });
+                }
+                spans.push(Span {
+                    start: incomplete.separator_range.0,
+                    end: incomplete.separator_range.1,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::Incomplete,
+                    Some(close_spec_from_incomplete(
+                        first.to_string(),
+                        &incomplete,
+                    )),
+                    spans,
+                    vec![Need::PomodoroCloseTask],
+                    Vec::new(),
+                ));
+            }
+            Some(Err(error)) => {
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroClose,
+                    None,
+                    vec![close_span],
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_close",
+                        message: error.message,
+                        range: Some(error.range),
+                    }],
+                ));
+            }
+        }
     }
-    // Near miss: first token is exactly `=x` but the item has anything
-    // else on the parent line. The extra text is the precise range.
-    let mut tokens = parent_trimmed.split_whitespace();
-    let first = tokens.next()?;
-    if !first.eq_ignore_ascii_case("=x") {
-        return None;
+    if single_token_parent {
+        // A single-token parent with authored child lines: a broken list
+        // reports its own diagnostic, anything else the shape error on the
+        // child line.
+        if let Some(after_x) = selection_after_x {
+            let base = token_start + (first.len() - after_x.len());
+            if let Err(error) = lex_close_selection(after_x, base, first) {
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroClose,
+                    None,
+                    vec![close_span],
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_close",
+                        message: error.message,
+                        range: Some(error.range),
+                    }],
+                ));
+            }
+        }
+        let child = &item.lines[1];
+        return Some(editor_close_outcome(
+            item,
+            parent_trimmed,
+            EditorMode::PomodoroClose,
+            None,
+            vec![close_span],
+            Vec::new(),
+            vec![Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_close",
+                message: POMODORO_CLOSE_SHAPE_ERROR.to_string(),
+                range: Some((child.raw.start, child.raw.end)),
+            }],
+        ));
     }
+    // Extra text on the parent line: a broken first token reports its own
+    // diagnostic first, a spaceless join that forms a selection gets the
+    // no-spaces hint, and anything else gets the shape error. The extra
+    // text is the precise range.
     let rest_start_in_trimmed =
         parent_trimmed.find(first).expect("first token") + first.len();
     let rest = parent_trimmed[rest_start_in_trimmed..].trim_start();
@@ -457,7 +532,63 @@ pub(super) fn parse_editor_close_item<'a>(
         let rest_start = parent.raw.start + rest_offset;
         (rest_start, rest_start + rest.len())
     };
-    Some(EditorItemOutcome {
+    if let Some(after_x) = selection_after_x {
+        let base = token_start + (first.len() - after_x.len());
+        if let Err(error) = lex_close_selection(after_x, base, first) {
+            return Some(editor_close_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::PomodoroClose,
+                None,
+                vec![close_span],
+                Vec::new(),
+                vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_close",
+                    message: error.message,
+                    range: Some(error.range),
+                }],
+            ));
+        }
+    }
+    let nospace: String = parent_trimmed.split_whitespace().collect();
+    let message = if whole_item_close_after_x(&nospace).is_some_and(|after_x| {
+        lex_close_selection(after_x, 0, &nospace).is_ok()
+    }) {
+        close_selection_no_spaces_error()
+    } else {
+        POMODORO_CLOSE_SHAPE_ERROR.to_string()
+    };
+    Some(editor_close_outcome(
+        item,
+        parent_trimmed,
+        EditorMode::PomodoroClose,
+        None,
+        vec![close_span],
+        Vec::new(),
+        vec![Diagnostic {
+            severity: Severity::Error,
+            code: "invalid_pomodoro_close",
+            message,
+            range: Some(range),
+        }],
+    ))
+}
+
+/// Build a whole-item close outcome for the live editor: the mode, the
+/// additive spec (or none for a near miss), the `=x`/list spans, the needs,
+/// and at most one diagnostic.
+#[allow(clippy::too_many_arguments)]
+fn editor_close_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    mode: EditorMode,
+    pomodoro_close: Option<PomodoroCloseSpec>,
+    spans: Vec<Span>,
+    needs: Vec<Need>,
+    diagnostics: Vec<Diagnostic>,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
         item: EditorItemParse {
             index: item.index,
             start: item.start,
@@ -465,30 +596,21 @@ pub(super) fn parse_editor_close_item<'a>(
             line_start: item.line_start,
             line_end: item.line_end,
             body: parent_trimmed.to_string(),
-            mode: EditorMode::PomodoroClose,
+            mode,
             route: None,
             section: None,
             block_id: None,
-            needs: Vec::new(),
+            needs,
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
-            pomodoro_close: None,
-            spans: vec![Span {
-                start: token_start,
-                end: token_end,
-                kind: SpanKind::PomodoroClose,
-            }],
-            diagnostics: vec![Diagnostic {
-                severity: Severity::Error,
-                code: "invalid_pomodoro_close",
-                message: POMODORO_CLOSE_SHAPE_ERROR.to_string(),
-                range: Some(range),
-            }],
+            pomodoro_close,
+            spans,
+            diagnostics,
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
         },
         declarations: Vec::new(),
-    })
+    }
 }

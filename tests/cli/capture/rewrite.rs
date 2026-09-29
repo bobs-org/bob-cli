@@ -297,7 +297,16 @@ fn capture_complete_and_rewrite_ignore_shifts() {
 #[test]
 fn capture_rewrite_pomodoro_close_protocol() {
     // `=x` is never rewritten, on whole items or link forms.
-    for text in ["=x", "^r:id=x", "Text @r:id=x"] {
+    for text in [
+        "=x",
+        "^r:id=x",
+        "Text @r:id=x",
+        "=x1,3!2",
+        "=x0",
+        "=x1,",
+        "^r:id=x1",
+        "Text @r:id=x!1",
+    ] {
         let output = bob_command()
             .arg("capture-rewrite")
             .arg("-f")

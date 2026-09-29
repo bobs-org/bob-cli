@@ -15,6 +15,8 @@ pub(crate) enum SpanKind {
     PomodoroName,
     PomodoroStart,
     PomodoroClose,
+    PomodoroCloseInProgress,
+    PomodoroCloseComplete,
     ActiveTaskRoute,
     ActiveTaskBlockId,
     PomodoroAdjust,
@@ -54,6 +56,8 @@ impl SpanKind {
             Self::PomodoroName => "pomodoro_name",
             Self::PomodoroStart => "pomodoro_start",
             Self::PomodoroClose => "pomodoro_close",
+            Self::PomodoroCloseInProgress => "pomodoro_close_in_progress",
+            Self::PomodoroCloseComplete => "pomodoro_close_complete",
             Self::ActiveTaskRoute => "active_task_route",
             Self::ActiveTaskBlockId => "active_task_block_id",
             Self::PomodoroAdjust => "pomodoro_adjust",
@@ -173,6 +177,7 @@ pub(crate) enum Need {
     Task,
     TaskSection,
     ActiveTask,
+    PomodoroCloseTask,
 }
 
 impl Need {
@@ -186,6 +191,7 @@ impl Need {
             Self::Task => "task",
             Self::TaskSection => "task_section",
             Self::ActiveTask => "active_task",
+            Self::PomodoroCloseTask => "pomodoro_close_task",
         }
     }
 }

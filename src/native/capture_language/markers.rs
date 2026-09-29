@@ -342,6 +342,73 @@ pub(crate) const POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro close 
 
 pub(crate) const POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `p:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
 
+/// Temporary executor refusal for a selection-bearing close, until the
+/// selection-capture phase wires the parsed selection into the planner.
+pub(crate) const POMODORO_CLOSE_SELECTION_UNSUPPORTED_ERROR: &str =
+    "task numbers after `=x` are not supported by this build yet";
+
+// ---------------------------------------------------------------------------
+// `=x[<N>][!<M>]` selection diagnostics
+// ---------------------------------------------------------------------------
+
+/// One shared source for every selection-list diagnostic, used by both the
+/// execution and editor parsers so `bob capture` and `capture-parse` agree.
+pub(super) fn close_selection_duplicate_error(
+    number: u32,
+    token: &str,
+) -> String {
+    format!("task {number} is listed twice in `{token}`")
+}
+
+pub(super) fn close_selection_overlap_error(
+    number: u32,
+    token: &str,
+) -> String {
+    format!(
+        "task {number} cannot both stay in progress and complete in `{token}`"
+    )
+}
+
+pub(super) fn close_selection_zero_alone_error() -> String {
+    "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`"
+        .to_string()
+}
+
+pub(super) fn close_selection_starts_at_one_error() -> String {
+    "task numbers start at 1".to_string()
+}
+
+pub(super) fn close_selection_expected_number_error() -> String {
+    "expected a task number before `,`".to_string()
+}
+
+pub(super) fn close_selection_one_bang_error() -> String {
+    "use one `!` list: `=x1!2,3`".to_string()
+}
+
+pub(super) fn close_selection_bad_list_error(token: &str) -> String {
+    format!(
+        "`{token}` is not a task list: write `=x`, then comma-separated task numbers, then optionally `!` and the numbers to complete (for example `=x1,3!2`)"
+    )
+}
+
+pub(super) fn close_selection_too_large_error(number_text: &str) -> String {
+    format!("task number {number_text} is too large")
+}
+
+pub(super) fn close_selection_no_spaces_error() -> String {
+    "write the task numbers right after `=x`, with no spaces (for example `=x1,3!2`)".to_string()
+}
+
+/// Execution rejection for a dangling separator: `separator` is the `,` or
+/// `!` the user still has to follow with a task number.
+pub(super) fn close_selection_incomplete_error(
+    token: &str,
+    separator: char,
+) -> String {
+    format!("`{token}` is incomplete: type a task number after `{separator}`")
+}
+
 // ---------------------------------------------------------------------------
 // Editor-facing parse
 // ---------------------------------------------------------------------------

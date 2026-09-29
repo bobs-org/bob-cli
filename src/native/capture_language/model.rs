@@ -131,10 +131,39 @@ pub(crate) enum SessionOperator {
 
 /// Typed `@<route>:<block-id>=x` close specification. `x` is
 /// case-insensitive; `raw` preserves what was typed.
+///
+/// A selection (`=x<N>`, `=x!<M>`, `=x<N>!<M>`) names numbered Task Links:
+/// `in_progress` is `None` when no `<N>` list was typed (unlisted links keep
+/// their ledger outcome) and `Some` (possibly empty for `=x0`) when one was;
+/// `complete` holds the `!<M>` list, empty when none was typed. Both lists
+/// are sorted ascending. Plain `=x` reports `in_progress: None` and an empty
+/// `complete`, so version-tolerant readers see only additive fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
-    /// Raw `x` text after `=`, exactly as typed.
+    /// Raw close token exactly as typed: `x`/`X` plus any selection lists
+    /// for a whole-item close, or the `=`-prefixed suffix for a link close.
     pub(crate) raw: String,
+    /// Numbered links that stay in progress, or `None` when no `<N>` list
+    /// was typed. `Some(vec![])` is an explicit `=x0` ("none").
+    pub(crate) in_progress: Option<Vec<u32>>,
+    /// Numbered links to complete, empty when no `!<M>` list was typed.
+    pub(crate) complete: Vec<u32>,
+}
+
+impl PomodoroCloseSpec {
+    /// A plain `=x` spec: no selection lists.
+    pub(crate) fn plain(raw: String) -> Self {
+        Self {
+            raw,
+            in_progress: None,
+            complete: Vec::new(),
+        }
+    }
+
+    /// `true` when the spec names at least one numbered Task Link.
+    pub(crate) fn has_selection(&self) -> bool {
+        self.in_progress.is_some() || !self.complete.is_empty()
+    }
 }
 
 /// Session suffix on a `@<route>:<block-id>` marker: either a start

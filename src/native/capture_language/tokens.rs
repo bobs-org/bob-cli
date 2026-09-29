@@ -1,5 +1,6 @@
 //! Route, caret, and selector parsers.
 
+use super::close_selection::*;
 use super::editor_parse::*;
 use super::item::*;
 use super::markers::*;
@@ -343,10 +344,29 @@ pub(super) fn parse_colon_link_tail(
     };
     let session: Option<SessionSuffix> = match suffix {
         None => None,
-        Some(raw) if raw.eq_ignore_ascii_case("x") => {
-            Some(SessionSuffix::Close(PomodoroCloseSpec {
-                raw: format!("={raw}"),
-            }))
+        Some(raw)
+            if raw.eq_ignore_ascii_case("x")
+                || link_close_after_x(raw).is_some() =>
+        {
+            let display = format!("={raw}");
+            let spec = match link_close_after_x(raw) {
+                None => PomodoroCloseSpec::plain(display.clone()),
+                Some(after_x) => {
+                    match lex_close_selection(after_x, 0, &display) {
+                        Ok(CloseSelectionOutcome::Valid(lex)) => {
+                            close_spec_from_lex(display.clone(), &lex)
+                        }
+                        Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+                            return Err(close_selection_incomplete_error(
+                                &display,
+                                incomplete.separator,
+                            ));
+                        }
+                        Err(error) => return Err(error.message),
+                    }
+                }
+            };
+            Some(SessionSuffix::Close(spec))
         }
         Some(raw) => {
             Some(SessionSuffix::Start(parse_pomodoro_start_suffix(raw)?))
@@ -589,6 +609,31 @@ pub(super) enum CaretTokenShape {
         link_end: usize,
         name_range: Option<(usize, usize)>,
         start_offset: Option<usize>,
+        /// Token-relative ranges of the `<N>` and `!<M>` lists inside a
+        /// selection-bearing close suffix, for the
+        /// `pomodoro_close_in_progress`/`pomodoro_close_complete` spans.
+        close_in_progress: Option<(usize, usize)>,
+        close_complete: Option<(usize, usize)>,
+    },
+    /// A `^route:block-id=x…` token whose selection ends in a dangling
+    /// separator: an editing state, not a mistake. `suffix_offset` starts
+    /// the `=`, `separator_range` covers the dangling `,`/`!`, and the list
+    /// ranges cover what was typed so far.
+    CloseIncomplete {
+        route: String,
+        block_id: String,
+        close: PomodoroCloseSpec,
+        link_end: usize,
+        suffix_offset: usize,
+        close_in_progress: Option<(usize, usize)>,
+        close_complete: Option<(usize, usize)>,
+        separator_range: (usize, usize),
+    },
+    /// A `^route:block-id=x…` token whose selection is lexically invalid,
+    /// with the precise token-relative range of the failure.
+    CloseInvalid {
+        message: String,
+        range: (usize, usize),
     },
 }
 
@@ -632,6 +677,17 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
             POMODORO_LINK_TOGGLE_ERROR.to_string(),
         );
     }
+    // A close-shaped `=` suffix (`x`, `x` plus lists) lexes through the
+    // shared selection lexer with token-relative offsets, so the editor can
+    // span the lists, report precise diagnostics, and surface the dangling
+    // separator as an incomplete state. Every other suffix keeps today's
+    // `=<X>` start handling below.
+    if let Some((before_eq, raw_suffix)) = tail.split_once('=')
+        && (raw_suffix.eq_ignore_ascii_case("x")
+            || link_close_after_x(raw_suffix).is_some())
+    {
+        return classify_caret_close_suffix(route_part, before_eq, raw_suffix);
+    }
     match parse_colon_link_tail(route_part, tail) {
         Ok(parts) => {
             if parts.project_note {
@@ -663,6 +719,8 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
                 link_end,
                 name_range,
                 start_offset,
+                close_in_progress: None,
+                close_complete: None,
             }
         }
         Err(message) => {
@@ -678,6 +736,99 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
             }
             CaretTokenShape::Invalid(message)
         }
+    }
+}
+
+/// Editor reading of a `^route:block-id=x…` close suffix. The link part is
+/// validated exactly like [`parse_colon_link_tail`] (so execution and the
+/// editor agree on block/name failures) while the lists lex through the
+/// shared selection lexer with token-relative offsets: a valid selection
+/// reports `Complete` with span ranges, a dangling separator reports
+/// `CloseIncomplete`, and a malformed list reports `CloseInvalid` with its
+/// precise range.
+fn classify_caret_close_suffix(
+    route_part: &str,
+    before_eq: &str,
+    raw_suffix: &str,
+) -> CaretTokenShape {
+    let route = route_part.to_ascii_lowercase();
+    let link_base = 1 + route_part.len() + 1;
+    let (block_raw, name_raw) = match before_eq.split_once('#') {
+        Some((block, name)) => (block, Some(name)),
+        None => (before_eq, None),
+    };
+    let (block_id, project_note) = match block_raw.strip_suffix('+') {
+        Some(stripped) => (stripped, true),
+        None => (block_raw, false),
+    };
+    if project_note {
+        return CaretTokenShape::Invalid(
+            POMODORO_LINK_PROJECT_ERROR.to_string(),
+        );
+    }
+    if block_id.is_empty() {
+        return CaretTokenShape::Invalid(if name_raw.is_some() {
+            format!(
+                "Pomodoro capture requires a block ID before the Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-tasks -r {route}` to list task block IDs)"
+            )
+        } else {
+            POMODORO_BLOCK_ID_ERROR.to_string()
+        });
+    }
+    if !is_block_id(block_id) {
+        return CaretTokenShape::Invalid(POMODORO_BLOCK_ID_ERROR.to_string());
+    }
+    match name_raw {
+        None => {}
+        Some("") => {
+            return CaretTokenShape::NamePartial {
+                route,
+                block_id: block_id.to_string(),
+            };
+        }
+        Some(name) if !is_pomodoro_selector_component(name) => {
+            return CaretTokenShape::Invalid(POMODORO_NAME_ERROR.to_string());
+        }
+        Some(name) => {
+            return CaretTokenShape::Invalid(format!(
+                "`=x` always closes the running Pomodoro; remove `#{name}` (drop `=x` to link under a named Pomodoro instead)"
+            ));
+        }
+    }
+    let suffix_offset = link_base + before_eq.len();
+    let after_x_offset = suffix_offset + 2;
+    let display = format!("={raw_suffix}");
+    let after_x = link_close_after_x(raw_suffix).unwrap_or("");
+    let link_end = link_base + block_id.len();
+    match lex_close_selection(after_x, after_x_offset, &display) {
+        Ok(CloseSelectionOutcome::Valid(lex)) => CaretTokenShape::Complete {
+            route,
+            block_id: block_id.to_string(),
+            pomodoro_name: None,
+            start: None,
+            close: Some(close_spec_from_lex(display, &lex)),
+            link_end,
+            name_range: None,
+            start_offset: Some(suffix_offset),
+            close_in_progress: lex.in_progress_range,
+            close_complete: lex.complete_range,
+        },
+        Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+            CaretTokenShape::CloseIncomplete {
+                route,
+                block_id: block_id.to_string(),
+                close: close_spec_from_incomplete(display, &incomplete),
+                link_end,
+                suffix_offset,
+                close_in_progress: incomplete.in_progress_range,
+                close_complete: incomplete.complete_range,
+                separator_range: incomplete.separator_range,
+            }
+        }
+        Err(error) => CaretTokenShape::CloseInvalid {
+            message: error.message,
+            range: error.range,
+        },
     }
 }
 
@@ -717,6 +868,31 @@ pub(super) enum CaretItemKind {
         link_end: usize,
         name_range: Option<(usize, usize)>,
         start_offset: Option<usize>,
+        close_in_progress: Option<(usize, usize)>,
+        close_complete: Option<(usize, usize)>,
+        conflict: Option<String>,
+    },
+    /// A selection-bearing close suffix ending in a dangling separator.
+    /// Ranges are token-relative; `conflict` mirrors `Complete`'s extra
+    /// text/child-line conflicts (a conflict wins over the pending state).
+    CloseIncomplete {
+        route: String,
+        block_id: String,
+        close: PomodoroCloseSpec,
+        link_end: usize,
+        suffix_offset: usize,
+        close_in_progress: Option<(usize, usize)>,
+        close_complete: Option<(usize, usize)>,
+        separator_range: (usize, usize),
+        conflict: Option<String>,
+    },
+    /// A selection-bearing close suffix that is lexically invalid, with the
+    /// precise token-relative range of the failure. `conflict` mirrors
+    /// `Complete`'s extra text/child-line conflicts (a conflict wins over
+    /// the suffix failure, exactly like execution).
+    CloseInvalid {
+        message: String,
+        range: (usize, usize),
         conflict: Option<String>,
     },
     Partial {
@@ -780,33 +956,11 @@ pub(super) fn classify_caret_item<'a>(
             link_end,
             name_range,
             start_offset,
+            close_in_progress,
+            close_complete,
         } => {
-            let conflict = if solo_parent && single_line {
-                None
-            } else if !solo_parent {
-                parent_tokens[1..]
-                    .iter()
-                    .find_map(|extra| {
-                        if parse_schedule_token(extra.text).is_some() {
-                            Some(
-                                POMODORO_LINK_SCHEDULE_CONFLICT_ERROR
-                                    .to_string(),
-                            )
-                        } else if parse_priority_token(extra.text).is_some() {
-                            Some(
-                                POMODORO_LINK_PRIORITY_CONFLICT_ERROR
-                                    .to_string(),
-                            )
-                        } else if extra.text.starts_with('%') {
-                            Some(POMODORO_LINK_CLIP_CONFLICT_ERROR.to_string())
-                        } else {
-                            None
-                        }
-                    })
-                    .or_else(|| Some(POMODORO_LINK_SHAPE_ERROR.to_string()))
-            } else {
-                Some(POMODORO_LINK_CHILD_CONFLICT_ERROR.to_string())
-            };
+            let conflict =
+                caret_item_conflict(&parent_tokens, solo_parent, single_line);
             Some(CaretItem {
                 token: *first,
                 solo_parent,
@@ -819,10 +973,85 @@ pub(super) fn classify_caret_item<'a>(
                     link_end,
                     name_range,
                     start_offset,
+                    close_in_progress,
+                    close_complete,
                     conflict,
                 },
             })
         }
+        CaretTokenShape::CloseIncomplete {
+            route,
+            block_id,
+            close,
+            link_end,
+            suffix_offset,
+            close_in_progress,
+            close_complete,
+            separator_range,
+        } => {
+            let conflict =
+                caret_item_conflict(&parent_tokens, solo_parent, single_line);
+            Some(CaretItem {
+                token: *first,
+                solo_parent,
+                kind: CaretItemKind::CloseIncomplete {
+                    route,
+                    block_id,
+                    close,
+                    link_end,
+                    suffix_offset,
+                    close_in_progress,
+                    close_complete,
+                    separator_range,
+                    conflict,
+                },
+            })
+        }
+        CaretTokenShape::CloseInvalid { message, range } => {
+            let conflict =
+                caret_item_conflict(&parent_tokens, solo_parent, single_line);
+            Some(CaretItem {
+                token: *first,
+                solo_parent,
+                kind: CaretItemKind::CloseInvalid {
+                    message,
+                    range,
+                    conflict,
+                },
+            })
+        }
+    }
+}
+
+/// Extra-text and child-line conflicts for a claimed `^` item: `None` for an
+/// exact solo link, the marker conflict for extra parent-line tokens, and
+/// the child conflict for authored children. Shared by every complete and
+/// close-suffix shape so the editor agrees with execution on which failure
+/// wins.
+fn caret_item_conflict(
+    parent_tokens: &[Token<'_>],
+    solo_parent: bool,
+    single_line: bool,
+) -> Option<String> {
+    if solo_parent && single_line {
+        None
+    } else if !solo_parent {
+        parent_tokens[1..]
+            .iter()
+            .find_map(|extra| {
+                if parse_schedule_token(extra.text).is_some() {
+                    Some(POMODORO_LINK_SCHEDULE_CONFLICT_ERROR.to_string())
+                } else if parse_priority_token(extra.text).is_some() {
+                    Some(POMODORO_LINK_PRIORITY_CONFLICT_ERROR.to_string())
+                } else if extra.text.starts_with('%') {
+                    Some(POMODORO_LINK_CLIP_CONFLICT_ERROR.to_string())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| Some(POMODORO_LINK_SHAPE_ERROR.to_string()))
+    } else {
+        Some(POMODORO_LINK_CHILD_CONFLICT_ERROR.to_string())
     }
 }
 

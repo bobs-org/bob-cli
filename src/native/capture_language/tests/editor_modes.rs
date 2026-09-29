@@ -625,10 +625,21 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "Finish it @cash:goog-exit+#bugs",
         "=x",
         "=X",
+        "=x1",
+        "=x1,3",
+        "=x3,1",
+        "=x!2",
+        "=x1,3!2",
+        "=X1!2",
+        "=x0",
+        "=x0!2",
         "@r:id=x",
+        "@r:id=x1!2",
         "^r:id=x",
+        "^r:id=x1",
         "Text @r:id=x",
         "Text @r:id=X",
+        "Text @r:id=x!1",
         "+",
         "-",
         "++",
@@ -803,6 +814,54 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         );
         assert!(parse.diagnostics.is_empty(), "{raw}");
     }
+    // Selection-bearing closes report the additive spec and the list
+    // spans.
+    for (raw, in_progress, complete) in [
+        ("=x1", Some(vec![1u32]), Vec::new()),
+        ("=x1,3!2", Some(vec![1u32, 3]), vec![2]),
+        ("=x!2", None, vec![2]),
+        ("=x0", Some(Vec::new()), Vec::new()),
+    ] {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::PomodoroClose, "{raw}");
+        let close = parse.pomodoro_close.as_ref().expect("close spec");
+        assert_eq!(close.raw, raw, "{raw}");
+        assert_eq!(close.in_progress, in_progress, "{raw}");
+        assert_eq!(close.complete, complete, "{raw}");
+        assert!(parse.diagnostics.is_empty(), "{raw}");
+    }
+    let selected = editor("=x1,3!2");
+    assert_eq!(
+        ranges(&selected),
+        vec![
+            (0, 2, SpanKind::PomodoroClose),
+            (2, 5, SpanKind::PomodoroCloseInProgress),
+            (5, 7, SpanKind::PomodoroCloseComplete),
+        ],
+        "=x1,3!2"
+    );
+    // A dangling separator is an editing state with the partial spec.
+    let pending = editor("=x1,");
+    assert_eq!(pending.mode, EditorMode::Incomplete, "=x1,");
+    assert_eq!(pending.needs, vec![Need::PomodoroCloseTask], "=x1,");
+    let partial = pending.pomodoro_close.as_ref().expect("partial spec");
+    assert_eq!(partial.in_progress, Some(vec![1]), "=x1,");
+    assert_eq!(
+        ranges(&pending),
+        vec![
+            (0, 2, SpanKind::PomodoroClose),
+            (2, 3, SpanKind::PomodoroCloseInProgress),
+            (3, 4, SpanKind::InteractivePlaceholder),
+        ],
+        "=x1,"
+    );
+    assert!(pending.diagnostics.is_empty(), "=x1,");
+    // A malformed selection reports `invalid_pomodoro_close` with no spec.
+    let duplicate = editor("=x1,1");
+    assert_eq!(duplicate.mode, EditorMode::PomodoroClose, "=x1,1");
+    assert_eq!(codes(&duplicate), vec!["invalid_pomodoro_close"], "=x1,1");
+    assert_eq!(duplicate.diagnostics[0].range, Some((4, 5)), "=x1,1");
+    assert!(duplicate.pomodoro_close.is_none(), "=x1,1");
     // Near misses and conflicts report `invalid_pomodoro_close`.
     let shape = editor("=x more");
     assert_eq!(shape.mode, EditorMode::PomodoroClose, "=x more");
@@ -834,14 +893,19 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         "Text @r:id=x s:2"
     );
     // Prose lookalikes stay ordinary tasks with no diagnostics.
-    // `=3` is now a whole-item start, not prose.
-    for raw in ["=xx", "=x!", "==", "Plan =x", "= foo", "=- foo"] {
+    // `=3` is now a whole-item start, not prose, and `=x!` is a dangling
+    // separator (an incomplete close, not prose).
+    for raw in ["=xx", "=xa", "==", "Plan =x", "= foo", "=- foo"] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Task, "{raw}");
         assert!(parse.diagnostics.is_empty(), "{raw}");
         assert!(parse.pomodoro_close.is_none(), "{raw}");
         assert!(parse.pomodoro_start.is_none(), "{raw}");
     }
+    let dangling = editor("=x!");
+    assert_eq!(dangling.mode, EditorMode::Incomplete, "=x!");
+    assert_eq!(dangling.needs, vec![Need::PomodoroCloseTask], "=x!");
+    assert!(dangling.diagnostics.is_empty(), "=x!");
     // A multi-item draft mixes an adjustment, a close, and a task.
     let mixed = parse_for_editor("+5\n\n=x\n\nCall bank @Cash+");
     assert_eq!(mixed.items.len(), 3, "mixed");
@@ -906,7 +970,7 @@ fn editor_reports_pomodoro_start_modes_spans_specs_and_diagnostics() {
     assert_eq!(overflow.diagnostics[0].range, Some((0, 24)), "overflow");
     // Bare tokens with prose, close shapes, and mid-body tokens stay
     // ordinary tasks.
-    for raw in ["= foo", "=- foo", "==", "=xx", "=x!", "Plan =3", "a=3"] {
+    for raw in ["= foo", "=- foo", "==", "=xx", "=xa", "Plan =3", "a=3"] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Task, "{raw}");
         assert!(parse.diagnostics.is_empty(), "{raw}");

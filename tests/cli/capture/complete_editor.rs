@@ -952,3 +952,41 @@ fn capture_complete_pomodoro_close_protocol() {
         );
     }
 }
+
+#[test]
+fn capture_complete_pomodoro_close_selection_protocol() {
+    // A cursor anywhere inside `=x…`, including the task-number lists and
+    // a dangling separator, returns an empty success.
+    for (text, cursor) in [
+        ("=x1,3!2", 1),
+        ("=x1,3!2", 3),
+        ("=x1,3!2", 5),
+        ("=x1,3!2", 7),
+        ("=x1,", 4),
+        ("=x!", 3),
+        ("^r:id=x1", 8),
+        ("^r:id=x1,", 9),
+        ("Text @r:id=x1!2", 14),
+    ] {
+        let output = bob_command()
+            .arg("capture-complete")
+            .arg("-c")
+            .arg(cursor.to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-complete");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("complete JSON");
+        assert_eq!(json["ok"], true, "{text} {cursor}");
+        assert_eq!(
+            json["candidates"],
+            serde_json::json!([]),
+            "{text} {cursor}"
+        );
+    }
+}
