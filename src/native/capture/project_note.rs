@@ -226,15 +226,15 @@ pub(super) fn plan_project_note_item(
                     "Pomodoro ledger already contains {block_link}"
                 )));
             }
-            let (updated, placement) = insert_pomodoro_block_link(
+            let insertion = insert_pomodoro_block_link(
                 &day,
                 &block_link,
                 pomodoro_name.as_deref(),
             )?;
             if first_placement.is_none() {
-                first_placement = Some(placement);
+                first_placement = Some(insertion.placement);
             }
-            day = updated;
+            day = insertion.updated;
         }
         planner.stage(&new_target, rendered.contents.clone())?;
         planner.stage(&day_file, day)?;

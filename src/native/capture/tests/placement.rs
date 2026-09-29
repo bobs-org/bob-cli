@@ -336,6 +336,7 @@ fn json_success_shape_is_stable() {
         }],
         None,
         Vec::new(),
+        None,
     );
 
     let value: serde_json::Value =
@@ -392,6 +393,7 @@ fn json_success_shape_is_stable() {
         "pomodoro_link_destination",
         "project_note",
         "pomodoro_start",
+        "plan_budget",
     ] {
         assert!(value.get(special_field).is_none(), "{value}");
     }

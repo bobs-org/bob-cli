@@ -22,9 +22,9 @@ use super::{
     },
     capture_pomodoros::{self, PomodoroEntry, PomodoroState},
     capture_targets::{self, CaptureTargetKind},
-    capture_task_sections, capture_tasks, env as bob_env,
+    capture_task_sections, capture_tasks, config, env as bob_env,
     note_tasks::{self, BlockIdLookup},
-    pomodoro,
+    plan_budget, pomodoro,
     style::Styler,
 };
 
@@ -122,7 +122,10 @@ updated clients must not insert. When the query is a nonempty valid \
 Pomodoro name that would not select an open exact or prefix match, and \
 today's ledger can uniquely place a new future entry, the first candidate \
 is a create action: creates_pomodoro is true, replacement is the canonical \
-selector, name is the canonical visible name, and ref is omitted. Accepting \
+selector, name is the canonical visible name, and ref is omitted. Create \
+rows also preview the plan budget with plan_themes_after and \
+plan_themes_cap (omitted when the daily note or the plan config is \
+unavailable). Accepting \
 that row only canonicalizes the marker; `bob capture` creates the named \
 placeholder later. Exact or prefix open-name matches stay first and do not \
 receive a create row. Empty queries stay the existing discovery list. A \
@@ -382,6 +385,13 @@ struct PomodoroNameCandidate {
     requires_name: bool,
     #[serde(skip_serializing_if = "is_false")]
     creates_pomodoro: bool,
+    /// Resulting theme count and cap when this create row is accepted.
+    /// Only on `creates_pomodoro` rows; omitted when the daily note or
+    /// the plan config is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_themes_after: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_themes_cap: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     line: Option<usize>,
     state: PomodoroState,
@@ -1038,18 +1048,76 @@ fn pomodoro_name_candidates_at(
         )));
     }
     warnings.extend(scan.warnings.iter().cloned());
-    let candidates = pomodoro_name_candidates_from_scan(&scan, query);
+    let plan_hint = plan_creation_hint(&contents, &scan);
+    let candidates =
+        pomodoro_name_candidates_from_scan_with_hint(&scan, query, plan_hint);
 
     Ok((Candidates::PomodoroName(candidates), warnings))
 }
 
+/// Theme count preview for a `creates_pomodoro` row: today's theme
+/// count plus one for the new name, with the configured cap. `None`
+/// when the ledger or the plan config is unavailable.
+struct PlanCreationHint {
+    before: usize,
+    keys: Vec<String>,
+    cap: u32,
+}
+
+fn plan_creation_hint(
+    contents: &str,
+    scan: &capture_pomodoros::PomodoroScan,
+) -> Option<PlanCreationHint> {
+    if !scan.has_section {
+        return None;
+    }
+    let config = config::load_plan_config(&config::config_path()).ok()?;
+    let ledger = plan_budget::compute(contents, &config);
+    Some(PlanCreationHint {
+        before: ledger.themes.count,
+        keys: ledger
+            .theme_names
+            .iter()
+            .map(|name| plan_budget::normalize_component(name))
+            .collect(),
+        cap: config.max_themes(),
+    })
+}
+
+fn plan_themes_after_for(
+    hint: Option<&PlanCreationHint>,
+    name: &str,
+) -> (Option<usize>, Option<u32>) {
+    let Some(hint) = hint else {
+        return (None, None);
+    };
+    let key = plan_budget::normalize_component(name);
+    let after = if hint.keys.iter().any(|known| *known == key) {
+        hint.before
+    } else {
+        hint.before + 1
+    };
+    (Some(after), Some(hint.cap))
+}
+
+#[cfg(test)]
 fn pomodoro_name_candidates_from_scan(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
 ) -> Vec<PomodoroNameCandidate> {
+    pomodoro_name_candidates_from_scan_with_hint(scan, query, None)
+}
+
+fn pomodoro_name_candidates_from_scan_with_hint(
+    scan: &capture_pomodoros::PomodoroScan,
+    query: &str,
+    plan_hint: Option<PlanCreationHint>,
+) -> Vec<PomodoroNameCandidate> {
     let mut candidates =
         pomodoro_name_candidates_from_entries(&scan.entries, query);
-    if let Some(creation) = pomodoro_creation_candidate(scan, query) {
+    if let Some(creation) =
+        pomodoro_creation_candidate(scan, query, plan_hint.as_ref())
+    {
         insert_pomodoro_creation_candidate(&mut candidates, creation, query);
     }
     candidates
@@ -1058,14 +1126,19 @@ fn pomodoro_name_candidates_from_scan(
 fn pomodoro_creation_candidate(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
+    plan_hint: Option<&PlanCreationHint>,
 ) -> Option<PomodoroNameCandidate> {
     let name = capture_pomodoros::named_creation_name(scan, query)?;
+    let (plan_themes_after, plan_themes_cap) =
+        plan_themes_after_for(plan_hint, &name);
     Some(PomodoroNameCandidate {
         replacement: capture_language::selector_slug(&name),
         pomodoro_ref: None,
         name: Some(name),
         requires_name: false,
         creates_pomodoro: true,
+        plan_themes_after,
+        plan_themes_cap,
         line: None,
         state: PomodoroState::Open,
         status_symbol: ' ',
@@ -1143,6 +1216,8 @@ fn pomodoro_name_candidate(
         name: entry.name.clone(),
         requires_name,
         creates_pomodoro: false,
+        plan_themes_after: None,
+        plan_themes_cap: None,
         line: Some(entry.line),
         state: entry.state,
         status_symbol: entry.status_symbol,

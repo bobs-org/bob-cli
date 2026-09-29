@@ -767,6 +767,7 @@ pub(super) fn link_existing_task_into_running(
                 line: running.line,
                 name: running.name.clone(),
                 time_range: running.time_range.clone(),
+                role: Some("current"),
             };
             return Ok((
                 day_contents.to_string(),
@@ -780,6 +781,7 @@ pub(super) fn link_existing_task_into_running(
             line: source.owner.line,
             name: source.owner.name.clone(),
             time_range: source.owner.time_range.clone(),
+            role: None,
         };
         let (moved_day, placement) =
             capture_task_toggle::move_subtree_to_entry(
@@ -797,6 +799,7 @@ pub(super) fn link_existing_task_into_running(
             line: running.line,
             name: running.name.clone(),
             time_range: running.time_range.clone(),
+            role: Some("current"),
         };
         let placement = Some(match placement {
             capture_task_toggle::LinkPlacement::Inserted => Placement::Inserted,
@@ -816,6 +819,7 @@ pub(super) fn link_existing_task_into_running(
         line: running.line,
         name: running.name.clone(),
         time_range: running.time_range.clone(),
+        role: Some("current"),
     };
     Ok((updated_day, "linked", None, dest, Some(placement)))
 }
@@ -1241,6 +1245,7 @@ pub(super) fn plan_pomodoro_close_task_item(
                 "{}-{}",
                 summary.closed.start, summary.closed.end
             )),
+            role: Some("current"),
         })
         .unwrap_or(PomodoroLinkEndpoint {
             line: summary.pomodoro_line,
@@ -1249,6 +1254,7 @@ pub(super) fn plan_pomodoro_close_task_item(
                 "{}-{}",
                 summary.closed.start, summary.closed.end
             )),
+            role: Some("current"),
         });
     let relative_target_path = relative_target(Some(route));
     let target_path = request.bob_dir.join(&relative_target_path);

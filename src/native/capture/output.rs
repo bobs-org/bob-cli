@@ -104,6 +104,10 @@ pub(super) struct CaptureResult {
     pub(super) global_destination: Option<GlobalDestinationSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
+    /// Before/after plan budget, present only when the batch changed
+    /// today's Pomodoros section. Never per item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) plan_budget: Option<CapturePlanBudget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -119,6 +123,7 @@ impl CaptureResult {
         items: Vec<CaptureItemResult>,
         global_destination: Option<GlobalDestinationSummary>,
         warnings: Vec<String>,
+        plan_budget: Option<CapturePlanBudget>,
     ) -> Self {
         let item = items
             .first()
@@ -130,6 +135,7 @@ impl CaptureResult {
             captures,
             global_destination,
             warnings,
+            plan_budget,
         }
     }
 }
@@ -259,6 +265,7 @@ pub(super) fn print_success(
         OutputFormat::Human => {
             print_capture_warnings(result);
             print_human_success(result);
+            print_plan_budget(result);
         }
         OutputFormat::Json => println!("{}", success_json(result)),
     }
@@ -271,6 +278,67 @@ pub(super) fn print_capture_warnings(result: &CaptureResult) {
     let styler = Styler::detect();
     for warning in &result.warnings {
         eprintln!("{COMMAND_NAME}: {}: {warning}", styler.warning_prefix());
+    }
+}
+
+/// Plan-budget meter line (stdout) plus one stderr warning per fired
+/// cap. Budget warnings stay out of the `warnings` vector: they
+/// describe the ledger, not the captured item.
+pub(super) fn print_plan_budget(result: &CaptureResult) {
+    let Some(budget) = result.plan_budget.as_ref() else {
+        return;
+    };
+    let styler = Styler::detect();
+    let themes =
+        format!("{}/{} themes", budget.themes.count, budget.themes.cap);
+    let links = format!("{}/{} links", budget.links.count, budget.links.cap);
+    let themes = if budget.themes.over {
+        styler.red(&themes)
+    } else {
+        styler.green(&themes)
+    };
+    let links = if budget.links.over {
+        styler.red(&links)
+    } else {
+        styler.green(&links)
+    };
+    let mut line = format!("plan {themes} · {links}");
+    if !budget.added_themes.is_empty() {
+        let count = budget.added_themes.len();
+        let noun = if count == 1 { "theme" } else { "themes" };
+        line.push_str(&format!(
+            "  (+{count} {noun}: {})",
+            budget.added_themes.join(", ")
+        ));
+    }
+    println!("{line}");
+    for warning in &budget.warnings {
+        eprintln!(
+            "{COMMAND_NAME}: {}: {}",
+            styler.warning_prefix(),
+            warning.message
+        );
+    }
+}
+
+/// Destination arrow for `<text> @route:id[#NAME]` Pomodoro-task
+/// captures: where the new Task Link landed.
+pub(super) fn format_pomodoro_task_destination(
+    destination: &PomodoroLinkEndpoint,
+) -> String {
+    let target = destination
+        .name
+        .as_deref()
+        .map(str::to_string)
+        .unwrap_or_else(|| format_pomodoro_endpoint(destination));
+    match destination.role {
+        Some("created") => format!("→ new Pomodoro {target}"),
+        Some("current") => match destination.time_range.as_deref() {
+            Some(range) => format!("→ into running {target} ({range})"),
+            None => format!("→ into running {target}"),
+        },
+        Some("named") => format!("→ under {target} (named)"),
+        _ => format!("→ under {target} (next up)"),
     }
 }
 
@@ -424,6 +492,14 @@ pub(super) fn print_human_item_success(
         println!("  under {marker}{parent_text}{block_id}{parent_section}");
     }
     println!("  {}", styler.dim(&result.task_line));
+    if result.kind == "pomodoro_task"
+        && let Some(destination) = result.pomodoro_link_destination.as_ref()
+    {
+        println!(
+            "  {}",
+            styler.dim(&format_pomodoro_task_destination(destination))
+        );
+    }
     if let Some(note) = result.project_note.as_ref() {
         let sections = if note.sections.is_empty() {
             "—".to_string()
@@ -1239,7 +1315,13 @@ pub(super) fn print_capture_error(
     match output_format {
         OutputFormat::Human => eprintln!("{COMMAND_NAME}: {}", error.message),
         OutputFormat::Json => {
-            println!("{}", json!({ "ok": false, "error": error.message }))
+            let mut value = serde_json::Map::new();
+            value.insert("ok".to_string(), json!(false));
+            value.insert("error".to_string(), json!(error.message));
+            if let Some(code) = error.code {
+                value.insert("code".to_string(), json!(code));
+            }
+            println!("{}", serde_json::Value::Object(value));
         }
     }
     error.kind.exit_code()
@@ -1249,6 +1331,9 @@ pub(super) fn print_capture_error(
 pub(super) struct CaptureError {
     pub(super) kind: CaptureErrorKind,
     pub(super) message: String,
+    /// Machine-readable failure code, serialized only for the strict
+    /// plan-budget refusal (`plan_theme_cap_exceeded`).
+    pub(super) code: Option<String>,
 }
 
 impl CaptureError {
@@ -1256,6 +1341,7 @@ impl CaptureError {
         Self {
             kind: CaptureErrorKind::Usage,
             message: message.into(),
+            code: None,
         }
     }
 
@@ -1263,6 +1349,17 @@ impl CaptureError {
         Self {
             kind: CaptureErrorKind::Io,
             message: message.into(),
+            code: None,
+        }
+    }
+
+    /// Strict-mode refusal: an I/O-class error (exit 1) carrying the
+    /// `plan_theme_cap_exceeded` code for machine callers.
+    pub(super) fn strict(message: impl Into<String>) -> Self {
+        Self {
+            kind: CaptureErrorKind::Io,
+            message: message.into(),
+            code: Some(plan_budget::LINT_THEME_CAP.to_string()),
         }
     }
 }

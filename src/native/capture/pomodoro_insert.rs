@@ -29,21 +29,70 @@ impl PomodoroSelection<'_> {
     }
 }
 
+/// What [`insert_pomodoro_block_link`] selected: the updated note,
+/// the ledger placement, the post-image destination endpoint (with the
+/// plan-budget `role`), and whether the insert created a named entry.
+#[derive(Debug)]
+pub(super) struct PomodoroBlockLinkInsertion {
+    pub(super) updated: String,
+    pub(super) placement: Placement,
+    pub(super) destination: PomodoroLinkEndpoint,
+    pub(super) creates_pomodoro: bool,
+}
+
 pub(super) fn insert_pomodoro_block_link(
     contents: &str,
     block_link: &str,
     pomodoro_name: Option<&str>,
-) -> Result<(String, Placement), CaptureError> {
+) -> Result<PomodoroBlockLinkInsertion, CaptureError> {
+    let creates = match pomodoro_name {
+        Some(name) => {
+            let lines = line_spans(contents);
+            matches!(
+                select_named_pomodoro(contents, &lines, name)?,
+                NamedPomodoroResolution::Create
+            )
+        }
+        None => false,
+    };
     let selection = match pomodoro_name {
         Some(name) => PomodoroSelection::NamedOrCreate(name),
         None => PomodoroSelection::CurrentOrFuture,
     };
-    let (updated, placement, _, _) = insert_pomodoro_child_block(
+    let (updated, placement, selected, _) = insert_pomodoro_child_block(
         contents,
         &format!("- {block_link}"),
         selection,
     )?;
-    Ok((updated, placement))
+    let scan = capture_pomodoros::scan(&updated);
+    let destination = scan
+        .entries
+        .iter()
+        .find(|entry| entry.line == selected + 1)
+        .map(|entry| {
+            let base = capture_task_toggle::endpoint_from_entry(entry);
+            PomodoroLinkEndpoint {
+                line: base.line,
+                name: base.name.clone(),
+                time_range: base.time_range.clone(),
+                role: Some(destination_role(
+                    creates,
+                    pomodoro_name,
+                    base.time_range.as_deref(),
+                )),
+            }
+        })
+        .ok_or_else(|| {
+            CaptureError::io(
+                "Pomodoro capture invariant failed: selected Pomodoro disappeared",
+            )
+        })?;
+    Ok(PomodoroBlockLinkInsertion {
+        updated,
+        placement,
+        destination,
+        creates_pomodoro: creates,
+    })
 }
 
 /// Select a Pomodoro in the daily note's `## Pomodoros` section according to

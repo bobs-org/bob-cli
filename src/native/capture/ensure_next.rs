@@ -75,6 +75,7 @@ pub(super) fn plan_ensure_next_capture(
         planner.stage(&day_file, relocation.content.clone())?;
     }
 
+    let selector = pomodoro_name;
     let pomodoro_link_action = match relocation.action {
         capture_task_toggle::LinkRelocationAction::Moved => "moved",
         capture_task_toggle::LinkRelocationAction::AlreadyCurrent => {
@@ -118,8 +119,10 @@ pub(super) fn plan_ensure_next_capture(
             status_changed: Some(status_changed),
             pomodoro_link_action: Some(pomodoro_link_action),
             pomodoro_link_source: Some(endpoint_json(&relocation.source)),
-            pomodoro_link_destination: Some(endpoint_json(
+            pomodoro_link_destination: Some(destination_json(
                 &relocation.destination,
+                relocation.creates_pomodoro,
+                selector,
             )),
         }),
         pomodoro_link: None,

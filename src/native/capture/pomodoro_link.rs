@@ -56,6 +56,15 @@ pub(super) fn plan_capture_with_pomodoro_link(
             )?;
         planner.stage(target, updated_target)?;
         planner.stage(&day_file, updated_day)?;
+        let destination = destination_json(
+            &capture_task_toggle::PomodoroEndpoint {
+                line: summary.pomodoro_line,
+                name: summary.pomodoro_name.clone(),
+                time_range: Some(summary.time_range.clone()),
+            },
+            summary.created_pomodoro,
+            pomodoro_name,
+        );
         return Ok(CaptureWritePlan {
             placement,
             pomodoro: Some(PlannedPomodoroEdit {
@@ -64,6 +73,9 @@ pub(super) fn plan_capture_with_pomodoro_link(
                     day_file: day_file_label,
                     block_link,
                     pomodoro_link_placement,
+                    pomodoro_name: summary.pomodoro_name.clone(),
+                    creates_pomodoro: summary.created_pomodoro,
+                    pomodoro_link_destination: Some(destination),
                 },
                 start: Some(summary),
             }),
@@ -73,10 +85,10 @@ pub(super) fn plan_capture_with_pomodoro_link(
             pomodoro_link: None,
         });
     }
-    let (updated_day, pomodoro_link_placement) =
+    let insertion =
         insert_pomodoro_block_link(&original_day, &block_link, pomodoro_name)?;
     planner.stage(target, updated_target)?;
-    planner.stage(&day_file, updated_day)?;
+    planner.stage(&day_file, insertion.updated)?;
 
     Ok(CaptureWritePlan {
         placement,
@@ -85,7 +97,10 @@ pub(super) fn plan_capture_with_pomodoro_link(
                 block_id: block_id.to_string(),
                 day_file: day_file_label,
                 block_link,
-                pomodoro_link_placement,
+                pomodoro_link_placement: insertion.placement,
+                pomodoro_name: insertion.destination.name.clone(),
+                creates_pomodoro: insertion.creates_pomodoro,
+                pomodoro_link_destination: Some(insertion.destination),
             },
             start: None,
         }),
@@ -103,6 +118,27 @@ pub(super) fn endpoint_json(
         line: endpoint.line,
         name: endpoint.name.clone(),
         time_range: endpoint.time_range.clone(),
+        role: None,
+    }
+}
+
+/// Destination variant of [`endpoint_json`]: the same post-image
+/// endpoint plus the plan-budget `role` (`current`/`next_up`/
+/// `named`/`created`). Sources keep `role` unset.
+pub(super) fn destination_json(
+    endpoint: &capture_task_toggle::PomodoroEndpoint,
+    creates_pomodoro: bool,
+    selector: Option<&str>,
+) -> PomodoroLinkEndpoint {
+    PomodoroLinkEndpoint {
+        line: endpoint.line,
+        name: endpoint.name.clone(),
+        time_range: endpoint.time_range.clone(),
+        role: Some(destination_role(
+            creates_pomodoro,
+            selector,
+            endpoint.time_range.as_deref(),
+        )),
     }
 }
 
@@ -327,8 +363,10 @@ pub(super) fn plan_pomodoro_link_capture(
             creates_pomodoro: relocation.creates_pomodoro,
             pomodoro_link_action: action,
             pomodoro_link_source: relocation.source.as_ref().map(endpoint_json),
-            pomodoro_link_destination: Some(endpoint_json(
+            pomodoro_link_destination: Some(destination_json(
                 &relocation.destination,
+                relocation.creates_pomodoro,
+                pomodoro_name,
             )),
             removed_scheduled: task_plan.removed_scheduled,
             schedule_log: task_plan.schedule_log,
@@ -469,14 +507,18 @@ pub(super) fn plan_pomodoro_link_with_start(
                 creates_pomodoro: summary.created_pomodoro,
                 pomodoro_link_action: "linked",
                 pomodoro_link_source: None,
-                pomodoro_link_destination: Some(PomodoroLinkEndpoint {
-                    line: summary.pomodoro_line,
-                    name: summary.pomodoro_name.clone(),
-                    time_range: Some(format!(
-                        "{}-{}",
-                        summary.start, summary.end
-                    )),
-                }),
+                pomodoro_link_destination: Some(destination_json(
+                    &capture_task_toggle::PomodoroEndpoint {
+                        line: summary.pomodoro_line,
+                        name: summary.pomodoro_name.clone(),
+                        time_range: Some(format!(
+                            "{}-{}",
+                            summary.start, summary.end
+                        )),
+                    },
+                    summary.created_pomodoro,
+                    pomodoro_name,
+                )),
                 removed_scheduled,
                 schedule_log,
                 status_changed,
@@ -519,7 +561,8 @@ pub(super) fn plan_pomodoro_link_with_start(
                             name: entry.name.clone(),
                             time_range: None,
                         });
-                    let dest_json = endpoint_json(&dest_entry);
+                    let dest_json =
+                        destination_json(&dest_entry, false, pomodoro_name);
                     let summary = PomodoroStartSummary {
                         start: start_text.clone(),
                         end: end_text.clone(),
@@ -556,6 +599,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                                 line: source_endpoint.line,
                                 name: source_endpoint.name.clone(),
                                 time_range: source_endpoint.time_range.clone(),
+                                role: None,
                             }),
                             pomodoro_link_destination: Some(dest_json),
                             removed_scheduled,
@@ -626,7 +670,8 @@ pub(super) fn plan_pomodoro_link_with_start(
                         name: entry.name.clone(),
                         time_range: Some(format!("{start_text}-{end_text}")),
                     });
-                let dest_json = endpoint_json(&dest_entry);
+                let dest_json =
+                    destination_json(&dest_entry, false, pomodoro_name);
                 let summary = PomodoroStartSummary {
                     start: start_text,
                     end: end_text,
@@ -665,6 +710,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                             line: source_endpoint.line,
                             name: source_endpoint.name.clone(),
                             time_range: source_endpoint.time_range.clone(),
+                            role: None,
                         }),
                         pomodoro_link_destination: Some(dest_json),
                         removed_scheduled,
@@ -746,7 +792,8 @@ pub(super) fn plan_pomodoro_link_with_start(
                         name: Some(name.clone()),
                         time_range: Some(format!("{start_text}-{end_text}")),
                     });
-                let dest_json = endpoint_json(&dest_entry);
+                let dest_json =
+                    destination_json(&dest_entry, true, pomodoro_name);
                 let summary = PomodoroStartSummary {
                     start: start_text,
                     end: end_text,
@@ -785,6 +832,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                             line: source_endpoint.line,
                             name: source_endpoint.name.clone(),
                             time_range: source_endpoint.time_range.clone(),
+                            role: None,
                         }),
                         pomodoro_link_destination: Some(dest_json),
                         removed_scheduled,
@@ -833,7 +881,7 @@ pub(super) fn plan_pomodoro_link_with_start(
             name: q_scan_entry.name.clone(),
             time_range: Some(format!("{start_text}-{end_text}")),
         });
-    let dest_json = endpoint_json(&dest_entry);
+    let dest_json = destination_json(&dest_entry, false, pomodoro_name);
     let summary = PomodoroStartSummary {
         start: start_text,
         end: end_text,
@@ -871,6 +919,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                 line: source_endpoint.line,
                 name: source_endpoint.name.clone(),
                 time_range: source_endpoint.time_range.clone(),
+                role: None,
             }),
             pomodoro_link_destination: Some(dest_json),
             removed_scheduled,

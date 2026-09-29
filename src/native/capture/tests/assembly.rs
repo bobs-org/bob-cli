@@ -262,9 +262,11 @@ fn pomodoro_link_prefers_the_single_timed_open_entry() {
         "## Later\n",
         "- [ ] Outside (1000-1030)\n",
     );
-    let (updated, placement) =
+    let insertion =
         insert_pomodoro_block_link(contents, "[[dev#^foobar]]", None)
             .expect("select timed Pomodoro");
+    let updated = insertion.updated;
+    let placement = insertion.placement;
     assert_eq!(placement, Placement::Inserted);
     assert_eq!(
         updated,
@@ -290,9 +292,11 @@ fn pomodoro_link_falls_back_to_first_open_and_ignores_nested_tasks() {
         "- [ ] First open\n",
         "- [ ] Second open\n",
     );
-    let (updated, placement) =
+    let insertion =
         insert_pomodoro_block_link(contents, "[[dev#^fallback]]", None)
             .expect("select first open Pomodoro");
+    let updated = insertion.updated;
+    let placement = insertion.placement;
     assert_eq!(placement, Placement::Inserted);
     assert_eq!(
         updated,
@@ -627,9 +631,10 @@ fn pomodoro_link_preserves_crlf_and_reuses_nearby_child_indentation() {
         "\t- old child\r\n",
         "- [ ] Next\r\n",
     );
-    let (updated, placement) =
-        insert_pomodoro_block_link(contents, "[[dev#^id]]", None)
-            .expect("insert CRLF link");
+    let insertion = insert_pomodoro_block_link(contents, "[[dev#^id]]", None)
+        .expect("insert CRLF link");
+    let updated = insertion.updated;
+    let placement = insertion.placement;
     assert_eq!(placement, Placement::Appended);
     assert_eq!(
         updated,
@@ -653,9 +658,9 @@ fn pomodoro_section_scan_ignores_fenced_lookalikes() {
         "## Pomodoros\n",
         "- [ ] Real\n",
     );
-    let (updated, _) =
-        insert_pomodoro_block_link(contents, "[[dev#^real]]", None)
-            .expect("find real section");
+    let updated = insert_pomodoro_block_link(contents, "[[dev#^real]]", None)
+        .expect("find real section")
+        .updated;
     assert!(updated.ends_with("- [ ] Real\n  - [[dev#^real]]\n"));
     assert!(!updated.contains("Example\n  - [[dev#^real]]"));
 }

@@ -587,6 +587,7 @@ fn capture_pomodoro_close_selection_human_output() {
             "    [x] Restart axe sase.md ^axe-restart +1 Work Log",
             "      *2026-09-28* — Restarted axe",
             "  next: CAPTURE (created) at line 14 · carries 1 link",
+            "plan 2/3 themes · 2/10 links",
         ]
     );
 

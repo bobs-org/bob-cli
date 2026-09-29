@@ -10,6 +10,7 @@ mod complete_query;
 mod ensure_next;
 mod parse;
 mod parse_pomodoro;
+mod plan_budget;
 mod pomodoro_adjust;
 mod pomodoro_chain;
 mod pomodoro_close;

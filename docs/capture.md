@@ -24,6 +24,7 @@ workflow guide.
   - [Pomodoro-linked tasks](#pomodoro-linked-tasks)
   - [Starting the session atomically](#starting-the-session-atomically)
   - [Linking and starting existing tasks](#linking-and-starting-existing-tasks)
+  - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
   - [Adjusting the current Pomodoro](#adjusting-the-current-pomodoro)
   - [Shifting the current Pomodoro](#shifting-the-current-pomodoro)
@@ -717,6 +718,57 @@ Human output follows the Ensure Next style: a `link`/`would link` or
 Next`, `[/] stays In Progress`), a ledger line (`Linked … under BUGS`,
 `Moved Task Link BUGS → FOCUS (created FOCUS)`, or `Task Link already in
 BUGS; no ledger change.`), and the existing start phrasing.
+
+### Plan budget and strict mode
+
+When a batch changes today's Pomodoros section, the result carries a
+top-level `plan_budget` with before/after meters (dry-run and real runs
+use the same planner, so they agree). It is never per item, and it is
+omitted when the ledger is unchanged:
+
+```json
+"plan_budget": {"status": "over",
+  "themes": {"count": 4, "cap": 3, "over": true, "before": 3},
+  "links": {"count": 8, "cap": 10, "over": false, "before": 7},
+  "added_themes": ["BOB"],
+  "warnings": [{"code": "plan_theme_cap_exceeded",
+    "message": "today's plan now has 4/3 themes (adds BOB); queue it with ^, keep it this week with #now, or defer with p:<N>"}]}
+```
+
+Warnings fire only for `plan_theme_cap_exceeded` and
+`plan_link_cap_exceeded`, and only while the batch grows that meter past
+its cap (`after > cap` and `after > before`). A capture that leaves an
+over-cap plan alone stays quiet. Human output prints one meter line
+after the result (`plan 4/3 themes · 8/10 links  (+1 theme: BOB)`) and
+one `bob capture: warning: …` stderr line per fired warning; the
+warnings never join the item `warnings` array. An invalid plan config
+skips the budget and pushes one plain string into `warnings` instead.
+
+With `plan.strict: true`, the whole batch is refused, atomically, when
+a non-start item creates a new named Pomodoro entry past the theme cap
+(`<text> @r:id#NAME`, `@r^id+#NAME` project notes, `@r+id#NAME`
+toggles, and any other non-start creation path). Session starts (`=`,
+`#NAME=`, and link starts) are never refused. The refusal is an
+I/O-class error (exit 1) whose JSON carries a machine-readable `code`:
+
+```json
+{"ok": false, "error": "refusing capture: today's plan would grow to 4/3 themes (adds BOB); …", "code": "plan_theme_cap_exceeded"}
+```
+
+`code` appears only on this refusal; every other capture failure omits
+it.
+
+Every `pomodoro_link_destination` carries a `role` naming how the entry
+was chosen: `current` (the running timed entry), `next_up` (implicitly
+chosen and not running), `named` (an existing entry matched by `#NAME`),
+or `created` (a new entry). New `<text> @route:id[#NAME]`
+Pomodoro-task captures report `pomodoro_link_destination`,
+`pomodoro_name`, and `creates_pomodoro` too, and human output names the
+landing spot: `→ into running GOALS (0945-1015)`, `→ under GOALS (next
+up)`, `→ under GOALS (named)`, or `→ new Pomodoro BOB`. In the
+`pomodoro_name` completion context, `creates_pomodoro` rows preview the
+result with `plan_themes_after` and `plan_themes_cap`, omitted when the
+daily note or the plan config is unavailable.
 
 ### Starting the next Pomodoro
 
@@ -1871,7 +1923,10 @@ ID-only task results use kind `"task"` and additionally include `block_id`.
 They omit `day_file`, `block_link`, and `pomodoro_link_placement`.
 
 Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
-`block_id`, `day_file`, `block_link`, and `pomodoro_link_placement`.
+`block_id`, `day_file`, `block_link`, `pomodoro_link_placement`,
+`pomodoro_name` (the resolved destination name), `creates_pomodoro`,
+and `pomodoro_link_destination` (with its `role`; see
+[Plan budget and strict mode](#plan-budget-and-strict-mode)).
 
 Solo-link results use kind `"pomodoro_link"` with `placement: "linked"`,
 `routed: true`, and `text: ""`. They carry the post-image `task_line`, the
@@ -1881,7 +1936,9 @@ Solo-link results use kind `"pomodoro_link"` with `placement: "linked"`,
 written), `pomodoro_name`, and `creates_pomodoro` fields; they add
 `pomodoro_link_action` (`"linked"`, `"moved"`, or `"already_current"`),
 pre-image `pomodoro_link_source` (only when a link existed), post-image
-`pomodoro_link_destination`, `pomodoro_link_placement` (when a link was
+`pomodoro_link_destination` (with its `role`; see
+[Plan budget and strict mode](#plan-budget-and-strict-mode)),
+`pomodoro_link_placement` (when a link was
 inserted or moved), and `pomodoro_start` (only with `=<X>`). They emit no
 `toggle_direction` / `toggle_behavior`, so older clients degrade to a neutral
 preview instead of a wrong one.

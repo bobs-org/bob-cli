@@ -6,6 +6,7 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) text_files: Vec<StagedTextFile>,
     pub(super) global_destination: Option<GlobalDestinationSummary>,
     pub(super) warnings: Vec<String>,
+    pub(super) plan_budget: Option<CapturePlanBudget>,
 }
 
 pub(super) struct PlannedCaptureItem {
@@ -73,6 +74,7 @@ pub(super) fn plan_capture_batch(
         text_files: planner.into_staged_files(),
         global_destination,
         warnings,
+        plan_budget: None,
     })
 }
 
@@ -663,8 +665,12 @@ pub(super) fn plan_capture_item(
             status_name: None,
             previous_status_symbol: None,
             previous_status_name: None,
-            pomodoro_name: None,
-            creates_pomodoro: None,
+            pomodoro_name: special
+                .as_ref()
+                .and_then(|edit| edit.details.pomodoro_name.clone()),
+            creates_pomodoro: special
+                .as_ref()
+                .map(|edit| edit.details.creates_pomodoro),
             pomodoro_already_linked: None,
             removed_pomodoro_links: None,
             removed_scheduled: None,
@@ -673,7 +679,9 @@ pub(super) fn plan_capture_item(
             status_changed: None,
             pomodoro_link_action: None,
             pomodoro_link_source: None,
-            pomodoro_link_destination: None,
+            pomodoro_link_destination: special.as_ref().and_then(|edit| {
+                edit.details.pomodoro_link_destination.clone()
+            }),
             project_note: None,
             pomodoro_start: special
                 .as_ref()

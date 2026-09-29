@@ -30,7 +30,7 @@ use super::{
     capture_task_toggle, collect_done, config, env as bob_env, markdown,
     note_tasks,
     note_tasks::{BlockIdLookup, RefLookup},
-    pomodoro,
+    plan_budget, pomodoro,
     projects::{
         frontmatter_is_area, frontmatter_is_project, frontmatter_value,
         parse_frontmatter, ProjectStatus,
@@ -45,6 +45,7 @@ const COMMAND_NAME: &str = "bob capture";
 pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
 
 mod batch;
+mod budget;
 mod cli;
 mod commit;
 mod ensure_next;
@@ -63,6 +64,7 @@ mod task_toggle;
 mod tests;
 
 use batch::*;
+use budget::*;
 use cli::*;
 use commit::*;
 use ensure_next::*;
@@ -121,7 +123,8 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 }
 
 fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
-    let batch = plan_capture_batch(&request)?;
+    let mut batch = plan_capture_batch(&request)?;
+    append_plan_budget(&request, &mut batch)?;
     if !request.dry_run {
         commit_capture_batch(&batch)?;
     }
@@ -129,5 +132,6 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.items.into_iter().map(|item| item.result).collect(),
         batch.global_destination,
         batch.warnings,
+        batch.plan_budget,
     ))
 }

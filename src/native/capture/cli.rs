@@ -173,6 +173,20 @@ running one). Session operators may share one line when whitespace \
 separates them: `+2 =x` means `+2`, blank line, `=x`, and `=x =` closes \
 then starts the next session. Quote `=` items in zsh, which expands a \
 leading `=word` to a command path.\n\n\
+Batches that change today's `## Pomodoros` section also report the plan \
+budget: a top-level `plan_budget` object with before/after theme and link \
+meters, an `added_themes` list, and cap warnings that fire only while the \
+batch grows a meter past its cap. Human output prints one `plan T/Tc \
+themes · L/Lc links` meter line after the result plus one `bob capture: \
+warning: …` stderr line per fired warning, and names where each new Task \
+Link landed (`→ into running GOALS (0945-1015)`, `→ under GOALS (next \
+up)`, `→ under GOALS (named)`, or `→ new Pomodoro BOB`; JSON reports the \
+same destination with a `role` of `current`, `next_up`, `named`, or \
+`created`). With `plan.strict: true` in the Bob config, a batch that \
+creates a new named Pomodoro past the theme cap is refused atomically \
+(exit 1, JSON `code: plan_theme_cap_exceeded`); session starts are never \
+refused. An invalid plan config skips the budget with one plain warning. \
+See `docs/capture.md` (`Plan budget and strict mode`) and `docs/plan.md`.\n\n\
 Capture a whole item `=`/`=<X>` (for example `=`, `=3`, `=-2`, `=2-1`) to \
 start today's next future Pomodoro now with the same timing as the `se<X>` \
 snippet: empty is 25 minutes, `3` is 15 minutes, `-` is 25 minutes with a \

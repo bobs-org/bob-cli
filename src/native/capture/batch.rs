@@ -342,6 +342,13 @@ pub(super) struct PomodoroCaptureDetails {
     pub(super) day_file: String,
     pub(super) block_link: String,
     pub(super) pomodoro_link_placement: Placement,
+    /// Canonical destination name for `<text> @route:id[#NAME]`
+    /// Pomodoro-task captures (`None` for legacy callers).
+    pub(super) pomodoro_name: Option<String>,
+    /// True when the capture created the destination entry.
+    pub(super) creates_pomodoro: bool,
+    /// Post-image destination endpoint (with the plan-budget `role`).
+    pub(super) pomodoro_link_destination: Option<PomodoroLinkEndpoint>,
 }
 
 #[derive(Debug)]
@@ -401,4 +408,30 @@ pub(super) struct PomodoroLinkEndpoint {
     pub(super) name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) time_range: Option<String>,
+    /// How the destination entry was chosen: `current` (the running
+    /// timed entry), `next_up` (implicitly chosen and not running),
+    /// `named` (an existing entry matched by `#NAME`), or `created`
+    /// (a new entry). Sources leave this unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) role: Option<&'static str>,
+}
+
+/// Resolve a link-destination role for the plan-budget contract: a
+/// created entry is `created`, an explicit `#NAME` match is `named`,
+/// otherwise a timed destination is the running `current` entry and
+/// an untimed one is `next_up`.
+pub(super) fn destination_role(
+    creates_pomodoro: bool,
+    selector: Option<&str>,
+    time_range: Option<&str>,
+) -> &'static str {
+    if creates_pomodoro {
+        "created"
+    } else if selector.is_some() {
+        "named"
+    } else if time_range.is_some() {
+        "current"
+    } else {
+        "next_up"
+    }
 }

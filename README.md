@@ -341,6 +341,15 @@ deleting the marker it absorbed. Discovery helpers
 lacks one. `capture-pomodoro-name` assigns a canonical ALL-CAPS name to an
 unnamed Pomodoro in today's daily note.
 
+Captures that change today's ledger also report the plan budget: a
+top-level `plan_budget` with before/after theme and link meters, a
+`→ under GOALS (next up)` destination line naming where the Task Link
+landed (JSON adds a `role` of `current`, `next_up`, `named`, or
+`created`), and a stderr warning only while the batch grows a meter
+past its cap. With `plan.strict: true`, a batch that would create a new
+named Pomodoro past the theme cap is refused atomically (exit 1,
+`code: plan_theme_cap_exceeded`); session starts are never refused.
+
 The full grammar, JSON contracts, and picker protocol live in
 [`docs/capture.md`](docs/capture.md).
 
