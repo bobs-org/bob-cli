@@ -12,6 +12,7 @@ mod parse;
 mod parse_pomodoro;
 mod pomodoro_adjust;
 mod pomodoro_close;
+mod pomodoro_close_selection;
 mod pomodoro_link;
 mod pomodoro_name;
 mod pomodoro_shift;

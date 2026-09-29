@@ -22,10 +22,22 @@ pub(super) struct PomodoroCloseTimingJson {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseTaskLinkJson {
+    pub(super) index: u32,
+    pub(super) ledger_line: usize,
+    pub(super) block_link: String,
+    pub(super) block_id: String,
+    pub(super) marker: &'static str,
+    pub(super) outcome: &'static str,
+    pub(super) source: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroCloseTaskJson {
     pub(super) role: &'static str,
     pub(super) block_link: String,
     pub(super) ledger_line: usize,
+    pub(super) index: Option<u32>,
     pub(super) resolved: bool,
     // Explicit nulls on unresolved rows, matching the top-level
     // `route: null` / `scheduled: null` convention.
@@ -61,6 +73,9 @@ pub(super) struct PomodoroCloseNextJson {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroCloseSummaryJson {
     pub(super) raw: String,
+    pub(super) in_progress: Option<Vec<u32>>,
+    pub(super) complete: Vec<u32>,
+    pub(super) task_links: Vec<PomodoroCloseTaskLinkJson>,
     pub(super) pomodoro_line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_name: Option<String>,
@@ -546,11 +561,68 @@ pub(super) fn print_human_pomodoro_close_success(
             ))
         );
     }
+    // Numbered index column: width of the highest number, plus one space.
+    // Unnumbered rows get blanks so text stays aligned; with zero numbered
+    // rows the output below is byte-identical to before.
+    let index_width = close
+        .task_links
+        .iter()
+        .map(|link| link.index.to_string().len())
+        .max()
+        .unwrap_or(0);
+    let numbered = index_width > 0;
+    let outcome_of = |index: u32| -> (&'static str, &'static str) {
+        close
+            .task_links
+            .iter()
+            .find(|link| link.index == index)
+            .map(|link| (link.outcome, link.source))
+            .unwrap_or(("deferred", "unlisted"))
+    };
+    // Bold index tinted by outcome: in progress uses the `/` marker color,
+    // complete uses the `x` marker color (dim), deferred is dim, and
+    // unlisted rows are dim so chosen rows stand out.
+    let style_index = |index: u32| -> String {
+        let (outcome, source) = outcome_of(index);
+        let text = index.to_string();
+        if source == "unlisted" {
+            styler.dim(&text)
+        } else if outcome == "in_progress" {
+            // Same paint as `style_task_status_marker`'s `/` color.
+            styler.blue(&text)
+        } else {
+            // Complete uses the `x` marker color (dim); deferred is dim.
+            // Bold (`1;`) so listed rows stand out from unlisted ones.
+            styler.paint("1;2", &text)
+        }
+    };
+    let row_prefix = |index: Option<u32>| -> String {
+        if !numbered {
+            return "  ".to_string();
+        }
+        match index {
+            Some(number) => {
+                let digits = number.to_string().len();
+                format!(
+                    "  {}{} ",
+                    " ".repeat(index_width.saturating_sub(digits)),
+                    style_index(number)
+                )
+            }
+            None => format!("  {} ", " ".repeat(index_width)),
+        }
+    };
+    let log_indent = if numbered {
+        " ".repeat(4 + index_width + 1)
+    } else {
+        "    ".to_string()
+    };
     for task in &close.tasks {
+        let prefix = row_prefix(task.index);
         if !task.resolved {
             let warning =
                 task.warning.as_deref().unwrap_or("unresolved target");
-            println!("  {}", styler.dim(&format!("warning: {warning}")));
+            println!("{prefix}{}", styler.dim(&format!("warning: {warning}")));
             continue;
         }
         let transition = match (
@@ -593,9 +665,9 @@ pub(super) fn print_human_pomodoro_close_success(
                 line.push_str(&format!(" +{count} Work Log"));
             }
         }
-        println!("  {line}");
+        println!("{prefix}{line}");
         for entry in task.work_log.iter().take(2) {
-            println!("    {}", styler.dim(entry));
+            println!("{log_indent}{}", styler.dim(entry));
         }
     }
     if let Some(next) = close.next_pomodoro.as_ref() {
@@ -603,7 +675,8 @@ pub(super) fn print_human_pomodoro_close_success(
         let created_text = if next.created { " (created)" } else { "" };
         let carries = close.carried.len();
         let carries_text = if next.created {
-            format!(" · carries {carries} links")
+            let noun = if carries == 1 { "link" } else { "links" };
+            format!(" · carries {carries} {noun}")
         } else {
             String::new()
         };

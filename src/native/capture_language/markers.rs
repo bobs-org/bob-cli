@@ -342,11 +342,6 @@ pub(crate) const POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro close 
 
 pub(crate) const POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `p:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
 
-/// Temporary executor refusal for a selection-bearing close, until the
-/// selection-capture phase wires the parsed selection into the planner.
-pub(crate) const POMODORO_CLOSE_SELECTION_UNSUPPORTED_ERROR: &str =
-    "task numbers after `=x` are not supported by this build yet";
-
 // ---------------------------------------------------------------------------
 // `=x[<N>][!<M>]` selection diagnostics
 // ---------------------------------------------------------------------------

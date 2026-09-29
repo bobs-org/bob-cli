@@ -128,6 +128,28 @@ fn capture_pomodoro_close_worked_example() {
         close,
         &serde_json::json!({
             "raw": "=x",
+            "in_progress": null,
+            "complete": [],
+            "task_links": [
+                {
+                    "index": 1,
+                    "ledger_line": 6,
+                    "block_link": "[[bob#^capture-stop]]",
+                    "block_id": "capture-stop",
+                    "marker": "plain",
+                    "outcome": "in_progress",
+                    "source": "ledger"
+                },
+                {
+                    "index": 2,
+                    "ledger_line": 10,
+                    "block_link": "[[bob#^web-capture]]",
+                    "block_id": "web-capture",
+                    "marker": "deferred",
+                    "outcome": "deferred",
+                    "source": "ledger"
+                }
+            ],
             "pomodoro_line": 5,
             "pomodoro_name": "CAPTURE",
             "day_relative": "2026/20260928.md",
@@ -148,6 +170,7 @@ fn capture_pomodoro_close_worked_example() {
                     "role": "worked",
                     "block_link": "[[bob#^capture-stop]]",
                     "ledger_line": 6,
+                    "index": 1,
                     "resolved": true,
                     "relative_target": "bob.md",
                     "block_id": "capture-stop",
@@ -169,6 +192,7 @@ fn capture_pomodoro_close_worked_example() {
                     "role": "deferred",
                     "block_link": "[[bob#^web-capture]]",
                     "ledger_line": 10,
+                    "index": 2,
                     "resolved": true,
                     "relative_target": "bob.md",
                     "block_id": "web-capture",
@@ -187,6 +211,7 @@ fn capture_pomodoro_close_worked_example() {
                     "role": "struck",
                     "block_link": "[[sase#^axe-restart]]",
                     "ledger_line": 11,
+                    "index": null,
                     "resolved": true,
                     "relative_target": "sase.md",
                     "block_id": "axe-restart",
@@ -527,28 +552,6 @@ fn capture_pomodoro_close_diagnostics() {
         serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["kind"], "pomodoro_close");
 
-    // A selection-bearing close parses but is refused until the
-    // selection-capture phase wires it in: nothing is written.
-    for args in [
-        vec!["=x1"],
-        vec!["=x1,3!2"],
-        vec!["=x0"],
-        vec!["^bob:ready=x3"],
-        vec!["Draft docs @bob:draft-docs=x0"],
-    ] {
-        let error = run_close_expect_error(
-            &vault,
-            &day_file,
-            "2026-09-28 09:37:00",
-            &args,
-        );
-        assert!(
-            error.contains(
-                "task numbers after `=x` are not supported by this build yet"
-            ),
-            "{args:?}: {error}"
-        );
-    }
     // A dangling separator is rejected as incomplete, never closed.
     let error = run_close_expect_error(
         &vault,

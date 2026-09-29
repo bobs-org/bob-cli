@@ -270,7 +270,7 @@ pub(super) fn map_close_plan_error(
 }
 
 pub(super) fn build_close_summary_json(
-    raw: &str,
+    spec: &PomodoroCloseSpec,
     day_relative: &str,
     plan: &capture_pomodoro_close::PomodoroClosePlan,
     now: chrono::NaiveDateTime,
@@ -348,6 +348,7 @@ pub(super) fn build_close_summary_json(
             role: task.role.as_str(),
             block_link: task.block_link.clone(),
             ledger_line: task.ledger_line,
+            index: task.index,
             resolved: task.resolved,
             relative_target: task.relative_target.clone(),
             block_id: task.block_id.clone(),
@@ -408,8 +409,25 @@ pub(super) fn build_close_summary_json(
                 time_range: next.time_range.clone(),
                 created: next.created,
             });
+    let task_links = plan
+        .summary
+        .task_links
+        .iter()
+        .map(|link| PomodoroCloseTaskLinkJson {
+            index: link.index,
+            ledger_line: link.line,
+            block_link: link.block_link.clone(),
+            block_id: link.block_id.clone(),
+            marker: link.marker.as_str(),
+            outcome: link.outcome.as_str(),
+            source: link.source.as_str(),
+        })
+        .collect();
     let summary = PomodoroCloseSummaryJson {
-        raw: raw.to_string(),
+        raw: spec.raw.clone(),
+        in_progress: spec.in_progress.clone(),
+        complete: spec.complete.clone(),
+        task_links,
         pomodoro_line: running.line,
         pomodoro_name: running.name.clone(),
         day_relative: day_relative.to_string(),
@@ -502,21 +520,22 @@ pub(super) fn final_task_line_for(
     }
 }
 
-/// Temporary refusal for a selection-bearing close: the grammar parses
-/// `=x[<N>][!<M>]` everywhere, but the planner cannot apply a selection
-/// until the selection-capture phase wires it in. Failing here (before any
-/// write or stage) keeps a parsed selection from ever being silently
-/// ignored.
-fn reject_selection_bearing_close(
+/// Convert a parsed `=x[<N>][!<M>]` spec into the planner's selection.
+/// Plain `=x` yields `None`, so the close runs exactly as before while still
+/// reporting the numbered lineup.
+fn selection_from_spec(
     spec: &PomodoroCloseSpec,
-) -> Result<(), CaptureError> {
-    if spec.has_selection() {
-        return Err(CaptureError::usage(
-            capture_language::POMODORO_CLOSE_SELECTION_UNSUPPORTED_ERROR
-                .to_string(),
-        ));
+) -> Option<capture_pomodoro_close::CloseSelection> {
+    if !spec.has_selection() {
+        return None;
     }
-    Ok(())
+    Some(capture_pomodoro_close::CloseSelection::new(
+        spec.in_progress
+            .clone()
+            .map(|numbers| numbers.into_iter().collect()),
+        spec.complete.iter().copied().collect(),
+        spec.raw.clone(),
+    ))
 }
 
 pub(super) fn plan_pomodoro_close_item(
@@ -529,7 +548,7 @@ pub(super) fn plan_pomodoro_close_item(
     warnings: &mut Vec<String>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_close_conflicts(&parsed, request)?;
-    reject_selection_bearing_close(&spec)?;
+    let selection = selection_from_spec(&spec);
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     let rel = close_day_relative(&request.bob_dir, &day_file);
     if !planner.currently_exists(&day_file)? {
@@ -544,11 +563,11 @@ pub(super) fn plan_pomodoro_close_item(
         &day_contents,
         now,
         &vault,
-        None,
+        selection.as_ref(),
     )
     .map_err(|error| map_close_plan_error(error, &rel, None))?;
     let (summary, extra_warnings) =
-        build_close_summary_json(&spec.raw, &rel, &plan, now);
+        build_close_summary_json(&spec, &rel, &plan, now);
     warnings.extend(plan.warnings.clone());
     warnings.extend(extra_warnings.clone());
     // Surface close warnings at the top level as well.
@@ -813,7 +832,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     close_spec: PomodoroCloseSpec,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_link_conflicts(&parsed, request)?;
-    reject_selection_bearing_close(&close_spec)?;
+    let selection = selection_from_spec(&close_spec);
     let route = parsed.route.clone().ok_or_else(|| {
         CaptureError::io(
             "pomodoro link capture invariant failed: route is missing",
@@ -985,11 +1004,11 @@ pub(super) fn plan_pomodoro_close_link_item(
         &day_contents,
         now,
         &vault,
-        None,
+        selection.as_ref(),
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
     let (summary, extra_warnings) =
-        build_close_summary_json(&close_spec.raw, &rel, &plan, now);
+        build_close_summary_json(&close_spec, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings.contains(warning) {
             warnings.push(warning.clone());
@@ -1095,7 +1114,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     close_spec: &PomodoroCloseSpec,
     capture_block: &str,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    reject_selection_bearing_close(close_spec)?;
+    let selection = selection_from_spec(close_spec);
     // Body-bearing `<text> @route:block-id=x`: today's `:` new-task capture
     // forced into _R_, then close. This helper stages the new task and the
     // link into _R_, then returns a write plan; the caller closes afterwards.
@@ -1178,11 +1197,11 @@ pub(super) fn plan_pomodoro_close_task_item(
         &linked_day,
         now,
         &vault,
-        None,
+        selection.as_ref(),
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
     let (summary, extra_warnings) =
-        build_close_summary_json(&close_spec.raw, &rel, &plan, now);
+        build_close_summary_json(close_spec, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings.contains(warning) {
             warnings.push(warning.clone());
