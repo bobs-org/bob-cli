@@ -192,23 +192,29 @@ pub(super) fn plan_project_note_item(
         }
         let original_day = planner.read_existing(&day_file)?;
         let scan = capture_pomodoros::scan(&original_day);
-        let canonical_pomodoro_name = match pomodoro_name.as_deref() {
-            Some(selector) => Some(
-                capture_pomodoros::canonicalize_pomodoro_name(selector)
-                    .ok_or_else(|| {
-                        CaptureError::usage(
-                            capture_pomodoros::POMODORO_NAME_USAGE,
-                        )
-                    })?,
-            ),
-            None => None,
-        };
-        let creates_pomodoro = match pomodoro_name.as_deref() {
-            Some(selector) => !matches!(
-                capture_pomodoros::select_named(&scan, selector),
-                capture_pomodoros::NamedSelection::Found(_)
-            ),
-            None => false,
+        let (canonical_pomodoro_name, creates_pomodoro) = match pomodoro_name
+            .as_deref()
+        {
+            Some(selector) => {
+                let canonical_fallback =
+                    capture_pomodoros::canonicalize_pomodoro_name(selector)
+                        .ok_or_else(|| {
+                            CaptureError::usage(
+                                capture_pomodoros::POMODORO_NAME_USAGE,
+                            )
+                        })?;
+                match capture_pomodoros::select_named(&scan, selector) {
+                    capture_pomodoros::NamedSelection::Found(entry) => (
+                        Some(entry.name.clone().unwrap_or(canonical_fallback)),
+                        false,
+                    ),
+                    capture_pomodoros::NamedSelection::CompletedOnly(_)
+                    | capture_pomodoros::NamedSelection::Missing { .. } => {
+                        (Some(canonical_fallback), true)
+                    }
+                }
+            }
+            None => (None, false),
         };
         let mut day = original_day;
         let mut first_placement = None;

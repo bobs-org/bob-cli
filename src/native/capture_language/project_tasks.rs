@@ -246,7 +246,9 @@ impl ProjectTaskPass {
                     };
                 }
                 let stripped = strip_task_id_suffix(body);
-                if stripped.split_whitespace().next().is_none() {
+                let (_, without_checkbox) =
+                    split_leading_checkbox(stripped.trim_start());
+                if without_checkbox.split_whitespace().next().is_none() {
                     return ChildTaskOutcome::Error {
                         code: "invalid_project_task_id",
                         message: empty_project_task_body_error(line_number),

@@ -1641,3 +1641,62 @@ fn execution_forced_route_keeps_retired_and_special_markers_literal() {
     assert_eq!(parsed.kind, CaptureKind::Task);
     assert_eq!(parsed.body, "Do thing @dev::id @dev+parent @dev^new-id");
 }
+
+#[test]
+fn execution_keeps_equals_wording_off_caret_tokens_without_plus() {
+    for raw in ["Do thing @dev^foo=3", "Do thing @dev^foo=x"] {
+        let error = execute(raw).expect_err("task-block-ID error");
+        assert_eq!(error, TASK_BLOCK_ID_ERROR, "{raw}");
+    }
+    let error = execute("Finish it @cash^goog-exit+=3")
+        .expect_err("start suffix on project note");
+    assert_eq!(error, POMODORO_START_PROJECT_NOTE_ERROR);
+    let error = execute("Finish it @cash^goog-exit+#bugs=x")
+        .expect_err("close suffix on project note");
+    assert_eq!(error, POMODORO_CLOSE_PROJECT_NOTE_ERROR);
+}
+
+#[test]
+fn execution_rejects_checkbox_only_project_task_ids() {
+    for raw in [
+        "Finish it @cash^x+\n- [x] ^foo",
+        "Finish it @cash^x+\n- [ ] ^foo",
+        "Finish it @cash^x+\n- [x] :foo",
+    ] {
+        let error = execute(raw).expect_err("empty body");
+        assert_eq!(error, empty_project_task_body_error(2), "{raw}");
+    }
+}
+
+#[test]
+fn execution_rejects_route_less_retired_project_note_markers() {
+    for (raw, token, block, name) in [
+        ("Finish it @:goog-exit+", "@:goog-exit+", "goog-exit", None),
+        (
+            "Finish it @:goog-exit+#bugs",
+            "@:goog-exit+#bugs",
+            "goog-exit",
+            Some("bugs"),
+        ),
+    ] {
+        let error = execute(raw).expect_err("retired route-less");
+        assert_eq!(
+            error,
+            retired_project_note_marker_error(token, "", block, name),
+            "{raw}"
+        );
+        let parse = editor(raw);
+        let expected =
+            retired_project_note_marker_error(token, "", block, name);
+        assert_eq!(
+            parse
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<_>>(),
+            vec![expected],
+            "{raw}"
+        );
+        assert_eq!(codes(&parse), vec!["retired_project_note_marker"], "{raw}");
+    }
+}

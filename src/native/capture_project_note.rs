@@ -9,8 +9,8 @@
 //! The module is free of filesystem and clock access: the caller passes the
 //! resolved body, the current datetime (`bob_env::current_datetime()`), the
 //! resolved scheduled date, the resolved priority field, pre-rendered
-//! schedule-log lines, the Pomodoro-link flag, and the item's authored
-//! sub-bullets. `render_project_note` returns the file contents plus a small
+//! schedule-log lines, and the item's authored sub-bullets with their task
+//! IDs. `render_project_note` returns the file contents plus a small
 //! summary (`basename`, rendered `^prj` line, section titles, task count) for
 //! the execution layer's JSON contract.
 //!
@@ -733,14 +733,33 @@ mod tests {
                 "equity-docs",
                 false,
             ),
+            bullet("FUTURE WORK", AuthoredDepth::First),
+            bullet("Revisit the severance terms", AuthoredDepth::Nested),
         ];
         let rendered = render_project_note(&base_input(&sub_bullets));
-        assert!(rendered.contents.contains(
-            "- [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo\n\
+        assert_eq!(
+            rendered.contents,
+            "---\n\
+             parent: \"[[cash]]\"\n\
+             template: \"[[new_project]]\"\n\
+             type: \"[[project]]\"\n\
+             status: wip\n\
+             created: 2026-09-20T14:31:07+0000\n\
+             ---\n\
+             \n\
+             - [ ] #task #prj Finish the Google exit packet! #hide ^prj\n\
+             \n\
+             ## Tasks\n\
+             \n\
+             - [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo\n\
              \t- keep it short\n\
              - [*] #task Call Morgan Stanley about the 401k [created::2026-09-20] ^call-ms\n\
-             - [ ] #task Collect the equity paperwork [created::2026-09-20] ^equity-docs\n"
-        ));
+             - [ ] #task Collect the equity paperwork [created::2026-09-20] ^equity-docs\n\
+             \n\
+             ## Future Work\n\
+             \n\
+             - Revisit the severance terms\n"
+        );
         assert_eq!(rendered.task_count, 3);
         assert_eq!(
             rendered

@@ -674,32 +674,42 @@ fn capture_project_note_task_links_write_the_worked_example() {
 
     let contents = fs::read_to_string(vault.join("cash_goog_exit.md"))
         .expect("read new project note");
-    assert!(
-        contents.contains(
-            "- [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo\n\t- keep it short\n"
-        ),
-        "{contents}"
-    );
-    assert!(
-        contents.contains(
-            "- [*] #task Call Morgan Stanley about the 401k [created::2026-09-20] ^call-ms\n"
-        ),
-        "{contents}"
-    );
-    assert!(
-        contents.contains(
-            "- [ ] #task Collect the equity paperwork [created::2026-09-20] ^equity-docs\n"
-        ),
-        "{contents}"
-    );
-    assert!(
-        contents
-            .contains("\n## Future Work\n\n- Revisit the severance terms\n"),
+    assert_eq!(
+        contents,
+        "---\n\
+         parent: \"[[cash]]\"\n\
+         template: \"[[new_project]]\"\n\
+         type: \"[[project]]\"\n\
+         status: wip\n\
+         created: 2026-09-20T14:31:07+0000\n\
+         ---\n\
+         \n\
+         - [ ] #task #prj Finish the Google exit packet! #hide ^prj\n\
+         \n\
+         ## Tasks\n\
+         \n\
+         - [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo\n\
+         \t- keep it short\n\
+         - [*] #task Call Morgan Stanley about the 401k [created::2026-09-20] ^call-ms\n\
+         - [ ] #task Collect the equity paperwork [created::2026-09-20] ^equity-docs\n\
+         \n\
+         ## Future Work\n\
+         \n\
+         - Revisit the severance terms\n",
         "{contents}"
     );
 
     let day_after = fs::read_to_string(&day_file).expect("read daily note");
-    assert!(day_after.contains("- [ ] () — ADMIN"), "{day_after}");
+    assert_eq!(
+        day_after,
+        "## Pomodoros\n\
+         - [ ] (1330-1400) Work\n\
+         - [ ] () — ADMIN\n\
+         \x20 - [[cash_goog_exit#^draft-memo]]\n\
+         \x20 - [[cash_goog_exit#^call-ms]]\n",
+        "{day_after}"
+    );
+    assert_eq!(day_after.matches("— ADMIN").count(), 1, "{day_after}");
     let admin = day_after.find("- [ ] () — ADMIN").expect("ADMIN entry");
     let first = day_after
         .find("[[cash_goog_exit#^draft-memo]]")
@@ -835,16 +845,45 @@ fn capture_project_note_task_links_dry_run_batch_and_rollback() {
         input,
     );
     assert_success(&output);
-    let json: serde_json::Value =
+    let dry_json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("dry-run JSON");
-    assert_eq!(json["dry_run"], true);
+    assert_eq!(dry_json["dry_run"], true);
     assert_eq!(
-        json["project_note"]["task_links"].as_array().unwrap().len(),
+        dry_json["project_note"]["task_links"]
+            .as_array()
+            .unwrap()
+            .len(),
         1,
-        "{json}"
+        "{dry_json}"
     );
     assert!(!vault.join("cash_drylink1.md").exists());
     assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+
+    // A dry run reports the same JSON as a real run, except for `dry_run`.
+    let real_output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&real_output);
+    let mut real_json: serde_json::Value =
+        serde_json::from_str(stdout(&real_output).trim())
+            .expect("real-run JSON");
+    assert_eq!(real_json["dry_run"], false);
+    let mut dry_without_flag = dry_json.clone();
+    dry_without_flag["dry_run"] = serde_json::json!(false);
+    // `target`/`day_file` embed the temp vault path, which is identical
+    // here because both runs share the vault; compare everything else.
+    real_json["dry_run"] = serde_json::json!(false);
+    assert_eq!(dry_without_flag, real_json, "dry-run JSON must match real");
+    assert!(vault.join("cash_drylink1.md").exists());
 
     // A batch appends the second item's links after the first item's.
     let batch = TempDir::new("bob-cli-capture-project-note-link-batch");
@@ -1031,4 +1070,54 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
         day_after.contains("[[cash_schedlink1#^draft-memo]]"),
         "{day_after}"
     );
+}
+
+#[test]
+fn capture_project_note_task_links_report_the_resolved_pomodoro_name() {
+    let temp = TempDir::new("bob-cli-capture-project-note-resolved-name");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (1330-1400) Work\n- [ ] () — ADMIN\n",
+    );
+    let input = "Finish it @cash^y+#adm\n- Draft :dr\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["pomodoro_name"], "ADMIN", "{json}");
+    assert_eq!(json["creates_pomodoro"], false, "{json}");
+    let day_after = fs::read_to_string(&day_file).expect("read daily note");
+    assert_eq!(day_after.matches("— ADMIN").count(), 1, "{day_after}");
+    let admin = day_after.find("- [ ] () — ADMIN").expect("ADMIN entry");
+    let link = day_after.find("[[cash_y#^dr]]").expect("task link");
+    assert!(admin < link, "{day_after}");
+
+    let human = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "Finish it @cash^y2+#adm\n- Draft :dr2\n",
+    );
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(out.contains("under ADMIN\n"), "{out}");
+    assert!(!out.contains("(created)"), "{out}");
 }

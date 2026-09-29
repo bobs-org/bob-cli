@@ -1329,3 +1329,68 @@ fn caret_close_conflicts_agree_with_execution() {
         "{child}: {execution}"
     );
 }
+
+#[test]
+fn editor_keeps_equals_wording_off_caret_tokens_without_plus() {
+    use super::super::markers::*;
+    for raw in ["Do thing @dev^foo=3", "Do thing @dev^foo=x"] {
+        let parse = editor(raw);
+        assert_eq!(codes(&parse), vec!["invalid_task_block_id"], "{raw}");
+        assert_eq!(parse.diagnostics[0].message, TASK_BLOCK_ID_ERROR, "{raw}");
+    }
+    let parse = editor("Finish it @cash^goog-exit+=3");
+    assert_eq!(
+        codes(&parse),
+        vec!["invalid_project_note_marker"],
+        "{parse:?}"
+    );
+    assert_eq!(
+        parse.diagnostics[0].message,
+        POMODORO_START_PROJECT_NOTE_ERROR
+    );
+    let parse = editor("Finish it @cash^goog-exit+#bugs=x");
+    assert_eq!(
+        codes(&parse),
+        vec!["invalid_project_note_marker"],
+        "{parse:?}"
+    );
+    assert_eq!(
+        parse.diagnostics[0].message,
+        POMODORO_CLOSE_PROJECT_NOTE_ERROR
+    );
+}
+
+#[test]
+fn editor_rejects_checkbox_only_project_task_ids_over_the_id_token() {
+    for raw in [
+        "Finish it @cash^x+\n- [x] ^foo",
+        "Finish it @cash^x+\n- [ ] ^foo",
+    ] {
+        let parse = editor(raw);
+        assert_eq!(codes(&parse), vec!["invalid_project_task_id"], "{raw}");
+        let needle = raw.rsplit(' ').next().expect("id token");
+        let start = raw.rfind(needle).expect("needle");
+        assert_eq!(
+            parse.diagnostics[0].range,
+            Some((start, start + needle.len())),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn editor_holds_unused_pomodoro_while_a_colon_id_is_unfinished() {
+    let pending = editor("Finish it @cash^x+#admin\n- Draft :");
+    assert_eq!(pending.mode, EditorMode::Incomplete);
+    assert_eq!(pending.needs, vec![Need::BlockId]);
+    assert!(pending.diagnostics.is_empty(), "{pending:?}");
+
+    let lone_caret = editor("Finish it @cash^x+#admin\n- Draft ^");
+    assert_eq!(lone_caret.mode, EditorMode::Incomplete);
+    assert_eq!(lone_caret.needs, vec![Need::BlockId]);
+    assert_eq!(
+        codes(&lone_caret),
+        vec!["unused_project_note_pomodoro"],
+        "{lone_caret:?}"
+    );
+}

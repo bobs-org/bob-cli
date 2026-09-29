@@ -43,6 +43,9 @@ pub(super) fn parse_terminal_route_token(
     if is_retired_double_colon_marker_candidate(token) {
         return Err(RETIRED_DOUBLE_COLON_ERROR.to_string());
     }
+    if let Some(message) = retired_route_less_project_note_error(token) {
+        return Err(message);
+    }
     if is_pomodoro_marker_candidate(token) {
         return parse_pomodoro_route_token(token).map(Some);
     }
@@ -293,14 +296,20 @@ pub(super) fn parse_task_block_id_route_token(
         });
     }
     if block_id.contains('=') {
-        let raw = block_id
-            .split_once('=')
-            .map(|(_, raw)| raw)
-            .unwrap_or_default();
-        if raw.eq_ignore_ascii_case("x") || link_close_after_x(raw).is_some() {
-            return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
+        let (before_eq, raw) = block_id.split_once('=').unwrap_or_default();
+        // The project-note `=` message applies only when the text before
+        // the first `=` ends with the project-note `+` (for example
+        // `@dev^foo+=3`); otherwise this is an ordinary invalid block ID,
+        // as before the epic.
+        if before_eq.ends_with('+') {
+            if raw.eq_ignore_ascii_case("x")
+                || link_close_after_x(raw).is_some()
+            {
+                return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
+            }
+            return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
         }
-        return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
+        return Err(TASK_BLOCK_ID_ERROR.to_string());
     }
     // A single trailing `+` immediately after the block ID is the
     // project-note sigil. `is_block_id` accepts only letters, digits, and
@@ -1308,6 +1317,33 @@ pub(super) fn parse_pomodoro_link_item<'a>(
     }
 }
 
+/// Route-less retired project-note shape (`@:<block-id>+`): the editor
+/// teaches the `^` replacement, and execution must agree. `@:` and `@:<id>`
+/// stay literal so interactive route-picking still diverges.
+pub(super) fn retired_route_less_project_note_error(
+    token: &str,
+) -> Option<String> {
+    let rest = token.strip_prefix("@:")?;
+    if rest.is_empty() {
+        return None;
+    }
+    let before_eq = rest
+        .split_once('=')
+        .map(|(before, _)| before)
+        .unwrap_or(rest);
+    let (block_probe, name_probe) = match before_eq.split_once('#') {
+        Some((block, name)) => (block, Some(name)),
+        None => (before_eq, None),
+    };
+    let stripped = block_probe.strip_suffix('+')?;
+    if stripped.is_empty() {
+        return None;
+    }
+    Some(retired_project_note_marker_error(
+        token, "", stripped, name_probe,
+    ))
+}
+
 /// Return whether a terminal token belongs to the Pomodoro-marker grammar.
 /// A colon that follows `#` remains part of an ordinary bullet section prefix.
 pub(super) fn is_pomodoro_marker_candidate(token: &str) -> bool {
@@ -1356,6 +1392,9 @@ pub(super) fn validate_special_terminal_markers_line(
         }
         if is_retired_double_colon_marker_candidate(token) {
             return Err(RETIRED_DOUBLE_COLON_ERROR.to_string());
+        }
+        if let Some(message) = retired_route_less_project_note_error(token) {
+            return Err(message);
         }
         if is_pomodoro_marker_candidate(token) {
             parse_pomodoro_route_token(token)?;

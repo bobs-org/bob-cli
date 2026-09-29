@@ -762,6 +762,7 @@ pub(super) fn parse_editor_item<'a>(
     // one accepted ` :` task upgrades to `pomodoro_project_note`.
     if mode == EditorMode::ProjectNote {
         let mut pass = ProjectTaskPass::new();
+        let mut has_pending_colon_link = false;
         if let Some(message) = pass.check_parent(&body) {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -782,8 +783,11 @@ pub(super) fn parse_editor_item<'a>(
                 line_number,
             ) {
                 ChildTaskOutcome::Ignore => {}
-                ChildTaskOutcome::Unfinished { .. } => {
+                ChildTaskOutcome::Unfinished { sigil } => {
                     mode = EditorMode::Incomplete;
+                    if sigil == ':' {
+                        has_pending_colon_link = true;
+                    }
                     if !needs.contains(&Need::BlockId) {
                         needs.push(Need::BlockId);
                     }
@@ -830,8 +834,10 @@ pub(super) fn parse_editor_item<'a>(
             }
         }
         // A `#pomodoro` name picks the Pomodoro that ` :<id>` Task Links
-        // go under. The diagnostic covers the `#name` component.
-        if section.is_some() && !pass.has_link {
+        // go under. The diagnostic covers the `#name` component. An
+        // unfinished ` :` ID counts as a pending link (a lone `^` does
+        // not, per Rule 7).
+        if section.is_some() && !pass.has_link && !has_pending_colon_link {
             let range = spans
                 .iter()
                 .find(|span| span.kind == SpanKind::PomodoroName)

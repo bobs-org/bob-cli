@@ -95,8 +95,10 @@ pub(crate) fn is_valid_block_id(_marker: char, id: &str) -> bool {
     id.bytes().all(is_block_id_byte)
 }
 
-/// Build the additive `block_id` object for a `pomodoro_block_id` or
-/// `task_block_id` field. Reads the routed note (missing is not an error).
+/// Build the additive `block_id` object for a `pomodoro_block_id`,
+/// `task_block_id`, or `project_task_block_id` field (see the
+/// `project_task_block_id` builder below). Reads the routed note (missing is
+/// not an error).
 pub(crate) fn build_block_id_field(
     bob_dir: &Path,
     raw_text: &str,

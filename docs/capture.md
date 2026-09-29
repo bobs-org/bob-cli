@@ -1959,7 +1959,7 @@ spaces become nested authored children. Separator rows themselves have no
 marker completion or highlighting. Incomplete
 interactive markers are valid input rather than errors, so `@`, `@#`,
 `@#Ideas`, `@route#`, `@^`, `@route^`, `@^id+`, `@+`, `@route+`, `@route+id#`,
-`@:`, `@route:`, `@:id+`, `@route:id#`, `@route:#name`,
+`@:`, `@route:`, `@route:id#`, `@route:#name`,
 and the legacy `@!` aliases all parse on any line. A valid `=<X>` start
 suffix on a `@<route>:<block-id>[#<name>]` marker parses as `pomodoro_task`
 with a `pomodoro_start` object (`raw` plus 5-minute `duration_units` and
@@ -2278,7 +2278,7 @@ no-op, because the claiming token is no longer bare.
 
 An item's single local marker that cannot be expressed as a declaration --
 `@route#Section`, `@route+block-id#section`, `@route^block-id`,
-`@route:block-id`, `@route^block-id+` / `@route:block-id+` as a project note,
+`@route:block-id`, `@route^block-id+` as a project note,
 `@route+block-id` as a task toggle, a solo `@route:block-id…` / `^route:block-id…`
 Pomodoro link, a `=x[<N>][!<M>]` Pomodoro close (`pomodoro_close` is non-absorbable and
 close items are never rewritten), or a trailing bare `#`
@@ -2428,8 +2428,8 @@ on an empty query). For `new` and `project_note` intents, `candidates` is
 The right-hand side of `@route^block-id` completes as `task_block_id` once
 the route resolves, with empty `candidates` and the additive `block_id`
 object below. A project-note `+` directly after either block-ID part is the
-sigil, never part of the replacement: `@sase:x+` at cursor 7 returns
-`{6, 7}`, a cursor after the sigil (and before `#` for `^`) returns an empty
+sigil, never part of the replacement: `@sase^x+` at cursor 7 returns
+`task_block_id` with replacement `{6, 7}`; `@sase:x+` returns no context, a cursor after the sigil (and before `#` for `^`) returns an empty
 success, and a `+` after `#name` stays part of the Pomodoro name. A solo
 leading `^` token instead completes active tasks: while the
 cursor is in the `route:block-id` part (including an empty part) the context

@@ -22,10 +22,10 @@ pub(crate) enum CaptureKind {
     /// `@<route>^<block-id>+` (create the note only) or
     /// `@<route>^<block-id>+#<pomodoro>` (also pick the Pomodoro that
     /// ` :<id>` Task Links go under): create the project note
-    /// `<route>_<block-id>.md`. `pomodoro_name: None` writes no Task Links;
-    /// `Some` names the Pomodoro the ` :` links go under (created as a
-    /// named future Pomodoro when missing). The `^prj` task itself is never
-    /// linked.
+    /// `<route>_<block-id>.md`. `pomodoro_name: None` links ` :` tasks
+    /// into the current/next Pomodoro; `Some` names the Pomodoro the ` :`
+    /// links go under (created as a named future Pomodoro when missing).
+    /// The `^prj` task itself is never linked.
     ProjectNote {
         block_id: String,
         pomodoro_name: Option<String>,

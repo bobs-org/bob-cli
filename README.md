@@ -126,7 +126,7 @@ Paths below are relative to `BOB_DIR` (`~/bob` by default):
 | `mac_inbox.md` | Default capture target |
 | `gkeep_inbox.md` | Default target for `bob gkeep pull` (`gkeep.target` can name another vault-relative note) |
 | `<route>.md` | Area or project note selected by an `@route` token |
-| `<route>_<id>.md` | Project note created by `@route^id+` or `@route:id+`; hyphens in the block ID become underscores |
+| `<route>_<id>.md` | Project note created by `@route^id+`; hyphens in the block ID become underscores |
 | `YYYY/YYYYMMDD.md` | Daily note; the `Pomodoros` section is the session ledger |
 | `done/` | Archive notes written by `bob move-done-tasks` |
 | `img/`, `file/` | Images and saved clipboard snippets written by `bob capture` |
@@ -214,8 +214,10 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it; numbers refer to the post-link lineup |
 | `<text> @route:id=x…` | Create the new task in the running session, then close it |
 | `@route^id+` | New project note `<route>_<id>.md`; the daily note and the parent note are left unchanged |
-| `@route:id+` | Same project note, and link its `^prj` task from today's implicit current/next Pomodoro |
-| `@route:id+#pomodoro` | Same, targeting a named open Pomodoro or creating that named future Pomodoro |
+| `@route^id+#pomodoro` | Same, picking the Pomodoro that ` :<task-id>` Task Links go under (named open Pomodoro or new named future Pomodoro) |
+| first-level bullet ending in ` :<task-id>` | Names the task, makes it Next, and links it into the current/next Pomodoro or the `#pomodoro` Pomodoro |
+| first-level bullet ending in ` ^<task-id>` | Names the task only (never linked) |
+| `@route:id+` | Retired project-note spelling; use `@route^id+` instead |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
@@ -235,12 +237,15 @@ stays ordinary text. The retired `@route::id` spelling is not accepted; use
 `@route^id` for an ordinary task with a block ID.
 
 `+` has two positions. `@route+id` is a child bullet, or an Ensure Next
-request, under an existing task. `@route^id+` and `@route:id+` put `+`
-immediately after the block ID and create `<route>_<id>.md` at the vault root,
+request, under an existing task. `@route^id+` puts `+`
+immediately after the block ID and creates `<route>_<id>.md` at the vault root,
 replacing every `-` in the block ID with `_`. Capture leaves the parent note
-unchanged; `bob projects sync` owns its Sub-projects line. The `^` form writes
-only the new project note. The `:` form also links that note's `^prj` task from
-today's ledger. A `+` after a Pomodoro name, as in `@sase:deep-fix#bugs+`,
+unchanged; `bob projects sync` owns its Sub-projects line. The project's own
+`^prj` task is never linked. End a first-level task bullet with ` :<task-id>`
+to link it into the current/next Pomodoro or the `#pomodoro` Pomodoro, or with
+` ^<task-id>` to name it only. The retired `@route:id+` spelling is not
+accepted; use `@route^id+` instead. A `+` after a Pomodoro name, as in
+`@sase:deep-fix#bugs+`,
 stays part of the name. Route names may contain letters, digits, `_`, and `-`.
 Block IDs may contain letters, digits, and `-`.
 

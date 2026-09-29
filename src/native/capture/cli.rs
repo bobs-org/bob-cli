@@ -240,9 +240,8 @@ modified ('bob projects sync' owns its Sub-projects line). Authored child \
 bullets become '## Tasks' entries or '## Title Case' sections from ALL-CAPS \
 titles in the new note. 's:<N>' and 'p:<N>' write frontmatter 'scheduled' and \
 an inline priority on the '^prj' line, while '%...' and --clip are rejected. \
-The '#<pomodoro>' name picks the Pomodoro that ' :<id>' Task Links go under \
-once task bullets can name IDs; with no such task the name is rejected as \
-unused. The retired '@<route>:<block-id>+' spelling is no longer accepted; \
+The '#<pomodoro>' name picks the Pomodoro that ' :<id>' Task Links go under; \
+with no such task the name is rejected as unused. The retired '@<route>:<block-id>+' spelling is no longer accepted; \
 use '@<route>^<block-id>+' instead. End a first-level task bullet with \
 ' :<block-id>' to name it, make it Next ('[*]', or '[?]' when the project is \
 scheduled), and link '[[<stem>#^<block-id>]]' into the current/next Pomodoro \

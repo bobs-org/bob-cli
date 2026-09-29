@@ -916,7 +916,7 @@ pub(super) fn completion_field_from_parts(
     let third_end = third_start + third.part.len();
     let split = cursor.clamp(third_start, third_end) - third_start;
     // Strip the project-note sigil from the block ID handed to Pomodoro-name
-    // completion, so `@route:id+#name` reports `id` rather than `id+`.
+    // completion, so `@route^id+#name` reports `id` rather than `id+`.
     let third_block = if right_is_block_id {
         right_core
     } else {

@@ -446,21 +446,25 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
         return TokenParse::Marker(marker_parse);
     }
     if block_part.contains('=') {
-        let raw = block_part
-            .split_once('=')
-            .map(|(_, raw)| raw)
-            .unwrap_or_default();
-        let message = if raw.eq_ignore_ascii_case("x")
-            || link_close_after_x(raw).is_some()
-        {
-            POMODORO_CLOSE_PROJECT_NOTE_ERROR
-        } else {
-            POMODORO_START_PROJECT_NOTE_ERROR
-        };
+        let (before_eq, raw) = block_part.split_once('=').unwrap_or_default();
+        if before_eq.ends_with('+') {
+            let message = if raw.eq_ignore_ascii_case("x")
+                || link_close_after_x(raw).is_some()
+            {
+                POMODORO_CLOSE_PROJECT_NOTE_ERROR
+            } else {
+                POMODORO_START_PROJECT_NOTE_ERROR
+            };
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_project_note_marker",
+                message,
+            ));
+        }
         return TokenParse::Invalid(token_diagnostic(
             token,
-            "invalid_project_note_marker",
-            message,
+            "invalid_task_block_id",
+            TASK_BLOCK_ID_ERROR,
         ));
     }
     let (block_part, project_note) = match block_part.strip_suffix('+') {

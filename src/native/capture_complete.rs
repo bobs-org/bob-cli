@@ -113,7 +113,8 @@ backed by the same scan as `bob capture-sections`. Task-section completion \
 covers '@route+id#prefix' and a bare '@route+id#', backed by the same \
 scanner as `bob capture-task-sections`; replacement text is the section \
 slug. Pomodoro-name completion covers '@route:id#prefix', a bare \
-'@route:id#', and '@route:#prefix'; it is backed by `bob \
+'@route:id#', '@route:#prefix', '@route^id+#prefix', and a bare '@route^id+#'; \
+it is backed by `bob \
 capture-pomodoros`, offers only open entries, collapses duplicate named \
 slugs, and keeps nameable rows after named rows even when the query is \
 nonempty. Nameable rows set requires_name and use an empty replacement that \
