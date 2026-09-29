@@ -206,9 +206,9 @@ typed on that same item. The whole batch is planned before anything is written.
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-` shortens 5m; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes); the item must contain only the start token (quote in zsh) |
-| `=x` | Close today's running timed Pomodoro (case-insensitive `=X`); the item must contain only `=x` (quote in zsh) |
-| `@route:id=x` / `^route:id=x` with no other text | Put that existing task into the running session, then close it |
-| `<text> @route:id=x` | Create the new task in the running session, then close it |
+| `=x[<N>][!<M>]` | Close today's running timed Pomodoro (case-insensitive `=X`); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, a lone `0` means none; the item must contain only the token (quote in zsh, since `!` history expansion also applies) |
+| `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it; numbers refer to the post-link lineup |
+| `<text> @route:id=x…` | Create the new task in the running session, then close it |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
@@ -269,14 +269,18 @@ Capture a whole item `=`/`=<X>` to start today's next future Pomodoro
 (`bob capture '='` starts 25 minutes, `bob capture '=3'` starts 15 minutes;
 quote in zsh, which expands a leading `=word`).
 
-Capture a whole item `=x` to close today's running timed Pomodoro the way
-Obsidian's Ctrl+Enter completion does, plus an auto-decrement that shortens
-an early-stopped session to the earliest five-minute step at or after now:
-`bob capture '=x'` closes the session, `bob capture '^bob:capture-stop=x'`
-puts that task into the running session then closes it, and
-`printf -- '-2\n\n=x\n' | bob capture` adjusts then closes atomically. See
-`docs/capture.md` for the classification, carry, Work Log, link-form,
-diagnostic, JSON, and batch rules.
+Capture a whole item `=x[<N>][!<M>]` to close today's running timed
+Pomodoro the way Obsidian's Ctrl+Enter completion does, plus an
+auto-decrement that shortens an early-stopped session to the earliest
+five-minute step at or after now: `bob capture '=x'` closes the session,
+`bob capture '=x2'` keeps only task 2 in progress, `bob capture '=x1!2'`
+also completes task 2, `bob capture '=x0'` defers everything,
+`bob capture '^bob:capture-stop=x'` puts that task into the running session
+then closes it, and `printf -- '-2\n\n=x\n' | bob capture` adjusts then
+closes atomically. Numbers count the session's Task Links in ledger order
+from 1; on link forms they refer to the post-link lineup. See
+`docs/capture.md` for the numbering, outcomes, classification, carry, Work
+Log, link-form, diagnostic, JSON, and batch rules.
 
 ```bash
 bob capture buy milk @groceries
