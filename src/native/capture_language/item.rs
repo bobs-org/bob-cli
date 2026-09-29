@@ -544,7 +544,40 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     })
 }
 
+/// Whether a whitespace-separated token can take part in a same-line
+/// session-operator chain. A token qualifies exactly when the whole-item
+/// session parsers would claim it as a standalone one-line item: either
+/// [`parse_pomodoro_equals_item`] or [`parse_pomodoro_adjust_item`] returns
+/// something other than `Ok(None)` for it. "Claimed" therefore includes
+/// both valid tokens and near misses (zero magnitudes, overflows, counted
+/// tokens with extra text, selection-shaped close fragments), so a broken
+/// token inside a chain gets its own precise family diagnostic on its own
+/// range instead of a vague shape error. A same-line chain has already been
+/// split into single-token items upstream in `draft.rs`, so these parsers
+/// only ever see exact single-token items.
+/// [`parse_pomodoro_equals_item`]: parse_pomodoro_equals_item
+/// [`parse_pomodoro_adjust_item`]: parse_pomodoro_adjust_item
+pub(super) fn is_session_chain_token(token: &str) -> bool {
+    if let Some((_, digits, len)) = session_operator_token(token) {
+        return len == token.len() || !digits.is_empty();
+    }
+    match session_equals_token(token) {
+        Some(EqualsToken::Start { counted, len, .. }) => {
+            len == token.len() || counted
+        }
+        Some(EqualsToken::Close) => {
+            token.eq_ignore_ascii_case("=x")
+                || whole_item_close_after_x(token).is_some()
+        }
+        None => false,
+    }
+}
+
 /// Whole-item session-operator grammar: one sign resizes, two signs shift.
+///
+/// A same-line chain has already been split into single-token items
+/// upstream in `draft.rs`, so this parser only ever sees an exact
+/// single-token item here.
 ///
 /// Returns `Ok(None)` when the item does not start with an operator token
 /// and ordinary parsing should continue. Returns `Ok(Some(outcome))` for
@@ -674,6 +707,10 @@ fn close_after_x_offset(
 }
 
 /// Whole-item `=`-family grammar: `=x[<N>][!<M>]` closes, `=`/`=<X>` starts.
+///
+/// A same-line chain has already been split into single-token items
+/// upstream in `draft.rs`, so this parser only ever sees an exact
+/// single-token item here.
 ///
 /// Runs first (before session operators, caret links, and ordinary
 /// parsing). Returns `Ok(None)` when the item is not `=`-shaped and

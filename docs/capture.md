@@ -29,6 +29,7 @@ workflow guide.
   - [Shifting the current Pomodoro](#shifting-the-current-pomodoro)
   - [Closing the running Pomodoro](#closing-the-running-pomodoro)
     - [Choosing each Task Link's outcome](#choosing-each-task-links-outcome)
+  - [Chaining session operators on one line](#chaining-session-operators-on-one-line)
   - [Project notes](#project-notes)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
   - [Task status toggle](#task-status-toggle)
@@ -68,6 +69,7 @@ anything is written, and any failure rolls the whole batch back.
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15 minutes later, `--` moves 5 minutes earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
 | `=x[<N>][!<M>]` | Close today's running timed Pomodoro (case-insensitive `=X`); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, a lone `0` means none; the item must contain only the token |
+| `+2 =x`, `=x =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items |
 | `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it; the same selection may follow the `x` and numbers refer to the post-link lineup |
 | `^route:block-id=x…` with no other text | Identical execution; `^` is the active-task spelling |
 | `<text> @route:block-id=x…` | Create the new Pomodoro-linked task in the running session, then close it; numbers refer to the post-link lineup |
@@ -119,6 +121,10 @@ anything is written, and any failure rolls the whole batch back.
 | `Plan =x` | Ordinary task text; a mid-body `=x` stays prose |
 | `Plan =3` | Ordinary task text; a mid-body `=3` stays prose |
 | `=x more` | Error: `` `=x` must be the whole capture item; to log a task while closing, use `@route:block-id=x` `` |
+| `+2 =x` | Extend by 10 minutes, then close; exactly like `+2`, blank line, `=x` |
+| `=x =` | Close the running session, then start the next future Pomodoro |
+| `= -2` vs `=-2` | `= -2` starts 25 minutes then shortens 10 minutes; `=-2` is one 25-minute start with a 10-minute offset |
+| `- -` | Two bare adjustments in a row; lines made only of bare operators are chains, not prose |
 | `@cash^goog-exit+` | New project note `cash_goog_exit.md`; the `+` is a project-note sigil, not a sub-bullet |
 | `@cash^goog-exit+#bugs` | New project note with its ` :id` Task Links under the Pomodoro named `BUGS`; the `#` names a Pomodoro, not a task section |
 | `@cash:goog-exit+`, `@cash:goog-exit+#bugs` | Retired project-note forms; use `@cash^goog-exit+` / `@cash^goog-exit+#bugs` and put ` :<id>` on the task bullets instead |
@@ -331,6 +337,11 @@ lookups, and Pomodoro links match a successful sequential capture. If any
 item fails to parse, read the clipboard, validate, stage, or replace, Bob
 leaves notes, ledgers, and newly-created clipboard files at their original
 state. `--dry-run` uses the same planner with the commit step disabled.
+
+Same-line session-operator chains split the same way: a physical line holding
+only whitespace-separated session operators (`+2 =x`) yields one item per
+token, in order, exactly like the same operators on blank-line-separated
+rows. See [Chaining session operators on one line](#chaining-session-operators-on-one-line).
 
 Single-item success JSON keeps the legacy shape. A multi-item success keeps
 the first result in the legacy top-level fields and adds an ordered
@@ -730,7 +741,9 @@ Pomodoro sessions form a lifecycle, taught in this order:
 Mnemonic: "`=` starts the next session, `=x` stops the running one."
 
 Recognition: let `t` be the item's first physical line trimmed of leading
-and trailing whitespace. A start token is `=` followed by the longest run
+and trailing whitespace (the token after a chain split; see
+[Chaining session operators on one line](#chaining-session-operators-on-one-line)).
+A start token is `=` followed by the longest run
 matching the `se<X>` suffix grammar `[0-9]*(-[0-9]*)?`. A token is bare when
 its suffix is empty or contains no digit (`=`, `=-`) and counted when its
 suffix contains at least one digit (`=3`, `=-2`, `=3-`, `=2-1`, `=0`).
@@ -761,8 +774,9 @@ checkbox, name, other bytes, children, CRLF, and a missing final newline,
 then the entry moves to the current slot. No entry is created, no link is
 added, and no task note is written. Later items see earlier staged edits and
 dry-run computes without committing; any failure rolls the whole batch back.
-Composable idioms: `=x`, blank line, `=` switches sessions; `=`, blank line,
-`+2` starts then extends; `=`, blank line, `^bob:ready` starts then links a
+Composable idioms: `=x`, blank line, `=` switches sessions (or `=x =` on one
+line); `=`, blank line, `+2` starts then extends; `=`, blank line,
+`^bob:ready` starts then links a
 task into the now-running session. A `@@` declaration never applies to start
 items, and forced `--route`/`--section`/`--task`/`--task-ref`/
 `--task-section`/`--clip` fail on them; `%`, `s:<N>`, and `p:<N>` after a
@@ -795,7 +809,10 @@ printf '+5\n\nCall bank @Cash+\n' | bob capture
 
 `+5` extends by 25 minutes and `-2` shortens by 10 minutes. The count is
 optional and defaults to 1, so a bare `+` or `-` is one unit rather than an
-incomplete state. The item must contain only the signed count: trimmed text
+incomplete state. The item must contain only the signed count (or share its
+line only with other session operators; see
+[Chaining session operators on one line](#chaining-session-operators-on-one-line)):
+trimmed text
 matching `^[+-][0-9]*$` with a positive magnitude. Leading/trailing
 whitespace is fine. `+0`/`-0` fail, and oversized magnitudes fail checked
 parsing/arithmetic before any write. If a valid signed-count token starts an
@@ -822,7 +839,8 @@ are rejected on adjustment items with a specific error. Later items observe
 earlier staged edits to the same daily file through `CaptureBatchPlanner`,
 so a `+5` after a session-start item can adjust the session created earlier
 in the draft; dry-run computes the same result without committing, and a
-later invalid item rolls back all earlier staged changes.
+later invalid item rolls back all earlier staged changes. The same holds on
+one line: `+2 =x` extends then closes atomically.
 
 JSON keeps every existing key and schema version 1 stable and reports a
 distinct `pomodoro_adjust` kind with an additive `pomodoro_adjust` object
@@ -846,7 +864,10 @@ One sign moves the end; two signs move the whole session. `++3` translates
 both endpoints 15 minutes later and `--2` translates both 10 minutes
 earlier, exactly like Obsidian's `3\o` / `2\O` with the running Pomodoro
 selected. The count is optional and defaults to 1, so `++` and `--` move one
-unit. The item must contain only the operator: trimmed text matching
+unit. The item must contain only the operator (or share its line only with
+other session operators; see
+[Chaining session operators on one line](#chaining-session-operators-on-one-line)):
+trimmed text matching
 `^(\+\+|--)[0-9]*$` with a positive magnitude. Leading/trailing whitespace
 is fine. `++0`/`--0` fail ("move nothing"), oversized magnitudes fail
 checked parsing/arithmetic before any write, and a counted token with extra
@@ -868,7 +889,8 @@ destination/task/section and clipboard options (`--route`, `--section`,
 `--task`, `--task-ref`, `--task-section`, `--clip`, `%`, `s:<N>`, `p:<N>`)
 are rejected on shift items with a specific error. Later items observe
 earlier staged edits, dry-run computes without committing, and any failure
-rolls the whole batch back, so `--2` then `+` in one draft composes.
+rolls the whole batch back, so `--2` then `+` in one draft composes (or
+`--2 +` on one line).
 
 The shell sees a leading `-` as a flag: spell an earlier shift as
 `bob capture -- --2`, or `bob capture --1` for one unit. A bare `--` stays
@@ -915,7 +937,10 @@ when `remaining ≥ 5`, `units = floor(remaining / 5)`,
 are untouched; Bob never extends a session, and an overrun is reported
 (`ran 7m over`). Closed at `09:49` or later, `0920-0950` stays unchanged.
 
-The item must contain only the close token; a token with extra text,
+The item must contain only the close token (or share its line only with other
+session operators; see
+[Chaining session operators on one line](#chaining-session-operators-on-one-line));
+a token with extra text,
 markers, or a child line (`=x more`) fails with an `invalid_pomodoro_close`
 error, and `=xx`/`==` plus mid-body `Plan =x` stay ordinary prose. A bare
 `=` is now a whole-item start, not an incomplete state. When no session is
@@ -1009,7 +1034,7 @@ the `x` color, deferred is dim), and unlisted indices are dim too. With
 zero numbered rows the output is byte-identical to before. The "switch tasks" batch
 idiom is `=x`, blank line, `^route:id=` — close the running session,
 then start the next one through the existing start rules. The session
-switch idiom is `=x`, blank line, `=` — close the running session, then
+switch idiom is `=x`, blank line, `=` (or `=x =` on one line) — close the running session, then
 start the next future Pomodoro.
 
 Worked example (`BOB_NOW=2026-09-28 09:37:00`, day file
@@ -1069,7 +1094,7 @@ existing links deferred and the new `[[bob#^ready]]` in progress as number
 plain `=x`; `^bob:capture-stop=x!1` is `already_current` and completes it;
 `Draft docs @bob:draft-docs=x` creates the new task;
 `Draft docs @bob:draft-docs=x0` creates it deferred;
-`-2`, blank line, `=x` decrements once; `-2`, blank line, `=x5` rolls back
+`-2`, blank line, `=x` decrements once (or `-2 =x` on one line); `-2`, blank line, `=x5` rolls back
 the `-2`; `=x`, blank line,
 `^sase:recovery-panel=` switches tasks; `^bob:ready#capture=x` errors
 with "remove `#capture`"; a second `=x` reports "no running Pomodoro to
@@ -1240,6 +1265,57 @@ in-progress line whose task did not end In Progress
 (``task 2 `[[bob#^x]]` is Blocked, so it was not started``) and a listed
 complete line whose task did not end Done. In a batch, a selection failure
 rolls the whole batch back.
+
+### Chaining session operators on one line
+
+The six whole-item Pomodoro session operators — `+[N]`, `-[N]`, `++[N]`,
+`--[N]`, `=`/`=<X>`, and `=x[<N>][!<M>]` — may share one physical line when
+whitespace separates them:
+
+```bash
+bob capture '+2 =x'
+bob capture '=x ='
+```
+
+Recognition: the line must hold at least two whitespace-separated tokens and
+every token must be a session token — one the whole-item session parsers
+would claim as a standalone one-line item, near misses included. A single
+token is never a chain, so single-token behavior is byte-identical. A line
+with any non-chain token is not a chain: `+2 more`, `=x more`, `=3 more`,
+and `++3 plan` keep their shape errors, `Plan +2 =x` and `- foo` stay prose,
+`=x ^bob:ready=` keeps the `=x` shape error, and `=x 1,3`, `=x1, 3`, and
+`=x1 !2` keep the no-spaces hint because `1,3`, `3`, and `!2` are not chain
+tokens.
+
+Tokens run left to right exactly like blank-line items: `+2 =x` extends then
+closes, `=x =` closes then starts the next future Pomodoro (a session switch
+in one line), `=x2 =3` closes keeping task 2 in progress then starts a
+15-minute session, `= +2` starts then extends, and `--2 +` shifts earlier
+then extends. Staging, rollback, and `--dry-run` match blank-line batches:
+later tokens see earlier staged edits through `CaptureBatchPlanner`, and any
+failure rolls the whole batch back. Output is per token: one JSON/human
+result per operator, and `capture-parse` reports one `items[]` entry per
+token with per-token ranges sharing the physical line numbers.
+
+Child lines attach to the last token's item and fail that token's existing
+exact-token-with-child-lines shape rule, so a chain line with children never
+becomes a prose task — including bare-first chains such as `+ =x` with a
+child bullet.
+
+Spacing is significant: `= -2` starts a 25-minute session then shortens it
+by 10 minutes, while `=-2` is one start with a 10-minute offset. Lines made
+only of bare operators are newly recognized chains (`- -`, `+ -`, `= =`,
+`-- --`, `- - -`); they used to be prose. Runtime guards apply per token in
+order (`=x -2` closes then fails because nothing is running; `= =` fails on
+the second start), and forced `--route`/`--section`/`--task`/`--task-ref`/
+`--task-section`/`--clip` fail on the first chain token.
+
+Single-quote the argument: zsh expands a leading `=word`, so write
+`bob capture '+2 =x'`. Positional args are already joined with spaces, so
+`bob capture +2 '=x'` also works. Task/link forms, markers, `@@`, and prose
+never chain, the JSON contract is unchanged (`schema_version` 1, no new
+keys), and no SASE memory changes.
+
 ### Project notes
 
 Use a leading or trailing `@<route>^<block-id>+` marker to create a brand-new
@@ -2122,7 +2198,9 @@ for `:`). Human output shows each sub-bullet with its ID, as ` ^id` or
 ` :id`. This remains schema version 1.
 
 For a multi-item draft, `items` is an ordered optional array, omitted for a
-single item. Each entry has a one-based `index`, a `range` with global UTF-8
+single item. A same-line session-operator chain reports one `items[]` entry
+per token: each `range` covers its token, and all entries share the physical
+line's `line_start`/`line_end`. Each entry has a one-based `index`, a `range` with global UTF-8
 `start`/`end` offsets into `input`, `line_start`/`line_end` physical line
 numbers, the item's `body`, `mode`, `route`, `section`, `block_id`, `needs`,
 and optional `sub_bullets`/`sub_bullet_depths`/`sub_bullet_task_ids`/`pomodoro_start`/`pomodoro_adjust`/`pomodoro_shift`/`pomodoro_close`. Real item indices and ranges

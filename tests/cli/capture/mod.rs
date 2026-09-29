@@ -11,6 +11,7 @@ mod ensure_next;
 mod parse;
 mod parse_pomodoro;
 mod pomodoro_adjust;
+mod pomodoro_chain;
 mod pomodoro_close;
 mod pomodoro_close_selection;
 mod pomodoro_link;

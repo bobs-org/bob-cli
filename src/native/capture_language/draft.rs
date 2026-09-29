@@ -60,7 +60,9 @@ pub(crate) fn split_physical_lines(raw: &str) -> Vec<RawLine<'_>> {
 /// items. A declaration-only line is removed before blank-line item
 /// splitting, so it neither becomes an item nor separates adjacent body
 /// lines. Item ranges and line numbers always refer back to the complete
-/// original draft.
+/// original draft. A parent line holding a whitespace-separated
+/// session-operator chain (`+2 =x`) is split into one single-token item per
+/// operator; see [`session_chain_tokens`].
 pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
     let lines = split_physical_lines(raw);
     let mut declarations = Vec::new();
@@ -92,6 +94,9 @@ pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
     }
 }
 
+/// Split blank-line-separated item lines into [`CaptureItem`]s. A parent
+/// line that is a session-operator chain yields one single-token item per
+/// operator; see [`push_capture_item`].
 pub(super) fn split_items_from_item_lines<'a>(
     lines: &[ItemLine<'a>],
 ) -> Vec<CaptureItem<'a>> {
@@ -111,6 +116,32 @@ pub(super) fn split_items_from_item_lines<'a>(
     items
 }
 
+/// Return the line's whitespace-separated tokens when the parent line is
+/// a session-operator chain: at least two tokens, every one passing
+/// [`is_session_chain_token`]. A single token is never a chain, so the
+/// existing single-token path stays byte-identical.
+pub(super) fn session_chain_tokens<'a>(
+    line: &RawLine<'a>,
+) -> Option<Vec<Token<'a>>> {
+    let tokens = tokenize_line_with_spans(line);
+    if tokens.len() >= 2
+        && tokens
+            .iter()
+            .all(|token| is_session_chain_token(token.text))
+    {
+        Some(tokens)
+    } else {
+        None
+    }
+}
+
+/// Push one blank-line-separated item. When the parent line is a session
+/// chain, push one single-token item per operator instead: each synthetic
+/// item holds a single [`ItemLine`] over that token's absolute range on the
+/// physical line, with sequential `index` numbering across the draft. Child
+/// lines attach to the last token's item (extending its `lines`, `end`,
+/// and `line_end`), so the last token's family parser reports its existing
+/// exact-token-with-child-lines shape error.
 pub(super) fn push_capture_item<'a>(
     items: &mut Vec<CaptureItem<'a>>,
     current: &mut Vec<ItemLine<'a>>,
@@ -118,6 +149,48 @@ pub(super) fn push_capture_item<'a>(
     let Some(first) = current.first().copied() else {
         return;
     };
+    if let Some(tokens) = session_chain_tokens(&first.raw) {
+        let rest: Vec<ItemLine<'a>> = current[1..].to_vec();
+        let last_child = rest.last().copied();
+        for (position, token) in tokens.iter().copied().enumerate() {
+            let is_last = position + 1 == tokens.len();
+            let token_line = ItemLine {
+                raw: RawLine {
+                    text: token.text,
+                    start: token.start,
+                    end: token.end,
+                },
+                line_number: first.line_number,
+            };
+            if is_last {
+                let mut lines = vec![token_line];
+                lines.extend(rest.iter().copied());
+                let (end, line_end) = match last_child {
+                    Some(child) => (child.raw.end, child.line_number),
+                    None => (token.end, first.line_number),
+                };
+                items.push(CaptureItem {
+                    index: items.len(),
+                    start: token.start,
+                    end,
+                    line_start: first.line_number,
+                    line_end,
+                    lines,
+                });
+            } else {
+                items.push(CaptureItem {
+                    index: items.len(),
+                    start: token.start,
+                    end: token.end,
+                    line_start: first.line_number,
+                    line_end: first.line_number,
+                    lines: vec![token_line],
+                });
+            }
+        }
+        current.clear();
+        return;
+    }
     let last = current.last().copied().expect("nonempty item");
     items.push(CaptureItem {
         index: items.len(),

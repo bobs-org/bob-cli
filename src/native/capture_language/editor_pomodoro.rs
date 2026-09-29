@@ -9,7 +9,9 @@ use super::model::*;
 use super::tokens::*;
 
 /// Whole-item session operator for the live editor: one sign resizes,
-/// two signs shift. Mirrors [`parse_pomodoro_adjust_item`]'s execution
+/// two signs shift. A same-line chain has already been split into
+/// single-token items upstream in `draft.rs`. Mirrors
+/// [`parse_pomodoro_adjust_item`]'s execution
 /// grammar but never fails: an exact operator reports `pomodoro_adjust`
 /// or `pomodoro_shift` with a span covering only the token and an additive
 /// spec (a bare sign is one unit, never incomplete), and zero/overflow/
@@ -331,7 +333,9 @@ pub(super) fn parse_editor_start_item<'a>(
     }
 }
 
-/// Whole-item `=`-family parser for the live editor. Mirrors
+/// Whole-item `=`-family parser for the live editor. A same-line chain has
+/// already been split into single-token items upstream in `draft.rs`.
+/// Mirrors
 /// [`parse_pomodoro_equals_item`]'s execution grammar but never fails: an
 /// exact `=x[<N>][!<M>]` reports `pomodoro_close` with spans covering `=x`
 /// plus each typed list and an additive spec, an exact `=`/`=<X>` reports

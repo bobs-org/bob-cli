@@ -213,6 +213,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes); the item must contain only the start token (quote in zsh) |
 | `=x[<N>][!<M>]` | Close today's running timed Pomodoro (case-insensitive `=X`); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, a lone `0` means none; the item must contain only the token (quote in zsh, since `!` history expansion also applies) |
+| `+2 =x`, `=x =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items |
 | `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it; numbers refer to the post-link lineup |
 | `<text> @route:id=x…` | Create the new task in the running session, then close it |
 | `@route^id+` | New project note `<route>_<id>.md`; the daily note and the parent note are left unchanged |
@@ -285,7 +286,9 @@ combine with `s:<N>` or `p:<N>`.
 Capture a whole item `+N` or `-N` to adjust today's current timed Pomodoro:
 `bob capture +5` extends by 25 minutes, `bob capture -- -2` shortens by 10
 minutes, and `printf '+5\n\nCall bank @Cash+\n' | bob capture` mixes an
-adjustment with an ordinary item across blank lines. The item must contain
+adjustment with an ordinary item across blank lines. Session operators may
+share one line (`bob capture '+2 =x'` extends then closes; `bob capture '=x ='`
+closes then starts). The item must contain
 only the signed count; `Plan +5` stays prose, and forced route/task/clipboard
 options are rejected on adjustments.
 
@@ -301,7 +304,7 @@ five-minute step at or after now: `bob capture '=x'` closes the session,
 keeps task 1 in progress and completes task 2, `bob capture '=x0'` defers everything,
 `bob capture '^bob:capture-stop=x'` puts that task into the running session
 then closes it, and `printf -- '-2\n\n=x\n' | bob capture` adjusts then
-closes atomically. Numbers count the session's Task Links in ledger order
+closes atomically (or `bob capture '-2 =x'` on one line). Numbers count the session's Task Links in ledger order
 from 1; on link forms they refer to the post-link lineup. See
 `docs/capture.md` for the numbering, outcomes, classification, carry, Work
 Log, link-form, diagnostic, JSON, and batch rules.
