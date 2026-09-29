@@ -272,7 +272,7 @@ pub(super) const POMODORO_ROUTE_ERROR: &str =
     "Pomodoro capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
 
 pub(super) const POMODORO_BLOCK_ID_ERROR: &str =
-    "Pomodoro capture block ID must be non-empty and contain only A-Z, a-z, 0-9, '_' or '-'";
+    "Pomodoro capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
 
 pub(super) const POMODORO_NAME_ERROR: &str =
     "Pomodoro capture name must contain only A-Z, a-z, 0-9 or \

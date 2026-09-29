@@ -17,15 +17,12 @@ use super::{
     collect_done, note_tasks,
 };
 
-/// Regex matching exactly one allowed ID character, per marker.
-pub(crate) const POMODORO_ALLOWED_CHARACTER: &str = "[A-Za-z0-9_-]";
-/// Human wording from the `:` validator error.
-pub(crate) const POMODORO_ALLOWED_DESCRIPTION: &str =
-    "A-Z, a-z, 0-9, '_' or '-'";
-/// Regex matching exactly one allowed ID character, per marker.
-pub(crate) const TASK_ALLOWED_CHARACTER: &str = "[A-Za-z0-9-]";
-/// Human wording from the `^` validator error.
-pub(crate) const TASK_ALLOWED_DESCRIPTION: &str = "A-Z, a-z, 0-9 or '-'";
+/// Regex matching exactly one allowed block-ID character, for both `:` and
+/// `^`. Mirrors [`collect_done::is_block_id_byte`]: ASCII letters, digits,
+/// and `-`.
+pub(crate) const BLOCK_ID_ALLOWED_CHARACTER: &str = "[A-Za-z0-9-]";
+/// Human wording from the block-ID validator errors.
+pub(crate) const BLOCK_ID_ALLOWED_DESCRIPTION: &str = "A-Z, a-z, 0-9 or '-'";
 
 /// Which thing the person can mean on the right-hand side of `@route:`/`@route^`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -75,33 +72,24 @@ pub(crate) struct BlockIdRequest<'a> {
     pub(crate) context: CompletionContext,
 }
 
-/// Whether `byte` is allowed in a `:` block ID (letters, digits, `_`, `-`).
-pub(crate) fn is_pomodoro_block_id_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
-}
-
-/// Whether `byte` is allowed in a `^` block ID (letters, digits, `-`).
-pub(crate) fn is_task_block_id_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'-'
+/// Whether `byte` is allowed in a block ID for either marker. Mirrors
+/// [`collect_done::is_block_id_byte`] so the contract can never drift from
+/// the validator again.
+pub(crate) fn is_block_id_byte(byte: u8) -> bool {
+    collect_done::is_block_id_byte(byte)
 }
 
 pub(crate) fn allowed_rule_for_marker(
-    marker: char,
+    _marker: char,
 ) -> (&'static str, &'static str) {
-    match marker {
-        ':' => (POMODORO_ALLOWED_CHARACTER, POMODORO_ALLOWED_DESCRIPTION),
-        _ => (TASK_ALLOWED_CHARACTER, TASK_ALLOWED_DESCRIPTION),
-    }
+    (BLOCK_ID_ALLOWED_CHARACTER, BLOCK_ID_ALLOWED_DESCRIPTION)
 }
 
-pub(crate) fn is_valid_block_id(marker: char, id: &str) -> bool {
+pub(crate) fn is_valid_block_id(_marker: char, id: &str) -> bool {
     if id.is_empty() {
         return false;
     }
-    match marker {
-        ':' => id.bytes().all(is_pomodoro_block_id_byte),
-        _ => id.bytes().all(is_task_block_id_byte),
-    }
+    id.bytes().all(is_block_id_byte)
 }
 
 /// Build the additive `block_id` object for a `pomodoro_block_id` or
@@ -608,28 +596,27 @@ mod tests {
 
     #[test]
     fn allowed_regex_agrees_with_validator_for_every_ascii_char() {
+        let regex =
+            regex::Regex::new(&format!("^{}$", BLOCK_ID_ALLOWED_CHARACTER))
+                .expect("valid block-ID regex");
         for byte in 0..128u8 {
-            let character = byte as char;
-            let text = character.to_string();
-            let pomodoro_match =
-                regex::Regex::new(&format!("^{}$", POMODORO_ALLOWED_CHARACTER))
-                    .expect("valid pomodoro regex")
-                    .is_match(&text);
+            let text = (byte as char).to_string();
             assert_eq!(
-                pomodoro_match,
-                is_pomodoro_block_id_byte(byte),
-                "pomodoro rule drift for {byte:#04X}"
-            );
-            let task_match =
-                regex::Regex::new(&format!("^{}$", TASK_ALLOWED_CHARACTER))
-                    .expect("valid task regex")
-                    .is_match(&text);
-            assert_eq!(
-                task_match,
-                is_task_block_id_byte(byte),
-                "task rule drift for {byte:#04X}"
+                regex.is_match(&text),
+                collect_done::is_block_id_byte(byte),
+                "block-ID rule drift for {byte:#04X}"
             );
         }
+        for marker in [':', '^'] {
+            assert_eq!(
+                allowed_rule_for_marker(marker),
+                (BLOCK_ID_ALLOWED_CHARACTER, BLOCK_ID_ALLOWED_DESCRIPTION),
+                "marker {marker:?} must share one rule"
+            );
+        }
+        assert!(!is_valid_block_id(':', "foo_bar"));
+        assert!(is_valid_block_id(':', "foo-bar"));
+        assert!(!is_valid_block_id('^', "foo_bar"));
     }
 
     #[test]

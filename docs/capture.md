@@ -2151,8 +2151,8 @@ top-level `block_id` object with `route`, `relative_target` (for example
 `marker` (`:` or `^`), `marker_range` (the whole marker token's draft-global
 UTF-8 byte range, for highlighting), `intent` (`link`, `new`, or
 `project_note`), `body` (the item's normalized parent-line body, or `""`),
-`allowed_character` (a one-character regex: `[A-Za-z0-9_-]` for `:` and
-`[A-Za-z0-9-]` for `^`), `allowed_description` (the human wording from the
+`allowed_character` (a one-character regex: `[A-Za-z0-9-]` for both `:` and
+`^`), `allowed_description` (the human wording from the
 matching validator), `suggestions` (at most 3, deterministic, for `new` and
 `project_note` intents with a non-empty body), and `used` (every ID the
 duplicate check sees, deduplicated by first occurrence in document order with
