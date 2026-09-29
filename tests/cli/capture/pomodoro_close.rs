@@ -533,7 +533,7 @@ fn capture_pomodoro_close_diagnostics() {
         "2026-09-28 09:37:00",
         &["Do @bob:new+=x"],
     );
-    assert!(error.contains("not project-note"), "{error}");
+    assert!(error.contains("is retired"), "{error}");
 
     // @@ never turns a close into a task.
     let output = run_with_stdin(

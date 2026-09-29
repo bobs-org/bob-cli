@@ -163,9 +163,14 @@ fn editor_reports_invalid_components_as_diagnostics() {
             TASK_BLOCK_ID_ERROR,
         ),
         (
-            "Body @dev^focus-123+#bugs",
+            "Body @dev^focus-123#bugs+",
             "invalid_project_note_marker",
-            PROJECT_NOTE_POMODORO_NAME_ERROR,
+            "put the project-note `+` right after the block ID: `@dev^focus-123+#bugs` (a `+` after `#bugs` would be part of the Pomodoro name)",
+        ),
+        (
+            "Body @dev^focus-123#bugs",
+            "invalid_project_note_marker",
+            "`#bugs` after `@dev^focus-123` needs the project-note `+` (`@dev^focus-123+#bugs`); to link a task under a Pomodoro, use `@dev:focus-123#bugs`",
         ),
         (
             "Body @bad.route:id",
@@ -189,8 +194,13 @@ fn editor_reports_invalid_components_as_diagnostics() {
         ),
         (
             "Body @dev:bad.id+",
-            "invalid_pomodoro_block_id",
-            POMODORO_BLOCK_ID_ERROR,
+            "retired_project_note_marker",
+            "`@dev:bad.id+` is retired: a project note never links its own `^prj` task. Write `@dev^bad.id+` and end each task bullet you want in the Pomodoro with ` :<id>`",
+        ),
+        (
+            "Body @cash:goog-exit+#bugs",
+            "retired_project_note_marker",
+            "`@cash:goog-exit+#bugs` is retired: a project note never links its own `^prj` task. Write `@cash^goog-exit+#bugs` and end each task bullet you want in the Pomodoro with ` :<id>`",
         ),
         (
             "Body @dev:id+!",
@@ -499,7 +509,7 @@ fn editor_reports_caret_near_misses_and_conflicts() {
         ),
         (
             "^sase:deep-fix+",
-            "Pomodoro link `^route:block-id+` is a project note",
+            "`^route:block-id+` is not a capture form",
         ),
         (
             "^sase:deep-fix!",

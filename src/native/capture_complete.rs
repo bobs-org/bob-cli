@@ -153,7 +153,7 @@ suffix survives. A `#name` after `^route:block-id` completes Pomodoro names \
 exactly as it does after `@route:block-id`, and a cursor inside `=<X>` or \
 `=x[<N>][!<M>]` offers nothing. The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
 candidates and an additive `block_id` object carrying intent, used IDs, and suggestions. A project-note `+` \
-directly after either block-ID part is never part of the replacement. An empty block-ID component \
+directly after the `^` block-ID part is never part of the replacement; a `+` after a `:` block ID is the retired project-note form and offers nothing. An empty block-ID component \
 ('@route+#') returns a successful empty task-section list; an unresolvable \
 parent task returns a successful empty list plus one bounded warning. Other \
 contexts still rank \

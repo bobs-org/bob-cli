@@ -20,14 +20,15 @@ pub(crate) enum CaptureKind {
         close: Option<PomodoroCloseSpec>,
     },
     /// `@<route>^<block-id>+` (create the note only) or
-    /// `@<route>:<block-id>+[#[<pomodoro>]]` (also link its `^prj` task under
-    /// a Pomodoro): create the project note `<route>_<block-id>.md`.
-    /// `pomodoro: None` is the `^` form; `Some` is the `:` form, whose
-    /// `name: None` selects the implicit current/next Pomodoro and whose
-    /// `name: Some` names one explicitly.
+    /// `@<route>^<block-id>+#<pomodoro>` (also pick the Pomodoro that
+    /// ` :<id>` Task Links go under): create the project note
+    /// `<route>_<block-id>.md`. `pomodoro_name: None` writes no Task Links;
+    /// `Some` names the Pomodoro the ` :` links go under (created as a
+    /// named future Pomodoro when missing). The `^prj` task itself is never
+    /// linked.
     ProjectNote {
         block_id: String,
-        pomodoro: Option<ProjectNotePomodoro>,
+        pomodoro_name: Option<String>,
     },
     SubBullet {
         target: SubBulletTarget,
@@ -188,14 +189,6 @@ pub(crate) struct PomodoroStartSpec {
     pub(crate) duration_units: u64,
     /// Number of 5-minute offset units.
     pub(crate) offset_units: u64,
-}
-
-/// Which Pomodoro, if any, a project-note capture links its `^prj` task under.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProjectNotePomodoro {
-    /// `None` selects the implicit current/next Pomodoro; `Some` names one
-    /// explicitly (created as a future Pomodoro when it does not exist yet).
-    pub(crate) name: Option<String>,
 }
 
 /// How a marker-only `@route+block-id` capture should change an existing task.

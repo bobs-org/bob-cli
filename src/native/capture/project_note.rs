@@ -63,12 +63,22 @@ pub(super) fn plan_project_note_item(
     item_index: usize,
     planner: &mut CaptureBatchPlanner,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    let CaptureKind::ProjectNote { block_id, pomodoro } = parsed.kind.clone()
+    let CaptureKind::ProjectNote {
+        block_id,
+        pomodoro_name,
+    } = parsed.kind.clone()
     else {
         return Err(CaptureError::io(
             "project-note capture invariant failed: wrong capture kind",
         ));
     };
+    // The grammar rejects a `#pomodoro` name with no ` :` task before
+    // planning; this guards planners that bypass it.
+    if let Some(name) = pomodoro_name {
+        return Err(CaptureError::usage(unused_project_note_pomodoro_error(
+            &name,
+        )));
+    }
     let route = parsed.route.clone().ok_or_else(|| {
         CaptureError::io(
             "project-note capture invariant failed: route is missing",
@@ -130,7 +140,6 @@ pub(super) fn plan_project_note_item(
         .as_ref()
         .map(|log| log.lines.clone())
         .unwrap_or_default();
-    let pomodoro_link = pomodoro.is_some();
     let render_input = capture_project_note::ProjectNoteRenderInput {
         route: &route,
         block_id: &block_id,
@@ -139,48 +148,13 @@ pub(super) fn plan_project_note_item(
         scheduled: scheduled.as_deref(),
         priority: priority_field,
         schedule_log_lines: &schedule_log_lines,
-        pomodoro_link,
         sub_bullets: &parsed.sub_bullets,
     };
     let rendered = capture_project_note::render_project_note(&render_input);
 
-    let pomodoro_plan = match pomodoro.as_ref() {
-        None => None,
-        Some(ProjectNotePomodoro { name }) => {
-            Some(plan_project_note_pomodoro_link(
-                planner,
-                &request.bob_dir,
-                &new_target,
-                &rendered,
-                name.as_deref(),
-            )?)
-        }
-    };
-
+    // A project note with no ` :` task never reads the daily note: the
+    // `^prj` task is never linked, and Task Links arrive in a later phase.
     planner.stage(&new_target, rendered.contents.clone())?;
-    if let Some(plan) = pomodoro_plan.as_ref() {
-        planner.stage(
-            &PathBuf::from(&plan.details.day_file),
-            plan.updated_day.clone(),
-        )?;
-    }
-
-    let (
-        day_file,
-        block_link,
-        pomodoro_link_placement,
-        pomodoro_name,
-        creates_pomodoro,
-    ) = match pomodoro_plan.as_ref() {
-        None => (None, None, None, None, None),
-        Some(plan) => (
-            Some(plan.details.day_file.clone()),
-            Some(plan.details.block_link.clone()),
-            Some(plan.details.pomodoro_link_placement),
-            plan.resolved_pomodoro_name.clone(),
-            Some(plan.creates_pomodoro),
-        ),
-    };
 
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -205,9 +179,9 @@ pub(super) fn plan_project_note_item(
             clip: None,
             schedule_log,
             block_id: Some("prj".to_string()),
-            day_file,
-            block_link,
-            pomodoro_link_placement,
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
             parent_line: None,
             parent_text: None,
             parent_section: None,
@@ -219,8 +193,8 @@ pub(super) fn plan_project_note_item(
             status_name: None,
             previous_status_symbol: None,
             previous_status_name: None,
-            pomodoro_name,
-            creates_pomodoro,
+            pomodoro_name: None,
+            creates_pomodoro: None,
             pomodoro_already_linked: None,
             removed_pomodoro_links: None,
             removed_scheduled: None,
@@ -244,70 +218,5 @@ pub(super) fn plan_project_note_item(
             toggle_task_description: None,
         },
         clip_plan: None,
-    })
-}
-
-pub(super) struct PlannedProjectNotePomodoro {
-    pub(super) details: PomodoroCaptureDetails,
-    pub(super) resolved_pomodoro_name: Option<String>,
-    pub(super) creates_pomodoro: bool,
-    pub(super) updated_day: String,
-}
-
-pub(super) fn plan_project_note_pomodoro_link(
-    planner: &mut CaptureBatchPlanner,
-    bob_dir: &Path,
-    new_target: &Path,
-    rendered: &capture_project_note::RenderedProjectNote,
-    pomodoro_name: Option<&str>,
-) -> Result<PlannedProjectNotePomodoro, CaptureError> {
-    let day_file = pomodoro::day_file_for(bob_dir);
-    if !day_file.is_file() {
-        return Err(CaptureError::io(format!(
-            "Bob daily note does not exist: {}",
-            day_file.display()
-        )));
-    }
-    if paths_refer_to_same_file(new_target, &day_file) {
-        return Err(CaptureError::io(
-            "routed note and Bob daily note must be different files",
-        ));
-    }
-    let original_day = planner.read_existing(&day_file)?;
-    let stem = rendered
-        .basename
-        .strip_suffix(".md")
-        .unwrap_or(rendered.basename.as_str());
-    let block_link = format!("[[{stem}#^prj]]");
-    if original_day.contains(&block_link) {
-        return Err(CaptureError::io(format!(
-            "Pomodoro ledger already contains {block_link}"
-        )));
-    }
-    let (updated_day, pomodoro_link_placement) =
-        insert_pomodoro_block_link(&original_day, &block_link, pomodoro_name)?;
-    let (resolved_pomodoro_name, creates_pomodoro) = match pomodoro_name {
-        None => (None, false),
-        Some(selector) => {
-            let canonical =
-                capture_pomodoros::canonicalize_pomodoro_name(selector);
-            let scan = capture_pomodoros::scan(&original_day);
-            let creates = !matches!(
-                capture_pomodoros::select_named(&scan, selector),
-                capture_pomodoros::NamedSelection::Found(_)
-            );
-            (canonical, creates)
-        }
-    };
-    Ok(PlannedProjectNotePomodoro {
-        details: PomodoroCaptureDetails {
-            block_id: "prj".to_string(),
-            day_file: day_file.display().to_string(),
-            block_link,
-            pomodoro_link_placement,
-        },
-        resolved_pomodoro_name,
-        creates_pomodoro,
-        updated_day,
     })
 }

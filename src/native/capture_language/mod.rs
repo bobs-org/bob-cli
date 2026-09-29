@@ -63,6 +63,7 @@ pub(crate) use self::markers::is_route_token;
 pub(crate) use self::markers::parse_priority_token;
 #[cfg(test)]
 pub(crate) use self::markers::parse_schedule_token;
+pub(crate) use self::markers::unused_project_note_pomodoro_error;
 pub(crate) use self::markers::POMODORO_START_FORCED_ERROR;
 pub(crate) use self::model::AuthoredDepth;
 pub(crate) use self::model::AuthoredSubBullet;
@@ -76,7 +77,6 @@ pub(crate) use self::model::PomodoroCloseSpec;
 pub(crate) use self::model::PomodoroLinkSpelling;
 pub(crate) use self::model::PomodoroShiftSpec;
 pub(crate) use self::model::PomodoroStartSpec;
-pub(crate) use self::model::ProjectNotePomodoro;
 pub(crate) use self::model::SubBulletTarget;
 pub(crate) use self::model::TaskSectionSelector;
 pub(crate) use self::model::TaskToggleIntent;

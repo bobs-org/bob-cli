@@ -161,10 +161,10 @@ route and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' \
 report `invalid_pomodoro_close` on the conflicting component or the precise \
 list range. A `@@` declaration never applies to close or `=`/`=<X>` items, \
 and neither is ever rewritten. \
-A '@^id+' or \
-'@:id+' marker already carries the project-note intent: it reports mode \
-'project_note' or 'pomodoro_project_note' with a 'route' need until the \
-route is typed. A solo '@route:block-id[#pomodoro][=<X>]' item links an existing task into \
+A '@^id+' marker already carries the project-note intent: it reports mode \
+'project_note' with a 'route' need until the \
+route is typed. A '@:id+' marker is the retired project-note form and \
+reports a `retired_project_note_marker` diagnostic. A solo '@route:block-id[#pomodoro][=<X>]' item links an existing task into \
 today's Pomodoro ledger instead of creating one, and parses as \
 'pomodoro_link' with the same spans and `pomodoro_start` object; anything \
 else on the item is an `invalid_pomodoro_link` diagnostic. The '^' spelling \
@@ -990,14 +990,14 @@ mod tests {
         assert!(value.get("pomodoro_start").is_none(), "{value}");
         assert_eq!(value["diagnostics"][0]["code"], "invalid_pomodoro_start");
 
-        let project_note = json("note @sase:outline+=3");
+        let project_note = json("note @sase^outline+=3");
         assert!(
             project_note.get("pomodoro_start").is_none(),
             "{project_note}"
         );
         assert_eq!(
             project_note["diagnostics"][0]["code"],
-            "invalid_pomodoro_start"
+            "invalid_project_note_marker"
         );
     }
 

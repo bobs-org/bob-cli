@@ -84,17 +84,9 @@ fn block_id_link_new_and_project_note_intents() {
     let new_spaced = complete_json(&vault, "@sase: x", 6, None);
     assert_eq!(new_spaced["block_id"]["intent"], "new");
 
-    let project = complete_json(&vault, "@sase:x+", 7, None);
-    assert_eq!(project["context"], "pomodoro_block_id");
-    assert_eq!(project["block_id"]["intent"], "project_note");
-    assert_eq!(
-        project["replacement"],
-        serde_json::json!({"start": 6, "end": 7})
-    );
-    assert_eq!(
-        project["candidates"].as_array().expect("candidates").len(),
-        0
-    );
+    // The retired `:` project-note form offers no completion.
+    let retired = complete_json(&vault, "@sase:x+", 7, None);
+    assert!(retired["context"].is_null());
 
     let caret = complete_json(&vault, "Fix flaky test @sase^", 21, None);
     assert_eq!(caret["context"], "task_block_id");

@@ -242,13 +242,65 @@ pub(super) fn parse_task_block_id_route_token(
     if !is_route_token(route) {
         return Err(TASK_BLOCK_ID_ROUTE_ERROR.to_string());
     }
-    // The `^` family takes no Pomodoro name. A `+` before the `#` marks this
-    // as a project-note attempt that used the wrong family; any other `#`
-    // stays an ordinary invalid block ID.
-    if let Some((before_hash, _)) = block_id.split_once('#')
-        && before_hash.ends_with('+')
-    {
-        return Err(PROJECT_NOTE_POMODORO_NAME_ERROR.to_string());
+    // Split the part after `^` at the first `#` into the block part and an
+    // optional Pomodoro name. The project-note `+` sits immediately after
+    // the block ID: with it, a `+` after `#name` is ordinary Pomodoro-name
+    // charset (so `@r^id+#c++` names `c++`); without it, a trailing `+` is
+    // a misordered marker and a bare `#name` is missing the `+`.
+    if let Some((block_part, name)) = block_id.split_once('#') {
+        let Some(block_core) = block_part.strip_suffix('+') else {
+            if let Some(name_core) = name.strip_suffix('+') {
+                return Err(project_note_misordered_error(
+                    route, block_part, name_core,
+                ));
+            }
+            return Err(project_note_name_without_plus_error(
+                route, block_part, name,
+            ));
+        };
+        if block_core.ends_with('+') {
+            return Err(TASK_BLOCK_ID_ERROR.to_string());
+        }
+        // A `=` anywhere after the `+` is a session suffix on a project
+        // note, which stays rejected.
+        if block_id.contains('=') {
+            let raw = block_id
+                .split_once('=')
+                .map(|(_, raw)| raw)
+                .unwrap_or_default();
+            if raw.eq_ignore_ascii_case("x")
+                || link_close_after_x(raw).is_some()
+            {
+                return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
+            }
+            return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
+        }
+        if block_core.is_empty() || !is_block_id(block_core) {
+            return Err(TASK_BLOCK_ID_ERROR.to_string());
+        }
+        if name.is_empty() {
+            return Err(project_note_name_required_error(route, block_core));
+        }
+        if !is_pomodoro_selector_component(name) {
+            return Err(POMODORO_NAME_ERROR.to_string());
+        }
+        return Ok(RouteToken {
+            route: Some(route.to_ascii_lowercase()),
+            kind: CaptureKind::ProjectNote {
+                block_id: block_core.to_string(),
+                pomodoro_name: Some(name.to_string()),
+            },
+        });
+    }
+    if block_id.contains('=') {
+        let raw = block_id
+            .split_once('=')
+            .map(|(_, raw)| raw)
+            .unwrap_or_default();
+        if raw.eq_ignore_ascii_case("x") || link_close_after_x(raw).is_some() {
+            return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
+        }
+        return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
     }
     // A single trailing `+` immediately after the block ID is the
     // project-note sigil. `is_block_id` accepts only letters, digits, and
@@ -266,7 +318,7 @@ pub(super) fn parse_task_block_id_route_token(
         kind: if project_note {
             CaptureKind::ProjectNote {
                 block_id: block_id.to_string(),
-                pomodoro: None,
+                pomodoro_name: None,
             }
         } else {
             CaptureKind::TaskWithBlockId {
@@ -325,16 +377,55 @@ pub(super) struct ColonLinkParts {
     pub(super) pomodoro_name: Option<String>,
     pub(super) start: Option<PomodoroStartSpec>,
     pub(super) close: Option<PomodoroCloseSpec>,
-    pub(super) project_note: bool,
 }
 
 /// Shared post-sigil `@route:…` / `^route:…` component parser: block ID,
 /// optional `#pomodoro` name, and optional session suffix (`=<X>` start or
 /// `=x` close). Both sigils share this so their validation stays identical.
+/// `typed_token` is the whole marker as typed (for the retired-form error);
+/// `caret` selects the `^route:…` callers, whose `+` form gets the
+/// caret-specific message instead of the retirement teaching.
 pub(super) fn parse_colon_link_tail(
+    typed_token: &str,
     route: &str,
     rest: &str,
+    caret: bool,
 ) -> Result<ColonLinkParts, String> {
+    // A trailing `+` immediately after the block ID is the retired
+    // project-note sigil. It is checked before the session suffix so the
+    // retired form always teaches the replacement. A `+` inside the
+    // Pomodoro name is ordinary Pomodoro-name charset and stays untouched,
+    // so `@sase:deep-fix#bugs+` keeps naming the Pomodoro `bugs+`.
+    let before_eq = rest
+        .split_once('=')
+        .map(|(before, _)| before)
+        .unwrap_or(rest);
+    let (block_probe, name_probe): (&str, Option<&str>) =
+        match before_eq.split_once('#') {
+            Some((block, name)) => (block, Some(name)),
+            None => (before_eq, None),
+        };
+    if let Some(stripped) = block_probe.strip_suffix('+') {
+        if stripped.is_empty() {
+            return Err(if name_probe.is_some() {
+                format!(
+                    "Pomodoro capture requires a block ID before the Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-tasks -r {}` to list task block IDs)",
+                    route.to_ascii_lowercase()
+                )
+            } else {
+                POMODORO_BLOCK_ID_ERROR.to_string()
+            });
+        }
+        if caret {
+            return Err(POMODORO_LINK_PROJECT_ERROR.to_string());
+        }
+        return Err(retired_project_note_marker_error(
+            typed_token,
+            route,
+            stripped,
+            name_probe,
+        ));
+    }
     // Split the additive session suffix before `#` handling: the first `=`
     // separates the old marker from the suffix. `x`/`X` is a close; anything
     // else follows the `=<X>` start shape. Any extra `=` inside is malformed.
@@ -381,14 +472,6 @@ pub(super) fn parse_colon_link_tail(
         Some((block_id, name)) => (block_id, Some(name)),
         None => (rest_before_start, None),
     };
-    // A single trailing `+` immediately after the block ID is the
-    // project-note sigil. A `+` inside the Pomodoro name is ordinary
-    // Pomodoro-name charset and stays untouched, so
-    // `@sase:deep-fix#bugs+` keeps naming the Pomodoro `bugs+`.
-    let (block_id, project_note) = match block_id.strip_suffix('+') {
-        Some(stripped) => (stripped, true),
-        None => (block_id, false),
-    };
     if block_id.is_empty() {
         return Err(if pomodoro_name.is_some() {
             format!(
@@ -413,12 +496,6 @@ pub(super) fn parse_colon_link_tail(
         Some(name) => Some(name.to_string()),
     };
 
-    if project_note && start.is_some() {
-        return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
-    }
-    if project_note && close.is_some() {
-        return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
-    }
     if close.is_some() && pomodoro_name.is_some() {
         let name = pomodoro_name.as_deref().unwrap_or_default();
         return Err(format!(
@@ -430,7 +507,6 @@ pub(super) fn parse_colon_link_tail(
         pomodoro_name,
         start,
         close,
-        project_note,
     })
 }
 
@@ -447,23 +523,14 @@ pub(super) fn parse_pomodoro_route_token(
     if !is_route_token(route) {
         return Err(POMODORO_ROUTE_ERROR.to_string());
     }
-    let parts = parse_colon_link_tail(route, rest)?;
+    let parts = parse_colon_link_tail(token, route, rest, false)?;
     Ok(RouteToken {
         route: Some(route.to_ascii_lowercase()),
-        kind: if parts.project_note {
-            CaptureKind::ProjectNote {
-                block_id: parts.block_id,
-                pomodoro: Some(ProjectNotePomodoro {
-                    name: parts.pomodoro_name,
-                }),
-            }
-        } else {
-            CaptureKind::Pomodoro {
-                block_id: parts.block_id,
-                pomodoro_name: parts.pomodoro_name,
-                start: parts.start,
-                close: parts.close,
-            }
+        kind: CaptureKind::Pomodoro {
+            block_id: parts.block_id,
+            pomodoro_name: parts.pomodoro_name,
+            start: parts.start,
+            close: parts.close,
         },
     })
 }
@@ -573,13 +640,8 @@ pub(super) fn parse_caret_link_token(
     if rest.ends_with('!') && !caret_tail_has_close_suffix(rest) {
         return Err(POMODORO_LINK_TOGGLE_ERROR.to_string());
     }
-    match parse_colon_link_tail(route, rest) {
-        Ok(parts) => {
-            if parts.project_note {
-                return Err(POMODORO_LINK_PROJECT_ERROR.to_string());
-            }
-            Ok((route.to_ascii_lowercase(), parts))
-        }
+    match parse_colon_link_tail(token, route, rest, true) {
+        Ok(parts) => Ok((route.to_ascii_lowercase(), parts)),
         Err(message) => {
             if message == POMODORO_NAME_REQUIRED_ERROR {
                 return Err(POMODORO_LINK_NAME_INCOMPLETE_ERROR.to_string());
@@ -699,13 +761,8 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
     {
         return classify_caret_close_suffix(route_part, before_eq, raw_suffix);
     }
-    match parse_colon_link_tail(route_part, tail) {
+    match parse_colon_link_tail(text, route_part, tail, true) {
         Ok(parts) => {
-            if parts.project_note {
-                return CaretTokenShape::Invalid(
-                    POMODORO_LINK_PROJECT_ERROR.to_string(),
-                );
-            }
             let route = route_part.to_ascii_lowercase();
             let link_base = 1 + route_part.len() + 1;
             let (before_start, start_offset) = match tail.split_once('=') {

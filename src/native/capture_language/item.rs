@@ -298,6 +298,16 @@ pub(super) fn parse_capture_item<'a>(
             return Err(POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR.to_string());
         }
     }
+    // A project-note `#pomodoro` name picks the Pomodoro that ` :<id>`
+    // Task Links go under. The task-ID grammar arrives in a later phase,
+    // so no item can carry a ` :` task yet and any name is unused.
+    if let CaptureKind::ProjectNote {
+        pomodoro_name: Some(name),
+        ..
+    } = &kind
+    {
+        return Err(unused_project_note_pomodoro_error(name));
+    }
     Ok(parsed_capture_item_outcome(
         item,
         ParsedCaptureText {

@@ -736,6 +736,25 @@ pub(super) fn parse_editor_item<'a>(
         }
     }
 
+    // A project-note `#pomodoro` name picks the Pomodoro that ` :<id>`
+    // Task Links go under. The task-ID grammar arrives in a later phase,
+    // so no item can carry a ` :` task yet and any name is unused. The
+    // diagnostic covers the `#name` component.
+    if mode == EditorMode::ProjectNote && section.is_some() {
+        let range = spans
+            .iter()
+            .find(|span| span.kind == SpanKind::PomodoroName)
+            .map(|span| (span.start.saturating_sub(1), span.end));
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "unused_project_note_pomodoro",
+            message: unused_project_note_pomodoro_error(
+                section.as_deref().unwrap_or_default(),
+            ),
+            range,
+        });
+    }
+
     // A leading `^` token claims its item (see `classify_caret_item`):
     // complete shapes report `pomodoro_link` with the `active_task_*`
     // spans, partial shapes report `incomplete`, and near misses report

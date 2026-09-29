@@ -412,6 +412,19 @@ pub(super) fn marker_field_at_cursor(
         let marker = &text[1..];
         let (route_part, block_part) =
             marker.split_once('^').expect("task block-ID candidate");
+        // A `#name` after `@route^id+` completes the Pomodoro name that
+        // picks the ` :` links' Pomodoro; the replacement is just the name.
+        let (block_part, third) = match block_part.split_once('#') {
+            Some((block, name)) => (
+                block,
+                Some(CompletionThird {
+                    separator_len: 1,
+                    part: name,
+                    context: CompletionContext::PomodoroName,
+                }),
+            ),
+            None => (block_part, None),
+        };
         return completion_field_from_parts(
             token,
             CompletionParts {
@@ -420,7 +433,7 @@ pub(super) fn marker_field_at_cursor(
                 separator_len: 1,
                 right_part: block_part,
                 right_context: Some(CompletionContext::TaskBlockId),
-                third: None,
+                third,
             },
             cursor,
         );
@@ -465,6 +478,14 @@ pub(super) fn marker_field_at_cursor(
             ),
             None => (rest, None),
         };
+        // The retired `:` project-note form (`@route:id+`, with or without
+        // a session suffix) offers no completion.
+        if block_part
+            .strip_suffix('+')
+            .is_some_and(|core| !core.is_empty())
+        {
+            return None;
+        }
         return completion_field_from_parts(
             token,
             CompletionParts {

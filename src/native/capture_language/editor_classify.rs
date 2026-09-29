@@ -320,15 +320,147 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
             TASK_BLOCK_ID_ROUTE_ERROR,
         ));
     }
-    // Mirror the execution grammar: a `+` before the `#` is a project-note
-    // attempt that used the `^` family, which takes no Pomodoro name.
-    if let Some((before_hash, _)) = block_part.split_once('#')
-        && before_hash.ends_with('+')
-    {
+    // Mirror the execution grammar: split the part after `^` at the first
+    // `#` into the block part and an optional Pomodoro name. The
+    // project-note `+` sits immediately after the block ID: with it, a `+`
+    // after `#name` is ordinary Pomodoro-name charset (so `@r^id+#c++`
+    // names `c++`); without it, a trailing `+` is a misordered marker and
+    // a bare `#name` is missing the `+`.
+    if let Some((block_before_hash, name)) = block_part.split_once('#') {
+        let Some(block_core) = block_before_hash.strip_suffix('+') else {
+            if let Some(name_core) = name.strip_suffix('+') {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_project_note_marker",
+                    &project_note_misordered_error(
+                        route_part,
+                        block_before_hash,
+                        name_core,
+                    ),
+                ));
+            }
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_project_note_marker",
+                &project_note_name_without_plus_error(
+                    route_part,
+                    block_before_hash,
+                    name,
+                ),
+            ));
+        };
+        if block_core.ends_with('+') {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_task_block_id",
+                TASK_BLOCK_ID_ERROR,
+            ));
+        }
+        // Mirror execution: once `#` is typed the block ID is finished, so
+        // an empty one is an error, not an incomplete state.
+        if block_core.is_empty() {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_task_block_id",
+                TASK_BLOCK_ID_ERROR,
+            ));
+        }
+        // A `=` anywhere after the `+` is a session suffix on a project
+        // note, which stays rejected.
+        if block_part.contains('=') {
+            let raw = block_part
+                .split_once('=')
+                .map(|(_, raw)| raw)
+                .unwrap_or_default();
+            let message = if raw.eq_ignore_ascii_case("x")
+                || link_close_after_x(raw).is_some()
+            {
+                POMODORO_CLOSE_PROJECT_NOTE_ERROR
+            } else {
+                POMODORO_START_PROJECT_NOTE_ERROR
+            };
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_project_note_marker",
+                message,
+            ));
+        }
+        if !is_block_id(block_core) {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_task_block_id",
+                TASK_BLOCK_ID_ERROR,
+            ));
+        }
+        if !name.is_empty() && !is_pomodoro_selector_component(name) {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_pomodoro_name",
+                POMODORO_NAME_ERROR,
+            ));
+        }
+        let mut marker_parse = marker_parse(
+            token,
+            MarkerShape {
+                sigil_len: 1,
+                route_part,
+                separator_len: 1,
+                right_part: block_core,
+                route_kind: SpanKind::TaskBlockIdRoute,
+                right_kind: SpanKind::TaskBlockId,
+                complete_mode: EditorMode::ProjectNote,
+                right_need: Need::BlockId,
+                third: Some(MarkerThird {
+                    // `+#` spans two bytes; a plain `#` spans one, but a
+                    // plain `#` without the `+` never reaches here.
+                    separator_len: 2,
+                    part: name,
+                    kind: SpanKind::PomodoroName,
+                    need: Need::PomodoroName,
+                }),
+                suffix: None,
+            },
+        );
+        // `marker_parse` leaves the `+#` separator bytes uncovered, so span
+        // the `+` sigil explicitly: ahead of the Pomodoro name, or split
+        // out of the `#` placeholder when the name is still missing.
+        let plus_start =
+            token.start + 1 + route_part.len() + 1 + block_core.len();
+        let plus_span = Span {
+            start: plus_start,
+            end: plus_start + 1,
+            kind: SpanKind::ProjectNoteMarker,
+        };
+        if !name.is_empty() {
+            marker_parse
+                .spans
+                .insert(marker_parse.spans.len().saturating_sub(1), plus_span);
+        } else if marker_parse.spans.pop().is_some() {
+            marker_parse.spans.push(plus_span);
+            marker_parse.spans.push(Span {
+                start: plus_start + 1,
+                end: plus_start + 2,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+        }
+        return TokenParse::Marker(marker_parse);
+    }
+    if block_part.contains('=') {
+        let raw = block_part
+            .split_once('=')
+            .map(|(_, raw)| raw)
+            .unwrap_or_default();
+        let message = if raw.eq_ignore_ascii_case("x")
+            || link_close_after_x(raw).is_some()
+        {
+            POMODORO_CLOSE_PROJECT_NOTE_ERROR
+        } else {
+            POMODORO_START_PROJECT_NOTE_ERROR
+        };
         return TokenParse::Invalid(token_diagnostic(
             token,
             "invalid_project_note_marker",
-            PROJECT_NOTE_POMODORO_NAME_ERROR,
+            message,
         ));
     }
     let (block_part, project_note) = match block_part.strip_suffix('+') {
@@ -416,13 +548,26 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             POMODORO_ROUTE_ERROR,
         ));
     }
-    // The project-note `+` sits immediately after the block ID, before any
-    // `#`. A `+` anywhere else -- notably inside the Pomodoro name -- is
-    // ordinary Pomodoro-name charset, so `@sase:deep-fix#bugs+` keeps
-    // naming the Pomodoro `bugs+`.
-    let (block_part, project_note) = match block_part.strip_suffix('+') {
-        Some(stripped) => (stripped, true),
-        None => (block_part, false),
+    // A `+` immediately after the block ID is the retired project-note
+    // sigil: the whole token teaches the `^` replacement. A `+` anywhere
+    // else -- notably inside the Pomodoro name -- is ordinary
+    // Pomodoro-name charset, so `@sase:deep-fix#bugs+` keeps naming the
+    // Pomodoro `bugs+`. An empty block ID stays an ordinary incomplete
+    // state, mirroring the execution grammar's family wording.
+    if let Some(stripped) = block_part.strip_suffix('+')
+        && !stripped.is_empty()
+    {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "retired_project_note_marker",
+            &retired_project_note_marker_error(
+                token.text, route_part, stripped, name_part,
+            ),
+        ));
+    }
+    let block_part = match block_part.strip_suffix('+') {
+        Some(stripped) => stripped,
+        None => block_part,
     };
     if !block_part.is_empty() && !is_block_id(block_part) {
         return TokenParse::Invalid(token_diagnostic(
@@ -495,20 +640,6 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             }
         },
     };
-    if project_note && start_spec.is_some() {
-        return TokenParse::Invalid(token_diagnostic(
-            token,
-            "invalid_pomodoro_start",
-            POMODORO_START_PROJECT_NOTE_ERROR,
-        ));
-    }
-    if project_note && close_spec.is_some() {
-        return TokenParse::Invalid(token_diagnostic(
-            token,
-            "invalid_pomodoro_close",
-            POMODORO_CLOSE_PROJECT_NOTE_ERROR,
-        ));
-    }
     if let (Some(name), Some(_)) = (name_part, close_spec.as_ref())
         && !name.is_empty()
     {
@@ -558,26 +689,15 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             right_part: block_part,
             route_kind: SpanKind::PomodoroRoute,
             right_kind: SpanKind::PomodoroBlockId,
-            complete_mode: if project_note {
-                EditorMode::PomodoroProjectNote
-            } else {
-                EditorMode::PomodoroTask
-            },
+            complete_mode: EditorMode::PomodoroTask,
             right_need: Need::PomodoroId,
             third: name_part.map(|part| MarkerThird {
-                // `+#` spans two bytes once the project-note sigil is
-                // present; a plain `#` spans one.
-                separator_len: 1 + usize::from(project_note),
+                separator_len: 1,
                 part,
                 kind: SpanKind::PomodoroName,
                 need: Need::PomodoroName,
             }),
-            suffix: start_suffix.or(close_suffix_span).or((project_note
-                && name_part.is_none())
-            .then_some(MarkerSuffix {
-                len: 1,
-                kind: SpanKind::ProjectNoteMarker,
-            })),
+            suffix: start_suffix.or(close_suffix_span),
         },
     );
     marker_parse.pomodoro_start = start_spec;
@@ -669,38 +789,6 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         None => {
             marker_parse.pomodoro_close = close_spec;
         }
-    }
-    if project_note && name_part.is_some() {
-        // `marker_parse` leaves the `+#` separator bytes uncovered, so span
-        // the `+` sigil explicitly: ahead of the Pomodoro name, or split out
-        // of the `#` placeholder when the name is still missing.
-        let plus_start = token.start
-            + sigil_len
-            + route_part.len()
-            + separator_len
-            + block_part.len();
-        let plus_span = Span {
-            start: plus_start,
-            end: plus_start + 1,
-            kind: SpanKind::ProjectNoteMarker,
-        };
-        if name_part.is_some_and(|part| !part.is_empty()) {
-            marker_parse
-                .spans
-                .insert(marker_parse.spans.len().saturating_sub(1), plus_span);
-        } else if marker_parse.spans.pop().is_some() {
-            marker_parse.spans.push(plus_span);
-            marker_parse.spans.push(Span {
-                start: plus_start + 1,
-                end: plus_start + 2,
-                kind: SpanKind::InteractivePlaceholder,
-            });
-        }
-    }
-    // `@:<id>+` carries the project-note intent even while the route is
-    // still missing; an empty block ID stays an ordinary incomplete state.
-    if project_note && !block_part.is_empty() && route_part.is_empty() {
-        marker_parse.mode = EditorMode::PomodoroProjectNote;
     }
     TokenParse::Marker(marker_parse)
 }

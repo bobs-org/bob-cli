@@ -38,7 +38,8 @@ pub(crate) const PLACEHOLDER_TASK_BODY: &str =
 /// is `YYYY-MM-DD`, `priority` is the `(name, value)` field pair (for example
 /// `("priority", "lowest")`), and `schedule_log_lines` are pre-rendered,
 /// already-indented lines (see `capture_schedule_log::plan`) inserted verbatim
-/// under the `^prj` task. `pomodoro_link` is true for the `:` marker form.
+/// under the `^prj` task. The `^prj` task is never linked: it renders `[ ]`,
+/// or `[?]` when scheduled.
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectNoteRenderInput<'a> {
     pub(crate) route: &'a str,
@@ -48,7 +49,6 @@ pub(crate) struct ProjectNoteRenderInput<'a> {
     pub(crate) scheduled: Option<&'a str>,
     pub(crate) priority: Option<(&'a str, &'a str)>,
     pub(crate) schedule_log_lines: &'a [String],
-    pub(crate) pomodoro_link: bool,
     pub(crate) sub_bullets: &'a [AuthoredSubBullet],
 }
 
@@ -287,13 +287,7 @@ pub(crate) fn render_project_note(
     let created_date = input.now.format("%Y-%m-%d").to_string();
     let created_timestamp = format_created_timestamp(input.now);
 
-    let status = if input.scheduled.is_some() {
-        '?'
-    } else if input.pomodoro_link {
-        '*'
-    } else {
-        ' '
-    };
+    let status = if input.scheduled.is_some() { '?' } else { ' ' };
     let mut task_line =
         format!("- [{status}] #task #prj {}", input.body.trim());
     if let Some((name, value)) = input.priority {
@@ -455,7 +449,6 @@ mod tests {
             scheduled: None,
             priority: None,
             schedule_log_lines: &[],
-            pomodoro_link: false,
             sub_bullets,
         }
     }
@@ -533,12 +526,14 @@ mod tests {
     }
 
     #[test]
-    fn pomodoro_link_uses_next_status_unless_scheduled() {
-        let mut input = base_input(&[]);
-        input.pomodoro_link = true;
-        assert!(render_project_note(&input).task_line.starts_with("- [*] "));
-        input.scheduled = Some("2026-10-04");
-        assert!(render_project_note(&input).task_line.starts_with("- [?] "));
+    fn prj_task_is_never_linked() {
+        let input = base_input(&[]);
+        assert!(render_project_note(&input).task_line.starts_with("- [ ] "));
+        let mut scheduled = base_input(&[]);
+        scheduled.scheduled = Some("2026-10-04");
+        assert!(render_project_note(&scheduled)
+            .task_line
+            .starts_with("- [?] "));
     }
 
     #[test]

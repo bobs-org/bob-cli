@@ -181,11 +181,10 @@ fn task_block_id_route_and_authored_id_both_complete() {
 
 #[test]
 fn block_id_project_note_sigil_is_excluded_from_replacement() {
-    let colon = field("@sase:x+", 7).expect("colon block id");
-    assert_eq!(colon.context, CompletionContext::PomodoroBlockId);
-    assert_eq!(colon.query, "x");
-    assert_eq!(colon.replacement, (6, 7));
+    // The retired `:` project-note form offers no completion.
+    assert_eq!(field("@sase:x+", 7), None);
     assert_eq!(field("@sase:x+", 8), None);
+    assert_eq!(field("@cash:goog-exit+#bugs", 10), None);
 
     let caret = field("@sase^x+", 7).expect("caret block id");
     assert_eq!(caret.context, CompletionContext::TaskBlockId);
@@ -193,13 +192,20 @@ fn block_id_project_note_sigil_is_excluded_from_replacement() {
     assert_eq!(caret.replacement, (6, 7));
     assert_eq!(field("@sase^x+", 8), None);
 
-    let named = field("@cash:goog-exit+#bugs", 10).expect("colon block id");
-    assert_eq!(named.context, CompletionContext::PomodoroBlockId);
+    let named = field("@cash^goog-exit+#bugs", 10).expect("caret block id");
+    assert_eq!(named.context, CompletionContext::TaskBlockId);
     assert_eq!(named.query, "goog");
     // Plus is excluded: replacement ends before the sigil.
     assert_eq!(named.replacement, (6, 15));
-    let hash = "@cash:goog-exit+#bugs".find('#').expect("hash");
-    assert_eq!(field("@cash:goog-exit+#bugs", hash), None);
+
+    // Inside the `#name` the context is the Pomodoro name and the
+    // replacement is just the name.
+    let name = field("@cash^goog-exit+#bu", 19).expect("pomodoro name");
+    assert_eq!(name.context, CompletionContext::PomodoroName);
+    assert_eq!(name.route.as_deref(), Some("cash"));
+    assert_eq!(name.block_id.as_deref(), Some("goog-exit"));
+    assert_eq!(name.query, "bu");
+    assert_eq!(name.replacement, (17, 19));
 }
 
 #[test]

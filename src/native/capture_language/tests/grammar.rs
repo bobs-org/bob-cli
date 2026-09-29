@@ -1203,6 +1203,8 @@ fn project_note_markers_stay_in_their_families() {
     // (token, sub-bullet, task-block-ID, pomodoro)
     let cases: &[(&str, bool, bool, bool)] = &[
         ("@cash^goog-exit+", false, true, false),
+        ("@cash^goog-exit+#bugs", false, true, false),
+        ("@cash^goog-exit#bugs+", false, true, false),
         ("@cash:goog-exit+", false, false, true),
         ("@cash:goog-exit+#bugs", false, false, true),
         // A `+` inside the Pomodoro name is name charset, not a sigil.
@@ -1236,34 +1238,59 @@ fn execution_parses_project_note_markers() {
         parsed.kind,
         CaptureKind::ProjectNote {
             block_id: "goog-exit".to_string(),
-            pomodoro: None,
+            pomodoro_name: None,
         }
     );
 
-    let parsed = execute("Finish it @cash:goog-exit+").expect("colon plus");
-    assert_eq!(parsed.route.as_deref(), Some("cash"));
+    // A named project-note marker parses at the token level; the item
+    // level rejects it as unused until task bullets can name IDs.
+    let token = parse_task_block_id_route_token("@cash^goog-exit+#bugs")
+        .expect("named project note");
+    assert_eq!(token.route.as_deref(), Some("cash"));
     assert_eq!(
-        parsed.kind,
+        token.kind,
         CaptureKind::ProjectNote {
             block_id: "goog-exit".to_string(),
-            pomodoro: Some(ProjectNotePomodoro { name: None }),
+            pomodoro_name: Some("bugs".to_string()),
         }
     );
 
-    let parsed = execute("Finish it @cash:goog-exit+#bugs")
-        .expect("named pomodoro plus");
-    assert_eq!(parsed.route.as_deref(), Some("cash"));
+    // A `+` inside the Pomodoro name is name charset, not a sigil.
+    let token = parse_task_block_id_route_token("@cash^goog-exit+#c++")
+        .expect("plus in project-note pomodoro name");
     assert_eq!(
-        parsed.kind,
+        token.kind,
         CaptureKind::ProjectNote {
             block_id: "goog-exit".to_string(),
-            pomodoro: Some(ProjectNotePomodoro {
-                name: Some("bugs".to_string()),
-            }),
+            pomodoro_name: Some("c++".to_string()),
         }
     );
 
-    // A trailing `+` on the Pomodoro name is not a sigil.
+    // The retired `:` project-note forms fail with a teaching error.
+    let error =
+        execute("Finish it @cash:goog-exit+").expect_err("retired colon plus");
+    assert_eq!(
+        error,
+        retired_project_note_marker_error(
+            "@cash:goog-exit+",
+            "cash",
+            "goog-exit",
+            None
+        )
+    );
+    let error = execute("Finish it @cash:goog-exit+#bugs")
+        .expect_err("retired named colon plus");
+    assert_eq!(
+        error,
+        retired_project_note_marker_error(
+            "@cash:goog-exit+#bugs",
+            "cash",
+            "goog-exit",
+            Some("bugs")
+        )
+    );
+
+    // A trailing `+` on a `:` Pomodoro name is not a sigil.
     let parsed = execute("Finish it @sase:deep-fix#bugs+")
         .expect("plus in pomodoro name");
     assert_eq!(
@@ -1279,9 +1306,40 @@ fn execution_parses_project_note_markers() {
 
 #[test]
 fn execution_rejects_project_note_shape_errors() {
+    // A `#pomodoro` name with no ` :` task is unused.
     let error = execute("Finish it @cash^goog-exit+#bugs")
-        .expect_err("caret takes no pomodoro");
-    assert_eq!(error, PROJECT_NOTE_POMODORO_NAME_ERROR);
+        .expect_err("unused pomodoro name");
+    assert_eq!(error, unused_project_note_pomodoro_error("bugs"));
+
+    // A `+` after `#name` is part of the Pomodoro name: the `+` belongs
+    // right after the block ID.
+    let error = execute("Finish it @cash^goog-exit#bugs+")
+        .expect_err("misordered plus");
+    assert_eq!(
+        error,
+        project_note_misordered_error("cash", "goog-exit", "bugs")
+    );
+
+    // A `#name` without the project-note `+` names the fix.
+    let error = execute("Finish it @cash^goog-exit#bugs")
+        .expect_err("name without plus");
+    assert_eq!(
+        error,
+        project_note_name_without_plus_error("cash", "goog-exit", "bugs")
+    );
+
+    // An empty name asks for one.
+    let error = execute("Finish it @cash^goog-exit+#")
+        .expect_err("empty pomodoro name");
+    assert_eq!(error, project_note_name_required_error("cash", "goog-exit"));
+
+    // Session suffixes stay rejected on project notes.
+    let error = execute("Finish it @cash^goog-exit+=3")
+        .expect_err("start suffix on project note");
+    assert_eq!(error, POMODORO_START_PROJECT_NOTE_ERROR);
+    let error = execute("Finish it @cash^goog-exit+#bugs=x")
+        .expect_err("close suffix on project note");
+    assert_eq!(error, POMODORO_CLOSE_PROJECT_NOTE_ERROR);
 
     let error = execute("Finish it @cash^+").expect_err("empty caret block ID");
     assert_eq!(error, TASK_BLOCK_ID_ERROR);
@@ -1310,7 +1368,11 @@ fn execution_rejects_project_note_shape_errors() {
 
 #[test]
 fn global_declaration_rejects_project_note_shapes() {
-    for token in ["@@cash^goog-exit+", "@@cash:goog-exit+"] {
+    for token in [
+        "@@cash^goog-exit+",
+        "@@cash^goog-exit+#bugs",
+        "@@cash:goog-exit+",
+    ] {
         let declaration = Token {
             text: token,
             start: 0,

@@ -696,7 +696,11 @@ fn parses_sub_bullet_routes_with_precedence_and_terminal_markers() {
     for raw in ["body @foo^bad:id", "body @foo^bad#section"] {
         let error = parse_capture_text(raw, None)
             .expect_err("caret must take precedence");
-        assert!(error.message.contains("task block-ID"), "{raw}: {error:?}");
+        assert!(
+            error.message.contains("task block-ID")
+                || error.message.contains("project-note `+`"),
+            "{raw}: {error:?}"
+        );
     }
     let error = parse_capture_text("body @foo::id", None)
         .expect_err("retired double colon is not ID-only or Pomodoro");

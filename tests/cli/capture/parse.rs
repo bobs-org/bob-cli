@@ -207,14 +207,14 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do work @cash:goog-exit+#bugs")
+        .arg("Do work @cash^goog-exit+#bugs")
         .output()
         .expect("run bob capture-parse project-note pomodoro marker");
 
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("capture-parse JSON");
-    assert_eq!(json["mode"], "pomodoro_project_note");
+    assert_eq!(json["mode"], "project_note");
     assert_eq!(json["body"], "Do work");
     assert_eq!(json["route"], "cash");
     assert_eq!(json["block_id"], "goog-exit");
@@ -223,13 +223,23 @@ fn capture_parse_json_reports_project_note_markers() {
     assert_eq!(
         json["spans"],
         serde_json::json!([
-            { "start": 8, "end": 13, "kind": "pomodoro_route" },
-            { "start": 14, "end": 23, "kind": "pomodoro_block_id" },
+            { "start": 8, "end": 13, "kind": "task_block_id_route" },
+            { "start": 14, "end": 23, "kind": "task_block_id" },
             { "start": 23, "end": 24, "kind": "project_note_marker" },
             { "start": 25, "end": 29, "kind": "pomodoro_name" },
         ])
     );
-    assert!(json["diagnostics"].as_array().unwrap().is_empty());
+    assert_eq!(
+        json["diagnostics"],
+        serde_json::json!([
+            {
+                "severity": "error",
+                "code": "unused_project_note_pomodoro",
+                "message": "`#bugs` picks the Pomodoro for ` :<id>` task links, but no task bullet ends with ` :<id>`; add one or remove `#bugs`",
+                "range": [24, 29],
+            }
+        ])
+    );
 
     let output = bob_command()
         .arg("capture-parse")
@@ -253,23 +263,23 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do work @cash^goog-exit+#bugs")
+        .arg("Do work @cash:goog-exit+#bugs")
         .output()
-        .expect("run caret project-note marker with a pomodoro name");
+        .expect("run retired colon project-note marker");
     assert_success(&invalid);
     let json: serde_json::Value = serde_json::from_str(stdout(&invalid).trim())
         .expect("capture-parse JSON");
     assert_eq!(json["mode"], "task");
     assert_eq!(
         json["diagnostics"][0]["code"],
-        "invalid_project_note_marker"
+        "retired_project_note_marker"
     );
     assert!(
         json["diagnostics"][0]["message"]
             .as_str()
             .is_some_and(|message| {
-                message.contains("takes no Pomodoro name")
-                    && message.contains("@<route>:<block-id>+#<pomodoro>")
+                message.contains("is retired")
+                    && message.contains("@cash^goog-exit+#bugs")
             }),
         "{json}"
     );

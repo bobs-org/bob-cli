@@ -19,10 +19,10 @@ use serde_json::json;
 use super::{
     capture_clip, capture_language,
     capture_language::{
-        is_block_id, AuthoredSubBullet, CaptureKind, ClipRequest,
-        ParsedCaptureItem, ParsedCaptureText, PomodoroAdjustSpec,
-        PomodoroCloseSpec, PomodoroShiftSpec, PomodoroStartSpec,
-        ProjectNotePomodoro, SubBulletTarget, TaskSectionSelector,
+        is_block_id, unused_project_note_pomodoro_error, AuthoredSubBullet,
+        CaptureKind, ClipRequest, ParsedCaptureItem, ParsedCaptureText,
+        PomodoroAdjustSpec, PomodoroCloseSpec, PomodoroShiftSpec,
+        PomodoroStartSpec, SubBulletTarget, TaskSectionSelector,
         TaskToggleIntent, POMODORO_START_FORCED_ERROR,
     },
     capture_pomodoro_close, capture_pomodoro_start, capture_pomodoros,

@@ -243,36 +243,12 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             &[Need::Route, Need::PomodoroId],
         ),
         (
-            "Body @dev:focus-123+",
-            EditorMode::PomodoroProjectNote,
-            Some("dev"),
-            None,
-            Some("focus-123"),
-            &[],
-        ),
-        (
-            "Body @dev:focus-123+#bugs",
-            EditorMode::PomodoroProjectNote,
-            Some("dev"),
-            Some("bugs"),
-            Some("focus-123"),
-            &[],
-        ),
-        (
-            "Body @dev:focus-123+#",
+            "Body @dev^focus-123+#",
             EditorMode::Incomplete,
             Some("dev"),
             None,
             Some("focus-123"),
             &[Need::PomodoroName],
-        ),
-        (
-            "Body @:focus-123+",
-            EditorMode::PomodoroProjectNote,
-            None,
-            None,
-            Some("focus-123"),
-            &[Need::Route],
         ),
         (
             "Body @dev:+",
@@ -351,6 +327,35 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
         assert_eq!(parse.needs, needs.to_vec(), "{raw}");
         assert!(parse.diagnostics.is_empty(), "{raw}");
     }
+}
+
+#[test]
+fn editor_reports_unused_project_note_pomodoro_over_the_name() {
+    // A `#pomodoro` name with no ` :` task is unused until task bullets
+    // can name IDs. The token-level mode stays `project_note`.
+    let raw = "Finish it @cash^goog-exit+#bugs";
+    let parse = editor(raw);
+    assert_eq!(parse.mode, EditorMode::ProjectNote);
+    assert_eq!(parse.route.as_deref(), Some("cash"));
+    assert_eq!(parse.section.as_deref(), Some("bugs"));
+    assert_eq!(parse.block_id.as_deref(), Some("goog-exit"));
+    assert!(parse.needs.is_empty());
+    assert_eq!(codes(&parse), vec!["unused_project_note_pomodoro"]);
+    let diagnostic = &parse.diagnostics[0];
+    assert_eq!(diagnostic.severity, Severity::Error);
+    assert_eq!(
+        diagnostic.message,
+        unused_project_note_pomodoro_error("bugs")
+    );
+    let hash = raw.find('#').expect("hash");
+    assert_eq!(diagnostic.range, Some((hash, raw.len())));
+
+    // An empty name is still an incomplete state with a placeholder over
+    // `#`, not an error.
+    let partial = editor("Finish it @cash^goog-exit+#");
+    assert_eq!(partial.mode, EditorMode::Incomplete);
+    assert_eq!(partial.needs, vec![Need::PomodoroName]);
+    assert!(partial.diagnostics.is_empty());
 }
 
 #[test]
@@ -478,37 +483,21 @@ fn editor_spans_cover_every_marker_shape() {
             ],
         ),
         (
-            "Body @dev:focus-123+",
+            "Body @dev^focus-123+#bugs",
             &[
-                SpanKind::PomodoroRoute,
-                SpanKind::PomodoroBlockId,
-                SpanKind::ProjectNoteMarker,
-            ],
-        ),
-        (
-            "Body @dev:focus-123+#bugs",
-            &[
-                SpanKind::PomodoroRoute,
-                SpanKind::PomodoroBlockId,
+                SpanKind::TaskBlockIdRoute,
+                SpanKind::TaskBlockId,
                 SpanKind::ProjectNoteMarker,
                 SpanKind::PomodoroName,
             ],
         ),
         (
-            "Body @dev:focus-123+#",
+            "Body @dev^focus-123+#",
             &[
-                SpanKind::PomodoroRoute,
-                SpanKind::PomodoroBlockId,
+                SpanKind::TaskBlockIdRoute,
+                SpanKind::TaskBlockId,
                 SpanKind::ProjectNoteMarker,
                 SpanKind::InteractivePlaceholder,
-            ],
-        ),
-        (
-            "Body @:focus-123+",
-            &[
-                SpanKind::InteractivePlaceholder,
-                SpanKind::PomodoroBlockId,
-                SpanKind::ProjectNoteMarker,
             ],
         ),
         (
@@ -621,8 +610,6 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "paste the failing output % #",
         "paste the failing output # %",
         "Finish it @cash^goog-exit+",
-        "Finish it @cash:goog-exit+",
-        "Finish it @cash:goog-exit+#bugs",
         "=x",
         "=X",
         "=x1",
@@ -676,13 +663,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::Pomodoro { .. } => EditorMode::PomodoroTask,
             CaptureKind::SubBullet { .. } => EditorMode::SubBullet,
             CaptureKind::PomodoroNote => EditorMode::PomodoroNote,
-            CaptureKind::ProjectNote { pomodoro, .. } => {
-                if pomodoro.is_none() {
-                    EditorMode::ProjectNote
-                } else {
-                    EditorMode::PomodoroProjectNote
-                }
-            }
+            CaptureKind::ProjectNote { .. } => EditorMode::ProjectNote,
             CaptureKind::TaskToggle { .. } => EditorMode::TaskToggle,
             CaptureKind::PomodoroAdjust { .. } => EditorMode::PomodoroAdjust,
             CaptureKind::PomodoroShift { .. } => EditorMode::PomodoroShift,
@@ -735,14 +716,15 @@ fn editor_agrees_with_execution_for_resolved_captures() {
                 "{raw}"
             );
         }
-        if let CaptureKind::ProjectNote { block_id, pomodoro } = &executed.kind
+        if let CaptureKind::ProjectNote {
+            block_id,
+            pomodoro_name,
+        } = &executed.kind
         {
             assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
             assert_eq!(
                 parse.section.as_deref(),
-                pomodoro
-                    .as_ref()
-                    .and_then(|pomodoro| pomodoro.name.as_deref()),
+                pomodoro_name.as_deref(),
                 "{raw}"
             );
         }

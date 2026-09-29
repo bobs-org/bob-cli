@@ -104,87 +104,82 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
 }
 
 #[test]
-fn capture_project_note_pomodoro_variants_link_the_prj_task() {
-    for (name, selector_args, day_before, expect_name, expect_creates) in [
-        (
-            "implicit",
-            vec!["@cash:impl1+", "Body implicit"],
-            "## Pomodoros\n- [ ] (1330-1400 [t:: 30m]) Work\n",
-            None,
-            false,
-        ),
-        (
-            "named-open",
-            vec!["@cash:open1+#bugs", "Body open"],
-            "## Pomodoros\n- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n- [ ] () — BUGS\n",
-            Some("BUGS"),
-            false,
-        ),
-        (
-            "named-future",
-            vec!["@cash:future1+#newthing", "Body future"],
-            "## Pomodoros\n- [ ] (1330-1400) Work\n",
-            Some("NEWTHING"),
-            true,
-        ),
+fn capture_project_note_retired_colon_forms_fail_with_teaching_errors() {
+    for (name, marker, teaching) in [
+        ("implicit", "@cash:impl1+", "@cash^impl1+"),
+        ("named", "@cash:open1+#bugs", "@cash^open1+#bugs"),
     ] {
-        let temp = TempDir::new(&format!("bob-cli-capture-project-note-{name}"));
+        let temp =
+            TempDir::new(&format!("bob-cli-capture-project-note-{name}"));
         let vault = temp.path().join("vault");
         let day_file = vault.join("day.md");
         write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+        let day_before = "## Pomodoros\n- [ ] (1330-1400 [t:: 30m]) Work\n";
         write_file(&day_file, day_before);
 
-        let mut command = bob_command();
-        command
+        let output = bob_command()
             .arg("capture")
             .arg("-b")
             .arg(&vault)
             .arg("-f")
-            .arg("json");
-        for arg in &selector_args {
-            command.arg(arg);
-        }
-        let output = command
+            .arg("json")
+            .arg(marker)
+            .arg("Body")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-09-20 14:31:07")
             .env("TZ", "UTC0")
             .output()
-            .expect("run pomodoro project-note capture");
+            .expect("run retired project-note capture");
 
-        assert_success(&output);
+        assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
         let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-        assert_eq!(json["kind"], "project_note", "{json}");
-        assert_eq!(json["block_id"], "prj", "{json}");
-        assert_eq!(json["day_file"], day_file.display().to_string(), "{json}");
+            serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
         assert!(
-            json["block_link"]
-                .as_str()
-                .is_some_and(|link| link.ends_with("#^prj]]")),
+            json["error"].as_str().is_some_and(|error| {
+                error.contains("is retired")
+                    && error.contains(teaching)
+                    && error.contains(" :<id>")
+            }),
             "{json}"
         );
-        assert!(
-            json["pomodoro_link_placement"] == "inserted"
-                || json["pomodoro_link_placement"] == "appended",
-            "{json}"
-        );
-        assert_eq!(json["creates_pomodoro"], expect_creates, "{json}");
-        match expect_name {
-            Some(name) => assert_eq!(json["pomodoro_name"], name, "{json}"),
-            None => assert!(json.get("pomodoro_name").is_none(), "{json}"),
-        }
-        if name == "implicit" {
-            assert_eq!(
-                json["task_line"], "- [*] #task #prj Body implicit #hide ^prj",
-                "{json}"
-            );
-        }
-        let day_after = fs::read_to_string(&day_file).expect("read daily note");
-        assert!(
-            day_after.contains(json["block_link"].as_str().unwrap()),
-            "{day_after}"
+        // Nothing is written: no project note and no daily-note edit.
+        assert!(!vault.join("cash_impl1.md").exists());
+        assert!(!vault.join("cash_open1.md").exists());
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("read daily note"),
+            day_before
         );
     }
+}
+
+#[test]
+fn capture_project_note_named_caret_form_rejects_the_unused_pomodoro() {
+    let temp = TempDir::new("bob-cli-capture-project-note-unused");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@cash^goog-exit+#bugs")
+        .arg("Body")
+        .env("BOB_NOW", "2026-09-20 14:31:07")
+        .env("TZ", "UTC0")
+        .output()
+        .expect("run named project-note capture");
+
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
+    assert!(
+        json["error"].as_str().is_some_and(|error| error
+            .contains("`#bugs` picks the Pomodoro for ` :<id>` task links")),
+        "{json}"
+    );
+    assert!(!vault.join("cash_goog_exit.md").exists());
 }
 
 #[test]
@@ -495,29 +490,15 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         format_output(&forced_clip)
     );
 
+    // The retired `:` form never reaches the ledger: it fails before any
+    // write, even when the ledger already mentions the `^prj` link.
     let ledger = TempDir::new("bob-cli-project-note-ledger");
     let vault = ledger.path().join("vault");
     let day_file = vault.join("day.md");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
-    write_file(
-        &day_file,
-        "## Pomodoros\n- [ ] (1330-1400) Work\n  - [[cash_dup#^prj]]\n",
-    );
-    let _ = bob_command()
-        .arg("capture")
-        .arg("-b")
-        .arg(&vault)
-        .arg("-f")
-        .arg("json")
-        .arg("@cash:dup+")
-        .arg("Body")
-        .env("BOB_DAY_FILE", &day_file)
-        .env("BOB_NOW", "2026-09-20 14:31:07")
-        .output();
-    write_file(
-        &day_file,
-        "## Pomodoros\n- [ ] (1330-1400) Work\n  - [[cash_dup#^prj]]\n",
-    );
+    let day_before =
+        "## Pomodoros\n- [ ] (1330-1400) Work\n  - [[cash_dup#^prj]]\n";
+    write_file(&day_file, day_before);
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -529,17 +510,21 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .output()
-        .expect("run duplicate ledger capture");
-    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        .expect("run retired ledger capture");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
     assert!(
-        json["error"].as_str().is_some_and(
-            |error| error.contains("Pomodoro ledger already contains")
-        ),
+        json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("is retired")),
         "{json}"
     );
     assert!(!vault.join("cash_dup.md").exists());
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read daily note"),
+        day_before
+    );
 
     let forced = TempDir::new("bob-cli-project-note-forced-literal");
     let vault = forced.path().join("vault");

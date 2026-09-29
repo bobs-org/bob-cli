@@ -990,7 +990,7 @@ fn capture_pomodoro_link_solo_grammar_and_atomic_execution() {
         ("@sase:a s:1", "cannot be combined with s:<N>"),
         ("@sase:a p:1", "cannot be combined with p:<N>"),
         ("^sase:a extra", "must be the whole capture item"),
-        ("^sase:a+", "@route:block-id+"),
+        ("^sase:a+", "@route^block-id+"),
         ("^sase:a!", "@route+block-id!"),
         ("^", "finish the marker"),
         ("^sase:", "finish the marker"),
