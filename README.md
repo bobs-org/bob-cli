@@ -71,9 +71,10 @@ bob capture-targets
 bob projects list
 ```
 
-Priority rolls (`p:<N>`), `bob randomize`, Highlights pre-scan hooks, and
-`bob gkeep` read `~/.config/bob/config.yml`. Override that path with
-`BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`; see [Environment](#environment).
+Priority rolls (`p:<N>`), `bob randomize`, Highlights pre-scan hooks,
+`bob gkeep`, and `bob plan` read `~/.config/bob/config.yml`. Override
+that path with `BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`; see
+[Environment](#environment).
 
 ## Terms
 
@@ -162,6 +163,7 @@ Bob's workflow commands are:
 | [`move-done-tasks`](#move-done-tasks) | Archive done and canceled task blocks and repair their links |
 | [`nightly`](#nightly-maintenance) | Run the Git sync and maintenance workflow |
 | [`notify`](#pomodoro-status) | Notify when the current Pomodoro finishes |
+| [`plan`](#plan-budget) | Show today's plan budget and this week's NOW count |
 | [`plugins`](#plugins) | List and deploy Bob's custom Obsidian plugins |
 | [`pomodoro`](#pomodoro-status) | Print the current Pomodoro status |
 | [`projects`](#projects) | Inspect and synchronize project lifecycle tasks |
@@ -409,6 +411,23 @@ transient failures with jittered backoff, bounded by `--retry-timeout`
 (default 120s; `0` fails fast on the first attempt). The full sync, grouping,
 link-resolution, exclusion, retry, output, and JSON contract lives in
 [`docs/task-status-hooks.md`](docs/task-status-hooks.md).
+
+## Plan budget
+
+```bash
+bob plan [-b|--bob-dir DIR] [-f|--format human|json]
+```
+
+Today is closed: GTD plus at most 3 themes, and this week is `#now`:
+at most 15 tasks. `bob plan` is read-only: it reports the plan
+budget from today's daily-note ledger (distinct open Pomodoro names
+besides the exempt ones, distinct Task Links under them) and the NOW
+count from the native Tasks index, with lints and hints. The first
+open non-exempt entry is the highlight (★); the timed entry is
+running (▶). A missing daily note or missing Pomodoros section still
+reports NOW and exits 0. The full definition, JSON contract, lint
+codes, and conformance examples live in
+[`docs/plan.md`](docs/plan.md).
 
 ## Projects
 
@@ -782,7 +801,10 @@ clipboard source alone.
 `$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`. That
 file holds the priority windows for `p:<N>` and `bob randomize`,
 `highlights.pre_scan_hook` for `bob highlights scan` and
-`bob highlights doctor`, and the `gkeep:` section for `bob gkeep`.
+`bob highlights doctor`, the `gkeep:` section for `bob gkeep`, and the
+optional `plan:` block for `bob plan` (caps default to 3 themes, 10
+links, and 15 NOW tasks; `bob plan` exits 2 on invalid values while
+every other surface falls back to the defaults).
 
 `COLUMNS`, when set to a positive integer, is the width `bob plugins list`
 and `bob gkeep` use when they shorten human table text so each row fits.

@@ -61,6 +61,34 @@ impl NoteBlock {
     }
 }
 
+/// The `docs/plan.md` NOW query: this week's bets visible today. It
+/// matches the dash's own defaults so every surface agrees.
+pub(crate) const NOW_QUERY: &str = "not done\ntags include #now\nis not blocked\ntags do not include #hide\nfolder does not include _templates\npath does not include _conflicts\n(no scheduled date) OR (scheduled on or before today)";
+
+/// The descriptions of the tasks matching `query` through the native
+/// Tasks engine, so plan-budget NOW counts honor the vault's Tasks
+/// settings. Callers apply their own whole-token tag predicates (the
+/// engine's `tags include` also matches subtags like `#now/x`).
+pub(crate) fn query_matching_descriptions(
+    vault: &Path,
+    query: &str,
+    now: chrono::NaiveDateTime,
+) -> Result<Vec<String>, DataviewError> {
+    let settings = TasksSettings::read(vault)?;
+    let index = TaskIndex::read(vault, &settings, now)?;
+    let parsed = parse::parse(vault, None, query, &settings)?;
+    let mut javascript =
+        js::JsSandbox::new(&index.tasks, parsed.context.as_ref(), now)?;
+    let execution =
+        execute_query(parsed, &settings, &index, now, &mut javascript)?;
+    Ok(execution
+        .result
+        .tasks
+        .iter()
+        .map(|task| task.description.clone())
+        .collect())
+}
+
 pub(super) fn run(
     vault: &Path,
     origin: Option<&Path>,

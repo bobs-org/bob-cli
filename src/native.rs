@@ -47,6 +47,7 @@ mod nightly;
 mod note_tasks;
 mod notify;
 mod ob;
+mod plan_budget;
 mod plugins;
 mod pomodoro;
 mod projects;
@@ -79,6 +80,7 @@ pub(crate) enum NativeCommand {
     MoveDoneTasks,
     Nightly,
     Notify,
+    Plan,
     Plugins,
     Pomodoro,
     Projects,
@@ -118,6 +120,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::MoveDoneTasks => collect_done::run(args),
         NativeCommand::Nightly => nightly::run(args),
         NativeCommand::Notify => notify::run(args),
+        NativeCommand::Plan => plan_budget::cli::run(args),
         NativeCommand::Plugins => plugins::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),
         NativeCommand::Projects => projects::run(args),

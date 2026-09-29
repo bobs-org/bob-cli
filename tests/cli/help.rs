@@ -863,6 +863,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "move-done-tasks",
         "nightly",
         "notify",
+        "plan",
         "plugins",
         "pomodoro",
         "projects",

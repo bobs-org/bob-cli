@@ -6,6 +6,7 @@ mod help;
 mod help_options;
 mod highlights;
 mod move_done;
+mod plan;
 mod plugins;
 mod pomodoro;
 mod projects;

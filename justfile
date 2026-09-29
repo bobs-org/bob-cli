@@ -69,6 +69,7 @@ install-smoke:
     "${root}/bin/bob" move-done-tasks --help >/dev/null
     "${root}/bin/bob" nightly --help >/dev/null
     "${root}/bin/bob" notify --help >/dev/null
+    "${root}/bin/bob" plan --help >/dev/null
     "${root}/bin/bob" plugins --help >/dev/null
     "${root}/bin/bob" plugins list --help >/dev/null
     "${root}/bin/bob" plugins sync --help >/dev/null
