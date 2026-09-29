@@ -15,8 +15,8 @@ use super::{
     capture_language::{
         self, AuthoredSubBullet, Diagnostic, EditorGlobalDestination,
         EditorItemParse, EditorMode, Need, PomodoroAdjustSpec,
-        PomodoroCloseSpec, PomodoroShiftSpec, PomodoroStartSpec, Severity,
-        Span,
+        PomodoroCloseSpec, PomodoroShiftSpec, PomodoroStartSpec, ProjectTaskId,
+        Severity, Span,
     },
     capture_links,
     style::Styler,
@@ -164,7 +164,16 @@ and neither is ever rewritten. \
 A '@^id+' marker already carries the project-note intent: it reports mode \
 'project_note' with a 'route' need until the \
 route is typed. A '@:id+' marker is the retired project-note form and \
-reports a `retired_project_note_marker` diagnostic. A solo '@route:block-id[#pomodoro][=<X>]' item links an existing task into \
+reports a `retired_project_note_marker` diagnostic. In a project-note item, a trailing \
+` :id` / ` ^id` word on a first-level task bullet names that task: ` :id` additionally makes it Next and \
+links it into the Pomodoro, reporting mode 'pomodoro_project_note' with a `project_task_link_marker` span over \
+the `:` and a `project_task_block_id` span over the ID (` ^id` spans only the ID). Stripped bodies appear in \
+`sub_bullets` with a parallel `sub_bullet_task_ids` array of `null` or `{\"block_id\", \"link\"}` entries, and \
+`section` carries the marker's Pomodoro name. Misplaced, invalid, reserved, empty, or checkbox-carrying IDs report \
+`misplaced_project_task_id` or `invalid_project_task_id`, a repeated ID reports `duplicate_project_task_id`, and a \
+`#pomodoro` name with no ` :` task reports `unused_project_note_pomodoro`. A lone trailing `:` or `^` is an unfinished \
+ID: mode 'incomplete' needing `block_id` with an `interactive_placeholder` span over the sigil and no diagnostic. \
+Outside project-note items these words stay literal text. A solo '@route:block-id[#pomodoro][=<X>]' item links an existing task into \
 today's Pomodoro ledger instead of creating one, and parses as \
 'pomodoro_link' with the same spans and `pomodoro_start` object; anything \
 else on the item is an `invalid_pomodoro_link` diagnostic. The '^' spelling \
@@ -302,6 +311,13 @@ struct CaptureParseResult {
     /// `2` for a nested authored child.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sub_bullet_depths: Vec<u8>,
+    /// Additive schema-version-1 field aligned one-to-one with
+    /// `sub_bullets`: each entry is `null` or
+    /// `{"block_id": "...", "link": bool}` (`link` is `true` for ` :id`).
+    /// Emitted only when at least one entry is non-null, so every older
+    /// input keeps its exact JSON shape.
+    #[serde(skip_serializing_if = "all_task_ids_none")]
+    sub_bullet_task_ids: Vec<Option<ProjectTaskId>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     items: Vec<CaptureParseItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -360,6 +376,8 @@ struct CaptureParseItem {
     sub_bullets: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sub_bullet_depths: Vec<u8>,
+    #[serde(skip_serializing_if = "all_task_ids_none")]
+    sub_bullet_task_ids: Vec<Option<ProjectTaskId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_start: Option<PomodoroStartSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -384,6 +402,7 @@ impl CaptureParseResult {
         let items = parse_items(&parse.items);
         let sub_bullets = parse.sub_bullets;
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
+        let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
         Self {
             ok: true,
             schema_version: SCHEMA_VERSION,
@@ -398,6 +417,7 @@ impl CaptureParseResult {
             diagnostics: parse.diagnostics,
             sub_bullets: sub_bullet_bodies(&sub_bullets),
             sub_bullet_depths,
+            sub_bullet_task_ids,
             items,
             global_destination: parse
                 .global_destination
@@ -449,6 +469,7 @@ fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
             needs: item.needs.clone(),
             sub_bullets: sub_bullet_bodies(&item.sub_bullets),
             sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
+            sub_bullet_task_ids: sub_bullet_task_ids(&item.sub_bullets),
             pomodoro_start: item.pomodoro_start.clone(),
             pomodoro_adjust: item.pomodoro_adjust.clone(),
             pomodoro_shift: item.pomodoro_shift.clone(),
@@ -463,6 +484,19 @@ fn sub_bullet_bodies(sub_bullets: &[AuthoredSubBullet]) -> Vec<String> {
 
 fn sub_bullet_depths(sub_bullets: &[AuthoredSubBullet]) -> Vec<u8> {
     sub_bullets.iter().map(|item| item.depth.level()).collect()
+}
+
+fn sub_bullet_task_ids(
+    sub_bullets: &[AuthoredSubBullet],
+) -> Vec<Option<ProjectTaskId>> {
+    sub_bullets
+        .iter()
+        .map(|item| item.task_id.clone())
+        .collect()
+}
+
+fn all_task_ids_none(ids: &[Option<ProjectTaskId>]) -> bool {
+    ids.iter().all(Option::is_none)
 }
 
 fn merge_spans(
@@ -553,13 +587,23 @@ fn print_human_success_with_styler(
     if !result.sub_bullets.is_empty() {
         println!();
         println!("  Sub-bullets");
-        for (sub_bullet, depth) in result
-            .sub_bullets
-            .iter()
-            .zip(result.sub_bullet_depths.iter().copied())
-        {
+        for (index, sub_bullet) in result.sub_bullets.iter().enumerate() {
+            let depth =
+                result.sub_bullet_depths.get(index).copied().unwrap_or(1);
             let indentation = "  ".repeat(usize::from(depth.saturating_sub(1)));
-            println!("    {indentation}- {sub_bullet}");
+            let task_id = result
+                .sub_bullet_task_ids
+                .get(index)
+                .and_then(|task| task.as_ref())
+                .map(|task| {
+                    format!(
+                        " {}{}",
+                        if task.link { ':' } else { '^' },
+                        task.block_id
+                    )
+                })
+                .unwrap_or_default();
+            println!("    {indentation}- {sub_bullet}{task_id}");
         }
     }
 

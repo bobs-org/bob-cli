@@ -6,6 +6,7 @@ use super::editor_parse::*;
 use super::line::*;
 use super::markers::*;
 use super::model::*;
+use super::project_tasks::*;
 use super::tokens::*;
 
 pub(super) struct ParsedCaptureItemOutcome<'a> {
@@ -91,6 +92,7 @@ pub(super) fn parse_capture_item<'a>(
     aggregate.absorb(parent_outcome.markers, parent_outcome.route)?;
 
     let mut sub_bullets = Vec::new();
+    let mut sub_bullet_lines = Vec::new();
     let mut has_first_level_owner = false;
     for line in child_lines {
         let line_number = line.line_number;
@@ -123,7 +125,9 @@ pub(super) fn parse_capture_item<'a>(
         sub_bullets.push(AuthoredSubBullet {
             body: outcome.body,
             depth: authored.depth,
+            task_id: None,
         });
+        sub_bullet_lines.push(line_number);
         if authored.depth == AuthoredDepth::First {
             has_first_level_owner = true;
         }
@@ -299,12 +303,45 @@ pub(super) fn parse_capture_item<'a>(
         }
     }
     // A project-note `#pomodoro` name picks the Pomodoro that ` :<id>`
-    // Task Links go under. The task-ID grammar arrives in a later phase,
-    // so no item can carry a ` :` task yet and any name is unused.
+    // Task Links go under. The trailing-ID post-pass below strips accepted
+    // IDs from bodies and records them on the sub-bullets; a name with no
+    // ` :` task stays unused.
+    let mut has_link_task = false;
+    if matches!(kind, CaptureKind::ProjectNote { .. }) {
+        let mut pass = ProjectTaskPass::new();
+        if let Some(message) = pass.check_parent(&parent_outcome.body) {
+            return Err(message);
+        }
+        for (index, child) in sub_bullets.iter_mut().enumerate() {
+            let line_number = sub_bullet_lines[index];
+            match pass.check_child(&child.body, child.depth, line_number) {
+                ChildTaskOutcome::Ignore => {}
+                ChildTaskOutcome::Unfinished { sigil } => {
+                    return Err(unfinished_project_task_id_error(sigil));
+                }
+                ChildTaskOutcome::Error { message, .. } => {
+                    return Err(message);
+                }
+                ChildTaskOutcome::Accept {
+                    sigil,
+                    id,
+                    stripped,
+                } => {
+                    child.body = stripped;
+                    child.task_id = Some(ProjectTaskId {
+                        block_id: id,
+                        link: sigil == ':',
+                    });
+                }
+            }
+        }
+        has_link_task = pass.has_link;
+    }
     if let CaptureKind::ProjectNote {
         pomodoro_name: Some(name),
         ..
     } = &kind
+        && !has_link_task
     {
         return Err(unused_project_note_pomodoro_error(name));
     }

@@ -26,7 +26,9 @@ use std::collections::HashMap;
 
 use chrono::{Local, LocalResult, NaiveDateTime, TimeZone};
 
-use super::capture_language::{AuthoredDepth, AuthoredSubBullet};
+use super::capture_language::{
+    split_leading_checkbox, AuthoredDepth, AuthoredSubBullet,
+};
 
 /// Placeholder task kept under `## Tasks` when no authored task children were
 /// rendered. Matches the template's `(REPLACE WITH TASK DESCRIPTION)` line
@@ -176,36 +178,6 @@ pub(crate) fn normalize_project_section_title(title: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
-}
-
-/// Split a leading `[X]` checkbox marker off a trimmed authored body,
-/// returning the status character and the remaining body. Returns
-/// `(None, body)` when no checkbox is present.
-fn split_leading_checkbox(trimmed: &str) -> (Option<char>, &str) {
-    let mut chars = trimmed.char_indices();
-    if chars.next().map(|(_, value)| value) != Some('[') {
-        return (None, trimmed);
-    }
-    let Some((_, status)) = chars.next() else {
-        return (None, trimmed);
-    };
-    if status == ']' || status == '\n' {
-        return (None, trimmed);
-    }
-    let Some((close_start, close)) = chars.next() else {
-        return (None, trimmed);
-    };
-    if close != ']' {
-        return (None, trimmed);
-    }
-    let rest = &trimmed[close_start + 1..];
-    if rest.is_empty() {
-        return (Some(status), "");
-    }
-    if !rest.starts_with(char::is_whitespace) {
-        return (None, trimmed);
-    }
-    (Some(status), rest.trim_start())
 }
 
 /// Whether `body` already carries a `#task` token, using the same boundary
@@ -435,6 +407,7 @@ mod tests {
         AuthoredSubBullet {
             body: body.to_string(),
             depth,
+            task_id: None,
         }
     }
 

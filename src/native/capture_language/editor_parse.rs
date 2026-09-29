@@ -7,6 +7,7 @@ use super::editor_pomodoro::*;
 use super::line::*;
 use super::markers::*;
 use super::model::*;
+use super::project_tasks::*;
 use super::tokens::*;
 
 /// Remap one physical line's own tokenizer output into the original
@@ -30,6 +31,10 @@ pub(super) fn tokenize_line_with_spans<'a>(
 /// clipboard spans it carries, and any diagnostics raised along the way.
 pub(super) struct LineEditorParse<'a> {
     pub(super) body: String,
+    /// The remaining body tokens with original-draft byte offsets, in
+    /// source order. The task-ID post-pass reads the last entry to span
+    /// the ` :id` / ` ^id` token exactly.
+    pub(super) body_tokens: Vec<Token<'a>>,
     pub(super) marker: Option<MarkerParse>,
     pub(super) marker_text: Option<String>,
     pub(super) declarations: Vec<Token<'a>>,
@@ -73,11 +78,15 @@ pub(super) fn parse_editor_line<'a>(
             TokenParse::Marker(_) => Some(tokens[*index].text.to_string()),
             TokenParse::Invalid(_) => None,
         });
-    let body = tokens
+    let body_tokens: Vec<Token<'_>> = tokens
         .iter()
         .enumerate()
         .filter(|(index, _)| Some(*index) != marker_index)
-        .map(|(_, token)| token.text)
+        .map(|(_, token)| *token)
+        .collect();
+    let body = body_tokens
+        .iter()
+        .map(|token| token.text)
         .collect::<Vec<_>>()
         .join(" ");
 
@@ -92,6 +101,7 @@ pub(super) fn parse_editor_line<'a>(
 
     LineEditorParse {
         body,
+        body_tokens,
         marker,
         marker_text,
         declarations,
@@ -492,6 +502,8 @@ pub(super) fn parse_editor_item<'a>(
     };
 
     let mut sub_bullets = Vec::new();
+    let mut child_task_tokens: Vec<Option<Token<'_>>> = Vec::new();
+    let mut child_task_lines: Vec<usize> = Vec::new();
     let mut has_first_level_owner = false;
     for line in item.lines.iter().skip(1) {
         let line_number = line.line_number;
@@ -572,9 +584,12 @@ pub(super) fn parse_editor_item<'a>(
                 range: Some((raw.start, raw.end)),
             });
         } else {
+            child_task_tokens.push(child_parse.body_tokens.last().copied());
+            child_task_lines.push(line_number);
             sub_bullets.push(AuthoredSubBullet {
                 body: child_parse.body,
                 depth: authored.depth,
+                task_id: None,
             });
             if authored.depth == AuthoredDepth::First {
                 has_first_level_owner = true;
@@ -736,23 +751,103 @@ pub(super) fn parse_editor_item<'a>(
         }
     }
 
-    // A project-note `#pomodoro` name picks the Pomodoro that ` :<id>`
-    // Task Links go under. The task-ID grammar arrives in a later phase,
-    // so no item can carry a ` :` task yet and any name is unused. The
-    // diagnostic covers the `#name` component.
-    if mode == EditorMode::ProjectNote && section.is_some() {
-        let range = spans
-            .iter()
-            .find(|span| span.kind == SpanKind::PomodoroName)
-            .map(|span| (span.start.saturating_sub(1), span.end));
-        diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            code: "unused_project_note_pomodoro",
-            message: unused_project_note_pomodoro_error(
-                section.as_deref().unwrap_or_default(),
-            ),
-            range,
-        });
+    // Project task IDs (` :id` / ` ^id`) are a post-pass over the parsed
+    // lines, mirroring execution's evaluation order through the shared
+    // `ProjectTaskPass`: the parent line, then each child in source order,
+    // then the unused-`#pomodoro` rule. Accepted IDs are stripped from the
+    // sub-bullet bodies and recorded on them; violations become
+    // diagnostics. A lone sigil ending a first-level bullet is an
+    // unfinished ID: `incomplete` needing `block_id` with a placeholder
+    // span over the sigil and no diagnostic. A project note with at least
+    // one accepted ` :` task upgrades to `pomodoro_project_note`.
+    if mode == EditorMode::ProjectNote {
+        let mut pass = ProjectTaskPass::new();
+        if let Some(message) = pass.check_parent(&body) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "misplaced_project_task_id",
+                message,
+                range: parent_parse
+                    .body_tokens
+                    .last()
+                    .map(|token| (token.start, token.end)),
+            });
+        }
+        for (index, sub_bullet) in sub_bullets.iter_mut().enumerate() {
+            let token = child_task_tokens[index];
+            let line_number = child_task_lines[index];
+            match pass.check_child(
+                &sub_bullet.body,
+                sub_bullet.depth,
+                line_number,
+            ) {
+                ChildTaskOutcome::Ignore => {}
+                ChildTaskOutcome::Unfinished { .. } => {
+                    mode = EditorMode::Incomplete;
+                    if !needs.contains(&Need::BlockId) {
+                        needs.push(Need::BlockId);
+                    }
+                    if let Some(token) = token {
+                        spans.push(Span {
+                            start: token.start,
+                            end: token.end,
+                            kind: SpanKind::InteractivePlaceholder,
+                        });
+                    }
+                }
+                ChildTaskOutcome::Accept {
+                    sigil,
+                    id,
+                    stripped,
+                } => {
+                    let link = sigil == ':';
+                    sub_bullet.body = stripped;
+                    sub_bullet.task_id =
+                        Some(ProjectTaskId { block_id: id, link });
+                    if let Some(token) = token {
+                        if link {
+                            spans.push(Span {
+                                start: token.start,
+                                end: token.start + 1,
+                                kind: SpanKind::ProjectTaskLinkMarker,
+                            });
+                        }
+                        spans.push(Span {
+                            start: token.start + 1,
+                            end: token.end,
+                            kind: SpanKind::ProjectTaskBlockId,
+                        });
+                    }
+                }
+                ChildTaskOutcome::Error { code, message } => {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code,
+                        message,
+                        range: token.map(|token| (token.start, token.end)),
+                    });
+                }
+            }
+        }
+        // A `#pomodoro` name picks the Pomodoro that ` :<id>` Task Links
+        // go under. The diagnostic covers the `#name` component.
+        if section.is_some() && !pass.has_link {
+            let range = spans
+                .iter()
+                .find(|span| span.kind == SpanKind::PomodoroName)
+                .map(|span| (span.start.saturating_sub(1), span.end));
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "unused_project_note_pomodoro",
+                message: unused_project_note_pomodoro_error(
+                    section.as_deref().unwrap_or_default(),
+                ),
+                range,
+            });
+        }
+        if pass.has_link && mode == EditorMode::ProjectNote {
+            mode = EditorMode::PomodoroProjectNote;
+        }
     }
 
     // A leading `^` token claims its item (see `classify_caret_item`):

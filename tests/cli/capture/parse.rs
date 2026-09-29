@@ -299,6 +299,123 @@ fn capture_parse_json_reports_project_note_markers() {
 }
 
 #[test]
+fn capture_parse_json_reports_project_task_ids_spans_and_mode() {
+    let input = "Finish the Google exit packet! @cash^goog-exit+#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs";
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(input)
+        .output()
+        .expect("run bob capture-parse project task IDs");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["mode"], "pomodoro_project_note");
+    assert_eq!(json["body"], "Finish the Google exit packet!");
+    assert_eq!(json["route"], "cash");
+    assert_eq!(json["section"], "admin");
+    assert_eq!(
+        json["sub_bullets"],
+        serde_json::json!([
+            "Draft the resignation memo",
+            "keep it short",
+            "Collect the equity paperwork",
+        ])
+    );
+    assert_eq!(json["sub_bullet_depths"], serde_json::json!([1, 2, 1]));
+    assert_eq!(
+        json["sub_bullet_task_ids"],
+        serde_json::json!([
+            { "block_id": "draft-memo", "link": true },
+            null,
+            { "block_id": "equity-docs", "link": false },
+        ])
+    );
+    assert!(json["diagnostics"].as_array().unwrap().is_empty(), "{json}");
+    let kinds: Vec<&str> = json["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|span| span["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"project_task_link_marker"), "{json}");
+    assert!(kinds.contains(&"project_task_block_id"), "{json}");
+    let memo = input.find(":draft-memo").unwrap();
+    assert!(
+        json["spans"].as_array().unwrap().iter().any(|span| {
+            span["start"] == memo
+                && span["end"] == memo + 1
+                && span["kind"] == "project_task_link_marker"
+        }),
+        "{json}"
+    );
+    assert!(
+        json["spans"].as_array().unwrap().iter().any(|span| {
+            span["start"] == memo + 1
+                && span["end"] == memo + ":draft-memo".len()
+                && span["kind"] == "project_task_block_id"
+        }),
+        "{json}"
+    );
+
+    // Inputs without task IDs keep their exact older shape: no
+    // `sub_bullet_task_ids` key at all.
+    let plain = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @cash^goog-exit+")
+        .output()
+        .expect("run plain project-note parse");
+    assert_success(&plain);
+    let json: serde_json::Value = serde_json::from_str(stdout(&plain).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "project_note");
+    assert!(json.get("sub_bullet_task_ids").is_none(), "{json}");
+
+    // Human output repeats each ID after its sub-bullet.
+    let human = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg(input)
+        .output()
+        .expect("run human project task-ID parse");
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(
+        out.contains("- Draft the resignation memo :draft-memo"),
+        "{out}"
+    );
+    assert!(
+        out.contains("- Collect the equity paperwork ^equity-docs"),
+        "{out}"
+    );
+    assert!(out.contains("- keep it short"), "{out}");
+
+    // A lone sigil is an unfinished ID: incomplete needing `block_id`.
+    let unfinished = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Finish it @cash^x+\n- Draft :")
+        .output()
+        .expect("run unfinished task-ID parse");
+    assert_success(&unfinished);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&unfinished).trim())
+            .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "incomplete");
+    assert_eq!(json["needs"], serde_json::json!(["block_id"]));
+    assert!(json["diagnostics"].as_array().unwrap().is_empty(), "{json}");
+}
+
+#[test]
 fn capture_parse_json_reports_retired_double_colon_as_migration_guidance() {
     let output = bob_command()
         .arg("capture-parse")

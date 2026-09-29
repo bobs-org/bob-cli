@@ -4,6 +4,7 @@ use super::super::draft::*;
 use super::super::editor_model::*;
 use super::super::editor_parse::*;
 use super::super::model::*;
+use super::super::project_tasks::*;
 use super::*;
 
 #[test]
@@ -359,6 +360,190 @@ fn editor_reports_unused_project_note_pomodoro_over_the_name() {
 }
 
 #[test]
+fn editor_reports_project_task_ids_with_modes_spans_and_diagnostics() {
+    let raw = "Finish the Google exit packet! @cash^goog-exit+#admin\n\
+               - Draft the resignation memo :draft-memo\n\
+               \x20 - keep it short\n\
+               - Collect the equity paperwork ^equity-docs";
+    let parse = editor(raw);
+    assert_eq!(parse.mode, EditorMode::PomodoroProjectNote);
+    assert_eq!(parse.route.as_deref(), Some("cash"));
+    assert_eq!(parse.section.as_deref(), Some("admin"));
+    assert_eq!(parse.block_id.as_deref(), Some("goog-exit"));
+    assert!(parse.needs.is_empty());
+    assert!(parse.diagnostics.is_empty());
+    assert_eq!(
+        parse
+            .sub_bullets
+            .iter()
+            .map(|sub| (sub.body.as_str(), sub.task_id.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "Draft the resignation memo",
+                Some(ProjectTaskId {
+                    block_id: "draft-memo".to_string(),
+                    link: true,
+                })
+            ),
+            ("keep it short", None),
+            (
+                "Collect the equity paperwork",
+                Some(ProjectTaskId {
+                    block_id: "equity-docs".to_string(),
+                    link: false,
+                })
+            ),
+        ]
+    );
+    // `:` spans the sigil as a link marker plus the ID; `^` spans only
+    // the ID, exactly like separators elsewhere.
+    let memo = raw.find(":draft-memo").expect("memo id");
+    let docs = raw.find("^equity-docs").expect("docs id");
+    assert!(
+        ranges(&parse).contains(&(
+            memo,
+            memo + 1,
+            SpanKind::ProjectTaskLinkMarker
+        )),
+        "{raw}"
+    );
+    assert!(
+        ranges(&parse).contains(&(
+            memo + 1,
+            memo + ":draft-memo".len(),
+            SpanKind::ProjectTaskBlockId
+        )),
+        "{raw}"
+    );
+    assert!(
+        ranges(&parse).contains(&(
+            docs + 1,
+            docs + "^equity-docs".len(),
+            SpanKind::ProjectTaskBlockId
+        )),
+        "{raw}"
+    );
+    assert!(parse.spans.iter().all(|span| span.start != docs), "{raw}");
+
+    // A `^`-only project note keeps the `project_note` mode.
+    let caret_only = editor("Finish it @cash^x+\n- Doc ^docs");
+    assert_eq!(caret_only.mode, EditorMode::ProjectNote);
+    assert!(caret_only.diagnostics.is_empty());
+
+    // Every rule violation is a diagnostic with the execution message,
+    // ranged over the offending token (the `#name` component for the
+    // unused-`#pomodoro` rule, the second ID for duplicates).
+    let cases: &[(&str, &str, String, &str, bool)] = &[
+        (
+            "Finish it :foo @cash^x+",
+            "misplaced_project_task_id",
+            misplaced_parent_task_id_error(":foo"),
+            ":foo",
+            false,
+        ),
+        (
+            "Finish it @cash^x+\n- Draft\n  - nested :foo",
+            "misplaced_project_task_id",
+            misplaced_nested_task_id_error(":foo"),
+            ":foo",
+            false,
+        ),
+        (
+            "Finish it @cash^x+\n- Draft :a_b",
+            "invalid_project_task_id",
+            invalid_project_task_id_charset_error("a_b"),
+            ":a_b",
+            false,
+        ),
+        (
+            "Finish it @cash^x+\n- Draft :PRJ",
+            "invalid_project_task_id",
+            reserved_project_task_id_error("PRJ"),
+            ":PRJ",
+            false,
+        ),
+        (
+            "Finish it @cash^x+\n- :foo",
+            "invalid_project_task_id",
+            empty_project_task_body_error(2),
+            ":foo",
+            false,
+        ),
+        (
+            "Finish it @cash^x+\n- [x] Foo :foo",
+            "invalid_project_task_id",
+            checkbox_project_task_id_error("foo", 'x'),
+            ":foo",
+            false,
+        ),
+        (
+            "Finish it @cash^x+\n- One :same\n- Two :same",
+            "duplicate_project_task_id",
+            duplicate_project_task_id_error("same", 2, 3),
+            ":same",
+            true,
+        ),
+        (
+            "Finish it @cash^x+#bugs\n- Doc ^docs",
+            "unused_project_note_pomodoro",
+            unused_project_note_pomodoro_error("bugs"),
+            "#bugs",
+            false,
+        ),
+    ];
+    for (raw, code, message, needle, last) in cases {
+        let parse = editor(raw);
+        assert_eq!(codes(&parse), vec![*code], "{raw}");
+        assert_eq!(parse.diagnostics[0].message, *message, "{raw}");
+        assert_eq!(parse.diagnostics[0].severity, Severity::Error, "{raw}");
+        let start = if *last {
+            raw.rfind(needle).expect("needle")
+        } else {
+            raw.find(needle).expect("needle")
+        };
+        assert_eq!(
+            parse.diagnostics[0].range,
+            Some((start, start + needle.len())),
+            "{raw}"
+        );
+    }
+
+    // A duplicate keeps the first ID and still upgrades the mode.
+    let duplicate = editor("Finish it @cash^x+\n- One :same\n- Two :same");
+    assert_eq!(duplicate.mode, EditorMode::PomodoroProjectNote);
+
+    // A lone sigil ending a first-level bullet is unfinished: mode
+    // `incomplete` needing `block_id`, a placeholder span over the sigil,
+    // and no diagnostic.
+    for (raw, sigil) in [
+        ("Finish it @cash^x+\n- Draft :", ':'),
+        ("Finish it @cash^x+\n- Draft ^", '^'),
+    ] {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parse.needs, vec![Need::BlockId], "{raw}");
+        assert!(parse.diagnostics.is_empty(), "{raw}");
+        let start = raw.rfind(sigil).expect("sigil");
+        assert!(
+            ranges(&parse).contains(&(
+                start,
+                start + 1,
+                SpanKind::InteractivePlaceholder
+            )),
+            "{raw}"
+        );
+    }
+
+    // Outside a project-note item the lookalike stays literal text.
+    let literal = editor("Fix @sase\n- ratio 3 :1");
+    assert_eq!(literal.mode, EditorMode::Task);
+    assert_eq!(sub_bullet_bodies(&literal.sub_bullets), vec!["ratio 3 :1"]);
+    assert!(literal.sub_bullets[0].task_id.is_none());
+    assert!(literal.diagnostics.is_empty());
+}
+
+#[test]
 fn editor_spans_cover_every_marker_shape() {
     let cases: &[(&str, &[SpanKind])] = &[
         (
@@ -592,6 +777,9 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "Postgres 17 minimum %log @foo+bar#requirements",
         "Postgres 17 minimum @foo+bar#q-and-a",
         "Postgres 17 minimum @foo+bar#Q&A",
+        "Finish the Google exit packet! @cash^goog-exit+#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs",
+        "Finish it\n- Draft :d @cash^x+",
+        "Fix @sase\n- ratio 3 :1",
         "@Cash+Goog-Exit",
         "@Cash+Goog-Exit!",
         "@Cash+Goog-Exit#bugs",
@@ -663,7 +851,15 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::Pomodoro { .. } => EditorMode::PomodoroTask,
             CaptureKind::SubBullet { .. } => EditorMode::SubBullet,
             CaptureKind::PomodoroNote => EditorMode::PomodoroNote,
-            CaptureKind::ProjectNote { .. } => EditorMode::ProjectNote,
+            CaptureKind::ProjectNote { .. } => {
+                if executed.sub_bullets.iter().any(|sub| {
+                    sub.task_id.as_ref().is_some_and(|task| task.link)
+                }) {
+                    EditorMode::PomodoroProjectNote
+                } else {
+                    EditorMode::ProjectNote
+                }
+            }
             CaptureKind::TaskToggle { .. } => EditorMode::TaskToggle,
             CaptureKind::PomodoroAdjust { .. } => EditorMode::PomodoroAdjust,
             CaptureKind::PomodoroShift { .. } => EditorMode::PomodoroShift,
@@ -672,6 +868,19 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::PomodoroStart { .. } => EditorMode::PomodoroStart,
         };
         assert_eq!(parse.mode, expected_mode, "{raw}");
+        assert_eq!(
+            parse
+                .sub_bullets
+                .iter()
+                .map(|sub| (sub.body.as_str(), sub.task_id.clone()))
+                .collect::<Vec<_>>(),
+            executed
+                .sub_bullets
+                .iter()
+                .map(|sub| (sub.body.as_str(), sub.task_id.clone()))
+                .collect::<Vec<_>>(),
+            "{raw}"
+        );
         if let CaptureKind::TaskWithBlockId { block_id } = &executed.kind {
             assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
         }

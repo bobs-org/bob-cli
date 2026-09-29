@@ -75,9 +75,14 @@ pub(super) fn plan_project_note_item(
     // The grammar rejects a `#pomodoro` name with no ` :` task before
     // planning; this guards planners that bypass it.
     if let Some(name) = pomodoro_name {
-        return Err(CaptureError::usage(unused_project_note_pomodoro_error(
-            &name,
-        )));
+        let has_link = parsed.sub_bullets.iter().any(|sub_bullet| {
+            sub_bullet.task_id.as_ref().is_some_and(|task| task.link)
+        });
+        if !has_link {
+            return Err(CaptureError::usage(
+                unused_project_note_pomodoro_error(&name),
+            ));
+        }
     }
     let route = parsed.route.clone().ok_or_else(|| {
         CaptureError::io(

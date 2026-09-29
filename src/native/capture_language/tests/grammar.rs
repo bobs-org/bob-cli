@@ -6,6 +6,7 @@ use super::super::editor_classify::*;
 use super::super::editor_model::*;
 use super::super::markers::*;
 use super::super::model::*;
+use super::super::project_tasks::*;
 use super::super::tokens::*;
 use super::*;
 
@@ -1388,6 +1389,243 @@ fn global_declaration_rejects_project_note_shapes() {
             TokenParse::Marker(_) => panic!("{token} must not parse"),
         }
     }
+}
+
+#[test]
+fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
+    let parsed = execute(
+        "Finish the Google exit packet! @cash^goog-exit+#admin\n\
+         - Draft the resignation memo :draft-memo\n\
+         \x20 - keep it short\n\
+         - Call Morgan Stanley about the 401k :call-ms\n\
+         - Collect the equity paperwork ^equity-docs\n\
+         - FUTURE WORK\n\
+         \x20 - Revisit the severance terms",
+    )
+    .expect("worked example");
+    assert_eq!(parsed.body, "Finish the Google exit packet!");
+    assert_eq!(
+        parsed.kind,
+        CaptureKind::ProjectNote {
+            block_id: "goog-exit".to_string(),
+            pomodoro_name: Some("admin".to_string()),
+        }
+    );
+    assert_eq!(
+        sub_bullet_bodies(&parsed.sub_bullets),
+        vec![
+            "Draft the resignation memo",
+            "keep it short",
+            "Call Morgan Stanley about the 401k",
+            "Collect the equity paperwork",
+            "FUTURE WORK",
+            "Revisit the severance terms",
+        ]
+    );
+    assert_eq!(
+        sub_bullet_depths(&parsed.sub_bullets),
+        vec![1, 2, 1, 1, 1, 2]
+    );
+    assert_eq!(
+        parsed
+            .sub_bullets
+            .iter()
+            .map(|sub| sub.task_id.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            Some(ProjectTaskId {
+                block_id: "draft-memo".to_string(),
+                link: true,
+            }),
+            None,
+            Some(ProjectTaskId {
+                block_id: "call-ms".to_string(),
+                link: true,
+            }),
+            Some(ProjectTaskId {
+                block_id: "equity-docs".to_string(),
+                link: false,
+            }),
+            None,
+            None,
+        ]
+    );
+
+    // A project note without a `#pomodoro` name still accepts task IDs.
+    let parsed = execute("Finish it @cash^x+\n- Draft the memo :draft-memo")
+        .expect("link without pomodoro name");
+    assert_eq!(
+        parsed.sub_bullets[0].task_id,
+        Some(ProjectTaskId {
+            block_id: "draft-memo".to_string(),
+            link: true,
+        })
+    );
+
+    // The project-note marker may sit on a child line: the trailing
+    // `@route…` marker is set aside before the last word is lexed.
+    let parsed =
+        execute("Finish it\n- Draft :d @cash^x+").expect("child-line marker");
+    assert_eq!(parsed.route.as_deref(), Some("cash"));
+    assert_eq!(parsed.body, "Finish it");
+    assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["Draft"]);
+    assert_eq!(
+        parsed.sub_bullets[0].task_id,
+        Some(ProjectTaskId {
+            block_id: "d".to_string(),
+            link: true,
+        })
+    );
+
+    // Trailing item-wide markers are set aside before the last word is
+    // lexed, so both spellings below name `draft-memo`.
+    let parsed = execute("Finish it @cash^x+\n- Draft memo :draft-memo s:2")
+        .expect("schedule marker after the ID");
+    assert_eq!(parsed.scheduled_offset, Some(2));
+    assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["Draft memo"]);
+    assert!(parsed.sub_bullets[0].task_id.is_some());
+    let parsed =
+        execute("Finish it @cash^x+\n- Draft memo :draft-memo @cash^x+")
+            .expect_err("duplicate route marker");
+    assert!(parsed.contains("may appear on only one line"), "{parsed}");
+}
+
+#[test]
+fn execution_rejects_project_task_id_rule_violations_verbatim() {
+    // The parent line's own task is always `^prj` and is never linked.
+    let error = execute("Finish it :foo @cash^x+").expect_err("parent task ID");
+    assert_eq!(error, misplaced_parent_task_id_error(":foo"));
+
+    // Only first-level child bullets can be named.
+    let error = execute("Finish it @cash^x+\n- Draft\n  - nested :foo")
+        .expect_err("nested task ID");
+    assert_eq!(error, misplaced_nested_task_id_error(":foo"));
+
+    // Shape and charset come before reserved, placement, empty body,
+    // checkbox, and duplicate checks.
+    let error =
+        execute("Finish it @cash^x+\n- Draft :a_b").expect_err("charset");
+    assert_eq!(error, invalid_project_task_id_charset_error("a_b"));
+
+    // `prj` is reserved in any letter case, even on a nested bullet
+    // (reserved precedes placement).
+    for token in [":PRJ", "^prj"] {
+        let error = execute(&format!("Finish it @cash^x+\n- Draft {token}"))
+            .expect_err("reserved");
+        assert_eq!(error, reserved_project_task_id_error(&token[1..]));
+    }
+    let error = execute("Finish it @cash^x+\n- Draft\n  - nested :PRJ")
+        .expect_err("reserved on nested");
+    assert_eq!(error, reserved_project_task_id_error("PRJ"));
+
+    // An empty remaining body names no task.
+    let error = execute("Finish it @cash^x+\n- :foo").expect_err("empty body");
+    assert_eq!(error, empty_project_task_body_error(2));
+
+    // A `:` task takes no authored checkbox.
+    let error =
+        execute("Finish it @cash^x+\n- [x] Foo :foo").expect_err("checkbox");
+    assert_eq!(error, checkbox_project_task_id_error("foo", 'x'));
+
+    // A `^` task keeps its authored checkbox.
+    let parsed =
+        execute("Finish it @cash^x+\n- [x] Foo ^foo").expect("caret checkbox");
+    assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["[x] Foo"]);
+
+    // Duplicate IDs compare exact and case-sensitive and name both draft
+    // lines; `:` and `^` share the namespace.
+    let error = execute("Finish it @cash^x+\n- One :same\n- Two :same")
+        .expect_err("duplicate");
+    assert_eq!(error, duplicate_project_task_id_error("same", 2, 3));
+    let error = execute("Finish it @cash^x+\n- One :same\n- Two ^same")
+        .expect_err("cross-sigil duplicate");
+    assert_eq!(error, duplicate_project_task_id_error("same", 2, 3));
+    let parsed = execute("Finish it @cash^x+\n- One :Same\n- Two :same")
+        .expect("case-sensitive distinct");
+    assert!(parsed.sub_bullets[1].task_id.is_some());
+
+    // Checkbox precedes duplicate: the first error is deterministic.
+    let error = execute("Finish it @cash^x+\n- [x] Foo :same\n- Bar :same")
+        .expect_err("checkbox before duplicate");
+    assert_eq!(error, checkbox_project_task_id_error("same", 'x'));
+
+    // A lone sigil ending a first-level bullet is unfinished.
+    let error =
+        execute("Finish it @cash^x+\n- Draft :").expect_err("lone colon");
+    assert_eq!(error, unfinished_project_task_id_error(':'));
+    let error =
+        execute("Finish it @cash^x+\n- Draft ^").expect_err("lone caret");
+    assert_eq!(error, unfinished_project_task_id_error('^'));
+
+    // A lone sigil on the parent or a nested bullet stays literal.
+    let parsed = execute("Finish it : @cash^x+").expect("lone parent sigil");
+    assert_eq!(parsed.body, "Finish it :");
+    let parsed = execute("Finish it @cash^x+\n- Draft\n  - nested :")
+        .expect("lone nested sigil");
+    assert_eq!(
+        sub_bullet_bodies(&parsed.sub_bullets),
+        vec!["Draft", "nested :"]
+    );
+
+    // A `^`-only project note with a `#pomodoro` name is still unused.
+    let error = execute("Finish it @cash^x+#bugs\n- Doc ^docs")
+        .expect_err("unused pomodoro");
+    assert_eq!(error, unused_project_note_pomodoro_error("bugs"));
+}
+
+#[test]
+fn execution_evaluates_project_note_markers_parents_and_children_in_order() {
+    // Step 1 (marker token) beats step 3 (children).
+    let error = execute("Finish it @cash^goog-exit#bugs+\n- :foo")
+        .expect_err("marker first");
+    assert_eq!(
+        error,
+        project_note_misordered_error("cash", "goog-exit", "bugs")
+    );
+
+    // Step 2 (parent line) beats step 3 (children).
+    let error =
+        execute("Finish it :foo @cash^x+\n- :bar").expect_err("parent first");
+    assert_eq!(error, misplaced_parent_task_id_error(":foo"));
+
+    // Step 3 runs in source order: the first child's error wins.
+    let error = execute("Finish it @cash^x+\n- Draft :a_b\n- Other :c_d")
+        .expect_err("first child first");
+    assert_eq!(error, invalid_project_task_id_charset_error("a_b"));
+
+    // Step 4 (unused `#pomodoro`) runs last.
+    let error = execute("Finish it @cash^x+#bugs\n- Draft :a_b")
+        .expect_err("child before unused");
+    assert_eq!(error, invalid_project_task_id_charset_error("a_b"));
+}
+
+#[test]
+fn execution_keeps_task_id_lookalikes_literal_outside_project_notes() {
+    // ` :1` stays prose in an ordinary task item.
+    let parsed =
+        execute("Fix @sase\n- ratio 3 :1").expect("non-project literal");
+    assert_eq!(parsed.kind, CaptureKind::Task);
+    assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["ratio 3 :1"]);
+    assert!(parsed.sub_bullets[0].task_id.is_none());
+
+    // Smileys, times, and mid-body markers never lex, even in a project
+    // note; a trailing `:1` still names the task.
+    let parsed =
+        execute("Finish it @cash^x+\n- ratio 3 :1\n- done 10:30\n- smile :-)")
+            .expect("lookalikes");
+    assert_eq!(
+        sub_bullet_bodies(&parsed.sub_bullets),
+        vec!["ratio 3", "done 10:30", "smile :-)"]
+    );
+    assert_eq!(
+        parsed.sub_bullets[0].task_id,
+        Some(ProjectTaskId {
+            block_id: "1".to_string(),
+            link: true,
+        })
+    );
+    assert!(parsed.sub_bullets[1].task_id.is_none());
+    assert!(parsed.sub_bullets[2].task_id.is_none());
 }
 
 #[test]

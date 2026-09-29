@@ -250,10 +250,21 @@ impl AuthoredDepth {
     }
 }
 
+/// A project-note task bullet's trailing ` :id` / ` ^id` token. `link` is
+/// `true` for `:` (name it, make it Next, and link it into the Pomodoro)
+/// and `false` for `^` (name it only). Always `None` outside project-note
+/// items.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ProjectTaskId {
+    pub(crate) block_id: String,
+    pub(crate) link: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthoredSubBullet {
     pub(crate) body: String,
     pub(crate) depth: AuthoredDepth,
+    pub(crate) task_id: Option<ProjectTaskId>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
