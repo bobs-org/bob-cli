@@ -445,6 +445,71 @@ fn editor_reports_a_broken_second_token_with_its_own_diagnostic() {
 }
 
 #[test]
+fn editor_reports_a_named_start_chain_with_absolute_spans() {
+    let parse = parse_for_editor("=x =#bugs");
+    assert_eq!(parse.items.len(), 2);
+    assert_eq!(parse.items[0].mode, EditorMode::PomodoroClose);
+    assert_eq!(parse.items[1].mode, EditorMode::PomodoroStart);
+    assert_eq!(parse.items[1].section.as_deref(), Some("bugs"));
+    assert!(parse.items[1].needs.is_empty());
+    assert_eq!((parse.items[0].start, parse.items[0].end), (0, 2));
+    assert_eq!((parse.items[1].start, parse.items[1].end), (3, 9));
+    assert_eq!(
+        parse.items[1]
+            .spans
+            .iter()
+            .map(|span| (span.start, span.end, span.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            (3, 4, SpanKind::PomodoroStart),
+            (5, 9, SpanKind::PomodoroName),
+        ]
+    );
+    assert!(parse.items[1].diagnostics.is_empty());
+    assert!(parse.items[1].pomodoro_start.is_some());
+}
+
+#[test]
+fn editor_reports_an_incomplete_named_start_inside_a_chain() {
+    let parse = parse_for_editor("=x =#");
+    assert_eq!(parse.items.len(), 2);
+    assert_eq!(parse.items[1].mode, EditorMode::Incomplete);
+    assert_eq!(parse.items[1].needs, vec![Need::PomodoroName]);
+    assert_eq!(
+        parse.items[1]
+            .spans
+            .iter()
+            .map(|span| (span.start, span.end, span.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            (3, 4, SpanKind::PomodoroStart),
+            (4, 5, SpanKind::InteractivePlaceholder),
+        ]
+    );
+    assert!(parse.items[1].diagnostics.is_empty());
+}
+
+#[test]
+fn editor_reports_a_named_start_plus_adjustment_chain() {
+    let parse = parse_for_editor("=#bugs +2");
+    assert_eq!(parse.items.len(), 2);
+    assert_eq!(parse.items[0].mode, EditorMode::PomodoroStart);
+    assert_eq!(parse.items[0].section.as_deref(), Some("bugs"));
+    assert_eq!(parse.items[1].mode, EditorMode::PomodoroAdjust);
+    assert_eq!(
+        parse.items[0]
+            .spans
+            .iter()
+            .map(|span| (span.start, span.end, span.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, 1, SpanKind::PomodoroStart),
+            (2, 6, SpanKind::PomodoroName),
+        ]
+    );
+}
+
+#[test]
 fn editor_chain_items_do_not_inherit_a_global_declaration() {
     let parse = parse_for_editor("@@work\n+2 =x");
     assert_eq!(parse.items.len(), 2);

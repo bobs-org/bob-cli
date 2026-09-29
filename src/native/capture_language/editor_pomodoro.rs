@@ -230,6 +230,286 @@ pub(super) fn editor_start_invalid_outcome<'a>(
     }
 }
 
+/// Whole-item `=<X>#name` named start for the live editor. Mirrors the
+/// named-start branch of [`parse_pomodoro_equals_item`] but never fails:
+/// an exact token reports `pomodoro_start` with its spec, `section` set to
+/// the typed selector, a `pomodoro_start` span over `=<X>` plus a
+/// `pomodoro_name` span over the name bytes only (the `#` is in no span),
+/// while an empty name reports `incomplete` needing `pomodoro_name` with
+/// the partial spec and an `interactive_placeholder` span over `#`. A near
+/// miss reports `pomodoro_start` plus one `invalid_pomodoro_start`
+/// diagnostic reusing the execution texts: E2/E3 over the name, E4 over
+/// the extra text or child line, overflow over `=<X>`. Purely lexical: it
+/// never guesses current ledger times.
+pub(super) fn parse_editor_named_start_item<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    suffix: String,
+    name: String,
+    len: usize,
+) -> Option<EditorItemOutcome<'a>> {
+    let parent = item.lines.first().expect("nonempty item");
+    let leading = parent.raw.text.len() - parent.raw.text.trim_start().len();
+    let token_start = parent.raw.start + leading;
+    let prefix_len = 1 + suffix.len();
+    let hash_start = token_start + prefix_len;
+    let name_start = hash_start + 1;
+    let name_end = name_start + name.len();
+    let mut spans = vec![Span {
+        start: token_start,
+        end: token_start + prefix_len,
+        kind: SpanKind::PomodoroStart,
+    }];
+    if name.is_empty() {
+        spans.push(Span {
+            start: hash_start,
+            end: hash_start + 1,
+            kind: SpanKind::InteractivePlaceholder,
+        });
+    } else {
+        spans.push(Span {
+            start: name_start,
+            end: name_end,
+            kind: SpanKind::PomodoroName,
+        });
+    }
+    let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+    let exact = parent_trimmed.len() == len && item.lines.len() == 1;
+    if exact {
+        if name.is_empty() {
+            // `=<X>#` is an editing state, never a mistake: the partial
+            // spec, the spans typed so far, and no diagnostic.
+            return Some(editor_named_incomplete_outcome(
+                item,
+                parent_trimmed,
+                spans,
+                parse_pomodoro_start_suffix(&suffix).ok(),
+            ));
+        }
+        if let Some((message, range)) = named_start_token_diagnostic(
+            token_text,
+            &suffix,
+            &name,
+            token_start,
+            prefix_len,
+            name_start,
+            name_end,
+        ) {
+            return Some(editor_named_invalid_outcome(
+                item,
+                parent_trimmed,
+                spans,
+                message,
+                Some(range),
+            ));
+        }
+        let spec = parse_pomodoro_start_suffix(&suffix)
+            .expect("named token checked before spec");
+        return Some(EditorItemOutcome {
+            item: EditorItemParse {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                body: parent_trimmed.to_string(),
+                mode: EditorMode::PomodoroStart,
+                route: None,
+                section: Some(name),
+                block_id: None,
+                needs: Vec::new(),
+                pomodoro_start: Some(spec),
+                pomodoro_adjust: None,
+                pomodoro_shift: None,
+                pomodoro_close: None,
+                spans,
+                diagnostics: Vec::new(),
+                sub_bullets: Vec::new(),
+                has_local_destination: false,
+                local_destination_markers: Vec::new(),
+            },
+            declarations: Vec::new(),
+        });
+    }
+    // Extra text or child lines: a broken token reports its own diagnostic
+    // first (E1 through E3, or overflow), exactly like execution.
+    let has_extra = parent_trimmed.len() > len;
+    if name.is_empty()
+        && has_extra
+        && let Some(message) = named_nospace_error(&suffix, parent_trimmed, len)
+    {
+        return Some(editor_named_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            Some(extra_text_range(token_start, parent_trimmed, len)),
+        ));
+    }
+    if let Some((message, range)) = named_start_token_diagnostic(
+        token_text,
+        &suffix,
+        &name,
+        token_start,
+        prefix_len,
+        name_start,
+        name_end,
+    ) {
+        let range = if name.is_empty() && !has_extra {
+            // `=<X>#` with child lines only: the child line is the range,
+            // matching the unnamed start's child-line policy.
+            let child = &item.lines[1];
+            Some((child.raw.start, child.raw.end))
+        } else {
+            Some(range)
+        };
+        return Some(editor_named_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            range,
+        ));
+    }
+    // A well-formed token with extra text or child lines: E4. An empty
+    // name here means child lines only (extra text took the no-space
+    // branch above).
+    if name.is_empty() {
+        let child = &item.lines[1];
+        return Some(editor_named_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            pomodoro_named_start_incomplete_error(token_text),
+            Some((child.raw.start, child.raw.end)),
+        ));
+    }
+    let message =
+        named_shape_error(token_text, &suffix, &name, parent_trimmed, len);
+    let range = if has_extra {
+        extra_text_range(token_start, parent_trimmed, len)
+    } else {
+        let child = &item.lines[1];
+        (child.raw.start, child.raw.end)
+    };
+    Some(editor_named_invalid_outcome(
+        item,
+        parent_trimmed,
+        spans,
+        message,
+        Some(range),
+    ))
+}
+
+/// Classify a named start token's own error the way execution's
+/// `named_token_error` does (E1/E3/E2/overflow order), paired with the
+/// editor range for that error: E1 over the `#`, E2/E3 over the name,
+/// overflow over `=<X>`. `None` when the token itself is well-formed.
+fn named_start_token_diagnostic(
+    token: &str,
+    suffix: &str,
+    name: &str,
+    token_start: usize,
+    prefix_len: usize,
+    name_start: usize,
+    name_end: usize,
+) -> Option<(String, (usize, usize))> {
+    if name.is_empty() {
+        return Some((
+            pomodoro_named_start_incomplete_error(token),
+            (token_start + prefix_len, token_start + prefix_len + 1),
+        ));
+    }
+    if let Some((before, after)) = name.split_once('=')
+        && suffix.is_empty()
+        && parse_pomodoro_start_suffix(after).is_ok()
+    {
+        return Some((
+            pomodoro_named_start_order_error(token, before, after),
+            (name_start, name_end),
+        ));
+    }
+    if !is_pomodoro_selector_component(name) {
+        return Some((
+            pomodoro_named_start_name_error(name, token),
+            (name_start, name_end),
+        ));
+    }
+    if let Err(message) = parse_pomodoro_start_suffix(suffix) {
+        return Some((message, (token_start, token_start + prefix_len)));
+    }
+    None
+}
+
+/// Range of the trimmed extra text after a whole-item token, mirroring the
+/// unnamed start's extra-text policy.
+fn extra_text_range(
+    token_start: usize,
+    parent_trimmed: &str,
+    len: usize,
+) -> (usize, usize) {
+    let rest_in_trimmed = &parent_trimmed[len..];
+    let rest_trimmed = rest_in_trimmed.trim_start();
+    let offset_in_trimmed = len + (rest_in_trimmed.len() - rest_trimmed.len());
+    let rest_start = token_start + offset_in_trimmed;
+    (rest_start, rest_start + rest_trimmed.len())
+}
+
+/// Build an `incomplete` named-start outcome: the spans typed so far, the
+/// partial spec, and a `pomodoro_name` need, with no diagnostic.
+fn editor_named_incomplete_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    spans: Vec<Span>,
+    pomodoro_start: Option<PomodoroStartSpec>,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::Incomplete,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: vec![Need::PomodoroName],
+            pomodoro_start,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            spans,
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    }
+}
+
+/// Build a named-start near-miss outcome: `pomodoro_start` mode, the spans
+/// typed so far, and one `invalid_pomodoro_start` diagnostic, with no spec.
+fn editor_named_invalid_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    spans: Vec<Span>,
+    message: String,
+    range: Option<(usize, usize)>,
+) -> EditorItemOutcome<'a> {
+    let mut outcome = editor_start_invalid_outcome(
+        item,
+        parent_trimmed,
+        spans[0],
+        message,
+        range,
+    );
+    outcome.item.spans = spans;
+    outcome
+}
+
 /// Whole-item `=`/`=<X>` start for the live editor. Mirrors the start
 /// branch of [`parse_pomodoro_equals_item`] but never fails: an exact
 /// single-token start reports `pomodoro_start` with its spec and one span
@@ -361,8 +641,14 @@ pub(super) fn parse_editor_close_item<'a>(
             len,
             name,
         } => {
-            if name.is_some() {
-                return None;
+            if let Some(selector) = name {
+                return parse_editor_named_start_item(
+                    item,
+                    parent_trimmed,
+                    suffix,
+                    selector,
+                    len,
+                );
             }
             return parse_editor_start_item(
                 item,
@@ -375,10 +661,6 @@ pub(super) fn parse_editor_close_item<'a>(
         EqualsToken::Close => {}
     }
     let first = parent_trimmed.split_whitespace().next()?;
-    let selection_after_x = whole_item_close_after_x(first);
-    if selection_after_x.is_none() && !first.eq_ignore_ascii_case("=x") {
-        return None;
-    }
     let leading = parent_text.len() - parent_text.trim_start().len();
     let token_start = parent.raw.start + leading;
     let token_end = token_start + 2;
@@ -387,6 +669,30 @@ pub(super) fn parse_editor_close_item<'a>(
         end: token_end,
         kind: SpanKind::PomodoroClose,
     };
+    // `=x#…` is a claimed close near miss with a teaching error, whether
+    // or not the item carries extra text or child lines. It used to be
+    // prose.
+    if is_close_hash_token(first) {
+        let hash = first.find('#').expect("close hash");
+        return Some(editor_close_outcome(
+            item,
+            parent_trimmed,
+            EditorMode::PomodoroClose,
+            None,
+            vec![close_span],
+            Vec::new(),
+            vec![Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_close",
+                message: pomodoro_close_hash_error(&first[hash + 1..]),
+                range: Some((token_start + 2, token_start + first.len())),
+            }],
+        ));
+    }
+    let selection_after_x = whole_item_close_after_x(first);
+    if selection_after_x.is_none() && !first.eq_ignore_ascii_case("=x") {
+        return None;
+    }
     let single_token_parent = parent_trimmed == first;
     if single_token_parent && item.lines.len() == 1 {
         // An exact close: plain `=x`, a valid selection, or a dangling

@@ -749,7 +749,7 @@ fn named_token_error(token: &str, suffix: &str, name: &str) -> Option<String> {
 }
 
 /// E4 for a well-formed named token with extra text or child lines.
-fn named_shape_error(
+pub(super) fn named_shape_error(
     token: &str,
     suffix: &str,
     name: &str,
@@ -779,7 +779,7 @@ fn named_shape_error(
 }
 
 /// E4 no-space variant for `=# <word>`: the name must follow `#` directly.
-fn named_nospace_error(
+pub(super) fn named_nospace_error(
     suffix: &str,
     parent_trimmed: &str,
     len: usize,

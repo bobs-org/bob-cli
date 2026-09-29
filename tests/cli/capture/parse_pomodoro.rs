@@ -1217,6 +1217,152 @@ fn capture_parse_pomodoro_start_protocol() {
 }
 
 #[test]
+fn capture_parse_named_pomodoro_start_protocol() {
+    let parse = |text: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+    let parse_stdin = |draft: &str| {
+        let output = run_with_stdin(
+            bob_command().arg("capture-parse").arg("-f").arg("json"),
+            draft,
+        );
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    // Exact named starts: `section` carries the typed selector, the spec
+    // mirrors `se<X>` timing, and `#` sits in no span.
+    for (text, section, raw, duration, offset, prefix_end, name_end) in [
+        ("=#bugs", "bugs", "", 5, 0, 1, 6),
+        ("=3#bugs", "bugs", "3", 3, 0, 2, 7),
+        ("=-2#bugs", "bugs", "-2", 5, 2, 3, 8),
+        ("=#deep-work", "deep-work", "", 5, 0, 1, 11),
+    ] {
+        let value = parse(text);
+        assert_eq!(value["schema_version"], 1, "{text}");
+        assert_eq!(value["mode"], "pomodoro_start", "{text}");
+        assert_eq!(value["body"], text, "{text}");
+        assert_eq!(value["section"], section, "{text}: {value}");
+        assert_eq!(value["needs"], serde_json::json!([]), "{text}");
+        assert_eq!(
+            value["spans"],
+            serde_json::json!([
+                { "start": 0, "end": prefix_end, "kind": "pomodoro_start" },
+                {
+                    "start": prefix_end + 1,
+                    "end": name_end,
+                    "kind": "pomodoro_name"
+                },
+            ]),
+            "{text}: {value}"
+        );
+        assert_eq!(value["diagnostics"], serde_json::json!([]), "{text}");
+        assert_eq!(
+            value["pomodoro_start"],
+            serde_json::json!({
+                "raw": raw,
+                "duration_units": duration,
+                "offset_units": offset,
+            }),
+            "{text}: {value}"
+        );
+        assert!(value.get("items").is_none(), "{text}: {value}");
+    }
+
+    // `=<X>#` with no name is incomplete, needing the Pomodoro name.
+    for (text, raw) in [("=#", ""), ("=3#", "3")] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "incomplete", "{text}");
+        assert_eq!(
+            value["needs"],
+            serde_json::json!(["pomodoro_name"]),
+            "{text}"
+        );
+        assert!(value["section"].is_null(), "{text}: {value}");
+        assert_eq!(
+            value["spans"],
+            serde_json::json!([
+                {
+                    "start": 0,
+                    "end": 1 + raw.len(),
+                    "kind": "pomodoro_start"
+                },
+                {
+                    "start": 1 + raw.len(),
+                    "end": 2 + raw.len(),
+                    "kind": "interactive_placeholder"
+                },
+            ]),
+            "{text}: {value}"
+        );
+        assert_eq!(value["diagnostics"], serde_json::json!([]), "{text}");
+    }
+
+    // Near misses keep `pomodoro_start` mode with one diagnostic.
+    let order = parse("=#bugs=3");
+    assert_eq!(order["mode"], "pomodoro_start");
+    assert_eq!(order["diagnostics"][0]["code"], "invalid_pomodoro_start");
+    assert_eq!(order["diagnostics"][0]["range"], serde_json::json!([2, 8]));
+    assert!(
+        order["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("`=3#bugs` instead of `=#bugs=3`"),
+        "{order}"
+    );
+
+    let multiword = parse("=#deep work");
+    assert_eq!(
+        multiword["diagnostics"][0]["code"],
+        "invalid_pomodoro_start"
+    );
+    assert_eq!(
+        multiword["diagnostics"][0]["range"],
+        serde_json::json!([7, 11])
+    );
+
+    let close_hash = parse("=x#bugs");
+    assert_eq!(close_hash["mode"], "pomodoro_close");
+    assert_eq!(
+        close_hash["diagnostics"][0]["code"],
+        "invalid_pomodoro_close"
+    );
+    assert_eq!(
+        close_hash["diagnostics"][0]["range"],
+        serde_json::json!([2, 7])
+    );
+
+    // Chains split per token with absolute ranges.
+    let chain = parse_stdin("=x =#bugs\n");
+    assert_eq!(chain["items"].as_array().expect("items").len(), 2);
+    assert_eq!(chain["items"][0]["mode"], "pomodoro_close");
+    assert_eq!(chain["items"][1]["mode"], "pomodoro_start");
+    assert_eq!(chain["items"][1]["section"], "bugs");
+    assert_eq!(chain["items"][1]["body"], "=#bugs");
+    assert_eq!(
+        chain["items"][1]["range"],
+        serde_json::json!({ "start": 3, "end": 9 })
+    );
+
+    // A `@@` declaration never applies to an incomplete named start.
+    let declared = parse_stdin("@@work\nFirst task\n\n=#\n");
+    assert_eq!(declared["items"][1]["mode"], "incomplete");
+    assert!(declared["items"][1]["route"].is_null());
+    assert!(declared["items"][1]["pomodoro_start"].is_object());
+}
+
+#[test]
 fn capture_parse_pomodoro_start_human_and_help() {
     let human = bob_command()
         .arg("capture-parse")
@@ -1242,6 +1388,36 @@ fn capture_parse_pomodoro_start_human_and_help() {
         "{}",
         stdout(&bare)
     );
+
+    // A named start line shows the whole token; `section` keeps its own
+    // line. A `@<route>:<block-id>[#<name>]=<X>` marker start keeps the
+    // suffix-only line.
+    let named = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("=3#bugs")
+        .output()
+        .expect("run named human");
+    assert_success(&named);
+    assert!(
+        stdout(&named).contains("=3#bugs (15m, offset 0u)"),
+        "{}",
+        stdout(&named)
+    );
+
+    let marked = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("Do work @sase:outline#deep=-2")
+        .output()
+        .expect("run marked human");
+    assert_success(&marked);
+    assert!(
+        stdout(&marked).contains("=-2 (25m, offset 2u)"),
+        "{}",
+        stdout(&marked)
+    );
+    assert!(!stdout(&marked).contains("=-2#deep"), "{}", stdout(&marked));
 
     let plain = bob_command()
         .arg("capture-parse")

@@ -238,16 +238,18 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
     {
         for item in &mut items {
             // Whole-item session operators, `=x[<N>][!<M>]` closes
-            // (including dangling-separator editing states), and
-            // `=`/`=<X>` starts are their own mode: a `@@` declaration
-            // routes ordinary items in the same draft but never turns an
-            // operator, close, or start into a task or changes its
-            // destination.
+            // (including dangling-separator editing states), `=`/`=<X>`
+            // starts, and `=<X>#` incomplete named starts (which carry
+            // the partial `pomodoro_start` spec) are their own mode: a
+            // `@@` declaration routes ordinary items in the same draft
+            // but never turns an operator, close, or start into a task
+            // or changes its destination.
             if item.mode == EditorMode::PomodoroAdjust
                 || item.mode == EditorMode::PomodoroShift
                 || item.mode == EditorMode::PomodoroClose
                 || item.mode == EditorMode::PomodoroStart
                 || item.pomodoro_close.is_some()
+                || item.pomodoro_start.is_some()
             {
                 continue;
             }

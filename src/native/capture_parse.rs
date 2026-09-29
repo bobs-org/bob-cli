@@ -138,7 +138,14 @@ ledger times. A counted token with extra text, markers, or child lines \
 (`=3 more`, `=3x`), an exact token with child lines, and an oversized \
 suffix report 'pomodoro_start' plus an `invalid_pomodoro_start` diagnostic \
 (the extra text, the child line, or the token for overflow), while `bob \
-capture` keeps its strict execution errors for the same text. A whole-item \
+capture` keeps its strict execution errors for the same text. A named \
+whole-item start (`=#bugs`, `=3#bugs`) starts that Pomodoro: `section` \
+carries the typed name with a `pomodoro_name` span over the name bytes \
+only (the `#` is in no span), `=<X>#` with no name reports mode \
+'incomplete' needing `pomodoro_name` with an `interactive_placeholder` \
+span over `#` and the partial `pomodoro_start` spec, and `=x#name` reports \
+mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
+`#name`. A whole-item \
 `=x[<N>][!<M>]` close (case-insensitive `=X`) reports mode 'pomodoro_close' \
 with a `pomodoro_close` object (`raw` plus the additive `in_progress` \
 list, null when no `<N>` was typed, and the `complete` list) and spans \
@@ -162,8 +169,8 @@ route and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' \
 'incomplete' needing `pomodoro_close_task`, while `#name=x…`, \
 `s:<N>`/`p:<N>`/`%` conflicts, project-note `=x`, and malformed lists \
 report `invalid_pomodoro_close` on the conflicting component or the precise \
-list range. A `@@` declaration never applies to close or `=`/`=<X>` items, \
-and neither is ever rewritten. \
+list range. A `@@` declaration never applies to close, `=`/`=<X>`, or \
+`=<X>#` items, and neither is ever rewritten. \
 A '@^id+' marker already carries the project-note intent: it reports mode \
 'project_note' with a 'route' need until the \
 route is typed. A '@:id+' marker is the retired project-note form and \
@@ -566,7 +573,13 @@ fn print_human_success_with_styler(
         print_field(styler, "block id", block_id);
     }
     if let Some(start) = result.pomodoro_start.as_ref() {
-        print_field(styler, "start", &format_pomodoro_start(start));
+        // Only a whole-item named start (`=<X>#name`) folds its name
+        // into the start line; a `@<route>:<block-id>[#<name>]=<X>`
+        // marker keeps `section` on its own line.
+        let section = (result.mode == EditorMode::PomodoroStart)
+            .then_some(result.section.as_deref())
+            .flatten();
+        print_field(styler, "start", &format_pomodoro_start(start, section));
     }
     if let Some(adjust) = result.pomodoro_adjust.as_ref() {
         print_field(styler, "adjust", &format_pomodoro_adjust(adjust));
@@ -641,12 +654,19 @@ fn print_human_success_with_styler(
     }
 }
 
-/// Render a validated `=<X>` start suffix for human output: the typed
-/// suffix plus its resolved 5-minute duration and offset units.
-fn format_pomodoro_start(start: &PomodoroStartSpec) -> String {
+/// Render a validated whole-item start for human output: the whole
+/// typed token (`=<X>` plus `#name` for a named start) plus its resolved
+/// 5-minute duration and offset units.
+fn format_pomodoro_start(
+    start: &PomodoroStartSpec,
+    section: Option<&str>,
+) -> String {
+    let token = match section {
+        Some(name) => format!("={}#{name}", start.raw),
+        None => format!("={}", start.raw),
+    };
     format!(
-        "={} ({}m, offset {}u)",
-        start.raw,
+        "{token} ({}m, offset {}u)",
         start.duration_units.saturating_mul(5),
         start.offset_units
     )
@@ -1130,6 +1150,116 @@ mod tests {
         assert_eq!(mixed["items"][0]["mode"], "pomodoro_adjust");
         assert_eq!(mixed["items"][1]["mode"], "pomodoro_close");
         assert_eq!(mixed["items"][1]["pomodoro_close"]["raw"], "=x");
+    }
+
+    #[test]
+    fn json_reports_named_pomodoro_starts() {
+        let value = json("=#bugs");
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["mode"], "pomodoro_start");
+        assert_eq!(value["body"], "=#bugs");
+        assert_eq!(value["section"], "bugs");
+        assert_eq!(
+            value["pomodoro_start"],
+            serde_json::json!({
+                "raw": "",
+                "duration_units": 5,
+                "offset_units": 0,
+            })
+        );
+        assert_eq!(
+            value["spans"],
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_start" },
+                { "start": 2, "end": 6, "kind": "pomodoro_name" },
+            ])
+        );
+        assert_eq!(value["diagnostics"], serde_json::json!([]));
+        assert!(value.get("items").is_none(), "{value}");
+
+        let counted = json("=3#bugs");
+        assert_eq!(counted["mode"], "pomodoro_start");
+        assert_eq!(counted["section"], "bugs");
+        assert_eq!(
+            counted["pomodoro_start"],
+            serde_json::json!({
+                "raw": "3",
+                "duration_units": 3,
+                "offset_units": 0,
+            })
+        );
+        assert_eq!(
+            counted["spans"],
+            serde_json::json!([
+                { "start": 0, "end": 2, "kind": "pomodoro_start" },
+                { "start": 3, "end": 7, "kind": "pomodoro_name" },
+            ])
+        );
+
+        let incomplete = json("=#");
+        assert_eq!(incomplete["mode"], "incomplete");
+        assert_eq!(incomplete["needs"], serde_json::json!(["pomodoro_name"]));
+        assert_eq!(
+            incomplete["pomodoro_start"],
+            serde_json::json!({
+                "raw": "",
+                "duration_units": 5,
+                "offset_units": 0,
+            })
+        );
+        assert_eq!(
+            incomplete["spans"],
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_start" },
+                { "start": 1, "end": 2, "kind": "interactive_placeholder" },
+            ])
+        );
+        assert_eq!(incomplete["diagnostics"], serde_json::json!([]));
+
+        let order = json("=#bugs=3");
+        assert_eq!(order["mode"], "pomodoro_start");
+        assert!(order.get("pomodoro_start").is_none(), "{order}");
+        assert_eq!(order["diagnostics"][0]["code"], "invalid_pomodoro_start");
+        assert_eq!(order["diagnostics"][0]["range"], serde_json::json!([2, 8]));
+
+        let multiword = json("=#deep work");
+        assert_eq!(
+            multiword["diagnostics"][0]["code"],
+            "invalid_pomodoro_start"
+        );
+        assert_eq!(
+            multiword["diagnostics"][0]["range"],
+            serde_json::json!([7, 11])
+        );
+
+        let close_hash = json("=x#bugs");
+        assert_eq!(close_hash["mode"], "pomodoro_close");
+        assert_eq!(
+            close_hash["diagnostics"][0]["code"],
+            "invalid_pomodoro_close"
+        );
+        assert_eq!(
+            close_hash["diagnostics"][0]["range"],
+            serde_json::json!([2, 7])
+        );
+        assert_eq!(
+            close_hash["spans"],
+            serde_json::json!([
+                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+            ])
+        );
+
+        let chain = json("=x =#bugs");
+        assert_eq!(chain["mode"], "pomodoro_close");
+        assert_eq!(chain["items"].as_array().expect("items").len(), 2);
+        assert_eq!(chain["items"][0]["mode"], "pomodoro_close");
+        assert_eq!(chain["items"][1]["mode"], "pomodoro_start");
+        assert_eq!(chain["items"][1]["section"], "bugs");
+        assert_eq!(chain["items"][1]["body"], "=#bugs");
+        assert_eq!(
+            chain["items"][1]["range"],
+            serde_json::json!({ "start": 3, "end": 9 })
+        );
     }
 
     #[test]
