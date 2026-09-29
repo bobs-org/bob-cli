@@ -617,3 +617,418 @@ fn capture_project_note_dry_run_and_batch_parenting_and_rollback() {
         "no partial note should survive a failing batch"
     );
 }
+
+#[test]
+fn capture_project_note_task_links_write_the_worked_example() {
+    let temp = TempDir::new("bob-cli-capture-project-note-links");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
+
+    let input = "Finish the Google exit packet! @cash^goog-exit+#admin\n\
+         - Draft the resignation memo :draft-memo\n  - keep it short\n\
+         - Call Morgan Stanley about the 401k :call-ms\n\
+         - Collect the equity paperwork ^equity-docs\n\
+         - FUTURE WORK\n  - Revisit the severance terms\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["kind"], "project_note");
+    assert_eq!(json["block_id"], "prj");
+    assert!(json.get("block_link").is_none(), "{json}");
+    assert_eq!(
+        json["project_note"]["task_links"],
+        serde_json::json!([
+            {
+                "block_id": "draft-memo",
+                "block_link": "[[cash_goog_exit#^draft-memo]]",
+                "text": "Draft the resignation memo",
+                "task_line": "- [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo",
+            },
+            {
+                "block_id": "call-ms",
+                "block_link": "[[cash_goog_exit#^call-ms]]",
+                "text": "Call Morgan Stanley about the 401k",
+                "task_line": "- [*] #task Call Morgan Stanley about the 401k [created::2026-09-20] ^call-ms",
+            },
+        ]),
+        "{json}"
+    );
+    assert_eq!(json["day_file"], day_file.display().to_string());
+    assert_eq!(json["pomodoro_name"], "ADMIN");
+    assert_eq!(json["creates_pomodoro"], true);
+    assert!(json["pomodoro_link_placement"].is_string(), "{json}");
+
+    let contents = fs::read_to_string(vault.join("cash_goog_exit.md"))
+        .expect("read new project note");
+    assert!(
+        contents.contains(
+            "- [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo\n\t- keep it short\n"
+        ),
+        "{contents}"
+    );
+    assert!(
+        contents.contains(
+            "- [*] #task Call Morgan Stanley about the 401k [created::2026-09-20] ^call-ms\n"
+        ),
+        "{contents}"
+    );
+    assert!(
+        contents.contains(
+            "- [ ] #task Collect the equity paperwork [created::2026-09-20] ^equity-docs\n"
+        ),
+        "{contents}"
+    );
+    assert!(
+        contents
+            .contains("\n## Future Work\n\n- Revisit the severance terms\n"),
+        "{contents}"
+    );
+
+    let day_after = fs::read_to_string(&day_file).expect("read daily note");
+    assert!(day_after.contains("- [ ] () — ADMIN"), "{day_after}");
+    let admin = day_after.find("- [ ] () — ADMIN").expect("ADMIN entry");
+    let first = day_after
+        .find("[[cash_goog_exit#^draft-memo]]")
+        .expect("first link");
+    let second = day_after
+        .find("[[cash_goog_exit#^call-ms]]")
+        .expect("second link");
+    assert!(admin < first && first < second, "{day_after}");
+    assert!(!day_after.contains("^equity-docs"), "{day_after}");
+
+    let human_temp = TempDir::new("bob-cli-capture-project-note-human");
+    let human_vault = human_temp.path().join("vault");
+    let human_day = human_vault.join("day.md");
+    write_file(
+        &human_vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n",
+    );
+    write_file(&human_day, "## Pomodoros\n- [ ] (1330-1400) Work\n");
+    let human = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&human_vault)
+            .env("BOB_DAY_FILE", &human_day)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "Body @cash^human1+#admin\n- Draft the memo :draft-memo\n",
+    );
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(out.contains("linked") && out.contains("day.md"), "{out}");
+    assert!(out.contains("under ADMIN (created)"), "{out}");
+    assert!(out.contains("[[cash_human1#^draft-memo]]"), "{out}");
+    assert!(out.contains("projects sync"), "{out}");
+}
+
+#[test]
+fn capture_project_note_task_links_use_the_implicit_pomodoro() {
+    let temp = TempDir::new("bob-cli-capture-project-note-implicit");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
+
+    let input =
+        "Body @cash^impl1+\n- Draft the memo :draft-memo\n- File it ^file-it\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(
+        json["project_note"]["task_links"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    assert_eq!(json["day_file"], day_file.display().to_string());
+    assert!(json.get("pomodoro_name").is_none(), "{json}");
+    assert_eq!(json["creates_pomodoro"], false);
+    let day_after = fs::read_to_string(&day_file).expect("read daily note");
+    assert!(
+        day_after.contains("[[cash_impl1#^draft-memo]]"),
+        "{day_after}"
+    );
+    assert!(!day_after.contains("() — "), "{day_after}");
+
+    // An existing named Pomodoro is reused instead of created.
+    let named = TempDir::new("bob-cli-capture-project-note-existing");
+    let vault = named.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (1330-1400) Work\n- [ ] () — ADMIN\n",
+    );
+    let input = "Body @cash^exist1+#admin\n- Draft the memo :draft-memo\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["pomodoro_name"], "ADMIN");
+    assert_eq!(json["creates_pomodoro"], false);
+    let day_after = fs::read_to_string(&day_file).expect("read daily note");
+    assert_eq!(day_after.matches("— ADMIN").count(), 1, "{day_after}");
+    assert!(
+        day_after.contains("[[cash_exist1#^draft-memo]]"),
+        "{day_after}"
+    );
+}
+
+#[test]
+fn capture_project_note_task_links_dry_run_batch_and_rollback() {
+    // Dry run reports the same JSON but writes nothing.
+    let temp = TempDir::new("bob-cli-capture-project-note-link-dry");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    let day_before = "## Pomodoros\n- [ ] (1330-1400) Work\n";
+    write_file(&day_file, day_before);
+    let input = "Body @cash^drylink1+\n- Draft the memo :draft-memo\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-d")
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("dry-run JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(
+        json["project_note"]["task_links"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    assert!(!vault.join("cash_drylink1.md").exists());
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+
+    // A batch appends the second item's links after the first item's.
+    let batch = TempDir::new("bob-cli-capture-project-note-link-batch");
+    let vault = batch.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
+    let input = "First @cash^batch1+\n- Alpha task :alpha\n\nSecond @cash^batch2+\n- Beta task :beta\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&output);
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    let first = day_after
+        .find("[[cash_batch1#^alpha]]")
+        .expect("first batch link");
+    let second = day_after
+        .find("[[cash_batch2#^beta]]")
+        .expect("second batch link");
+    assert!(first < second, "{day_after}");
+
+    // A duplicate ledger link rolls the whole batch back.
+    let rollback = TempDir::new("bob-cli-capture-project-note-link-dup");
+    let vault = rollback.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    let day_before =
+        "## Pomodoros\n- [ ] (1330-1400) Work\n  - [[cash_dup2#^dup]]\n";
+    write_file(&day_file, day_before);
+    let input = "Body @cash^dup2+\n- Draft the memo :dup\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
+    assert!(
+        json["error"].as_str().is_some_and(|error| error
+            .contains("Pomodoro ledger already contains [[cash_dup2#^dup]]")),
+        "{json}"
+    );
+    assert!(!vault.join("cash_dup2.md").exists());
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+}
+
+#[test]
+fn capture_project_note_task_links_need_the_day_file_only_for_links() {
+    // A ` :` task without a daily note fails before writing anything.
+    let missing = TempDir::new("bob-cli-capture-project-note-link-noday");
+    let vault = missing.path().join("vault");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    let input = "Body @cash^noday1+\n- Draft the memo :draft-memo\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
+    assert!(
+        json["error"].as_str().is_some_and(
+            |error| error.contains("Bob daily note does not exist")
+        ),
+        "{json}"
+    );
+    assert!(!vault.join("cash_noday1.md").exists());
+
+    // `^`-only tasks never read the daily note, even when it is missing.
+    let caret = TempDir::new("bob-cli-capture-project-note-caret-noday");
+    let vault = caret.path().join("vault");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    let input = "Body @cash^caretn1+\n- Draft the memo ^draft-memo\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert!(
+        json["project_note"]["task_links"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{json}"
+    );
+    assert!(json.get("day_file").is_none(), "{json}");
+
+    // `^`-only tasks leave an existing daily note untouched.
+    let untouched = TempDir::new("bob-cli-capture-project-note-caret-day");
+    let vault = untouched.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    let day_before = "## Pomodoros\n- [ ] (1330-1400) Work\n";
+    write_file(&day_file, day_before);
+    let input = "Body @cash^caretd1+\n- Draft the memo ^draft-memo\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&output);
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+
+    // A scheduled project still links its `:` tasks as `[?]`.
+    let scheduled = TempDir::new("bob-cli-capture-project-note-link-sched");
+    let vault = scheduled.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
+    let input = "Body @cash^schedlink1+ s:2\n- Draft the memo :draft-memo\n";
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        input,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("scheduled JSON");
+    assert_eq!(json["scheduled"], "2026-09-22", "{json}");
+    assert!(
+        json["project_note"]["task_links"][0]["task_line"]
+            .as_str()
+            .unwrap()
+            .starts_with("- [?] "),
+        "{json}"
+    );
+    let contents = fs::read_to_string(vault.join("cash_schedlink1.md"))
+        .expect("read scheduled note");
+    assert!(
+        contents.contains(
+            "- [?] #task Draft the memo [created::2026-09-20] ^draft-memo"
+        ),
+        "{contents}"
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day_after.contains("[[cash_schedlink1#^draft-memo]]"),
+        "{day_after}"
+    );
+}

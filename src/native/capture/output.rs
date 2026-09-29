@@ -143,12 +143,21 @@ impl std::ops::Deref for CaptureResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectTaskLinkJson {
+    pub(super) block_id: String,
+    pub(super) block_link: String,
+    pub(super) text: String,
+    pub(super) task_line: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct ProjectNoteSummary {
     pub(super) basename: String,
     pub(super) parent_route: String,
     pub(super) parent_link: String,
     pub(super) tasks: usize,
     pub(super) sections: Vec<String>,
+    pub(super) task_links: Vec<ProjectTaskLinkJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -484,6 +493,29 @@ pub(super) fn print_human_item_success(
                 start.pomodoro_line,
             ))
         );
+    }
+    if let Some(note) = result.project_note.as_ref()
+        && !note.task_links.is_empty()
+    {
+        let link_verb = if result.dry_run {
+            "would link"
+        } else {
+            "linked"
+        };
+        if let Some(day_file) = result.day_file.as_deref() {
+            println!("{prefix} {link_verb}   {}", styler.cyan(day_file));
+        }
+        if let Some(name) = result.pomodoro_name.as_deref() {
+            let created = if result.creates_pomodoro == Some(true) {
+                " (created)"
+            } else {
+                ""
+            };
+            println!("  under {name}{created}");
+        }
+        for link in &note.task_links {
+            println!("  {}", styler.dim(&format!("- {}", link.block_link)));
+        }
     }
     if result.project_note.is_some() {
         println!(

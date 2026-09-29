@@ -69,6 +69,21 @@ pub(crate) struct RenderedProjectNote {
     /// placeholder when it is kept. Nested child lines and notes merged from
     /// an authored `TASKS` section are not counted.
     pub(crate) task_count: usize,
+    /// Named first-level tasks in source order, backing `task_links`.
+    pub(crate) named_tasks: Vec<RenderedNamedTask>,
+}
+
+/// One named first-level task bullet: a trailing ` :id` / ` ^id` token
+/// rendered as a task line ending in ` ^<id>`. `link` is `true` for `:`
+/// (Next and linked into the Pomodoro) and `false` for `^` (named only).
+/// `text` is the task body without a leading checkbox, and `task_line` is
+/// the full rendered line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RenderedNamedTask {
+    pub(crate) block_id: String,
+    pub(crate) link: bool,
+    pub(crate) text: String,
+    pub(crate) task_line: String,
 }
 
 /// `<route>_<block-id with every '-' replaced by '_'>.md`, matching
@@ -218,13 +233,15 @@ fn contains_task_tag(body: &str) -> bool {
 }
 
 /// Render one authored task line: preserve an authored checkbox status
-/// (defaulting to open), add `#task` unless present, and append
-/// `[created::DATE]` unless the body already carries one. Nested child lines
-/// are rendered by the caller as plain indented bullets.
+/// (defaulting to open), add `#task` unless present, append
+/// `[created::DATE]` unless the body already carries one, and finally append
+/// ` ^<block-id>` for a named task. Nested child lines are rendered by the
+/// caller as plain indented bullets.
 fn render_authored_task(
     status: char,
     body: &str,
     created_date: &str,
+    task_id: Option<&str>,
 ) -> String {
     let task_body = if body.is_empty() {
         "#task".to_string()
@@ -236,6 +253,9 @@ fn render_authored_task(
     let mut line = format!("- [{status}] {task_body}");
     if !task_body.contains("[created::") {
         line.push_str(&format!(" [created::{created_date}]"));
+    }
+    if let Some(id) = task_id {
+        line.push_str(&format!(" ^{id}"));
     }
     line
 }
@@ -281,12 +301,15 @@ pub(crate) fn render_project_note(
 
     let mut tasks_block: Vec<String> = Vec::new();
     let mut task_entries: usize = 0;
+    let mut named_tasks: Vec<RenderedNamedTask> = Vec::new();
     let mut sections: Vec<SectionEntry> = Vec::new();
     let mut section_index: HashMap<String, usize> = HashMap::new();
     for group in &groups {
         let owner_body = group.owner.body.trim();
         let (checkbox, bare) = split_leading_checkbox(owner_body);
-        if checkbox.is_none()
+        let named = group.owner.task_id.as_ref();
+        if named.is_none()
+            && checkbox.is_none()
             && !group.nested.is_empty()
             && is_project_section_title(owner_body)
         {
@@ -311,13 +334,33 @@ pub(crate) fn render_project_note(
                 }
             }
         } else {
-            let task_status = checkbox.unwrap_or(' ');
-            tasks_block.push(render_authored_task(
+            let task_status = match named {
+                Some(task) if task.link => {
+                    if input.scheduled.is_some() {
+                        '?'
+                    } else {
+                        '*'
+                    }
+                }
+                _ => checkbox.unwrap_or(' '),
+            };
+            let task_id_suffix = named.map(|task| task.block_id.as_str());
+            let task_line = render_authored_task(
                 task_status,
                 bare,
                 &created_date,
-            ));
+                task_id_suffix,
+            );
+            tasks_block.push(task_line.clone());
             task_entries += 1;
+            if let Some(task) = named {
+                named_tasks.push(RenderedNamedTask {
+                    block_id: task.block_id.clone(),
+                    link: task.link,
+                    text: bare.to_string(),
+                    task_line,
+                });
+            }
             for nested in &group.nested {
                 tasks_block.push(format!("\t- {}", nested.body.trim()));
             }
@@ -388,11 +431,13 @@ pub(crate) fn render_project_note(
         task_line,
         sections: section_titles,
         task_count,
+        named_tasks,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::capture_language::ProjectTaskId;
     use super::*;
     use chrono::NaiveDate;
 
@@ -408,6 +453,22 @@ mod tests {
             body: body.to_string(),
             depth,
             task_id: None,
+        }
+    }
+
+    fn named_bullet(
+        body: &str,
+        depth: AuthoredDepth,
+        id: &str,
+        link: bool,
+    ) -> AuthoredSubBullet {
+        AuthoredSubBullet {
+            body: body.to_string(),
+            depth,
+            task_id: Some(ProjectTaskId {
+                block_id: id.to_string(),
+                link,
+            }),
         }
     }
 
@@ -647,5 +708,137 @@ mod tests {
             "- [ ] #task 🗓️ **SCHEDULE LOG** [created::2026-09-20]\n"
         ));
         assert_eq!(rendered.task_count, 1);
+    }
+
+    #[test]
+    fn named_tasks_render_ids_last_with_next_status_for_links() {
+        pin_utc();
+        let sub_bullets = vec![
+            named_bullet(
+                "Draft the resignation memo",
+                AuthoredDepth::First,
+                "draft-memo",
+                true,
+            ),
+            bullet("keep it short", AuthoredDepth::Nested),
+            named_bullet(
+                "Call Morgan Stanley about the 401k",
+                AuthoredDepth::First,
+                "call-ms",
+                true,
+            ),
+            named_bullet(
+                "Collect the equity paperwork",
+                AuthoredDepth::First,
+                "equity-docs",
+                false,
+            ),
+        ];
+        let rendered = render_project_note(&base_input(&sub_bullets));
+        assert!(rendered.contents.contains(
+            "- [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo\n\
+             \t- keep it short\n\
+             - [*] #task Call Morgan Stanley about the 401k [created::2026-09-20] ^call-ms\n\
+             - [ ] #task Collect the equity paperwork [created::2026-09-20] ^equity-docs\n"
+        ));
+        assert_eq!(rendered.task_count, 3);
+        assert_eq!(
+            rendered
+                .named_tasks
+                .iter()
+                .map(|task| (task.block_id.as_str(), task.link))
+                .collect::<Vec<_>>(),
+            vec![
+                ("draft-memo", true),
+                ("call-ms", true),
+                ("equity-docs", false),
+            ]
+        );
+        assert_eq!(
+            rendered.named_tasks[0].task_line,
+            "- [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo"
+        );
+        assert_eq!(rendered.named_tasks[0].text, "Draft the resignation memo");
+    }
+
+    #[test]
+    fn named_all_caps_bullet_with_children_stays_a_task() {
+        pin_utc();
+        let sub_bullets = vec![
+            named_bullet("FUTURE WORK", AuthoredDepth::First, "future-1", true),
+            bullet("Revisit the terms", AuthoredDepth::Nested),
+        ];
+        let rendered = render_project_note(&base_input(&sub_bullets));
+        assert!(!rendered.contents.contains("## Future Work"));
+        assert!(rendered.contents.contains(
+            "- [*] #task FUTURE WORK [created::2026-09-20] ^future-1\n\
+             \t- Revisit the terms\n"
+        ));
+        assert!(rendered.sections.is_empty());
+        assert_eq!(rendered.task_count, 1);
+    }
+
+    #[test]
+    fn scheduled_project_renders_linked_tasks_as_blocked() {
+        pin_utc();
+        let sub_bullets = vec![
+            named_bullet("Draft the memo", AuthoredDepth::First, "draft", true),
+            named_bullet("File the memo", AuthoredDepth::First, "file", false),
+        ];
+        let mut input = base_input(&sub_bullets);
+        input.scheduled = Some("2026-09-22");
+        let rendered = render_project_note(&input);
+        assert!(rendered.contents.contains(
+            "- [?] #task Draft the memo [created::2026-09-20] ^draft\n"
+        ));
+        assert!(rendered.contents.contains(
+            "- [ ] #task File the memo [created::2026-09-20] ^file\n"
+        ));
+        assert!(rendered.task_line.starts_with("- [?] "));
+    }
+
+    #[test]
+    fn caret_task_keeps_its_authored_checkbox() {
+        pin_utc();
+        let sub_bullets = vec![
+            named_bullet(
+                "[/] Draft the memo",
+                AuthoredDepth::First,
+                "draft",
+                false,
+            ),
+            named_bullet(
+                "Collect the paperwork",
+                AuthoredDepth::First,
+                "paperwork",
+                false,
+            ),
+        ];
+        let rendered = render_project_note(&base_input(&sub_bullets));
+        assert!(rendered.contents.contains(
+            "- [/] #task Draft the memo [created::2026-09-20] ^draft\n"
+        ));
+        assert!(rendered.contents.contains(
+            "- [ ] #task Collect the paperwork [created::2026-09-20] ^paperwork\n"
+        ));
+    }
+
+    #[test]
+    fn named_task_keeps_an_existing_created_stamp_before_the_id() {
+        pin_utc();
+        let sub_bullets = vec![named_bullet(
+            "Draft the memo [created::2026-09-18]",
+            AuthoredDepth::First,
+            "draft",
+            true,
+        )];
+        let rendered = render_project_note(&base_input(&sub_bullets));
+        assert!(rendered.contents.contains(
+            "- [*] #task Draft the memo [created::2026-09-18] ^draft\n"
+        ));
+        assert_eq!(
+            rendered.contents.matches("[created::2026-09-20]").count(),
+            0
+        );
     }
 }

@@ -74,13 +74,13 @@ pub(super) fn plan_project_note_item(
     };
     // The grammar rejects a `#pomodoro` name with no ` :` task before
     // planning; this guards planners that bypass it.
-    if let Some(name) = pomodoro_name {
+    if let Some(name) = pomodoro_name.as_deref() {
         let has_link = parsed.sub_bullets.iter().any(|sub_bullet| {
             sub_bullet.task_id.as_ref().is_some_and(|task| task.link)
         });
         if !has_link {
             return Err(CaptureError::usage(
-                unused_project_note_pomodoro_error(&name),
+                unused_project_note_pomodoro_error(name),
             ));
         }
     }
@@ -157,9 +157,106 @@ pub(super) fn plan_project_note_item(
     };
     let rendered = capture_project_note::render_project_note(&render_input);
 
-    // A project note with no ` :` task never reads the daily note: the
-    // `^prj` task is never linked, and Task Links arrive in a later phase.
-    planner.stage(&new_target, rendered.contents.clone())?;
+    // One Task Link per `:` task, in source order. With no links the daily
+    // note is never read; otherwise the note and the day file are staged
+    // together so any failure writes nothing.
+    let stem = rendered
+        .basename
+        .strip_suffix(".md")
+        .unwrap_or(rendered.basename.as_str())
+        .to_string();
+    let linked: Vec<&capture_project_note::RenderedNamedTask> = rendered
+        .named_tasks
+        .iter()
+        .filter(|task| task.link)
+        .collect();
+    let (
+        day_file,
+        pomodoro_link_placement,
+        canonical_pomodoro_name,
+        creates_pomodoro,
+    ) = if linked.is_empty() {
+        (None, None, None, None)
+    } else {
+        let day_file = pomodoro::day_file_for(&request.bob_dir);
+        if !planner.currently_exists(&day_file)? {
+            return Err(CaptureError::io(format!(
+                "Bob daily note does not exist: {}",
+                day_file.display()
+            )));
+        }
+        if paths_refer_to_same_file(&new_target, &day_file) {
+            return Err(CaptureError::io(
+                "routed note and Bob daily note must be different files",
+            ));
+        }
+        let original_day = planner.read_existing(&day_file)?;
+        let scan = capture_pomodoros::scan(&original_day);
+        let canonical_pomodoro_name = match pomodoro_name.as_deref() {
+            Some(selector) => Some(
+                capture_pomodoros::canonicalize_pomodoro_name(selector)
+                    .ok_or_else(|| {
+                        CaptureError::usage(
+                            capture_pomodoros::POMODORO_NAME_USAGE,
+                        )
+                    })?,
+            ),
+            None => None,
+        };
+        let creates_pomodoro = match pomodoro_name.as_deref() {
+            Some(selector) => !matches!(
+                capture_pomodoros::select_named(&scan, selector),
+                capture_pomodoros::NamedSelection::Found(_)
+            ),
+            None => false,
+        };
+        let mut day = original_day;
+        let mut first_placement = None;
+        for task in &linked {
+            let block_link =
+                format!("[[{stem}#^{block_id}]]", block_id = task.block_id);
+            if day.contains(&block_link) {
+                return Err(CaptureError::io(format!(
+                    "Pomodoro ledger already contains {block_link}"
+                )));
+            }
+            let (updated, placement) = insert_pomodoro_block_link(
+                &day,
+                &block_link,
+                pomodoro_name.as_deref(),
+            )?;
+            if first_placement.is_none() {
+                first_placement = Some(placement);
+            }
+            day = updated;
+        }
+        planner.stage(&new_target, rendered.contents.clone())?;
+        planner.stage(&day_file, day)?;
+        (
+            Some(day_file.display().to_string()),
+            first_placement,
+            canonical_pomodoro_name,
+            Some(creates_pomodoro),
+        )
+    };
+    if linked.is_empty() {
+        // A project note with no ` :` task never reads the daily note: the
+        // `^prj` task is never linked.
+        planner.stage(&new_target, rendered.contents.clone())?;
+    }
+
+    let task_links = linked
+        .iter()
+        .map(|task| ProjectTaskLinkJson {
+            block_id: task.block_id.clone(),
+            block_link: format!(
+                "[[{stem}#^{block_id}]]",
+                block_id = task.block_id
+            ),
+            text: task.text.clone(),
+            task_line: task.task_line.clone(),
+        })
+        .collect::<Vec<_>>();
 
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -184,9 +281,9 @@ pub(super) fn plan_project_note_item(
             clip: None,
             schedule_log,
             block_id: Some("prj".to_string()),
-            day_file: None,
+            day_file,
             block_link: None,
-            pomodoro_link_placement: None,
+            pomodoro_link_placement,
             parent_line: None,
             parent_text: None,
             parent_section: None,
@@ -198,8 +295,8 @@ pub(super) fn plan_project_note_item(
             status_name: None,
             previous_status_symbol: None,
             previous_status_name: None,
-            pomodoro_name: None,
-            creates_pomodoro: None,
+            pomodoro_name: canonical_pomodoro_name,
+            creates_pomodoro,
             pomodoro_already_linked: None,
             removed_pomodoro_links: None,
             removed_scheduled: None,
@@ -215,6 +312,7 @@ pub(super) fn plan_project_note_item(
                 parent_link: format!("[[{route}]]"),
                 tasks: rendered.task_count,
                 sections: rendered.sections.clone(),
+                task_links,
             }),
             pomodoro_start: None,
             pomodoro_adjust: None,
