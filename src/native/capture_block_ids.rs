@@ -13,7 +13,10 @@ use serde::Serialize;
 
 use super::{
     capture,
-    capture_language::{editor_item_at, parse_for_editor, CompletionContext},
+    capture_language::{
+        editor_item_at, parse_for_editor, project_task_block_id_detail,
+        CompletionContext,
+    },
     collect_done, note_tasks,
 };
 
@@ -50,7 +53,7 @@ pub(crate) struct UsedBlockId {
 }
 
 /// Additive top-level `block_id` object, present exactly when the context is
-/// `pomodoro_block_id` or `task_block_id`.
+/// `pomodoro_block_id`, `task_block_id`, or `project_task_block_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct BlockIdField {
     pub(crate) route: String,
@@ -100,6 +103,11 @@ pub(crate) fn build_block_id_field(
     cursor: usize,
     request: &BlockIdRequest<'_>,
 ) -> BlockIdField {
+    if request.context == CompletionContext::ProjectTaskBlockId {
+        return build_project_task_block_id_field(
+            bob_dir, raw_text, cursor, request,
+        );
+    }
     let marker = match request.context {
         CompletionContext::PomodoroBlockId => ':',
         _ => '^',
@@ -167,6 +175,77 @@ pub(crate) fn build_block_id_field(
         allowed_description: allowed_description.to_string(),
         suggestions,
         used,
+    }
+}
+
+/// Build the additive `block_id` object for a `project_task_block_id`
+/// field: a trailing ` :id` / ` ^id` on a project-note task bullet. Intent
+/// is always `new`. The routed note is never read beyond setting
+/// `note_exists` for the project note itself; `used` is `prj` plus every
+/// other accepted task ID already typed in the item.
+fn build_project_task_block_id_field(
+    bob_dir: &Path,
+    raw_text: &str,
+    cursor: usize,
+    request: &BlockIdRequest<'_>,
+) -> BlockIdField {
+    let Some(detail) =
+        project_task_block_id_detail(raw_text, cursor, request.replacement)
+    else {
+        return BlockIdField {
+            route: request.route.to_string(),
+            relative_target: format!("{}.md", request.route),
+            note_exists: false,
+            marker: "^".to_string(),
+            marker_range: BlockIdMarkerRange {
+                start: request.replacement.0,
+                end: request.replacement.1,
+            },
+            intent: BlockIdIntent::New,
+            body: String::new(),
+            allowed_character: BLOCK_ID_ALLOWED_CHARACTER.to_string(),
+            allowed_description: BLOCK_ID_ALLOWED_DESCRIPTION.to_string(),
+            suggestions: Vec::new(),
+            used: Vec::new(),
+        };
+    };
+    let (allowed_character, allowed_description) =
+        allowed_rule_for_marker(detail.marker);
+    let relative_target = format!("{}.md", detail.stem);
+    let note_exists = bob_dir.join(&relative_target).is_file();
+    let used_ids: Vec<String> =
+        detail.used.iter().map(|entry| entry.id.clone()).collect();
+    let suggestions = if detail.body.is_empty() {
+        Vec::new()
+    } else {
+        suggest_ids(&detail.body, detail.marker, &used_ids)
+    };
+    BlockIdField {
+        route: detail.stem,
+        relative_target,
+        note_exists,
+        marker: detail.marker.to_string(),
+        marker_range: BlockIdMarkerRange {
+            start: detail.marker_range.0,
+            end: detail.marker_range.1,
+        },
+        intent: BlockIdIntent::New,
+        body: detail.body,
+        allowed_character: allowed_character.to_string(),
+        allowed_description: allowed_description.to_string(),
+        suggestions,
+        used: detail
+            .used
+            .into_iter()
+            .map(|entry| UsedBlockId {
+                id: entry.id,
+                line: entry.line,
+                task: true,
+                status_symbol: None,
+                status_name: None,
+                text: entry.text,
+            })
+            .collect(),
     }
 }
 

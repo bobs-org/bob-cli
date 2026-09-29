@@ -575,3 +575,79 @@ fn completion_inside_an_item_stays_item_local_with_a_global_declaration() {
     assert_eq!(field(raw, 3).unwrap().context, CompletionContext::Route);
     assert_eq!(field(raw, 3).unwrap().replacement, (2, 5));
 }
+
+#[test]
+fn project_task_block_id_completes_a_lone_colon() {
+    let raw = "Finish it @cash^goog-exit+\n- Draft the memo :";
+    let completion = field(raw, raw.len()).expect("project task field");
+    assert_eq!(completion.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(completion.route.as_deref(), Some("cash_goog_exit"));
+    assert_eq!(completion.query, "");
+    assert_eq!(completion.replacement, (raw.len(), raw.len()));
+}
+
+#[test]
+fn project_task_block_id_completes_a_partial_id() {
+    let raw = "Finish it @cash^goog-exit+\n- Draft the memo :dr";
+    let completion = field(raw, raw.len()).expect("project task field");
+    assert_eq!(completion.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(completion.route.as_deref(), Some("cash_goog_exit"));
+    assert_eq!(completion.query, "dr");
+    let id_start = raw.rfind(":dr").expect("id") + 1;
+    assert_eq!(completion.replacement, (id_start, raw.len()));
+    // A mid-ID cursor keeps the whole-ID replacement with the typed prefix.
+    let mid = field(raw, raw.len() - 1).expect("mid-id field");
+    assert_eq!(mid.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(mid.query, "d");
+    assert_eq!(mid.replacement, (id_start, raw.len()));
+}
+
+#[test]
+fn project_task_block_id_completes_a_caret_id() {
+    let raw = "Finish it @cash^goog-exit+\n- Collect the equity paperwork ^equ";
+    let completion = field(raw, raw.len()).expect("project task field");
+    assert_eq!(completion.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(completion.route.as_deref(), Some("cash_goog_exit"));
+    assert_eq!(completion.query, "equ");
+    let id_start = raw.rfind("^equ").expect("id") + 1;
+    assert_eq!(completion.replacement, (id_start, raw.len()));
+
+    let lone = "Finish it @cash^goog-exit+\n- Collect the equity paperwork ^";
+    let lone_field = field(lone, lone.len()).expect("lone caret field");
+    assert_eq!(lone_field.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(lone_field.query, "");
+    assert_eq!(lone_field.replacement, (lone.len(), lone.len()));
+}
+
+#[test]
+fn project_task_id_before_a_child_line_route_marker_still_completes() {
+    let raw =
+        "Finish it @cash^goog-exit+\n- Draft the memo :dr @cash^goog-exit+";
+    let id_end = raw.rfind(" @cash").expect("marker");
+    let completion = field(raw, id_end).expect("project task field");
+    assert_eq!(completion.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(completion.route.as_deref(), Some("cash_goog_exit"));
+    assert_eq!(completion.query, "dr");
+    // A cursor inside the child-line marker itself stays a marker field.
+    let plus = raw.rfind('+').expect("plus");
+    let marker = field(raw, plus).expect("marker field");
+    assert_eq!(marker.context, CompletionContext::TaskBlockId);
+}
+
+#[test]
+fn project_task_block_id_completes_only_first_level_project_bullets() {
+    // Nested bullets never complete.
+    let nested = "Finish it @cash^goog-exit+\n- Draft the memo :draft\n  - keep it short :x";
+    assert_eq!(field(nested, nested.len()), None);
+    // Non-project items keep `:1` literal.
+    let plain = "Fix @sase\n- ratio 3 :1";
+    assert_eq!(field(plain, plain.len()), None);
+    // The parent line never completes a task ID.
+    let parent = "Finish it @cash^goog-exit+\n- Draft the memo :dr";
+    let parent_end = parent.find('\n').expect("newline");
+    assert_eq!(field(parent, parent_end), None);
+    // A cursor before the sigil is outside the token.
+    let raw = "Finish it @cash^goog-exit+\n- Draft the memo :dr";
+    let sigil = raw.rfind(':').expect("sigil");
+    assert_eq!(field(raw, sigil), None);
+}

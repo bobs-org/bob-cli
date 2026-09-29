@@ -32,6 +32,7 @@ mod tokens;
 mod tests;
 
 pub(crate) use self::completion::completion_field_at;
+pub(crate) use self::completion::project_task_block_id_detail;
 pub(crate) use self::completion::CompletionContext;
 #[cfg(test)]
 pub(crate) use self::completion::CompletionField;

@@ -153,7 +153,8 @@ suffix survives. A `#name` after `^route:block-id` completes Pomodoro names \
 exactly as it does after `@route:block-id`, and a cursor inside `=<X>` or \
 `=x[<N>][!<M>]` offers nothing. The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
 candidates and an additive `block_id` object carrying intent, used IDs, and suggestions. A project-note `+` \
-directly after the `^` block-ID part is never part of the replacement; a `+` after a `:` block ID is the retired project-note form and offers nothing. An empty block-ID component \
+directly after the `^` block-ID part is never part of the replacement; a `+` after a `:` block ID is the retired project-note form and offers nothing. A trailing ` :id` or ` ^id` on a \
+first-level bullet of a project-note item completes as `project_task_block_id`, with empty candidates and an additive `block_id` object carrying intent `new`, the project-note stem, the sigil range, the bullet body, used IDs (`prj` plus sibling task IDs), and suggestions. An empty block-ID component \
 ('@route+#') returns a successful empty task-section list; an unresolvable \
 parent task returns a successful empty list plus one bounded warning. Other \
 contexts still rank \
@@ -170,7 +171,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, pomodoro_name, task, task_section, active_task, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, task, task_section, active_task, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -484,6 +485,7 @@ fn build_result(
             | CompletionContext::Section
             | CompletionContext::PomodoroBlockId
             | CompletionContext::TaskBlockId
+            | CompletionContext::ProjectTaskBlockId
             | CompletionContext::PomodoroName
             | CompletionContext::Task
             | CompletionContext::TaskSection
@@ -514,7 +516,9 @@ fn build_result(
 
     if matches!(
         field.context,
-        CompletionContext::PomodoroBlockId | CompletionContext::TaskBlockId
+        CompletionContext::PomodoroBlockId
+            | CompletionContext::TaskBlockId
+            | CompletionContext::ProjectTaskBlockId
     ) {
         let route = field.route.as_deref().expect("route resolved");
         let block_field = capture_block_ids::build_block_id_field(
@@ -582,7 +586,9 @@ fn build_result(
                 Vec::new(),
             )
         }
-        CompletionContext::PomodoroBlockId | CompletionContext::TaskBlockId => {
+        CompletionContext::PomodoroBlockId
+        | CompletionContext::TaskBlockId
+        | CompletionContext::ProjectTaskBlockId => {
             unreachable!("block-id handled above")
         }
         CompletionContext::Task => {
@@ -1491,6 +1497,7 @@ fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::Section => "section",
         CompletionContext::PomodoroBlockId => "pomodoro_block_id",
         CompletionContext::TaskBlockId => "task_block_id",
+        CompletionContext::ProjectTaskBlockId => "project_task_block_id",
         CompletionContext::PomodoroName => "pomodoro_name",
         CompletionContext::Task => "task",
         CompletionContext::TaskSection => "task_section",

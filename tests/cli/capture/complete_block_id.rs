@@ -248,6 +248,95 @@ fn block_id_suggestions_follow_body_examples() {
 }
 
 #[test]
+fn project_task_block_id_reports_stem_body_used_and_suggestions() {
+    let temp = TempDir::new("bob-cli-complete-project-task-block-id");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_settings(&vault);
+
+    let draft = "Finish it @cash^goog-exit+\n- Draft the memo :";
+    let value = complete_json(&vault, draft, draft.len(), None);
+    assert_eq!(value["context"], "project_task_block_id");
+    assert_eq!(
+        value["replacement"],
+        serde_json::json!({"start": draft.len(), "end": draft.len()})
+    );
+    assert_eq!(value["candidates"].as_array().expect("candidates").len(), 0);
+    let block = &value["block_id"];
+    assert_eq!(block["route"], "cash_goog_exit");
+    assert_eq!(block["relative_target"], "cash_goog_exit.md");
+    assert_eq!(block["note_exists"], false);
+    assert_eq!(block["marker"], ":");
+    assert_eq!(
+        block["marker_range"],
+        serde_json::json!({"start": draft.len() - 1, "end": draft.len()})
+    );
+    assert_eq!(block["intent"], "new");
+    assert_eq!(block["body"], "Draft the memo");
+    assert_eq!(block["allowed_character"], "[A-Za-z0-9-]");
+    assert_eq!(block["allowed_description"], "A-Z, a-z, 0-9 or '-'");
+    assert_eq!(block["suggestions"], serde_json::json!(["draft-memo"]));
+    assert_eq!(
+        block["used"],
+        serde_json::json!([{
+            "id": "prj",
+            "line": 1,
+            "task": true,
+            "status_symbol": null,
+            "status_name": null,
+            "text": "Finish it",
+        }])
+    );
+
+    // A second bullet sees the first bullet's ID in `used`.
+    let two = "Finish it @cash^goog-exit+\n- Draft the memo :draft-memo\n- Call about the 401k :";
+    let second = complete_json(&vault, two, two.len(), None);
+    assert_eq!(second["context"], "project_task_block_id");
+    let second_block = &second["block_id"];
+    assert_eq!(second_block["marker"], ":");
+    assert_eq!(second_block["body"], "Call about the 401k");
+    assert_eq!(
+        second_block["suggestions"],
+        serde_json::json!(["call-about-401k"])
+    );
+    let ids: Vec<&str> = second_block["used"]
+        .as_array()
+        .expect("used")
+        .iter()
+        .map(|entry| entry["id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(ids, vec!["prj", "draft-memo"]);
+    assert_eq!(second_block["used"][1]["line"], 2);
+    assert_eq!(second_block["used"][1]["text"], "Draft the memo");
+
+    // An existing project note flips `note_exists` without changing `used`.
+    write_file(&vault.join("cash_goog_exit.md"), "- [ ] #task #prj Stub\n");
+    let existing = complete_json(&vault, draft, draft.len(), None);
+    assert_eq!(existing["block_id"]["note_exists"], true);
+    assert_eq!(
+        existing["block_id"]["used"],
+        serde_json::json!([{
+            "id": "prj",
+            "line": 1,
+            "task": true,
+            "status_symbol": null,
+            "status_name": null,
+            "text": "Finish it",
+        }])
+    );
+
+    // A `^` bullet reports the caret marker with the same shape.
+    let caret = "Finish it @cash^goog-exit+\n- Collect the equity paperwork ^";
+    let caret_value = complete_json(&vault, caret, caret.len(), None);
+    assert_eq!(caret_value["context"], "project_task_block_id");
+    assert_eq!(caret_value["block_id"]["marker"], "^");
+    assert_eq!(
+        caret_value["block_id"]["body"],
+        "Collect the equity paperwork"
+    );
+}
+
+#[test]
 fn block_id_json_shape_and_human_line() {
     let temp = TempDir::new("bob-cli-complete-block-id-shape");
     let vault = temp.path().join("vault");

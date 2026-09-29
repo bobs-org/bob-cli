@@ -8,6 +8,7 @@ use super::editor_pomodoro::*;
 use super::line::*;
 use super::markers::*;
 use super::model::*;
+use super::project_tasks::*;
 use super::tokens::*;
 use serde::Serialize;
 
@@ -19,6 +20,7 @@ pub(crate) enum CompletionContext {
     Section,
     PomodoroBlockId,
     TaskBlockId,
+    ProjectTaskBlockId,
     PomodoroName,
     Task,
     TaskSection,
@@ -251,6 +253,14 @@ pub(crate) fn completion_field_at(
     {
         return None;
     }
+    // A trailing ` :id` / ` ^id` on a first-level project-note bullet
+    // completes the task ID itself; a cursor elsewhere on the line falls
+    // through to the `@` marker path below.
+    if line_index > 0
+        && let Some(field) = project_task_completion_field(item, line, cursor)
+    {
+        return Some(field);
+    }
     let leading = line_index == 0;
 
     // A solo leading `^` token completes active tasks vault-wide instead of
@@ -307,6 +317,213 @@ pub(crate) fn completion_field_at(
             && resolved.needs == [Need::PomodoroName]);
 
     marker_field_at_cursor(&token, cursor, sub_bullet_is_toggle)
+}
+
+/// Trailing ` :id` / ` ^id` completion on a first-level project-note child.
+///
+/// On a first-level child line of an item whose editor parse is a project
+/// note with a resolved route and project ID, a cursor inside the trailing
+/// task-ID token (from just after the sigil to the token end) yields the
+/// `project_task_block_id` context. The replacement is the ID span, which is
+/// empty at the cursor for a lone sigil. The same `project_tasks` lexer and
+/// last-body-word-after-markers rule backs both this and the editor spans,
+/// so completion never disagrees with highlighting. Parent lines, nested
+/// lines, non-project items, items without a resolved route or project ID,
+/// and cursors outside the trailing token yield nothing.
+fn project_task_completion_field(
+    item: &CaptureItem<'_>,
+    line: RawLine<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let info = project_task_token_at(item, line, cursor)?;
+    let query = info
+        .token
+        .text
+        .get(1..cursor - info.token.start)?
+        .to_string();
+    Some(CompletionField {
+        context: CompletionContext::ProjectTaskBlockId,
+        route: Some(info.stem),
+        block_id: None,
+        query,
+        replacement: (info.token.start + 1, info.token.end),
+    })
+}
+
+/// One trailing task-ID token with absolute offsets plus its project stem.
+struct ProjectTaskToken<'a> {
+    token: Token<'a>,
+    stem: String,
+}
+
+/// Locate the trailing task-ID token at `cursor` on a first-level child
+/// line of a project note with a resolved route and project ID. An item
+/// left `incomplete` by a lone ` :` / ` ^` still qualifies: its marker is
+/// resolved and only the ID is missing.
+fn project_task_token_at<'a>(
+    item: &CaptureItem<'a>,
+    line: RawLine<'a>,
+    cursor: usize,
+) -> Option<ProjectTaskToken<'a>> {
+    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+        return None;
+    };
+    if authored.depth != AuthoredDepth::First || cursor < authored.body_start {
+        return None;
+    }
+    let resolved = parse_editor_item(item).item;
+    let is_project_note = matches!(
+        resolved.mode,
+        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
+    ) || (resolved.mode == EditorMode::Incomplete
+        && resolved.needs == [Need::BlockId]);
+    if !is_project_note {
+        return None;
+    }
+    let (Some(route), Some(project_id)) = (resolved.route, resolved.block_id)
+    else {
+        return None;
+    };
+    let child_line = RawLine {
+        text: authored.body,
+        start: authored.body_start,
+        end: line.end,
+    };
+    let child_tokens = tokenize_line_with_spans(&child_line);
+    let child_parse = parse_editor_line(child_tokens, false);
+    let token = child_parse.body_tokens.last()?;
+    // The lexer decides what counts as a trailing task-ID token; prose
+    // (`:)`, `10:30`) yields nothing.
+    lex_project_task_id(token.text)?;
+    if cursor < token.start + 1 || cursor > token.end {
+        return None;
+    }
+    Some(ProjectTaskToken {
+        token: *token,
+        stem: format!("{}_{}", route, project_id.replace('-', "_")),
+    })
+}
+
+/// One already-typed project task ID elsewhere in the same item, for the
+/// `project_task_block_id` used list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectTaskUsedId {
+    pub(crate) id: String,
+    pub(crate) line: usize,
+    pub(crate) text: String,
+}
+
+/// Detail behind the `project_task_block_id` block-ID object: the
+/// project-note stem, the sigil, the whole-token marker range, the cursor
+/// line's bullet body without its ID or leading checkbox, and `prj` plus
+/// every other accepted task ID in the item, in source order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectTaskBlockIdDetail {
+    pub(crate) stem: String,
+    pub(crate) marker: char,
+    pub(crate) marker_range: (usize, usize),
+    pub(crate) body: String,
+    pub(crate) used: Vec<ProjectTaskUsedId>,
+}
+
+/// Collect the `project_task_block_id` block-ID detail at `cursor`.
+/// `replacement` is the ID span the detection step reported; a caller
+/// passing a foreign range gets nothing rather than a mismatched object.
+pub(crate) fn project_task_block_id_detail(
+    raw_text: &str,
+    cursor: usize,
+    replacement: (usize, usize),
+) -> Option<ProjectTaskBlockIdDetail> {
+    let draft = split_capture_draft(raw_text);
+    let (item, line_index, line) = draft.items.iter().find_map(|item| {
+        item.lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| {
+                cursor >= line.raw.start && cursor <= line.raw.end
+            })
+            .map(|(line_index, line)| (item, line_index, line.raw))
+    })?;
+    if line_index == 0 {
+        return None;
+    }
+    let info = project_task_token_at(item, line, cursor)?;
+    if replacement != (info.token.start + 1, info.token.end) {
+        return None;
+    }
+    let marker = info.token.text.chars().next()?;
+    if marker != ':' && marker != '^' {
+        return None;
+    }
+    let resolved = parse_editor_item(item).item;
+    let parent_line_number =
+        item.lines.first().map(|line| line.line_number).unwrap_or(1);
+    let mut used = vec![ProjectTaskUsedId {
+        id: "prj".to_string(),
+        line: parent_line_number,
+        text: clean_project_task_body(&resolved.body),
+    }];
+    // Run the shared per-item pass in source order so duplicate accounting
+    // matches the editor spans; only accepted IDs join the used list, and
+    // the cursor line never does.
+    let mut pass = ProjectTaskPass::new();
+    for (index, child) in item.lines.iter().enumerate().skip(1) {
+        let AuthoredLineClass::Item(authored) =
+            classify_authored_line(child.raw)
+        else {
+            continue;
+        };
+        let child_line = RawLine {
+            text: authored.body,
+            start: authored.body_start,
+            end: child.raw.end,
+        };
+        let child_tokens = tokenize_line_with_spans(&child_line);
+        let child_parse = parse_editor_line(child_tokens, false);
+        if let ChildTaskOutcome::Accept { id, stripped, .. } = pass.check_child(
+            &child_parse.body,
+            authored.depth,
+            child.line_number,
+        ) && index != line_index
+        {
+            used.push(ProjectTaskUsedId {
+                id,
+                line: child.line_number,
+                text: clean_project_task_body(&stripped),
+            });
+        }
+    }
+    // The cursor line's body without its trailing token or checkbox. The
+    // accepted-ID strip and the plain last-word strip coincide, so one
+    // path covers valid, invalid, and lone-sigil tokens alike.
+    let current = &item.lines[line_index];
+    let AuthoredLineClass::Item(current_authored) =
+        classify_authored_line(current.raw)
+    else {
+        return None;
+    };
+    let current_line = RawLine {
+        text: current_authored.body,
+        start: current_authored.body_start,
+        end: current.raw.end,
+    };
+    let current_tokens = tokenize_line_with_spans(&current_line);
+    let current_parse = parse_editor_line(current_tokens, false);
+    let stripped = strip_task_id_suffix(&current_parse.body);
+    Some(ProjectTaskBlockIdDetail {
+        stem: info.stem,
+        marker,
+        marker_range: (info.token.start, info.token.end),
+        body: clean_project_task_body(&stripped),
+        used,
+    })
+}
+
+/// Bullet body without a leading checkbox, for suggestion input and used
+/// text. Mirrors the renderer's checkbox shape through the shared helper.
+fn clean_project_task_body(stripped: &str) -> String {
+    let (_, rest) = split_leading_checkbox(stripped.trim_start());
+    rest.trim().to_string()
 }
 
 pub(super) fn has_previous_first_level_authored_item(
