@@ -792,8 +792,15 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
     }
     planner.write_logs(&ledger)?;
     planner.retire_closed_embeds(&ledger, running.line.saturating_sub(1))?;
-    assign_task_indices(&mut planner.tasks, &task_links);
-    emit_listed_status_warnings(&mut planner, &task_links);
+    let link_rows = link_row_mapping(
+        planner.vault,
+        planner.day_path,
+        &planner.task_indices,
+        &planner.unresolved_indices,
+        &task_links,
+    );
+    assign_task_indices(&mut planner.tasks, &task_links, &link_rows);
+    emit_listed_status_warnings(&mut planner, &task_links, &link_rows);
 
     if let Some(contents) = planner.staged.get(day_path) {
         ledger.contents = contents.clone();
@@ -818,79 +825,136 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
     })
 }
 
+/// Map every numbered link to the task row that owns its task, by task
+/// identity rather than the row's first ledger line. A task gets one row,
+/// registered from the first ledger line that mentions it, so an earlier
+/// unnumbered (mentioned or struck) line can own the row while a later
+/// numbered line carries the task's number.
+fn link_row_mapping<V: CloseVault>(
+    vault: &V,
+    day_path: &Path,
+    task_indices: &BTreeMap<TaskKey, usize>,
+    unresolved_indices: &BTreeMap<String, usize>,
+    task_links: &[NumberedTaskLink],
+) -> BTreeMap<u32, usize> {
+    let mut mapping = BTreeMap::new();
+    for link in task_links {
+        let row = match vault.resolve_target(day_path, &link.path_part) {
+            LinkResolution::Found(path) => {
+                task_indices.get(&(path, link.block_id.clone())).copied()
+            }
+            LinkResolution::Missing | LinkResolution::Ambiguous => {
+                let key = format!("{}#^{}", link.path_part, link.block_id);
+                unresolved_indices.get(&key).copied()
+            }
+        };
+        if let Some(row) = row {
+            mapping.insert(link.index, row);
+        }
+    }
+    mapping
+}
+
 fn assign_task_indices(
     tasks: &mut [PomodoroCloseTask],
     task_links: &[NumberedTaskLink],
+    link_rows: &BTreeMap<u32, usize>,
 ) {
-    for task in tasks.iter_mut() {
+    let mut best_by_row: BTreeMap<usize, u32> = BTreeMap::new();
+    for link in task_links {
+        if let Some(row) = link_rows.get(&link.index).copied()
+            && let Some(current) = best_by_row.get(&row).copied()
+        {
+            if link.index < current {
+                best_by_row.insert(row, link.index);
+            }
+        } else if let Some(row) = link_rows.get(&link.index).copied() {
+            best_by_row.insert(row, link.index);
+        }
+    }
+    for (row, task) in tasks.iter_mut().enumerate() {
         if task.role == CloseTaskRole::Subtask {
             task.index = None;
             continue;
         }
-        let mut best: Option<u32> = None;
-        for link in task_links {
-            if link.line == task.ledger_line && link.block_id == task.block_id {
-                best = Some(match best {
-                    Some(current) => current.min(link.index),
-                    None => link.index,
-                });
-            }
-        }
-        task.index = best;
+        task.index = best_by_row.get(&row).copied();
     }
 }
 
 fn emit_listed_status_warnings<V: CloseVault>(
     planner: &mut ClosePlanner<'_, V>,
     task_links: &[NumberedTaskLink],
+    link_rows: &BTreeMap<u32, usize>,
 ) {
-    let mut by_index = BTreeMap::<u32, &NumberedTaskLink>::new();
+    let mut by_link: BTreeMap<u32, &NumberedTaskLink> = BTreeMap::new();
     for link in task_links {
         if link.source == TaskLinkSource::Listed {
-            by_index.insert(link.index, link);
+            by_link.insert(link.index, link);
         }
     }
-    for row in 0..planner.tasks.len() {
-        let (resolved, status_symbol, status_name, index) =
+    // Group listed links by row; warn at most once per row using the lowest
+    // listed number on that row.
+    let mut listed_by_row: BTreeMap<usize, Vec<&NumberedTaskLink>> =
+        BTreeMap::new();
+    for link in by_link.values() {
+        if let Some(row) = link_rows.get(&link.index).copied() {
+            listed_by_row.entry(row).or_default().push(*link);
+        }
+    }
+    for (row, links) in listed_by_row {
+        let (resolved, resolved_path, block_id, row_status_name) =
             match planner.tasks.get(row) {
                 Some(task) => (
                     task.resolved,
-                    task.status_symbol,
+                    task.resolved_path.clone(),
+                    task.block_id.clone(),
                     task.status_name.clone(),
-                    task.index,
                 ),
                 None => continue,
             };
         if !resolved {
             continue;
         }
-        let Some(number) = index else {
+        let Some(first) = links.iter().min_by_key(|link| link.index) else {
             continue;
         };
-        let Some(link) = by_index.get(&number) else {
+        let number = first.index;
+        let Some(resolved_path) = resolved_path else {
             continue;
         };
-        let status_name = status_name.unwrap_or_else(|| "Unknown".to_string());
-        match link.outcome {
+        let key = (resolved_path, block_id);
+        let Ok(Some(note_task)) = planner.task_for_key(&key, true) else {
+            continue;
+        };
+        let status_name =
+            row_status_name.unwrap_or_else(|| note_task.status_name.clone());
+        // Fall back to the refreshed row name when the lookup has none.
+        let status_name = if status_name.is_empty() {
+            note_task.status_name.clone()
+        } else {
+            status_name
+        };
+        match first.outcome {
             super::selection::TaskLinkOutcome::InProgress
-                if status_symbol != Some('/') =>
+                if note_task.status_type != TaskStatusType::InProgress =>
             {
                 planner.row_warning(
                     row,
                     format!(
                         "task {number} `{}` is {status_name}, so it was not started",
-                        link.block_link
+                        first.block_link
                     ),
                 );
             }
             super::selection::TaskLinkOutcome::Complete
-                if status_symbol != Some('x') =>
+                if note_task.status_type != TaskStatusType::Done
+                    && note_task.status_symbol != 'x' =>
             {
                 planner.row_warning(
                     row,
                     format!(
                         "task {number} `{}` is {status_name}, so it was not completed",
-                        link.block_link
+                        first.block_link
                     ),
                 );
             }

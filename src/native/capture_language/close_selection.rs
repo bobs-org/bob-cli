@@ -138,9 +138,22 @@ pub(crate) fn lex_close_selection(
                 });
             }
         }
-        // A head that still ends in a separator (`=x1,,`) reports its empty
-        // element from the inner parse below, so the error wins over the
-        // incomplete state.
+        // `=x0,` can never become valid: `0` must stand alone, so the
+        // lexical `0`-alone error wins over the incomplete state.
+        if head == "0" {
+            return Err(CloseSelectionError {
+                message: close_selection_zero_alone_error(),
+                range: (base_offset, base_offset + 1),
+            });
+        }
+        // A double separator (`=x1,,`, `=x1!2,,`) points at the dangling
+        // (second) comma, matching `=x1,,2`.
+        if head.ends_with(',') {
+            return Err(CloseSelectionError {
+                message: close_selection_expected_number_error(),
+                range: separator_range,
+            });
+        }
         let parsed = parse_selection_body(head, base_offset, token, token_end)?;
         return Ok(CloseSelectionOutcome::Incomplete(
             CloseSelectionIncomplete {
@@ -185,6 +198,21 @@ fn parse_selection_body(
         None => (body, None),
     };
     let has_bang = m_text.is_some();
+    // `=x1,!2`: the `<N>` part ends in a single comma after a number, so the
+    // empty element sits after the `,` (before the `!`). Report the new
+    // "after" message on that comma instead of the generic "before".
+    if has_bang
+        && n_text.ends_with(',')
+        && !n_text.ends_with(",,")
+        && n_text.len() >= 2
+        && n_text.as_bytes()[n_text.len() - 2].is_ascii_digit()
+    {
+        let comma = base_offset + n_text.len() - 1;
+        return Err(CloseSelectionError {
+            message: close_selection_expected_number_after_error(),
+            range: (comma, comma + 1),
+        });
+    }
     let n_base = base_offset;
     let n_parsed = parse_number_list(n_text, n_base, token, token_end)?;
     let (m_parsed, complete_range) = match m_text {
@@ -286,6 +314,16 @@ fn validate_selection(
     token: &str,
     complete_range: Option<(usize, usize)>,
 ) -> Result<SelectionBody, CloseSelectionError> {
+    // Only a literal `0` means "none": a zero-valued `<n>` with extra digits
+    // (`=x00`) gets the `0`-alone message on that number.
+    if let Some((_, range)) = n_parsed.iter().find(|(number, range)| {
+        *number == 0 && range.1.saturating_sub(range.0) > 1
+    }) {
+        return Err(CloseSelectionError {
+            message: close_selection_zero_alone_error(),
+            range: *range,
+        });
+    }
     if let Some((_, range)) = n_parsed.iter().find(|(number, _)| *number == 0)
         && n_parsed.len() > 1
     {
@@ -509,6 +547,34 @@ mod tests {
         let overflow = error("=x99999999999");
         assert_eq!(overflow.message, "task number 99999999999 is too large");
         assert_eq!(overflow.range, (2, 13));
+
+        let double_trailing = error("=x1,,");
+        assert_eq!(
+            double_trailing.message,
+            "expected a task number before `,`"
+        );
+        assert_eq!(double_trailing.range, (4, 5));
+
+        let double_trailing_complete = error("=x1!2,,");
+        assert_eq!(double_trailing_complete.range, (6, 7));
+
+        let after_comma = error("=x1,!2");
+        assert_eq!(after_comma.message, "expected a task number after `,`");
+        assert_eq!(after_comma.range, (3, 4));
+
+        let zero_trailing = error("=x0,");
+        assert_eq!(
+            zero_trailing.message,
+            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`"
+        );
+        assert_eq!(zero_trailing.range, (2, 3));
+
+        let zero_padded = error("=x00");
+        assert_eq!(
+            zero_padded.message,
+            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`"
+        );
+        assert_eq!(zero_padded.range, (2, 4));
     }
 
     #[test]

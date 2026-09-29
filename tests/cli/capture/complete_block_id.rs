@@ -125,6 +125,24 @@ fn block_id_link_new_and_project_note_intents() {
 }
 
 #[test]
+fn block_id_incomplete_close_list_still_links() {
+    let temp = TempDir::new("bob-cli-complete-block-id-close");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_settings(&vault);
+    write_file(&vault.join("sase.md"), "- [ ] #task Existing ^tool\n");
+    // Cursor in the block ID of `@r:id=x1,` (incomplete close) still links,
+    // like `@r:id=x1` and `@r:id=x1!2`.
+    let at_incomplete = complete_json(&vault, "@r:id=x1,", 4, None);
+    assert_eq!(at_incomplete["context"], "pomodoro_block_id");
+    assert_eq!(at_incomplete["block_id"]["intent"], "link");
+    let at_plain = complete_json(&vault, "@r:id=x1", 4, None);
+    assert_eq!(at_plain["block_id"]["intent"], "link");
+    let at_complete = complete_json(&vault, "@r:id=x1!2", 4, None);
+    assert_eq!(at_complete["block_id"]["intent"], "link");
+}
+
+#[test]
 fn block_id_used_covers_done_nontask_duplicates_and_order() {
     let temp = TempDir::new("bob-cli-complete-block-id-used");
     let vault = temp.path().join("vault");

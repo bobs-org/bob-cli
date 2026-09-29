@@ -723,9 +723,14 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         ),
         ("=x0,2", "`0` means no task stays in progress", [2, 3]),
         ("=x2,0", "`0` means no task stays in progress", [4, 5]),
+        ("=x0,", "`0` means no task stays in progress", [2, 3]),
+        ("=x00", "`0` means no task stays in progress", [2, 4]),
         ("=x!0", "task numbers start at 1", [3, 4]),
         ("=x,1", "expected a task number before", [2, 3]),
         ("=x1,,2", "expected a task number before", [4, 5]),
+        ("=x1,,", "expected a task number before", [4, 5]),
+        ("=x1!2,,", "expected a task number before", [6, 7]),
+        ("=x1,!2", "expected a task number after", [3, 4]),
         ("=x!,1", "expected a task number before", [3, 4]),
         ("=x1!2!3", "use one `!` list", [5, 6]),
         ("=x1a", "`=x1a` is not a task list", [3, 4]),
@@ -782,6 +787,41 @@ fn capture_parse_pomodoro_close_selection_protocol() {
             "{text}"
         );
     }
+
+    // Extra-text ranges are computed from the first token's end.
+    for (text, range) in [
+        ("=x1 1", [4, 5]),
+        ("=x1,3 3", [6, 7]),
+        ("=x1 x1", [4, 6]),
+        ("  =x1 1", [6, 7]),
+    ] {
+        let value = parse(text);
+        assert_eq!(
+            value["diagnostics"][0]["code"], "invalid_pomodoro_close",
+            "{text}"
+        );
+        assert_eq!(
+            value["diagnostics"][0]["range"],
+            serde_json::json!(range),
+            "{text}"
+        );
+    }
+
+    // A `^` link close ending in `!` is incomplete, not a toggle.
+    for text in ["^r:id=x!", "^r:id=x1!", "^r:id=x0!", "^r:id=x1,3!"] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "incomplete", "{text}");
+        assert_eq!(
+            value["needs"],
+            serde_json::json!(["pomodoro_close_task"]),
+            "{text}"
+        );
+    }
+    let caret_toggle = parse("^r:id!");
+    assert_eq!(
+        caret_toggle["diagnostics"][0]["code"],
+        "invalid_pomodoro_link"
+    );
 
     // A selection with other text still reports the close shape error.
     let more = parse("=x1 more");

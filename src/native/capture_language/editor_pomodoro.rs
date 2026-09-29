@@ -519,17 +519,15 @@ pub(super) fn parse_editor_close_item<'a>(
     // Extra text on the parent line: a broken first token reports its own
     // diagnostic first, a spaceless join that forms a selection gets the
     // no-spaces hint, and anything else gets the shape error. The extra
-    // text is the precise range.
-    let rest_start_in_trimmed =
-        parent_trimmed.find(first).expect("first token") + first.len();
-    let rest = parent_trimmed[rest_start_in_trimmed..].trim_start();
-    let rest_offset = parent_text
-        .find(rest)
-        .unwrap_or(token_end - parent.raw.start);
+    // text is the precise range, computed from the first token's end plus
+    // skipped whitespace so it cannot land inside the close token itself.
+    let after_first = &parent_trimmed[first.len()..];
+    let rest = after_first.trim_start();
+    let skipped = after_first.len() - rest.len();
     let range = if rest.is_empty() {
         (item.start, item.end)
     } else {
-        let rest_start = parent.raw.start + rest_offset;
+        let rest_start = token_start + first.len() + skipped;
         (rest_start, rest_start + rest.len())
     };
     if let Some(after_x) = selection_after_x {

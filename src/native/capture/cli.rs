@@ -193,7 +193,8 @@ reported). A bare `=x` keeps today's behavior; `=x<N>` keeps only the \
 numbered Task Links in `<N>` in progress and defers the rest, `=x!<M>` \
 completes the links in `<M>`, and `=x<N>!<M>` does both. `<N>` and `<M>` \
 are comma-separated task numbers in ledger order starting at 1 (the \
-numbers `capture-parse` and the human output show); a lone `0` means no \
+numbers `bob capture` shows, in human output, in `--dry-run`, and as JSON \
+`task_links`); a lone `0` means no \
 task stays in progress, as in `=x0`. The outcome is exactly the marker \
 edits the user would make by hand before Ctrl+Enter, followed by the \
 unchanged close. The item must contain only the close token \
@@ -214,7 +215,7 @@ their kind with an additive `pomodoro_close` object) carrying the typed \
 lineup, and each task row's `index`; human output names the session, the \
 range change, the file, and the line, prefixing numbered rows with their \
 index. Single-quote the argument: zsh expands a leading `=word` and `!` \
-history expansion applies.\n\n\\n\n\
+history expansion applies.\n\n\
 Use '@<route>^<block-id>' in the same leading or trailing position to create \
 an ordinary open task with the requested trailing Obsidian block ID, without \
 creating or modifying a Pomodoro ledger link. It renders as '- [ ] #task \

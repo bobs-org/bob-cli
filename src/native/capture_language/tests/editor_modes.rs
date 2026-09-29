@@ -747,13 +747,19 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             );
         }
         // The close `raw` keeps the typed `=`, so parse and execution
-        // agree on link forms as well as whole-item closes.
+        // agree on link forms as well as whole-item closes. Compare the
+        // full selection, not only `raw`.
         if let CaptureKind::Pomodoro { close, .. } = &executed.kind {
             match close {
                 Some(expected) => {
                     let actual =
                         parse.pomodoro_close.as_ref().expect("close spec");
                     assert_eq!(actual.raw, expected.raw, "{raw}");
+                    assert_eq!(
+                        actual.in_progress, expected.in_progress,
+                        "{raw}"
+                    );
+                    assert_eq!(actual.complete, expected.complete, "{raw}");
                 }
                 None => assert!(parse.pomodoro_close.is_none(), "{raw}"),
             }
@@ -761,6 +767,8 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         if let CaptureKind::PomodoroClose { spec } = &executed.kind {
             let actual = parse.pomodoro_close.as_ref().expect("close spec");
             assert_eq!(actual.raw, spec.raw, "{raw}");
+            assert_eq!(actual.in_progress, spec.in_progress, "{raw}");
+            assert_eq!(actual.complete, spec.complete, "{raw}");
         }
         if let CaptureKind::PomodoroStart { spec } = &executed.kind {
             let actual = parse.pomodoro_start.as_ref().expect("start spec");
@@ -1098,4 +1106,35 @@ fn pomodoro_start_suffix_reports_spec_and_non_overlapping_spans() {
     let plain = editor("Do work @sase:outline");
     assert!(plain.pomodoro_start.is_none());
     assert!(!span_kinds(&plain).contains(&SpanKind::PomodoroStart));
+}
+
+#[test]
+fn caret_close_conflicts_agree_with_execution() {
+    use super::super::parse_capture_text_with_clip_control;
+    // Invalid link closes with item conflicts report the conflict in both
+    // execution and the editor: a conflict wins over the lexical diagnostic.
+    for raw in ["^r:id=x1,1 s:2", "^r:id=x1, s:2"] {
+        let execution =
+            parse_capture_text_with_clip_control(raw, None, None, true)
+                .expect_err(raw);
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::PomodoroLink, "{raw}");
+        let diagnostic = parse.diagnostics.first().expect("diagnostic");
+        assert_eq!(diagnostic.message, execution, "{raw}");
+        assert!(
+            execution.contains("cannot be combined with s:<N>"),
+            "{raw}: {execution}"
+        );
+    }
+    let child = "^r:id=x1,1\n- detail";
+    let execution =
+        parse_capture_text_with_clip_control(child, None, None, true)
+            .expect_err(child);
+    let parse = editor(child);
+    let diagnostic = parse.diagnostics.first().expect("diagnostic");
+    assert_eq!(diagnostic.message, execution, "{child}");
+    assert!(
+        execution.contains("authored child bullets"),
+        "{child}: {execution}"
+    );
 }

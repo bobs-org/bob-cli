@@ -561,13 +561,14 @@ pub(super) fn print_human_pomodoro_close_success(
             ))
         );
     }
-    // Numbered index column: width of the highest number, plus one space.
-    // Unnumbered rows get blanks so text stays aligned; with zero numbered
-    // rows the output below is byte-identical to before.
+    // Numbered index column: width of the highest numbered row, plus one
+    // space. Unnumbered rows get blanks so text stays aligned; with zero
+    // numbered rows the output below is byte-identical to before.
     let index_width = close
-        .task_links
+        .tasks
         .iter()
-        .map(|link| link.index.to_string().len())
+        .filter_map(|task| task.index)
+        .map(|index| index.to_string().len())
         .max()
         .unwrap_or(0);
     let numbered = index_width > 0;

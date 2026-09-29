@@ -377,6 +377,10 @@ pub(super) fn close_selection_expected_number_error() -> String {
     "expected a task number before `,`".to_string()
 }
 
+pub(super) fn close_selection_expected_number_after_error() -> String {
+    "expected a task number after `,`".to_string()
+}
+
 pub(super) fn close_selection_one_bang_error() -> String {
     "use one `!` list: `=x1!2,3`".to_string()
 }

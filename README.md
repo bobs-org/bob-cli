@@ -291,7 +291,7 @@ Pomodoro the way Obsidian's Ctrl+Enter completion does, plus an
 auto-decrement that shortens an early-stopped session to the earliest
 five-minute step at or after now: `bob capture '=x'` closes the session,
 `bob capture '=x2'` keeps only task 2 in progress, `bob capture '=x1!2'`
-also completes task 2, `bob capture '=x0'` defers everything,
+keeps task 1 in progress and completes task 2, `bob capture '=x0'` defers everything,
 `bob capture '^bob:capture-stop=x'` puts that task into the running session
 then closes it, and `printf -- '-2\n\n=x\n' | bob capture` adjusts then
 closes atomically. Numbers count the session's Task Links in ledger order

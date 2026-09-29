@@ -22,10 +22,13 @@ workflow guide.
   - [Clipboard](#clipboard)
   - [Task with a requested block ID](#task-with-a-requested-block-id)
   - [Pomodoro-linked tasks](#pomodoro-linked-tasks)
+  - [Starting the session atomically](#starting-the-session-atomically)
+  - [Linking and starting existing tasks](#linking-and-starting-existing-tasks)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
   - [Adjusting the current Pomodoro](#adjusting-the-current-pomodoro)
   - [Shifting the current Pomodoro](#shifting-the-current-pomodoro)
   - [Closing the running Pomodoro](#closing-the-running-pomodoro)
+    - [Choosing each Task Link's outcome](#choosing-each-task-links-outcome)
   - [Project notes](#project-notes)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
   - [Task status toggle](#task-status-toggle)
@@ -1008,162 +1011,6 @@ then start the next one through the existing start rules. The session
 switch idiom is `=x`, blank line, `=` — close the running session, then
 start the next future Pomodoro.
 
-#### Choosing each Task Link's outcome
-
-Close the running session with `=x[<N>][!<M>]` (case-insensitive `=X`) to
-decide, by number, which of its Task Links stay in progress, which are
-deferred, and which are completed and struck — in one capture instead of
-editing the `[[…]]#` / `![[…]]` markers by hand before Ctrl+Enter:
-
-```bash
-bob capture '=x2'
-bob capture '=x!1'
-bob capture '=x1!2'
-bob capture '=x0'
-```
-
-`<N>` and `<M>` are comma-separated task numbers with no whitespace.
-`<N>` omitted leaves unlisted links at their ledger outcome; `<N>`
-present, even as a lone `0`, turns every unlisted link that would have been
-in progress into deferred. Order inside a list does not matter. A selection
-is nothing but the marker edits the user would make by hand, applied to the
-numbered lines, followed by the unchanged close — so plain `=x` works byte
-for byte as it always has, and every selection produces exactly the files
-the matching hand edits followed by `=x` produce.
-
-**Numbering.** Every line of the running session's sub-bullet range whose
-list-item body, after stripping 🍅 markers, is exactly one block link is
-numbered in ledger order starting at 1, at any depth:
-
-| Body shape | Marker | Outcome if nothing is listed |
-| ---------- | ------ | ---------------------------- |
-| `[[T]]` | plain | in progress |
-| `[[T]]#` | deferred | deferred |
-| `![[T]]` | embedded | complete |
-| `![[T]]#` | embedded (the `#` is inert, as today) | complete |
-
-Struck links (`~~[[T]]~~`, already done), lines that mix a link with other
-text (the "mentioned" role, never started), notes, and fenced lines are
-never numbered. `T` is any `path#^id` block link with an optional `|alias`,
-copied verbatim. On link forms (`@route:block-id=x…`,
-`^route:block-id=x…`, `<text> @route:block-id=x…`) the numbering is taken
-after the link step: a newly linked or created task lands last and gets the
-highest number, while an already-current task keeps its place.
-
-**Outcomes.** For numbered line _i_ with marker _m_, the first matching row
-wins:
-
-| Condition | Outcome | Source |
-| --------- | ------- | ------ |
-| _i_ ∈ `<M>` | complete | listed |
-| _i_ ∈ `<N>` | in progress | listed |
-| `<N>` typed and _m_ = embedded | complete (a hand transclusion is kept) | unlisted |
-| `<N>` typed | deferred | unlisted |
-| otherwise | the ledger outcome of _m_ | ledger |
-
-Only numbered lines whose outcome differs from their marker's ledger outcome
-are rewritten, in place, keeping indentation and list markers: in progress
-becomes `[[T]]`, deferred becomes `[[T]]#`, complete becomes `![[T]]`. 🍅
-markers are dropped from rewritten lines (the close adds back exactly one on
-worked lines); line count never changes and matching lines stay
-byte-identical.
-
-**Worked selections.** On the fixture below, the numbered Task Links are 1 =
-`[[bob#^capture-stop]]` (line 6, plain, with nested notes) and 2 =
-`[[bob#^web-capture]]#` (line 10, deferred).
-
-`bob capture '=x2'` defers 1 and keeps 2 in progress:
-
-```markdown
-- [x] (**0920-0940** [t:: 20m]) — CAPTURE - Designed the `=x` grammar - chose `x` for done - Wrote the plan
-	- 🍅 [[bob#^web-capture]]
-	- ~~[[sase#^axe-restart]]~~
-		- Restarted axe
-	- quick note
-- [ ] () — CAPTURE
-	- [[bob#^web-capture]]
-	- [[bob#^capture-stop]]
-```
-
-`^capture-stop` stays `[*]` but still gets its two-entry Work Log;
-`^web-capture` becomes `[/]`.
-
-`bob capture '=x1!2'` keeps 1 in progress and completes 2:
-
-```markdown
-- [x] (**0920-0940** [t:: 20m]) — CAPTURE
-	- 🍅 [[bob#^capture-stop]]
-		- Designed the `=x` grammar
-			- chose `x` for done
-		- Wrote the plan
-	- ~~[[bob#^web-capture]]~~
-	- ~~[[sase#^axe-restart]]~~
-		- Restarted axe
-	- quick note
-- [ ] () — CAPTURE
-	- [[bob#^capture-stop]]
-```
-
-`^capture-stop` becomes `[/]` with its Work Log; `^web-capture` closes as
-`- [x] #task Add capture support for web URLs! [created::2026-09-21]
-[completion:: 2026-09-28] ^web-capture` (two spaces before
-`[completion::`, as today's embedded close writes it). Human output
-(`NO_COLOR`):
-
-```text
-✓ closed CAPTURE 0920-0950 → 0920-0940 (20m, −10m) · 2026/20260928.md line 5
-  1 [*] → [/] Add support for `=x` syntax! bob.md ^capture-stop +2 Work Log
-      *2026-09-28* — Designed the `=x` grammar
-      *2026-09-28* — Wrote the plan
-  2 [*] → [x] Add capture support for web URLs! bob.md ^web-capture
-    [x] Restart axe sase.md ^axe-restart +1 Work Log
-      *2026-09-28* — Restarted axe
-  next: CAPTURE (created) at line 14 · carries 1 link
-```
-
-`bob capture '=x0'` defers everything:
-
-```markdown
-- [x] (**0920-0940** [t:: 20m]) — CAPTURE - Designed the `=x` grammar - chose `x` for done - Wrote the plan
-	- ~~[[sase#^axe-restart]]~~
-		- Restarted axe
-	- quick note
-- [ ] () — CAPTURE
-	- [[bob#^capture-stop]]
-	- [[bob#^web-capture]]
-```
-
-Both tasks stay `[*]`, and `^capture-stop` still gets its Work Log. `=x1`
-equals plain `=x` on this fixture (2 was already deferred); `=x1,2`
-un-defers 2 so both links get `🍅`, both tasks become `[/]`, and the
-placeholder carries `[[bob#^capture-stop]]` then `[[bob#^web-capture]]`.
-
-**Diagnostics (all write nothing).** Out of range:
-`` `=x4` names task 4, but CAPTURE has 2 numbered Task Links (1–2) `` (`(1)`
-for one link; `` `=x1` names task 1, but CAPTURE has no numbered Task Links;
-close it with `=x` `` for none; an unnamed session reads "the running
-Pomodoro"); several bad numbers are listed together. Conflicting duplicates:
-``tasks 1 and 3 both link `[[bob#^a]]` but get different outcomes; give them
-the same one`` (same-outcome duplicates are fine). Malformed lists fail
-lexically: ``task 1 is listed twice in `=x1,1` ``,
-``task 1 cannot both stay in progress and complete in `=x1!1` ``,
-``` `0` means no task stays in progress; use it alone, as `=x0` or `=x0!2` ```
-(for `=x0,2`), `task numbers start at 1` (for `=x!0`), `` expected a task
-number before `,` ``, `` use one `!` list: `=x1!2,3` ``,
-``` `=x1a` is not a task list: write `=x`, then comma-separated task numbers,
-then optionally `!` and the numbers to complete (for example `=x1,3!2`) ```,
-`task number 99999999999 is too large`, and
-``write the task numbers right after `=x`, with no spaces (for example
-`=x1,3!2`)``. A token ending in a dangling separator (`=x1,`, `=x!`,
-`=x1!`, `=x!2,`) is an editing state: `bob capture` rejects it
-(`` `=x1,` is incomplete: type a task number after `,` ``) while
-`capture-parse` reports mode `incomplete` needing `pomodoro_close_task`.
-**Warnings** (shown on the row and top-level, never blocking): a listed
-in-progress line whose task did not end In Progress
-(``task 2 `[[bob#^x]]` is Blocked, so it was not started``) and a listed
-complete line whose task did not end Done. In a batch, a selection failure
-rolls the whole batch back.
-
 Worked example (`BOB_NOW=2026-09-28 09:37:00`, day file
 `2026/20260928.md`, TAB indentation):
 
@@ -1228,6 +1075,170 @@ with "remove `#capture`"; a second `=x` reports "no running Pomodoro to
 close… next up is CAPTURE at line 13"; `=x more` (or a child line) is an
 `invalid_pomodoro_close` error; `=x3` is out of range on this fixture.
 
+#### Choosing each Task Link's outcome
+
+Close the running session with `=x[<N>][!<M>]` (case-insensitive `=X`) to
+decide, by number, which of its Task Links stay in progress, which are
+deferred, and which are completed and struck — in one capture instead of
+editing the `[[…]]#` / `![[…]]` markers by hand before Ctrl+Enter:
+
+```bash
+bob capture '=x2'
+bob capture '=x!1'
+bob capture '=x1!2'
+bob capture '=x0'
+```
+
+`<N>` and `<M>` are comma-separated task numbers with no whitespace.
+`<N>` omitted leaves unlisted links at their ledger outcome; `<N>`
+present, even as a lone `0`, turns every unlisted link that would have been
+in progress into deferred. Order inside a list does not matter. A selection
+is nothing but the marker edits the user would make by hand, applied to the
+numbered lines, followed by the unchanged close — so plain `=x` works byte
+for byte as it always has, and every selection produces exactly the files
+the matching hand edits followed by `=x` produce.
+
+**Numbering.** Every line of the running session's sub-bullet range whose
+list-item body, after stripping 🍅 markers, is exactly one block link is
+numbered in ledger order starting at 1, at any depth:
+
+| Body shape | Marker | Outcome if nothing is listed |
+| ---------- | ------ | ---------------------------- |
+| `[[T]]` | plain | in progress |
+| `[[T]]#` | deferred | deferred |
+| `![[T]]` | embedded | complete |
+| `![[T]]#` | embedded (the `#` is inert, as today) | complete |
+
+Struck links (`~~[[T]]~~`, already done), lines that mix a link with other
+text (the "mentioned" role, never started), notes, and fenced lines are
+never numbered. `T` is any `path#^id` block link with an optional `|alias`,
+copied verbatim. On link forms (`@route:block-id=x…`,
+`^route:block-id=x…`, `<text> @route:block-id=x…`) the numbering is taken
+after the link step: a newly linked or created task lands last and gets the
+highest number, while an already-current task keeps its place.
+
+**Outcomes.** For numbered line _i_ with marker _m_, the first matching row
+wins:
+
+| Condition | Outcome | Source |
+| --------- | ------- | ------ |
+| _i_ ∈ `<M>` | complete | listed |
+| _i_ ∈ `<N>` | in progress | listed |
+| `<N>` typed and _m_ = embedded | complete (a hand transclusion is kept) | unlisted |
+| `<N>` typed | deferred | unlisted |
+| otherwise | the ledger outcome of _m_ | ledger |
+
+Only numbered lines whose outcome differs from their marker's ledger outcome
+are rewritten, in place, keeping indentation and list markers: in progress
+becomes `[[T]]`, deferred becomes `[[T]]#`, complete becomes `![[T]]`. 🍅
+markers are dropped from rewritten lines (the close adds back exactly one on
+worked lines); line count never changes and matching lines stay
+byte-identical.
+
+**Worked selections.** On the fixture above, the numbered Task Links are 1 =
+`[[bob#^capture-stop]]` (line 6, plain, with nested notes) and 2 =
+`[[bob#^web-capture]]#` (line 10, deferred).
+
+`bob capture '=x2'` defers 1 and keeps 2 in progress:
+
+```markdown
+- [x] (**0920-0940** [t:: 20m]) — CAPTURE
+		- Designed the `=x` grammar
+			- chose `x` for done
+		- Wrote the plan
+	- 🍅 [[bob#^web-capture]]
+	- ~~[[sase#^axe-restart]]~~
+		- Restarted axe
+	- quick note
+- [ ] () — CAPTURE
+	- [[bob#^web-capture]]
+	- [[bob#^capture-stop]]
+```
+
+`^capture-stop` stays `[*]` but still gets its two-entry Work Log;
+`^web-capture` becomes `[/]`.
+
+`bob capture '=x1!2'` keeps 1 in progress and completes 2:
+
+```markdown
+- [x] (**0920-0940** [t:: 20m]) — CAPTURE
+	- 🍅 [[bob#^capture-stop]]
+		- Designed the `=x` grammar
+			- chose `x` for done
+		- Wrote the plan
+	- ~~[[bob#^web-capture]]~~
+	- ~~[[sase#^axe-restart]]~~
+		- Restarted axe
+	- quick note
+- [ ] () — CAPTURE
+	- [[bob#^capture-stop]]
+```
+
+`^capture-stop` becomes `[/]` with its Work Log; `^web-capture` closes as
+(two spaces before `[completion::`, as today's embedded close writes it):
+
+```text
+- [x] #task Add capture support for web URLs! [created::2026-09-21]  [completion:: 2026-09-28] ^web-capture
+```
+
+Human output (`NO_COLOR`):
+
+```text
+✓ closed CAPTURE 0920-0950 → 0920-0940 (20m, −10m) · 2026/20260928.md line 5
+  1 [*] → [/] Add support for `=x` syntax! bob.md ^capture-stop +2 Work Log
+      *2026-09-28* — Designed the `=x` grammar
+      *2026-09-28* — Wrote the plan
+  2 [*] → [x] Add capture support for web URLs! bob.md ^web-capture
+    [x] Restart axe sase.md ^axe-restart +1 Work Log
+      *2026-09-28* — Restarted axe
+  next: CAPTURE (created) at line 14 · carries 1 link
+```
+
+`bob capture '=x0'` defers everything:
+
+```markdown
+- [x] (**0920-0940** [t:: 20m]) — CAPTURE
+		- Designed the `=x` grammar
+			- chose `x` for done
+		- Wrote the plan
+	- ~~[[sase#^axe-restart]]~~
+		- Restarted axe
+	- quick note
+- [ ] () — CAPTURE
+	- [[bob#^capture-stop]]
+	- [[bob#^web-capture]]
+```
+
+Both tasks stay `[*]`, and `^capture-stop` still gets its Work Log. `=x1`
+equals plain `=x` on this fixture (2 was already deferred); `=x1,2`
+un-defers 2 so both links get `🍅`, both tasks become `[/]`, and the
+placeholder carries `[[bob#^capture-stop]]` then `[[bob#^web-capture]]`.
+
+**Diagnostics (all write nothing).** Out of range:
+`` `=x4` names task 4, but CAPTURE has 2 numbered Task Links (1–2) `` (`(1)`
+for one link; `` `=x1` names task 1, but CAPTURE has no numbered Task Links;
+close it with `=x` `` for none; an unnamed session reads "the running
+Pomodoro"); several bad numbers are listed together. Conflicting duplicates:
+``tasks 1 and 3 both link `[[bob#^a]]` but get different outcomes; give them
+the same one`` (same-outcome duplicates are fine). Malformed lists fail
+lexically: ``task 1 is listed twice in `=x1,1` ``,
+``task 1 cannot both stay in progress and complete in `=x1!1` ``,
+``` `0` means no task stays in progress; use it alone, as `=x0` or `=x0!2` ```
+(for `=x0,2`, `=x0,`, and `=x00`), `task numbers start at 1` (for `=x!0`), `` expected a task
+number before `,` ``, `` expected a task number after `,` `` (for `=x1,!2`), `` use one `!` list: `=x1!2,3` ``,
+``` `=x1a` is not a task list: write `=x`, then comma-separated task numbers,
+then optionally `!` and the numbers to complete (for example `=x1,3!2`) ```,
+`task number 99999999999 is too large`, and
+``write the task numbers right after `=x`, with no spaces (for example
+`=x1,3!2`)``. A token ending in a dangling separator (`=x1,`, `=x!`,
+`=x1!`, `=x!2,`) is an editing state: `bob capture` rejects it
+(`` `=x1,` is incomplete: type a task number after `,` ``) while
+`capture-parse` reports mode `incomplete` needing `pomodoro_close_task`.
+**Warnings** (shown on the row and top-level, never blocking): a listed
+in-progress line whose task did not end In Progress
+(``task 2 `[[bob#^x]]` is Blocked, so it was not started``) and a listed
+complete line whose task did not end Done. In a batch, a selection failure
+rolls the whole batch back.
 ### Project notes
 
 Use a leading or trailing `@<route>^<block-id>+` marker to create a brand-new
@@ -1908,7 +1919,7 @@ separator. Other `=`-prefixed tokens (`=xx`, `=xa`, `==`,
 `= foo`) and mid-body `=x`/`=3` stay ordinary prose. On link items the
 `=x…` suffix spans the same three span kinds instead of `pomodoro_start`:
 `@r:id=x1!2` and `^r:id=x1` stay `pomodoro_link` (or `pomodoro_task` with body
-text) and carry the spec, `^r:id=x1,` reports `incomplete` needing
+text) and carry the spec, `^r:id=x1,` and `^r:id=x1!` report `incomplete` needing
 `pomodoro_close_task`, while `#name=x…`, `s:<N>`/`p:<N>`/`%` conflicts,
 project-note `=x`, and malformed lists report `invalid_pomodoro_close` on
 the conflicting component or the precise list range. A `@@` declaration

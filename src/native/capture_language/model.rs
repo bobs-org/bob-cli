@@ -140,7 +140,7 @@ pub(crate) enum SessionOperator {
 /// `complete`, so version-tolerant readers see only additive fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
-    /// Raw close token exactly as typed: `x`/`X` plus any selection lists
+    /// Raw close token exactly as typed: the `=`-prefixed token (`=x1,3!2`)
     /// for a whole-item close, or the `=`-prefixed suffix for a link close.
     pub(crate) raw: String,
     /// Numbered links that stay in progress, or `None` when no `<N>` list

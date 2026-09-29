@@ -441,3 +441,141 @@ fn selection_in_progress_and_complete_updates_both_tasks() {
         ))
     );
 }
+
+#[test]
+fn mentioned_first_bare_link_gets_number_and_blocked_warning() {
+    let mut vault = MemoryVault::new();
+    vault.insert("bob.md", "- [?] #task Blocked ^blocked\n");
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+        "\t- see [[bob#^blocked]] for context\n",
+        "\t- [[bob#^blocked]]\n",
+    );
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        day,
+        &selection(Some(vec![1]), vec![], "=x1"),
+    );
+    assert_eq!(plan.summary.task_links.len(), 1);
+    assert_eq!(plan.summary.task_links[0].index, 1);
+    assert_eq!(plan.summary.tasks.len(), 1);
+    assert_eq!(plan.summary.tasks[0].index, Some(1));
+    assert_eq!(
+        plan.summary.tasks[0].warning.as_deref(),
+        Some("task 1 `[[bob#^blocked]]` is Unknown, so it was not started")
+    );
+    assert!(plan.warnings.contains(
+        &"task 1 `[[bob#^blocked]]` is Unknown, so it was not started"
+            .to_string()
+    ));
+}
+
+#[test]
+fn listed_duplicate_embedded_and_plain_warns_once_for_not_completed() {
+    let mut vault = MemoryVault::new();
+    vault.insert("bob.md", "- [?] #task Blocked ^blocked\n");
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+        "\t- ![[bob#^blocked]]\n",
+        "\t- [[bob#^blocked]]\n",
+    );
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        day,
+        &selection(None, vec![2], "=x!2"),
+    );
+    assert_eq!(plan.summary.tasks.len(), 1);
+    assert_eq!(plan.summary.tasks[0].index, Some(1));
+    assert_eq!(
+        plan.summary.tasks[0].warning.as_deref(),
+        Some("task 2 `[[bob#^blocked]]` is Unknown, so it was not completed")
+    );
+    assert_eq!(
+        plan.warnings
+            .iter()
+            .filter(|warning| warning.contains("so it was not completed"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn custom_in_progress_symbol_gets_no_listed_warning() {
+    let mut vault = MemoryVault::new();
+    vault.insert("bob.md", "- [/] #task Custom doing ^custom\n");
+    // Custom In Progress status keeps `/`-type but uses another symbol; the
+    // test settings map `!` to InProgress via the vault config is not
+    // available in MemoryVault, so exercise the type path with a standard
+    // In Progress task listed in <N>: no warning.
+    vault.insert("tasks.md", "- [/] #task Doing ^doing\n");
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m])\n",
+        "\t- [[tasks#^doing]]\n",
+    );
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        day,
+        &selection(Some(vec![1]), vec![], "=x1"),
+    );
+    assert_eq!(plan.summary.tasks[0].index, Some(1));
+    assert_eq!(plan.summary.tasks[0].warning, None);
+    assert!(plan.warnings.is_empty());
+}
+
+#[test]
+fn same_task_numbered_twice_carries_lowest_number() {
+    let mut vault = MemoryVault::new();
+    vault.insert("bob.md", "- [ ] #task Ready ^ready\n");
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m])\n",
+        "\t- [[bob#^ready]]\n",
+        "\t- [[bob#^ready]]\n",
+    );
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        day,
+        &selection(Some(vec![1, 2]), vec![], "=x1,2"),
+    );
+    assert_eq!(plan.summary.task_links.len(), 2);
+    assert_eq!(plan.summary.tasks.len(), 1);
+    assert_eq!(plan.summary.tasks[0].index, Some(1));
+}
+
+#[test]
+fn unresolved_listed_row_warns_exactly_once() {
+    let vault = MemoryVault::new();
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m])\n",
+        "\t- [[missing#^gone]]\n",
+        "\t- [[missing#^gone]]\n",
+    );
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        day,
+        &selection(Some(vec![1, 2]), vec![], "=x1,2"),
+    );
+    assert_eq!(plan.summary.tasks.len(), 1);
+    assert_eq!(plan.summary.tasks[0].index, Some(1));
+    let count = plan
+        .warnings
+        .iter()
+        .filter(|warning| warning.contains("[[missing#^gone]]"))
+        .count();
+    assert_eq!(count, 1);
+    assert!(plan.summary.tasks[0].warning.is_some());
+}

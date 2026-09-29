@@ -541,6 +541,17 @@ pub(super) fn parse_pomodoro_start_suffix(
     })
 }
 
+/// Whether a `^route:…` tail carries a close-shaped `=x…` suffix. A trailing
+/// `!` on such a tail is a dangling close separator (an incomplete close),
+/// not an explicit-toggle marker.
+fn caret_tail_has_close_suffix(tail: &str) -> bool {
+    let Some((_, raw_suffix)) = tail.split_once('=') else {
+        return false;
+    };
+    raw_suffix.eq_ignore_ascii_case("x")
+        || link_close_after_x(raw_suffix).is_some()
+}
+
 /// Parse a `^route:…` token's components with the shared post-sigil parser.
 /// Returns the route plus the shared parts. `+` (project note) and trailing
 /// `!` (explicit toggle) are rejected with caret-specific messages.
@@ -559,7 +570,7 @@ pub(super) fn parse_caret_link_token(
     if rest.is_empty() {
         return Err(POMODORO_LINK_INCOMPLETE_ERROR.to_string());
     }
-    if rest.ends_with('!') {
+    if rest.ends_with('!') && !caret_tail_has_close_suffix(rest) {
         return Err(POMODORO_LINK_TOGGLE_ERROR.to_string());
     }
     match parse_colon_link_tail(route, rest) {
@@ -672,7 +683,7 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
             route: Some(route_part.to_ascii_lowercase()),
         };
     }
-    if tail.ends_with('!') {
+    if tail.ends_with('!') && !caret_tail_has_close_suffix(tail) {
         return CaretTokenShape::Invalid(
             POMODORO_LINK_TOGGLE_ERROR.to_string(),
         );
@@ -1196,6 +1207,41 @@ pub(super) fn parse_pomodoro_link_item<'a>(
             }
             if is_solo_item {
                 return Err(message);
+            }
+            // A close-shaped suffix with an item conflict reports the
+            // conflict exactly like the editor: a conflict wins over the
+            // lexical close diagnostic.
+            let close_shaped = first.contains("=x") || first.contains("=X");
+            if close_shaped && !is_solo_item {
+                if !is_solo_parent {
+                    for extra in &tokens[1..] {
+                        if parse_schedule_token(extra).is_some() {
+                            return Err(
+                                "Pomodoro link capture cannot be combined with s:<N>"
+                                    .to_string(),
+                            );
+                        }
+                        if parse_priority_token(extra).is_some() {
+                            return Err(
+                                "Pomodoro link capture cannot be combined with p:<N>"
+                                    .to_string(),
+                            );
+                        }
+                        if extra.starts_with('%') {
+                            return Err(
+                                "Pomodoro link capture cannot be combined with % clipboard markers"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    // Extra text without a marker conflict still reports the
+                    // shape error, matching the editor's conflict.
+                    return Err(POMODORO_LINK_SHAPE_ERROR.to_string());
+                }
+                return Err(
+                    "Pomodoro link capture cannot be combined with authored child bullets"
+                        .to_string(),
+                );
             }
             if tail.ends_with('#') {
                 return Ok(None);

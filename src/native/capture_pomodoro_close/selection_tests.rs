@@ -134,15 +134,16 @@ fn embedded_hash_alias_and_tomato() {
 
 #[test]
 fn fenced_links_are_unnumbered() {
-    // A fence cuts the sub-bullet range, so the fenced link and anything
-    // after it are never numbered.
+    // An indented fence inside the running Pomodoro's sub-bullet range: the
+    // fenced link is never numbered. The fence markers themselves end the
+    // sub-bullet range, so anything after the fence stays outside the range.
     let contents = note(&[
         "## Pomodoros",
         "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
         "\t- [[bob#^keep]]",
-        "```md",
+        "\t```md",
         "\t- [[bob#^fenced]]#",
-        "```",
+        "\t```",
         "\t- [[bob#^after]]",
     ]);
     let running = running_of(&contents);
@@ -153,7 +154,7 @@ fn fenced_links_are_unnumbered() {
             .map(|l| l.block_id.as_str())
             .collect::<Vec<_>>(),
         vec!["keep"],
-        "fenced and post-fence links are never numbered"
+        "indented fenced and post-fence links are never numbered"
     );
 }
 
@@ -220,13 +221,20 @@ fn outcome_table_covers_every_row() {
         ],
         "hand transclusion is kept when <N> is typed"
     );
-    // No list: ledger outcomes.
+    // No list: ledger outcomes and sources.
     let (_, links) =
         apply_close_selection(&contents, &running, &sel(None, vec![], "=x"))
             .expect("apply");
-    assert!(
-        links.iter().all(|l| l.source == TaskLinkSource::Ledger),
-        "no list means ledger sources"
+    assert_eq!(
+        links
+            .iter()
+            .map(|l| (l.index, l.outcome, l.source))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, TaskLinkOutcome::InProgress, TaskLinkSource::Ledger),
+            (2, TaskLinkOutcome::Deferred, TaskLinkSource::Ledger),
+            (3, TaskLinkOutcome::Complete, TaskLinkSource::Ledger),
+        ]
     );
     // Empty <N> (=x0): everything unlisted.
     let (_, links) = apply_close_selection(

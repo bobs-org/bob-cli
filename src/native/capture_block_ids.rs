@@ -237,8 +237,14 @@ fn detect_colon_intent(
         .iter()
         .find(|item| item.index == original_index)
         .is_some_and(|item| {
-            item.mode == super::capture_language::EditorMode::PomodoroLink
-                && item.diagnostics.is_empty()
+            (item.mode == super::capture_language::EditorMode::PomodoroLink
+                && item.diagnostics.is_empty())
+                || (item.mode
+                    == super::capture_language::EditorMode::Incomplete
+                    && item.needs
+                        == vec![
+                            super::capture_language::Need::PomodoroCloseTask,
+                        ])
         });
     if matches {
         BlockIdIntent::Link

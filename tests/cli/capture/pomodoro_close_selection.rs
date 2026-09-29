@@ -411,6 +411,10 @@ fn capture_pomodoro_close_selection_defer_all() {
             plain_bob_work_log(),
         )
     );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase.md")).expect("sase"),
+        plain_sase_after(),
+    );
 }
 
 #[test]
@@ -450,6 +454,31 @@ fn capture_pomodoro_close_selection_listed_matches_ledger() {
     let close = &json["pomodoro_close"];
     assert_eq!(close["raw"], "=x1,2");
     assert_eq!(close["in_progress"], serde_json::json!([1, 2]));
+    assert_eq!(
+        close["task_links"],
+        serde_json::json!([
+            {
+                "index": 1,
+                "ledger_line": 6,
+                "block_link": "[[bob#^capture-stop]]",
+                "block_id": "capture-stop",
+                "marker": "plain",
+                "outcome": "in_progress",
+                "source": "listed"
+            },
+            {
+                "index": 2,
+                "ledger_line": 10,
+                "block_link": "[[bob#^web-capture]]",
+                "block_id": "web-capture",
+                "marker": "deferred",
+                "outcome": "in_progress",
+                "source": "listed"
+            }
+        ])
+    );
+    assert_eq!(close["tasks"][0]["index"], 1);
+    assert_eq!(close["tasks"][1]["index"], 2);
     assert_eq!(close["tasks"][0]["role"], "worked");
     assert_eq!(close["tasks"][1]["role"], "worked");
     assert_eq!(close["tasks"][1]["status_symbol"], "/");
@@ -500,6 +529,10 @@ fn capture_pomodoro_close_selection_listed_matches_ledger() {
             ),
             plain_bob_work_log(),
         )
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase.md")).expect("sase"),
+        plain_sase_after(),
     );
 }
 
@@ -688,6 +721,25 @@ fn capture_pomodoro_close_selection_link_forms() {
         ])
     );
     assert_eq!(close["next_pomodoro"]["line"], 13);
+    assert_eq!(close["next_pomodoro"]["created"], true);
+    let task_by_id = |id: &str| {
+        close["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["block_id"] == id)
+            .unwrap_or_else(|| panic!("missing task {id}"))
+            .clone()
+    };
+    assert_eq!(task_by_id("capture-stop")["index"], 1);
+    assert_eq!(task_by_id("capture-stop")["role"], "deferred");
+    assert_eq!(task_by_id("capture-stop")["status_symbol"], "*");
+    assert_eq!(task_by_id("web-capture")["index"], 2);
+    assert_eq!(task_by_id("web-capture")["role"], "deferred");
+    assert_eq!(task_by_id("web-capture")["status_symbol"], "*");
+    assert_eq!(task_by_id("ready")["index"], 3);
+    assert_eq!(task_by_id("ready")["role"], "worked");
+    assert_eq!(task_by_id("ready")["status_symbol"], "/");
     let day_after = fs::read_to_string(&day_file).expect("read day");
     assert_eq!(
         day_after,
@@ -719,6 +771,13 @@ fn capture_pomodoro_close_selection_link_forms() {
     assert!(bob_after.contains(
         "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n"
     ));
+    assert!(bob_after.contains(
+        "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n"
+    ));
+    assert_eq!(
+        fs::read_to_string(vault.join("sase.md")).expect("sase"),
+        plain_sase_after(),
+    );
 
     // `^bob:capture-stop=x!1`: already current, completing it matches the
     // `=x!1` post-images byte for byte.
@@ -764,6 +823,19 @@ fn capture_pomodoro_close_selection_link_forms() {
     let close = &json["pomodoro_close"];
     assert_eq!(close["raw"], "=x0");
     assert_eq!(close["in_progress"], serde_json::json!([]));
+    let task_by_id = |id: &str| {
+        close["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["block_id"] == id)
+            .unwrap_or_else(|| panic!("missing task {id}"))
+            .clone()
+    };
+    assert_eq!(task_by_id("capture-stop")["index"], 1);
+    assert_eq!(task_by_id("web-capture")["index"], 2);
+    assert_eq!(task_by_id("draft-docs")["index"], 3);
+    assert_eq!(task_by_id("draft-docs")["role"], "deferred");
     assert_eq!(close["task_links"].as_array().unwrap().len(), 3);
     assert_eq!(close["task_links"][2]["index"], 3);
     assert_eq!(close["task_links"][2]["block_id"], "draft-docs");
@@ -805,6 +877,12 @@ fn capture_pomodoro_close_selection_link_forms() {
     assert!(bob_after.contains(
         "- [*] #task Draft docs [created::2026-09-28] ^draft-docs\n"
     ));
+    assert!(bob_after.contains(
+        "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n"
+    ));
+    assert!(bob_after.contains(
+        "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n"
+    ));
 }
 
 #[test]
@@ -836,6 +914,16 @@ fn capture_pomodoro_close_selection_batches() {
         day_after.contains("(**0920-0940** [t:: 20m])"),
         "{day_after}"
     );
+    assert!(
+        day_after.contains("\t- ~~[[bob#^web-capture]]~~"),
+        "{day_after}"
+    );
+    assert!(
+        fs::read_to_string(vault.join("bob.md"))
+            .expect("bob")
+            .contains("[completion:: 2026-09-28] ^web-capture"),
+        "batch completes web-capture"
+    );
 
     // `=x0`, blank, `^sase:recovery-panel=` closes, then switches sessions.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-b2");
@@ -856,6 +944,17 @@ fn capture_pomodoro_close_selection_batches() {
     assert_eq!(json["captures"][0]["kind"], "pomodoro_close");
     assert_eq!(json["captures"][0]["pomodoro_close"]["raw"], "=x0");
     assert_eq!(json["captures"][1]["kind"], "pomodoro_link");
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day_after.contains("(**0920-0940** [t:: 20m]) — CAPTURE"),
+        "{day_after}"
+    );
+    assert!(
+        fs::read_to_string(vault.join("bob.md"))
+            .expect("bob")
+            .contains("^capture-stop"),
+        "batch keeps bob tasks"
+    );
 
     // `-2`, blank, `=x5` fails out of range and rolls back the `-2`.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-b3");
@@ -993,8 +1092,19 @@ fn capture_pomodoro_close_selection_diagnostics() {
             vec!["=x0,2"],
             "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`",
         ),
+        (
+            vec!["=x0,"],
+            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`",
+        ),
+        (
+            vec!["=x00"],
+            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`",
+        ),
         (vec!["=x!0"], "task numbers start at 1"),
         (vec!["=x,1"], "expected a task number before `,`"),
+        (vec!["=x1,,"], "expected a task number before `,`"),
+        (vec!["=x1!2,,"], "expected a task number before `,`"),
+        (vec!["=x1,!2"], "expected a task number after `,`"),
         (vec!["=x1!2!3"], "use one `!` list: `=x1!2,3`"),
         (
             vec!["=x1a"],
@@ -1029,6 +1139,125 @@ fn capture_pomodoro_close_selection_diagnostics() {
         "{error}"
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+
+    // A `^` link close ending in `!` is incomplete, not a toggle.
+    for args in ["^r:id=x!", "^r:id=x1!", "^r:id=x0!", "^r:id=x1,3!"] {
+        let error = run_close_expect_error(
+            &vault,
+            &day_file,
+            "2026-09-28 09:37:00",
+            &[args],
+        );
+        assert!(
+            error.contains("is incomplete: type a task number after `!`"),
+            "{args}: {error}"
+        );
+    }
+    // `^r:id!` without `=` is still the toggle error.
+    let toggle = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["^r:id!"],
+    );
+    assert!(toggle.contains("toggle"), "{toggle}");
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+
+    // Invalid link closes with conflicts report the conflict like the editor.
+    for (args, phrase) in [
+        (
+            "^r:id=x1,1 s:2",
+            "Pomodoro link capture cannot be combined with s:<N>",
+        ),
+        (
+            "^r:id=x1, s:2",
+            "Pomodoro link capture cannot be combined with s:<N>",
+        ),
+    ] {
+        let error = run_close_expect_error(
+            &vault,
+            &day_file,
+            "2026-09-28 09:37:00",
+            &[args],
+        );
+        assert!(error.contains(phrase), "{args}: {error}");
+    }
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+}
+
+#[test]
+fn capture_pomodoro_close_selection_land_fixes() {
+    // Mentioned-first then bare link to a Blocked task: the row carries
+    // index 1 and the not-started warning.
+    let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-land-1");
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+        "\t- see [[bob#^capture-stop]] for context\n",
+        "\t- [[bob#^capture-stop]]\n",
+        "\t- [[bob#^web-capture]]#\n",
+    );
+    write_file(&day_file, day);
+    let bob = fs::read_to_string(vault.join("bob.md")).expect("bob");
+    write_file(
+        &vault.join("bob.md"),
+        &bob.replace(
+            "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
+            "- [?] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
+        ),
+    );
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1"]);
+    assert_eq!(json["pomodoro_close"]["tasks"][0]["index"], 1);
+    assert_eq!(
+        json["pomodoro_close"]["tasks"][0]["warning"],
+        "task 1 `[[bob#^capture-stop]]` is Blocked, so it was not started"
+    );
+
+    // `![[T]]` / `[[T]]` duplicate with `=x!2` on Blocked warns not completed.
+    let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-land-2");
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+        "\t- ![[bob#^capture-stop]]\n",
+        "\t- [[bob#^capture-stop]]\n",
+    );
+    write_file(&day_file, day);
+    let bob = fs::read_to_string(vault.join("bob.md")).expect("bob");
+    write_file(
+        &vault.join("bob.md"),
+        &bob.replace(
+            "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
+            "- [?] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
+        ),
+    );
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x!2"]);
+    assert_eq!(json["pomodoro_close"]["tasks"][0]["index"], 1);
+    assert!(
+        json["pomodoro_close"]["tasks"][0]["warning"]
+            .as_str()
+            .expect("warning")
+            .contains("so it was not completed"),
+        "{}",
+        json["pomodoro_close"]["tasks"][0]["warning"]
+    );
+
+    // Plain `=x` with no numbered rows is byte-identical to pre-epic output;
+    // a fixture with no bare Task Links at all has an empty lineup.
+    let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-land-3");
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n\t- quick note\n",
+    );
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    assert_eq!(json["pomodoro_close"]["task_links"], serde_json::json!([]));
+    assert!(json["pomodoro_close"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|task| task["index"].is_null()));
 }
 
 #[test]
