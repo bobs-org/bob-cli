@@ -24,18 +24,16 @@ mod linked_task_tests;
 mod tests;
 
 pub(crate) use ledger::{
-    close_timing, find_running_pomodoro, plan_ledger_close, sub_bullet_range,
-    BlockLinkTarget, ClassifiedLink, CloseTiming, FindRunningError,
-    LedgerClosePlan, LedgerLinkRole, NamedPomodoro, NextPomodoro,
-    RunningPomodoro, WorkLogNode, WorkLogNoteGroup,
+    find_running_pomodoro, plan_ledger_close, sub_bullet_range,
+    BlockLinkTarget, FindRunningError, LedgerClosePlan, LedgerLinkRole,
+    RunningPomodoro, WorkLogNode,
 };
 pub(crate) use linked_tasks::{
-    lookup_task, plan_pomodoro_close, CloseTaskRole, CloseVault,
-    PomodoroClosePlan, PomodoroClosePlanError, PomodoroCloseSummary,
-    PomodoroCloseTask,
+    lookup_task, plan_pomodoro_close, CloseVault, PomodoroClosePlan,
+    PomodoroClosePlanError,
 };
 pub(crate) use links::{
-    bare_embedded_link, bare_plain_link, exact_struck, range_is_struck,
+    bare_embedded_link, bare_plain_link, range_is_struck,
     strikethrough_inner_spans, strip_pomodoro_markers, wikilink_tokens,
     WikiToken,
 };
