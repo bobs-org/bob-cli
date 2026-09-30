@@ -133,11 +133,11 @@ missing daily note, a missing Pomodoros section, and multiple open timed \
 Pomodoros stay write-free warnings without a create row. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` start suffix is \
 never completable: block and Pomodoro-name replacement ranges end before \
 the `=`, a cursor inside the suffix returns an empty success, and accepting \
-a candidate preserves the typed suffix. The `=x[<N>][!<M>]` close suffix behaves the \
+a candidate preserves the typed suffix. The `=x[<N>][!<M>][~<K>]` close suffix behaves the \
 same way: it is never a completion field, replacements still stop before \
 `#`/`=`, and a cursor anywhere inside the suffix, including the task-number \
-lists and a dangling `,`/`!` separator, returns an empty success. A whole-item \
-`+[N]`/`-[N]` Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`, or `--` is one unit), `=x[<N>][!<M>]` close, or `=`/`=<X>` start (a bare `=` starts 25 minutes) is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Pomodoro block-ID \
+lists and a dangling `,`/`!`/`~` separator, returns an empty success. A whole-item \
+`+[N]`/`-[N]` Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`, or `--` is one unit), `=x[<N>][!<M>][~<K>]` close, or `=`/`=<X>` start (a bare `=` starts 25 minutes) is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
 `bob capture-tasks` and, by default, only offer tasks that already carry a \

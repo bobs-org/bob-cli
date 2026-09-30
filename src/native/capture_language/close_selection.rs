@@ -1,4 +1,4 @@
-//! Shared `=x[<N>][!<M>]` selection lexer for Pomodoro closes.
+//! Shared `=x[<N>][!<M>][~<K>]` selection lexer for Pomodoro closes.
 //!
 //! Both the execution parser (`bob capture`) and the editor parser
 //! (`capture-parse`, completion, rewrite) lex a close selection through
@@ -10,26 +10,31 @@ use super::markers::*;
 use super::model::*;
 
 /// A fully typed selection: `<N>` (or `None` when omitted, so unlisted links
-/// keep their ledger outcome) plus the `!<M>` list. Ranges are absolute byte
-/// offsets: `in_progress_range` covers `<N>` including its commas and
-/// `complete_range` covers `!<M>` including the `!`.
+/// keep their ledger outcome) plus the `!<M>` and `~<K>` lists. Ranges are
+/// absolute byte offsets: `in_progress_range` covers `<N>` including its
+/// commas, `complete_range` covers `!<M>` including the `!`, and
+/// `drop_range` covers `~<K>` including the `~`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CloseSelectionLex {
     pub(crate) in_progress: Option<Vec<u32>>,
     pub(crate) complete: Vec<u32>,
+    pub(crate) drop: Vec<u32>,
     pub(crate) in_progress_range: Option<(usize, usize)>,
     pub(crate) complete_range: Option<(usize, usize)>,
+    pub(crate) drop_range: Option<(usize, usize)>,
 }
 
 /// An editing state: the token ends in a dangling separator. `separator` is
-/// the `,` or `!` the user still has to follow with a task number, and the
-/// remaining fields describe the lists typed so far.
+/// the `,`, `!`, or `~` the user still has to follow with a task number,
+/// and the remaining fields describe the lists typed so far.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CloseSelectionIncomplete {
     pub(crate) in_progress: Option<Vec<u32>>,
     pub(crate) complete: Vec<u32>,
+    pub(crate) drop: Vec<u32>,
     pub(crate) in_progress_range: Option<(usize, usize)>,
     pub(crate) complete_range: Option<(usize, usize)>,
+    pub(crate) drop_range: Option<(usize, usize)>,
     pub(crate) separator_range: (usize, usize),
     pub(crate) separator: char,
 }
@@ -50,7 +55,7 @@ pub(crate) enum CloseSelectionOutcome {
 
 /// Return the text after the `x` when a whole-item token is
 /// selection-shaped: it starts with `=x`/`=X` and the character right after
-/// the `x` is an ASCII digit, `,`, or `!`. `None` for plain `=x`, every
+/// the `x` is an ASCII digit, `,`, `!`, or `~`. `None` for plain `=x`, every
 /// other `=` shape (`=xx`, `=xa`, `=x.`), and non-close tokens.
 pub(crate) fn whole_item_close_after_x(token: &str) -> Option<&str> {
     let after_eq = token.strip_prefix('=')?;
@@ -59,14 +64,14 @@ pub(crate) fn whole_item_close_after_x(token: &str) -> Option<&str> {
 
 /// Return the text after the `x` when a link suffix (the text after `=`) is
 /// selection-shaped: it starts with `x`/`X` and the character right after
-/// the `x` is an ASCII digit, `,`, or `!`. `None` for a plain `x` suffix and
-/// every `=<X>` start shape.
+/// the `x` is an ASCII digit, `,`, `!`, or `~`. `None` for a plain `x`
+/// suffix and every `=<X>` start shape.
 pub(crate) fn link_close_after_x(suffix: &str) -> Option<&str> {
     let after_x = suffix
         .strip_prefix('x')
         .or_else(|| suffix.strip_prefix('X'))?;
     if after_x.as_bytes().first().is_some_and(|byte| {
-        byte.is_ascii_digit() || *byte == b',' || *byte == b'!'
+        byte.is_ascii_digit() || *byte == b',' || *byte == b'!' || *byte == b'~'
     }) {
         Some(after_x)
     } else {
@@ -78,7 +83,7 @@ pub(crate) fn link_close_after_x(suffix: &str) -> Option<&str> {
 /// absolute byte offset of `after_x`'s first byte and `token` is the display
 /// token (`=x...`) interpolated into diagnostics.
 ///
-/// An empty `after_x` is a plain close. A trailing `,` or `!` is an
+/// An empty `after_x` is a plain close. A trailing `,`, `!`, or `~` is an
 /// [`CloseSelectionOutcome::Incomplete`] editing state, unless a lexical
 /// error elsewhere in the token wins. Anything else malformed is a
 /// [`CloseSelectionError`] with a precise range.
@@ -91,8 +96,10 @@ pub(crate) fn lex_close_selection(
         return Ok(CloseSelectionOutcome::Valid(CloseSelectionLex {
             in_progress: None,
             complete: Vec::new(),
+            drop: Vec::new(),
             in_progress_range: None,
             complete_range: None,
+            drop_range: None,
         }));
     }
     let token_end = base_offset + after_x.len();
@@ -108,6 +115,18 @@ pub(crate) fn lex_close_selection(
             range: (base_offset + second, base_offset + second + 1),
         });
     }
+    let tilde_count = after_x.bytes().filter(|byte| *byte == b'~').count();
+    if tilde_count > 1 {
+        let first = after_x.find('~').expect("has tilde");
+        let second = after_x[first + 1..]
+            .find('~')
+            .map(|offset| first + 1 + offset)
+            .expect("second tilde");
+        return Err(CloseSelectionError {
+            message: close_selection_one_tilde_error(),
+            range: (base_offset + second, base_offset + second + 1),
+        });
+    }
     if let Some(body) = after_x.strip_suffix('!') {
         let parsed = parse_selection_body(body, base_offset, token, token_end)?;
         return Ok(CloseSelectionOutcome::Incomplete(
@@ -116,27 +135,45 @@ pub(crate) fn lex_close_selection(
                 separator: '!',
                 in_progress: parsed.in_progress,
                 complete: Vec::new(),
+                drop: parsed.drop,
                 in_progress_range: parsed.in_progress_range,
                 complete_range: None,
+                drop_range: parsed.drop_range,
+            },
+        ));
+    }
+    if let Some(body) = after_x.strip_suffix('~') {
+        let parsed = parse_selection_body(body, base_offset, token, token_end)?;
+        return Ok(CloseSelectionOutcome::Incomplete(
+            CloseSelectionIncomplete {
+                separator_range: (token_end - 1, token_end),
+                separator: '~',
+                in_progress: parsed.in_progress,
+                complete: parsed.complete,
+                drop: Vec::new(),
+                in_progress_range: parsed.in_progress_range,
+                complete_range: parsed.complete_range,
+                drop_range: None,
             },
         ));
     }
     if let Some(head) = after_x.strip_suffix(',') {
         let separator_range = (token_end - 1, token_end);
-        if !head.contains('!') && head.is_empty() {
+        if !head.contains('!') && !head.contains('~') && head.is_empty() {
             return Err(CloseSelectionError {
                 message: close_selection_expected_number_error(),
                 range: separator_range,
             });
         }
-        if let Some(bang) = head.find('!') {
-            let m_part = &head[bang + 1..];
-            if m_part.is_empty() {
-                return Err(CloseSelectionError {
-                    message: close_selection_expected_number_error(),
-                    range: separator_range,
-                });
-            }
+        // A dangling list separator (`=x1!,`, `=x1~2~,`) names no number
+        // after it yet: the trailing comma is the precise range.
+        if let Some(last) = head.rfind(['!', '~'])
+            && head[last + 1..].is_empty()
+        {
+            return Err(CloseSelectionError {
+                message: close_selection_expected_number_error(),
+                range: separator_range,
+            });
         }
         // `=x0,` can never become valid: `0` must stand alone, so the
         // lexical `0`-alone error wins over the incomplete state.
@@ -161,8 +198,10 @@ pub(crate) fn lex_close_selection(
                 separator: ',',
                 in_progress: parsed.in_progress,
                 complete: parsed.complete,
+                drop: parsed.drop,
                 in_progress_range: parsed.in_progress_range,
                 complete_range: parsed.complete_range,
+                drop_range: parsed.drop_range,
             },
         ));
     }
@@ -170,8 +209,10 @@ pub(crate) fn lex_close_selection(
     Ok(CloseSelectionOutcome::Valid(CloseSelectionLex {
         in_progress: parsed.in_progress,
         complete: parsed.complete,
+        drop: parsed.drop,
         in_progress_range: parsed.in_progress_range,
         complete_range: parsed.complete_range,
+        drop_range: parsed.drop_range,
     }))
 }
 
@@ -179,29 +220,81 @@ pub(crate) fn lex_close_selection(
 struct SelectionBody {
     in_progress: Option<Vec<u32>>,
     complete: Vec<u32>,
+    drop: Vec<u32>,
     in_progress_range: Option<(usize, usize)>,
     complete_range: Option<(usize, usize)>,
+    drop_range: Option<(usize, usize)>,
+}
+
+/// One labeled trailing list: the `!` complete list or the `~` drop list,
+/// in the order typed.
+struct TrailingList<'a> {
+    separator: char,
+    text: &'a str,
+    base: usize,
 }
 
 /// Parse a complete selection body (no trailing separator): split on the
-/// single `!`, parse both lists, then validate zeros, duplicates, and
-/// overlaps. An empty `<N>` with a `!` is an omitted list; an empty `<N>`
-/// without one is only reachable for an empty body, which callers handle.
+/// single `!` and the single `~` (either order), parse every list, then
+/// validate zeros, duplicates, and overlaps. An empty `<N>` with a
+/// `!` or `~` is an omitted list; an empty `<N>` without one is only
+/// reachable for an empty body, which callers handle.
 fn parse_selection_body(
     body: &str,
     base_offset: usize,
     token: &str,
     token_end: usize,
 ) -> Result<SelectionBody, CloseSelectionError> {
-    let (n_text, m_text) = match body.find('!') {
-        Some(bang) => (&body[..bang], Some(&body[bang + 1..])),
-        None => (body, None),
+    let bang = body.find('!');
+    let tilde = body.find('~');
+    let (n_text, trailing) = match (bang, tilde) {
+        (None, None) => (body, Vec::new()),
+        (Some(bang), None) => (
+            &body[..bang],
+            vec![TrailingList {
+                separator: '!',
+                text: &body[bang + 1..],
+                base: base_offset + bang + 1,
+            }],
+        ),
+        (None, Some(tilde)) => (
+            &body[..tilde],
+            vec![TrailingList {
+                separator: '~',
+                text: &body[tilde + 1..],
+                base: base_offset + tilde + 1,
+            }],
+        ),
+        (Some(bang), Some(tilde)) => {
+            let (first, second) = if bang < tilde {
+                (bang, tilde)
+            } else {
+                (tilde, bang)
+            };
+            let first_sep = body.as_bytes()[first] as char;
+            let second_sep = body.as_bytes()[second] as char;
+            (
+                &body[..first],
+                vec![
+                    TrailingList {
+                        separator: first_sep,
+                        text: &body[first + 1..second],
+                        base: base_offset + first + 1,
+                    },
+                    TrailingList {
+                        separator: second_sep,
+                        text: &body[second + 1..],
+                        base: base_offset + second + 1,
+                    },
+                ],
+            )
+        }
     };
-    let has_bang = m_text.is_some();
+    let has_trailing = !trailing.is_empty();
     // `=x1,!2`: the `<N>` part ends in a single comma after a number, so the
-    // empty element sits after the `,` (before the `!`). Report the new
-    // "after" message on that comma instead of the generic "before".
-    if has_bang
+    // empty element sits after the `,` (before the separator). Report the
+    // new "after" message on that comma instead of the generic "before".
+    if has_trailing
         && n_text.ends_with(',')
         && !n_text.ends_with(",,")
         && n_text.len() >= 2
@@ -213,28 +306,36 @@ fn parse_selection_body(
             range: (comma, comma + 1),
         });
     }
-    let n_base = base_offset;
-    let n_parsed = parse_number_list(n_text, n_base, token, token_end)?;
-    let (m_parsed, complete_range) = match m_text {
-        None => (Vec::new(), None),
-        Some(m_text) => {
-            let m_base = base_offset + n_text.len() + 1;
-            let parsed = parse_number_list(m_text, m_base, token, token_end)?;
-            let range = (
-                base_offset + n_text.len(),
-                base_offset + n_text.len() + 1 + m_text.len(),
-            );
-            (parsed, Some(range))
+    let n_parsed = parse_number_list(n_text, base_offset, token, token_end)?;
+    let mut m_parsed: Vec<ParsedNumber> = Vec::new();
+    let mut complete_range = None;
+    let mut k_parsed: Vec<ParsedNumber> = Vec::new();
+    let mut drop_range = None;
+    for list in &trailing {
+        let parsed = parse_number_list(list.text, list.base, token, token_end)?;
+        // The range covers the separator plus the list text.
+        let range = (list.base - 1, list.base + list.text.len());
+        match list.separator {
+            '!' => {
+                m_parsed = parsed;
+                complete_range = Some(range);
+            }
+            _ => {
+                k_parsed = parsed;
+                drop_range = Some(range);
+            }
         }
-    };
+    }
     validate_selection(
         n_text,
-        has_bang,
+        has_trailing,
         n_parsed,
         m_parsed,
+        k_parsed,
         base_offset,
         token,
         complete_range,
+        drop_range,
     )
 }
 
@@ -302,17 +403,20 @@ fn parse_number_list(
     Ok(numbers)
 }
 
-/// Validate zeros, duplicates, and overlaps across both lists, then sort
-/// ascending. `n_text`/`has_bang` decide whether an empty `<N>` is omitted
-/// (`None`) or explicit (`Some`, only for a bare `0`).
+/// Validate zeros, duplicates, and overlaps across all three lists, then
+/// sort ascending. `n_text`/`has_trailing` decide whether an empty `<N>` is
+/// omitted (`None`) or explicit (`Some`, only for a bare `0`).
+#[allow(clippy::too_many_arguments)]
 fn validate_selection(
     n_text: &str,
-    has_bang: bool,
+    has_trailing: bool,
     n_parsed: Vec<ParsedNumber>,
     m_parsed: Vec<ParsedNumber>,
+    k_parsed: Vec<ParsedNumber>,
     base_offset: usize,
     token: &str,
     complete_range: Option<(usize, usize)>,
+    drop_range: Option<(usize, usize)>,
 ) -> Result<SelectionBody, CloseSelectionError> {
     // Only a literal `0` means "none": a zero-valued `<n>` with extra digits
     // (`=x00`) gets the `0`-alone message on that number.
@@ -332,7 +436,11 @@ fn validate_selection(
             range: *range,
         });
     }
-    if let Some((_, range)) = m_parsed.iter().find(|(number, _)| *number == 0) {
+    if let Some((_, range)) = m_parsed
+        .iter()
+        .chain(k_parsed.iter())
+        .find(|(number, _)| *number == 0)
+    {
         return Err(CloseSelectionError {
             message: close_selection_starts_at_one_error(),
             range: *range,
@@ -354,6 +462,14 @@ fn validate_selection(
             });
         }
     }
+    for (position, (number, range)) in k_parsed.iter().enumerate() {
+        if k_parsed[..position].iter().any(|(seen, _)| seen == number) {
+            return Err(CloseSelectionError {
+                message: close_selection_duplicate_error(*number, token),
+                range: *range,
+            });
+        }
+    }
     if let Some((overlapped, range)) = m_parsed
         .iter()
         .find(|(number, _)| n_parsed.iter().any(|(seen, _)| seen == number))
@@ -363,15 +479,39 @@ fn validate_selection(
             range: *range,
         });
     }
-    let in_progress = if (n_text.is_empty() && has_bang) || n_parsed.is_empty()
+    if let Some((overlapped, range)) = k_parsed
+        .iter()
+        .find(|(number, _)| n_parsed.iter().any(|(seen, _)| seen == number))
     {
-        None
-    } else {
-        let mut numbers: Vec<u32> =
-            n_parsed.iter().map(|(number, _)| *number).collect();
-        numbers.sort_unstable();
-        Some(numbers)
-    };
+        return Err(CloseSelectionError {
+            message: close_selection_overlap_in_progress_drop_error(
+                *overlapped,
+                token,
+            ),
+            range: *range,
+        });
+    }
+    if let Some((overlapped, range)) = k_parsed
+        .iter()
+        .find(|(number, _)| m_parsed.iter().any(|(seen, _)| seen == number))
+    {
+        return Err(CloseSelectionError {
+            message: close_selection_overlap_complete_drop_error(
+                *overlapped,
+                token,
+            ),
+            range: *range,
+        });
+    }
+    let in_progress =
+        if (n_text.is_empty() && has_trailing) || n_parsed.is_empty() {
+            None
+        } else {
+            let mut numbers: Vec<u32> =
+                n_parsed.iter().map(|(number, _)| *number).collect();
+            numbers.sort_unstable();
+            Some(numbers)
+        };
     // A lone `0` means none: keep the typed range but report no numbers.
     let in_progress = match &in_progress {
         Some(numbers) if numbers == &[0] => Some(Vec::new()),
@@ -385,11 +525,16 @@ fn validate_selection(
     let mut complete: Vec<u32> =
         m_parsed.iter().map(|(number, _)| *number).collect();
     complete.sort_unstable();
+    let mut drop: Vec<u32> =
+        k_parsed.iter().map(|(number, _)| *number).collect();
+    drop.sort_unstable();
     Ok(SelectionBody {
         in_progress,
         complete,
+        drop,
         in_progress_range,
         complete_range,
+        drop_range,
     })
 }
 
@@ -402,6 +547,7 @@ pub(crate) fn close_spec_from_lex(
         raw,
         in_progress: lex.in_progress.clone(),
         complete: lex.complete.clone(),
+        drop: lex.drop.clone(),
     }
 }
 
@@ -416,6 +562,7 @@ pub(crate) fn close_spec_from_incomplete(
         raw,
         in_progress: incomplete.in_progress.clone(),
         complete: incomplete.complete.clone(),
+        drop: incomplete.drop.clone(),
     }
 }
 
@@ -578,6 +725,109 @@ mod tests {
     }
 
     #[test]
+    fn lex_reports_drop_selections() {
+        let drop_only = valid("=x~2");
+        assert_eq!(drop_only.in_progress, None);
+        assert_eq!(drop_only.complete, Vec::<u32>::new());
+        assert_eq!(drop_only.drop, vec![2]);
+        assert_eq!(drop_only.in_progress_range, None);
+        assert_eq!(drop_only.complete_range, None);
+        assert_eq!(drop_only.drop_range, Some((2, 4)));
+
+        let in_progress_drop = valid("=x1~2");
+        assert_eq!(in_progress_drop.in_progress, Some(vec![1]));
+        assert_eq!(in_progress_drop.drop, vec![2]);
+        assert_eq!(in_progress_drop.in_progress_range, Some((2, 3)));
+        assert_eq!(in_progress_drop.drop_range, Some((3, 5)));
+
+        // `!` and `~` compose in either order with the same lists.
+        let complete_then_drop = valid("=x1!2~3");
+        assert_eq!(complete_then_drop.in_progress, Some(vec![1]));
+        assert_eq!(complete_then_drop.complete, vec![2]);
+        assert_eq!(complete_then_drop.drop, vec![3]);
+        assert_eq!(complete_then_drop.in_progress_range, Some((2, 3)));
+        assert_eq!(complete_then_drop.complete_range, Some((3, 5)));
+        assert_eq!(complete_then_drop.drop_range, Some((5, 7)));
+
+        let drop_then_complete = valid("=x1~3!2");
+        assert_eq!(drop_then_complete.in_progress, Some(vec![1]));
+        assert_eq!(drop_then_complete.complete, vec![2]);
+        assert_eq!(drop_then_complete.drop, vec![3]);
+        assert_eq!(drop_then_complete.in_progress_range, Some((2, 3)));
+        assert_eq!(drop_then_complete.drop_range, Some((3, 5)));
+        assert_eq!(drop_then_complete.complete_range, Some((5, 7)));
+
+        let omitted_both = valid("=x!2~3");
+        assert_eq!(omitted_both.in_progress, None);
+        assert_eq!(omitted_both.complete, vec![2]);
+        assert_eq!(omitted_both.drop, vec![3]);
+
+        let reversed_omitted = valid("=x~3!2");
+        assert_eq!(reversed_omitted.in_progress, None);
+        assert_eq!(reversed_omitted.complete, vec![2]);
+        assert_eq!(reversed_omitted.drop, vec![3]);
+
+        // List order does not matter; JSON reports ascending.
+        let sorted = valid("=x~3,1");
+        assert_eq!(sorted.drop, vec![1, 3]);
+
+        let none_drop = valid("=x0~2");
+        assert_eq!(none_drop.in_progress, Some(Vec::new()));
+        assert_eq!(none_drop.drop, vec![2]);
+
+        // A number in two lists is a precise-range overlap error.
+        let overlap_drop = error("=x1~1");
+        assert_eq!(
+            overlap_drop.message,
+            "task 1 cannot both stay in progress and drop in `=x1~1`"
+        );
+        assert_eq!(overlap_drop.range, (4, 5));
+
+        let overlap_complete_drop = error("=x!2~2");
+        assert_eq!(
+            overlap_complete_drop.message,
+            "task 2 cannot both complete and drop in `=x!2~2`"
+        );
+        assert_eq!(overlap_complete_drop.range, (5, 6));
+
+        // `~0` names no task, like `!0`.
+        let zero_drop = error("=x~0");
+        assert_eq!(zero_drop.message, "task numbers start at 1");
+        assert_eq!(zero_drop.range, (3, 4));
+
+        // A second `~` points at the second tilde.
+        let doubled_tilde = error("=x1~2~3");
+        assert_eq!(doubled_tilde.message, "use one `~` list: `=x1~2,3`");
+        assert_eq!(doubled_tilde.range, (5, 6));
+
+        // A dangling `~` is an editing state, like `!`.
+        let bare_tilde = incomplete("=x~");
+        assert_eq!(bare_tilde.in_progress, None);
+        assert_eq!(bare_tilde.complete, Vec::<u32>::new());
+        assert_eq!(bare_tilde.drop, Vec::<u32>::new());
+        assert_eq!(bare_tilde.separator_range, (2, 3));
+        assert_eq!(bare_tilde.separator, '~');
+
+        let numbered_tilde = incomplete("=x1~");
+        assert_eq!(numbered_tilde.in_progress, Some(vec![1]));
+        assert_eq!(numbered_tilde.drop, Vec::<u32>::new());
+        assert_eq!(numbered_tilde.separator, '~');
+
+        let complete_tilde = incomplete("=x1!2~");
+        assert_eq!(complete_tilde.in_progress, Some(vec![1]));
+        assert_eq!(complete_tilde.complete, vec![2]);
+        assert_eq!(complete_tilde.complete_range, Some((3, 5)));
+        assert_eq!(complete_tilde.drop, Vec::<u32>::new());
+        assert_eq!(complete_tilde.separator, '~');
+
+        let drop_comma = incomplete("=x~2,");
+        assert_eq!(drop_comma.in_progress, None);
+        assert_eq!(drop_comma.drop, vec![2]);
+        assert_eq!(drop_comma.drop_range, Some((2, 4)));
+        assert_eq!(drop_comma.separator, ',');
+    }
+
+    #[test]
     fn lex_reports_dangling_separators_as_incomplete() {
         let trailing_comma = incomplete("=x1,");
         assert_eq!(trailing_comma.in_progress, Some(vec![1]));
@@ -615,13 +865,16 @@ mod tests {
 
     #[test]
     fn selection_shape_detection() {
-        for token in ["=x1", "=X1!2", "=x,", "=x!", "=x0"] {
+        for token in [
+            "=x1", "=X1!2", "=x,", "=x!", "=x~", "=x0", "=x1~2", "=x1!2~3",
+        ] {
             assert!(whole_item_close_after_x(token).is_some(), "{token}");
         }
         for token in ["=x", "=X", "=xx", "=xa", "=x.", "=3", "Plan =x1"] {
             assert!(whole_item_close_after_x(token).is_none(), "{token}");
         }
         assert_eq!(link_close_after_x("x1,3!2"), Some("1,3!2"));
+        assert_eq!(link_close_after_x("x1~2"), Some("1~2"));
         assert_eq!(link_close_after_x("X1"), Some("1"));
         assert_eq!(link_close_after_x("x"), None);
         assert_eq!(link_close_after_x("xa"), None);

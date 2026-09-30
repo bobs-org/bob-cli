@@ -882,6 +882,7 @@ pub(super) fn parse_editor_item<'a>(
                 start_offset,
                 close_in_progress,
                 close_complete,
+                close_drop,
                 conflict,
             } => {
                 mode = EditorMode::PomodoroLink;
@@ -937,6 +938,13 @@ pub(super) fn parse_editor_item<'a>(
                                 kind: SpanKind::PomodoroCloseComplete,
                             });
                         }
+                        if let Some((start, end)) = close_drop {
+                            spans.push(Span {
+                                start: token_start + start,
+                                end: token_start + end,
+                                kind: SpanKind::PomodoroCloseDrop,
+                            });
+                        }
                     } else {
                         spans.push(Span {
                             start: token_start + offset,
@@ -974,6 +982,7 @@ pub(super) fn parse_editor_item<'a>(
                 suffix_offset,
                 close_in_progress,
                 close_complete,
+                close_drop,
                 separator_range,
                 conflict,
             } => {
@@ -1022,6 +1031,13 @@ pub(super) fn parse_editor_item<'a>(
                         start: token_start + start,
                         end: token_start + end,
                         kind: SpanKind::PomodoroCloseComplete,
+                    });
+                }
+                if let Some((start, end)) = close_drop {
+                    spans.push(Span {
+                        start: token_start + start,
+                        end: token_start + end,
+                        kind: SpanKind::PomodoroCloseDrop,
                     });
                 }
                 spans.push(Span {

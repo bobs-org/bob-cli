@@ -366,6 +366,7 @@ fn selection(
         in_progress: in_progress
             .map(|list| list.into_iter().collect::<BTreeSet<u32>>()),
         complete: complete.into_iter().collect::<BTreeSet<u32>>(),
+        drop: BTreeSet::new(),
         raw: raw.to_string(),
     }
 }

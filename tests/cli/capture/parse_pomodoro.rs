@@ -1004,6 +1004,158 @@ fn capture_parse_pomodoro_close_selection_protocol() {
 }
 
 #[test]
+fn capture_parse_pomodoro_close_drop_protocol() {
+    let parse = |text: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    // Valid drop selections: additive spec plus the drop span, in either
+    // `!`/`~` order.
+    for (text, spec, spans) in [
+        (
+            "=x~2",
+            serde_json::json!({ "raw": "=x~2", "in_progress": null, "complete": [], "drop": [2] }),
+            serde_json::json!([
+                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+                { "start": 2, "end": 4, "kind": "pomodoro_close_drop" },
+            ]),
+        ),
+        (
+            "=x1~2",
+            serde_json::json!({ "raw": "=x1~2", "in_progress": [1], "complete": [], "drop": [2] }),
+            serde_json::json!([
+                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
+                { "start": 3, "end": 5, "kind": "pomodoro_close_drop" },
+            ]),
+        ),
+        (
+            "=x1!2~3",
+            serde_json::json!({ "raw": "=x1!2~3", "in_progress": [1], "complete": [2], "drop": [3] }),
+            serde_json::json!([
+                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
+                { "start": 3, "end": 5, "kind": "pomodoro_close_complete" },
+                { "start": 5, "end": 7, "kind": "pomodoro_close_drop" },
+            ]),
+        ),
+        (
+            "=x1~3!2",
+            serde_json::json!({ "raw": "=x1~3!2", "in_progress": [1], "complete": [2], "drop": [3] }),
+            serde_json::json!([
+                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
+                { "start": 3, "end": 5, "kind": "pomodoro_close_drop" },
+                { "start": 5, "end": 7, "kind": "pomodoro_close_complete" },
+            ]),
+        ),
+    ] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_close", "{text}");
+        assert_eq!(value["pomodoro_close"], spec, "{text}");
+        assert_eq!(value["spans"], spans, "{text}");
+        assert_eq!(value["diagnostics"], serde_json::json!([]), "{text}");
+    }
+
+    // A dangling `~` is an editing state needing `pomodoro_close_task`.
+    let tilde = parse("=x1~");
+    assert_eq!(tilde["mode"], "incomplete");
+    assert_eq!(tilde["needs"], serde_json::json!(["pomodoro_close_task"]));
+    assert_eq!(tilde["pomodoro_close"]["raw"], "=x1~");
+    assert_eq!(
+        tilde["pomodoro_close"]["in_progress"],
+        serde_json::json!([1])
+    );
+    assert_eq!(tilde["pomodoro_close"]["complete"], serde_json::json!([]));
+    assert!(tilde["pomodoro_close"].get("drop").is_none());
+    assert_eq!(
+        tilde["spans"],
+        serde_json::json!([
+            { "start": 0, "end": 2, "kind": "pomodoro_close" },
+            { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
+            { "start": 3, "end": 4, "kind": "interactive_placeholder" },
+        ])
+    );
+
+    // Drop overlaps and range errors report precise ranges with no spec.
+    for (text, leading, range) in [
+        (
+            "=x1~1",
+            "task 1 cannot both stay in progress and drop",
+            [4, 5],
+        ),
+        ("=x!2~2", "task 2 cannot both complete and drop", [5, 6]),
+        ("=x~0", "task numbers start at 1", [3, 4]),
+        ("=x1~2~3", "use one `~` list", [5, 6]),
+    ] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_close", "{text}");
+        assert!(value.get("pomodoro_close").is_none(), "{text}: {value}");
+        assert_eq!(
+            value["diagnostics"][0]["code"], "invalid_pomodoro_close",
+            "{text}"
+        );
+        assert!(
+            value["diagnostics"][0]["message"]
+                .as_str()
+                .expect("message")
+                .starts_with(leading),
+            "{text}: {}",
+            value["diagnostics"][0]["message"]
+        );
+        assert_eq!(
+            value["diagnostics"][0]["range"],
+            serde_json::json!(range),
+            "{text}"
+        );
+    }
+
+    // Link forms carry the drop spec and spans.
+    let at = parse("@r:id=x1~2");
+    assert_eq!(at["mode"], "pomodoro_link");
+    assert_eq!(
+        at["pomodoro_close"],
+        serde_json::json!({ "raw": "=x1~2", "in_progress": [1], "complete": [], "drop": [2] })
+    );
+    assert_eq!(
+        at["spans"],
+        serde_json::json!([
+            { "start": 0, "end": 2, "kind": "pomodoro_route" },
+            { "start": 3, "end": 5, "kind": "pomodoro_block_id" },
+            { "start": 5, "end": 7, "kind": "pomodoro_close" },
+            { "start": 7, "end": 8, "kind": "pomodoro_close_in_progress" },
+            { "start": 8, "end": 10, "kind": "pomodoro_close_drop" },
+        ])
+    );
+
+    // The human `close` line summarizes the drop list.
+    let human = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("=x1,3!2~4")
+        .output()
+        .expect("run capture-parse human");
+    assert_success(&human);
+    assert!(
+        stdout(&human).contains(
+            "=x1,3!2~4 (in progress 1, 3 · complete 2 · drop 4 · defer the rest)"
+        ),
+        "{}",
+        stdout(&human)
+    );
+}
+
+#[test]
 fn capture_parse_pomodoro_start_protocol() {
     let parse = |text: &str| {
         let output = bob_command()

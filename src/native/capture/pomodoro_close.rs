@@ -350,6 +350,7 @@ pub(super) fn build_close_summary_json(
             ledger_line: task.ledger_line,
             index: task.index,
             resolved: task.resolved,
+            now: task.now.then_some(true),
             relative_target: task.relative_target.clone(),
             block_id: task.block_id.clone(),
             text: task.text.clone(),
@@ -377,7 +378,8 @@ pub(super) fn build_close_summary_json(
             | capture_pomodoro_close::LedgerLinkRole::Mentioned => 0,
             capture_pomodoro_close::LedgerLinkRole::Deferred => 1,
             capture_pomodoro_close::LedgerLinkRole::Struck
-            | capture_pomodoro_close::LedgerLinkRole::Embedded => 2,
+            | capture_pomodoro_close::LedgerLinkRole::Embedded
+            | capture_pomodoro_close::LedgerLinkRole::Dropped => 2,
         };
         (group, link.line)
     });
@@ -390,6 +392,7 @@ pub(super) fn build_close_summary_json(
                     "mentioned"
                 }
                 capture_pomodoro_close::LedgerLinkRole::Deferred => "deferred",
+                capture_pomodoro_close::LedgerLinkRole::Dropped => "dropped",
                 capture_pomodoro_close::LedgerLinkRole::Struck => "struck",
                 capture_pomodoro_close::LedgerLinkRole::Embedded => "embedded",
             };
@@ -427,6 +430,7 @@ pub(super) fn build_close_summary_json(
         raw: spec.raw.clone(),
         in_progress: spec.in_progress.clone(),
         complete: spec.complete.clone(),
+        drop: spec.drop.clone(),
         task_links,
         pomodoro_line: running.line,
         pomodoro_name: running.name.clone(),
@@ -520,9 +524,9 @@ pub(super) fn final_task_line_for(
     }
 }
 
-/// Convert a parsed `=x[<N>][!<M>]` spec into the planner's selection.
-/// Plain `=x` yields `None`, so the close runs exactly as before while still
-/// reporting the numbered lineup.
+/// Convert a parsed `=x[<N>][!<M>][~<K>]` spec into the planner's
+/// selection. Plain `=x` yields `None`, so the close runs exactly as before
+/// while still reporting the numbered lineup.
 fn selection_from_spec(
     spec: &PomodoroCloseSpec,
 ) -> Option<capture_pomodoro_close::CloseSelection> {
@@ -534,6 +538,7 @@ fn selection_from_spec(
             .clone()
             .map(|numbers| numbers.into_iter().collect()),
         spec.complete.iter().copied().collect(),
+        spec.drop.iter().copied().collect(),
         spec.raw.clone(),
     ))
 }

@@ -210,22 +210,25 @@ destination/task/section/clipboard options are rejected on them. Later items \
 see earlier staged edits, dry-run reports without writing, and any failure \
 rolls the whole batch back, so `=x`, blank line, `=` switches sessions \
 atomically.\n\n\
-Capture a whole item `=x[<N>][!<M>]` (case-insensitive `=X`) to close \
-today's running timed Pomodoro the way Obsidian's Ctrl+Enter completion \
-does, plus an auto-decrement that shortens an early-stopped session to the \
-earliest five-minute step at or after now (never extended; an overrun is \
-reported). A bare `=x` keeps today's behavior; `=x<N>` keeps only the \
-numbered Task Links in `<N>` in progress and defers the rest, `=x!<M>` \
-completes the links in `<M>`, and `=x<N>!<M>` does both. `<N>` and `<M>` \
-are comma-separated task numbers in ledger order starting at 1 (the \
-numbers `bob capture` shows, in human output, in `--dry-run`, and as JSON \
-`task_links`); a lone `0` means no \
+Capture a whole item `=x[<N>][!<M>][~<K>]` (case-insensitive `=X`, with \
+`!` and `~` in either order) to close today's running timed Pomodoro the \
+way Obsidian's Ctrl+Enter completion does, plus an auto-decrement that \
+shortens an early-stopped session to the earliest five-minute step at or \
+after now (never extended; an overrun is reported). A bare `=x` keeps \
+today's behavior; `=x<N>` keeps only the numbered Task Links in `<N>` in \
+progress and defers the rest, `=x!<M>` completes the links in `<M>`, \
+`=x~<K>` drops the links in `<K>` (removed from the closed session, not \
+carried and not started; the next hooks run demotes Next to Ready and \
+`#now` keeps a dropped task in view), and combined forms do each part at \
+once. `<N>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
+order starting at 1 (the numbers `bob capture` shows, in human output, in \
+`--dry-run`, and as JSON `task_links`); a lone `0` means no \
 task stays in progress, as in `=x0`. The outcome is exactly the marker \
 edits the user would make by hand before Ctrl+Enter, followed by the \
 unchanged close. The item must contain only the close token \
 (leading/trailing whitespace is fine); a token with extra text, markers, \
-or child lines fails, a token ending in `,` or `!` (`=x1,`) is incomplete \
-and fails, whitespace is never allowed inside the lists, and \
+or child lines fails, a token ending in `,`, `!`, or `~` (`=x1,`) is \
+incomplete and fails, whitespace is never allowed inside the lists, and \
 `=xx`/`=xa`/`Plan =x` stay ordinary prose. `@route:block-id=x…` and \
 `^route:block-id=x…` first put that existing task into the running session \
 then close it, and `<text> @route:block-id=x…` creates the new task in the \
@@ -236,10 +239,13 @@ any failure rolls the whole batch back, so \
 `printf -- '-2\\n\\n=x\\n' | bob capture` adjusts then closes atomically. \
 JSON reports a distinct `pomodoro_close` kind (link and task forms keep \
 their kind with an additive `pomodoro_close` object) carrying the typed \
-`raw`, the `in_progress`/`complete` lists, the numbered `task_links` \
-lineup, and each task row's `index`; human output names the session, the \
-range change, the file, and the line, prefixing numbered rows with their \
-index. Single-quote the argument: zsh expands a leading `=word` and `!` \
+`raw`, the `in_progress`/`complete`/`drop` lists, the numbered \
+`task_links` lineup (with a `dropped` outcome), each task row's `index` \
+and `role` (with a `dropped` role and a `now` flag for `#now` tasks); \
+human output names the session, the range change, the file, and the line, \
+prefixing numbered rows with their index, listing dropped rows (with a \
+`stays in NOW` caption for `#now` tasks), and summarizing `Dropped <K>`. \
+Single-quote the argument: zsh expands a leading `=word` and `!` \
 history expansion applies.\n\n\
 Use '@<route>^<block-id>' in the same leading or trailing position to create \
 an ordinary open task with the requested trailing Obsidian block ID, without \

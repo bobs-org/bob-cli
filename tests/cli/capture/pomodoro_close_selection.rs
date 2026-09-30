@@ -5,6 +5,7 @@ use super::pomodoro_close::{
 };
 use crate::support::*;
 use std::fs;
+use std::path::PathBuf;
 
 fn close_entry_range(line: &str) -> bool {
     line.contains("(**0920-0940** [t:: 20m])")
@@ -1102,11 +1103,21 @@ fn capture_pomodoro_close_selection_diagnostics() {
             "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`",
         ),
         (vec!["=x!0"], "task numbers start at 1"),
+        (vec!["=x~0"], "task numbers start at 1"),
         (vec!["=x,1"], "expected a task number before `,`"),
         (vec!["=x1,,"], "expected a task number before `,`"),
         (vec!["=x1!2,,"], "expected a task number before `,`"),
         (vec!["=x1,!2"], "expected a task number after `,`"),
         (vec!["=x1!2!3"], "use one `!` list: `=x1!2,3`"),
+        (vec!["=x1~2~3"], "use one `~` list: `=x1~2,3`"),
+        (
+            vec!["=x1~1"],
+            "task 1 cannot both stay in progress and drop in `=x1~1`",
+        ),
+        (
+            vec!["=x!2~2"],
+            "task 2 cannot both complete and drop in `=x!2~2`",
+        ),
         (
             vec!["=x1a"],
             "`=x1a` is not a task list: write `=x`, then comma-separated task numbers",
@@ -1114,7 +1125,7 @@ fn capture_pomodoro_close_selection_diagnostics() {
         (vec!["=x99999999999"], "task number 99999999999 is too large"),
         (
             vec!["=x 1,3"],
-            "write the task numbers right after `=x`, with no spaces (for example `=x1,3!2`)",
+            "write the task numbers right after `=x`, with no spaces (for example `=x1,3!2~4`)",
         ),
         (vec!["=x1 more"], "must be the whole capture item"),
     ] {
@@ -1138,6 +1149,17 @@ fn capture_pomodoro_close_selection_diagnostics() {
     assert!(
         error.contains("`=x1,` is incomplete: type a task number after `,`"),
         "{error}"
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+    let tilde = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x1~"],
+    );
+    assert!(
+        tilde.contains("`=x1~` is incomplete: type a task number after `~`"),
+        "{tilde}"
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
@@ -1277,4 +1299,163 @@ fn capture_pomodoro_close_selection_crlf_day_file() {
     assert!(!day_after.replace("\r\n", "").contains('\n'));
     assert!(day_after.contains("(**0920-0940** [t:: 20m])"));
     assert!(day_after.contains("\t- \u{1F345} [[bob#^capture-stop]]\r\n"));
+}
+
+fn drop_worked_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
+    // The worked fixture plus a third numbered link (`^ready`, tagged
+    // `#now`) so `=x1!2~3` exercises all three close forms at once.
+    let (temp, vault, day_file) = close_worked_vault(name);
+    let day = fs::read_to_string(&day_file).expect("read day");
+    write_file(
+        &day_file,
+        &day.replace(
+            "\t- [[bob#^web-capture]]#\n",
+            "\t- [[bob#^web-capture]]#\n\t- [[bob#^ready]]\n",
+        ),
+    );
+    let bob = fs::read_to_string(vault.join("bob.md")).expect("read bob");
+    write_file(
+        &vault.join("bob.md"),
+        &bob.replace(
+            "- [ ] #task Plain ready task [created::2026-09-20] ^ready",
+            "- [ ] #task Plain ready task #now [created::2026-09-20] ^ready",
+        ),
+    );
+    (temp, vault, day_file)
+}
+
+#[test]
+fn capture_pomodoro_close_selection_drop() {
+    // `=x1!2~3`: task 1 in progress, task 2 complete, task 3 dropped.
+    // The dropped link leaves the closed session, is not carried, and its
+    // Ready `#now` task is untouched (stays `[ ]`, no Work Log).
+    let (_temp, vault, day_file) = drop_worked_vault("bob-cli-close-sel-drop");
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1!2~3"]);
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["raw"], "=x1!2~3");
+    assert_eq!(close["in_progress"], serde_json::json!([1]));
+    assert_eq!(close["complete"], serde_json::json!([2]));
+    assert_eq!(close["drop"], serde_json::json!([3]));
+    assert_eq!(
+        close["task_links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|link| (
+                link["index"].clone(),
+                link["outcome"].clone(),
+                link["source"].clone()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                serde_json::json!(1),
+                serde_json::json!("in_progress"),
+                serde_json::json!("listed")
+            ),
+            (
+                serde_json::json!(2),
+                serde_json::json!("complete"),
+                serde_json::json!("listed")
+            ),
+            (
+                serde_json::json!(3),
+                serde_json::json!("dropped"),
+                serde_json::json!("listed")
+            ),
+        ]
+    );
+    let dropped = close["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["block_id"] == "ready")
+        .expect("dropped task row");
+    assert_eq!(dropped["role"], "dropped");
+    assert_eq!(dropped["index"], 3);
+    assert_eq!(dropped["now"], true);
+    assert_eq!(dropped["carried"], false);
+    assert_eq!(dropped["status_symbol"], " ");
+    assert_eq!(dropped["status_changed"], false);
+    assert_eq!(dropped["work_log"], serde_json::json!([]));
+    assert!(dropped["warning"].is_null());
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(!day_after.contains("\t- ~[["), "{day_after}");
+    assert!(!day_after.contains("[[bob#^ready]]"), "{day_after}");
+    assert!(
+        day_after.contains("~~[[bob#^web-capture]]~~"),
+        "{day_after}"
+    );
+    assert!(
+        day_after.contains("- [ ] () — CAPTURE\n\t- [[bob#^capture-stop]]\n"),
+        "{day_after}"
+    );
+    let bob_after = fs::read_to_string(vault.join("bob.md")).expect("bob");
+    assert!(
+        bob_after.contains(
+            "- [ ] #task Plain ready task #now [created::2026-09-20] ^ready\n"
+        ),
+        "{bob_after}"
+    );
+    assert!(
+        bob_after.contains("[completion:: 2026-09-28] ^web-capture"),
+        "{bob_after}"
+    );
+}
+
+#[test]
+fn capture_pomodoro_close_selection_drop_human_output() {
+    // Dropped rows read `dropped <K> [[T]]` (with `stays in NOW` for
+    // `#now` tasks) plus a `Dropped <K>` summary.
+    let (_temp, vault, day_file) =
+        drop_worked_vault("bob-cli-close-sel-drop-hu");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("=x1!2~3")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("human drop close");
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let out = stdout(&output);
+    assert!(out.contains("closed CAPTURE 0920-0950"), "{out}");
+    assert!(
+        out.contains("dropped 3 [[bob#^ready]] · stays in NOW"),
+        "{out}"
+    );
+    assert!(out.contains("Dropped 3"), "{out}");
+}
+
+#[test]
+fn capture_pomodoro_close_selection_drop_only_forms() {
+    // `=x~2` drops with unlisted links at their ledger outcome;
+    // `=x0~2` drops while deferring everything else.
+    let (_temp, vault, day_file) =
+        drop_worked_vault("bob-cli-close-sel-drop-only");
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x~2"]);
+    let close = &json["pomodoro_close"];
+    assert!(close["in_progress"].is_null());
+    assert_eq!(close["complete"], serde_json::json!([]));
+    assert_eq!(close["drop"], serde_json::json!([2]));
+    assert_eq!(close["task_links"][0]["outcome"], "in_progress");
+    assert_eq!(close["task_links"][0]["source"], "ledger");
+    assert_eq!(close["task_links"][1]["outcome"], "dropped");
+
+    let (_temp, vault, day_file) =
+        drop_worked_vault("bob-cli-close-sel-drop-none");
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x0~2"]);
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["in_progress"], serde_json::json!([]));
+    assert_eq!(close["drop"], serde_json::json!([2]));
+    assert_eq!(close["task_links"][0]["outcome"], "deferred");
+    assert_eq!(close["task_links"][0]["source"], "unlisted");
+    assert_eq!(close["task_links"][1]["outcome"], "dropped");
+    assert_eq!(close["task_links"][2]["outcome"], "deferred");
 }

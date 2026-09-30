@@ -729,6 +729,13 @@ pub(super) fn parse_editor_close_item<'a>(
                         kind: SpanKind::PomodoroCloseComplete,
                     });
                 }
+                if let Some((start, end)) = lex.drop_range {
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::PomodoroCloseDrop,
+                    });
+                }
                 return Some(editor_close_outcome(
                     item,
                     parent_trimmed,
@@ -753,6 +760,13 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseComplete,
+                    });
+                }
+                if let Some((start, end)) = incomplete.drop_range {
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::PomodoroCloseDrop,
                     });
                 }
                 spans.push(Span {

@@ -499,6 +499,20 @@ pub(super) fn close_selection_overlap_error(
     )
 }
 
+pub(super) fn close_selection_overlap_in_progress_drop_error(
+    number: u32,
+    token: &str,
+) -> String {
+    format!("task {number} cannot both stay in progress and drop in `{token}`")
+}
+
+pub(super) fn close_selection_overlap_complete_drop_error(
+    number: u32,
+    token: &str,
+) -> String {
+    format!("task {number} cannot both complete and drop in `{token}`")
+}
+
 pub(super) fn close_selection_zero_alone_error() -> String {
     "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`"
         .to_string()
@@ -520,9 +534,13 @@ pub(super) fn close_selection_one_bang_error() -> String {
     "use one `!` list: `=x1!2,3`".to_string()
 }
 
+pub(super) fn close_selection_one_tilde_error() -> String {
+    "use one `~` list: `=x1~2,3`".to_string()
+}
+
 pub(super) fn close_selection_bad_list_error(token: &str) -> String {
     format!(
-        "`{token}` is not a task list: write `=x`, then comma-separated task numbers, then optionally `!` and the numbers to complete (for example `=x1,3!2`)"
+        "`{token}` is not a task list: write `=x`, then comma-separated task numbers, then optionally `!` and the numbers to complete and `~` and the numbers to drop (for example `=x1,3!2~4`)"
     )
 }
 
@@ -531,7 +549,7 @@ pub(super) fn close_selection_too_large_error(number_text: &str) -> String {
 }
 
 pub(super) fn close_selection_no_spaces_error() -> String {
-    "write the task numbers right after `=x`, with no spaces (for example `=x1,3!2`)".to_string()
+    "write the task numbers right after `=x`, with no spaces (for example `=x1,3!2~4`)".to_string()
 }
 
 /// Execution rejection for a dangling separator: `separator` is the `,` or

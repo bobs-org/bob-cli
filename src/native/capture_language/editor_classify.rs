@@ -14,11 +14,13 @@ enum EditorCloseSuffix {
     Valid {
         in_progress: Option<(usize, usize)>,
         complete: Option<(usize, usize)>,
+        drop: Option<(usize, usize)>,
     },
     Incomplete {
         spec: PomodoroCloseSpec,
         in_progress: Option<(usize, usize)>,
         complete: Option<(usize, usize)>,
+        drop: Option<(usize, usize)>,
         separator: (usize, usize),
     },
 }
@@ -611,6 +613,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     close_suffix = Some(EditorCloseSuffix::Valid {
                         in_progress: lex.in_progress_range,
                         complete: lex.complete_range,
+                        drop: lex.drop_range,
                     });
                     close_spec = Some(close_spec_from_lex(display, &lex));
                 }
@@ -619,6 +622,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                         spec: close_spec_from_incomplete(display, &incomplete),
                         in_progress: incomplete.in_progress_range,
                         complete: incomplete.complete_range,
+                        drop: incomplete.drop_range,
                         separator: incomplete.separator_range,
                     });
                 }
@@ -709,6 +713,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         Some(EditorCloseSuffix::Valid {
             in_progress,
             complete,
+            drop,
         }) => {
             // Split the whole-suffix `pomodoro_close` span into `=x` plus
             // the list spans. (A plain `=x` re-emits the identical single
@@ -741,12 +746,20 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     kind: SpanKind::PomodoroCloseComplete,
                 });
             }
+            if let Some((start, end)) = drop {
+                marker_parse.spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::PomodoroCloseDrop,
+                });
+            }
             marker_parse.pomodoro_close = Some(spec);
         }
         Some(EditorCloseSuffix::Incomplete {
             spec,
             in_progress,
             complete,
+            drop,
             separator,
         }) => {
             // The dangling separator is an editing state: the partial spec,
@@ -777,6 +790,13 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     start,
                     end,
                     kind: SpanKind::PomodoroCloseComplete,
+                });
+            }
+            if let Some((start, end)) = drop {
+                marker_parse.spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::PomodoroCloseDrop,
                 });
             }
             marker_parse.spans.push(Span {

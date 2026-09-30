@@ -146,27 +146,30 @@ only (the `#` is in no span), `=<X>#` with no name reports mode \
 span over `#` and the partial `pomodoro_start` spec, and `=x#name` reports \
 mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
 `#name`. A whole-item \
-`=x[<N>][!<M>]` close (case-insensitive `=X`) reports mode 'pomodoro_close' \
-with a `pomodoro_close` object (`raw` plus the additive `in_progress` \
-list, null when no `<N>` was typed, and the `complete` list) and spans \
-covering the `=x` token (`pomodoro_close`), the `<N>` list including its \
-commas (`pomodoro_close_in_progress`), and the `!<M>` list including the \
-`!` (`pomodoro_close_complete`); the human `close` line reads `=x1,3!2 (in \
-progress 1, 3 · complete 2 · defer the rest)`, with `in progress none` for \
-`=x0` and a bare `=x` for a plain close. A leading selection-shaped token \
-with extra text, markers, or child lines reports 'pomodoro_close' plus an \
-`invalid_pomodoro_close` diagnostic on the extra text or child line, as \
-does every malformed list (duplicates, overlaps, a misplaced `0`, a second \
-`!`, a bad character, an oversized number, or a space inside the lists, \
-which gets the no-spaces hint). A token ending in a dangling separator \
-(`=x1,`, `=x!`, `=x1!`, `=x!2,`, `=x0!`) reports mode 'incomplete' needing \
-`pomodoro_close_task`, with the partial spec, the spans typed so far, and \
-one `interactive_placeholder` span over the separator. Other `=`-prefixed \
-tokens (`=xx`, `=xa`, `==`, `= foo`) and mid-body `=x` stay ordinary prose. \
-On link items the `=x…` suffix spans the same three span kinds after the \
-route and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' \
-(or 'pomodoro_task' with body text) and carry the spec, `^r:id=x1,` reports \
-'incomplete' needing `pomodoro_close_task`, while `#name=x…`, \
+`=x[<N>][!<M>][~<K>]` close (case-insensitive `=X`, with `!` and `~` in \
+either order) reports mode 'pomodoro_close' with a `pomodoro_close` object \
+(`raw` plus the additive `in_progress` list, null when no `<N>` was typed, \
+the `complete` list, and the `drop` list) and spans covering the `=x` token \
+(`pomodoro_close`), the `<N>` list including its commas \
+(`pomodoro_close_in_progress`), the `!<M>` list including the `!` \
+(`pomodoro_close_complete`), and the `~<K>` list including the `~` \
+(`pomodoro_close_drop`); the human `close` line reads `=x1,3!2~4 (in \
+progress 1, 3 · complete 2 · drop 4 · defer the rest)`, with `in progress \
+none` for `=x0` and a bare `=x` for a plain close. A leading \
+selection-shaped token with extra text, markers, or child lines reports \
+'pomodoro_close' plus an `invalid_pomodoro_close` diagnostic on the extra \
+text or child line, as does every malformed list (duplicates, overlaps, a \
+misplaced `0`, a second `!` or `~`, a bad character, an oversized number, \
+or a space inside the lists, which gets the no-spaces hint). A token ending \
+in a dangling separator (`=x1,`, `=x!`, `=x~`, `=x1!`, `=x!2,`, `=x0!`) \
+reports mode 'incomplete' needing `pomodoro_close_task`, with the partial \
+spec, the spans typed so far, and one `interactive_placeholder` span over \
+the separator. Other `=`-prefixed tokens (`=xx`, `=xa`, `==`, `= foo`) and \
+mid-body `=x` stay ordinary prose. On link items the `=x…` suffix spans the \
+same four span kinds after the route and block-ID spans: `@r:id=x1!2` and \
+`^r:id=x1` stay 'pomodoro_link' (or 'pomodoro_task' with body text) and \
+carry the spec, `^r:id=x1,` reports 'incomplete' needing \
+`pomodoro_close_task`, while `#name=x…`, \
 `s:<N>`/`p:<N>`/`%` conflicts, project-note `=x`, and malformed lists \
 report `invalid_pomodoro_close` on the conflicting component or the precise \
 list range. A `@@` declaration never applies to close, `=`/`=<X>`, or \
@@ -215,7 +218,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x0!2'\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, pomodoro_close_task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x1~2'\n  bob capture-parse -f json -- '=x0!2'\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, pomodoro_close_task",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -707,9 +710,9 @@ fn unit_noun(units: u64) -> &'static str {
     }
 }
 
-/// Render a validated `=x[<N>][!<M>]` close for human output: the typed
-/// token plus the outcome summary. Plain `=x` prints alone; a typed `<N>`
-/// list always ends with `defer the rest`, and `=x0` reads
+/// Render a validated `=x[<N>][!<M>][~<K>]` close for human output: the
+/// typed token plus the outcome summary. Plain `=x` prints alone; a typed
+/// `<N>` list always ends with `defer the rest`, and `=x0` reads
 /// `in progress none`.
 fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
     let base = if close.raw.starts_with('=') {
@@ -718,10 +721,17 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
         format!("={}", close.raw)
     };
     let Some(in_progress) = close.in_progress.as_ref() else {
-        if close.complete.is_empty() {
+        let mut parts = Vec::new();
+        if !close.complete.is_empty() {
+            parts.push(format!("complete {}", join_numbers(&close.complete)));
+        }
+        if !close.drop.is_empty() {
+            parts.push(format!("drop {}", join_numbers(&close.drop)));
+        }
+        if parts.is_empty() {
             return base;
         }
-        return format!("{base} (complete {})", join_numbers(&close.complete));
+        return format!("{base} ({})", parts.join(" · "));
     };
     let mut parts = if in_progress.is_empty() {
         vec!["in progress none".to_string()]
@@ -730,6 +740,9 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
     };
     if !close.complete.is_empty() {
         parts.push(format!("complete {}", join_numbers(&close.complete)));
+    }
+    if !close.drop.is_empty() {
+        parts.push(format!("drop {}", join_numbers(&close.drop)));
     }
     parts.push("defer the rest".to_string());
     format!("{base} ({})", parts.join(" · "))

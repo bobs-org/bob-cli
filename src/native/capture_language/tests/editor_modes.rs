@@ -1054,6 +1054,64 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         ],
         "=x1,3!2"
     );
+    // A drop list reports its spec and a `pomodoro_close_drop` span, in
+    // either `!`/`~` order.
+    for (raw, in_progress, complete, drop) in [
+        ("=x~2", None, Vec::new(), vec![2u32]),
+        ("=x1~2", Some(vec![1u32]), Vec::new(), vec![2]),
+        ("=x1!2~3", Some(vec![1u32]), vec![2], vec![3]),
+        ("=x1~3!2", Some(vec![1u32]), vec![2], vec![3]),
+        ("=x!2~3", None, vec![2], vec![3]),
+    ] {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::PomodoroClose, "{raw}");
+        let close = parse.pomodoro_close.as_ref().expect("close spec");
+        assert_eq!(close.raw, raw, "{raw}");
+        assert_eq!(close.in_progress, in_progress, "{raw}");
+        assert_eq!(close.complete, complete, "{raw}");
+        assert_eq!(close.drop, drop, "{raw}");
+        assert!(parse.diagnostics.is_empty(), "{raw}");
+    }
+    let dropped = editor("=x1,3!2~4");
+    assert_eq!(
+        ranges(&dropped),
+        vec![
+            (0, 2, SpanKind::PomodoroClose),
+            (2, 5, SpanKind::PomodoroCloseInProgress),
+            (5, 7, SpanKind::PomodoroCloseComplete),
+            (7, 9, SpanKind::PomodoroCloseDrop),
+        ],
+        "=x1,3!2~4"
+    );
+    let dropped_first = editor("=x1~4!2");
+    assert_eq!(
+        ranges(&dropped_first),
+        vec![
+            (0, 2, SpanKind::PomodoroClose),
+            (2, 3, SpanKind::PomodoroCloseInProgress),
+            (3, 5, SpanKind::PomodoroCloseDrop),
+            (5, 7, SpanKind::PomodoroCloseComplete),
+        ],
+        "=x1~4!2"
+    );
+    // A dangling `~` is an editing state with the partial spec.
+    let pending_drop = editor("=x1~");
+    assert_eq!(pending_drop.mode, EditorMode::Incomplete, "=x1~");
+    assert_eq!(pending_drop.needs, vec![Need::PomodoroCloseTask], "=x1~");
+    let partial_drop =
+        pending_drop.pomodoro_close.as_ref().expect("partial spec");
+    assert_eq!(partial_drop.in_progress, Some(vec![1]), "=x1~");
+    assert_eq!(partial_drop.drop, Vec::<u32>::new(), "=x1~");
+    assert_eq!(
+        ranges(&pending_drop),
+        vec![
+            (0, 2, SpanKind::PomodoroClose),
+            (2, 3, SpanKind::PomodoroCloseInProgress),
+            (3, 4, SpanKind::InteractivePlaceholder),
+        ],
+        "=x1~"
+    );
+    assert!(pending_drop.diagnostics.is_empty(), "=x1~");
     // A dangling separator is an editing state with the partial spec.
     let pending = editor("=x1,");
     assert_eq!(pending.mode, EditorMode::Incomplete, "=x1,");

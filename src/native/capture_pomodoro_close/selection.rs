@@ -20,6 +20,7 @@ use super::links::{
 pub(crate) struct CloseSelection {
     pub in_progress: Option<BTreeSet<u32>>,
     pub complete: BTreeSet<u32>,
+    pub drop: BTreeSet<u32>,
     pub raw: String,
 }
 
@@ -27,11 +28,13 @@ impl CloseSelection {
     pub(crate) fn new(
         in_progress: Option<BTreeSet<u32>>,
         complete: BTreeSet<u32>,
+        drop: BTreeSet<u32>,
         raw: impl Into<String>,
     ) -> Self {
         Self {
             in_progress,
             complete,
+            drop,
             raw: raw.into(),
         }
     }
@@ -67,6 +70,7 @@ pub(crate) enum TaskLinkOutcome {
     InProgress,
     Deferred,
     Complete,
+    Dropped,
 }
 
 impl TaskLinkOutcome {
@@ -75,6 +79,7 @@ impl TaskLinkOutcome {
             Self::InProgress => "in_progress",
             Self::Deferred => "deferred",
             Self::Complete => "complete",
+            Self::Dropped => "dropped",
         }
     }
 }
@@ -336,6 +341,9 @@ fn outcome_for(
     if selection.complete.contains(&index) {
         return (TaskLinkOutcome::Complete, TaskLinkSource::Listed);
     }
+    if selection.drop.contains(&index) {
+        return (TaskLinkOutcome::Dropped, TaskLinkSource::Listed);
+    }
     if let Some(in_progress) = selection.in_progress.as_ref() {
         if in_progress.contains(&index) {
             return (TaskLinkOutcome::InProgress, TaskLinkSource::Listed);
@@ -375,6 +383,11 @@ pub(crate) fn apply_close_selection(
         }
     }
     for number in &selection.complete {
+        if *number < 1 || (*number as usize) > total {
+            bad.insert(*number);
+        }
+    }
+    for number in &selection.drop {
         if *number < 1 || (*number as usize) > total {
             bad.insert(*number);
         }
@@ -449,6 +462,11 @@ pub(crate) fn apply_close_selection(
             TaskLinkOutcome::InProgress => link.block_link.clone(),
             TaskLinkOutcome::Deferred => format!("{}#", link.block_link),
             TaskLinkOutcome::Complete => format!("!{}", link.block_link),
+            // A dropped link is rewritten with a `~` prefix the ledger
+            // planner recognizes and removes: never carried, never
+            // started. The marker is transient — the line is skipped from
+            // the closed entry, so it never reaches the day note.
+            TaskLinkOutcome::Dropped => format!("~{}", link.block_link),
         };
         lines[zero_based] = format!("{prefix}{body}");
     }

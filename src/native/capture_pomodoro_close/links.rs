@@ -324,6 +324,27 @@ pub(crate) fn bare_plain_link(line: &str) -> Option<WikiToken> {
     (target.start == body_start && target.end == body_end).then_some(target)
 }
 
+/// The dropped sibling of [`bare_plain_link`]: the trimmed body is exactly
+/// one `~[[path#^id]]` link, the transient marker
+/// [`apply_close_selection`](super::selection::apply_close_selection) writes
+/// for dropped Task Links. The ledger planner removes these lines: they are
+/// never carried and never started. The marker never reaches the day note.
+pub(crate) fn dropped_plain_link(line: &str) -> Option<WikiToken> {
+    let (body_start, body_end) = trimmed_body_range(line)?;
+    if line.as_bytes().get(body_start) != Some(&b'~') {
+        return None;
+    }
+    let plains = wikilink_tokens(line)
+        .into_iter()
+        .filter(|token| !token.embedded)
+        .collect::<Vec<_>>();
+    if plains.len() != 1 {
+        return None;
+    }
+    let target = plains.into_iter().next()?;
+    (target.start == body_start + 1 && target.end == body_end).then_some(target)
+}
+
 /// The embedded sibling of [`bare_plain_link`]: the trimmed body is exactly
 /// one `![[path#^id]]` transclusion. The start planner lists these alongside
 /// plain Task Links.

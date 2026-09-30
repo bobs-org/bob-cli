@@ -56,10 +56,20 @@ fn sel(
     complete: Vec<u32>,
     raw: &str,
 ) -> CloseSelection {
+    sel_drop(in_progress, complete, Vec::new(), raw)
+}
+
+fn sel_drop(
+    in_progress: Option<Vec<u32>>,
+    complete: Vec<u32>,
+    drop: Vec<u32>,
+    raw: &str,
+) -> CloseSelection {
     CloseSelection {
         in_progress: in_progress
             .map(|list| list.into_iter().collect::<BTreeSet<u32>>()),
         complete: complete.into_iter().collect::<BTreeSet<u32>>(),
+        drop: drop.into_iter().collect::<BTreeSet<u32>>(),
         raw: raw.to_string(),
     }
 }
@@ -253,6 +263,65 @@ fn outcome_table_covers_every_row() {
             (2, TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted),
             (3, TaskLinkOutcome::Complete, TaskLinkSource::Unlisted),
         ]
+    );
+}
+
+#[test]
+fn drop_removes_from_closed_session_without_carry() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+        "\t- [[a#^three]]#",
+    ]);
+    let running = running_of(&contents);
+    let (rewritten, links) = apply_close_selection(
+        &contents,
+        &running,
+        &sel_drop(None, vec![], vec![2], "=x~2"),
+    )
+    .expect("apply");
+    assert_eq!(
+        links
+            .iter()
+            .map(|l| (l.index, l.outcome, l.source))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, TaskLinkOutcome::InProgress, TaskLinkSource::Ledger),
+            (2, TaskLinkOutcome::Dropped, TaskLinkSource::Listed),
+            (3, TaskLinkOutcome::Deferred, TaskLinkSource::Ledger),
+        ]
+    );
+    assert!(rewritten.contains("\t- ~[[a#^two]]"), "{rewritten}");
+    let plan = plan_ledger_close(&rewritten, &running, at(9, 37));
+    // The dropped line leaves the closed session entirely: no transient
+    // marker and no carried copy.
+    assert!(!plan.contents.contains('~'), "{}", plan.contents);
+    assert!(!plan.contents.contains("two"), "{}", plan.contents);
+    assert!(
+        plan.classified_links
+            .iter()
+            .any(|link| link.block_id == "two" && !link.carried),
+        "{:?}",
+        plan.classified_links
+    );
+    assert_eq!(plan.carried_lines.len(), 2);
+    assert!(
+        plan.carried_lines.iter().all(|line| !line.contains("two")),
+        "{:?}",
+        plan.carried_lines
+    );
+    // An out-of-range drop number is a precise-range error.
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel_drop(None, vec![], vec![9], "=x~9"),
+    )
+    .expect_err("out of range drop");
+    assert_eq!(
+        error.to_string(),
+        "`=x~9` names task 9, but CAPTURE has 3 numbered Task Links (1–3)"
     );
 }
 

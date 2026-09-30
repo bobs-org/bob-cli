@@ -691,16 +691,18 @@ pub(super) enum CaretTokenShape {
         link_end: usize,
         name_range: Option<(usize, usize)>,
         start_offset: Option<usize>,
-        /// Token-relative ranges of the `<N>` and `!<M>` lists inside a
-        /// selection-bearing close suffix, for the
-        /// `pomodoro_close_in_progress`/`pomodoro_close_complete` spans.
+        /// Token-relative ranges of the `<N>`, `!<M>`, and `~<K>` lists
+        /// inside a selection-bearing close suffix, for the
+        /// `pomodoro_close_in_progress`/`pomodoro_close_complete`/
+        /// `pomodoro_close_drop` spans.
         close_in_progress: Option<(usize, usize)>,
         close_complete: Option<(usize, usize)>,
+        close_drop: Option<(usize, usize)>,
     },
     /// A `^route:block-id=x…` token whose selection ends in a dangling
     /// separator: an editing state, not a mistake. `suffix_offset` starts
-    /// the `=`, `separator_range` covers the dangling `,`/`!`, and the list
-    /// ranges cover what was typed so far.
+    /// the `=`, `separator_range` covers the dangling `,`/`!`/`~`, and the
+    /// list ranges cover what was typed so far.
     CloseIncomplete {
         route: String,
         block_id: String,
@@ -709,6 +711,7 @@ pub(super) enum CaretTokenShape {
         suffix_offset: usize,
         close_in_progress: Option<(usize, usize)>,
         close_complete: Option<(usize, usize)>,
+        close_drop: Option<(usize, usize)>,
         separator_range: (usize, usize),
     },
     /// A `^route:block-id=x…` token whose selection is lexically invalid,
@@ -798,6 +801,7 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
                 start_offset,
                 close_in_progress: None,
                 close_complete: None,
+                close_drop: None,
             }
         }
         Err(message) => {
@@ -889,6 +893,7 @@ fn classify_caret_close_suffix(
             start_offset: Some(suffix_offset),
             close_in_progress: lex.in_progress_range,
             close_complete: lex.complete_range,
+            close_drop: lex.drop_range,
         },
         Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
             CaretTokenShape::CloseIncomplete {
@@ -899,6 +904,7 @@ fn classify_caret_close_suffix(
                 suffix_offset,
                 close_in_progress: incomplete.in_progress_range,
                 close_complete: incomplete.complete_range,
+                close_drop: incomplete.drop_range,
                 separator_range: incomplete.separator_range,
             }
         }
@@ -947,6 +953,7 @@ pub(super) enum CaretItemKind {
         start_offset: Option<usize>,
         close_in_progress: Option<(usize, usize)>,
         close_complete: Option<(usize, usize)>,
+        close_drop: Option<(usize, usize)>,
         conflict: Option<String>,
     },
     /// A selection-bearing close suffix ending in a dangling separator.
@@ -960,6 +967,7 @@ pub(super) enum CaretItemKind {
         suffix_offset: usize,
         close_in_progress: Option<(usize, usize)>,
         close_complete: Option<(usize, usize)>,
+        close_drop: Option<(usize, usize)>,
         separator_range: (usize, usize),
         conflict: Option<String>,
     },
@@ -1035,6 +1043,7 @@ pub(super) fn classify_caret_item<'a>(
             start_offset,
             close_in_progress,
             close_complete,
+            close_drop,
         } => {
             let conflict =
                 caret_item_conflict(&parent_tokens, solo_parent, single_line);
@@ -1052,6 +1061,7 @@ pub(super) fn classify_caret_item<'a>(
                     start_offset,
                     close_in_progress,
                     close_complete,
+                    close_drop,
                     conflict,
                 },
             })
@@ -1064,6 +1074,7 @@ pub(super) fn classify_caret_item<'a>(
             suffix_offset,
             close_in_progress,
             close_complete,
+            close_drop,
             separator_range,
         } => {
             let conflict =
@@ -1079,6 +1090,7 @@ pub(super) fn classify_caret_item<'a>(
                     suffix_offset,
                     close_in_progress,
                     close_complete,
+                    close_drop,
                     separator_range,
                     conflict,
                 },

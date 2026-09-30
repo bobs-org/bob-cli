@@ -39,6 +39,9 @@ pub(super) struct PomodoroCloseTaskJson {
     pub(super) ledger_line: usize,
     pub(super) index: Option<u32>,
     pub(super) resolved: bool,
+    /// Present only when the linked task's line carries `#now`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) now: Option<bool>,
     // Explicit nulls on unresolved rows, matching the top-level
     // `route: null` / `scheduled: null` convention.
     pub(super) relative_target: Option<String>,
@@ -75,6 +78,9 @@ pub(super) struct PomodoroCloseSummaryJson {
     pub(super) raw: String,
     pub(super) in_progress: Option<Vec<u32>>,
     pub(super) complete: Vec<u32>,
+    /// Dropped `~<K>` list, omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) drop: Vec<u32>,
     pub(super) task_links: Vec<PomodoroCloseTaskLinkJson>,
     pub(super) pomodoro_line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -727,6 +733,20 @@ pub(super) fn print_human_pomodoro_close_success(
         "    ".to_string()
     };
     for task in &close.tasks {
+        // Dropped rows name the task number directly (`dropped 4
+        // [[sase#^x]]`), with a NOW caption while the task keeps its
+        // `#now` tag elsewhere.
+        if task.role == "dropped" && task.resolved {
+            let mut line = match task.index {
+                Some(index) => format!("dropped {index} {}", task.block_link),
+                None => format!("dropped {}", task.block_link),
+            };
+            if task.now == Some(true) {
+                line.push_str(" · stays in NOW");
+            }
+            println!("  {line}");
+            continue;
+        }
         let prefix = row_prefix(task.index);
         if !task.resolved {
             let warning =
@@ -778,6 +798,21 @@ pub(super) fn print_human_pomodoro_close_success(
         for entry in task.work_log.iter().take(2) {
             println!("{log_indent}{}", styler.dim(entry));
         }
+    }
+    let mut dropped: Vec<u32> = close
+        .task_links
+        .iter()
+        .filter(|link| link.outcome == "dropped")
+        .map(|link| link.index)
+        .collect();
+    dropped.sort_unstable();
+    if !dropped.is_empty() {
+        let numbers = dropped
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  {}", styler.dim(&format!("Dropped {numbers}")));
     }
     if let Some(next) = close.next_pomodoro.as_ref() {
         let next_name = next.name.as_deref().unwrap_or("session");

@@ -134,22 +134,29 @@ pub(crate) enum SessionOperator {
 /// Typed `@<route>:<block-id>=x` close specification. `x` is
 /// case-insensitive; `raw` preserves what was typed.
 ///
-/// A selection (`=x<N>`, `=x!<M>`, `=x<N>!<M>`) names numbered Task Links:
-/// `in_progress` is `None` when no `<N>` list was typed (unlisted links keep
-/// their ledger outcome) and `Some` (possibly empty for `=x0`) when one was;
-/// `complete` holds the `!<M>` list, empty when none was typed. Both lists
-/// are sorted ascending. Plain `=x` reports `in_progress: None` and an empty
-/// `complete`, so version-tolerant readers see only additive fields.
+/// A selection (`=x<N>`, `=x!<M>`, `=x~<K>`, in any `!`/`~` order) names
+/// numbered Task Links: `in_progress` is `None` when no `<N>` list was typed
+/// (unlisted links keep their ledger outcome) and `Some` (possibly empty for
+/// `=x0`) when one was; `complete` holds the `!<M>` list and `drop` the
+/// `~<K>` list, each empty when none was typed. All lists are sorted
+/// ascending. Plain `=x` reports `in_progress: None` and empty
+/// `complete`/`drop`, so version-tolerant readers see only additive fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
-    /// Raw close token exactly as typed: the `=`-prefixed token (`=x1,3!2`)
-    /// for a whole-item close, or the `=`-prefixed suffix for a link close.
+    /// Raw close token exactly as typed: the `=`-prefixed token
+    /// (`=x1,3!2~4`) for a whole-item close, or the `=`-prefixed suffix for
+    /// a link close.
     pub(crate) raw: String,
     /// Numbered links that stay in progress, or `None` when no `<N>` list
     /// was typed. `Some(vec![])` is an explicit `=x0` ("none").
     pub(crate) in_progress: Option<Vec<u32>>,
     /// Numbered links to complete, empty when no `!<M>` list was typed.
     pub(crate) complete: Vec<u32>,
+    /// Numbered links to drop, empty when no `~<K>` list was typed.
+    /// Dropped links are removed from the closed session: not carried to
+    /// the next placeholder and never started.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) drop: Vec<u32>,
 }
 
 impl PomodoroCloseSpec {
@@ -159,12 +166,15 @@ impl PomodoroCloseSpec {
             raw,
             in_progress: None,
             complete: Vec::new(),
+            drop: Vec::new(),
         }
     }
 
     /// `true` when the spec names at least one numbered Task Link.
     pub(crate) fn has_selection(&self) -> bool {
-        self.in_progress.is_some() || !self.complete.is_empty()
+        self.in_progress.is_some()
+            || !self.complete.is_empty()
+            || !self.drop.is_empty()
     }
 }
 

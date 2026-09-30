@@ -15,8 +15,9 @@ use super::super::{
 };
 use super::links::{move_only_destination, rewrite_completed_markers};
 use super::{
-    bare_plain_link, range_is_struck, strikethrough_inner_spans,
-    strip_pomodoro_markers, wikilink_tokens, WikiToken,
+    bare_plain_link, dropped_plain_link, range_is_struck,
+    strikethrough_inner_spans, strip_pomodoro_markers, wikilink_tokens,
+    WikiToken,
 };
 
 const PLACEHOLDER_LINE: &str = "- [ ] ()";
@@ -66,6 +67,7 @@ pub(crate) enum LedgerLinkRole {
     Worked,
     Mentioned,
     Deferred,
+    Dropped,
     Struck,
     Embedded,
 }
@@ -300,6 +302,18 @@ pub(crate) fn plan_ledger_close(
             carried_lines.push(destination.clone());
         }
     }
+    // Dropped links are removed from the closed session like deferred
+    // ones, except nothing is carried: the `~` marker never reaches the
+    // day note.
+    let mut dropped_lines = BTreeSet::new();
+    for bullet in classified
+        .iter()
+        .filter(|bullet| bullet.kind == BulletKind::Dropped)
+    {
+        dropped_lines.insert(bullet.line);
+    }
+    let removed_lines: BTreeSet<usize> =
+        deferred_lines.union(&dropped_lines).copied().collect();
 
     let later_entry = find_next_pomodoro_line(&line_text, entry_index);
     let should_create = !carried_lines.is_empty() || later_entry.is_none();
@@ -317,7 +331,7 @@ pub(crate) fn plan_ledger_close(
     }
     for index in range.clone() {
         let line = line_text[index];
-        if deferred_lines.contains(&index) {
+        if removed_lines.contains(&index) {
             continue;
         }
         if fenced.contains(&index) {
@@ -357,7 +371,7 @@ pub(crate) fn plan_ledger_close(
 
     let next_pomodoro = created_next.or_else(|| {
         later_entry.map(|later_index| {
-            let shifted = later_index - deferred_lines.len();
+            let shifted = later_index - removed_lines.len();
             let line = line_text[later_index];
             NextPomodoro {
                 line: shifted + 1,
@@ -508,6 +522,7 @@ enum BulletKind {
     Fenced,
     Embedded,
     Deferred,
+    Dropped,
     WorkedOn,
     Note,
 }
@@ -557,6 +572,16 @@ fn classify_sub_bullets(
                 kind: BulletKind::Deferred,
                 stripped,
                 deferred_destination: Some(destination),
+                startable: false,
+            });
+            continue;
+        }
+        if dropped_plain_link(&stripped).is_some() {
+            bullets.push(ClassifiedBullet {
+                line: index,
+                kind: BulletKind::Dropped,
+                stripped,
+                deferred_destination: None,
                 startable: false,
             });
             continue;
@@ -616,6 +641,18 @@ fn collect_links_from_bullet(
                     token,
                     LedgerLinkRole::Deferred,
                     true,
+                ));
+            }
+        }
+        BulletKind::Dropped => {
+            // Removed from the closed session: reported, but never
+            // carried to the next placeholder and never started.
+            if let Some(token) = dropped_plain_link(&bullet.stripped) {
+                classified_links.push(link_from_token(
+                    pre_image_line,
+                    &token,
+                    LedgerLinkRole::Dropped,
+                    false,
                 ));
             }
         }
