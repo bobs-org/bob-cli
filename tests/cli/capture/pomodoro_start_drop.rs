@@ -242,6 +242,7 @@ fn start_drop_bare_removes_link_with_nested_note() {
     assert!(tasks[0].get("nested_lines").is_none(), "{json}");
 
     let day_after = fs::read_to_string(&day_file).expect("day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
     assert!(
         day_after.contains("- [ ] (**0945-1010** [t:: 25m]) — CAPTURE"),
         "{day_after}"

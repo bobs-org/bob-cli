@@ -176,6 +176,11 @@ impl PomodoroBlockTracker {
             &old_to_new,
             &new_to_old,
         );
+        let tracked_current = self
+            .tracked
+            .iter()
+            .map(|tracked| tracked.current)
+            .collect::<std::collections::BTreeSet<_>>();
         autodetect(
             &mut resolved,
             &pre_lines,
@@ -186,6 +191,7 @@ impl PomodoroBlockTracker {
             post_section_end,
             &old_to_new,
             &new_to_old,
+            &tracked_current,
         );
         self.forward(
             &resolved,
@@ -609,6 +615,7 @@ fn autodetect(
     post_section_end: usize,
     old_to_new: &BTreeMap<usize, usize>,
     new_to_old: &BTreeMap<usize, usize>,
+    tracked_current: &std::collections::BTreeSet<usize>,
 ) {
     let pre_entries = pre_scan
         .entries
@@ -679,9 +686,7 @@ fn autodetect(
                 // Genuinely new only when no line survived. Anything else
                 // is a rewritten or moved headline with no ref: show the
                 // block with every line unchanged rather than a guessed
-                // diff. Link and task starts rewrite headlines without
-                // refs until blocks_refs, so this is not a debug panic
-                // (see the bead's follow-up notes).
+                // diff.
                 let any_mapped =
                     range.clone().any(|index| new_to_old.contains_key(&index));
                 let all_new = range.clone().all(|index| {
@@ -697,6 +702,10 @@ fn autodetect(
                         force_unchanged: false,
                     });
                 } else {
+                    debug_assert!(
+                        false,
+                        "rewritten pomodoro headline has no ref"
+                    );
                     resolved.push(ResolvedBlockRef {
                         role: PomodoroBlockRole::Changed,
                         before: PomodoroBlockBefore::Created,
@@ -707,10 +716,41 @@ fn autodetect(
             }
         }
     }
-    // A pre-entry with no mapping and no claimant (a placeholder a task
-    // start consumed, for example) is dropped silently: link and task
-    // starts legitimately reshape entries without refs until blocks_refs,
-    // so this is not a debug panic (see the bead's follow-up notes).
+    // A pre-entry with no mapping and no claimant is dropped silently
+    // in release builds; debug builds panic. Currently tracked headlines
+    // stay with `forward`: an unref'd deletion panics there as a tracked
+    // headline lost.
+    for entry in &pre_scan.entries {
+        let headline = entry.line.saturating_sub(1);
+        if tracked_current.contains(&headline) {
+            continue;
+        }
+        if old_to_new.contains_key(&headline) {
+            continue;
+        }
+        let claimed_before = resolved
+            .iter()
+            .any(|item| item.before == PomodoroBlockBefore::At(headline));
+        if claimed_before {
+            continue;
+        }
+        // A moved block surfaces as delete+insert under Myers, so an
+        // unmapped headline whose bytes survive as a post entry moved
+        // rather than vanished: whole-item starts displace completed
+        // entries this way while the Started ref covers the rewritten
+        // headline. Only a headline gone from the post image is a vanish.
+        if find_moved_headline(
+            pre_lines.get(headline).copied(),
+            post_lines,
+            post_scan,
+            headline,
+        )
+        .is_some()
+        {
+            continue;
+        }
+        debug_assert!(false, "pomodoro entry vanished without a ref");
+    }
 }
 
 /// Nesting level of every line in `range` relative to the headline: the
@@ -1277,9 +1317,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    #[should_panic(expected = "rewritten pomodoro headline has no ref")]
     fn unreported_headline_rewrite_emits_unchanged_block() {
-        // Link and task starts rewrite headlines without refs until
-        // blocks_refs: never a guessed diff, and never a panic.
         let rewritten = LEDGER.replace(
             "- [ ] (**0620-0710** [t:: 50m]) — CLEANUP",
             "- [ ] (**0620-0735** [t:: 75m]) — CLEANUP",
@@ -1298,8 +1338,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
+    #[should_panic(expected = "pomodoro entry vanished without a ref")]
     fn vanished_entry_is_dropped_silently() {
-        // Task starts consume placeholders without refs until blocks_refs.
         let dropped = "## Pomodoros\n- [ ] () — GTD\n\t- [[#^gtd]]\n";
         let blocks =
             tracker_with_items(&[(LEDGER, dropped, vec![])], dropped, "d.md");
