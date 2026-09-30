@@ -6,7 +6,11 @@ use std::{
 };
 
 use super::super::{
-    capture::{leading_spaces_or_tabs_len, line_spans, list_marker_len},
+    capture::{
+        leading_spaces_or_tabs_len, line_spans, list_marker_len,
+        nearest_shallower_list_item_parent,
+    },
+    capture_language::CloseLogEntry,
     markdown,
 };
 use super::ledger::{sub_bullet_range, RunningPomodoro};
@@ -16,11 +20,12 @@ use super::links::{
     wikilink_tokens, WikiToken,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CloseSelection {
     pub in_progress: Option<BTreeSet<u32>>,
     pub complete: BTreeSet<u32>,
     pub drop: BTreeSet<u32>,
+    pub log: Vec<CloseLogEntry>,
     pub raw: String,
 }
 
@@ -35,9 +40,25 @@ impl CloseSelection {
             in_progress,
             complete,
             drop,
+            log: Vec::new(),
             raw: raw.into(),
         }
     }
+
+    pub(crate) fn with_log(mut self, log: Vec<CloseLogEntry>) -> Self {
+        self.log = log;
+        self
+    }
+}
+
+/// The rewritten day contents after applying a close selection, the
+/// renumbered Task Link lineup, and the 1-based line numbers of the
+/// inserted typed Work Log sub-bullets (in typed order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppliedCloseSelection {
+    pub contents: String,
+    pub lineup: Vec<NumberedTaskLink>,
+    pub inserted_lines: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +146,26 @@ pub(crate) enum CloseSelectionError {
         indices: Vec<u32>,
         block_link: String,
     },
+    LogOutOfRange {
+        raw: String,
+        index: u32,
+        total: usize,
+        running_name: Option<String>,
+    },
+    LogDeferred {
+        index: u32,
+        block_link: String,
+    },
+    LogDropped {
+        index: u32,
+        block_link: String,
+    },
+    LogNested {
+        index: u32,
+        block_link: String,
+        running_name: Option<String>,
+    },
+    LogLineupChanged,
 }
 
 impl fmt::Display for CloseSelectionError {
@@ -172,7 +213,63 @@ impl fmt::Display for CloseSelectionError {
                     join_numbers(indices)
                 )
             }
+            Self::LogOutOfRange {
+                raw,
+                index,
+                total,
+                running_name,
+            } => {
+                let owner = owner_name(running_name);
+                let range = range_words(*total);
+                write!(
+                    f,
+                    "`{raw}` logs to task {index}, but {owner} has {range}; write `\\{index}` to keep the number as text"
+                )
+            }
+            Self::LogDeferred { index, block_link } => {
+                write!(
+                    f,
+                    "task {index} `{block_link}` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
+                )
+            }
+            Self::LogDropped { index, block_link } => {
+                write!(
+                    f,
+                    "task {index} `{block_link}` is dropped, so it can't take a Work Log entry"
+                )
+            }
+            Self::LogNested {
+                index,
+                block_link,
+                running_name,
+            } => {
+                let owner = owner_name(running_name);
+                write!(
+                    f,
+                    "task {index} `{block_link}` is nested under another bullet, so the close can't write its Work Log; move it to the top level of {owner}"
+                )
+            }
+            Self::LogLineupChanged => {
+                write!(f, "Work Log entry changed the Task Link lineup")
+            }
         }
+    }
+}
+
+fn owner_name(running_name: &Option<String>) -> String {
+    match running_name.as_deref() {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => "the running Pomodoro".to_string(),
+    }
+}
+
+fn range_words(total: usize) -> String {
+    if total == 0 {
+        "no numbered Task Links".to_string()
+    } else if total == 1 {
+        "1 numbered Task Link (1)".to_string()
+    } else {
+        format!("{total} numbered Task Links (1\u{2013}{total})")
     }
 }
 
@@ -368,7 +465,7 @@ pub(crate) fn apply_close_selection(
     contents: &str,
     running: &RunningPomodoro,
     selection: &CloseSelection,
-) -> Result<(String, Vec<NumberedTaskLink>), CloseSelectionError> {
+) -> Result<AppliedCloseSelection, CloseSelectionError> {
     let mut lineup = number_task_links(contents, running);
     let total = lineup.len();
     let mut bad: BTreeSet<u32> = BTreeSet::new();
@@ -472,9 +569,231 @@ pub(crate) fn apply_close_selection(
     }
     let ending = line_ending(contents);
     let had_final_newline = contents.ends_with('\n');
+    if selection.log.is_empty() {
+        let mut rebuilt = lines.join(ending);
+        if had_final_newline {
+            rebuilt.push_str(ending);
+        }
+        return Ok(AppliedCloseSelection {
+            contents: rebuilt,
+            lineup,
+            inserted_lines: Vec::new(),
+        });
+    }
+    validate_close_log_entries(contents, running, &lineup, selection)?;
+    let mut tags: Vec<LineTag> =
+        (0..lines.len()).map(LineTag::Original).collect();
+    for (ordinal, entry) in selection.log.iter().enumerate() {
+        insert_close_log_entry(
+            &mut lines, &mut tags, running, &lineup, entry, ordinal,
+        );
+    }
     let mut rebuilt = lines.join(ending);
     if had_final_newline {
         rebuilt.push_str(ending);
     }
-    Ok((rebuilt, lineup))
+    reline_close_log_lineup(&rebuilt, running, &mut lineup, &tags)?;
+    let mut inserted_lines = vec![0usize; selection.log.len()];
+    for (position, tag) in tags.iter().enumerate() {
+        if let LineTag::Inserted(ordinal) = tag {
+            inserted_lines[*ordinal] = position + 1;
+        }
+    }
+    Ok(AppliedCloseSelection {
+        contents: rebuilt,
+        lineup,
+        inserted_lines,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineTag {
+    Original(usize),
+    Inserted(usize),
+}
+
+fn validate_close_log_entries(
+    contents: &str,
+    running: &RunningPomodoro,
+    lineup: &[NumberedTaskLink],
+    selection: &CloseSelection,
+) -> Result<(), CloseSelectionError> {
+    let spans = line_spans(contents);
+    let entry_index = running.line.saturating_sub(1);
+    let by_index: BTreeMap<u32, &NumberedTaskLink> =
+        lineup.iter().map(|link| (link.index, link)).collect();
+    for entry in &selection.log {
+        let Some(link) = by_index.get(&entry.index).copied() else {
+            return Err(CloseSelectionError::LogOutOfRange {
+                raw: selection.raw.clone(),
+                index: entry.index,
+                total: lineup.len(),
+                running_name: running.name.clone(),
+            });
+        };
+        match link.outcome {
+            TaskLinkOutcome::InProgress | TaskLinkOutcome::Complete => {}
+            TaskLinkOutcome::Deferred => {
+                return Err(CloseSelectionError::LogDeferred {
+                    index: entry.index,
+                    block_link: link.block_link.clone(),
+                });
+            }
+            TaskLinkOutcome::Dropped => {
+                return Err(CloseSelectionError::LogDropped {
+                    index: entry.index,
+                    block_link: link.block_link.clone(),
+                });
+            }
+        }
+        let link_zero = link.line.saturating_sub(1);
+        if link_zero >= spans.len()
+            || nearest_shallower_list_item_parent(&spans, link_zero)
+                != Some(entry_index)
+        {
+            return Err(CloseSelectionError::LogNested {
+                index: entry.index,
+                block_link: link.block_link.clone(),
+                running_name: running.name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn insert_close_log_entry(
+    lines: &mut Vec<String>,
+    tags: &mut Vec<LineTag>,
+    running: &RunningPomodoro,
+    lineup: &[NumberedTaskLink],
+    entry: &CloseLogEntry,
+    ordinal: usize,
+) {
+    let original_zero = lineup
+        .iter()
+        .find(|link| link.index == entry.index)
+        .map(|link| link.line.saturating_sub(1));
+    let Some(original_zero) = original_zero else {
+        return;
+    };
+    let Some(target) = tags
+        .iter()
+        .position(|tag| *tag == LineTag::Original(original_zero))
+    else {
+        return;
+    };
+    let texts: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let running_original = running.line.saturating_sub(1);
+    let entry_current = tags
+        .iter()
+        .position(|tag| *tag == LineTag::Original(running_original))
+        .unwrap_or(target);
+    let range = sub_bullet_range(&texts, entry_current);
+    let mut end = child_block_end(&texts, target);
+    end = end.min(range.end.saturating_sub(1).max(target));
+    let indent = close_log_child_indent(&texts, target, end);
+    lines.insert(end + 1, format!("{indent}- {}", entry.text));
+    tags.insert(end + 1, LineTag::Inserted(ordinal));
+}
+
+fn child_block_end(lines: &[&str], parent: usize) -> usize {
+    let Some(parent_line) = lines.get(parent) else {
+        return parent;
+    };
+    let parent_indent = leading_spaces_or_tabs_len(parent_line);
+    let mut end = parent;
+    for (index, line) in lines.iter().enumerate().skip(parent + 1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if leading_spaces_or_tabs_len(line) > parent_indent {
+            end = index;
+            continue;
+        }
+        break;
+    }
+    end
+}
+
+fn close_log_child_indent(lines: &[&str], target: usize, end: usize) -> String {
+    let probe = lines.join("\n");
+    let spans = line_spans(&probe);
+    let first_child = (target + 1..=end.min(spans.len().saturating_sub(1)))
+        .find(|&index| {
+            !spans[index].text.trim().is_empty()
+                && list_marker_len(
+                    &spans[index].text
+                        [leading_spaces_or_tabs_len(spans[index].text)..],
+                )
+                .is_some()
+                && nearest_shallower_list_item_parent(&spans, index)
+                    == Some(target)
+        });
+    if let Some(child) = first_child
+        && let Some(line) = lines.get(child)
+    {
+        return line[..leading_spaces_or_tabs_len(line)].to_string();
+    }
+    let link_indent = lines
+        .get(target)
+        .map(|line| line[..leading_spaces_or_tabs_len(line)].to_string())
+        .unwrap_or_default();
+    format!("{link_indent}{}", child_indent_unit(&link_indent))
+}
+
+fn child_indent_unit(parent_indent: &str) -> String {
+    if !parent_indent.is_empty() && !parent_indent.contains('\t') {
+        parent_indent.to_string()
+    } else {
+        "\t".to_string()
+    }
+}
+
+fn marker_for_outcome(outcome: TaskLinkOutcome) -> TaskLinkMarker {
+    match outcome {
+        TaskLinkOutcome::InProgress => TaskLinkMarker::Plain,
+        TaskLinkOutcome::Deferred => TaskLinkMarker::Deferred,
+        TaskLinkOutcome::Complete | TaskLinkOutcome::Dropped => {
+            TaskLinkMarker::Embedded
+        }
+    }
+}
+
+fn reline_close_log_lineup(
+    rebuilt: &str,
+    running: &RunningPomodoro,
+    lineup: &mut [NumberedTaskLink],
+    tags: &[LineTag],
+) -> Result<(), CloseSelectionError> {
+    let relined = number_task_links(rebuilt, running);
+    let mut kept = lineup
+        .iter_mut()
+        .filter(|link| link.outcome != TaskLinkOutcome::Dropped)
+        .collect::<Vec<_>>();
+    if relined.len() != kept.len() {
+        return Err(CloseSelectionError::LogLineupChanged);
+    }
+    for (fresh, link) in relined.into_iter().zip(kept.iter_mut()) {
+        if fresh.block_link != link.block_link
+            || fresh.path_part != link.path_part
+            || fresh.block_id != link.block_id
+            || fresh.marker != marker_for_outcome(link.outcome)
+        {
+            return Err(CloseSelectionError::LogLineupChanged);
+        }
+        link.line = fresh.line;
+    }
+    for link in lineup
+        .iter_mut()
+        .filter(|link| link.outcome == TaskLinkOutcome::Dropped)
+    {
+        let original_zero = link.line.saturating_sub(1);
+        if let Some(position) = tags
+            .iter()
+            .position(|tag| *tag == LineTag::Original(original_zero))
+        {
+            link.line = position + 1;
+        }
+    }
+    Ok(())
 }

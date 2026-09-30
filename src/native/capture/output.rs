@@ -33,6 +33,12 @@ pub(super) struct PomodoroCloseTaskLinkJson {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseLogEntryJson {
+    pub(super) index: u32,
+    pub(super) text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroCloseTaskJson {
     pub(super) role: &'static str,
     pub(super) block_link: String,
@@ -52,6 +58,10 @@ pub(super) struct PomodoroCloseTaskJson {
     pub(super) carried: bool,
     pub(super) work_log: Vec<String>,
     pub(super) work_log_created: bool,
+    /// Dated entries this close's typed Work Log entries produced, in typed
+    /// order (a subset of `work_log`), omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) typed_work_log: Vec<String>,
     pub(super) warning: Option<String>,
 }
 
@@ -78,6 +88,9 @@ pub(super) struct PomodoroCloseSummaryJson {
     /// Dropped `~<K>` list, omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) drop: Vec<u32>,
+    /// Typed Work Log entries in typed order, omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) log: Vec<PomodoroCloseLogEntryJson>,
     pub(super) task_links: Vec<PomodoroCloseTaskLinkJson>,
     pub(super) pomodoro_line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -802,7 +815,23 @@ pub(super) fn print_human_pomodoro_close_success(
             }
         }
         println!("{prefix}{line}");
-        for entry in task.work_log.iter().take(2) {
+        // Typed entries print first, all of them, not dimmed; up to two
+        // other entries follow, dimmed as before.
+        for entry in &task.typed_work_log {
+            println!("{log_indent}{entry}");
+        }
+        let mut unprinted = task.typed_work_log.clone();
+        let mut others = Vec::new();
+        for entry in &task.work_log {
+            if let Some(position) =
+                unprinted.iter().position(|typed| typed == entry)
+            {
+                unprinted.remove(position);
+            } else {
+                others.push(entry);
+            }
+        }
+        for entry in others.iter().take(2) {
             println!("{log_indent}{}", styler.dim(entry));
         }
     }

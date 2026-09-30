@@ -367,8 +367,27 @@ fn selection(
             .map(|list| list.into_iter().collect::<BTreeSet<u32>>()),
         complete: complete.into_iter().collect::<BTreeSet<u32>>(),
         drop: BTreeSet::new(),
+        log: Vec::new(),
         raw: raw.to_string(),
     }
+}
+
+fn selection_log(
+    in_progress: Option<Vec<u32>>,
+    complete: Vec<u32>,
+    log: Vec<(u32, &str)>,
+    raw: &str,
+) -> super::selection::CloseSelection {
+    use super::super::capture_language::CloseLogEntry;
+    let mut base = selection(in_progress, complete, raw);
+    base.log = log
+        .into_iter()
+        .map(|(index, text)| CloseLogEntry {
+            index,
+            text: text.to_string(),
+        })
+        .collect();
+    base
 }
 
 fn worked_vault() -> MemoryVault {
@@ -552,6 +571,100 @@ fn same_task_numbered_twice_carries_lowest_number() {
     assert_eq!(plan.summary.task_links.len(), 2);
     assert_eq!(plan.summary.tasks.len(), 1);
     assert_eq!(plan.summary.tasks[0].index, Some(1));
+}
+
+#[test]
+fn typed_entry_lands_in_task_work_log_as_typed_subset() {
+    let vault = worked_vault();
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        &worked_example_day(),
+        &selection_log(None, vec![], vec![(1, "wired the lexer")], "=x"),
+    );
+    assert_eq!(
+        plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
+        Some(concat!(
+            "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
+            "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
+            "\t\t\t- chose `x` for done\n",
+            "\t\t- *2026-09-28* — Wrote the plan\n",
+            "\t\t- *2026-09-28* — wired the lexer\n",
+            "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
+            "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
+        ))
+    );
+    assert_eq!(plan.summary.tasks[0].work_log.len(), 3);
+    assert_eq!(
+        plan.summary.tasks[0].typed_work_log,
+        vec!["*2026-09-28* — wired the lexer".to_string()]
+    );
+    assert!(plan.summary.tasks[1].typed_work_log.is_empty());
+    // The inserted sub-bullet stays in the closed session, and the lineup
+    // tracks the shifted link below the insert.
+    let day = &plan.changed_files[day_path];
+    assert!(day.contains("    - wired the lexer\n"));
+    assert_eq!(
+        plan.summary
+            .task_links
+            .iter()
+            .map(|link| (link.index, link.line))
+            .collect::<Vec<_>>(),
+        vec![(1, 6), (2, 11)]
+    );
+    assert_eq!(plan.summary.tasks[0].ledger_line, 6);
+    assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+}
+
+#[test]
+fn typed_entry_on_complete_target_lands_in_completed_task() {
+    let vault = worked_vault();
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        &worked_example_day(),
+        &selection_log(None, vec![1], vec![(1, "shipped it")], "=x!1"),
+    );
+    let bob = &plan.changed_files[Path::new("bob.md")];
+    assert!(bob.starts_with("- [x] #task Add support for `=x` syntax!"));
+    assert!(bob.contains("*2026-09-28* — shipped it"));
+    assert_eq!(
+        plan.summary.tasks[0].typed_work_log,
+        vec!["*2026-09-28* — shipped it".to_string()]
+    );
+}
+
+#[test]
+fn unresolved_typed_target_warns_and_stays_in_pomodoro() {
+    let vault = MemoryVault::new();
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+        "\t- [[missing#^gone]]\n",
+    );
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        day,
+        &selection_log(None, vec![], vec![(1, "did it")], "=x"),
+    );
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|warning| warning
+            == "task 1 `[[missing#^gone]]` has no task line, so its Work Log entry stays only in the Pomodoro"));
+    assert!(plan.summary.tasks[0].typed_work_log.is_empty());
+    // The row keeps its resolution warning; the typed warning is top-level.
+    assert!(plan.summary.tasks[0]
+        .warning
+        .as_deref()
+        .is_some_and(|warning| warning.contains("does not resolve")));
+    let day_post = &plan.changed_files[day_path];
+    assert!(day_post.contains("\t\t- did it\n"));
 }
 
 #[test]

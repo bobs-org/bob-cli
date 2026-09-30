@@ -548,6 +548,7 @@ pub(crate) fn close_spec_from_lex(
         in_progress: lex.in_progress.clone(),
         complete: lex.complete.clone(),
         drop: lex.drop.clone(),
+        log: Vec::new(),
     }
 }
 
@@ -563,6 +564,7 @@ pub(crate) fn close_spec_from_incomplete(
         in_progress: incomplete.in_progress.clone(),
         complete: incomplete.complete.clone(),
         drop: incomplete.drop.clone(),
+        log: Vec::new(),
     }
 }
 

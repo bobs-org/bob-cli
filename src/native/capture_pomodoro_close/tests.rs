@@ -132,12 +132,15 @@ fn worked_example_ledger_is_byte_for_byte() {
                     marker: "-".to_string(),
                     body_text: "chose `x` for done".to_string(),
                     children: Vec::new(),
+                    source_line: None,
                 }],
+                source_line: Some(7),
             },
             WorkLogNode {
                 marker: "-".to_string(),
                 body_text: "Wrote the plan".to_string(),
                 children: Vec::new(),
+                source_line: Some(9),
             },
         ]
     );
@@ -147,6 +150,7 @@ fn worked_example_ledger_is_byte_for_byte() {
             marker: "-".to_string(),
             body_text: "Restarted axe".to_string(),
             children: Vec::new(),
+            source_line: Some(12),
         }]
     );
 }

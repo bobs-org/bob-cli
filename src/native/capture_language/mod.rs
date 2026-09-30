@@ -72,6 +72,7 @@ pub(crate) use self::model::AuthoredDepth;
 pub(crate) use self::model::AuthoredSubBullet;
 pub(crate) use self::model::CaptureKind;
 pub(crate) use self::model::ClipRequest;
+pub(crate) use self::model::CloseLogEntry;
 pub(crate) use self::model::ParsedCaptureDraft;
 pub(crate) use self::model::ParsedCaptureItem;
 pub(crate) use self::model::ParsedCaptureText;

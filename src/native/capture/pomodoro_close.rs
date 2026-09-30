@@ -361,6 +361,7 @@ pub(super) fn build_close_summary_json(
             carried: task.carried,
             work_log: task.work_log.clone(),
             work_log_created: task.work_log_created,
+            typed_work_log: task.typed_work_log.clone(),
             warning: task.warning.clone(),
         })
         .collect();
@@ -430,6 +431,14 @@ pub(super) fn build_close_summary_json(
         in_progress: spec.in_progress.clone(),
         complete: spec.complete.clone(),
         drop: spec.drop.clone(),
+        log: spec
+            .log
+            .iter()
+            .map(|entry| PomodoroCloseLogEntryJson {
+                index: entry.index,
+                text: entry.text.clone(),
+            })
+            .collect(),
         task_links,
         pomodoro_line: running.line,
         pomodoro_name: running.name.clone(),
@@ -525,21 +534,25 @@ pub(super) fn final_task_line_for(
 
 /// Convert a parsed `=x[<N>][!<M>][~<K>]` spec into the planner's
 /// selection. Plain `=x` yields `None`, so the close runs exactly as before
-/// while still reporting the numbered lineup.
+/// while still reporting the numbered lineup. A spec with lists or typed
+/// Work Log entries yields a selection.
 fn selection_from_spec(
     spec: &PomodoroCloseSpec,
 ) -> Option<capture_pomodoro_close::CloseSelection> {
-    if !spec.has_selection() {
+    if !spec.has_selection() && !spec.has_log() {
         return None;
     }
-    Some(capture_pomodoro_close::CloseSelection::new(
-        spec.in_progress
-            .clone()
-            .map(|numbers| numbers.into_iter().collect()),
-        spec.complete.iter().copied().collect(),
-        spec.drop.iter().copied().collect(),
-        spec.raw.clone(),
-    ))
+    Some(
+        capture_pomodoro_close::CloseSelection::new(
+            spec.in_progress
+                .clone()
+                .map(|numbers| numbers.into_iter().collect()),
+            spec.complete.iter().copied().collect(),
+            spec.drop.iter().copied().collect(),
+            spec.raw.clone(),
+        )
+        .with_log(spec.log.clone()),
+    )
 }
 
 pub(super) fn plan_pomodoro_close_item(

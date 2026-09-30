@@ -9,7 +9,8 @@ use chrono::NaiveDateTime;
 
 use super::super::{
     capture::{line_spans, LineSpan},
-    capture_language, capture_task_toggle, capture_work_log,
+    capture_language::{self, CloseLogEntry},
+    capture_task_toggle, capture_work_log,
     note_tasks::{
         self, BlockIdLookup, NoteTask, NoteTaskSettings, TaskStatusType,
     },
@@ -70,6 +71,9 @@ pub(crate) struct PomodoroCloseTask {
     pub carried: bool,
     pub work_log: Vec<String>,
     pub work_log_created: bool,
+    /// Dated entries this close's typed Work Log entries produced, in typed
+    /// order (a subset of `work_log`).
+    pub typed_work_log: Vec<String>,
     pub warning: Option<String>,
     pub index: Option<u32>,
     resolved_path: Option<PathBuf>,
@@ -318,6 +322,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     carried: target.carried,
                     work_log: Vec::new(),
                     work_log_created: false,
+                    typed_work_log: Vec::new(),
                     warning: None,
                     index: None,
                     resolved_path: Some(path.clone()),
@@ -347,6 +352,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     carried: target.carried,
                     work_log: Vec::new(),
                     work_log_created: false,
+                    typed_work_log: Vec::new(),
                     warning: Some(warning.clone()),
                     index: None,
                     resolved_path: Some(path.clone()),
@@ -396,6 +402,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             carried,
             work_log: Vec::new(),
             work_log_created: false,
+            typed_work_log: Vec::new(),
             warning: Some(warning.clone()),
             index: None,
             resolved_path,
@@ -594,7 +601,8 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
     fn write_logs(
         &mut self,
         ledger: &LedgerClosePlan,
-    ) -> Result<(), PomodoroClosePlanError> {
+        log_lines: &BTreeMap<usize, usize>,
+    ) -> Result<BTreeSet<usize>, PomodoroClosePlanError> {
         let mut groups: Vec<(
             TaskKey,
             usize,
@@ -644,6 +652,9 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             );
         }
 
+        let mut landed = BTreeSet::new();
+        let mut typed_by_row: BTreeMap<usize, Vec<(usize, String)>> =
+            BTreeMap::new();
         for (key, _first_source_line, note_groups) in groups {
             let mut cursor = None;
             for note_roots in note_groups {
@@ -668,13 +679,62 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                 if let Some(index) = self.task_indices.get(&key).copied()
                     && let Some(row) = self.tasks.get_mut(index)
                 {
-                    row.work_log.extend(write.entries);
+                    for (dated, source) in
+                        write.entries.iter().zip(write.entry_sources.iter())
+                    {
+                        row.work_log.push(dated.clone());
+                        if let Some(source) = source
+                            && let Some(ordinal) = log_lines.get(source)
+                        {
+                            typed_by_row
+                                .entry(index)
+                                .or_default()
+                                .push((*ordinal, dated.clone()));
+                            landed.insert(*ordinal);
+                        }
+                    }
                     row.work_log_created = true;
                 }
                 cursor = Some(write.next_cursor);
             }
         }
-        Ok(())
+        for (index, mut pairs) in typed_by_row {
+            pairs.sort();
+            if let Some(row) = self.tasks.get_mut(index) {
+                row.typed_work_log =
+                    pairs.into_iter().map(|(_, dated)| dated).collect();
+            }
+        }
+        Ok(landed)
+    }
+
+    fn warn_missing_typed_logs(
+        &mut self,
+        entries: &[CloseLogEntry],
+        task_links: &[NumberedTaskLink],
+        link_rows: &BTreeMap<u32, usize>,
+        landed: &BTreeSet<usize>,
+    ) {
+        let by_index: BTreeMap<u32, &NumberedTaskLink> =
+            task_links.iter().map(|link| (link.index, link)).collect();
+        for (ordinal, entry) in entries.iter().enumerate() {
+            if landed.contains(&ordinal) {
+                continue;
+            }
+            let block = by_index
+                .get(&entry.index)
+                .map(|link| link.block_link.as_str())
+                .unwrap_or("?");
+            let message = format!(
+                "task {} `{block}` has no task line, so its Work Log entry stays only in the Pomodoro",
+                entry.index
+            );
+            if let Some(row) = link_rows.get(&entry.index).copied() {
+                self.row_warning(row, message);
+            } else {
+                self.warn(message);
+            }
+        }
     }
 
     fn retire_closed_embeds(
@@ -757,14 +817,25 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
 ) -> Result<PomodoroClosePlan, PomodoroClosePlanError> {
     let running = find_running_pomodoro(day_contents)
         .map_err(PomodoroClosePlanError::FindRunning)?;
-    let (working_contents, task_links) = match selection {
-        Some(sel) => apply_close_selection(day_contents, &running, sel)
-            .map_err(PomodoroClosePlanError::Selection)?,
+    let (working_contents, task_links, inserted_lines) = match selection {
+        Some(sel) => {
+            let applied = apply_close_selection(day_contents, &running, sel)
+                .map_err(PomodoroClosePlanError::Selection)?;
+            (applied.contents, applied.lineup, applied.inserted_lines)
+        }
         None => (
             day_contents.to_string(),
             number_task_links(day_contents, &running),
+            Vec::new(),
         ),
     };
+    let log_lines: BTreeMap<usize, usize> = inserted_lines
+        .iter()
+        .enumerate()
+        .map(|(ordinal, line)| (*line, ordinal))
+        .collect();
+    let log_entries: Vec<CloseLogEntry> =
+        selection.map(|sel| sel.log.clone()).unwrap_or_default();
     let mut ledger = plan_ledger_close(&working_contents, &running, now);
     let mut planner =
         ClosePlanner::new(vault, day_path, day_contents, &ledger, now);
@@ -796,7 +867,7 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
             CloseTaskRole::Embedded,
         )?;
     }
-    planner.write_logs(&ledger)?;
+    let landed = planner.write_logs(&ledger, &log_lines)?;
     planner.retire_closed_embeds(&ledger, running.line.saturating_sub(1))?;
     let link_rows = link_row_mapping(
         planner.vault,
@@ -807,6 +878,12 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
     );
     assign_task_indices(&mut planner.tasks, &task_links, &link_rows);
     emit_listed_status_warnings(&mut planner, &task_links, &link_rows);
+    planner.warn_missing_typed_logs(
+        &log_entries,
+        &task_links,
+        &link_rows,
+        &landed,
+    );
 
     if let Some(contents) = planner.staged.get(day_path) {
         ledger.contents = contents.clone();
@@ -1026,6 +1103,7 @@ fn work_log_node(node: &WorkLogNode) -> capture_work_log::WorkLogNode {
         marker: node.marker.clone(),
         body_text: node.body_text.clone(),
         children: node.children.iter().map(work_log_node).collect(),
+        source_line: node.source_line,
     }
 }
 

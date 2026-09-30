@@ -65,11 +65,39 @@ fn sel_drop(
     drop: Vec<u32>,
     raw: &str,
 ) -> CloseSelection {
+    sel_drop_log(in_progress, complete, drop, Vec::new(), raw)
+}
+
+fn sel_log(
+    in_progress: Option<Vec<u32>>,
+    complete: Vec<u32>,
+    log: Vec<(u32, &str)>,
+    raw: &str,
+) -> CloseSelection {
+    sel_drop_log(in_progress, complete, Vec::new(), log, raw)
+}
+
+fn sel_drop_log(
+    in_progress: Option<Vec<u32>>,
+    complete: Vec<u32>,
+    drop: Vec<u32>,
+    log: Vec<(u32, &str)>,
+    raw: &str,
+) -> CloseSelection {
     CloseSelection {
         in_progress: in_progress
             .map(|list| list.into_iter().collect::<BTreeSet<u32>>()),
         complete: complete.into_iter().collect::<BTreeSet<u32>>(),
         drop: drop.into_iter().collect::<BTreeSet<u32>>(),
+        log: log
+            .into_iter()
+            .map(|(index, text)| {
+                super::super::capture_language::CloseLogEntry {
+                    index,
+                    text: text.to_string(),
+                }
+            })
+            .collect(),
         raw: raw.to_string(),
     }
 }
@@ -198,11 +226,12 @@ fn outcome_table_covers_every_row() {
     ]);
     let running = running_of(&contents);
     // Listed complete beats everything.
-    let (_, links) =
+    let applied =
         apply_close_selection(&contents, &running, &sel(None, vec![2], "=x!2"))
             .expect("apply");
     assert_eq!(
-        links
+        applied
+            .lineup
             .iter()
             .map(|l| (l.index, l.outcome, l.source))
             .collect::<Vec<_>>(),
@@ -213,14 +242,15 @@ fn outcome_table_covers_every_row() {
         ]
     );
     // Listed in-progress beats ledger.
-    let (_, links) = apply_close_selection(
+    let applied = apply_close_selection(
         &contents,
         &running,
         &sel(Some(vec![2]), vec![], "=x2"),
     )
     .expect("apply");
     assert_eq!(
-        links
+        applied
+            .lineup
             .iter()
             .map(|l| (l.index, l.outcome, l.source))
             .collect::<Vec<_>>(),
@@ -232,11 +262,12 @@ fn outcome_table_covers_every_row() {
         "hand transclusion is kept when <N> is typed"
     );
     // No list: ledger outcomes and sources.
-    let (_, links) =
+    let applied =
         apply_close_selection(&contents, &running, &sel(None, vec![], "=x"))
             .expect("apply");
     assert_eq!(
-        links
+        applied
+            .lineup
             .iter()
             .map(|l| (l.index, l.outcome, l.source))
             .collect::<Vec<_>>(),
@@ -247,14 +278,15 @@ fn outcome_table_covers_every_row() {
         ]
     );
     // Empty <N> (=x0): everything unlisted.
-    let (_, links) = apply_close_selection(
+    let applied = apply_close_selection(
         &contents,
         &running,
         &sel(Some(vec![]), vec![], "=x0"),
     )
     .expect("apply");
     assert_eq!(
-        links
+        applied
+            .lineup
             .iter()
             .map(|l| (l.index, l.outcome, l.source))
             .collect::<Vec<_>>(),
@@ -276,14 +308,15 @@ fn drop_removes_from_closed_session_without_carry() {
         "\t- [[a#^three]]#",
     ]);
     let running = running_of(&contents);
-    let (rewritten, links) = apply_close_selection(
+    let applied = apply_close_selection(
         &contents,
         &running,
         &sel_drop(None, vec![], vec![2], "=x~2"),
     )
     .expect("apply");
     assert_eq!(
-        links
+        applied
+            .lineup
             .iter()
             .map(|l| (l.index, l.outcome, l.source))
             .collect::<Vec<_>>(),
@@ -293,8 +326,12 @@ fn drop_removes_from_closed_session_without_carry() {
             (3, TaskLinkOutcome::Deferred, TaskLinkSource::Ledger),
         ]
     );
-    assert!(rewritten.contains("\t- ~[[a#^two]]"), "{rewritten}");
-    let plan = plan_ledger_close(&rewritten, &running, at(9, 37));
+    assert!(
+        applied.contents.contains("\t- ~[[a#^two]]"),
+        "{}",
+        applied.contents
+    );
+    let plan = plan_ledger_close(&applied.contents, &running, at(9, 37));
     // The dropped line leaves the closed session entirely: no transient
     // marker and no carried copy.
     assert!(!plan.contents.contains('~'), "{}", plan.contents);
@@ -330,12 +367,15 @@ fn none_is_byte_identical_to_plan_ledger_close() {
     let contents = worked_example();
     let running = running_of(&contents);
     let ledger = plan_ledger_close(&contents, &running, at(9, 37));
-    let (rewritten, links) =
+    let applied =
         apply_close_selection(&contents, &running, &sel(None, vec![], "=x"))
             .expect("apply with no lists");
-    assert_eq!(rewritten, contents);
-    assert!(links.iter().all(|l| l.source == TaskLinkSource::Ledger));
-    let relined = plan_ledger_close(&rewritten, &running, at(9, 37));
+    assert_eq!(applied.contents, contents);
+    assert!(applied
+        .lineup
+        .iter()
+        .all(|l| l.source == TaskLinkSource::Ledger));
+    let relined = plan_ledger_close(&applied.contents, &running, at(9, 37));
     assert_eq!(relined.contents, ledger.contents);
     assert_eq!(relined.carried_lines, ledger.carried_lines);
 }
@@ -350,17 +390,17 @@ fn rewrite_keeps_prefix_and_drops_tomato() {
     ]);
     let running = running_of(&contents);
     // Defer 1 (was plain): drops the tomato, appends `#`.
-    let (rewritten, _) = apply_close_selection(
+    let applied = apply_close_selection(
         &contents,
         &running,
         &sel(Some(vec![2]), vec![], "=x2"),
     )
     .expect("apply");
-    assert!(rewritten.contains("\t- [[a#^one]]#\n"));
-    assert!(!rewritten.contains("🍅 [[a#^one]]"));
-    assert!(rewritten.contains("\t- [[a#^two]]\n"));
+    assert!(applied.contents.contains("\t- [[a#^one]]#\n"));
+    assert!(!applied.contents.contains("🍅 [[a#^one]]"));
+    assert!(applied.contents.contains("\t- [[a#^two]]\n"));
     // Unchanged lines stay byte-identical.
-    let (same, _) = apply_close_selection(
+    let applied = apply_close_selection(
         &contents,
         &running,
         &sel(Some(vec![1]), vec![], "=x1"),
@@ -369,33 +409,33 @@ fn rewrite_keeps_prefix_and_drops_tomato() {
     // Line 2 was already deferred-adjacent? 1 stays plain, 2 stays
     // deferred-ledged except 1 listed keeps plain: only line 4 changes?
     // Here =x1 equals the ledger (1 plain, 2 deferred) so nothing changes.
-    assert_eq!(same, contents);
+    assert_eq!(applied.contents, contents);
 }
 
 #[test]
 fn apply_preserves_crlf_and_missing_final_newline() {
     let contents = worked_example().replace('\n', "\r\n");
     let running = running_of(&contents);
-    let (rewritten, _) = apply_close_selection(
+    let applied = apply_close_selection(
         &contents,
         &running,
         &sel(Some(vec![2]), vec![], "=x2"),
     )
     .expect("apply");
-    assert!(rewritten.contains("\r\n"));
-    assert!(!rewritten.replace("\r\n", "").contains('\n'));
-    assert!(rewritten.ends_with("\r\n"));
+    assert!(applied.contents.contains("\r\n"));
+    assert!(!applied.contents.replace("\r\n", "").contains('\n'));
+    assert!(applied.contents.ends_with("\r\n"));
 
     let mut no_final = worked_example();
     assert_eq!(no_final.pop(), Some('\n'));
     let running = running_of(&no_final);
-    let (rewritten, _) = apply_close_selection(
+    let applied = apply_close_selection(
         &no_final,
         &running,
         &sel(Some(vec![2]), vec![], "=x2"),
     )
     .expect("apply");
-    assert!(!rewritten.ends_with('\n'));
+    assert!(!applied.contents.ends_with('\n'));
 }
 
 #[test]
@@ -828,4 +868,218 @@ fn listed_blocked_and_done_warnings() {
         .warnings
         .iter()
         .any(|w| w.contains("was not completed")));
+}
+
+#[test]
+fn log_entry_appends_after_existing_descendants() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t\t- hand note",
+        "\t\t\t- grandchild",
+        "\t- [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_log(None, vec![], vec![(1, "wired the lexer")], "=x"),
+    )
+    .expect("apply");
+    assert_eq!(
+        applied.contents,
+        note(&[
+            "## Pomodoros",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+            "\t- [[a#^one]]",
+            "\t\t- hand note",
+            "\t\t\t- grandchild",
+            "\t\t- wired the lexer",
+            "\t- [[a#^two]]",
+        ])
+    );
+    assert_eq!(applied.inserted_lines, vec![6]);
+    assert_eq!(
+        applied
+            .lineup
+            .iter()
+            .map(|link| (link.index, link.line))
+            .collect::<Vec<_>>(),
+        vec![(1, 3), (2, 7)]
+    );
+}
+
+#[test]
+fn log_entry_child_indent_follows_first_child_or_link_indent() {
+    // A link with no children and a two-space indent doubles the indent.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "  - [[a#^one]]",
+        "  - [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_log(None, vec![], vec![(2, "did it")], "=x"),
+    )
+    .expect("apply");
+    assert!(applied.contents.contains("  - [[a#^two]]\n    - did it\n"));
+
+    // A tab-indented link with no children adds one tab.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_log(None, vec![], vec![(1, "did it")], "=x"),
+    )
+    .expect("apply");
+    assert!(applied.contents.contains("\t- [[a#^one]]\n\t\t- did it\n"));
+}
+
+#[test]
+fn log_entries_keep_typed_order_for_repeated_index() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t\t- hand note",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_log(None, vec![], vec![(1, "first"), (1, "second")], "=x"),
+    )
+    .expect("apply");
+    assert_eq!(
+        applied.contents,
+        note(&[
+            "## Pomodoros",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+            "\t- [[a#^one]]",
+            "\t\t- hand note",
+            "\t\t- first",
+            "\t\t- second",
+        ])
+    );
+    assert_eq!(applied.inserted_lines, vec![5, 6]);
+}
+
+#[test]
+fn log_entry_preserves_crlf_and_missing_final_newline() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+    ])
+    .replace('\n', "\r\n");
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_log(None, vec![], vec![(1, "did it")], "=x"),
+    )
+    .expect("apply");
+    assert!(applied.contents.contains("\t\t- did it\r\n"));
+    assert!(!applied.contents.replace("\r\n", "").contains('\n'));
+
+    let mut no_final = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+    ]);
+    no_final.pop();
+    let running = running_of(&no_final);
+    let applied = apply_close_selection(
+        &no_final,
+        &running,
+        &sel_log(None, vec![], vec![(1, "did it")], "=x"),
+    )
+    .expect("apply");
+    assert!(applied.contents.ends_with("\t\t- did it"));
+    assert!(!applied.contents.ends_with('\n'));
+}
+
+#[test]
+fn log_entry_errors() {
+    let contents = worked_example();
+    let running = running_of(&contents);
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel_log(None, vec![], vec![(5, "x")], "=x"),
+    )
+    .expect_err("out of range entry");
+    assert_eq!(
+        error.to_string(),
+        "`=x` logs to task 5, but CAPTURE has 2 numbered Task Links (1–2); write `\\5` to keep the number as text"
+    );
+
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel_log(None, vec![], vec![(2, "x")], "=x"),
+    )
+    .expect_err("deferred entry");
+    assert_eq!(
+        error.to_string(),
+        "task 2 `[[bob#^web-capture]]` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
+    );
+
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel_drop_log(None, vec![], vec![2], vec![(2, "x")], "=x~2"),
+    )
+    .expect_err("dropped entry");
+    assert_eq!(
+        error.to_string(),
+        "task 2 `[[bob#^web-capture]]` is dropped, so it can't take a Work Log entry"
+    );
+
+    let nested = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[bob#^parent]]",
+        "\t\t- [[bob#^child]]",
+    ]);
+    let running = running_of(&nested);
+    let error = apply_close_selection(
+        &nested,
+        &running,
+        &sel_log(None, vec![], vec![(2, "x")], "=x"),
+    )
+    .expect_err("nested entry");
+    assert_eq!(
+        error.to_string(),
+        "task 2 `[[bob#^child]]` is nested under another bullet, so the close can't write its Work Log; move it to the top level of CAPTURE"
+    );
+}
+
+#[test]
+fn log_entry_text_that_numbers_a_link_fails_loudly() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+    ]);
+    let running = running_of(&contents);
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel_log(None, vec![], vec![(1, "[[a#^evil]]")], "=x"),
+    )
+    .expect_err("lineup guard");
+    assert_eq!(
+        error.to_string(),
+        "Work Log entry changed the Task Link lineup"
+    );
 }

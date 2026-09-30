@@ -103,6 +103,9 @@ pub(crate) struct WorkLogNode {
     pub marker: String,
     pub body_text: String,
     pub children: Vec<WorkLogNode>,
+    /// 1-based day-note line this root was collected from (`None` for
+    /// nested nodes). Typed close entries claim dated strings by it.
+    pub source_line: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -824,7 +827,12 @@ fn collect_descendant_tree(
         indent: root_indent,
         nodes: Vec::new(),
     }];
-    for raw in lines.iter().take(end_line + 1).skip(sub_bullet + 1) {
+    for (offset, raw) in lines
+        .iter()
+        .enumerate()
+        .take(end_line + 1)
+        .skip(sub_bullet + 1)
+    {
         if raw.trim().is_empty() {
             continue;
         }
@@ -843,11 +851,14 @@ fn collect_descendant_tree(
             continue;
         }
         let (marker, body_text) = parse_list_prefix(raw);
+        // Only depth-one roots carry a source line; nested nodes never do.
+        let source_line = (stack.len() == 1).then_some(offset + 1);
         if let Some(parent) = stack.last_mut() {
             parent.nodes.push(WorkLogNode {
                 marker,
                 body_text,
                 children: Vec::new(),
+                source_line,
             });
         }
         stack.push(Frame {

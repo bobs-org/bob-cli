@@ -141,6 +141,10 @@ pub(crate) enum SessionOperator {
 /// `~<K>` list, each empty when none was typed. All lists are sorted
 /// ascending. Plain `=x` reports `in_progress: None` and empty
 /// `complete`/`drop`, so version-tolerant readers see only additive fields.
+///
+/// A Work Log tail (`=x<N> <n> <text> …`) appends `log` entries: each names
+/// a numbered Task Link plus the literal, unescaped entry text, in typed
+/// order. The text is final; the grammar phase fills it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
     /// Raw close token exactly as typed: the `=`-prefixed token
@@ -157,6 +161,19 @@ pub(crate) struct PomodoroCloseSpec {
     /// the next placeholder and never started.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) drop: Vec<u32>,
+    /// Typed Work Log entries in typed order, empty when no tail was typed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) log: Vec<CloseLogEntry>,
+}
+
+/// One typed Work Log entry on a close: the numbered Task Link it logs to
+/// plus the literal, unescaped entry text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct CloseLogEntry {
+    /// Numbered Task Link the entry is logged under.
+    pub(crate) index: u32,
+    /// Literal entry text, unescaped and final.
+    pub(crate) text: String,
 }
 
 impl PomodoroCloseSpec {
@@ -167,6 +184,7 @@ impl PomodoroCloseSpec {
             in_progress: None,
             complete: Vec::new(),
             drop: Vec::new(),
+            log: Vec::new(),
         }
     }
 
@@ -175,6 +193,11 @@ impl PomodoroCloseSpec {
         self.in_progress.is_some()
             || !self.complete.is_empty()
             || !self.drop.is_empty()
+    }
+
+    /// `true` when the spec carries at least one typed Work Log entry.
+    pub(crate) fn has_log(&self) -> bool {
+        !self.log.is_empty()
     }
 }
 

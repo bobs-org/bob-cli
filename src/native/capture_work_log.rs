@@ -14,6 +14,9 @@ pub(crate) struct WorkLogNode {
     pub(crate) marker: String,
     pub(crate) body_text: String,
     pub(crate) children: Vec<WorkLogNode>,
+    /// 1-based day-note line this root was collected from, when known.
+    /// Typed close entries use it to claim the dated strings they produced.
+    pub(crate) source_line: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +31,8 @@ pub(crate) struct WorkLogWrite {
     pub(crate) contents: String,
     /// Dated depth-one entry bodies, without their list prefix.
     pub(crate) entries: Vec<String>,
+    /// Source line per entry, parallel to `entries`.
+    pub(crate) entry_sources: Vec<Option<usize>>,
     pub(crate) next_cursor: WorkLogCursor,
 }
 
@@ -99,6 +104,7 @@ pub(crate) fn write_work_log_group(
         };
 
     let mut entries = Vec::new();
+    let mut entry_sources = Vec::new();
     let mut inserted = Vec::new();
     if let Some(marker) = marker_line {
         inserted.push(marker);
@@ -110,6 +116,7 @@ pub(crate) fn write_work_log_group(
             &entry_marker,
             date,
             &mut entries,
+            &mut entry_sources,
             &mut inserted,
         );
     }
@@ -125,6 +132,7 @@ pub(crate) fn write_work_log_group(
     Some(WorkLogWrite {
         contents: insert_lines(contents, insert_line, &inserted),
         entries,
+        entry_sources,
         next_cursor,
     })
 }
@@ -135,6 +143,7 @@ fn append_entry_node(
     entry_marker: &str,
     date: &str,
     entries: &mut Vec<String>,
+    entry_sources: &mut Vec<Option<usize>>,
     output: &mut Vec<String>,
 ) {
     let body = node.body_text.trim();
@@ -144,6 +153,7 @@ fn append_entry_node(
     let dated = format!("*{date}* — {body}");
     output.push(format!("{entry_indent}{entry_marker} {dated}"));
     entries.push(dated);
+    entry_sources.push(node.source_line);
     append_descendants(&node.children, entry_indent, output);
 }
 
@@ -302,6 +312,7 @@ mod tests {
             marker: "-".to_string(),
             body_text: body.to_string(),
             children: Vec::new(),
+            source_line: None,
         }
     }
 
