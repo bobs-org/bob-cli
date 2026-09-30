@@ -127,10 +127,10 @@ fn native_entry_name_and_range(
 }
 
 /// The read-only plan budget for a successful sync: the pure ledger
-/// half plus the NOW count. It never changes the exit code and never
-/// writes. An invalid plan config yields `None` (JSON `null`) and a
-/// single stderr warning; a missing Pomodoros section also yields
-/// `None`.
+/// half plus the Today rows and lane meters. It never changes the
+/// exit code and never writes. An invalid plan config yields `None`
+/// (JSON `null`) and a single stderr warning; a missing Pomodoros
+/// section also yields `None`.
 pub(super) fn plan_budget_for_sync(
     bob_dir: &Path,
     daily_contents: &str,
@@ -163,13 +163,16 @@ pub(super) fn plan_budget_for_sync(
     if !ledger.has_section {
         return None;
     }
-    let now = plan_budget::count_now(bob_dir, anchor, &config);
+    let lanes = plan_budget::count_lanes(bob_dir, anchor, &config);
+    let today_result =
+        plan_budget::today::today_tasks(bob_dir, &daily_file, daily_contents);
     Some(plan_budget::assemble_report(
         anchor,
         &daily_file,
         &config,
         &ledger,
-        now,
+        &lanes,
+        &today_result,
     ))
 }
 

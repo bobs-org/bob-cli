@@ -1,12 +1,12 @@
-# Plan budget and NOW
+# Plan budget, Today, and lanes
 
 By default, the plan budget allows 3 themes and 10 distinct Task Links
 under today's open Pomodoros. GTD is exempt. The first open, non-exempt
-Pomodoro is the highlight. Separately, the NOW budget allows 15 visible
-`#now` tasks. `#now` is a tag for this week's work: removing a Task Link
-does not add the tag. Tag an eligible task before removing its link if
-you want it to remain in the NOW view. The task's status after unlinking
-depends on the operation and the next task-status sync.
+Pomodoro is the highlight. Separately, Today lists the open tasks with
+a dedicated Task Link under today's open Pomodoros, and the NEXT and
+PENDING lanes count every `[*]` and `[/]` task visible today (caps 15
+and 10). Removing a Task Link never changes a task's lane: only an
+explicit release (Alt+N) returns Next or Pending work to Ready.
 
 For a typical day, capture or link work into the daily Pomodoro ledger,
 inspect it with read-only `bob plan`, then run `bob task-status-hooks`
@@ -94,16 +94,60 @@ one applies:
 | `duplicate_open_pomodoro_name` | the same non-exempt component is on two open entries |
 | `inventory_label_open` | an open component is in `plan.inventory_labels`; it still counts as a theme |
 | `subheading_in_pomodoros` | a `###`–`######` heading sits inside the section; it splits the heading's time total |
-| `now_cap_exceeded` | NOW is over the cap; only on surfaces that compute NOW |
+| `next_cap_exceeded` | NEXT is over the cap; never changes `status`, nothing is refused |
+| `pending_cap_exceeded` | PENDING is over the cap; never changes `status`, nothing is refused |
+| `today_link_unresolved` | a ledger link resolves to no countable task (missing or ambiguous note, unreadable file, or no open task behind the block ID) |
 
-## NOW (this week's bets)
+## Today
 
-A NOW task is a `#task` line that the native Tasks engine (the one
+Today is the open tasks with a dedicated Task Link under today's
+**open** Pomodoros, computed at read time. It is never a tag, a
+task-line field, or a file-path filter.
+
+1. **Ledger and open entries** are exactly the plan budget's:
+   today's daily note (`YYYY/YYYYMMDD.md`), its `## Pomodoros…`
+   section, column-0 checkbox entries; an entry is open unless its
+   status is `x`, `X`, or `-`.
+2. **Every open entry counts**, including exempt ones (GTD) and
+   unnamed placeholders.
+3. **Only dedicated Task Links count:** a direct child bullet, at
+   the entry's first child indentation, whose body after stripping
+   🍅 markers is exactly one plain `[[target#^id]]` or embedded
+   `![[target#^id]]` block link, not struck through and not fenced.
+   Deeper descendants and mixed-text bullets do not count. This is
+   exactly `list_queued_links` in
+   `src/native/capture_pomodoro_start.rs` (the `=x` / start lineup
+   rule).
+4. **Resolution:** an empty target is the daily note itself;
+   otherwise the hooks' rules apply (exact vault-relative path with
+   or without `.md`, then a unique case-insensitive basename).
+   Unresolved or ambiguous links are skipped; Rust reports them as
+   the lint `today_link_unresolved`. JavaScript uses
+   `metadataCache.getFirstLinkpathDest(target, dailyPath)`;
+   ambiguous basenames are a documented divergence, and no
+   conformance vector uses one.
+5. **Today's tasks** are the resolved `#task` lines with that block
+   ID whose status is open (Ready, Next, In Progress, or Blocked);
+   done and cancelled tasks drop out. Deduplicate by (path, block
+   ID), keeping the ledger order of first occurrence. The key is
+   `"<vault path with .md>#<block id>"`.
+6. Transcluded dependencies do **not** inherit Today; the hooks
+   still promote them to Next.
+
+## Lanes (NEXT and PENDING)
+
+**NEXT** is every `[*]` task and **PENDING** every `[/]` task that
+the dash's defaults show: not done, not dependency-blocked, not
+`#hide`, not under `_templates`, not under `_conflicts`, and no
+scheduled date after today. Each counts the **whole lane, Today
+included**, so counts don't swing during the day.
+
+A NEXT task is a `#task` line that the native Tasks engine (the one
 behind `bob query --tasks`) matches with this query:
 
 ```text
 not done
-tags include #now
+status.symbol is *
 is not blocked
 tags do not include #hide
 folder does not include _templates
@@ -111,20 +155,19 @@ path does not include _conflicts
 (no scheduled date) OR (scheduled on or before today)
 ```
 
-This matches the dash's own defaults, so the chip, the `### NOW
-Tasks` section and `bob plan` always agree. `has_now_tag(text)`
-means the case-sensitive whole token `#now`: preceded by the line
-start or whitespace, followed by the end or whitespace. `#now` is
-**never** a Next source and never changes task status.
+The PENDING query is identical with `status.symbol is /`. This
+matches the dash's own defaults, so the chips, the lane sections
+and `bob plan` always agree.
 
 ## Config
 
 ```yaml
-# Today's plan budget (bob plan, capture, tmux, Obsidian) and the weekly #now cap.
+# Today's plan budget (bob plan, capture, tmux, Obsidian) and the NEXT/PENDING lane caps.
 plan:
   max_themes: 3 # distinct open Pomodoro names besides the exempt ones
   max_links: 10 # distinct open Task Links outside exempt entries
-  max_now: 15 # open #now tasks visible today (see above)
+  max_next: 15 # open Next tasks visible today (see above)
+  max_pending: 10 # open In Progress tasks visible today (see above)
   strict: false # refuse #NAME captures that would create a theme past max_themes
   exempt: [GTD] # open entries that never count as themes
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open names that are storage, not themes
@@ -150,18 +193,33 @@ strings.
 `-f/--format human|json`, `-h/--help`. Environment: `BOB_DIR`,
 `BOB_DAY_FILE`, `BOB_NOW`, `BOB_CONFIG_FILE`, `NO_COLOR`.
 
-JSON adds `ok: true` and `schema_version: 1` to the report. This example
+JSON adds `ok: true` and `schema_version: 2` to the report. This example
 shows all report fields for one open theme and one exempt entry:
 
 ```json
 {
-  "date": "2026-09-30",
-  "daily_file": "2026/20260930.md",
-  "caps": { "max_themes": 3, "max_links": 10, "max_now": 15, "strict": false },
+  "date": "2026-10-01",
+  "daily_file": "2026/20261001.md",
+  "caps": { "max_themes": 3, "max_links": 10, "max_next": 15, "max_pending": 10, "strict": false },
   "status": "ok",
   "themes": { "count": 1, "cap": 3, "over": false },
   "links": { "count": 3, "cap": 10, "over": false },
-  "now": { "count": 12, "cap": 15, "over": false },
+  "today": { "count": 2 },
+  "next": { "count": 12, "cap": 15, "over": false },
+  "pending": { "count": 8, "cap": 10, "over": false },
+  "today_tasks": [
+    {
+      "path": "sase.md",
+      "block_id": "fix-it",
+      "line": 120,
+      "status_symbol": "*",
+      "status_name": "Next",
+      "text": "Fix it",
+      "entry_line": 55,
+      "entry_name": "BOB",
+      "ledger_line": 56
+    }
+  ],
   "theme_names": ["GOALS"],
   "entries": [
     {
@@ -186,23 +244,28 @@ shows all report fields for one open theme and one exempt entry:
   ],
   "warnings": [],
   "ok": true,
-  "schema_version": 1
+  "schema_version": 2
 }
 ```
 
 `theme_names` lists the ordered theme names alongside `entries`.
 Lint objects omit `line` when none applies; entries omit
-`time_range` when untimed.
+`time_range` when untimed. `today_tasks` is in ledger order of
+first occurrence; `today.count` is its length.
 
 Human output:
 
 ```text
-bob plan · Wed 2026-09-30 · 2026/20260930.md
+bob plan · Thu 2026-10-01 · 2026/20261001.md
 
-  PLAN  1/3 themes · 3/10 links        NOW  12/15
+  PLAN  3/3 themes · 7/10 links      TODAY 7 · PENDING 8/10 · NEXT 12/15
 
-  ★ GOALS  ▶ 0945-1015  3 links
-    GTD    exempt       0 links
+  ★ GOALS    ▶ 0945-1015   3 links
+    …
+
+  TODAY
+    [*] sase#^fix-it        Fix it
+    [/] bob#^capture-stop   Better capture stop
 ```
 
 Meters are green within the cap and red when over. ★ is yellow and
@@ -212,22 +275,22 @@ as MISC appears as a row and counts as a theme even though it also raises
 `inventory_label_open`.
 
 With no daily note the header says `no daily note yet`; with no
-Pomodoros section it says `no Pomodoros section`. NOW is still
-shown, and the command exits 0. Exit codes: 0 for a report, 1 for
-an I/O failure, 2 for usage or an invalid plan config.
+Pomodoros section it says `no Pomodoros section`. `TODAY 0` and the
+lanes are still shown, and the command exits 0. Exit codes: 0 for a
+report, 1 for an I/O failure, 2 for usage or an invalid plan config.
 
 ## Surfaces
 
 | Surface | What it shows |
 | --- | --- |
-| `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), and lint messages with codes |
-| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin renders PLAN and NOW chips, a theme line, and any lints. The affected chip shows a dash when the daily note, Pomodoros section, or Tasks plugin data is unavailable. |
-| `dash.md` | Its configured PLAN and NOW chips and `### NOW Tasks` section use the Bob Ledger Tools API. |
+| `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
+| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin renders PLAN, TODAY, and lane chips, a theme line, and any lints. (Later phase: the plugin moves to api v2.) The affected chip shows a dash when the daily note, Pomodoros section, or Tasks plugin data is unavailable. |
+| `dash.md` | Its configured PLAN, TODAY, and lane chips and mutually exclusive TODAY / PENDING / NEXT / READY sections use the Bob Ledger Tools API. (Later phase: the dash rebuild.) |
 | `bob tmux-pomodoro` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |
-| `bob task-status-hooks` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · NOW 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
+| `bob task-status-hooks` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
 | `bob capture` | When a capture changes today's Pomodoros section, a before/after theme and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap theme. |
 | Bob Mac Capture | The same budget in Themes and Links capsules, warning captions, and shorter destination rows such as `→ GOALS · next up` or `→ running GOALS 0945–1015`. |
-| Obsidian Notices | A plan suffix such as `· plan 3/3 · 11/10 🔴` on Task Link changes; a NOW toggle Notice such as `#now added · 1 task · NOW 13/15`. |
+| Obsidian Notices | A plan suffix such as `· plan 3/3 · 11/10 🔴` on Task Link changes. (Later phase: lane-aware Notices.) |
 
 ## Conformance examples
 
@@ -357,3 +420,139 @@ unless noted.
    ```
 
    Links are 1/10.
+
+## Today conformance examples
+
+Each vector gives the ledger, the notes it resolves against, and
+the expected ordered Today keys (`"<vault path with .md>#<block
+id>"`). Caps are the defaults unless noted. The vectors are shared
+with the `bob-ledger-tools` JavaScript mirror as its test vectors.
+
+- **T1 GTD.** An exempt entry's empty-target link resolves to the
+  daily note itself:
+
+  ```markdown
+  ## Pomodoros
+
+  - [ ] () — GTD
+      - [[#^gtd]]
+  ```
+
+  with `- [ ] #task Gtd chore ^gtd` in `2026/20261001.md` →
+  `2026/20261001.md#gtd`.
+
+- **T2 markers.** `🍅 [[a#^x]]` counts, `~~[[a#^y]]~~` doesn't,
+  `![[a#^z]]` counts:
+
+  ```markdown
+  ## Pomodoros
+
+  - [ ] () — GOALS
+      - 🍅 [[a#^x]]
+      - ~~[[a#^y]]~~
+      - ![[a#^z]]
+  ```
+
+  → `a.md#x`, `a.md#z`.
+
+- **T3 closed entries.** Links under `[x]` and `[-]` entries don't
+  count:
+
+  ```markdown
+  ## Pomodoros
+
+  - [x] () — DONE
+      - [[a#^x]]
+  - [-] () — GONE
+      - [[a#^y]]
+  - [ ] () — OPEN
+  ```
+
+  → no keys.
+
+- **T4 shapes.** A mixed bullet `Review [[a#^m]]` and a link nested
+  under a note bullet don't count:
+
+  ```markdown
+  ## Pomodoros
+
+  - [ ] () — GOALS
+      - Review [[a#^m]]
+      - Note text
+          - [[a#^deep]]
+  ```
+
+  → no keys.
+
+- **T5 dedupe.** One task under two open entries, and `[[a#^x]]`
+  plus `[[dir/a#^x]]` resolving to the same note → one key at its
+  first position:
+
+  ```markdown
+  ## Pomodoros
+
+  - [ ] () — ONE
+      - [[a#^x]]
+  - [ ] () — TWO
+      - [[a#^x]]
+      - [[dir/a#^x]]
+  ```
+
+  with only `dir/a.md` holding `^x` → `dir/a.md#x` at the first
+  entry's position.
+
+- **T6 fenced.** A link inside a fenced block doesn't count:
+
+  ````markdown
+  ## Pomodoros
+
+  - [ ] () — GOALS
+      - [[a#^x]]
+
+  ```
+  - [[a#^q]]
+  ```
+  ````
+
+  → `a.md#x`.
+
+- **T7 status.** Linked `[x]` and `[-]` tasks drop out; `[?]`
+  stays:
+
+  ```markdown
+  ## Pomodoros
+
+  - [ ] () — GOALS
+      - [[a#^x]]
+      - [[a#^y]]
+      - [[a#^z]]
+      - [[a#^w]]
+  ```
+
+  with `- [x] #task Done ^x`, `- [-] #task Gone ^y`,
+  `- [?] #task Waiting ^z`, `- [ ] #task Open ^w` in `a.md` →
+  `a.md#z`, `a.md#w`, and no lint.
+
+- **T8 unresolved.** `[[missing#^q]]` gives no key, plus
+  `today_link_unresolved` at the link's ledger line:
+
+  ```markdown
+  ## Pomodoros
+
+  - [ ] () — GOALS
+      - [[missing#^q]]
+  ```
+
+  → no keys, one `today_link_unresolved`.
+
+- **T9 alias.** `[[a#^x|alias]]` counts, pinned to whatever
+  `list_queued_links` does with aliases:
+
+  ```markdown
+  ## Pomodoros
+
+  - [ ] () — GOALS
+      - [[a#^x|alias]]
+  ```
+
+  → `a.md#x`.

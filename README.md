@@ -164,7 +164,7 @@ Bob's workflow commands are:
 | [`move-done-tasks`](#move-done-tasks) | Archive done and canceled task blocks and repair their links |
 | [`nightly`](#nightly-maintenance) | Run the Git sync and maintenance workflow |
 | [`notify`](#pomodoro-status) | Notify when the current Pomodoro finishes |
-| [`plan`](#plan-budget) | Show today's plan budget and this week's NOW count |
+| [`plan`](#plan-budget) | Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes |
 | [`plugins`](#plugins) | List and deploy Bob's custom Obsidian plugins |
 | [`pomodoro`](#pomodoro-status) | Print the current Pomodoro status |
 | [`projects`](#projects) | Inspect and synchronize project lifecycle tasks |
@@ -445,16 +445,17 @@ link-resolution, exclusion, retry, output, and JSON contract lives in
 bob plan [-b|--bob-dir DIR] [-f|--format human|json]
 ```
 
-Today is closed: GTD plus at most 3 themes, and this week is `#now`:
-at most 15 tasks. `bob plan` is read-only: it reports the plan
-budget from today's daily-note ledger (distinct open Pomodoro names
-besides the exempt ones, distinct Task Links under them) and the NOW
-count from the native Tasks index, with lints and hints. The first
-open non-exempt entry is the highlight (★); the timed entry is
-running (▶). A missing daily note or missing Pomodoros section still
-reports NOW and exits 0. The full definition, JSON contract, lint
-codes, and conformance examples live in
-[`docs/plan.md`](docs/plan.md).
+Today is closed: GTD plus at most 3 themes. `bob plan` is read-only:
+it reports the plan budget from today's daily-note ledger (distinct
+open Pomodoro names besides the exempt ones, distinct Task Links
+under them), Today's tasks with a dedicated Task Link under today's
+open Pomodoros, and the NEXT/PENDING lane counts from the native
+Tasks index, with lints and hints. Removing a Task Link never changes
+a task's lane. The first open non-exempt entry is the highlight (★);
+the timed entry is running (▶). A missing daily note or missing
+Pomodoros section still reports `TODAY 0` and the lanes, and exits 0.
+The full definition, JSON contract, lint codes, and conformance
+examples live in [`docs/plan.md`](docs/plan.md).
 
 ## Projects
 
@@ -834,8 +835,9 @@ file holds the priority windows for `p:<N>` and `bob randomize`,
 `highlights.pre_scan_hook` for `bob highlights scan` and
 `bob highlights doctor`, the `gkeep:` section for `bob gkeep`, and the
 optional `plan:` block for `bob plan` (caps default to 3 themes, 10
-links, and 15 NOW tasks; `bob plan` exits 2 on invalid values while
-every other surface falls back to the defaults).
+links, 15 NEXT tasks, and 10 PENDING tasks; `bob plan` exits 2 on
+invalid values while every other surface falls back to the
+defaults).
 
 `COLUMNS`, when set to a positive integer, is the width `bob plugins list`
 and `bob gkeep` use when they shorten human table text so each row fits.

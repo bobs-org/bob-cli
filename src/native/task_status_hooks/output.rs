@@ -463,7 +463,9 @@ pub(super) fn print_plan_budget_line(result: &SyncResult) {
     let themes =
         format!("{}/{} themes", budget.themes.count, budget.themes.cap);
     let links = format!("{}/{} links", budget.links.count, budget.links.cap);
-    let now = format!("{}/{}", budget.now.count, budget.now.cap);
+    let today = format!("TODAY {}", budget.today.count);
+    let pending = format!("{}/{}", budget.pending.count, budget.pending.cap);
+    let next = format!("{}/{}", budget.next.count, budget.next.cap);
     let themes = if budget.themes.over {
         styler.red(&themes)
     } else {
@@ -474,12 +476,19 @@ pub(super) fn print_plan_budget_line(result: &SyncResult) {
     } else {
         links
     };
-    let now = if budget.now.over {
-        styler.red(&now)
+    let pending = if budget.pending.over {
+        styler.red(&pending)
     } else {
-        now
+        pending
     };
-    let mut line = format!("  plan {themes} \u{b7} {links} \u{b7} NOW {now}");
+    let next = if budget.next.over {
+        styler.red(&next)
+    } else {
+        next
+    };
+    let mut line = format!(
+        "  plan {themes} \u{b7} {links} \u{b7} {today} \u{b7} PENDING {pending} \u{b7} NEXT {next}"
+    );
     if !budget.warnings.is_empty() {
         let count = budget.warnings.len();
         line.push_str(&format!(

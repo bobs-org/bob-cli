@@ -1189,8 +1189,32 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
         json["plan_budget"]["links"],
         serde_json::json!({"count": 3, "cap": 10, "over": false})
     );
-    assert_eq!(json["plan_budget"]["now"]["count"], 0);
-    assert_eq!(json["plan_budget"]["now"]["cap"], 15);
+    assert_eq!(json["plan_budget"]["today"]["count"], 3);
+    assert_eq!(
+        json["plan_budget"]["next"],
+        serde_json::json!({"count": 0, "cap": 15, "over": false})
+    );
+    assert_eq!(
+        json["plan_budget"]["pending"],
+        serde_json::json!({"count": 0, "cap": 10, "over": false})
+    );
+    assert_eq!(
+        json["plan_budget"]["caps"],
+        serde_json::json!({
+            "max_themes": 3,
+            "max_links": 10,
+            "max_next": 15,
+            "max_pending": 10,
+            "strict": false,
+        })
+    );
+    assert_eq!(
+        json["plan_budget"]["today_tasks"]
+            .as_array()
+            .expect("today_tasks array")
+            .len(),
+        3
+    );
     assert_eq!(json["plan_budget"]["status"], "ok");
 
     let human = bob_command()
@@ -1203,7 +1227,9 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
         .expect("dry-run plan budget human output");
     assert_success(&human);
     assert!(
-        stdout(&human).contains("plan 2/3 themes · 3/10 links · NOW 0/15"),
+        stdout(&human).contains(
+            "plan 2/3 themes · 3/10 links · TODAY 3 · PENDING 0/10 · NEXT 0/15"
+        ),
         "expected a plan budget stats line:\n{}",
         format_output(&human)
     );

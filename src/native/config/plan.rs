@@ -7,7 +7,8 @@ use super::ConfigError;
 pub(crate) struct PlanConfig {
     pub(crate) max_themes: u32,
     pub(crate) max_links: u32,
-    pub(crate) max_now: u32,
+    pub(crate) max_next: u32,
+    pub(crate) max_pending: u32,
     pub(crate) strict: bool,
     pub(crate) exempt: Vec<String>,
     pub(crate) inventory_labels: Vec<String>,
@@ -18,7 +19,8 @@ impl Default for PlanConfig {
         Self {
             max_themes: 3,
             max_links: 10,
-            max_now: 15,
+            max_next: 15,
+            max_pending: 10,
             strict: false,
             exempt: vec!["GTD".to_string()],
             inventory_labels: vec![
@@ -40,8 +42,12 @@ impl PlanConfig {
         self.max_links
     }
 
-    pub(crate) fn max_now(&self) -> u32 {
-        self.max_now
+    pub(crate) fn max_next(&self) -> u32 {
+        self.max_next
+    }
+
+    pub(crate) fn max_pending(&self) -> u32 {
+        self.max_pending
     }
 
     pub(crate) fn strict(&self) -> bool {
@@ -195,10 +201,16 @@ fn parse_plan_config(
             .collect::<Result<Vec<_>, _>>()
     };
 
+    // A stale `max_now` stays ignored like any other unknown key.
     Ok(PlanConfig {
         max_themes: cap("max_themes", get("max_themes"), defaults.max_themes)?,
         max_links: cap("max_links", get("max_links"), defaults.max_links)?,
-        max_now: cap("max_now", get("max_now"), defaults.max_now)?,
+        max_next: cap("max_next", get("max_next"), defaults.max_next)?,
+        max_pending: cap(
+            "max_pending",
+            get("max_pending"),
+            defaults.max_pending,
+        )?,
         strict: strict_value,
         exempt: strings("exempt", get("exempt"))?,
         inventory_labels: strings("inventory_labels", get("inventory_labels"))?,
@@ -231,7 +243,8 @@ mod tests {
         assert_eq!(config, PlanConfig::default());
         assert_eq!(config.max_themes(), 3);
         assert_eq!(config.max_links(), 10);
-        assert_eq!(config.max_now(), 15);
+        assert_eq!(config.max_next(), 15);
+        assert_eq!(config.max_pending(), 10);
         assert!(!config.strict());
         assert_eq!(config.exempt(), ["GTD"]);
         assert_eq!(
@@ -264,7 +277,9 @@ mod tests {
             plan:\n\
             \x20 max_themes: 5\n\
             \x20 max_links: 12\n\
-            \x20 max_now: 20\n\
+            \x20 max_next: 20\n\
+            \x20 max_pending: 7\n\
+            \x20 max_now: 99\n\
             \x20 strict: true\n\
             \x20 exempt: [GTD, ADMIN]\n\
             \x20 inventory_labels: [LATER]\n\
@@ -274,7 +289,8 @@ mod tests {
         .expect("valid plan block");
         assert_eq!(config.max_themes(), 5);
         assert_eq!(config.max_links(), 12);
-        assert_eq!(config.max_now(), 20);
+        assert_eq!(config.max_next(), 20);
+        assert_eq!(config.max_pending(), 7);
         assert!(config.strict());
         assert_eq!(config.exempt(), ["GTD", "ADMIN"]);
         assert_eq!(config.inventory_labels(), ["LATER"]);
@@ -285,7 +301,8 @@ mod tests {
         for text in [
             "plan:\n  max_themes: 0\n",
             "plan:\n  max_links: -2\n",
-            "plan:\n  max_now: 0\n",
+            "plan:\n  max_next: 0\n",
+            "plan:\n  max_pending: 0\n",
             "plan:\n  max_themes: many\n",
             "plan:\n  strict: \"yes\"\n",
             "plan:\n  exempt: GTD\n",

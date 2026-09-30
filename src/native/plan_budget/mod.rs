@@ -1,10 +1,14 @@
 //! Shared plan-budget core: the `plan:` config definition, a pure
-//! ledger budget and lint engine, and the NOW counter built on the
-//! native Tasks engine. `docs/plan.md` is the authoritative definition;
-//! this module is its Rust implementation, shared by `bob plan`, the
+//! ledger budget and lint engine, the ledger-derived Today engine,
+//! and the NEXT/PENDING lane counters built on the native Tasks
+//! engine. `docs/plan.md` is the authoritative definition; this
+//! module is its Rust implementation, shared by `bob plan`, the
 //! task-status hooks, and capture.
 
 pub(crate) mod cli;
+pub(crate) mod today;
+
+pub(crate) use today::{TodayResult, TodayTask};
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -26,7 +30,8 @@ pub(crate) const LINT_LINK_CAP: &str = "plan_link_cap_exceeded";
 pub(crate) const LINT_DUPLICATE_NAME: &str = "duplicate_open_pomodoro_name";
 pub(crate) const LINT_INVENTORY_LABEL: &str = "inventory_label_open";
 pub(crate) const LINT_SUBHEADING: &str = "subheading_in_pomodoros";
-pub(crate) const LINT_NOW_CAP: &str = "now_cap_exceeded";
+pub(crate) const LINT_NEXT_CAP: &str = "next_cap_exceeded";
+pub(crate) const LINT_PENDING_CAP: &str = "pending_cap_exceeded";
 
 /// Display name used when an unnamed open entry holds counted links.
 pub(crate) const UNNAMED_THEME: &str = "(unnamed)";
@@ -45,18 +50,34 @@ pub(crate) struct PlanMeter {
     pub(crate) over: bool,
 }
 
+/// One lane meter: the whole NEXT or PENDING lane, Today
+/// included, so counts never swing during the day.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct NowBudget {
+pub(crate) struct LaneBudget {
     pub(crate) count: usize,
     pub(crate) cap: u32,
     pub(crate) over: bool,
+}
+
+/// Both lane meters together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct Lanes {
+    pub(crate) next: LaneBudget,
+    pub(crate) pending: LaneBudget,
+}
+
+/// Today's dedicated-task count: the number of [`TodayTask`] rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TodayBudget {
+    pub(crate) count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PlanCaps {
     pub(crate) max_themes: u32,
     pub(crate) max_links: u32,
-    pub(crate) max_now: u32,
+    pub(crate) max_next: u32,
+    pub(crate) max_pending: u32,
     pub(crate) strict: bool,
 }
 
@@ -94,7 +115,7 @@ pub(crate) struct LedgerBudget {
     pub(crate) warnings: Vec<PlanLint>,
 }
 
-/// The full report shared by `bob plan`, the hooks, and capture.
+/// The full report shared by `bob plan` and the hooks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PlanReport {
     pub(crate) date: String,
@@ -103,7 +124,10 @@ pub(crate) struct PlanReport {
     pub(crate) status: PlanStatus,
     pub(crate) themes: PlanMeter,
     pub(crate) links: PlanMeter,
-    pub(crate) now: NowBudget,
+    pub(crate) today: TodayBudget,
+    pub(crate) next: LaneBudget,
+    pub(crate) pending: LaneBudget,
+    pub(crate) today_tasks: Vec<TodayTask>,
     pub(crate) theme_names: Vec<String>,
     pub(crate) entries: Vec<PlanEntry>,
     pub(crate) warnings: Vec<PlanLint>,
@@ -114,31 +138,46 @@ impl PlanReport {
         PlanCaps {
             max_themes: config.max_themes(),
             max_links: config.max_links(),
-            max_now: config.max_now(),
+            max_next: config.max_next(),
+            max_pending: config.max_pending(),
             strict: config.strict(),
         }
     }
 }
 
-/// The full report shared by `bob plan`, the hooks, and capture:
-/// the pure ledger half plus the NOW count. NOW over-cap appends
-/// `now_cap_exceeded` but never changes `status`: status depends
-/// only on themes and links (rule 8). Being exactly at a cap is fine.
+/// The full report shared by `bob plan` and the hooks: the pure
+/// ledger half plus the Today rows and lane meters. Lane over-cap
+/// appends `next_cap_exceeded` / `pending_cap_exceeded` but never
+/// changes `status`: status depends only on themes and links (rule
+/// 8). Being exactly at a cap is fine. Nothing is ever refused.
 pub(crate) fn assemble_report(
     today: NaiveDate,
     daily_file: &str,
     config: &PlanConfig,
     ledger: &LedgerBudget,
-    now: NowBudget,
+    lanes: &Lanes,
+    today_result: &TodayResult,
 ) -> PlanReport {
     let mut warnings = ledger.warnings.clone();
-    if now.over {
+    warnings.extend(today_result.warnings.iter().cloned());
+    if lanes.next.over {
         warnings.push(PlanLint {
-            code: LINT_NOW_CAP.to_string(),
+            code: LINT_NEXT_CAP.to_string(),
             message: format!(
-                "this week's NOW has {}/{cap} tasks",
-                now.count,
-                cap = now.cap
+                "NEXT has {}/{cap} tasks; release some with Alt+N",
+                lanes.next.count,
+                cap = lanes.next.cap
+            ),
+            line: None,
+        });
+    }
+    if lanes.pending.over {
+        warnings.push(PlanLint {
+            code: LINT_PENDING_CAP.to_string(),
+            message: format!(
+                "PENDING has {}/{cap} tasks; release some with Alt+N",
+                lanes.pending.count,
+                cap = lanes.pending.cap
             ),
             line: None,
         });
@@ -151,7 +190,12 @@ pub(crate) fn assemble_report(
         status,
         themes: ledger.themes.clone(),
         links: ledger.links.clone(),
-        now,
+        today: TodayBudget {
+            count: today_result.tasks.len(),
+        },
+        next: lanes.next.clone(),
+        pending: lanes.pending.clone(),
+        today_tasks: today_result.tasks.clone(),
         theme_names: ledger.theme_names.clone(),
         entries: ledger.entries.clone(),
         warnings,
@@ -171,9 +215,9 @@ pub(crate) fn normalize_component(value: &str) -> String {
 /// preceded by the line start or whitespace, followed by the end or
 /// whitespace. `#nowadays` and `#now/x` never match.
 ///
-/// Shared with the close-drop and now-token phases (per-row `now`
-/// flags and the `^` picker); `bob plan` itself counts NOW through
-/// the Tasks engine plus this predicate.
+/// Shared with capture (per-row `now` flags and the `^` picker),
+/// which still uses it until `#now` is removed. `bob plan` itself
+/// now counts the NEXT/PENDING lanes through the Tasks engine.
 pub(crate) fn has_now_tag(text: &str) -> bool {
     let mut search = text;
     let mut offset = 0;
@@ -196,32 +240,41 @@ pub(crate) fn has_now_tag(text: &str) -> bool {
     false
 }
 
-/// Count this week's bets through the native Tasks engine, so the
-/// result honors the vault's Tasks settings, then keep only whole
-/// `#now` tokens: the engine's `tags include` also matches subtags
-/// like `#now/x`. A scan failure reads as zero: the vault was
-/// already proven readable by the daily-note read, and the query
-/// text itself is covered by tests.
-pub(crate) fn count_now(
+/// Count the NEXT and PENDING lanes through the native Tasks
+/// engine, so the result honors the vault's Tasks settings. Each
+/// counts the whole lane, Today included. A scan failure reads as
+/// zero: the vault was already proven readable by the daily-note
+/// read, and the query text itself is covered by tests.
+pub(crate) fn count_lanes(
     bob_dir: &Path,
     today: NaiveDate,
     config: &PlanConfig,
-) -> NowBudget {
+) -> Lanes {
     let now = today
         .and_hms_opt(12, 0, 0)
         .unwrap_or(chrono::NaiveDateTime::MIN);
-    let count = dataview::query_matching_descriptions(
-        bob_dir,
-        dataview::NOW_QUERY,
-        now,
-    )
-    .map(|descriptions| {
-        descriptions.iter().filter(|text| has_now_tag(text)).count()
-    })
-    .unwrap_or(0);
-    let cap = config.max_now();
+    Lanes {
+        next: count_lane(bob_dir, dataview::NEXT_QUERY, now, config.max_next()),
+        pending: count_lane(
+            bob_dir,
+            dataview::PENDING_QUERY,
+            now,
+            config.max_pending(),
+        ),
+    }
+}
+
+fn count_lane(
+    bob_dir: &Path,
+    query: &str,
+    now: chrono::NaiveDateTime,
+    cap: u32,
+) -> LaneBudget {
+    let count = dataview::query_matching_descriptions(bob_dir, query, now)
+        .map(|descriptions| descriptions.len())
+        .unwrap_or(0);
     let over = u64::try_from(count).unwrap_or(u64::MAX) > u64::from(cap);
-    NowBudget { count, cap, over }
+    LaneBudget { count, cap, over }
 }
 
 /// Pure ledger budget and lint engine implementing `docs/plan.md`
@@ -841,25 +894,25 @@ mod tests {
     }
 
     #[test]
-    fn now_query_parses_through_the_native_engine() {
-        // The fixed NOW query must stay valid Tasks syntax; the count
-        // itself is covered by the fixture-vault CLI tests.
+    fn lane_queries_parse_through_the_native_engine() {
+        // The fixed lane queries must stay valid Tasks syntax; the
+        // counts themselves are covered by the fixture-vault CLI
+        // tests.
         let vault = tempfile::tempdir().expect("temp vault");
         let now = chrono::NaiveDate::from_ymd_opt(2026, 9, 30)
             .expect("date")
             .and_hms_opt(12, 0, 0)
             .expect("noon");
-        let descriptions = dataview::query_matching_descriptions(
-            vault.path(),
-            dataview::NOW_QUERY,
-            now,
-        )
-        .expect("NOW query parses and runs");
-        assert!(descriptions.is_empty());
+        for query in [dataview::NEXT_QUERY, dataview::PENDING_QUERY] {
+            let descriptions =
+                dataview::query_matching_descriptions(vault.path(), query, now)
+                    .expect("lane query parses and runs");
+            assert!(descriptions.is_empty());
+        }
     }
 
     #[test]
-    fn now_over_never_changes_status() {
+    fn lane_over_never_changes_status() {
         let ledger = budget(
             "## Pomodoros\n\
             \n\
@@ -867,13 +920,30 @@ mod tests {
         );
         let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 30).expect("date");
         let config = PlanConfig::default();
-        let now = NowBudget {
-            count: config.max_now() as usize + 1,
-            cap: config.max_now(),
-            over: true,
+        let lanes = Lanes {
+            next: LaneBudget {
+                count: config.max_next() as usize + 1,
+                cap: config.max_next(),
+                over: true,
+            },
+            pending: LaneBudget {
+                count: config.max_pending() as usize + 1,
+                cap: config.max_pending(),
+                over: true,
+            },
         };
-        let report =
-            assemble_report(today, "2026/20260930.md", &config, &ledger, now);
+        let today_result = TodayResult {
+            tasks: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let report = assemble_report(
+            today,
+            "2026/20260930.md",
+            &config,
+            &ledger,
+            &lanes,
+            &today_result,
+        );
         assert_eq!(report.status, PlanStatus::Ok);
         assert_eq!(codes(&ledger), Vec::<&str>::new());
         assert_eq!(
@@ -882,7 +952,7 @@ mod tests {
                 .iter()
                 .map(|w| w.code.as_str())
                 .collect::<Vec<_>>(),
-            vec![LINT_NOW_CAP]
+            vec![LINT_NEXT_CAP, LINT_PENDING_CAP]
         );
     }
 

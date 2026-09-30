@@ -1,5 +1,5 @@
-//! Read-only `bob plan` CLI: today's plan budget and this week's
-//! NOW count, as human output or JSON.
+//! Read-only `bob plan` CLI: today's plan budget, Today's
+//! tasks, and the NEXT/PENDING lanes, as human output or JSON.
 
 use std::{
     ffi::OsString,
@@ -20,15 +20,16 @@ use super::{
         env as bob_env, pomodoro,
         style::Styler,
     },
-    assemble_report, compute_for_daily, count_now, LedgerBudget, NowBudget,
-    PlanReport, PlanStatus,
+    assemble_report, compute_for_daily, count_lanes,
+    today::{today_tasks, TodayResult},
+    Lanes, LedgerBudget, PlanReport, PlanStatus,
 };
 
 const COMMAND_NAME: &str = "bob plan";
 
 /// Bump only for a breaking change to the JSON object below; new
-/// optional fields keep version 1.
-const SCHEMA_VERSION: u32 = 1;
+/// optional fields keep the current version.
+const SCHEMA_VERSION: u32 = 2;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
@@ -63,15 +64,19 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Show today's plan budget and this week's NOW count")
+        .about(
+            "Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes",
+        )
         .long_about(
-            "Show today's Pomodoro plan budget from the daily note ledger \
-            and this week's NOW count from the Tasks index.\n\n\
+            "Show today's Pomodoro plan budget from the daily note ledger, \
+            Today's tasks with a dedicated Task Link under today's open \
+            Pomodoros, and the NEXT/PENDING lane counts from the Tasks \
+            index.\n\n\
             The command is read-only. Themes are the distinct open Pomodoro \
             names besides the exempt ones; links are the distinct Task Links \
-            under them; NOW counts open #now tasks visible today. See \
-            docs/plan.md for the full definition. A missing daily note or \
-            missing Pomodoros section still reports NOW and exits 0.",
+            under them. See docs/plan.md for the full definition. A missing \
+            daily note or missing Pomodoros section still reports TODAY 0 \
+            and the lanes, and exits 0.",
         )
         .after_help(
             "Examples:\n  bob plan\n  bob plan -f json\n  bob plan -b ~/bob -f json\n\nEnvironment:\n  BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n  BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  BOB_DIR                   Bob vault root when --bob-dir is omitted\n  BOB_NOW                   Local datetime override for default daily-note selection\n  NO_COLOR                  Disable colored output",
@@ -172,7 +177,7 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     let relative_day_file = relative_day_file(&day_file, &request.bob_dir);
     let today = day_date(&day_file);
-    let now = count_now(&request.bob_dir, today, &config);
+    let lanes = count_lanes(&request.bob_dir, today, &config);
 
     let contents = match fs::read_to_string(&day_file) {
         Ok(contents) => contents,
@@ -182,7 +187,7 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
                     today,
                     &relative_day_file,
                     &config,
-                    now,
+                    &lanes,
                 ),
                 no_daily_note: true,
                 has_section: false,
@@ -199,13 +204,22 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
     let ledger =
         compute_for_daily(&contents, &config, Some(&relative_day_file));
     let has_section = ledger.has_section;
+    let today_result = if has_section {
+        today_tasks(&request.bob_dir, &relative_day_file, &contents)
+    } else {
+        TodayResult {
+            tasks: Vec::new(),
+            warnings: Vec::new(),
+        }
+    };
     Ok(PlanSuccess {
         report: assemble_report(
             today,
             &relative_day_file,
             &config,
             &ledger,
-            now,
+            &lanes,
+            &today_result,
         ),
         no_daily_note: false,
         has_section,
@@ -236,7 +250,7 @@ fn report_without_ledger(
     today: NaiveDate,
     relative_day_file: &str,
     config: &PlanConfig,
-    now: NowBudget,
+    lanes: &Lanes,
 ) -> PlanReport {
     let ledger = LedgerBudget {
         has_section: false,
@@ -255,7 +269,18 @@ fn report_without_ledger(
         entries: Vec::new(),
         warnings: Vec::new(),
     };
-    assemble_report(today, relative_day_file, config, &ledger, now)
+    let today_result = TodayResult {
+        tasks: Vec::new(),
+        warnings: Vec::new(),
+    };
+    assemble_report(
+        today,
+        relative_day_file,
+        config,
+        &ledger,
+        lanes,
+        &today_result,
+    )
 }
 
 fn print_success(result: &PlanSuccess, output_format: OutputFormat) {
@@ -308,7 +333,10 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
         format!("{}/{} themes", report.themes.count, report.themes.cap);
     let links_meter =
         format!("{}/{} links", report.links.count, report.links.cap);
-    let now_meter = format!("{}/{}", report.now.count, report.now.cap);
+    let today_meter = format!("TODAY {}", report.today.count);
+    let pending_meter =
+        format!("{}/{}", report.pending.count, report.pending.cap);
+    let next_meter = format!("{}/{}", report.next.count, report.next.cap);
     let paint_meter = |styler: &Styler, text: &str, over: bool| {
         if over {
             styler.red(text)
@@ -317,10 +345,12 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
         }
     };
     output.push_str(&format!(
-        "  PLAN  {} {sep} {}        NOW  {}\n",
+        "  PLAN  {} {sep} {}      {} {sep} PENDING {} {sep} NEXT {}\n",
         paint_meter(styler, &themes_meter, report.themes.over),
         paint_meter(styler, &links_meter, report.links.over),
-        paint_meter(styler, &now_meter, report.now.over),
+        paint_meter(styler, &today_meter, false),
+        paint_meter(styler, &pending_meter, report.pending.over),
+        paint_meter(styler, &next_meter, report.next.over),
         sep = styler.separator(),
     ));
     output.push('\n');
@@ -371,6 +401,28 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
             } else {
                 output.push_str(&row);
             }
+        }
+        output.push('\n');
+    }
+
+    if !report.today_tasks.is_empty() {
+        output.push_str("  TODAY\n");
+        let key_width = report
+            .today_tasks
+            .iter()
+            .map(|task| {
+                format!("{}#^{}", task.path, task.block_id).chars().count()
+            })
+            .max()
+            .unwrap_or(0);
+        for task in &report.today_tasks {
+            let key = format!("{}#^{}", task.path, task.block_id);
+            output.push_str(&format!(
+                "    [{}] {}  {}\n",
+                task.status_symbol,
+                pad(&key, key_width),
+                task.text,
+            ));
         }
         output.push('\n');
     }

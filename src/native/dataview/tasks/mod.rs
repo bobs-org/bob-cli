@@ -61,9 +61,14 @@ impl NoteBlock {
     }
 }
 
-/// The `docs/plan.md` NOW query: this week's bets visible today. It
-/// matches the dash's own defaults so every surface agrees.
-pub(crate) const NOW_QUERY: &str = "not done\ntags include #now\nis not blocked\ntags do not include #hide\nfolder does not include _templates\npath does not include _conflicts\n(no scheduled date) OR (scheduled on or before today)";
+/// The `docs/plan.md` NEXT lane query: every Next task visible
+/// today. It mirrors the old NOW query's defaults, replacing only the
+/// tag test with the status test, so the dash and `bob plan` agree.
+pub(crate) const NEXT_QUERY: &str = "not done\nstatus.symbol is *\nis not blocked\ntags do not include #hide\nfolder does not include _templates\npath does not include _conflicts\n(no scheduled date) OR (scheduled on or before today)";
+
+/// The `docs/plan.md` PENDING lane query: every In Progress task
+/// visible today. Same defaults as [`NEXT_QUERY`].
+pub(crate) const PENDING_QUERY: &str = "not done\nstatus.symbol is /\nis not blocked\ntags do not include #hide\nfolder does not include _templates\npath does not include _conflicts\n(no scheduled date) OR (scheduled on or before today)";
 
 /// The descriptions of the tasks matching `query` through the native
 /// Tasks engine, so plan-budget NOW counts honor the vault's Tasks

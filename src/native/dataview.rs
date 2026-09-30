@@ -40,7 +40,9 @@ use sources::{
     collect_native_markdown_paths, native_frontmatter_block,
     native_link_target, normalize_note_path, note_stem, unquote_native_scalar,
 };
-pub(crate) use tasks::{query_matching_descriptions, NOW_QUERY};
+pub(crate) use tasks::{
+    query_matching_descriptions, NEXT_QUERY, PENDING_QUERY,
+};
 
 const COMMAND_NAME: &str = "bob query";
 const ENV_OBSIDIAN_COMMAND: &str = "BOB_DATAVIEW_OBSIDIAN_COMMAND";

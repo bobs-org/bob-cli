@@ -129,7 +129,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
         name: "plan",
         script_command: None,
-        about: "Show today's plan budget and this week's NOW count",
+        about: "Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes",
         native_command: NativeCommand::Plan,
     },
     Subcommand {
@@ -369,7 +369,7 @@ Examples:
   bob move-done-tasks --threshold 10
                                  Move tasks and maintain done links
   bob nightly                    Run the nightly sync and maintenance steps
-  bob plan -f json               Show today's plan budget and NOW count
+  bob plan -f json               Show today's plan budget, Today, and lanes
   bob plugins list               List Bob plugins and their vault sync state
   bob pomodoro                   Show today's Pomodoro status
   bob projects list              List project notes and ^prj task states

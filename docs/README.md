@@ -11,7 +11,7 @@ index, and environment variables.
 | [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into Obsidian tasks |
 | [highlights-ref-sync.md](highlights-ref-sync.md) | `bob highlights` PDF intake and reference notes |
 | [obsidian-sync-exclusions.md](obsidian-sync-exclusions.md) | Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only |
-| [plan.md](plan.md) | Plan budget and NOW definition, `bob plan` JSON, lints, and conformance examples |
+| [plan.md](plan.md) | Plan budget, Today, and lanes definition, `bob plan` JSON, lints, and conformance examples |
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
 | [randomize.md](randomize.md) | `bob randomize` bulk re-roll of due prioritized tasks |
