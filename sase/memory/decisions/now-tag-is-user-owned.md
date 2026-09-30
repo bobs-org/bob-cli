@@ -11,8 +11,11 @@ summary:
   strips it. It never changes task status or feeds Next, and it stays a tag, never an
   inline field."
 metadata:
-  status: accepted
+  status: superseded
   decided: 2026-09-29
+  superseded_by:
+    - decisions/task-lanes-are-sticky
+    - decisions/today-is-read-from-the-ledger
 ---
 
 **Applies to.** bob-cli, bob-plugins, Bob Mac Capture, vault.
@@ -71,3 +74,7 @@ shows NOW ignored — the research's rule is then to delete the tag and keep onl
 capped ledger; promotion from Ready proves too slow and a second horizon tag such as
 `#next` is needed; or Obsidian Tasks or Bases gains task-level properties that are as
 parser-safe as a tag.
+
+Superseded: `#now` is retired — see [[decisions/task-lanes-are-sticky]] and
+[[decisions/today-is-read-from-the-ledger]]. The Next lane now holds this week's
+commitments.

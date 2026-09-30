@@ -459,7 +459,11 @@ fn blocked_transition_precedence_and_recovery_are_explicit() {
     );
     assert_eq!(
         task_transition(&working, None, None, false, false, true),
-        Transition::ClearInProgress
+        Transition::Unchanged
+    );
+    assert_eq!(
+        task_transition(&working, None, None, false, false, false),
+        Transition::Unchanged
     );
     assert_eq!(
         task_transition(&working, None, None, false, true, true),
@@ -472,7 +476,7 @@ fn blocked_transition_precedence_and_recovery_are_explicit() {
             Some(RankedStatus::Next),
             true,
             false,
-            false,
+            true,
         ),
         Transition::KeptNext
     );
@@ -486,6 +490,90 @@ fn blocked_transition_precedence_and_recovery_are_explicit() {
             false,
         ),
         Transition::Unchanged
+    );
+}
+
+#[test]
+fn sticky_lanes_keep_next_and_in_progress_outside_daily_notes() {
+    let settings = test_settings();
+    let ready = parse_tasks("- [ ] #task Ready\n", &settings).remove(0);
+    let next = parse_tasks("- [*] #task Next\n", &settings).remove(0);
+    let working = parse_tasks("- [/] #task Working\n", &settings).remove(0);
+    let blocked = parse_tasks("- [?] #task Blocked\n", &settings).remove(0);
+    // 1. Unlinked [*] in an ordinary note stays [*] without counting as kept.
+    assert_eq!(
+        task_transition(&next, None, None, false, false, false),
+        Transition::Unchanged
+    );
+    // ... even when directly recent: still Unchanged, never KeptNext.
+    assert_eq!(
+        task_transition(
+            &next,
+            None,
+            Some(RankedStatus::Next),
+            true,
+            false,
+            false
+        ),
+        Transition::Unchanged
+    );
+    // 2. Unlinked [*] in an area/project note also stays [*]; the lane rule
+    // does not consult note kind, so daily=false covers both.
+    assert_eq!(
+        task_transition(&next, None, None, true, false, false),
+        Transition::Unchanged
+    );
+    // 3. Area/project [/] with no recent activity stays [/].
+    assert_eq!(
+        task_transition(&working, None, None, false, false, false),
+        Transition::Unchanged
+    );
+    assert_eq!(
+        task_transition(&working, None, None, true, false, false),
+        Transition::Unchanged
+    );
+    // 4. A ^gtd-style [*] in the daily note still clears without grace, and
+    // is kept only while directly recent.
+    assert_eq!(
+        task_transition(&next, None, None, false, false, true),
+        Transition::Clear
+    );
+    assert_eq!(
+        task_transition(
+            &next,
+            None,
+            Some(RankedStatus::Next),
+            true,
+            false,
+            true
+        ),
+        Transition::KeptNext
+    );
+    // 5. Blocked still overrides [*] and [/], and recovers to Ready when the
+    // task was never linked.
+    assert_eq!(
+        task_transition(&next, None, None, false, true, false),
+        Transition::MarkBlocked
+    );
+    assert_eq!(
+        task_transition(&working, None, None, false, true, false),
+        Transition::MarkBlocked
+    );
+    assert_eq!(
+        task_transition(&blocked, None, None, false, false, false),
+        Transition::Unblock(RankedStatus::Ready)
+    );
+    // 6. Ready -> Next on link is unchanged.
+    assert_eq!(
+        task_transition(
+            &ready,
+            Some(RankedStatus::Next),
+            None,
+            false,
+            false,
+            false
+        ),
+        Transition::MarkNext
     );
 }
 

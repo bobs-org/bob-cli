@@ -25,16 +25,26 @@ edited in place.
 <!-- sase:strands -->
 
 1. **#now Is A User-Owned Weekly Bet, Never A Status** (`now-tag-is-user-owned`)
-   - Only Bryan's explicit gestures add or remove #now; no automation infers, adds, or
-     strips it. It never changes task status or feeds Next, and it stays a tag, never an
-     inline field.
+   - _[superseded by `task-lanes-are-sticky`, `today-is-read-from-the-ledger`]_ Only
+     Bryan's explicit gestures add or remove #now; no automation infers, adds, or strips
+     it. It never changes task status or feeds Next, and it stays a tag, never an inline
+     field.
 2. **Active Task Statuses Are Derived, Not Authored** (`task-status-is-derived`)
-   - Today's Pomodoro ledger drives Next and In Progress; open dependencies and future
-     scheduled dates drive Blocked. bob task-status-hooks reconciles them, so writers
-     change those inputs, never just the checkbox.
+   - _[partly superseded by `task-lanes-are-sticky`]_ Today's Pomodoro ledger drives
+     Next and In Progress; open dependencies and future scheduled dates drive Blocked.
+     bob task-status-hooks reconciles them, so writers change those inputs, never just
+     the checkbox.
 3. **Bob Mac Capture Is A Thin Client Of bob** (`mac-capture-is-a-thin-client`)
    - Bob Mac Capture never parses capture grammar, computes previews, or writes the
      vault; it runs bob, renders the spans, candidates, and previews bob returns, and
      submits each draft as one bob capture call.
+4. **Next And Pending Are Sticky Lanes; Only Blocked Is Derived**
+   (`task-lanes-are-sticky`) - Linking raises Ready to Next and an =x close sets In
+   Progress (PENDING); no unlink, hooks run, or capture drop lowers them; only Alt+N
+   release returns a task to Ready; Blocked stays derived.
+5. **Today Is Read From The Ledger, Never Written To Tasks**
+   (`today-is-read-from-the-ledger`) - Today is the open tasks with a dedicated Task
+   Link under today's open Pomodoros, computed at read time by bob plan and
+   bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is retired.
 
 <!-- /sase:strands -->

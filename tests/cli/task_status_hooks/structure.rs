@@ -416,7 +416,7 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
     assert_eq!(json["references"], 7);
     assert_eq!(json["dependency_references"], 0);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
-    assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
+    assert!(json["cleared"].as_array().unwrap().is_empty());
     assert_eq!(
         json["removed_canceled_references"],
         serde_json::json!([
@@ -517,7 +517,7 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
         "- [C] #task All canceled custom ^all-canceled",
         "- [-] #task Mixed duplicate canceled ^mixed",
         "- [*] #task Mixed duplicate live ^mixed",
-        "- [ ] #task Reachable only through canceled root ^dependency-only",
+        "- [*] #task Reachable only through canceled root ^dependency-only",
     ] {
         assert!(
             task_contents.contains(expected),

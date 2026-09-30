@@ -408,10 +408,11 @@ source.
 
 Direct block links under open Pomodoros promote Ready tasks to Next (`[*]`) and
 leave In Progress (`[/]`) alone. Sole transcluded dependencies inherit the
-strongest parent rank. Unreachable Next tasks clear back to Ready unless recent
-activity still references them; stale In Progress in `[[area]]` / `[[project]]`
-notes rolls back the same way. Independently, open Dataview dependencies and
-future `[scheduled:: YYYY-MM-DD]` dates mark a task Blocked (`[?]`). The command
+strongest parent rank. Lanes are sticky: removing a link never lowers Next or
+In Progress — only a Next task inside a canonical daily note (or the current
+ledger) still clears back to Ready once unlinked and stale. Independently,
+open Dataview dependencies and future `[scheduled:: YYYY-MM-DD]` dates mark a
+task Blocked (`[?]`). The command
 also retires completed references, moves stray bullets onto the current
 Pomodoro, repairs Pomodoro markers, de-duplicates the same task under later
 open Pomodoros, removes list items that only point at canceled tasks, deletes

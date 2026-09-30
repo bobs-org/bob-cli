@@ -13,6 +13,10 @@ In practice it:
   to this command
 - Promotes tasks linked under today's open Pomodoros to Next (`[*]`), leaving
   In Progress (`[/]`) alone
+- Never lowers Next (`[*]`) or In Progress (`[/]`) when links disappear:
+  lanes are sticky and only an explicit release returns them to Ready.
+  The single exception is a Next task that lives in a canonical daily note
+  or the selected current ledger, which still clears once unlinked and stale
 - Follows transcluded dependency bullets (`![[note#^id]]` as the entire child)
   and promotes those too
 - Marks a task Blocked (`[?]`) when it has an open Dataview dependency or a
@@ -22,9 +26,9 @@ In practice it:
   Pomodoros, and repairs `🍅` markers
 
 The latest existing earlier daily note is a read-only recent-activity source:
-it can keep an area/project In Progress task active and can supply the rank an
-otherwise-unblocked Blocked task recovers to, but it never promotes a Ready
-task and is never written. Completed-task references are retired as struck,
+it supplies the rank an otherwise-unblocked Blocked task recovers to and the
+grace that keeps a directly referenced daily-note Next task, but it never
+promotes a Ready task and is never written. Completed-task references are retired as struck,
 non-embedded links. Live non-transcluded links beneath completed Pomodoros
 carry the machine-owned `🍅` marker; embedded and provenance-unknown retired
 links do not. Links beneath open Pomodoros are unmarked. A link to an
@@ -267,35 +271,27 @@ The previous daily note is read-only. It never receives duplicate cleanup,
 link retirement, marker repair, canceled-reference removal, Pomodoro
 relocation, or task-status writes. If it has no `## Pomodoros` section, it is
 the selected source with zero references; the command does not fail or fall
-through to an older note. Non-retired historical links may preserve an
-already-In-Progress task or an existing directly referenced recovery-ranked
-Next task, but they never promote a Ready task to Next or In Progress.
+through to an older note. Non-retired historical links never promote a Ready
+task to Next or In Progress. They feed two read-only consumers: the
+recovery-only rank below, and the grace that keeps a directly referenced
+daily-note Next task (`KeptNext`) while it remains recent.
 
 Recent roots traverse the same eligible transcluded-task dependency graph as
 current promotion roots with the same strongest-rank merge and cycle rules.
-This produces a recovery-only rank in addition to protecting an area/project
-In-Progress dependency. A Blocked task reached directly defaults to Next
-because Blocked has no active rank. An already-In-Progress task on the
-transclusion path can strengthen downstream recovery to In Progress. A task
-absent from this graph recovers to Ready. The recovery rank does not promote an
-ordinary Ready task; a directly recent task can retain an existing Next so a
-recovered task remains stable on repeated runs. Dependency-only recovery still
-follows the vault-wide Next clearing policy after its Blocked status is gone.
+This produces a recovery-only rank for unblocking. A Blocked task reached
+directly defaults to Next because Blocked has no active rank. An
+already-In-Progress task on the transclusion path can strengthen downstream
+recovery to In Progress. A task absent from this graph recovers to Ready. The
+recovery rank does not promote an ordinary Ready task; a directly recent task
+can retain an existing Next so a recovered task remains stable on repeated
+runs. Dependency-only recovery still follows the daily-note Next clearing
+policy after its Blocked status is gone: a recovered Next outside a daily
+note stays Next, while one inside a daily note clears unless directly recent.
 
-After this traversal, a recognized `[/]` Tasks task is reset to `[ ]` only
-when all of the following are true:
-
-- its note has frontmatter `type: [[area]]` or `type: [[project]]`, including
-  the shared parser's single- and double-quoted scalar forms;
-- the note is not a canonical daily note or the selected current ledger;
-- the task's canonical path-plus-block identity is absent from recent
-  activity, or the task has no usable trailing block ID; and
-- it has no derived blocking reason from either an open Dataview dependency or
-  a future task-level schedule.
-
-Directory names and tags do not establish area/project scope. Ordinary notes,
-daily notes, generated references, terminal statuses, unknown/custom
-statuses, and other checkbox states are not subject to this rollback.
+Recent activity no longer clears anything. An In Progress task stays In
+Progress wherever it lives, however long its links have been gone, and a Next
+task outside canonical daily notes (or the selected current ledger) stays
+Next. Note kind, directory names, and tags play no role in lane decisions.
 
 ## Derived Blocked Status
 
@@ -411,27 +407,27 @@ The command scans Markdown task lines allowed by the Obsidian Tasks
 | `[ ]` or `[*]` | desired In Progress | `[/]` |
 | `[*]` | desired Next | unchanged |
 | `[/]` | desired Next or In Progress | unchanged |
-| `[*]` | unreachable | `[ ]` |
-| `[/]` in an area/project note | no rolling recent activity | `[ ]` |
-| `[/]` in an area/project note | rolling recent activity from either daily or an eligible dependency path | unchanged |
-| `[ ]` or out-of-scope `[/]` | unreachable | unchanged |
+| `[*]` in a canonical daily note or the current ledger | unreachable, not directly recent | `[ ]` |
+| `[*]` in a canonical daily note or the current ledger | unreachable, directly recent | unchanged (`kept_next`) |
+| `[*]` outside daily notes | unreachable | unchanged (sticky lane) |
+| `[/]` | unreachable | unchanged (sticky lane) |
+| `[ ]` | unreachable | unchanged |
 | done, canceled, non-task, or unknown/custom | any | unchanged |
 
 Ranked propagation itself is monotonic and never lowers a dependency target.
 Removing a transclusion therefore does not perform a matching rollback. The
-separate vault-wide cleanup rule still resets any Next task that is no longer
-reachable from the final open-Pomodoro graph. The distinct scoped rollback
-resets stale In Progress only under the rolling-activity rules above and never
-resets terminal/custom statuses. Open Dataview dependency derivation takes
-precedence over both cleanup rules, producing one stable final state.
+daily-note cleanup rule resets only a Next task that lives in a canonical
+daily note or the selected current ledger and is no longer reachable from the
+final open-Pomodoro graph (unless directly recent). Every other unlinked Next
+or In Progress task keeps its lane. Open Dataview dependency derivation takes
+precedence over the cleanup rule, producing one stable final state.
 
 The machine-managed `#task #ref ... ^ref` reading task in a generated reference
 note is an ordinary scanned task. Promoting it to `[*]` or `[/]` therefore
 flows through the next highlights sync as the corresponding reference status;
-clearing an unreachable `[*]` back to `[ ]` flows through as `status: ready`.
-Existing `[/]`, `[x]`/`[X]`, and `[-]` statuses in generated reference notes
-are never lowered because those notes are outside the area/project rollback
-scope. Because the highlights lifecycle is also
+clearing an unreachable daily-note `[*]` back to `[ ]` flows through as
+`status: ready`. Generated reference notes are ordinary notes for lane
+purposes: their `[/]` tasks are sticky like any other. Because the highlights lifecycle is also
 stored in the PDF marker, preview with `bob highlights scan --dry-run` and use a
 reviewed `bob highlights scan --write-pdfs` when marker write-back is needed.
 
@@ -632,8 +628,8 @@ with its one-based line and time range, for example
 Second (line 5, 0930-1000); close all but one with `bob capture -- =x`, or
 mark it `[x]` ``. Empty timed entries are pruned instead of making the current
 Pomodoro ambiguous. A valid but empty current section is a valid source of
-truth: it clears every scanned `[*]` task and applies scoped stale-In-Progress
-rollback using the optional previous source. This distinction prevents a
+truth: it clears every daily-note `[*]` task without recent-activity grace
+and leaves every other lane untouched. This distinction prevents a
 missing or malformed current ledger from causing a mass clear.
 
 The previous daily is optional and never weakens those current-ledger guards.
@@ -748,10 +744,13 @@ the exact staggered crontab this project runs.
 
 ## Output
 
-Human output lists every Next promotion, In-Progress promotion, Next clear,
-scoped In-Progress clear, Blocked transition, unblock, duplicate line removal,
+Human output lists every Next promotion, In-Progress promotion, daily-note
+Next clear, Blocked transition, unblock, duplicate line removal,
 empty Pomodoro removal, retired reference, move, and marker repair, plus every
-canceled-reference list-item trigger, followed by a summary. The selected
+canceled-reference list-item trigger, followed by a summary. The legacy
+`cleared in progress` section is retained but always empty, and the kept line
+(`kept X already next · Y in progress`) counts only daily-note Next grace
+keeps plus In Progress tasks that already held a desired rank. The selected
 previous daily path and its reference count appear in changed and no-op
 reports.
 Canceled-reference rows show the target, block ID, original one-based line
@@ -824,15 +823,7 @@ JSON mode prints one object on stdout with these stable fields:
     }
   ],
   "cleared": [],
-  "cleared_in_progress": [
-    {
-      "path": "Projects/Alpha.md",
-      "line_number": 29,
-      "block_id": "stale-work",
-      "description": "Stale project work",
-      "dependency": false
-    }
-  ],
+  "cleared_in_progress": [],
   "marked_blocked": [
     {
       "path": "dev.md",
@@ -988,9 +979,14 @@ the normalized current and previous sources before dependency traversal.
 change item's `dependency` boolean distinguishes direct references from
 dependency-only graph reachability. `marked_blocked` and `unblocked` are
 additive fields and do not duplicate changes into those older arrays.
-`cleared` remains the compatibility list for `[*] -> [ ]`, while
-`cleared_in_progress` separately reports scoped `[/] -> [ ]` changes with the
-same path, line, block ID, description, and dependency shape. Their
+`cleared` lists only daily-note `[*] -> [ ]` changes: a Next task that lives
+in a canonical daily note or the selected current ledger and lost its links
+without recent-activity grace. Every other unlinked Next or In Progress task
+keeps its lane and never appears here. `cleared_in_progress` is an
+always-empty compatibility list (the In Progress rollback is retired) with the
+same path, line, block ID, description, and dependency shape. `kept_next`
+counts only directly recent daily-note Next tasks held by grace; sticky
+non-daily Next tasks stay without incrementing it. Their
 `from`/`to` values are the actual checkbox symbols, and their dependency-ID
 arrays and nullable `future_scheduled_date` explain the derived decision. The
 date is present only when the task-level schedule is later than the effective

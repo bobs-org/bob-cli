@@ -124,6 +124,8 @@ pub(super) struct SyncResult {
     pub(super) marked_next: Vec<ChangeItem>,
     pub(super) marked_in_progress: Vec<ChangeItem>,
     pub(super) cleared: Vec<ChangeItem>,
+    /// Kept for JSON compatibility; always empty since sticky lanes retired
+    /// the In Progress rollback.
     pub(super) cleared_in_progress: Vec<ChangeItem>,
     pub(super) marked_blocked: Vec<DependencyStatusChange>,
     pub(super) unblocked: Vec<DependencyStatusChange>,
@@ -402,7 +404,6 @@ pub(super) enum Transition {
     MarkNext,
     MarkInProgress,
     Clear,
-    ClearInProgress,
     MarkBlocked,
     Unblock(RankedStatus),
     KeptNext,

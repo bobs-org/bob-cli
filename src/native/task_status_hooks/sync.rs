@@ -460,14 +460,13 @@ pub(super) fn sync_task_statuses(
         &dependency_edges,
         &task_blocks,
     );
-    let recent_activity =
-        reachable_identities(&recent_activity_roots, &dependency_edges);
     let task_dependency_states = task_dependency_states(&files);
 
     let mut marked_next = Vec::new();
     let mut marked_in_progress = Vec::new();
     let mut cleared = Vec::new();
-    let mut cleared_in_progress = Vec::new();
+    // Kept for JSON compatibility; sticky lanes never clear In Progress.
+    let cleared_in_progress: Vec<ChangeItem> = Vec::new();
     let mut marked_blocked = Vec::new();
     let mut unblocked = Vec::new();
     let mut changes = Vec::new();
@@ -508,14 +507,6 @@ pub(super) fn sync_task_statuses(
                 .get(&(file_index, task_index))
                 .cloned()
                 .unwrap_or_default();
-            let is_recent = task.block_id.as_ref().is_some_and(|block_id| {
-                recent_activity
-                    .contains(&(file.relative_path.clone(), block_id.clone()))
-            });
-            let clear_stale_in_progress = file.note_kind.is_area_or_project()
-                && !is_daily_note
-                && task.status == '/'
-                && !is_recent;
             let future_scheduled_date =
                 task.scheduled.filter(|scheduled| *scheduled > anchor);
             let has_derived_block =
@@ -527,7 +518,7 @@ pub(super) fn sync_task_statuses(
                 recovery_status,
                 directly_recent,
                 has_derived_block,
-                clear_stale_in_progress,
+                is_daily_note,
             ) {
                 Transition::MarkNext => {
                     let dependency =
@@ -562,14 +553,6 @@ pub(super) fn sync_task_statuses(
                 }
                 Transition::Clear => {
                     cleared.push(change_item(file, task, false));
-                    changes.push(PlannedChange {
-                        file_index,
-                        status_byte_offset: task.status_byte_offset,
-                        replacement: ' ',
-                    });
-                }
-                Transition::ClearInProgress => {
-                    cleared_in_progress.push(change_item(file, task, false));
                     changes.push(PlannedChange {
                         file_index,
                         status_byte_offset: task.status_byte_offset,
@@ -737,7 +720,7 @@ pub(super) fn task_transition(
     recovery_desired: Option<RankedStatus>,
     directly_recent: bool,
     has_derived_block: bool,
-    clear_stale_in_progress: bool,
+    is_daily_note: bool,
 ) -> Transition {
     if task.status_type.is_terminal()
         || !task.status_type.is_open()
@@ -757,11 +740,16 @@ pub(super) fn task_transition(
             recovery_desired.unwrap_or(RankedStatus::Ready),
         );
     }
-    if task.status == '*' && desired.is_none() && directly_recent {
-        return Transition::KeptNext;
-    }
-    if clear_stale_in_progress {
-        return Transition::ClearInProgress;
+    // Sticky lanes: an unlinked Next outside daily notes stays Next without
+    // counting as kept_next. Inside daily notes the old policy holds: a
+    // directly recent Next is kept, otherwise it clears.
+    if task.status == '*' && desired.is_none() {
+        if !is_daily_note {
+            return Transition::Unchanged;
+        }
+        if directly_recent {
+            return Transition::KeptNext;
+        }
     }
     transition(task.status, desired)
 }

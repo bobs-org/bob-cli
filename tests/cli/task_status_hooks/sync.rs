@@ -61,7 +61,8 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     assert_eq!(json["scanned_files"], 3);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 3);
     assert!(json["marked_in_progress"].as_array().unwrap().is_empty());
-    assert_eq!(json["cleared"].as_array().unwrap().len(), 2);
+    assert!(json["cleared"].as_array().unwrap().is_empty());
+    assert_eq!(json["cleared_in_progress"].as_array().unwrap().len(), 0);
     assert_eq!(json["kept_next"], 1);
     assert_eq!(json["kept_in_progress"], 1);
     assert_eq!(
@@ -140,13 +141,12 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     let report = stdout(&applied);
     assert!(
         report.contains("marked next")
-            && report.contains("cleared")
             && report.contains("marked Pomodoro references")
             && report.contains("unmarked Pomodoro references")
             && report.contains("removed duplicate task-link lines")
             && report.contains("(dependency)")
             && report.contains(
-                "Summary: 3 marked next, 0 marked in progress, 2 cleared"
+                "Summary: 3 marked next, 0 marked in progress, 0 cleared"
             ),
         "unexpected task-status-hooks report:\n{}",
         format_output(&applied)
@@ -162,9 +162,9 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         "- [ ] #task Fenced transclusion is not a dependency ^fenced-dep"
     ));
     assert!(dev_contents
-        .contains("- [ ] #task Stale dependency clears ^stale-child"));
+        .contains("- [*] #task Stale dependency clears ^stale-child"));
     assert!(dev_contents.contains("- [*] #task Already next ^already"));
-    assert!(dev_contents.contains("- [ ] #task Clear me ^orphan"));
+    assert!(dev_contents.contains("- [*] #task Clear me ^orphan"));
     assert!(dev_contents
         .contains("- [ ] #task Closed reference stays todo ^closed"));
     assert!(dev_contents.contains("- [x] #task Done stays done ^done"));
@@ -252,13 +252,12 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         .output()
         .expect("clear stale dependency chain");
     assert_success(&stale_chain);
-    let dev_contents = fs::read_to_string(&dev).expect("read cleared chain");
-    assert!(dev_contents.contains("- [ ] #task Promote me ^promote"));
-    assert!(dev_contents.contains("- [ ] #task Same-file dependency ^dep-one"));
-    let alpha_contents =
-        fs::read_to_string(&alpha).expect("read cleared alpha");
+    let dev_contents = fs::read_to_string(&dev).expect("read sticky chain");
+    assert!(dev_contents.contains("- [*] #task Promote me ^promote"));
+    assert!(dev_contents.contains("- [*] #task Same-file dependency ^dep-one"));
+    let alpha_contents = fs::read_to_string(&alpha).expect("read sticky alpha");
     assert!(alpha_contents
-        .contains("- [ ] #task Cross-file recursive dependency ^dep-two"));
+        .contains("- [*] #task Cross-file recursive dependency ^dep-two"));
 }
 
 #[test]
@@ -374,7 +373,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
             .expect("grouping dry-run JSON");
     assert_eq!(dry_json["dry_run"], true);
     assert_eq!(dry_json["marked_next"].as_array().unwrap().len(), 1);
-    assert_eq!(dry_json["cleared_in_progress"].as_array().unwrap().len(), 1);
+    assert_eq!(dry_json["cleared_in_progress"].as_array().unwrap().len(), 0);
     assert_eq!(dry_json["marked_blocked"].as_array().unwrap().len(), 1);
     assert_eq!(
         dry_json["grouped_task_sections"].as_array().unwrap().len(),
@@ -394,11 +393,11 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         project_group["heading_ancestry"],
         serde_json::json!(["Alpha", "Tasks"])
     );
-    assert_eq!(project_group["open"], 2);
-    assert_eq!(project_group["next_and_in_progress"], 1);
+    assert_eq!(project_group["open"], 1);
+    assert_eq!(project_group["next_and_in_progress"], 2);
     assert_eq!(project_group["blocked"], 1);
     assert_eq!(project_group["done_and_canceled"], 2);
-    assert_eq!(project_group["moved_block_count"], 4);
+    assert_eq!(project_group["moved_block_count"], 5);
     assert_eq!(
         project_group["moved_blocks"][0],
         serde_json::json!({
@@ -428,7 +427,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     assert!(
         human.contains("would group task sections")
             && human.contains("alpha.md")
-            && human.contains("open 2 · next/in progress 1")
+            && human.contains("open 1 · next/in progress 2")
             && human.contains("Summary:")
             && !human.contains("already in sync, no changes"),
         "unexpected grouping human dry-run:\n{}",
@@ -467,13 +466,13 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         &[
             "## Tasks",
             "<!-- bob:task-status-badges:v1 -->",
-            "[`⚪ 2 open`](#Alpha#Tasks)",
+            "[`⚪ 1 open`](#Alpha#Tasks)",
             "Project context.",
             "- [ ] #task Keep in intake ^ready",
-            "- [ ] #task Stale work clears ^stale",
             "### Next & In Progress",
             "<!-- bob:task-status-group:v1:active -->",
             "- [*] #task Promote from Pomodoro ^promote",
+            "- [/] #task Stale work clears ^stale",
             "### Blocked",
             "- [?] #task Future blocked [scheduled:: 2026-07-11] ^future",
             "### Done & Canceled",
@@ -539,8 +538,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     assert_text_order(
         &project_after_capture,
         &[
-            "[`⚪ 2 open`](#Alpha#Tasks)",
-            "- [ ] #task Stale work clears ^stale",
+            "[`⚪ 1 open`](#Alpha#Tasks)",
             "- [ ] #task Captured ready [created::2026-07-10] ^captured",
             "### Next & In Progress",
         ],
@@ -558,12 +556,12 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     assert_success(&after_ready_capture);
     let after_ready_capture_report = stdout(&after_ready_capture);
     assert!(
-        after_ready_capture_report.contains("open 3 · next/in progress 1"),
+        after_ready_capture_report.contains("open 2 · next/in progress 2"),
         "Ready capture should refresh the open badge:\n{}",
         format_output(&after_ready_capture)
     );
     let project_after_badge_refresh = fs::read_to_string(&project).unwrap();
-    assert!(project_after_badge_refresh.contains("[`⚪ 3 open`](#Alpha#Tasks)"));
+    assert!(project_after_badge_refresh.contains("[`⚪ 2 open`](#Alpha#Tasks)"));
 
     let daily_with_captured = fs::read_to_string(&daily).unwrap().replace(
         "  - [[Areas/Home#^working]]\n\n## Tasks",
@@ -584,10 +582,11 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     assert_text_order(
         &project_after_promotion,
         &[
-            "[`⚪ 2 open`](#Alpha#Tasks)",
+            "[`⚪ 1 open`](#Alpha#Tasks)",
             "### Next & In Progress",
             "- [*] #task Captured ready [created::2026-07-10] ^captured",
             "- [*] #task Promote from Pomodoro ^promote",
+            "- [/] #task Stale work clears ^stale",
         ],
     );
 }
@@ -744,8 +743,8 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         "- [/] #task Previous direct ^previous\r\n",
         "- [/] #task Previous dependency ^previous-dependency\r\n",
         "- [/] #task Current dependency ^current-dependency\r\n",
-        "- [ ] #task Stale area task ^stale\r\n",
-        "- [ ] #task Missing block id\r\n",
+        "- [/] #task Stale area task ^stale\r\n",
+        "- [/] #task Missing block id\r\n",
     );
     let project_before = concat!(
         "---\n",
@@ -761,8 +760,8 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         "type: [[project]]\n",
         "---\n",
         "- [/] #task Current direct ^today\n",
-        "- [ ] #task Older daily only ^older-only\n",
-        "- [ ] #task Retired historical link ^retired\n",
+        "- [/] #task Older daily only ^older-only\n",
+        "- [/] #task Retired historical link ^retired\n",
         "- [ ] #task Historical links do not promote ^historical-ready\n",
     );
     let ordinary_before = "- [/] #task Ordinary note stays active ^ordinary\n";
@@ -790,7 +789,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         .output()
         .expect("human dry-run rolling daily reconciliation");
     assert_success(&human_dry_run);
-    assert!(stdout(&human_dry_run).contains("would clear in progress"));
+    assert!(!stdout(&human_dry_run).contains("would clear in progress"));
     assert!(stdout(&human_dry_run).contains("previous 2026/20260710.md"));
 
     let dry_run = bob_command()
@@ -818,12 +817,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     assert_eq!(json["recent_activity_references"], 6);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert!(json["cleared"].as_array().unwrap().is_empty());
-    assert_eq!(json["cleared_in_progress"].as_array().unwrap().len(), 4);
-    assert!(json["cleared_in_progress"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|item| item["path"] == "Areas/Home.md" && item["block_id"] == ""));
+    assert_eq!(json["cleared_in_progress"].as_array().unwrap().len(), 0);
 
     let applied = bob_command()
         .arg("task-status-hooks")
@@ -834,7 +828,6 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         .output()
         .expect("apply rolling daily reconciliation");
     assert_success(&applied);
-    assert!(stdout(&applied).contains("cleared in progress"));
     assert!(stdout(&applied).contains("previous 2026/20260710.md"));
     assert_eq!(fs::read_to_string(&previous).unwrap(), previous_before);
     assert_eq!(fs::read_to_string(&older).unwrap(), older_before);
@@ -881,9 +874,9 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         sectionless_before
     );
     let area_contents = fs::read_to_string(&area).unwrap();
-    assert!(area_contents.contains("- [ ] #task Previous direct ^previous"));
+    assert!(area_contents.contains("- [/] #task Previous direct ^previous"));
     assert!(area_contents
-        .contains("- [ ] #task Previous dependency ^previous-dependency"));
+        .contains("- [/] #task Previous dependency ^previous-dependency"));
     assert!(area_contents
         .contains("- [/] #task Current dependency ^current-dependency"));
 }
@@ -944,7 +937,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     assert_eq!(json["dependency_references"], 8);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 2);
     assert_eq!(json["marked_in_progress"].as_array().unwrap().len(), 3);
-    assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
+    assert!(json["cleared"].as_array().unwrap().is_empty());
     assert!(json["marked_in_progress"]
         .as_array()
         .unwrap()
@@ -971,7 +964,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
         report.contains("marked in progress")
             && report.contains("[ ] or [*] -> [/]")
             && report.contains(
-                "Summary: 2 marked next, 3 marked in progress, 1 cleared"
+                "Summary: 2 marked next, 3 marked in progress, 0 cleared"
             ),
         "unexpected ranked propagation report:\n{}",
         format_output(&applied)
@@ -988,7 +981,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
         "- [x] #task Done child ^done",
         "- [-] #task Cancelled child ^cancelled",
         "- [!] #task Custom child ^custom",
-        "- [ ] #task Unreachable next ^orphan",
+        "- [*] #task Unreachable next ^orphan",
     ] {
         assert!(
             contents.contains(expected),
@@ -1016,11 +1009,11 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("clear unreachable next while preserving in-progress tasks");
+        .expect("keep unreachable next while preserving in-progress tasks");
     assert_success(&without_active_path);
     let contents = fs::read_to_string(&tasks).unwrap();
-    assert!(contents.contains("- [ ] #task Next root ^root-next"));
-    assert!(contents.contains("- [ ] #task Next child ^next-ready"));
+    assert!(contents.contains("- [*] #task Next root ^root-next"));
+    assert!(contents.contains("- [*] #task Next child ^next-ready"));
     assert!(
         contents.contains("- [/] #task Stronger descendant ^stronger-child")
     );
@@ -1071,7 +1064,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
     assert_eq!(json["references"], 2);
     assert_eq!(json["dependency_references"], 0);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
-    assert_eq!(json["cleared"].as_array().unwrap().len(), 3);
+    assert_eq!(json["cleared"].as_array().unwrap().len(), 1);
     assert_eq!(json["removed_duplicate_lines"].as_array().unwrap().len(), 1);
     assert_eq!(json["removed_duplicate_lines"][0]["line_number"], 8);
     assert_eq!(
@@ -1128,9 +1121,9 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
         fs::read_to_string(&tasks).unwrap(),
         concat!(
             "- [*] #task Alpha ^alpha\n",
-            "- [ ] #task Beta ^beta\n",
+            "- [*] #task Beta ^beta\n",
             "  - ![[#^beta-dep]]\n",
-            "- [ ] #task Beta dependency ^beta-dep\n",
+            "- [*] #task Beta dependency ^beta-dep\n",
         )
     );
 

@@ -9,8 +9,9 @@ summary:
   scheduled dates drive Blocked. bob task-status-hooks reconciles them, so writers
   change those inputs, never just the checkbox.
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-07-16
+  superseded_by: decisions/task-lanes-are-sticky
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -50,3 +51,6 @@ in a checkbox — that is what [[decisions/now-tag-is-user-owned]] is for.
 **Reopens when.** A status is needed that no ledger, dependency, or schedule input can
 express, or reconciliation moves off a periodic whole-vault scan (for example, behind a
 transactional vault service).
+
+Superseded in part: Next and In Progress are no longer derived — see
+[[decisions/task-lanes-are-sticky]]. Blocked stays derived as stated.

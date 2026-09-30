@@ -21,7 +21,10 @@ fn task_status_hooks_dry_run_creates_no_lock_or_recovery() {
     let tasks = vault.join("tasks.md");
     let lock = temp.path().join("bob_sync.lock");
     let state = temp.path().join("state");
-    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(
+        &daily,
+        "## Pomodoros\n\n- [ ] Current (0900-0930)\n\n## Tasks\n\n- [*] #task Stale next ^stale\n",
+    );
     write_file(&tasks, "- [*] #task Stale next ^stale\n");
 
     let output = bob_command()
@@ -151,7 +154,10 @@ fn task_status_hooks_human_retry_progress_goes_to_stdout() {
     let daily = vault.join("2026/20260710.md");
     let tasks = vault.join("tasks.md");
     let lock_path = temp.path().join("bob_sync.lock");
-    write_file(&daily, "## Pomodoros\n");
+    write_file(
+        &daily,
+        "## Pomodoros\n\n- [ ] Current\n\n## Tasks\n\n- [*] #task Stale next ^stale\n",
+    );
     write_file(&tasks, "- [*] #task Stale next ^stale\n");
 
     let lock = fs::OpenOptions::new()
@@ -260,7 +266,13 @@ fn task_status_hooks_human_retry_progress_goes_to_stdout() {
     );
     assert_eq!(
         fs::read_to_string(&tasks).unwrap(),
-        "- [ ] #task Stale next ^stale\n",
+        "- [*] #task Stale next ^stale\n",
+        "sticky lanes keep the ordinary-note task while the daily clears"
+    );
+    assert!(
+        fs::read_to_string(&daily)
+            .unwrap()
+            .contains("- [ ] #task Stale next ^stale"),
         "the eventually successful retry must still apply the guarded write"
     );
 }
@@ -272,7 +284,10 @@ fn task_status_hooks_json_retry_progress_stays_off_stdout() {
     let daily = vault.join("2026/20260710.md");
     let tasks = vault.join("tasks.md");
     let lock_path = temp.path().join("bob_sync.lock");
-    write_file(&daily, "## Pomodoros\n");
+    write_file(
+        &daily,
+        "## Pomodoros\n\n- [ ] Current\n\n## Tasks\n\n- [*] #task Stale next ^stale\n",
+    );
     write_file(&tasks, "- [*] #task Stale next ^stale\n");
 
     let lock = fs::OpenOptions::new()
@@ -362,7 +377,13 @@ fn task_status_hooks_json_retry_progress_stays_off_stdout() {
     );
     assert_eq!(
         fs::read_to_string(&tasks).unwrap(),
-        "- [ ] #task Stale next ^stale\n",
+        "- [*] #task Stale next ^stale\n",
+        "sticky lanes keep the ordinary-note task while the daily clears"
+    );
+    assert!(
+        fs::read_to_string(&daily)
+            .unwrap()
+            .contains("- [ ] #task Stale next ^stale"),
         "the eventually successful retry must still apply the guarded write"
     );
 }
@@ -498,7 +519,10 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
     let lock_path = temp.path().join("bob_sync.lock");
     let state = temp.path().join("state");
     let log_path = temp.path().join("bob_task_status_hooks.log");
-    write_file(&daily, "## Pomodoros\n");
+    write_file(
+        &daily,
+        "## Pomodoros\n\n- [ ] Current\n\n## Tasks\n\n- [*] #task Stale next ^stale\n",
+    );
     write_file(&tasks, "- [*] #task Stale next ^stale\n");
 
     let lock = fs::OpenOptions::new()
@@ -577,7 +601,13 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
     );
     assert_eq!(
         fs::read_to_string(&tasks).unwrap(),
-        "- [ ] #task Stale next ^stale\n",
+        "- [*] #task Stale next ^stale\n",
+        "sticky lanes keep the ordinary-note task while the daily clears"
+    );
+    assert!(
+        fs::read_to_string(&daily)
+            .unwrap()
+            .contains("- [ ] #task Stale next ^stale"),
         "the eventually successful retry must still apply the guarded write"
     );
 }

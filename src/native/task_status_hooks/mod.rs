@@ -85,13 +85,12 @@ desired status of Next [*]; tasks already In Progress [/] keep that stronger \
 status. Dependency tasks are discovered recursively from sole transcluded \
 block-link child bullets and inherit the strongest effective parent status, \
 promoting Ready [ ] tasks to Next or In Progress and Next tasks to In Progress. \
-Status propagation never lowers a task. Existing [*] tasks not reachable from \
-an open entry or directly referenced by recent activity are independently reset to [ ]. \
-In Progress [/] tasks in notes \
-whose frontmatter type is [[area]] or [[project]] are reset to Ready [ ] when \
-they are not reachable from a non-retired link in either the current ledger or \
-the latest existing earlier daily note. Historical links protect existing \
-In-Progress state and supply recovery-only rank for Blocked tasks without \
+Status propagation never lowers a task, and removing a link never changes a \
+lane: unlinked Next [*] and In Progress [/] tasks stay as they are. Only a \
+daily-note Next task still clears: a [*] that lives in a canonical daily note \
+or the selected current ledger and is not reachable from an open entry is reset \
+to [ ], unless it is directly referenced by recent activity, in which case it is \
+kept. Historical links supply recovery-only rank for Blocked tasks without \
 promoting Ready tasks; a recovered directly referenced Next task stays Next \
 while it remains recent, and the historical note is never modified. Tasks whose Dataview \
 [dependsOn:: ...] metadata names an open \
