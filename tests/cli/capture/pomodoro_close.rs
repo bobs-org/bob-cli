@@ -1212,12 +1212,15 @@ fn capture_pomodoro_close_links_batches_and_files() {
 #[test]
 fn capture_pomodoro_close_reports_full_blocks() {
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-blocks");
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
     let json = capture_json_dry_run_matches_real(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
         &["=x"],
     );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
     assert_eq!(
         json["pomodoro_blocks"],
         serde_json::json!([
@@ -1313,16 +1316,14 @@ fn capture_pomodoro_close_reports_unchanged_next_block() {
     let temp = TempDir::new("bob-cli-close-unchanged-next");
     let vault = temp.path().join("vault");
     let day_file = vault.join("2026").join("20260928.md");
-    write_file(
-        &day_file,
-        concat!(
-            "## Pomodoros\n",
-            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
-            "\t- quick note\n",
-            "- [ ] () — GTD\n",
-            "\t- [[#^gtd]]\n",
-        ),
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+        "\t- quick note\n",
+        "- [ ] () — GTD\n",
+        "\t- [[#^gtd]]\n",
     );
+    write_file(&day_file, day_before);
 
     let json = capture_json_dry_run_matches_real(
         &vault,
@@ -1330,6 +1331,8 @@ fn capture_pomodoro_close_reports_unchanged_next_block() {
         "2026-09-28 09:37:00",
         &["=x"],
     );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
     assert_eq!(
         json["pomodoro_blocks"],
         serde_json::json!([
@@ -1403,12 +1406,15 @@ fn capture_pomodoro_close_tracks_blocks_past_day_file_work_log() {
         ),
     );
 
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
     let json = capture_json_dry_run_matches_real(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
         &["=x"],
     );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
     let blocks = &json["pomodoro_blocks"];
     assert_eq!(blocks[0]["name"], "CAPTURE");
     assert_eq!(blocks[0]["line"], 8);
@@ -1424,6 +1430,135 @@ fn capture_pomodoro_close_tracks_blocks_past_day_file_work_log() {
     );
     assert_eq!(blocks[1]["name"], "CAPTURE");
     assert_eq!(blocks[1]["line"], 11);
+    assert_eq!(blocks[1]["roles"], serde_json::json!(["next"]));
+    assert_eq!(blocks[1]["created"], true);
+}
+
+#[test]
+fn capture_pomodoro_close_link_reports_moved_source_and_next() {
+    // Close link form with a queued link: the closed entry carries the
+    // `closed` ref from its pre-link running line, the moved source the
+    // `unlinked` ref, and the next entry the `next` ref.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-link-blocks");
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["^sase:recovery-panel=x"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
+    assert_eq!(json["kind"], "pomodoro_link");
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    let blocks = &json["pomodoro_blocks"];
+    assert_eq!(blocks.as_array().map(Vec::len), Some(3));
+    assert_eq!(blocks[0]["name"], "CAPTURE");
+    assert_eq!(blocks[0]["line"], 5);
+    assert_eq!(blocks[0]["roles"], serde_json::json!(["closed"]));
+    assert_eq!(blocks[0]["created"], false);
+    assert_eq!(
+        blocks[0]["lines"].as_array().map(Vec::len),
+        Some(10),
+        "{blocks}"
+    );
+    assert_eq!(
+        blocks[0]["lines"][9],
+        serde_json::json!({
+            "text": "\t- 🍅 [[sase#^recovery-panel]]",
+            "depth": 1,
+            "change": "added",
+        })
+    );
+    assert_eq!(blocks[1]["name"], "SASE");
+    assert_eq!(blocks[1]["line"], 18);
+    assert_eq!(blocks[1]["roles"], serde_json::json!(["unlinked"]));
+    assert_eq!(
+        blocks[1]["lines"][1],
+        serde_json::json!({
+            "text": "\t- [[sase#^recovery-panel]]",
+            "depth": 1,
+            "change": "removed",
+        })
+    );
+    assert_eq!(blocks[2]["name"], "CAPTURE");
+    assert_eq!(blocks[2]["line"], 14);
+    assert_eq!(blocks[2]["roles"], serde_json::json!(["next"]));
+    assert_eq!(blocks[2]["created"], true);
+}
+
+#[test]
+fn capture_pomodoro_close_link_reports_already_current() {
+    // Close link form when the link already runs: no source moves, so the
+    // closed and next blocks are the whole story.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-link-current-blocks");
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["^bob:capture-stop=x"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
+    assert_eq!(json["kind"], "pomodoro_link");
+    assert_eq!(json["pomodoro_link_action"], "already_current");
+    let blocks = &json["pomodoro_blocks"];
+    assert_eq!(blocks.as_array().map(Vec::len), Some(2));
+    assert_eq!(blocks[0]["name"], "CAPTURE");
+    assert_eq!(blocks[0]["line"], 5);
+    assert_eq!(blocks[0]["roles"], serde_json::json!(["closed"]));
+    assert_eq!(blocks[1]["name"], "CAPTURE");
+    assert_eq!(blocks[1]["line"], 13);
+    assert_eq!(blocks[1]["roles"], serde_json::json!(["next"]));
+    assert_eq!(blocks[1]["created"], true);
+    assert_eq!(
+        blocks[1]["lines"],
+        serde_json::json!([
+            {
+                "text": "- [ ] () — CAPTURE",
+                "depth": 0,
+                "change": "added",
+            },
+            {
+                "text": "\t- [[bob#^capture-stop]]",
+                "depth": 1,
+                "change": "added",
+            },
+            {
+                "text": "\t- [[bob#^web-capture]]",
+                "depth": 1,
+                "change": "added",
+            },
+        ])
+    );
+}
+
+#[test]
+fn capture_pomodoro_close_task_reports_closed_and_next() {
+    // Body-bearing close (`<text> @route:block-id=x`): the new task links
+    // into the running entry before it closes, so the closed and next
+    // refs cover both blocks with no moved source.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-task-blocks");
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["Draft docs @bob:draft-docs=x"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
+    assert_eq!(json["kind"], "pomodoro_task");
+    assert_eq!(json["pomodoro_link_action"], "linked");
+    let blocks = &json["pomodoro_blocks"];
+    assert_eq!(blocks.as_array().map(Vec::len), Some(2));
+    assert_eq!(blocks[0]["name"], "CAPTURE");
+    assert_eq!(blocks[0]["roles"], serde_json::json!(["closed"]));
+    assert_eq!(blocks[1]["name"], "CAPTURE");
     assert_eq!(blocks[1]["roles"], serde_json::json!(["next"]));
     assert_eq!(blocks[1]["created"], true);
 }

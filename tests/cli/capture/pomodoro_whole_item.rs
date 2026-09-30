@@ -1165,6 +1165,7 @@ fn capture_pomodoro_whole_item_start_reports_moved_block() {
             "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
         ),
     );
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
 
     let json = capture_json_dry_run_matches_real(
         &vault,
@@ -1172,6 +1173,8 @@ fn capture_pomodoro_whole_item_start_reports_moved_block() {
         "2026-09-28 09:42:00",
         &["="],
     );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
     assert_eq!(
         json["pomodoro_blocks"],
         serde_json::json!([

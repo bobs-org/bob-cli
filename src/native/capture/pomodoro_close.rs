@@ -1099,6 +1099,29 @@ pub(super) fn plan_pomodoro_close_link_item(
         }
     }
     stage_close_plan(planner, &plan)?;
+    // Block refs: the closed entry was the pre-link running entry
+    // (`destination` still carries its pre-link line); a moved source
+    // resolves through the item's line map; the next entry is named by
+    // the close card, so it shows even when byte-identical.
+    let post_day = planner.read_existing(&day_file)?;
+    let mut pomodoro_refs = vec![PomodoroBlockRef::at(
+        PomodoroBlockRole::Closed,
+        destination.line.saturating_sub(1),
+        locate_close_headline(&post_day, &summary),
+    )];
+    if let Some(moved) = source.as_ref() {
+        pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
+            moved.line.saturating_sub(1),
+        ));
+    }
+    if let Some(next) = summary.next_pomodoro.as_ref() {
+        let after = locate_next_headline(&post_day, next);
+        pomodoro_refs.push(if next.created {
+            PomodoroBlockRef::created(PomodoroBlockRole::Next, after)
+        } else {
+            PomodoroBlockRef::resolved(PomodoroBlockRole::Next, after)
+        });
+    }
     // Final post-image for the linked task (close starts it to [/]).
     let final_task_line =
         final_task_line_for(planner, &request.bob_dir, &route, block_id)
@@ -1182,7 +1205,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             toggle_task_description: Some(task_description),
         },
         clip_plan: None,
-        pomodoro_refs: Vec::new(),
+        pomodoro_refs,
     })
 }
 
@@ -1245,7 +1268,7 @@ pub(super) fn plan_pomodoro_close_task_item(
         return Err(error);
     }
     let block_link = format!("[[{route}#^{block_id}]]");
-    let (linked_day, _action, _source, _dest, _placement) =
+    let (linked_day, _action, link_source, running_dest, _placement) =
         link_existing_task_into_running(
             planner,
             &request.bob_dir,
@@ -1293,6 +1316,28 @@ pub(super) fn plan_pomodoro_close_task_item(
         }
     }
     stage_close_plan(planner, &plan)?;
+    // Block refs: the closed entry was the pre-link running entry; a
+    // moved source resolves through the item's line map; the next entry
+    // is named by the close card, so it shows even when byte-identical.
+    let post_day = planner.read_existing(&day_file)?;
+    let mut pomodoro_refs = vec![PomodoroBlockRef::at(
+        PomodoroBlockRole::Closed,
+        running_dest.line.saturating_sub(1),
+        locate_close_headline(&post_day, &summary),
+    )];
+    if let Some(moved) = link_source.as_ref() {
+        pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
+            moved.line.saturating_sub(1),
+        ));
+    }
+    if let Some(next) = summary.next_pomodoro.as_ref() {
+        let after = locate_next_headline(&post_day, next);
+        pomodoro_refs.push(if next.created {
+            PomodoroBlockRef::created(PomodoroBlockRole::Next, after)
+        } else {
+            PomodoroBlockRef::resolved(PomodoroBlockRole::Next, after)
+        });
+    }
     let final_task_line =
         final_task_line_for(planner, &request.bob_dir, route, block_id)
             .unwrap_or_else(|| {
@@ -1397,6 +1442,6 @@ pub(super) fn plan_pomodoro_close_task_item(
             toggle_task_description: None,
         },
         clip_plan: None,
-        pomodoro_refs: Vec::new(),
+        pomodoro_refs,
     })
 }

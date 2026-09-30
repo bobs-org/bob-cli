@@ -664,3 +664,209 @@ pub(crate) fn remove_dir_all_if_exists(path: &Path) -> io::Result<()> {
         Err(error) => Err(error),
     }
 }
+
+/// Coverage invariant for batch-level `pomodoro_blocks`.
+///
+/// `original_day` is the day file before the capture, `final_day` after
+/// it, and `json` the capture JSON. Runs a Myers line diff of the two
+/// snapshots and checks both directions inside the `## Pomodoros`
+/// section:
+/// - every inserted or changed final line lies within a block listed in
+///   `pomodoro_blocks`, located by its final headline `line`;
+/// - every deleted pre-state line resurfaces in a listed block, either
+///   as a `removed` line or as the `before` text of a `changed` line.
+///
+/// Two readings mirror the block tracker's own move handling, so entry
+/// moves never fail the invariant. A line whose bytes survive unmapped
+/// on the other side of the diff moved rather than changed: whole-item
+/// starts relocate entries past untouched ones, and created entries
+/// shift queued headlines down, and Myers pairs those shifts as
+/// delete/insert pairs. Changes outside the section — Work Log inserts
+/// and day-file task status flips from closing — are out of scope; other
+/// assertions pin them.
+///
+/// Headline `line` values are 1-based. Removed lines occupy no final
+/// line, so a block spans its headline plus one final line per
+/// non-`removed` entry, in order. Whitespace-only lines are skipped on
+/// both sides: they carry no Pomodoro content and Myers aligns them
+/// arbitrarily around moves.
+pub(crate) fn assert_pomodoro_blocks_cover_changes(
+    original_day: &str,
+    final_day: &str,
+    json: &serde_json::Value,
+) {
+    let blocks = json["pomodoro_blocks"].as_array().unwrap_or_else(|| {
+        panic!(
+            "expected a pomodoro_blocks array:\n{}",
+            serde_json::to_string_pretty(json).unwrap_or_default()
+        )
+    });
+    let mut covered: std::collections::BTreeSet<usize> =
+        std::collections::BTreeSet::new();
+    let mut removed_texts: std::collections::BTreeSet<&str> =
+        std::collections::BTreeSet::new();
+    let mut before_texts: std::collections::BTreeSet<&str> =
+        std::collections::BTreeSet::new();
+    for block in blocks {
+        let headline = block["line"].as_u64().unwrap_or_else(|| {
+            panic!("block headline line must be a number: {block}")
+        }) as usize;
+        assert!(headline >= 1, "block headline lines are 1-based: {block}");
+        // `cursor` is the 1-based final line of the next non-removed row.
+        let mut cursor = headline;
+        let rows = block["lines"]
+            .as_array()
+            .unwrap_or_else(|| panic!("block lines must be an array: {block}"));
+        for row in rows {
+            let text = row["text"].as_str().unwrap_or_else(|| {
+                panic!("block line text must be a string: {row}")
+            });
+            match row["change"].as_str() {
+                Some("removed") => {
+                    removed_texts.insert(text);
+                }
+                Some("changed") => {
+                    let before = row["before"].as_str().unwrap_or_else(|| {
+                        panic!("changed lines carry before: {row}")
+                    });
+                    before_texts.insert(before);
+                    covered.insert(cursor);
+                    cursor += 1;
+                }
+                _ => {
+                    covered.insert(cursor);
+                    cursor += 1;
+                }
+            }
+        }
+    }
+
+    let original_lines: Vec<&str> = original_day.lines().collect();
+    let final_lines: Vec<&str> = final_day.lines().collect();
+    let original_section = pomodoro_section_range(&original_lines);
+    let final_section = pomodoro_section_range(&final_lines);
+    let ops = similar::capture_diff_slices(
+        similar::Algorithm::Myers,
+        &original_lines,
+        &final_lines,
+    );
+    let mut old_mapped = std::collections::BTreeSet::new();
+    let mut new_mapped = std::collections::BTreeSet::new();
+    for op in &ops {
+        if let similar::DiffOp::Equal {
+            old_index,
+            new_index,
+            len,
+        } = op
+        {
+            for offset in 0..*len {
+                old_mapped.insert(old_index + offset);
+                new_mapped.insert(new_index + offset);
+            }
+        }
+    }
+    // Bytes that survive unmapped on the other side moved rather than
+    // changed, so neither side counts them as new or lost content.
+    let pre_unmapped: std::collections::BTreeSet<&str> = original_lines
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !old_mapped.contains(index))
+        .map(|(_, text)| *text)
+        .collect();
+    let post_unmapped: std::collections::BTreeSet<&str> = final_lines
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !new_mapped.contains(index))
+        .map(|(_, text)| *text)
+        .collect();
+    let check_old = |index: usize, text: &str, label: &str| {
+        if text.trim().is_empty() || !original_section.contains(&index) {
+            return;
+        }
+        if post_unmapped.contains(text) {
+            return;
+        }
+        assert!(
+            removed_texts.contains(text) || before_texts.contains(text),
+            "{label} line {index} is in no pomodoro block: {text:?}\n\
+             removed: {removed_texts:?}\nbefore: {before_texts:?}"
+        );
+    };
+    let check_new = |index: usize, text: &str, label: &str| {
+        if text.trim().is_empty() || !final_section.contains(&index) {
+            return;
+        }
+        if pre_unmapped.contains(text) {
+            return;
+        }
+        assert!(
+            covered.contains(&(index + 1)),
+            "{label} line {} is in no pomodoro block: {text:?}\nblocks: {}",
+            index + 1,
+            serde_json::to_string_pretty(&json["pomodoro_blocks"])
+                .unwrap_or_default(),
+        );
+    };
+    for op in &ops {
+        match op {
+            similar::DiffOp::Equal { .. } => {}
+            similar::DiffOp::Delete {
+                old_index, old_len, ..
+            } => {
+                for offset in 0..*old_len {
+                    let index = old_index + offset;
+                    check_old(index, original_lines[index], "deleted");
+                }
+            }
+            similar::DiffOp::Insert {
+                new_index, new_len, ..
+            } => {
+                for offset in 0..*new_len {
+                    let index = new_index + offset;
+                    check_new(index, final_lines[index], "final");
+                }
+            }
+            similar::DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                for offset in 0..*old_len {
+                    let index = old_index + offset;
+                    check_old(index, original_lines[index], "replaced-away");
+                }
+                for offset in 0..*new_len {
+                    let index = new_index + offset;
+                    check_new(index, final_lines[index], "replacement");
+                }
+            }
+        }
+    }
+}
+
+/// 0-based range of the `## Pomodoros` section: the heading line through
+/// the line before the next heading or the end of the note. Fenced lines
+/// never end the section.
+fn pomodoro_section_range(lines: &[&str]) -> std::ops::Range<usize> {
+    let mut start = None;
+    let mut fenced = false;
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            fenced = !fenced;
+        }
+        if fenced {
+            continue;
+        }
+        if trimmed == "## Pomodoros" {
+            start = Some(index);
+        } else if start.is_some() && trimmed.starts_with('#') {
+            return start.unwrap_or(index)..index;
+        }
+    }
+    match start {
+        Some(heading) => heading..lines.len(),
+        None => 0..0,
+    }
+}

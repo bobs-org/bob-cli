@@ -2112,7 +2112,9 @@ Pomodoro-linked results use kind `"pomodoro_task"` and additionally include
 `block_id`, `day_file`, `block_link`, `pomodoro_link_placement`,
 `pomodoro_name` (the resolved destination name), `creates_pomodoro`,
 and `pomodoro_link_destination` (with its `role`; see
-[Plan budget and strict mode](#plan-budget-and-strict-mode)).
+[Plan budget and strict mode](#plan-budget-and-strict-mode)). The touched
+Pomodoro also appears in the batch-level `pomodoro_blocks` array; see
+[Pomodoro blocks](#pomodoro-blocks).
 
 Solo-link results use kind `"pomodoro_link"` with `placement: "linked"`,
 `routed: true`, and `text: ""`. They carry the post-image `task_line`, the
@@ -2127,7 +2129,9 @@ pre-image `pomodoro_link_source` (only when a link existed), post-image
 `pomodoro_link_placement` (when a link was
 inserted or moved), and `pomodoro_start` (only with `=<X>`). They emit no
 `toggle_direction` / `toggle_behavior`, so older clients degrade to a neutral
-preview instead of a wrong one.
+preview instead of a wrong one. Every touched Pomodoro also appears in the
+batch-level `pomodoro_blocks` array; see
+[Pomodoro blocks](#pomodoro-blocks).
 
 Project-note results use kind `"project_note"` with `placement: "created"`.
 `route` stays the parent route (`cash` for `@cash^goog-exit+`), so
@@ -2157,7 +2161,9 @@ sections <titles>` line, then — when links were written — `✓ linked
 ` (created)` when a named Pomodoro was created, one dim `- [[stem#^id]]`
 line per link, and the hint that `bob projects sync` adds the parent's
 Sub-projects line and `bob task-status-hooks` reconciles Blocked state, since
-neither is written here.
+neither is written here. When links were written, their Pomodoro also appears
+in the batch-level `pomodoro_blocks` array; see
+[Pomodoro blocks](#pomodoro-blocks).
 
 Sub-bullet results additionally include `parent_line`, `parent_text`,
 `parent_status_symbol`, and `parent_status_name`. A capture that targeted a
@@ -2182,7 +2188,10 @@ Ensure Next contract. Toggle results omit `sub_bullets`, `clip`, `priority`,
 `priority_label`, `parent_*`, and `scheduled`. Ensure Next results add
 `toggle_behavior`, `status_changed`, `pomodoro_link_action`, and the
 source/destination endpoint objects described under
-[Task status toggle](#task-status-toggle).
+[Task status toggle](#task-status-toggle). An Ensure Next destination — and
+any Pomodoro a two-way toggle insert, named creation, or open-direction
+removal touches — also appears in the batch-level `pomodoro_blocks` array;
+see [Pomodoro blocks](#pomodoro-blocks).
 
 Pomodoro-note results use kind `"pomodoro_note"` with `routed: false`, `route:
 null`, and `target`/`relative_target` set to the daily note. They additionally
@@ -2191,7 +2200,8 @@ Pomodoro's ledger line and text, but omit `block_id`, `block_link`,
 `pomodoro_link_placement`, `parent_status_symbol`, and `parent_status_name`,
 since the ledger checkbox is not an Obsidian task. Human output prints an
 `under <parent_text>` line without a status marker, then the rendered
-`- <text>` bullet.
+`- <text>` bullet. The noted Pomodoro also appears in the batch-level
+`pomodoro_blocks` array; see [Pomodoro blocks](#pomodoro-blocks).
 
 #### Pomodoro blocks
 

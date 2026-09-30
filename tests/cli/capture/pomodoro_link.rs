@@ -554,3 +554,210 @@ fn capture_named_pomodoro_batch_reuses_new_placeholder() {
         )
     );
 }
+
+#[test]
+fn capture_pomodoro_task_reports_running_entry_block() {
+    // A Pomodoro task capture links into the running entry: the planner
+    // pushes the destination `linked` ref.
+    let temp = TempDir::new("bob-cli-capture-pomodoro-task-blocks");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "# Sase\n## Tasks\n");
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930** [t:: 30m]) — RUN\n",
+        "  - context\n",
+    );
+    write_file(&day_file, day_before);
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-07-10 10:00:00",
+        &["Write outline @sase:outline"],
+    );
+    assert_eq!(json["kind"], "pomodoro_task");
+    assert_eq!(json["block_link"], "[[sase#^outline]]");
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 2,
+                "name": "RUN",
+                "time_range": "0900-0930",
+                "status": "running",
+                "created": false,
+                "roles": ["linked"],
+                "lines": [
+                    {
+                        "text": "- [ ] (**0900-0930** [t:: 30m]) — RUN",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - context",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - [[sase#^outline]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read linked day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — RUN\n",
+            "  - context\n",
+            "  - [[sase#^outline]]\n",
+        )
+    );
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}
+
+#[test]
+fn capture_pomodoro_link_reports_move_destination_first() {
+    // A queued link moved to `#gtd` reports the destination first and
+    // then the source with its removed line.
+    let temp = TempDir::new("bob-cli-capture-pomodoro-link-move");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("sase.md"), "- [ ] #task Do X ^x\n");
+    let day_before = "## Pomodoros\n\
+         - [ ] (**0900-0930** [t:: 30m]) — RUN\n\
+         - [ ] () — QUEUE\n\
+         \t- [[sase#^x]]\n\
+         - [ ] () — GTD\n";
+    write_file(&day_file, day_before);
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-07-10 10:00:00",
+        &["^sase:x#gtd"],
+    );
+    assert_eq!(json["kind"], "pomodoro_link");
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 4,
+                "name": "GTD",
+                "status": "queued",
+                "created": false,
+                "roles": ["linked"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — GTD",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t- [[sase#^x]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                ],
+            },
+            {
+                "relative_target": "day.md",
+                "line": 3,
+                "name": "QUEUE",
+                "status": "queued",
+                "created": false,
+                "roles": ["unlinked"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — QUEUE",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t- [[sase#^x]]",
+                        "depth": 1,
+                        "change": "removed",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read moved day");
+    assert_eq!(
+        day_after,
+        "## Pomodoros\n\
+         - [ ] (**0900-0930** [t:: 30m]) — RUN\n\
+         - [ ] () — QUEUE\n\
+         - [ ] () — GTD\n\
+         \t- [[sase#^x]]\n"
+    );
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}
+
+#[test]
+fn capture_pomodoro_link_reports_created_named_destination() {
+    // A link that creates its named Pomodoro reports a created block
+    // whose lines are all added.
+    let temp = TempDir::new("bob-cli-capture-pomodoro-link-created");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(
+        &vault.join("dev.md"),
+        "# Dev\n## Tasks\n- [ ] #task Existing\n",
+    );
+    let day_before = "## Pomodoros\n- [ ] (**0900-0930** [t:: 30m]) — RUN\n";
+    write_file(&day_file, day_before);
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-07-10 10:00:00",
+        &["@Dev:brand#new-name New task body."],
+    );
+    assert_eq!(json["kind"], "pomodoro_task");
+    assert_eq!(json["creates_pomodoro"], true);
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 3,
+                "name": "NEW-NAME",
+                "status": "queued",
+                "created": true,
+                "roles": ["linked"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — NEW-NAME",
+                        "depth": 0,
+                        "change": "added",
+                    },
+                    {
+                        "text": "  - [[dev#^brand]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read created day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — RUN\n",
+            "- [ ] () — NEW-NAME\n",
+            "  - [[dev#^brand]]\n",
+        )
+    );
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}

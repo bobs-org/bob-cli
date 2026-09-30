@@ -1121,3 +1121,93 @@ fn capture_project_note_task_links_report_the_resolved_pomodoro_name() {
     assert!(out.contains("under ADMIN\n"), "{out}");
     assert!(!out.contains("(created)"), "{out}");
 }
+
+#[test]
+fn capture_project_note_reports_created_pomodoro_block() {
+    // Two ` :<id>` tasks linked into one created Pomodoro are
+    // auto-detected: no planner ref is pushed for project notes.
+    let temp = TempDir::new("bob-cli-capture-project-note-blocks");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    let day_before = "## Pomodoros\n- [ ] (1330-1400) Work\n";
+    write_file(&day_file, day_before);
+    let input =
+        "Finish packet! @cash^goog-exit+#admin\n- Draft memo :draft-memo\n- Call bank :call-ms\n";
+
+    let run = |dry_run: bool| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json");
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        command
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        let output = run_with_stdin(&mut command, input);
+        assert_success(&output);
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
+    };
+    let dry: serde_json::Value = run(true);
+    assert_eq!(dry["dry_run"], true);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("dry run writes nothing"),
+        day_before
+    );
+    let json: serde_json::Value = run(false);
+    assert_eq!(json["dry_run"], false);
+    let mut masked = dry.clone();
+    masked["dry_run"] = serde_json::json!(false);
+    assert_eq!(masked, json, "dry-run JSON must equal real-run JSON");
+
+    assert_eq!(json["kind"], "project_note");
+    assert_eq!(json["creates_pomodoro"], true);
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 3,
+                "name": "ADMIN",
+                "status": "queued",
+                "created": true,
+                "roles": ["changed"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — ADMIN",
+                        "depth": 0,
+                        "change": "added",
+                    },
+                    {
+                        "text": "  - [[cash_goog_exit#^draft-memo]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                    {
+                        "text": "  - [[cash_goog_exit#^call-ms]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read linked day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (1330-1400) Work\n",
+            "- [ ] () — ADMIN\n",
+            "  - [[cash_goog_exit#^draft-memo]]\n",
+            "  - [[cash_goog_exit#^call-ms]]\n",
+        )
+    );
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}

@@ -663,6 +663,8 @@ fn capture_pomodoro_close_selection_dry_run_matches_real_run() {
     dry_json["dry_run"] = serde_json::json!(false);
     real_json["dry_run"] = serde_json::json!(false);
     assert_eq!(dry_json, real_json);
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&before_day, &day_after, &real_json);
 }
 
 #[test]

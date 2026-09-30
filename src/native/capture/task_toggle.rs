@@ -242,5 +242,8 @@ pub(super) fn plan_task_toggle_capture(
             pomodoro_link_destination: None,
         }),
         pomodoro_link: None,
+        // Two-way toggles rely on block auto-detection; see
+        // `PomodoroBlockTracker::track_item`.
+        pomodoro_refs: Vec::new(),
     })
 }

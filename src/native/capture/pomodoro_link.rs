@@ -46,7 +46,7 @@ pub(super) fn plan_capture_with_pomodoro_link(
     }
     let day_file_label = day_file.display().to_string();
     if let Some(spec) = start {
-        let (updated_day, pomodoro_link_placement, summary) =
+        let (updated_day, pomodoro_link_placement, summary, start_before) =
             plan_pomodoro_start(
                 &original_day,
                 &block_link,
@@ -56,6 +56,14 @@ pub(super) fn plan_capture_with_pomodoro_link(
             )?;
         planner.stage(target, updated_target)?;
         planner.stage(&day_file, updated_day)?;
+        // The start moves (or creates) the entry and appends the Task
+        // Link beneath it, so the entry carries both roles.
+        let pomodoro_refs = PomodoroBlockRef::started_and_linked(
+            start_before,
+            summary.pomodoro_line.saturating_sub(1),
+        )
+        .into_iter()
+        .collect();
         let destination = destination_json(
             &capture_task_toggle::PomodoroEndpoint {
                 line: summary.pomodoro_line,
@@ -83,12 +91,31 @@ pub(super) fn plan_capture_with_pomodoro_link(
             pomodoro_note: None,
             toggle: None,
             pomodoro_link: None,
+            pomodoro_refs,
         });
     }
     let insertion =
         insert_pomodoro_block_link(&original_day, &block_link, pomodoro_name)?;
     planner.stage(target, updated_target)?;
     planner.stage(&day_file, insertion.updated)?;
+    // The destination endpoint is post-state (scanned from the updated
+    // note), so its headline needs only resolution — or `Created` — for
+    // `before`. A fresh task link never moves a source.
+    let pomodoro_refs = vec![if insertion.creates_pomodoro {
+        PomodoroBlockRef::created(
+            PomodoroBlockRole::Linked,
+            insertion.destination.line.saturating_sub(1),
+        )
+    } else {
+        PomodoroBlockRef::resolved(
+            PomodoroBlockRole::Linked,
+            insertion.destination.line.saturating_sub(1),
+        )
+    }];
+    let destination = insertion.destination;
+    let placement = insertion.placement;
+    let destination_name = destination.name.clone();
+    let creates_pomodoro = insertion.creates_pomodoro;
 
     Ok(CaptureWritePlan {
         placement,
@@ -97,10 +124,10 @@ pub(super) fn plan_capture_with_pomodoro_link(
                 block_id: block_id.to_string(),
                 day_file: day_file_label,
                 block_link,
-                pomodoro_link_placement: insertion.placement,
-                pomodoro_name: insertion.destination.name.clone(),
-                creates_pomodoro: insertion.creates_pomodoro,
-                pomodoro_link_destination: Some(insertion.destination),
+                pomodoro_link_placement: placement,
+                pomodoro_name: destination_name,
+                creates_pomodoro,
+                pomodoro_link_destination: Some(destination),
             },
             start: None,
         }),
@@ -108,6 +135,7 @@ pub(super) fn plan_capture_with_pomodoro_link(
         pomodoro_note: None,
         toggle: None,
         pomodoro_link: None,
+        pomodoro_refs,
     })
 }
 
@@ -341,6 +369,27 @@ pub(super) fn plan_pomodoro_link_capture(
         }
     };
     let placement = relocation.placement.map(link_placement_to_placement);
+    // The destination endpoint is post-state; a moved source keeps its
+    // pre-state headline and resolves through the item's line map.
+    // Mention-only destinations (`AlreadyCurrent`, an already-linked
+    // entry) still push their ref so the block shows with every line
+    // unchanged.
+    let mut pomodoro_refs = vec![if relocation.creates_pomodoro {
+        PomodoroBlockRef::created(
+            PomodoroBlockRole::Linked,
+            relocation.destination.line.saturating_sub(1),
+        )
+    } else {
+        PomodoroBlockRef::resolved(
+            PomodoroBlockRole::Linked,
+            relocation.destination.line.saturating_sub(1),
+        )
+    }];
+    if relocation.action == capture_task_toggle::PomodoroLinkLedgerAction::Moved
+        && let Some(source) = relocation.source.as_ref()
+    {
+        pomodoro_refs.push(PomodoroBlockRef::unlinked_before(source.line - 1));
+    }
     Ok(CaptureWritePlan {
         placement: Placement::Linked,
         pomodoro: None,
@@ -373,6 +422,7 @@ pub(super) fn plan_pomodoro_link_capture(
             status_changed,
             pomodoro_start: None,
         }),
+        pomodoro_refs,
     })
 }
 
@@ -477,14 +527,21 @@ pub(super) fn plan_pomodoro_link_with_start(
     };
 
     if queue.is_none() {
-        let (updated_day, placement, summary) = plan_pomodoro_start(
-            day_contents,
-            block_link,
-            pomodoro_name,
-            spec,
-            now,
-        )?;
+        let (updated_day, placement, summary, start_before) =
+            plan_pomodoro_start(
+                day_contents,
+                block_link,
+                pomodoro_name,
+                spec,
+                now,
+            )?;
         planner.stage(day_file, updated_day)?;
+        let pomodoro_refs = PomodoroBlockRef::started_and_linked(
+            start_before,
+            summary.pomodoro_line.saturating_sub(1),
+        )
+        .into_iter()
+        .collect();
         return Ok(CaptureWritePlan {
             placement: Placement::Linked,
             pomodoro: None,
@@ -524,6 +581,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                 status_changed,
                 pomodoro_start: Some(summary),
             }),
+            pomodoro_refs,
         });
     }
 
@@ -550,6 +608,14 @@ pub(super) fn plan_pomodoro_link_with_start(
                             &time_range,
                         )?;
                     planner.stage(day_file, started_day.clone())?;
+                    // The queued link's own entry started: it carries
+                    // both the start and the (mention-only) link ref.
+                    let pomodoro_refs = PomodoroBlockRef::started_and_linked(
+                        PomodoroBlockBefore::At(dest_index),
+                        moved_index,
+                    )
+                    .into_iter()
+                    .collect();
                     let after_scan = capture_pomodoros::scan(&started_day);
                     let dest_entry = after_scan
                         .entries
@@ -609,6 +675,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                             status_changed,
                             pomodoro_start: Some(summary),
                         }),
+                        pomodoro_refs,
                     });
                 }
                 let (started_day, moved_dest_index) =
@@ -674,6 +741,18 @@ pub(super) fn plan_pomodoro_link_with_start(
                     });
                 let dest_json =
                     destination_json(&dest_entry, false, pomodoro_name);
+                // The named entry started and moved, and the queued link
+                // moved into it: the destination carries both roles while
+                // the source resolves through the item's line map.
+                let mut pomodoro_refs = PomodoroBlockRef::started_and_linked(
+                    PomodoroBlockBefore::At(dest_index),
+                    dest_json.line.saturating_sub(1),
+                )
+                .into_iter()
+                .collect::<Vec<_>>();
+                pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
+                    source_endpoint.line.saturating_sub(1),
+                ));
                 let summary = PomodoroStartSummary {
                     start: start_text,
                     end: end_text,
@@ -722,6 +801,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         status_changed,
                         pomodoro_start: Some(summary),
                     }),
+                    pomodoro_refs,
                 });
             }
             capture_pomodoros::NamedSelection::CompletedOnly(_)
@@ -798,6 +878,17 @@ pub(super) fn plan_pomodoro_link_with_start(
                     });
                 let dest_json =
                     destination_json(&dest_entry, true, pomodoro_name);
+                // The named entry was created and started, and the queued
+                // link moved into it.
+                let mut pomodoro_refs = PomodoroBlockRef::started_and_linked(
+                    PomodoroBlockBefore::Created,
+                    dest_json.line.saturating_sub(1),
+                )
+                .into_iter()
+                .collect::<Vec<_>>();
+                pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
+                    source_endpoint.line.saturating_sub(1),
+                ));
                 let summary = PomodoroStartSummary {
                     start: start_text,
                     end: end_text,
@@ -846,6 +937,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         status_changed,
                         pomodoro_start: Some(summary),
                     }),
+                    pomodoro_refs,
                 });
             }
         }
@@ -902,6 +994,14 @@ pub(super) fn plan_pomodoro_link_with_start(
         dropped: Vec::new(),
     };
     let _ = (q_line_index, q_subtree_end);
+    // The queued entry started in place and already holds the link: the
+    // destination carries both the start and the (mention-only) link ref.
+    let pomodoro_refs = PomodoroBlockRef::started_and_linked(
+        PomodoroBlockBefore::At(q_entry_index),
+        moved_index,
+    )
+    .into_iter()
+    .collect();
     Ok(CaptureWritePlan {
         placement: Placement::Linked,
         pomodoro: None,
@@ -935,6 +1035,7 @@ pub(super) fn plan_pomodoro_link_with_start(
             status_changed,
             pomodoro_start: Some(summary),
         }),
+        pomodoro_refs,
     })
 }
 

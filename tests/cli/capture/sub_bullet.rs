@@ -732,3 +732,130 @@ fn capture_sub_bullet_errors_are_actionable_in_human_and_json_modes() {
         }
     }
 }
+
+#[test]
+fn capture_pomodoro_note_reports_running_entry_block() {
+    // A `#` Pomodoro note under the running entry is auto-detected: no
+    // planner ref is pushed for Pomodoro notes.
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-running");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [x] (**0800-0830**) — DONE\n",
+        "- [ ] (**0900-0930**) — RUN\n",
+    );
+    write_file(&day_file, day_before);
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-07-10 10:00:00",
+        &["quick note #"],
+    );
+    assert_eq!(json["kind"], "pomodoro_note");
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 3,
+                "name": "RUN",
+                "time_range": "0900-0930",
+                "status": "running",
+                "created": false,
+                "roles": ["changed"],
+                "lines": [
+                    {
+                        "text": "- [ ] (**0900-0930**) — RUN",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - quick note",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read noted day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0800-0830**) — DONE\n",
+            "- [ ] (**0900-0930**) — RUN\n",
+            "  - quick note\n",
+        )
+    );
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}
+
+#[test]
+fn capture_pomodoro_note_reports_last_completed_entry_block() {
+    // With no running entry, `#` lands under the last completed entry,
+    // and auto-detection reports that block.
+    let temp = TempDir::new("bob-cli-capture-pomodoro-note-completed");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [x] (**0800-0830**) — DONE\n",
+        "  - old ctx\n",
+        "- [ ] () — QUEUED\n",
+    );
+    write_file(&day_file, day_before);
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-07-10 10:00:00",
+        &["quick note #"],
+    );
+    assert_eq!(json["kind"], "pomodoro_note");
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 2,
+                "name": "DONE",
+                "time_range": "0800-0830",
+                "status": "completed",
+                "created": false,
+                "roles": ["changed"],
+                "lines": [
+                    {
+                        "text": "- [x] (**0800-0830**) — DONE",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - old ctx",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - quick note",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read noted day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0800-0830**) — DONE\n",
+            "  - old ctx\n",
+            "  - quick note\n",
+            "- [ ] () — QUEUED\n",
+        )
+    );
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}

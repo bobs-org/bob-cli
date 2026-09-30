@@ -1,0 +1,1 @@
+{"globalFilter": "#task", "statusSettings": {"coreStatuses": [{"symbol":" ","name":"Ready","type":"TODO"},{"symbol":"x","name":"Done","type":"DONE"}], "customStatuses": [{"symbol":"*","name":"Next","type":"ON_HOLD"},{"symbol":"?","name":"Blocked","type":"TODO"},{"symbol":"/","name":"In Progress","type":"IN_PROGRESS"},{"symbol":"-","name":"Canceled","type":"CANCELLED"}]}}

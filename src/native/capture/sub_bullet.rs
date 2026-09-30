@@ -33,6 +33,8 @@ pub(super) fn plan_pomodoro_note_capture(
         }),
         toggle: None,
         pomodoro_link: None,
+        // Pomodoro notes rely on block auto-detection.
+        pomodoro_refs: Vec::new(),
     })
 }
 
@@ -163,6 +165,7 @@ pub(super) fn plan_sub_bullet_capture(
         pomodoro_note: None,
         toggle: None,
         pomodoro_link: None,
+        pomodoro_refs: Vec::new(),
     })
 }
 

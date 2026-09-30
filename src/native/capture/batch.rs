@@ -154,6 +154,7 @@ pub(super) fn plan_capture_to_target(
             pomodoro_note: None,
             toggle: None,
             pomodoro_link: None,
+            pomodoro_refs: Vec::new(),
         });
     }
 
@@ -230,6 +231,7 @@ pub(super) fn plan_capture_to_target(
         pomodoro_note: None,
         toggle: None,
         pomodoro_link: None,
+        pomodoro_refs: Vec::new(),
     })
 }
 
@@ -241,6 +243,11 @@ pub(super) struct CaptureWritePlan {
     pub(super) pomodoro_note: Option<PomodoroNoteDetails>,
     pub(super) toggle: Option<TaskToggleCaptureDetails>,
     pub(super) pomodoro_link: Option<PomodoroLinkCaptureDetails>,
+    /// Pomodoro block touches the batch loop feeds to the block tracker.
+    /// Empty for captures that never touch the day file; two-way toggles,
+    /// Pomodoro notes, and project notes stay empty and rely on
+    /// auto-detection instead.
+    pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
 }
 
 #[derive(Debug)]

@@ -271,6 +271,7 @@ fn named_start_created_reports_added_block() {
             "\t- [[#^gtd]]\n",
         ),
     );
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
 
     let json = capture_json_dry_run_matches_real(
         &vault,
@@ -278,6 +279,8 @@ fn named_start_created_reports_added_block() {
         "2026-09-30 07:20:00",
         &["=#focus"],
     );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
     assert_eq!(
         json["pomodoro_blocks"],
         serde_json::json!([

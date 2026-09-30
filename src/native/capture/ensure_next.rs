@@ -89,6 +89,26 @@ pub(super) fn plan_ensure_next_capture(
     let pomodoro_link_placement =
         relocation.placement.map(link_placement_to_placement);
     let pomodoro_name = relocation.destination.name.clone();
+    // The destination endpoint is post-state; a moved source keeps its
+    // pre-state headline and resolves through the item's line map. An
+    // already-current destination still pushes its ref so the block shows
+    // with every line unchanged.
+    let mut pomodoro_refs = vec![if relocation.creates_pomodoro {
+        PomodoroBlockRef::created(
+            PomodoroBlockRole::Linked,
+            relocation.destination.line.saturating_sub(1),
+        )
+    } else {
+        PomodoroBlockRef::resolved(
+            PomodoroBlockRole::Linked,
+            relocation.destination.line.saturating_sub(1),
+        )
+    }];
+    if relocation.action == capture_task_toggle::LinkRelocationAction::Moved {
+        pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
+            relocation.source.line.saturating_sub(1),
+        ));
+    }
 
     Ok(CaptureWritePlan {
         placement: Placement::Toggled,
@@ -126,5 +146,6 @@ pub(super) fn plan_ensure_next_capture(
             )),
         }),
         pomodoro_link: None,
+        pomodoro_refs,
     })
 }

@@ -273,12 +273,15 @@ fn chain_blocks_vault(
 fn chain_adjust_then_close_reports_one_cumulative_block() {
     let (_temp, vault, day_file) =
         chain_blocks_vault("bob-cli-chain-blocks-adjust-close");
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
     let json = capture_json_dry_run_matches_real(
         &vault,
         &day_file,
         "2026-09-30 07:20:00",
         &["+2 =x"],
     );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
     assert_eq!(json["captures"][0]["kind"], "pomodoro_adjust");
     assert_eq!(json["captures"][1]["kind"], "pomodoro_close");
     assert_eq!(
@@ -334,12 +337,15 @@ fn chain_adjust_then_close_reports_one_cumulative_block() {
 fn chain_close_then_start_reports_next_started_block() {
     let (_temp, vault, day_file) =
         chain_blocks_vault("bob-cli-chain-blocks-close-start");
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
     let json = capture_json_dry_run_matches_real(
         &vault,
         &day_file,
         "2026-09-30 07:20:00",
         &["=x ="],
     );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
     assert_eq!(json["captures"][0]["kind"], "pomodoro_close");
     assert_eq!(json["captures"][1]["kind"], "pomodoro_start");
     assert_eq!(

@@ -182,7 +182,7 @@ pub(super) fn plan_capture_item(
         let created = date_string(today);
         let relative_target = relative_target(Some(route));
         let target = request.bob_dir.join(&relative_target);
-        let note_plan = plan_task_toggle_capture(
+        let mut note_plan = plan_task_toggle_capture(
             planner,
             &request.bob_dir,
             &target,
@@ -193,6 +193,7 @@ pub(super) fn plan_capture_item(
             today,
             warnings,
         )?;
+        let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
         let toggle = note_plan.toggle.as_ref().ok_or_else(|| {
             CaptureError::io(
                 "task toggle capture invariant failed: missing toggle details",
@@ -254,7 +255,7 @@ pub(super) fn plan_capture_item(
                 toggle_task_description: Some(toggle.task_description.clone()),
             },
             clip_plan: None,
-            pomodoro_refs: Vec::new(),
+            pomodoro_refs,
         });
     }
     if let CaptureKind::PomodoroLink {
@@ -280,7 +281,7 @@ pub(super) fn plan_capture_item(
         let created = date_string(today);
         let relative_target = relative_target(Some(route));
         let target = request.bob_dir.join(&relative_target);
-        let note_plan = plan_pomodoro_link_capture(
+        let mut note_plan = plan_pomodoro_link_capture(
             planner,
             &request.bob_dir,
             &target,
@@ -292,6 +293,7 @@ pub(super) fn plan_capture_item(
             today,
             warnings,
         )?;
+        let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
         let link = note_plan.pomodoro_link.as_ref().ok_or_else(|| {
             CaptureError::io(
                 "pomodoro link capture invariant failed: missing link details",
@@ -353,7 +355,7 @@ pub(super) fn plan_capture_item(
                 toggle_task_description: Some(link.task_description.clone()),
             },
             clip_plan: None,
-            pomodoro_refs: Vec::new(),
+            pomodoro_refs,
         });
     }
     if matches!(parsed.kind, CaptureKind::ProjectNote { .. }) {
@@ -555,7 +557,7 @@ pub(super) fn plan_capture_item(
         clip_plan.as_ref().map(|plan| plan.output.lines.as_slice()),
         schedule_log.as_ref().map(|log| log.lines.as_slice()),
     );
-    let note_plan = match &parsed.kind {
+    let mut note_plan = match &parsed.kind {
         CaptureKind::SubBullet {
             target: sub_bullet_target,
             section,
@@ -627,6 +629,7 @@ pub(super) fn plan_capture_item(
             &parsed.kind,
         )?,
     };
+    let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
     let special = note_plan.pomodoro.as_ref();
     let sub_bullet = note_plan.sub_bullet.as_ref();
     let pomodoro_note = note_plan.pomodoro_note.as_ref();
@@ -719,7 +722,7 @@ pub(super) fn plan_capture_item(
             toggle_task_description: None,
         },
         clip_plan,
-        pomodoro_refs: Vec::new(),
+        pomodoro_refs,
     })
 }
 

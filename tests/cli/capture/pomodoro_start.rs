@@ -732,6 +732,7 @@ fn capture_pomodoro_start_moves_named_destination_before_link_move() {
             "- [ ] () — AFTER\n",
         ),
     );
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -768,6 +769,7 @@ fn capture_pomodoro_start_moves_named_destination_before_link_move() {
             "- [ ] () — AFTER\n",
         )
     );
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
 }
 
 #[test]

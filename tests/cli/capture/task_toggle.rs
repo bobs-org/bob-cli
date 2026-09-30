@@ -518,3 +518,238 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
         );
     }
 }
+
+#[test]
+fn capture_task_toggle_reports_inserted_link_block() {
+    // A two-way toggle that inserts a fresh Task Link is auto-detected:
+    // no planner ref is pushed for toggles.
+    let temp = TempDir::new("bob-cli-capture-toggle-blocks-insert");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&target, "- [ ] #task Fresh work ^fresh\n");
+    let day_before =
+        "## Pomodoros\n- [ ] (**0900-0930**) — CODING\n  - context\n";
+    write_file(&day_file, day_before);
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-07-10 10:00:00",
+        &["@cash+fresh!"],
+    );
+    assert_eq!(json["kind"], "task_toggle");
+    assert_eq!(json["toggle_direction"], "next");
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 2,
+                "name": "CODING",
+                "time_range": "0900-0930",
+                "status": "running",
+                "created": false,
+                "roles": ["changed"],
+                "lines": [
+                    {
+                        "text": "- [ ] (**0900-0930**) — CODING",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - context",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - [[cash#^fresh]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read toggled day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CODING\n",
+            "  - context\n",
+            "  - [[cash#^fresh]]\n",
+        )
+    );
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}
+
+#[test]
+fn capture_task_toggle_reports_created_named_entry() {
+    // Ensure-Next onto a missing name creates the Pomodoro and moves the
+    // queued link into it: the destination carries the `linked` ref with
+    // `created: true`, the source the `unlinked` ref.
+    let temp = TempDir::new("bob-cli-capture-toggle-blocks-created");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&target, "- [ ] #task Fresh work ^fresh\n");
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — CODING\n",
+        "- [ ] () — QUEUE\n",
+        "  - [[cash#^fresh]]\n",
+    );
+    write_file(&day_file, day_before);
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-07-10 10:00:00",
+        &["@cash+fresh#deep+work"],
+    );
+    assert_eq!(json["kind"], "task_toggle");
+    assert_eq!(json["toggle_behavior"], "ensure_next");
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(json["creates_pomodoro"], true);
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 3,
+                "name": "DEEP+WORK",
+                "status": "queued",
+                "created": true,
+                "roles": ["linked"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — DEEP+WORK",
+                        "depth": 0,
+                        "change": "added",
+                    },
+                    {
+                        "text": "  - [[cash#^fresh]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                ],
+            },
+            {
+                "relative_target": "day.md",
+                "line": 5,
+                "name": "QUEUE",
+                "status": "queued",
+                "created": false,
+                "roles": ["unlinked"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — QUEUE",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - [[cash#^fresh]]",
+                        "depth": 1,
+                        "change": "removed",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read toggled day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CODING\n",
+            "- [ ] () — DEEP+WORK\n",
+            "  - [[cash#^fresh]]\n",
+            "- [ ] () — QUEUE\n",
+        )
+    );
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}
+
+#[test]
+fn capture_task_toggle_reports_open_removal_from_two_entries() {
+    // Open-direction cleanup removes the link from every open entry, and
+    // auto-detection reports each touched block with its removed line.
+    let temp = TempDir::new("bob-cli-capture-toggle-blocks-removal");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&target, "- [*] #task Done work ^done\n");
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — ONE\n",
+        "  - [[cash#^done]]\n",
+        "- [ ] () — TWO\n",
+        "  - [[cash#^done]]\n",
+    );
+    write_file(&day_file, day_before);
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-07-10 10:00:00",
+        &["@cash+done!"],
+    );
+    assert_eq!(json["kind"], "task_toggle");
+    assert_eq!(json["toggle_direction"], "open");
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 2,
+                "name": "ONE",
+                "time_range": "0900-0930",
+                "status": "running",
+                "created": false,
+                "roles": ["changed"],
+                "lines": [
+                    {
+                        "text": "- [ ] (**0900-0930**) — ONE",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - [[cash#^done]]",
+                        "depth": 1,
+                        "change": "removed",
+                    },
+                ],
+            },
+            {
+                "relative_target": "day.md",
+                "line": 3,
+                "name": "TWO",
+                "status": "queued",
+                "created": false,
+                "roles": ["changed"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — TWO",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - [[cash#^done]]",
+                        "depth": 1,
+                        "change": "removed",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read toggled day");
+    assert_eq!(
+        day_after,
+        "## Pomodoros\n- [ ] (**0900-0930**) — ONE\n- [ ] () — TWO\n"
+    );
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}

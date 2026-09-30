@@ -25,6 +25,7 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
             "    - review notes\n",
         ),
     );
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
 
     let dry_run = bob_command()
         .arg("capture")
@@ -98,6 +99,69 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
             "- [ ] () — LATER\n",
         )
     );
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 2,
+                "name": "CURRENT",
+                "time_range": "0900-0930",
+                "status": "running",
+                "created": false,
+                "roles": ["linked"],
+                "lines": [
+                    {
+                        "text": "- [ ] (**0900-0930**) — CURRENT",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - context",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - [[cash#^goog-exit]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                    {
+                        "text": "    - review notes",
+                        "depth": 2,
+                        "change": "added",
+                    },
+                ],
+            },
+            {
+                "relative_target": "day.md",
+                "line": 6,
+                "name": "LATER",
+                "status": "queued",
+                "created": false,
+                "roles": ["unlinked"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — LATER",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "  - [[cash#^goog-exit]]",
+                        "depth": 1,
+                        "change": "removed",
+                    },
+                    {
+                        "text": "    - review notes",
+                        "depth": 2,
+                        "change": "removed",
+                    },
+                ],
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
 
     let noop = bob_command()
         .arg("capture")

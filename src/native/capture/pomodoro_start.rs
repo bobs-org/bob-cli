@@ -45,13 +45,20 @@ pub(super) fn compute_pomodoro_start_range(
     Ok((start, end, duration_minutes, time_range))
 }
 
+/// Low-level link/task start used by Pomodoro task and link captures.
+/// The fourth tuple element is the block-tracker `before` for the started
+/// entry: `At` of the pre-state headline the start moved, or `Created`
+/// when the start created its entry.
 pub(super) fn plan_pomodoro_start(
     original_day: &str,
     block_link: &str,
     pomodoro_name: Option<&str>,
     spec: &PomodoroStartSpec,
     now: chrono::NaiveDateTime,
-) -> Result<(String, Placement, PomodoroStartSummary), CaptureError> {
+) -> Result<
+    (String, Placement, PomodoroStartSummary, PomodoroBlockBefore),
+    CaptureError,
+> {
     let (start, end, duration_minutes, time_range) =
         compute_pomodoro_start_range(now, spec)?;
     let lines = line_spans(original_day);
@@ -132,6 +139,7 @@ pub(super) fn plan_pomodoro_start(
                         drop: Vec::new(),
                         dropped: Vec::new(),
                     },
+                    PomodoroBlockBefore::At(index),
                 ));
             }
             capture_pomodoros::NamedSelection::CompletedOnly(_)
@@ -168,6 +176,7 @@ pub(super) fn plan_pomodoro_start(
                         drop: Vec::new(),
                         dropped: Vec::new(),
                     },
+                    PomodoroBlockBefore::Created,
                 ));
             }
         }
@@ -219,6 +228,7 @@ pub(super) fn plan_pomodoro_start(
                 drop: Vec::new(),
                 dropped: Vec::new(),
             },
+            PomodoroBlockBefore::At(index),
         ));
     }
     let (updated_day, placement, created_line) = create_started_pomodoro_entry(
@@ -245,6 +255,7 @@ pub(super) fn plan_pomodoro_start(
             drop: Vec::new(),
             dropped: Vec::new(),
         },
+        PomodoroBlockBefore::Created,
     ))
 }
 

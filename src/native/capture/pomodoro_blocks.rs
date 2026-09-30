@@ -20,10 +20,7 @@ pub(super) enum PomodoroBlockRole {
     Started,
     Closed,
     Next,
-    // `Linked`/`Unlinked` arrive with the link/task refs in blocks_refs.
-    #[allow(dead_code)]
     Linked,
-    #[allow(dead_code)]
     Unlinked,
     Changed,
 }
@@ -76,6 +73,36 @@ impl PomodoroBlockRef {
             before: PomodoroBlockBefore::Resolve,
             after: Some(after),
         }
+    }
+
+    /// A moved-away link source: its headline is unchanged, so the batch
+    /// loop resolves `after` through the item's line map.
+    pub(super) fn unlinked_before(before: usize) -> Self {
+        Self {
+            role: PomodoroBlockRole::Unlinked,
+            before: PomodoroBlockBefore::At(before),
+            after: None,
+        }
+    }
+
+    /// The started entry of a link/task start is also the appended Task
+    /// Link's destination: both roles share one block.
+    pub(super) fn started_and_linked(
+        before: PomodoroBlockBefore,
+        after: usize,
+    ) -> [Self; 2] {
+        [
+            Self {
+                role: PomodoroBlockRole::Started,
+                before,
+                after: Some(after),
+            },
+            Self {
+                role: PomodoroBlockRole::Linked,
+                before,
+                after: Some(after),
+            },
+        ]
     }
 }
 
