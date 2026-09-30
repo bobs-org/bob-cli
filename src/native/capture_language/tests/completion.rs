@@ -252,6 +252,28 @@ fn cursor_past_a_trailing_space_has_no_completion() {
 }
 
 #[test]
+fn trailing_now_tag_fragment_completes_the_tag() {
+    let completion = field("Fix it #n", 9).expect("now_tag field");
+    assert_eq!(completion.context, CompletionContext::NowTag);
+    assert_eq!(completion.query, "n");
+    assert_eq!(completion.replacement, (7, 9));
+
+    // The whole token is replaced wherever the cursor sits inside it.
+    let completion = field("Fix it @sase #no", 14).expect("now_tag field");
+    assert_eq!(completion.context, CompletionContext::NowTag);
+    assert_eq!(completion.query, "no");
+    assert_eq!(completion.replacement, (13, 16));
+
+    // Re-accepting a complete tag is idempotent.
+    let completion = field("Fix it #now", 11).expect("now_tag field");
+    assert_eq!(completion.context, CompletionContext::NowTag);
+    assert_eq!(completion.replacement, (7, 11));
+
+    // A lone `#` stays the Pomodoro-note marker: no tag completion.
+    assert_eq!(field("Fix #", 5), None);
+}
+
+#[test]
 fn retired_double_colon_marker_has_no_completion_field() {
     assert_eq!(field("Do work @Dev::new-id", 12), None);
     assert_eq!(field("Do work @Dev::new-id", 14), None);

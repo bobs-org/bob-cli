@@ -1218,6 +1218,14 @@ pub(super) fn parse_pomodoro_link_item<'a>(
             }
             if !is_solo_item {
                 if !is_solo_parent {
+                    // A solo link with nothing but the weekly-bet tag has no
+                    // new task text to tag.
+                    if item.lines.len() == 1
+                        && tokens.len() == 2
+                        && is_now_tag(tokens[1])
+                    {
+                        return Err(now_tag_body_error());
+                    }
                     for extra in &tokens[1..] {
                         if parse_schedule_token(extra).is_some() {
                             return Err(

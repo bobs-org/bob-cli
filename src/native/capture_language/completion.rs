@@ -26,6 +26,7 @@ pub(crate) enum CompletionContext {
     Task,
     TaskSection,
     ActiveTask,
+    NowTag,
     WikilinkNote,
     WikilinkHeading,
     WikilinkBlock,
@@ -344,6 +345,24 @@ pub(crate) fn completion_field_at(
             end: line.end,
         }
     };
+
+    // A trailing `#n`, `#no`, or `#now` completes the weekly-bet tag: the
+    // cursor inside the token requests the `now_tag` context whose single
+    // candidate is `#now`, while a lone `#` stays the Pomodoro-note marker.
+    let scan_tokens = tokenize_line_with_spans(&scan_line);
+    if let Some(last) = scan_tokens.last()
+        && cursor >= last.start
+        && cursor <= last.end
+        && (is_now_tag(last.text) || is_now_tag_prefix(last.text))
+    {
+        return Some(CompletionField {
+            context: CompletionContext::NowTag,
+            route: None,
+            block_id: None,
+            query: last.text.trim_start_matches('#').to_string(),
+            replacement: (last.start, last.end),
+        });
+    }
 
     let mut tokens = tokenize_line_with_spans(&scan_line);
     take_global_declarations(&mut tokens);

@@ -177,13 +177,46 @@ pub(super) fn is_pomodoro_note_marker(token: &str) -> bool {
     token == "#"
 }
 
+/// The first-class weekly-bet tag: an exact `#now` token is task text, never
+/// a retired bullet marker, and (after the route marker) it is moved to the
+/// end of the body so the written `- [ ] #task` line carries it before the
+/// `[created::…]` stamp. Matching is case-sensitive and whole-token:
+/// `#nowadays` and `#now/x` stay ordinary text.
+pub(super) const NOW_TAG: &str = "#now";
+
+/// Whether a whitespace-free token is exactly the `#now` tag.
+pub(super) fn is_now_tag(token: &str) -> bool {
+    token == NOW_TAG
+}
+
+/// Whether a whitespace-free token is a partially-typed `#now` tag: the
+/// editor offers `now_tag` completion for these while execution still
+/// rejects them as legacy markers.
+pub(super) fn is_now_tag_prefix(token: &str) -> bool {
+    matches!(token, "#n" | "#no")
+}
+
+/// Split one trailing exact `#now` whitespace token off line text,
+/// returning the kept prefix. `None` when the line does not end with a
+/// standalone `#now` token (`a#now` and `#nowadays` stay literal).
+pub(super) fn strip_trailing_now_tag(text: &str) -> Option<&str> {
+    let trimmed = text.trim_end();
+    let kept = trimmed.strip_suffix(NOW_TAG)?;
+    if kept.is_empty() {
+        return Some(kept);
+    }
+    kept.ends_with(char::is_whitespace).then(|| kept.trim_end())
+}
+
 /// Reject the retired standalone bullet marker forms so they fail clearly
 /// instead of silently capturing literal `#...` text. The marker is honored
 /// only when appended to an `@route` token (`@foo#bar`).
 ///
 /// Two terminal positions are rejected: a final token that itself starts with
 /// `#`, and (when `allow_route`) a final plain `@route` token preceded by a
-/// `#...` token. A `#tag` anywhere else stays literal task text.
+/// `#...` token. A `#tag` anywhere else stays literal task text. An exact
+/// trailing or pre-route `#now` is exempt in both positions: it is the
+/// first-class weekly-bet tag, not a legacy marker.
 pub(super) fn reject_legacy_bullet_markers(
     tokens: &[&str],
     allow_route: bool,
@@ -192,7 +225,10 @@ pub(super) fn reject_legacy_bullet_markers(
         return Ok(());
     };
 
-    if last.starts_with('#') && !is_pomodoro_note_marker(last) {
+    if last.starts_with('#')
+        && !is_pomodoro_note_marker(last)
+        && !is_now_tag(last)
+    {
         return Err(legacy_marker_error());
     }
 
@@ -200,6 +236,7 @@ pub(super) fn reject_legacy_bullet_markers(
         && tokens.len() >= 2
         && tokens[tokens.len() - 2].starts_with('#')
         && !is_pomodoro_note_marker(tokens[tokens.len() - 2])
+        && !is_now_tag(tokens[tokens.len() - 2])
         && parse_route_token(last)
             .is_some_and(|token| matches!(token.kind, CaptureKind::Task))
     {
@@ -207,6 +244,14 @@ pub(super) fn reject_legacy_bullet_markers(
     }
 
     Ok(())
+}
+
+/// Usage error for `#now` with no new task text (a solo link, a toggle, or
+/// a whole-item operator followed by `#now`): the tag belongs on new text,
+/// while existing tasks take Alt+N in Obsidian.
+pub(super) fn now_tag_body_error() -> String {
+    "`#now` tags new task text; tag an existing task with Alt+N in Obsidian"
+        .to_string()
 }
 
 pub(super) fn normalize_forced_route(route: &str) -> Result<String, String> {

@@ -128,7 +128,7 @@ the link moves to that named entry (creating it when needed); without a \
 name an already-queued task stays in its Pomodoro and '=<X>' starts that \
 entry and moves it to the front of the queue, otherwise the implicit current/next entry is used. The \
 '^' spelling ('bob capture '^sase:deep-fix='') executes identically and \
-exists so typing '^' completes only In Progress and Next tasks. JSON \
+exists so typing '^' completes In Progress, Next, and Ready `#now` tasks. JSON \
 reports a distinct 'pomodoro_link' kind with the status transition, the \
 ledger action (linked, moved, or already_current), and the resolved \
 destination.\n\n\

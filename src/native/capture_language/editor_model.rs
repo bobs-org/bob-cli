@@ -36,6 +36,7 @@ pub(crate) enum SpanKind {
     GlobalSubBulletRoute,
     GlobalSubBulletBlockId,
     PomodoroNote,
+    NowTag,
     Schedule,
     Priority,
     Clipboard,
@@ -80,6 +81,7 @@ impl SpanKind {
             Self::GlobalSubBulletRoute => "global_sub_bullet_route",
             Self::GlobalSubBulletBlockId => "global_sub_bullet_block_id",
             Self::PomodoroNote => "pomodoro_note",
+            Self::NowTag => "now_tag",
             Self::Schedule => "schedule",
             Self::Priority => "priority",
             Self::Clipboard => "clipboard",
@@ -184,6 +186,7 @@ pub(crate) enum Need {
     TaskSection,
     ActiveTask,
     PomodoroCloseTask,
+    NowTag,
 }
 
 impl Need {
@@ -198,6 +201,7 @@ impl Need {
             Self::TaskSection => "task_section",
             Self::ActiveTask => "active_task",
             Self::PomodoroCloseTask => "pomodoro_close_task",
+            Self::NowTag => "now_tag",
         }
     }
 }

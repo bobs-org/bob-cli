@@ -34,6 +34,39 @@ pub(super) fn resolve_line<'a>(
     detect_route: bool,
     parse_clip_markers: bool,
 ) -> Result<LineOutcome<'a>, String> {
+    // A trailing exact `#now` is the weekly-bet tag, not a route or a
+    // legacy marker: resolve the route in front of it, then move the tag to
+    // the end of the body. With a forced route every `@...` token stays
+    // literal, so `#now` stays literal body text there too.
+    let trailing_now = (detect_route
+        && tokens.last().is_some_and(|token| is_now_tag(token.text)))
+    .then(|| tokens.pop())
+    .flatten()
+    .is_some();
+    match resolve_line_inner(tokens, leading, detect_route, parse_clip_markers)
+    {
+        Err(message) if trailing_now && message == missing_text_error() => {
+            Err(now_tag_body_error())
+        }
+        Ok(mut outcome) if trailing_now => {
+            if outcome.body.is_empty() {
+                return Err(now_tag_body_error());
+            }
+            outcome.body.push_str(" #now");
+            Ok(outcome)
+        }
+        outcome => outcome,
+    }
+}
+
+/// [`resolve_line`] without the trailing-`#now` handling: every return
+/// below sees the line with the tag already removed.
+fn resolve_line_inner<'a>(
+    mut tokens: Vec<Token<'a>>,
+    leading: bool,
+    detect_route: bool,
+    parse_clip_markers: bool,
+) -> Result<LineOutcome<'a>, String> {
     let declarations = take_global_declarations(&mut tokens);
     let (markers, _) =
         extract_terminal_markers(&mut tokens, parse_clip_markers);

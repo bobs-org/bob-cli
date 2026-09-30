@@ -1700,3 +1700,86 @@ fn execution_rejects_route_less_retired_project_note_markers() {
         assert_eq!(codes(&parse), vec!["retired_project_note_marker"], "{raw}");
     }
 }
+
+#[test]
+fn execution_moves_a_trailing_now_tag_onto_the_body() {
+    let parsed = execute("Fix it @sase^fix-it #now").expect("now tag");
+    assert_eq!(parsed.body, "Fix it #now");
+    assert_eq!(parsed.route.as_deref(), Some("sase"));
+    let CaptureKind::TaskWithBlockId { block_id } = &parsed.kind else {
+        panic!("expected a task block-ID capture: {:?}", parsed.kind);
+    };
+    assert_eq!(block_id, "fix-it");
+
+    let parsed = execute("Fix it @sase:fix-it #now").expect("now tag");
+    assert_eq!(parsed.body, "Fix it #now");
+    assert_eq!(parsed.route.as_deref(), Some("sase"));
+    assert!(
+        matches!(parsed.kind, CaptureKind::Pomodoro { .. }),
+        "{:?}",
+        parsed.kind
+    );
+
+    // `#now` before the route never leaves the body.
+    let parsed = execute("Fix it #now @sase").expect("now tag before route");
+    assert_eq!(parsed.body, "Fix it #now");
+    assert_eq!(parsed.route.as_deref(), Some("sase"));
+    assert_eq!(parsed.kind, CaptureKind::Task);
+
+    // Terminal markers still extract in front of a trailing tag.
+    let parsed = execute("Fix it @sase s:3 #now").expect("now tag");
+    assert_eq!(parsed.body, "Fix it #now");
+    assert_eq!(parsed.route.as_deref(), Some("sase"));
+    assert_eq!(parsed.scheduled_offset, Some(3));
+}
+
+#[test]
+fn execution_rejects_a_now_tag_without_new_task_text() {
+    for raw in [
+        "@sase:fix-it #now",
+        "^sase:fix-it #now",
+        "@sase+fix-it #now",
+        "@sase+fix-it! #now",
+        "=x #now",
+        "=3 #now",
+        "+5 #now",
+        "#now",
+    ] {
+        let error = execute(raw).expect_err(&format!("{raw} needs text"));
+        assert_eq!(error, now_tag_body_error(), "{raw}");
+    }
+}
+
+#[test]
+fn execution_keeps_other_trailing_hash_tags_rejected() {
+    // Every other trailing `#tag` keeps today's legacy-marker error, and
+    // matching stays case-sensitive and whole-token.
+    for raw in [
+        "Some note #bar",
+        "Some note #bar @foo",
+        "Some note @foo #bar",
+        "Some note #nowadays",
+        "Some note #now/x",
+        "Some note #NOW",
+    ] {
+        let error = execute(raw).expect_err(&format!("{raw} stays rejected"));
+        assert!(error.contains("bullet section markers"), "{raw}: {error}");
+    }
+
+    // A `#now` mid-body stays literal task text.
+    let parsed = execute("Some #now note").expect("middle tag");
+    assert_eq!(parsed.body, "Some #now note");
+    assert_eq!(parsed.kind, CaptureKind::Task);
+
+    // With a forced route every `@...` token stays literal, so a trailing
+    // `#now` stays literal body text there too.
+    let parsed = parse_capture_text_with_clip_control(
+        "Fix #now",
+        Some("work"),
+        None,
+        true,
+    )
+    .expect("forced route");
+    assert_eq!(parsed.body, "Fix #now");
+    assert_eq!(parsed.route.as_deref(), Some("work"));
+}

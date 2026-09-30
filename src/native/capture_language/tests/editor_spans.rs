@@ -637,6 +637,82 @@ fn editor_serializes_snake_case_vocabulary() {
 }
 
 #[test]
+fn editor_paints_now_tag_spans_and_moves_a_trailing_tag() {
+    let parse = editor("Fix it @sase^fix-it #now");
+    assert_eq!(parse.mode, EditorMode::Task);
+    assert_eq!(parse.body, "Fix it #now");
+    assert_eq!(parse.route.as_deref(), Some("sase"));
+    assert!(parse.diagnostics.is_empty());
+    assert_eq!(
+        ranges(&parse),
+        vec![
+            (7, 12, SpanKind::TaskBlockIdRoute),
+            (13, 19, SpanKind::TaskBlockId),
+            (20, 24, SpanKind::NowTag),
+        ]
+    );
+
+    // `#now` before the route stays body text with the same span.
+    let parse = editor("Fix it #now @sase");
+    assert_eq!(parse.body, "Fix it #now");
+    assert_eq!(parse.route.as_deref(), Some("sase"));
+    assert!(ranges(&parse).contains(&(7, 11, SpanKind::NowTag)));
+
+    // Other trailing `#tag` shapes keep today's diagnostic and never gain
+    // the tag span.
+    let parse = editor("Some note #bar");
+    assert_eq!(codes(&parse), vec!["legacy_bullet_marker"]);
+    assert!(!span_kinds(&parse).contains(&SpanKind::NowTag));
+
+    // Authored child lines move a trailing tag the same way.
+    let parse = editor("Fix it @sase\n- sub #now");
+    assert_eq!(parse.body, "Fix it");
+    assert_eq!(
+        parse
+            .sub_bullets
+            .iter()
+            .map(|item| item.body.as_str())
+            .collect::<Vec<_>>(),
+        vec!["sub #now"]
+    );
+    assert!(parse.diagnostics.is_empty());
+    assert!(ranges(&parse).contains(&(19, 23, SpanKind::NowTag)));
+}
+
+#[test]
+fn editor_reports_a_partial_now_tag_as_incomplete() {
+    for (raw, end) in [("Fix it @sase #n", 15), ("Fix it @sase #no", 16)] {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parse.needs, vec![Need::NowTag], "{raw}");
+        assert!(
+            ranges(&parse).contains(&(13, end, SpanKind::NowTag)),
+            "{raw}: {:?}",
+            parse.spans
+        );
+        // Execution still rejects the partial like any other `#tag`.
+        assert_eq!(codes(&parse), vec!["legacy_bullet_marker"], "{raw}");
+    }
+}
+
+#[test]
+fn editor_reports_a_now_tag_without_task_text() {
+    for raw in [
+        "@sase:fix-it #now",
+        "^sase:fix-it #now",
+        "@sase+fix-it #now",
+        "=x #now",
+        "+5 #now",
+        "#now",
+    ] {
+        let parse = editor(raw);
+        assert_eq!(codes(&parse), vec!["now_tag_without_task"], "{raw}");
+        assert_eq!(parse.diagnostics[0].message, now_tag_body_error(), "{raw}");
+        assert!(span_kinds(&parse).contains(&SpanKind::NowTag), "{raw}");
+    }
+}
+
+#[test]
 fn diagnostics_serialize_with_a_nullable_range_pair() {
     let parse = editor("Body @dev+bad.id");
     let value = serde_json::to_value(&parse.diagnostics).expect("json");
