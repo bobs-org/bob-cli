@@ -759,7 +759,6 @@ fn start_task_json(
 ) -> PomodoroStartTaskJson {
     PomodoroStartTaskJson {
         index,
-        now: task.now.then_some(true),
         block_link: task.block_link.clone(),
         embedded: task.embedded,
         ledger_line: task.ledger_line,

@@ -13,7 +13,6 @@ use super::super::{
     note_tasks::{
         self, BlockIdLookup, NoteTask, NoteTaskSettings, TaskStatusType,
     },
-    plan_budget::has_now_tag,
     pomodoro,
     vault_links::LinkResolution,
 };
@@ -62,8 +61,6 @@ pub(crate) struct PomodoroCloseTask {
     pub resolved: bool,
     pub relative_target: Option<String>,
     pub block_id: String,
-    /// Whether the linked task's line carries a whole `#now` token.
-    pub now: bool,
     pub text: Option<String>,
     pub previous_status_symbol: Option<char>,
     pub previous_status_name: Option<String>,
@@ -305,8 +302,6 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         match lookup_task(&contents, settings, target.block_id) {
             Ok(note_task) => {
                 let index = self.tasks.len();
-                let now = line_text_at(&contents, note_task.line_index)
-                    .is_some_and(has_now_tag);
                 self.tasks.push(PomodoroCloseTask {
                     role: target.role,
                     block_link: target.block_link.to_string(),
@@ -314,7 +309,6 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     resolved: true,
                     relative_target: Some(relative_target),
                     block_id: target.block_id.to_string(),
-                    now,
                     text: Some(close_task_text(&note_task.description)),
                     previous_status_symbol: Some(note_task.status_symbol),
                     previous_status_name: Some(note_task.status_name.clone()),
@@ -344,7 +338,6 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     resolved: false,
                     relative_target: Some(relative_target),
                     block_id: target.block_id.to_string(),
-                    now: false,
                     text: None,
                     previous_status_symbol: None,
                     previous_status_name: None,
@@ -394,7 +387,6 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                 .as_deref()
                 .map(|path| self.relative_target(path)),
             block_id: block_id.to_string(),
-            now: false,
             text: None,
             previous_status_symbol: None,
             previous_status_name: None,

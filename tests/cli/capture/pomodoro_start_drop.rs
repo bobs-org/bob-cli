@@ -1,7 +1,7 @@
 //! Numbered start lineup and `~<K>` start-drop grammar tests: every
-//! whole-item start reports its queued Task Links with
-//! `tasks[].index`/`tasks[].now` and a numbered human index column, and a
-//! trailing `~<K>` drop list starts the next session without those links.
+//! whole-item start reports its queued Task Links with `tasks[].index`
+//! and a numbered human index column, and a trailing `~<K>` drop list
+//! starts the next session without those links.
 
 use crate::support::*;
 use std::fs;
@@ -115,10 +115,10 @@ fn start_lineup_numbered_human_and_json() {
         .map(|row| row["index"].as_u64().expect("index"))
         .collect();
     assert_eq!(indices, vec![1, 2, 3], "{json}");
-    // Only the `#now` task carries `now: true`; it is omitted otherwise.
-    assert!(tasks[0].get("now").is_none(), "{json}");
-    assert_eq!(tasks[1]["now"], true, "{json}");
-    assert!(tasks[2].get("now").is_none(), "{json}");
+    // The retired `now` flag is gone from every row.
+    for (index, row) in tasks.iter().enumerate() {
+        assert!(row.get("now").is_none(), "{index}: {json}");
+    }
     assert_eq!(tasks[0]["ledger_line"], 6, "{json}");
     assert_eq!(tasks[1]["ledger_line"], 7, "{json}");
     assert_eq!(tasks[2]["ledger_line"], 9, "{json}");
@@ -144,7 +144,7 @@ fn start_lineup_counted_and_named() {
         .map(|row| row["index"].as_u64().expect("index"))
         .collect();
     assert_eq!(indices, vec![1, 2, 3], "{counted}");
-    assert_eq!(start["tasks"][1]["now"], true, "{counted}");
+    assert!(start["tasks"][1].get("now").is_none(), "{counted}");
 
     let (_temp, vault, day_file) =
         start_lineup_vault("bob-cli-start-lineup-named");
@@ -234,7 +234,7 @@ fn start_drop_bare_removes_link_with_nested_note() {
     let dropped = start["dropped"].as_array().expect("dropped").clone();
     assert_eq!(dropped.len(), 1, "{json}");
     assert_eq!(dropped[0]["index"], 2, "{json}");
-    assert_eq!(dropped[0]["now"], true, "{json}");
+    assert!(dropped[0].get("now").is_none(), "{json}");
     assert_eq!(dropped[0]["block_link"], "[[bob#^web-capture]]", "{json}");
     assert_eq!(dropped[0]["nested_lines"], 1, "{json}");
     assert_eq!(dropped[0]["ledger_line"], 7, "{json}");

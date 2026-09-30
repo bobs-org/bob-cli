@@ -1,10 +1,10 @@
 //! Active-task discovery for the `^` picker.
 //!
-//! A read-only scanner that lists In Progress (`/`), Next (`*`), and
-//! Ready (` `) `#now` tasks with block IDs from routable vault-root
-//! notes, annotated with the open Pomodoro (if any) whose children hold
-//! the task's dedicated `[[route#^id]]` Task Link. The editor-contract
-//! phase wires this into `capture-complete`'s `active_task` context.
+//! A read-only scanner that lists In Progress (`/`) and Next (`*`) tasks
+//! with block IDs from routable vault-root notes, annotated with the open
+//! Pomodoro (if any) whose children hold the task's dedicated
+//! `[[route#^id]]` Task Link. The editor-contract phase wires this into
+//! `capture-complete`'s `active_task` context.
 
 use std::{collections::HashMap, fs, io, path::Path};
 
@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use super::{
     capture, capture_pomodoros, capture_targets, capture_task_toggle,
-    capture_tasks, note_tasks, plan_budget, pomodoro, projects,
+    capture_tasks, note_tasks, pomodoro, projects,
 };
 
 /// An open Pomodoro holding a task's dedicated Task Link.
@@ -24,7 +24,7 @@ pub(crate) struct ActiveTaskPomodoro {
     pub(crate) is_current: bool,
 }
 
-/// One In Progress, Next, or Ready-`#now` task with a block ID.
+/// One In Progress or Next task with a block ID.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ActiveTask {
     pub(crate) route: String,
@@ -37,15 +37,7 @@ pub(crate) struct ActiveTask {
     #[serde(rename = "ref")]
     pub(crate) task_ref: String,
     pub(crate) line: usize,
-    /// `true` when the task line carries the `#now` tag, omitted when
-    /// `false` so version-tolerant readers see no change.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub(crate) now: bool,
     pub(crate) pomodoro: Option<ActiveTaskPomodoro>,
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
 }
 
 impl ActiveTask {
@@ -65,11 +57,10 @@ pub(crate) struct ActiveTaskResult {
 /// Scan every routable vault-root note for active tasks.
 ///
 /// With an empty query the order is: queued tasks in ledger order
-/// (entry order, then child order), unqueued In Progress tasks,
-/// then unqueued Next tasks, then unqueued Ready `#now` tasks. Within
-/// the unqueued groups tasks are ordered by route, then line. A failed
-/// or partial read still returns the other candidates alongside a
-/// warning.
+/// (entry order, then child order), unqueued In Progress tasks, then
+/// unqueued Next tasks. Within the unqueued groups tasks are ordered by
+/// route, then line. A failed or partial read still returns the other
+/// candidates alongside a warning.
 pub(crate) fn discover(bob_dir: &Path) -> ActiveTaskResult {
     discover_at(bob_dir, &pomodoro::day_file_for(bob_dir))
 }
@@ -99,9 +90,7 @@ pub(crate) fn discover_at(bob_dir: &Path, day_file: &Path) -> ActiveTaskResult {
             scan.open_tasks()
                 .filter(|task| {
                     task.block_id.is_some()
-                        && (matches!(task.status_symbol, '/' | '*')
-                            || (task.status_symbol == ' '
-                                && plan_budget::has_now_tag(&task.description)))
+                        && matches!(task.status_symbol, '/' | '*')
                 })
                 .map(|task| ActiveTask {
                     route: route.clone(),
@@ -118,7 +107,6 @@ pub(crate) fn discover_at(bob_dir: &Path, day_file: &Path) -> ActiveTaskResult {
                     section: task.section.clone(),
                     task_ref: task.task_ref(),
                     line: task.line_index + 1,
-                    now: plan_budget::has_now_tag(&task.description),
                     pomodoro: None,
                 }),
         );
@@ -349,11 +337,7 @@ fn queue_key(
     if task.status_symbol == '/' {
         return (1, 0, 0);
     }
-    if task.status_symbol == '*' {
-        return (2, 0, 0);
-    }
-    // Unqueued Ready `#now` tasks list after unqueued Next tasks.
-    (3, 0, 0)
+    (2, 0, 0)
 }
 
 pub(crate) fn bounded_warning(message: String) -> String {
@@ -546,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_ready_now_tasks_after_next_with_now_flag() {
+    fn excludes_ready_tasks_even_with_now_text() {
         let temp = TempDir::new("bob-cli-active-tasks-now");
         write_settings(temp.path());
         write_file(
@@ -562,15 +546,17 @@ mod tests {
             "## Pomodoros\n- [ ] () — BUGS\n",
         );
         assert!(result.warnings.is_empty());
-        // A Ready task without `#now` stays excluded; a Ready `#now` task
-        // lists after unqueued Next tasks.
-        assert_eq!(
-            replacements(&result),
-            vec!["sase:wip-now", "sase:next", "sase:ready-now"]
+        // `#now` is ordinary text: Ready tasks stay excluded, while In
+        // Progress and Next tasks list with the tag kept in their text.
+        assert_eq!(replacements(&result), vec!["sase:wip-now", "sase:next"]);
+        assert!(
+            result
+                .tasks
+                .iter()
+                .find(|task| task.block_id == "wip-now")
+                .is_some_and(|task| task.text.contains("#now")),
+            "the `#now` text stays on listed tasks"
         );
-        let flags: Vec<bool> =
-            result.tasks.iter().map(|task| task.now).collect();
-        assert_eq!(flags, vec![true, false, true]);
     }
 
     #[test]

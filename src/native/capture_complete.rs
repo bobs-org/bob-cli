@@ -159,22 +159,19 @@ ref, and set requires_block_id. Task search matches block ID, description, \
 section, and status name or symbol; identified tasks stay ahead of \
 unidentified tasks, and prefix matches precede substring matches inside \
 each group. A solo leading '^' token completes active tasks instead: the \
-`route:block-id` part offers In Progress and Next tasks with block IDs \
-plus Ready tasks tagged `#now`, ordered by today's open-Pomodoro Task \
-Links (queued first, then In Progress, Next, and Ready `#now`), and \
-accepting a row inserts the full `route:block-id` in one step while a \
-typed `#name`/`=<X>` suffix survives. Candidates whose task line carries \
-`#now` set `now: true`. A `#name` after `^route:block-id` completes \
-Pomodoro names exactly as it does after `@route:block-id`, and a cursor \
-inside `=<X>` or `=x[<N>][!<M>]` offers nothing. A solo leading `:` token \
+`route:block-id` part offers In Progress and Next tasks with block IDs, \
+ordered by today's open-Pomodoro Task Links (queued first, then In \
+Progress, then Next), and accepting a row inserts the full \
+`route:block-id` in one step while a typed `#name`/`=<X>` suffix \
+survives. A `#name` after `^route:block-id` completes Pomodoro names \
+exactly as it does after `@route:block-id`, and a cursor inside `=<X>` \
+or `=x[<N>][!<M>]` offers nothing. A solo leading `:` token \
 completes `task_link`: every linkable open task (Ready, Blocked, Next, In \
 Progress) in the routable inbox, area, and non-terminal project notes, in \
 canonical picker order and ranked by the query with ID-less tasks always \
 included; the replacement covers the whole `:` token, sigil included, \
 because accepting rewrites the query into the canonical `@route:block-id` \
-link. A trailing `#n`/`#no` \
-(or `#now`) completes as `now_tag` with the single `#now` candidate \
-(this week's bet). The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
+link. The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
 candidates and an additive `block_id` object carrying intent, used IDs, and suggestions. A project-note `+` \
 directly after the `^` block-ID part is never part of the replacement; a `+` after a `:` block ID is the retired project-note form and offers nothing. A trailing ` :id` or ` ^id` on a \
 first-level bullet of a project-note item completes as `project_task_block_id`, with empty candidates and an additive `block_id` object carrying intent `new`, the project-note stem, the sigil range, the bullet body, used IDs (`prj` plus sibling task IDs), and suggestions. An empty block-ID component \
@@ -194,7 +191,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_link, now_tag, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_link, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -384,8 +381,8 @@ struct ActiveTaskPomodoroCandidate {
 /// routable inbox, area, or non-terminal project note. The JSON keys match
 /// the picker contract: `replacement` is the `@route:id` an accept inserts
 /// (empty for ID-less tasks, which clients must never insert),
-/// `requires_block_id` marks those rows, and `now` / `pulls_forward` are
-/// omitted when false.
+/// `requires_block_id` marks those rows, and `pulls_forward` is omitted
+/// when false.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct TaskLinkCandidate {
     replacement: String,
@@ -404,8 +401,6 @@ struct TaskLinkCandidate {
     depth: usize,
     line: usize,
     group: capture_link_tasks::LinkTaskGroup,
-    #[serde(skip_serializing_if = "is_false")]
-    now: bool,
     scheduled: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
     pulls_forward: bool,
@@ -424,28 +419,7 @@ struct ActiveTaskCandidate {
     status_type: &'static str,
     text: String,
     section: Option<String>,
-    #[serde(skip_serializing_if = "is_false")]
-    now: bool,
     pomodoro: Option<ActiveTaskPomodoroCandidate>,
-}
-
-/// The single `now_tag` completion candidate: accepting a trailing
-/// `#n`/`#no` (or re-accepting `#now`) inserts the weekly-bet tag.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct NowTagCandidate {
-    replacement: String,
-    label: String,
-    text: String,
-    kind: String,
-}
-
-fn now_tag_candidate() -> NowTagCandidate {
-    NowTagCandidate {
-        replacement: "#now".to_string(),
-        label: "#now".to_string(),
-        text: "This week's bet".to_string(),
-        kind: "tag".to_string(),
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -492,7 +466,6 @@ enum Candidates {
     PomodoroName(Vec<PomodoroNameCandidate>),
     ActiveTask(Vec<ActiveTaskCandidate>),
     TaskLink(Vec<TaskLinkCandidate>),
-    NowTag(Vec<NowTagCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
@@ -508,7 +481,6 @@ impl Candidates {
             Self::PomodoroName(items) => items.len(),
             Self::ActiveTask(items) => items.len(),
             Self::TaskLink(items) => items.len(),
-            Self::NowTag(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
@@ -585,8 +557,7 @@ fn build_result(
             | CompletionContext::Task
             | CompletionContext::TaskSection
             | CompletionContext::ActiveTask
-            | CompletionContext::TaskLink
-            | CompletionContext::NowTag => {
+            | CompletionContext::TaskLink => {
                 unreachable!("link field context")
             }
         };
@@ -721,9 +692,6 @@ fn build_result(
         }
         CompletionContext::TaskLink => {
             task_link_candidates(bob_dir, &field.query)
-        }
-        CompletionContext::NowTag => {
-            (Candidates::NowTag(vec![now_tag_candidate()]), Vec::new())
         }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
@@ -1098,7 +1066,6 @@ fn active_task_candidates(
             status_type: task.status_type,
             text: task.text.clone(),
             section: task.section.clone(),
-            now: task.now,
             pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
                 ActiveTaskPomodoroCandidate {
                     line: pomodoro.line,
@@ -1142,7 +1109,6 @@ fn task_link_candidates(
             depth: task.depth,
             line: task.line,
             group: task.group,
-            now: task.now,
             scheduled: task.scheduled.clone(),
             pulls_forward: task.pulls_forward,
             pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
@@ -1836,7 +1802,7 @@ fn plural_candidates(result: &CaptureCompleteResult) -> &'static str {
 /// Human row for one `task_link` candidate: the `@route:id` (or
 /// `@route:…` for ID-less tasks) plus `[status] text  · tail`, where the
 /// tail is the queued Pomodoro name (`Planned` when unnamed), `In
-/// Progress`, `Next`, `#now`, or the note label, with `· needs ID
+/// Progress`, `Next`, or the note label, with `· needs ID
 /// (^suggestion)` on ID-less rows and `· scheduled DATE` whenever the task
 /// carries a scheduled date.
 fn task_link_line(item: &TaskLinkCandidate) -> (String, String) {
@@ -1851,7 +1817,6 @@ fn task_link_line(item: &TaskLinkCandidate) -> (String, String) {
                 "In Progress".to_string()
             }
             capture_link_tasks::LinkTaskGroup::Next => "Next".to_string(),
-            capture_link_tasks::LinkTaskGroup::Now => "#now".to_string(),
             capture_link_tasks::LinkTaskGroup::Note => {
                 format!("{}.md", item.route)
             }
@@ -1945,15 +1910,6 @@ fn candidate_lines(
         Candidates::TaskLink(items) => {
             items.iter().map(task_link_line).collect()
         }
-        Candidates::NowTag(items) => items
-            .iter()
-            .map(|item| {
-                (
-                    item.replacement.clone(),
-                    format!("{}  {}", item.text, item.kind),
-                )
-            })
-            .collect(),
         Candidates::PomodoroName(items) => items
             .iter()
             .map(|item| {
@@ -2072,7 +2028,6 @@ fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::TaskSection => "task_section",
         CompletionContext::ActiveTask => "active_task",
         CompletionContext::TaskLink => "task_link",
-        CompletionContext::NowTag => "now_tag",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",
         CompletionContext::WikilinkBlock => "wikilink_block",
@@ -2375,37 +2330,18 @@ mod tests {
     }
 
     #[test]
-    fn now_tag_completion_offers_the_single_tag_candidate() {
+    fn trailing_hash_fragment_requests_no_completion() {
         let temp = TempDir::new("bob-cli-capture-complete-now-tag");
+        // `#now` is retired: a trailing `#n` is ordinary text with no
+        // completion field, exactly like any other `#tag`.
         let raw = "Fix it #n";
         let value = result(temp.path(), raw, raw.len());
-        assert_eq!(value.context, Some(CompletionContext::NowTag));
-        assert_eq!(value.replacement, Replacement { start: 7, end: 9 });
-        let Candidates::NowTag(candidates) = &value.candidates else {
-            panic!("expected now-tag candidates");
-        };
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].replacement, "#now");
-
-        let json = serde_json::to_value(&value).expect("serialize result");
-        assert_eq!(json["context"], "now_tag");
-        assert_eq!(
-            json["replacement"],
-            serde_json::json!({"start": 7, "end": 9})
-        );
-        assert_eq!(
-            json["candidates"][0],
-            serde_json::json!({
-                "replacement": "#now",
-                "label": "#now",
-                "text": "This week's bet",
-                "kind": "tag",
-            })
-        );
+        assert_eq!(value.context, None);
+        assert_eq!(value.candidates.len(), 0);
     }
 
     #[test]
-    fn active_task_completion_flags_ready_now_tasks() {
+    fn active_task_completion_excludes_ready_tasks() {
         let _guard = day_file_guard();
         let temp = TempDir::new("bob-cli-capture-complete-active-now");
         write_settings(temp.path());
@@ -2426,17 +2362,16 @@ mod tests {
         let Candidates::ActiveTask(candidates) = &value.candidates else {
             panic!("expected active-task candidates");
         };
-        // The Ready task without `#now` stays excluded; the Ready `#now`
-        // task lists after the unqueued Next task.
+        // Ready tasks stay excluded even with `#now` text; only the
+        // Next task lists, with no `now` key in its JSON.
         let replacements: Vec<&str> = candidates
             .iter()
             .map(|candidate| candidate.replacement.as_str())
             .collect();
-        assert_eq!(replacements, vec!["sase:deep-fix", "sase:ready-now"]);
+        assert_eq!(replacements, vec!["sase:deep-fix"]);
 
         let json = serde_json::to_value(&value).expect("serialize result");
         assert!(json["candidates"][0].get("now").is_none());
-        assert_eq!(json["candidates"][1]["now"], true);
     }
 
     #[test]
@@ -2610,12 +2545,12 @@ mod tests {
             vec![
                 "@sase:deep-fix",
                 "@sase:outline",
-                "@sase:blog",
                 "",
                 "",
                 "@bob:polish",
                 "",
                 "",
+                "@sase:blog",
             ]
         );
         assert!(value.warnings.is_empty());
@@ -2664,7 +2599,7 @@ mod tests {
         assert!(identified.get("now").is_none());
         assert!(identified.get("pulls_forward").is_none());
 
-        let missing = &json["candidates"][7];
+        let missing = &json["candidates"][6];
         assert_eq!(missing["replacement"], "");
         assert_eq!(missing["route"], "sase");
         assert_eq!(missing["note_kind"], "project");
@@ -2683,11 +2618,16 @@ mod tests {
         assert!(missing.get("now").is_none());
         assert!(missing.get("pulls_forward").is_none());
 
-        // The `#now` bet and the pull-forward flag serialize when set.
-        assert_eq!(json["candidates"][2]["now"], true);
-        assert_eq!(json["candidates"][4]["pulls_forward"], true);
+        // The retired `#now` text stays on the row without a `now` key,
+        // and the pull-forward flag serializes when set.
+        let bet = &json["candidates"][7];
+        assert_eq!(bet["replacement"], "@sase:blog");
+        assert_eq!(bet["text"], "Ship blog post #now");
+        assert_eq!(bet["group"], "note");
+        assert!(bet.get("now").is_none());
+        assert_eq!(json["candidates"][3]["pulls_forward"], true);
         assert_eq!(
-            json["candidates"][4]["scheduled"],
+            json["candidates"][3]["scheduled"],
             serde_json::json!("2026-10-03")
         );
     }
@@ -2753,10 +2693,6 @@ mod tests {
                     "[/] Draft outline  · In Progress".to_string(),
                 ),
                 (
-                    "@sase:blog".to_string(),
-                    "[ ] Ship blog post #now  · #now".to_string(),
-                ),
-                (
                     "@mac_inbox:…".to_string(),
                     "[ ] Call the bank  · mac_inbox.md · needs ID (^call-bank)"
                         .to_string(),
@@ -2779,6 +2715,10 @@ mod tests {
                     "@sase:…".to_string(),
                     "[ ] Fix flaky gkeep test  · sase.md · needs ID (^fix-flaky-gkeep)"
                         .to_string(),
+                ),
+                (
+                    "@sase:blog".to_string(),
+                    "[ ] Ship blog post #now  · sase.md".to_string(),
                 ),
             ]
         );

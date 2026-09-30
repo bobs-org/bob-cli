@@ -252,35 +252,23 @@ fn cursor_past_a_trailing_space_has_no_completion() {
 }
 
 #[test]
-fn trailing_now_tag_fragment_completes_the_tag() {
-    let completion = field("Fix it #n", 9).expect("now_tag field");
-    assert_eq!(completion.context, CompletionContext::NowTag);
-    assert_eq!(completion.query, "n");
-    assert_eq!(completion.replacement, (7, 9));
-
-    // The whole token is replaced wherever the cursor sits inside it.
-    let completion = field("Fix it @sase #no", 14).expect("now_tag field");
-    assert_eq!(completion.context, CompletionContext::NowTag);
-    assert_eq!(completion.query, "no");
-    assert_eq!(completion.replacement, (13, 16));
-
-    // Re-accepting a complete tag is idempotent.
-    let completion = field("Fix it #now", 11).expect("now_tag field");
-    assert_eq!(completion.context, CompletionContext::NowTag);
-    assert_eq!(completion.replacement, (7, 11));
+fn trailing_hash_fragments_have_no_completion() {
+    // `#now` is retired: `#n`/`#no`/`#now` are ordinary text with no
+    // completion field, exactly like any other `#tag`.
+    assert_eq!(field("Fix it #n", 9), None);
+    assert_eq!(field("Fix it @sase #no", 14), None);
+    assert_eq!(field("Fix it #now", 11), None);
 
     // A lone `#` stays the Pomodoro-note marker: no tag completion.
     assert_eq!(field("Fix #", 5), None);
 }
 
 #[test]
-fn now_tag_completion_needs_body_text() {
+fn operator_items_have_no_hash_completion() {
     assert_eq!(field("=x #n", 5), None);
     assert_eq!(field("@r:id #n", 8), None);
     assert_eq!(field("#n", 2), None);
     assert_eq!(field("#now", 4), None);
-    let completion = field("Fix it #n", 9).expect("body keeps the tag");
-    assert_eq!(completion.context, CompletionContext::NowTag);
 }
 
 #[test]

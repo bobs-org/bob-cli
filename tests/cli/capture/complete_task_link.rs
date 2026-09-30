@@ -116,15 +116,15 @@ fn complete_task_link_lists_the_worked_example_in_json_and_human() {
         vec![
             "@sase:deep-fix",
             "@sase:outline",
-            "@sase:blog",
             "",
             "",
             "@bob:polish",
             "",
             "",
+            "@sase:blog",
         ]
     );
-    assert_eq!(json["candidates"][4]["pulls_forward"], true);
+    assert_eq!(json["candidates"][3]["pulls_forward"], true);
 
     let human = bob_command()
         .arg("capture-complete")
@@ -203,10 +203,10 @@ fn complete_task_link_round_trip_for_a_task_without_an_id() {
     fs::create_dir_all(&vault).expect("create vault");
     let day_file = write_worked_example(&vault);
 
-    // Row 8 is ID-less: name it with its first suggestion, then link and
+    // Row 7 is ID-less: name it with its first suggestion, then link and
     // start it with `=`.
     let json = complete_json(&vault, &day_file, 1, ":");
-    let row = &json["candidates"][7];
+    let row = &json["candidates"][6];
     assert_eq!(row["replacement"], "");
     assert_eq!(row["route"], "sase");
     assert_eq!(row["requires_block_id"], true);
@@ -281,7 +281,7 @@ fn complete_task_link_pull_forward_agrees_with_the_scheduled_retire() {
 
     // The health row carries a future scheduled date it would retire.
     let json = complete_json(&vault, &day_file, 1, ":");
-    let row = &json["candidates"][4];
+    let row = &json["candidates"][3];
     assert_eq!(row["route"], "health");
     assert_eq!(row["scheduled"], "2026-10-03");
     assert_eq!(row["pulls_forward"], true);

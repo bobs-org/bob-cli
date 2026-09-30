@@ -128,7 +128,7 @@ the link moves to that named entry (creating it when needed); without a \
 name an already-queued task stays in its Pomodoro and '=<X>' starts that \
 entry and moves it to the front of the queue, otherwise the implicit current/next entry is used. The \
 '^' spelling ('bob capture '^sase:deep-fix='') executes identically and \
-exists so typing '^' completes In Progress, Next, and Ready `#now` tasks. JSON \
+exists so typing '^' completes In Progress and Next tasks. JSON \
 reports a distinct 'pomodoro_link' kind with the status transition, the \
 ledger action (linked, moved, or already_current), and the resolved \
 destination.\n\n\
@@ -255,7 +255,7 @@ JSON reports a distinct `pomodoro_close` kind (link and task forms keep \
 their kind with an additive `pomodoro_close` object) carrying the typed \
 `raw`, the `in_progress`/`complete`/`drop` lists, the numbered \
 `task_links` lineup (with a `dropped` outcome), each task row's `index` \
-and `role` (with a `dropped` role and a `now` flag for `#now` tasks); \
+and `role` (with a `dropped` role); \
 human output names the session, the range change, the file, and the line, \
 prefixing numbered rows with their index, listing dropped rows (with a \
 `stays <status>` lane caption), and summarizing `Dropped <K>`. \

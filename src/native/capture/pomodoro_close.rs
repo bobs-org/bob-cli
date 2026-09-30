@@ -350,7 +350,6 @@ pub(super) fn build_close_summary_json(
             ledger_line: task.ledger_line,
             index: task.index,
             resolved: task.resolved,
-            now: task.now.then_some(true),
             relative_target: task.relative_target.clone(),
             block_id: task.block_id.clone(),
             text: task.text.clone(),

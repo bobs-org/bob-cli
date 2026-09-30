@@ -323,9 +323,6 @@ pub(super) struct PomodoroStartSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroStartTaskJson {
     pub(super) index: u32,
-    /// Present only when the linked task's line carries `#now`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) now: Option<bool>,
     pub(super) block_link: String,
     pub(super) embedded: bool,
     pub(super) ledger_line: usize,

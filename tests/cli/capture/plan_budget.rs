@@ -413,7 +413,8 @@ fn capture_strict_mode_refuses_new_theme_past_cap_atomically() {
     let error = json["error"].as_str().expect("error message");
     assert!(error.contains("4/3 themes"), "{error}");
     assert!(error.contains("GOALS"), "{error}");
-    assert!(error.contains("#now"), "{error}");
+    assert!(error.contains("queue it with ^"), "{error}");
+    assert!(!error.contains("#now"), "{error}");
     assert_eq!(
         fs::read_to_string(&day_file).expect("read day"),
         before_day,
@@ -829,7 +830,7 @@ fn capture_parse_link_close_with_drop_reports_close() {
 }
 
 #[test]
-fn capture_now_tag_writes_task_line_with_created_and_id() {
+fn capture_trailing_now_tag_fails_like_any_other_tag() {
     let temp = TempDir::new("bob-cli-capture-now-e2e");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -841,22 +842,31 @@ fn capture_now_tag_writes_task_line_with_created_and_id() {
         r##"{"globalFilter":"#task","statusSettings":{"coreStatuses":[{"symbol":" ","name":"Todo","type":"TODO"},{"symbol":"x","name":"Done","type":"DONE"}],"customStatuses":[]}}"##,
     );
 
+    // `#now` is retired: a trailing tag is the ordinary trailing-tag
+    // error, like any other `#tag`.
     let output = capture_json(
         &vault,
         &day_file,
         &["Ship", "the", "thing", "@dev", "#now"],
         None,
     );
+    assert_ne!(output.status.code(), Some(0), "{}", format_output(&output));
+    let json = parse_json(&output);
+    let error = json["error"].as_str().expect("error message");
+    assert!(error.contains("bullet section markers"), "{error}");
+
+    // The same capture without the tag still succeeds.
+    let output = capture_json(
+        &vault,
+        &day_file,
+        &["Ship", "the", "thing", "@dev"],
+        None,
+    );
     assert_success(&output);
     let json = parse_json(&output);
     let task_line = json["task_line"].as_str().expect("task line");
     assert!(
-        task_line.starts_with("- [ ] #task Ship the thing #now [created::"),
-        "task line should carry #task, #now and created stamp:\n{task_line}"
-    );
-    let body = fs::read_to_string(&target).expect("read target");
-    assert!(
-        body.contains("- [ ] #task Ship the thing #now [created::"),
-        "written file should carry #task, #now and created stamp:\n{body}"
+        task_line.starts_with("- [ ] #task Ship the thing [created::"),
+        "task line should carry #task and created stamp:\n{task_line}"
     );
 }

@@ -16,8 +16,8 @@ use super::{
     capture_active_tasks::{self, ActiveTaskPomodoro},
     capture_block_ids,
     capture_targets::{self, CaptureTargetKind},
-    capture_tasks, collect_done, env as bob_env, note_tasks, plan_budget,
-    pomodoro, task_fields,
+    capture_tasks, collect_done, env as bob_env, note_tasks, pomodoro,
+    task_fields,
 };
 
 /// Whether a task status can be linked into a Pomodoro: Ready, Blocked,
@@ -35,7 +35,6 @@ pub(crate) enum LinkTaskGroup {
     Queued,
     InProgress,
     Next,
-    Now,
     Note,
 }
 
@@ -56,10 +55,6 @@ pub(crate) struct LinkTask {
     pub(crate) line: usize,
     #[serde(rename = "ref")]
     pub(crate) task_ref: String,
-    /// `true` when the task line carries the `#now` tag, omitted when
-    /// `false` so version-tolerant readers see no change.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub(crate) now: bool,
     pub(crate) scheduled: Option<String>,
     /// `true` when linking would retire a future `scheduled` field,
     /// omitted when `false`.
@@ -147,7 +142,6 @@ pub(crate) fn discover_at(
         {
             let raw_line =
                 lines.get(task.line_index).copied().unwrap_or_default();
-            let now = plan_budget::has_now_tag(&task.description);
             let key = task
                 .block_id
                 .as_ref()
@@ -161,8 +155,6 @@ pub(crate) fn discover_at(
                 LinkTaskGroup::InProgress
             } else if task.status_symbol == '*' {
                 LinkTaskGroup::Next
-            } else if now {
-                LinkTaskGroup::Now
             } else {
                 LinkTaskGroup::Note
             };
@@ -174,8 +166,7 @@ pub(crate) fn discover_at(
                 }
                 LinkTaskGroup::InProgress => (1, 0, 0),
                 LinkTaskGroup::Next => (2, 0, 0),
-                LinkTaskGroup::Now => (3, 0, 0),
-                LinkTaskGroup::Note => (4, target_index, task.line_index),
+                LinkTaskGroup::Note => (3, target_index, task.line_index),
             };
             // One field pass per task line feeds both the displayed
             // date and the pull-forward flag.
@@ -204,7 +195,6 @@ pub(crate) fn discover_at(
                     depth: capture_tasks::indentation_depth(&task.indentation),
                     line: task.line_index + 1,
                     task_ref: task.task_ref(),
-                    now,
                     scheduled,
                     pulls_forward,
                     pomodoro,
@@ -226,13 +216,13 @@ pub(crate) fn discover_at(
     }
 }
 
-/// Route then line within the In Progress, Next, and Now groups; a
-/// constant elsewhere so the group sort keeps queued ledger order and
-/// note document order.
+/// Route then line within the In Progress and Next groups; a constant
+/// elsewhere so the group sort keeps queued ledger order and note
+/// document order.
 fn secondary_order(
     (task, key): &(LinkTask, (u8, usize, usize)),
 ) -> (&str, usize) {
-    if matches!(key.0, 1..=3) {
+    if matches!(key.0, 1..=2) {
         (task.route.as_str(), task.line)
     } else {
         ("", 0)
@@ -502,12 +492,12 @@ mod tests {
             vec![
                 "@sase:deep-fix",
                 "@sase:outline",
-                "@sase:blog",
                 "",
                 "",
                 "@bob:polish",
                 "",
                 "",
+                "@sase:blog",
             ]
         );
         assert_eq!(
@@ -519,11 +509,11 @@ mod tests {
             vec![
                 ("sase", LinkTaskGroup::Queued),
                 ("sase", LinkTaskGroup::InProgress),
-                ("sase", LinkTaskGroup::Now),
                 ("mac_inbox", LinkTaskGroup::Note),
                 ("health", LinkTaskGroup::Note),
                 ("bob", LinkTaskGroup::Note),
                 ("bob", LinkTaskGroup::Note),
+                ("sase", LinkTaskGroup::Note),
                 ("sase", LinkTaskGroup::Note),
             ]
         );
@@ -540,7 +530,6 @@ mod tests {
         assert_eq!(queued.depth, 0);
         assert_eq!(queued.line, 6);
         assert!(queued.task_ref.starts_with("6:"));
-        assert!(!queued.now);
         assert_eq!(queued.scheduled, None);
         assert!(!queued.pulls_forward);
         let pomodoro = queued.pomodoro.as_ref().expect("queued");
@@ -557,26 +546,11 @@ mod tests {
         assert_eq!(wip.section.as_deref(), Some("Writing"));
         assert_eq!(wip.depth, 0);
         assert_eq!(wip.line, 10);
-        assert!(!wip.now);
         assert_eq!(wip.scheduled, None);
         assert!(!wip.pulls_forward);
         assert!(wip.pomodoro.is_none());
 
-        let bet = &result.tasks[2];
-        assert_eq!(bet.block_id.as_deref(), Some("blog"));
-        assert!(bet.block_id_suggestions.is_empty());
-        assert_eq!(bet.status_symbol, ' ');
-        assert_eq!(bet.status_name, "Todo");
-        assert_eq!(bet.status_type, "TODO");
-        assert_eq!(bet.text, "Ship blog post #now");
-        assert_eq!(bet.section.as_deref(), Some("Writing"));
-        assert_eq!(bet.line, 11);
-        assert!(bet.now);
-        assert_eq!(bet.scheduled, None);
-        assert!(!bet.pulls_forward);
-        assert!(bet.pomodoro.is_none());
-
-        let inbox = &result.tasks[3];
+        let inbox = &result.tasks[2];
         assert_eq!(inbox.route, "mac_inbox");
         assert_eq!(inbox.note_kind, CaptureTargetKind::Inbox);
         assert_eq!(inbox.block_id, None);
@@ -586,12 +560,11 @@ mod tests {
         assert_eq!(inbox.section, None);
         assert_eq!(inbox.depth, 0);
         assert_eq!(inbox.line, 4);
-        assert!(!inbox.now);
         assert_eq!(inbox.scheduled, None);
         assert!(!inbox.pulls_forward);
         assert!(inbox.pomodoro.is_none());
 
-        let dentist = &result.tasks[4];
+        let dentist = &result.tasks[3];
         assert_eq!(dentist.route, "health");
         assert_eq!(dentist.note_kind, CaptureTargetKind::Area);
         assert_eq!(dentist.block_id, None);
@@ -605,11 +578,10 @@ mod tests {
         assert_eq!(dentist.text, "Book dentist");
         assert_eq!(dentist.section.as_deref(), Some("Errands"));
         assert_eq!(dentist.line, 5);
-        assert!(!dentist.now);
         assert_eq!(dentist.scheduled.as_deref(), Some("2026-10-03"));
         assert!(dentist.pulls_forward);
 
-        let polish = &result.tasks[5];
+        let polish = &result.tasks[4];
         assert_eq!(polish.route, "bob");
         assert_eq!(polish.note_kind, CaptureTargetKind::Project);
         assert_eq!(polish.block_id.as_deref(), Some("polish"));
@@ -621,7 +593,7 @@ mod tests {
         assert_eq!(polish.scheduled, None);
         assert!(!polish.pulls_forward);
 
-        let nested = &result.tasks[6];
+        let nested = &result.tasks[5];
         assert_eq!(nested.route, "bob");
         assert_eq!(nested.block_id, None);
         assert_eq!(
@@ -633,7 +605,7 @@ mod tests {
         assert_eq!(nested.line, 6);
         assert!(!nested.pulls_forward);
 
-        let flaky = &result.tasks[7];
+        let flaky = &result.tasks[6];
         assert_eq!(flaky.route, "sase");
         assert_eq!(flaky.block_id, None);
         assert_eq!(
@@ -647,9 +619,22 @@ mod tests {
         assert_eq!(flaky.section.as_deref(), Some("Bugs"));
         assert_eq!(flaky.depth, 0);
         assert_eq!(flaky.line, 7);
-        assert!(!flaky.now);
         assert_eq!(flaky.scheduled, None);
         assert!(!flaky.pulls_forward);
+
+        let bet = &result.tasks[7];
+        assert_eq!(bet.block_id.as_deref(), Some("blog"));
+        assert!(bet.block_id_suggestions.is_empty());
+        assert_eq!(bet.status_symbol, ' ');
+        assert_eq!(bet.status_name, "Todo");
+        assert_eq!(bet.status_type, "TODO");
+        assert_eq!(bet.text, "Ship blog post #now");
+        assert_eq!(bet.section.as_deref(), Some("Writing"));
+        assert_eq!(bet.line, 11);
+        assert_eq!(bet.group, LinkTaskGroup::Note);
+        assert_eq!(bet.scheduled, None);
+        assert!(!bet.pulls_forward);
+        assert!(bet.pomodoro.is_none());
     }
 
     #[test]
@@ -891,7 +876,7 @@ mod tests {
         // Ties keep the canonical order.
         assert_eq!(
             ranked("sase"),
-            vec!["@sase:deep-fix", "@sase:outline", "@sase:blog", ""]
+            vec!["@sase:deep-fix", "@sase:outline", "", "@sase:blog"]
         );
     }
 
@@ -910,7 +895,6 @@ mod tests {
             depth: 0,
             line: 2,
             task_ref: "2:deadbeef".to_string(),
-            now: false,
             scheduled: None,
             pulls_forward: false,
             pomodoro: None,

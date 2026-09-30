@@ -67,7 +67,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id=<X>` | Same, and atomically start the selected session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
 | `@route:block-id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
 | `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); `=<X>` starts the resolved session atomically |
-| `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress, Next, and Ready `#now` tasks |
+| `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks |
 | `:<query>` | Incomplete: pick any open task to link (`capture-parse` needs `task_link`); accepting inserts `@route:block-id`, and execution never captures it |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends by 25 minutes, `-` shortens by 5 minutes; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15 minutes later, `--` moves 5 minutes earlier; the count defaults to 1); the item must contain only the operator |
@@ -89,7 +89,6 @@ anything is written, and any failure rolls the whole batch back.
 | `@route+block-id#pomodoro` with no other text | Ensure Next and move that existing Task Link subtree to the named open Pomodoro, or create that named future Pomodoro and move the subtree there |
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready/Blocked rise to Next) or unlink it when linked (lane unchanged) |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
-| trailing `#now` | This week's bet (see below): resolves the route in front of it, then moves to the end of the body |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `p:<N>` | Write priority level N and roll a scheduled date in that level's window |
 | `%`, `%N`, `%header` | Capture clipboard content as child bullets |
@@ -167,10 +166,10 @@ anything is written, and any failure rolls the whole batch back.
 | `@cash^goog-exit+#bugs` | New project note with its ` :id` Task Links under the Pomodoro named `BUGS`; the `#` names a Pomodoro, not a task section |
 | `@cash:goog-exit+`, `@cash:goog-exit+#bugs` | Retired project-note forms; use `@cash^goog-exit+` / `@cash^goog-exit+#bugs` and put ` :<id>` on the task bullets instead |
 | `@sase:deep-fix#bugs+` | Pomodoro-linked task under the Pomodoro named `BUGS+`; a trailing `+` after a `#name` stays part of the Pomodoro name |
-| `Fix it @sase #now` | This week's bet on new task text; the route resolves, then `#now` moves after the body |
-| `Fix it #now @sase` | Same; `#now` before the route stays body text |
-| `@sase:deep-fix #now` | Error: `` `#now` tags new task text; tag an existing task with Alt+N in Obsidian `` |
-| `Fix it @sase #n` | Incomplete: `capture-parse` needs `now_tag`; execution still rejects `#n` like any other `#tag` |
+| `Fix it @sase #now` | Error: a trailing `#tag` must be appended to an `@route` token (`@foo#bar`); `#now` was retired |
+| `Fix it #now @sase` | Error: a `#tag` before the route is a retired bullet marker, like any other `#tag` |
+| `@sase:deep-fix #now` | Error: a trailing `#tag` must be appended to an `@route` token (`@foo#bar`) |
+| `Fix it @sase #n` | Error: a trailing `#tag` must be appended to an `@route` token (`@foo#bar`) |
 
 A `#` after `@route+id` follows the item's mode: with no body text it names a
 Pomodoro for the task toggle, and once body text is present it names an
@@ -578,33 +577,13 @@ invalid or missing `BOB_DAY_FILE` has no effect. The retired
 `@<route>::<block-id>` spelling is no longer accepted; use
 `@<route>^<block-id>` instead.
 
-### This week's `#now`
+### `#now` is retired
 
-Tag new task text with a trailing `#now` to mark this week's bet (see
-`docs/plan.md` for what NOW means). The route in front of the tag resolves
-normally, then the tag moves to the end of the body, so
-`Fix it @sase^fix-it #now` writes:
-
-```markdown
-- [ ] #task Fix it #now [created::2026-09-30] ^fix-it
-```
-
-The tag lands before the `[created::…]` stamp and any `^block-id`, exactly
-where the NOW query looks for it. `#now` before the route (for example
-`Fix it #now @sase`) keeps working: it never leaves the body. Matching is
-case-sensitive and whole-token, so `#nowadays` and `#now/x` stay ordinary
-text, and every other trailing `#tag` keeps today's legacy-marker error.
-
-An item with no body text — a solo link, a toggle, or a whole-item operator —
-followed by `#now` is a usage error: `` `#now` tags new task text; tag an
-existing task with Alt+N in Obsidian ``. Every exact `#now` token in the body
-gets a `now_tag` span in `capture-parse`; a trailing `#n` or `#no` is an
-`incomplete` state with `needs: ["now_tag"]` and the same span (execution
-still rejects the partial), and `capture-complete` offers the single `#now`
-candidate (this week's bet) as the `now_tag` context. Ready `#now` tasks with
-block IDs also list in the `^` active-task picker, ordered after unqueued
-Next tasks, with `now: true` on every candidate whose task line carries the
-tag.
+The `#now` weekly-bet tag was retired: the Next lane took over what it
+tracked, and Today is read from the ledger at render time (see
+`docs/plan.md`). A trailing `#now` is now the ordinary trailing-tag error
+like any other `#tag`, and a `#now` in the body stays plain text. Existing
+vault lines that still carry `#now` keep working — the text is ignored.
 
 ### Pomodoro-linked tasks
 
@@ -831,10 +810,10 @@ in terminal projects and untyped vault-root files.
 
 Groups, in precedence: `queued` (an identified task whose dedicated
 `[[route#^id]]` link sits under an open Pomodoro today), `in_progress`,
-`next`, `now` (Ready or Blocked with `#now`), and `note` (everything else).
-The empty query keeps the canonical order: `queued` in ledger order, then
-`in_progress`, `next`, and `now` each by route then line, then `note` tasks
-in targets order and document order. Ranking splits the query into lowercase
+`next`, and `note` (everything else). The empty query keeps the canonical
+order: `queued` in ledger order, then `in_progress` and `next` each by
+route then line, then `note` tasks in targets order and document order.
+Ranking splits the query into lowercase
 whitespace-separated terms that must all match over `route:block-id`, the
 block ID, the text, the route, the section, and the Pomodoro name — field
 prefix first, then word prefix, substring, and in-order subsequence — with
@@ -863,7 +842,7 @@ omitted when the ledger is unchanged:
   "links": {"count": 8, "cap": 10, "over": false, "before": 7},
   "added_themes": ["BOB"],
   "warnings": [{"code": "plan_theme_cap_exceeded",
-    "message": "today's plan now has 4/3 themes (adds BOB); queue it with ^, keep it this week with #now, or defer with p:<N>"}]}
+    "message": "today's plan now has 4/3 themes (adds BOB); queue it with ^ or defer with p:<N>"}]}
 ```
 
 Warnings fire only for `plan_theme_cap_exceeded` and
@@ -979,8 +958,7 @@ number a queued link holds: JSON kind `pomodoro_start` keeps
 schema version 1 with `text` = the raw token, `task_line` = the started
 ledger line, `placement: "started"`, and the existing `pomodoro_start`
 object with `created_pomodoro: false` plus an additive `tasks` array where
-each row carries its `index` (its lineup number) and `now: true` when the
-linked task's line carries `#now` (omitted otherwise). The
+each row carries its `index` (its lineup number). The
 started session also appears in the batch-level `pomodoro_blocks` array;
 see [Pomodoro blocks](#pomodoro-blocks).
 Human output prints the started file, the session range and line, the
@@ -1021,16 +999,15 @@ without writing, and any failure rolls the whole batch back.
 
 JSON kind `pomodoro_start` keeps schema version 1: `text` is the raw token,
 `pomodoro_start.drop` is the typed list (omitted when empty),
-`pomodoro_start.tasks[]` are the rows still queued (each with `index` and
-`now`), and `pomodoro_start.dropped[]` are the removed rows (with `index`,
-`now`, the pre-image `ledger_line`, and `nested_lines`, omitted when 0).
+`pomodoro_start.tasks[]` are the rows still queued (each with `index`),
+and `pomodoro_start.dropped[]` are the removed rows (with `index`,
+the pre-image `ledger_line`, and `nested_lines`, omitted when 0).
 Human output numbers the queued rows, prints dropped rows inline (`dropped
 2 [[T]] · stays Next · +1 nested line`), follows with a dim `Dropped <K>`
 summary, and prints `nothing queued` when nothing is left.
 
 Worked example (`BOB_NOW=2026-09-30 09:42:00`, TAB indentation;
-`^capture-stop` and `^web-capture` are `[*]`, `^web-capture` carries `#now`,
-`^axe-restart` is `[*]`):
+`^capture-stop`, `^web-capture`, and `^axe-restart` are `[*]`):
 
 ```markdown
 ## Pomodoros
@@ -1359,9 +1336,8 @@ Field notes:
   row carries the lowest number. `tasks[].role` keeps its current meaning:
   it is the role after the selection, so a completed row is `embedded`, a
   deferred row is `deferred`, and a dropped row is `dropped`.
-  `tasks[].now` is `true` when the linked task's line carries `#now`,
-  omitted otherwise. A client joins `tasks[].index` to
-  `task_links[index-1]` for `outcome`/`source`.
+  A client joins `tasks[].index` to `task_links[index-1]` for
+  `outcome`/`source`.
 - `tasks[].carried` is true only when that target's line was actually
   carried into the new placeholder, and agrees with the top-level
   `carried` list.
@@ -2477,12 +2453,10 @@ names the task Next and links it into the Pomodoro, `^` names it only — with
 no teaching line.
 
 A solo leading `^` opens the active-task picker instead of creating a task.
-Typing `^` lists In Progress and Next tasks with block IDs plus Ready tasks
-tagged `#now`, ordered by today's open-Pomodoro Task Links (queued tasks in
-ledger order, then unqueued In Progress, then unqueued Next, then unqueued
-Ready `#now`); accepting a row inserts the full
-`route:block-id` in one step. Candidates whose task line carries `#now` set
-`now: true` (omitted when false). A typed `#name`/`=<X>`/`=x` suffix survives the
+Typing `^` lists In Progress and Next tasks with block IDs, ordered by
+today's open-Pomodoro Task Links (queued tasks in ledger order, then
+unqueued In Progress, then unqueued Next); accepting a row inserts the full
+`route:block-id` in one step. A typed `#name`/`=<X>`/`=x` suffix survives the
 accept. `^`, `^fragment`, and `^route:` report `incomplete` with
 `needs: ["active_task"]`, `^route:block-id#` needs `pomodoro_name`, and a
 complete `^route:block-id[#pomodoro][=<X>]` reports `pomodoro_link` and links
@@ -2681,9 +2655,8 @@ span over the sigil, never a diagnostic. A bare trailing `#` reports `pomodoro_n
 `route`, `section`, and `block_id` all `null` and an empty `needs` list. Combining
 that marker with `@route`, `s:<N>`, or `p:<N>` on the same item still reports
 mode `pomodoro_note` plus a `pomodoro_note_conflict` diagnostic; `bob capture`
-rejects the same input. A trailing `#n` or `#no` is an `incomplete` state with
-`needs: ["now_tag"]` and a `now_tag` span over the partial token; `bob capture`
-rejects it like any other trailing `#tag`. `route`, `section`, and `block_id` are the
+rejects the same input. A trailing `#n` or `#no` is rejected like any other
+trailing `#tag`. `route`, `section`, and `block_id` are the
 resolved components, or `null`; `block_id` carries the ID-only task, Pomodoro,
 sub-bullet, or project-note ID, whichever applies — for a project-note marker
 it is the authored block ID the filename suffix derives from. For a Pomodoro
@@ -2692,7 +2665,7 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `pomodoro_close_task`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `pomodoro_close_task`, `pomodoro_start_task`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` with no body text reports mode
 `incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode
@@ -2778,7 +2751,7 @@ close items never inherit a `@@` declaration.
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
-`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `now_tag`, `project_note_marker`, `sub_bullet_route`,
+`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
@@ -3052,10 +3025,9 @@ sigil, never part of the replacement: `@sase^x+` at cursor 7 returns
 success, and a `+` after `#name` stays part of the Pomodoro name. A solo
 leading `^` token instead completes active tasks: while the
 cursor is in the `route:block-id` part (including an empty part) the context
-is `active_task`, offering In Progress and Next tasks with block IDs plus
-Ready tasks tagged `#now`, backed by the active-task discovery scan — queued
-tasks in ledger order, then unqueued In Progress, then unqueued Next, then
-unqueued Ready `#now` — with prefix matches before
+is `active_task`, offering In Progress and Next tasks with block IDs,
+backed by the active-task discovery scan — queued tasks in ledger order,
+then unqueued In Progress, then unqueued Next — with prefix matches before
 substring matches over `route:block-id`, the block ID, the task text, the
 section, and the Pomodoro name, so `^dee`, `^sase:dee`, and `^outline` all
 find their tasks. `replacement` runs from just after `^` to the end of that
@@ -3121,10 +3093,8 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `task`,
-`task_section`, `active_task`, `task_link`, `now_tag`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
-active. `now_tag` covers a cursor inside a trailing `#n`, `#no`, or `#now`
-token; its single candidate is `{ "replacement": "#now", "label": "#now",
-"text": "This week's bet", "kind": "tag" }`. `task_block_id` covers `@route^prefix` once the route resolves;
+`task_section`, `active_task`, `task_link`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+active. `task_block_id` covers `@route^prefix` once the route resolves;
 `candidates` is always `[]`. `project_task_block_id` covers a cursor inside a
 trailing ` :` / ` ^` task ID token on a first-level bullet of a project-note
 item with a resolved route and block ID, from just after the sigil to the
@@ -3196,20 +3166,19 @@ their normal block-ID `replacement`. An active-task candidate (`active_task`
 context) has `replacement` (`route:block-id`), `ref`, `route`, `block_id`,
 `status_symbol`, `status_name`, `status_type`, `text`, nullable `section`, and
 nullable `pomodoro` (`line`, nullable `name`, nullable `time_range`,
-`is_current`; `null` when the task is not queued), plus `now: true` when the
-task line carries `#now` (omitted when false). Human rows read
+`is_current`; `null` when the task is not queued). Human rows read
 `sase:deep-fix  [*] Fix deep bug  · BUGS`. A task-link candidate (`task_link`
 context) has `replacement` (`@route:block-id`, or `""` for ID-less tasks,
 which clients must never insert), `ref`, `route`, `note_kind` (`inbox`,
 `area`, or `project`), nullable `block_id`, `requires_block_id`,
 `block_id_suggestions` (up to 3, `[]` for identified tasks),
 `status_symbol`, `status_name`, `status_type`, `text`, nullable `section`,
-`depth`, 1-based `line`, `group` (`queued`, `in_progress`, `next`, `now`, or
+`depth`, 1-based `line`, `group` (`queued`, `in_progress`, `next`, or
 `note`), nullable `scheduled`, and nullable `pomodoro` with the exact
-`active_task` shape (`null` unless the task is queued), plus `now: true` and
-`pulls_forward: true` when set (both omitted when false). Human rows read
+`active_task` shape (`null` unless the task is queued), plus
+`pulls_forward: true` when set (omitted when false). Human rows read
 `@sase:deep-fix  [*] Fix deep bug  · BUGS`, with the tail naming the queued
-Pomodoro (`Planned` when unnamed), `In Progress`, `Next`, `#now`, or the note
+Pomodoro (`Planned` when unnamed), `In Progress`, `Next`, or the note
 label, plus `· needs ID (^suggestion)` on ID-less rows and
 `· scheduled YYYY-MM-DD` whenever the task carries a scheduled date. Missing-ID tasks, which appear only when
 `--all-tasks` is set in the `task` context, have `block_id: null`,

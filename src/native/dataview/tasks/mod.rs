@@ -71,9 +71,9 @@ pub(crate) const NEXT_QUERY: &str = "not done\nstatus.symbol is *\nis not blocke
 pub(crate) const PENDING_QUERY: &str = "not done\nstatus.symbol is /\nis not blocked\ntags do not include #hide\nfolder does not include _templates\npath does not include _conflicts\n(no scheduled date) OR (scheduled on or before today)";
 
 /// The descriptions of the tasks matching `query` through the native
-/// Tasks engine, so plan-budget NOW counts honor the vault's Tasks
+/// Tasks engine, so plan-budget lane counts honor the vault's Tasks
 /// settings. Callers apply their own whole-token tag predicates (the
-/// engine's `tags include` also matches subtags like `#now/x`).
+/// engine's `tags include` also matches subtags like `#hide/x`).
 pub(crate) fn query_matching_descriptions(
     vault: &Path,
     query: &str,

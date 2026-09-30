@@ -211,35 +211,6 @@ pub(crate) fn normalize_component(value: &str) -> String {
         .to_lowercase()
 }
 
-/// Whether `text` carries the case-sensitive whole token `#now`:
-/// preceded by the line start or whitespace, followed by the end or
-/// whitespace. `#nowadays` and `#now/x` never match.
-///
-/// Shared with capture (per-row `now` flags and the `^` picker),
-/// which still uses it until `#now` is removed. `bob plan` itself
-/// now counts the NEXT/PENDING lanes through the Tasks engine.
-pub(crate) fn has_now_tag(text: &str) -> bool {
-    let mut search = text;
-    let mut offset = 0;
-    while let Some(found) = search.find("#now") {
-        let absolute = offset + found;
-        let before_ok = text[..absolute]
-            .chars()
-            .next_back()
-            .is_none_or(|cell| cell.is_whitespace());
-        let after_ok = text[absolute + "#now".len()..]
-            .chars()
-            .next()
-            .is_none_or(|cell| cell.is_whitespace());
-        if before_ok && after_ok {
-            return true;
-        }
-        search = &search[found + 1..];
-        offset = absolute + 1;
-    }
-    false
-}
-
 /// Count the NEXT and PENDING lanes through the native Tasks
 /// engine, so the result honors the vault's Tasks settings. Each
 /// counts the whole lane, Today included. A scan failure reads as
@@ -880,17 +851,6 @@ mod tests {
         );
         assert_eq!(ledger.links.count, 2);
         assert_eq!(ledger.entries[0].links, 2);
-    }
-
-    #[test]
-    fn has_now_tag_matches_whole_tokens_only() {
-        assert!(has_now_tag("- [ ] #task Foo #now [created:: 2026-09-30]"));
-        assert!(has_now_tag("#now leading"));
-        assert!(has_now_tag("trailing #now"));
-        assert!(!has_now_tag("- [ ] #task #nowadays"));
-        assert!(!has_now_tag("- [ ] #task #now/x"));
-        assert!(!has_now_tag("- [ ] #task #NOW"));
-        assert!(!has_now_tag("- [ ] #task snow"));
     }
 
     #[test]

@@ -22,7 +22,6 @@ use super::{
     },
     capture_task_toggle::child_block_end_line,
     markdown, note_tasks,
-    plan_budget::has_now_tag,
     vault_links::LinkResolution,
 };
 
@@ -42,12 +41,10 @@ pub(crate) struct StartLink {
 /// One resolved lineup row, following the close row's explicit-null
 /// convention: unresolved rows carry `None` fields plus a `warning`.
 /// `index` is the 1-based lineup number (kept rows hold their pre-image
-/// number, so a drop leaves gaps like 1, 3); `now` is true when the linked
-/// task's line carries `#now`.
+/// number, so a drop leaves gaps like 1, 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StartTaskRow {
     pub index: u32,
-    pub now: bool,
     pub block_link: String,
     pub embedded: bool,
     pub ledger_line: usize,
@@ -152,7 +149,6 @@ fn resolve_one<V: CloseVault>(
     let unresolved =
         |relative_target: Option<String>, warning: String| StartTaskRow {
             index: link.index,
-            now: false,
             block_link: link.block_link.clone(),
             embedded: link.embedded,
             ledger_line: link.ledger_line,
@@ -198,26 +194,19 @@ fn resolve_one<V: CloseVault>(
         settings
     };
     match lookup_task(&contents, lookup_settings, &link.block_id) {
-        Ok(task) => {
-            // Same `#now` read the close rows use: the resolved task's own
-            // line decides, so a dropped task keeps its NOW caption.
-            let now = line_text_at(&contents, task.line_index)
-                .is_some_and(has_now_tag);
-            StartTaskRow {
-                index: link.index,
-                now,
-                block_link: link.block_link.clone(),
-                embedded: link.embedded,
-                ledger_line: link.ledger_line,
-                resolved: true,
-                relative_target: Some(relative_target),
-                block_id: link.block_id.clone(),
-                text: Some(close_task_text(&task.description)),
-                status_symbol: Some(task.status_symbol),
-                status_name: Some(task.status_name.clone()),
-                warning: None,
-            }
-        }
+        Ok(task) => StartTaskRow {
+            index: link.index,
+            block_link: link.block_link.clone(),
+            embedded: link.embedded,
+            ledger_line: link.ledger_line,
+            resolved: true,
+            relative_target: Some(relative_target),
+            block_id: link.block_id.clone(),
+            text: Some(close_task_text(&task.description)),
+            status_symbol: Some(task.status_symbol),
+            status_name: Some(task.status_name.clone()),
+            warning: None,
+        },
         Err(reason) => unresolved(
             Some(relative_target.clone()),
             format!("{relative_target} {reason}"),
@@ -230,10 +219,6 @@ fn relative_name(bob_dir: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
-}
-
-fn line_text_at(contents: &str, line_index: usize) -> Option<&str> {
-    line_spans(contents).get(line_index).map(|line| line.text)
 }
 
 /// Who owns the started session, for drop diagnostics: the entry name when

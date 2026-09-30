@@ -161,8 +161,8 @@ pub(super) fn append_plan_budget(
     Ok(())
 }
 
-/// `today's plan now has 4/3 themes (adds BOB); queue it with ^, keep
-/// it this week with #now, or defer with p:<N>`.
+/// `today's plan now has 4/3 themes (adds BOB); queue it with ^ or
+/// defer with p:<N>`.
 fn theme_warning(count: usize, cap: u32, added: &[String]) -> String {
     let adds = if added.is_empty() {
         String::new()
@@ -170,22 +170,22 @@ fn theme_warning(count: usize, cap: u32, added: &[String]) -> String {
         format!(" (adds {})", added.join(", "))
     };
     format!(
-        "today's plan now has {count}/{cap} themes{adds}; queue it with ^, \
-        keep it this week with #now, or defer with p:<N>"
+        "today's plan now has {count}/{cap} themes{adds}; queue it with ^ \
+        or defer with p:<N>"
     )
 }
 
-/// `today's plan now has 11/10 links; queue it with ^, keep it this
-/// week with #now, or defer with p:<N>`.
+/// `today's plan now has 11/10 links; queue it with ^ or defer with
+/// p:<N>`.
 fn link_warning(count: usize, cap: u32) -> String {
     format!(
-        "today's plan now has {count}/{cap} links; queue it with ^, keep \
-        it this week with #now, or defer with p:<N>"
+        "today's plan now has {count}/{cap} links; queue it with ^ or defer \
+        with p:<N>"
     )
 }
 
 /// Strict-mode refusal: names the current (pre-batch) themes and the
-/// added ones, with the same `^` / `#now` / `p:<N>` hint.
+/// added ones, with the same `^` / `p:<N>` hint.
 fn theme_refusal(
     current: &[String],
     count: usize,
@@ -204,8 +204,8 @@ fn theme_refusal(
     };
     format!(
         "refusing capture: today's plan would grow to {count}/{cap} \
-        themes{adds}; current themes: {current}; queue it with ^, keep it \
-        this week with #now, or defer with p:<N>"
+        themes{adds}; current themes: {current}; queue it with ^ or defer \
+        with p:<N>"
     )
 }
 
@@ -217,8 +217,8 @@ mod tests {
     fn theme_warning_names_added_themes_with_hint() {
         assert_eq!(
             theme_warning(4, 3, &["BOB".to_string()]),
-            "today's plan now has 4/3 themes (adds BOB); queue it with ^, \
-            keep it this week with #now, or defer with p:<N>"
+            "today's plan now has 4/3 themes (adds BOB); queue it with ^ \
+            or defer with p:<N>"
         );
     }
 

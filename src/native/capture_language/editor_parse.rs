@@ -9,7 +9,6 @@ use super::markers::*;
 use super::model::*;
 use super::project_tasks::*;
 use super::tokens::*;
-use crate::native::capture_language::item::is_session_chain_token;
 
 /// Remap one physical line's own tokenizer output into the original
 /// multi-line text's byte offsets, so every span an editor receives always
@@ -36,10 +35,6 @@ pub(super) struct LineEditorParse<'a> {
     /// source order. The task-ID post-pass reads the last entry to span
     /// the ` :id` / ` ^id` token exactly.
     pub(super) body_tokens: Vec<Token<'a>>,
-    /// A trailing exact `#now` tag removed before marker resolution, with
-    /// its original-draft byte offsets. The caller moves it to the end of
-    /// the body and paints it with a `now_tag` span.
-    pub(super) now_tag: Option<Token<'a>>,
     pub(super) marker: Option<MarkerParse>,
     pub(super) marker_text: Option<String>,
     pub(super) declarations: Vec<Token<'a>>,
@@ -57,14 +52,6 @@ pub(super) fn parse_editor_line<'a>(
     leading: bool,
 ) -> LineEditorParse<'a> {
     let declarations = take_global_declarations(&mut tokens);
-    // A trailing exact `#now` is the weekly-bet tag: resolve the route in
-    // front of it exactly like execution does, then move it to the end of
-    // the body.
-    let now_tag = tokens
-        .last()
-        .is_some_and(|token| is_now_tag(token.text))
-        .then(|| tokens.pop())
-        .flatten();
     let (_, marker_spans) = extract_terminal_markers(&mut tokens, true);
     let terminal_spans: Vec<Span> = marker_spans
         .into_iter()
@@ -115,7 +102,6 @@ pub(super) fn parse_editor_line<'a>(
     LineEditorParse {
         body,
         body_tokens,
-        now_tag,
         marker,
         marker_text,
         declarations,
@@ -194,18 +180,6 @@ pub(super) fn duplicate_capture_marker_diagnostic(
         code: "duplicate_capture_marker",
         message,
         range: Some(range),
-    }
-}
-
-/// Diagnostic for `#now` with no new task text (a solo link, a toggle, or a
-/// whole-item operator followed by `#now`), mirroring execution's
-/// [`now_tag_body_error`]. The range covers the `#now` token itself.
-pub(super) fn now_tag_without_task_diagnostic(token: &Token<'_>) -> Diagnostic {
-    Diagnostic {
-        severity: Severity::Error,
-        code: "now_tag_without_task",
-        message: now_tag_body_error(),
-        range: Some((token.start, token.end)),
     }
 }
 
@@ -486,69 +460,11 @@ pub(super) fn parse_editor_task_link_item<'a>(
     })
 }
 
-/// A whole-item operator, close, or start followed by `#now` (`=x #now`,
-/// `=3 #now`, `+5 #now`): execution reports the tag error because no new
-/// task text remains, so the editor resolves the stripped item with the
-/// family parsers and swaps their diagnostics for the same tag error.
-/// Returns `None` for every other shape, including a lone `#now` (the
-/// generic pass reports that) and multi-token bodies (which keep the tag).
-pub(super) fn parse_editor_now_tag_item<'a>(
-    item: &CaptureItem<'a>,
-) -> Option<EditorItemOutcome<'a>> {
-    let parent = item.lines.first().expect("nonempty item");
-    let line_tokens = tokenize_line_with_spans(&parent.raw);
-    let now_token = line_tokens.last()?;
-    if !is_now_tag(now_token.text) {
-        return None;
-    }
-    let kept = parent.raw.text[..now_token.start - parent.raw.start].trim_end();
-    let kept_trimmed = kept.trim();
-    if kept_trimmed.is_empty()
-        || kept_trimmed.split_whitespace().count() != 1
-        || !is_session_chain_token(kept_trimmed)
-    {
-        return None;
-    }
-    let mut lines = item.lines.clone();
-    lines[0] = ItemLine {
-        raw: RawLine {
-            text: kept,
-            start: parent.raw.start,
-            end: parent.raw.start + kept.len(),
-        },
-        line_number: parent.line_number,
-    };
-    let shadow = CaptureItem {
-        index: item.index,
-        start: item.start,
-        end: item.end,
-        line_start: item.line_start,
-        line_end: item.line_end,
-        lines,
-    };
-    let mut outcome = parse_editor_close_item(&shadow)
-        .or_else(|| parse_editor_adjust_item(&shadow))?;
-    outcome.item.diagnostics = vec![now_tag_without_task_diagnostic(now_token)];
-    outcome.item.spans.push(Span {
-        start: now_token.start,
-        end: now_token.end,
-        kind: SpanKind::NowTag,
-    });
-    outcome
-        .item
-        .spans
-        .sort_by_key(|span| (span.start, span.end));
-    Some(outcome)
-}
-
 pub(super) fn parse_editor_item<'a>(
     item: &CaptureItem<'a>,
 ) -> EditorItemOutcome<'a> {
     if let Some(task_link) = parse_editor_task_link_item(item) {
         return task_link;
-    }
-    if let Some(now_tagged) = parse_editor_now_tag_item(item) {
-        return now_tagged;
     }
     if let Some(close) = parse_editor_close_item(item) {
         return close;
@@ -707,43 +623,17 @@ pub(super) fn parse_editor_item<'a>(
             }
         }
 
-        // Child lines mirror the parent's weekly-bet tag handling: paint
-        // exact `#now` tokens, move a trailing tag onto the child body, and
-        // report the tag error when no child text remains.
-        for token in &child_parse.body_tokens {
-            if is_now_tag(token.text) {
-                spans.push(Span {
-                    start: token.start,
-                    end: token.end,
-                    kind: SpanKind::NowTag,
-                });
-            }
-        }
-        if let Some(token) = &child_parse.now_tag {
-            spans.push(Span {
-                start: token.start,
-                end: token.end,
-                kind: SpanKind::NowTag,
-            });
-        }
         if child_parse.body.is_empty() {
-            if let Some(token) = &child_parse.now_tag {
-                diagnostics.push(now_tag_without_task_diagnostic(token));
-            } else {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    code: "empty_child_after_markers",
-                    message: empty_child_after_markers_error(line_number),
-                    range: Some((raw.start, raw.end)),
-                });
-            }
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "empty_child_after_markers",
+                message: empty_child_after_markers_error(line_number),
+                range: Some((raw.start, raw.end)),
+            });
         } else {
             child_task_tokens.push(child_parse.body_tokens.last().copied());
             child_task_lines.push(line_number);
-            let mut child_body = child_parse.body;
-            if child_parse.now_tag.is_some() {
-                child_body.push_str(" #now");
-            }
+            let child_body = child_parse.body;
             sub_bullets.push(AuthoredSubBullet {
                 body: child_body,
                 depth: authored.depth,
@@ -1042,13 +932,7 @@ pub(super) fn parse_editor_item<'a>(
                 conflict,
             } => {
                 mode = EditorMode::PomodoroLink;
-                // A solo link with nothing but the weekly-bet tag has no
-                // new task text: the `^` token is the marker (not body
-                // text), so the body stays empty and the tag error below
-                // replaces the link conflict, exactly like execution.
-                let now_tag_only = parent_parse.now_tag.is_some()
-                    && parent_parse.body_tokens == [caret.token];
-                body = if caret.solo_parent || now_tag_only {
+                body = if caret.solo_parent {
                     String::new()
                 } else {
                     body
@@ -1127,9 +1011,7 @@ pub(super) fn parse_editor_item<'a>(
                 local_destination_marker = local_destination_markers
                     .last()
                     .map(|marker| marker.text.clone());
-                if let Some(message) = conflict
-                    && !now_tag_only
-                {
+                if let Some(message) = conflict {
                     diagnostics.push(Diagnostic {
                         severity: Severity::Error,
                         code: "invalid_pomodoro_link",
@@ -1371,54 +1253,6 @@ pub(super) fn parse_editor_item<'a>(
                 message,
                 range: Some((span.start, span.end)),
             });
-        }
-    }
-
-    // The weekly-bet tag: paint every exact `#now` token in the parent body,
-    // move a trailing tag to the end of the body, and report a tag error
-    // when no task text remains. A trailing `#n`/`#no` is still being typed:
-    // an `incomplete` state needing `now_tag` with the same span, while
-    // execution keeps rejecting it as a legacy marker.
-    for token in &parent_parse.body_tokens {
-        if is_now_tag(token.text) {
-            spans.push(Span {
-                start: token.start,
-                end: token.end,
-                kind: SpanKind::NowTag,
-            });
-        }
-    }
-    if let Some(token) = &parent_parse.now_tag {
-        spans.push(Span {
-            start: token.start,
-            end: token.end,
-            kind: SpanKind::NowTag,
-        });
-        if body.is_empty() {
-            if !diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "now_tag_without_task")
-            {
-                diagnostics.push(now_tag_without_task_diagnostic(token));
-            }
-        } else {
-            body.push_str(" #now");
-        }
-    }
-    if parent_parse
-        .body_tokens
-        .last()
-        .is_some_and(|token| is_now_tag_prefix(token.text))
-    {
-        let token = parent_parse.body_tokens.last().expect("last token");
-        spans.push(Span {
-            start: token.start,
-            end: token.end,
-            kind: SpanKind::NowTag,
-        });
-        mode = EditorMode::Incomplete;
-        if !needs.contains(&Need::NowTag) {
-            needs.push(Need::NowTag);
         }
     }
 

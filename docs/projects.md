@@ -527,8 +527,8 @@ upserted before any trailing `^block-id` (replacing an existing `cancelled`
 field), matching what Obsidian Tasks itself writes so Tasks queries, `done`
 filters, and `### Done & Canceled` grouping treat it the same. Nothing else
 on the line changes: `scheduled`, `dependsOn`, `id`, `priority`, `created`,
-`#hide`, and `#now` are untouched (`#now` is user-owned, and a cancelled
-`#now` task drops out of NOW by itself since Cancelled counts as done).
+and `#hide` are untouched (a cancelled task drops out of every lane view by
+itself since Cancelled counts as done).
 
 ```markdown
 - [-] #task Add new `Agents` sub-tab to `Artifacts` tab! [priority:: high] [created::
@@ -557,7 +557,7 @@ same rule. After the writes land, the picker reuses the Task Status Cycler
 `api.recoverBlockedDependents` recovery: a Blocked dependent with no
 remaining open dependency and no future `scheduled` date becomes Ready. The
 notice card summarizes the result with `removed N Pomodoro links`,
-`unblocked N dependents`, `NOW c/cap`, and plan-budget chips as applicable.
+`unblocked N dependents`, and plan-budget chips as applicable.
 
 Refusals write nothing: recurring tasks (a `[repeat:: …]`, `(repeat:: …)`, or
 `🔁` line — cancel those with Obsidian Tasks so the next occurrence is

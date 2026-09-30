@@ -39,9 +39,6 @@ pub(super) struct PomodoroCloseTaskJson {
     pub(super) ledger_line: usize,
     pub(super) index: Option<u32>,
     pub(super) resolved: bool,
-    /// Present only when the linked task's line carries `#now`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) now: Option<bool>,
     // Explicit nulls on unresolved rows, matching the top-level
     // `route: null` / `scheduled: null` convention.
     pub(super) relative_target: Option<String>,

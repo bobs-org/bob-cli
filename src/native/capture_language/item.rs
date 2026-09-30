@@ -37,23 +37,6 @@ pub(super) fn parse_capture_item<'a>(
     if parent_normalized.is_empty() {
         return Err(missing_text_error());
     }
-    // A whole-item operator, close, or start followed by `#now` has no new
-    // task text to tag: `=x #now`, `=3 #now`, and `+5 #now` report the tag
-    // error instead of their own shape errors. Anything else with trailing
-    // `#now` falls through to `resolve_line`, which moves the tag onto the
-    // body (or reports the same error when no body text remains).
-    if forced_route.is_none()
-        && let Some(stripped) =
-            strip_trailing_now_tag(parent_line.raw.text.trim())
-    {
-        let kept = stripped.trim();
-        if kept.is_empty()
-            || (kept.split_whitespace().count() == 1
-                && is_session_chain_token(kept))
-        {
-            return Err(now_tag_body_error());
-        }
-    }
     // A `:` picker query is never executable: it rejects with a teaching
     // error before any other item parser, so the whole batch rolls back.
     // Forced flags do not change this.

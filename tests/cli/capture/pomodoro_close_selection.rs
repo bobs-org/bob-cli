@@ -1304,8 +1304,8 @@ fn capture_pomodoro_close_selection_crlf_day_file() {
 }
 
 fn drop_worked_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
-    // The worked fixture plus a third numbered link (`^ready`, tagged
-    // `#now`) so `=x1!2~3` exercises all three close forms at once.
+    // The worked fixture plus a third numbered link (`^ready`) so
+    // `=x1!2~3` exercises all three close forms at once.
     let (temp, vault, day_file) = close_worked_vault(name);
     let day = fs::read_to_string(&day_file).expect("read day");
     write_file(
@@ -1330,7 +1330,7 @@ fn drop_worked_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
 fn capture_pomodoro_close_selection_drop() {
     // `=x1!2~3`: task 1 in progress, task 2 complete, task 3 dropped.
     // The dropped link leaves the closed session, is not carried, and its
-    // Ready `#now` task is untouched (stays `[ ]`, no Work Log).
+    // Ready task is untouched (stays `[ ]`, no Work Log).
     let (_temp, vault, day_file) = drop_worked_vault("bob-cli-close-sel-drop");
     let json =
         run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1!2~3"]);
@@ -1376,7 +1376,7 @@ fn capture_pomodoro_close_selection_drop() {
         .expect("dropped task row");
     assert_eq!(dropped["role"], "dropped");
     assert_eq!(dropped["index"], 3);
-    assert_eq!(dropped["now"], true);
+    assert!(dropped.get("now").is_none());
     assert_eq!(dropped["carried"], false);
     assert_eq!(dropped["status_symbol"], " ");
     assert_eq!(dropped["status_changed"], false);
