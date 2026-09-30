@@ -70,18 +70,6 @@ pub(super) struct CompletionParts<'a> {
     pub(super) third: Option<CompletionThird<'a>>,
 }
 
-/// Identify the completable marker component at `cursor`, reusing the same
-/// tokenizer, terminal-marker extraction, and `@token` candidate detection
-/// as [`parse_for_editor`]. Returns `None` when the cursor is not inside an
-/// eligible leading or trailing `@` marker: plain body text, a token in the
-/// middle of the input, and an unrecognized or invalid marker never produce
-/// a completion field.
-///
-/// Multi-line drafts complete the physical line the cursor is on: only the
-/// first (parent) line offers a leading marker, and a later line's source
-/// indentation plus bullet marker itself is never completable, matching the
-/// authored-bullet grammar `bob capture` and `bob capture-parse` execute
-/// with.
 /// Complete a solo leading `:` token: the query is the token text between
 /// the sigil and the cursor (empty at or just after the sigil), and the
 /// replacement covers the whole token including the sigil, because
@@ -292,6 +280,18 @@ fn pomodoro_start_name_field(
     })
 }
 
+/// Identify the completable marker component at `cursor`, reusing the same
+/// tokenizer, terminal-marker extraction, and `@token` candidate detection
+/// as [`parse_for_editor`]. Returns `None` when the cursor is not inside an
+/// eligible leading or trailing `@` marker: plain body text, a token in the
+/// middle of the input, and an unrecognized or invalid marker never produce
+/// a completion field.
+///
+/// Multi-line drafts complete the physical line the cursor is on: only the
+/// first (parent) line offers a leading marker, and a later line's source
+/// indentation plus bullet marker itself is never completable, matching the
+/// authored-bullet grammar `bob capture` and `bob capture-parse` execute
+/// with.
 pub(crate) fn completion_field_at(
     raw_text: &str,
     cursor: usize,

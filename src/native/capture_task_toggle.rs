@@ -1401,7 +1401,7 @@ fn scheduled_field_matches(line: &str) -> Vec<ScheduledFieldMatch> {
 /// Exactly one recognized `scheduled` field, syntactically valid, and
 /// strictly later than `today` -- the only shape that qualifies for
 /// future-schedule removal.
-pub(crate) fn find_single_future_scheduled_field(
+fn find_single_future_scheduled_field(
     line: &str,
     today: NaiveDate,
 ) -> Option<ScheduledFieldMatch> {
