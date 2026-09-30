@@ -71,8 +71,9 @@ anything is written, and any failure rolls the whole batch back.
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15 minutes later, `--` moves 5 minutes earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
 | `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name ("again"), otherwise a new named session is created and started; the item must contain only the start token |
+| `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`, `=3#bugs~1,3`); `~` drops, the drop part always comes last, and the item must contain only the start token |
 | `=x[<N>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, with `!` and `~` in either order); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; the item must contain only the token |
-| `+2 =x`, `=x =`, `=x =#bugs` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items |
+| `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; `=x =~2` closes then starts without link 2 of the next lineup, while `=x~2 =` drops link 2 of the running session and then starts |
 | `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it; the same selection may follow the `x` and numbers refer to the post-link lineup |
 | `^route:block-id=x…` with no other text | Identical execution; `^` is the active-task spelling |
 | `<text> @route:block-id=x…` | Create the new Pomodoro-linked task in the running session, then close it; numbers refer to the post-link lineup |
@@ -131,6 +132,24 @@ anything is written, and any failure rolls the whole batch back.
 | `+2 =x` | Extend by 10 minutes, then close; exactly like `+2`, blank line, `=x` |
 | `=x =` | Close the running session, then start the next future Pomodoro |
 | `=x =#bugs` | Close the running session, then start the open `BUGS` Pomodoro; a session switch in one line |
+| `=~2` | Start the next session without queued Task Link 2 |
+| `=3~2,4` | Start the next session for 15 minutes without links 2 and 4 |
+| `=#bugs~2` | Start the open `BUGS` Pomodoro without its link 2 |
+| `=3#bugs~1,3` | Start `BUGS` for 15 minutes without links 1 and 3 |
+| `=x =~2` | Close the running session, then start the next one without link 2 of that session's own lineup (the links `=x` carried into it) |
+| `=~2 +2` | Start without link 2, then extend by 10 minutes |
+| `=~` | Incomplete: type a task number after `~` (`capture-parse` needs `pomodoro_start_task`) |
+| `=~2,` | Incomplete: type a task number after `,` (`capture-parse` needs `pomodoro_start_task`) |
+| `=~0` | Error: task numbers start at 1 |
+| `=~2,2` | Error: `` task 2 is listed twice in `=~2,2` `` |
+| `=~,2` | Error: `` expected a task number before `,` `` |
+| `=~2~3` | Error: `` use one `~` list: `=~2,3` `` |
+| `=~2!3` | Error: `` a start can only drop Task Links; `!` completes them when you close (`=x!3`) `` |
+| `=~2#bugs` | Error: `` write the drop list after the name: `=#bugs~2` instead of `=~2#bugs` `` |
+| `=~2a` | Error: `` `=~2a` is not a drop list: write `~`, then comma-separated task numbers (for example `=~2,3`) `` |
+| `=~ 2` | Error: `` write the task numbers right after `~`, with no spaces (for example `=~2,3`) `` |
+| `=#~2` | Error: the existing empty-name error on `=#` |
+| `= ~2` | Ordinary task text; a bare `=` followed by separate text stays prose |
 | `=#deep-work` | Start the open `DEEP WORK` Pomodoro now for 25 minutes; whole-slug match wins, else prefix (`=#deep` matches too) |
 | `=3#bugs` | Start the open `BUGS` Pomodoro now for 15 minutes |
 | `=#` | Incomplete: type a Pomodoro name after `#` (`capture-parse` needs `pomodoro_name`) |
@@ -908,6 +927,77 @@ Quote `=` items in zsh, which expands a leading `=word` to a command path:
 `bob capture '='`, `bob capture '=3'`, `bob capture '=-2'`,
 `bob capture '=x'`.
 
+#### Dropping queued Task Links as a session starts
+
+Write a trailing `~<K>` drop list on a whole-item start to start lean:
+`=~2` starts the next session without queued Task Link 2. One-card
+mnemonic: **`~` drops** — `=x~2` drops task 2 from the session you stop,
+`=~2` drops task 2 from the session you start, using the numbers the start
+lineup shows.
+
+`<K>` is comma-separated task numbers, each at least 1, with no whitespace,
+in any order; JSON reports the list sorted ascending. The drop part always
+comes last: after `<X>`, and after `#name` when present. A named start's
+name part ends at the first ASCII whitespace or `~`. Any start token with a
+drop part claims its item, near misses included; a bare `=` followed by
+separate text (`= ~2`, `= foo`) stays prose. Link and task starts
+(`^route:id=<X>`, `@route:id=<X>`) do not take a drop part.
+
+The lineup is the started entry's direct-child Task Links in ledger order,
+numbered 1..N on the staged pre-image (after earlier batch items and chain
+tokens have run). Every whole-item start reports these numbers, including a
+plain `=`. A named start that creates its session has an empty lineup, so
+any drop list fails before insertion.
+
+Each dropped Task Link bullet is removed together with its nested child
+lines (which belong to that link in a session about to start — unlike a
+close, which keeps notes as history). No task note is written; `bob
+task-status-hooks` reconciles status as it does for any removed Pomodoro
+link, and `#now` keeps a dropped task in view this week. Dry-run computes
+without writing, and any failure rolls the whole batch back.
+
+JSON kind `pomodoro_start` keeps schema version 1: `text` is the raw token,
+`pomodoro_start.drop` is the typed list (omitted when empty),
+`pomodoro_start.tasks[]` are the rows still queued (each with `index` and
+`now`), and `pomodoro_start.dropped[]` are the removed rows (with `index`,
+`now`, the pre-image `ledger_line`, and `nested_lines`, omitted when 0).
+Human output numbers the queued rows, prints dropped rows inline (`dropped
+2 [[T]] · stays in NOW · +1 nested line`), follows with a dim `Dropped <K>`
+summary, and prints `nothing queued` when nothing is left.
+
+Worked example (`BOB_NOW=2026-09-30 09:42:00`, TAB indentation;
+`^capture-stop` and `^web-capture` are `[*]`, `^web-capture` carries `#now`,
+`^axe-restart` is `[*]`):
+
+```markdown
+## Pomodoros
+
+- [x] (**0830-0855** [t:: 25m]) — PLAN
+  - 🍅 [[bob#^capture-stop]]
+- [ ] () — CAPTURE
+  - [[bob#^capture-stop]]
+  - [[bob#^web-capture]]
+    - remember the URL parser
+  - [[sase#^axe-restart]]
+- [ ] () — SASE
+```
+
+`bob capture '='` numbers the lineup 1 `^capture-stop`, 2 `^web-capture`, 3
+`^axe-restart`. `bob capture '=~2'` writes:
+
+```markdown
+## Pomodoros
+
+- [x] (**0830-0855** [t:: 25m]) — PLAN
+  - 🍅 [[bob#^capture-stop]]
+- [ ] (**0945-1010** [t:: 25m]) — CAPTURE
+  - [[bob#^capture-stop]]
+  - [[sase#^axe-restart]]
+- [ ] () — SASE
+```
+
+(`bob.md` and `sase.md` are untouched.)
+
 ### Starting a named Pomodoro
 
 Capture a whole item `=<X>#pomodoro` to start one named Pomodoro now:
@@ -1508,6 +1598,8 @@ whitespace separates them:
 bob capture '+2 =x'
 bob capture '=x ='
 bob capture '=x =#bugs'
+bob capture '=x =~2'
+bob capture '=~2 +2'
 ```
 
 Recognition: the line must hold at least two whitespace-separated tokens and
@@ -1525,7 +1617,9 @@ closes, `=x =` closes then starts the next future Pomodoro (a session switch
 in one line), `=x =#bugs` closes then starts the open `BUGS` session,
 `=x2 =3` closes keeping task 2 in progress then starts a
 15-minute session, `= +2` starts then extends, `=#bugs +2` starts `BUGS`
-then extends it, and `--2 +` shifts earlier
+then extends it, `=x =~2` closes then starts without link 2 of the next
+lineup (while `=x~2 =` drops link 2 of the running session and then
+starts), `=~2 +2` starts without link 2 then extends, and `--2 +` shifts earlier
 then extends. Staging, rollback, and `--dry-run` match blank-line batches:
 later tokens see earlier staged edits through `CaptureBatchPlanner`, and any
 failure rolls the whole batch back. Output is per token: one JSON/human
@@ -2371,12 +2465,20 @@ report an `invalid_pomodoro_adjustment` (one sign) or
 `invalid_pomodoro_shift` (two signs) diagnostic. A whole-item `=`/`=<X>`
 start (for example `=` is 25 minutes, `=3` is 15 minutes) parses as
 `pomodoro_start` with a `pomodoro_start` object (`raw` excludes `=`, plus
-5-minute `duration_units`/`offset_units`) and a `pomodoro_start` span
-covering the whole token; a counted token with extra text, an exact token
-with child lines, or an oversized suffix reports `pomodoro_start` plus an
-`invalid_pomodoro_start` diagnostic (the extra text, the child line, or the
-token for overflow). A whole-item `=<X>#pomodoro` named start (for example
-`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes) parses as
+5-minute `duration_units`/`offset_units` and the additive `drop` list) and a
+`pomodoro_start` span covering the whole token (only `=<X>` when a `~<K>`
+drop part is present, with a `pomodoro_start_drop` span covering `~<K>`
+including the `~`); the human `start` line reads `=3#bugs~1,3 (15m, offset
+0u · drop 1, 3)`. A claimed token (counted or drop-carrying) with extra
+text, an exact token with child lines, or an oversized suffix reports
+`pomodoro_start` plus an `invalid_pomodoro_start` diagnostic (the extra
+text, the child line, or the token for overflow). A trailing `~<K>` drop
+list parses with the sorted list in the spec; a dangling `~`/`,` reports
+mode `incomplete` needing `pomodoro_start_task` with the partial spec, the
+spans typed so far, and one `interactive_placeholder` span over the
+separator. A whole-item `=<X>#pomodoro` named start (for example
+`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes, `=3#bugs~1` starts
+`BUGS` for 15 minutes without link 1) parses as
 `pomodoro_start` with the same `pomodoro_start` object (`raw` excludes `=`,
 so `=3#bugs` reports `"3"`), `section` carrying the typed name, a
 `pomodoro_start` span covering the `=<X>` bytes, and a `pomodoro_name` span
@@ -2816,8 +2918,8 @@ task completion candidates: a cursor on such an item returns an empty success. A
 whole-item `=<X>#name` named start instead completes the name after `#` as
 `pomodoro_start_name`, per token inside chains: a cursor inside the name part
 completes it, while a cursor on `=<X>` or at the `#` byte itself returns an
-empty success. Near misses complete the same way valid tokens do. The name `replacement` covers only the name part, so accepting
-a candidate preserves the typed `=<X>#`. Candidates are start-aware, backed
+empty success. A cursor anywhere inside a drop part, including a dangling `~`/`,`, returns an empty success. Near misses complete the same way valid tokens do. The name `replacement` covers only the name part (it ends before `~`), so accepting
+a candidate preserves the typed `=<X>#` and any typed `~<K>` list. Candidates are start-aware, backed
 by today's ledger scan: open untimed placeholders first (with `next_up` on
 today's next future entry), then a create row for a missing name, then
 `again` rows for completed sessions (which start a new session with that

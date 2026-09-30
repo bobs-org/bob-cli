@@ -26,6 +26,7 @@ mod markers;
 mod model;
 mod project_tasks;
 mod rewrite;
+mod start_selection;
 mod tokens;
 
 #[cfg(test)]

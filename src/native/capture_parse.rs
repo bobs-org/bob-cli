@@ -132,16 +132,27 @@ requests no route or task completion candidates. A whole-item `=`/`=<X>` \
 start (for example `=` starts 25 minutes, `=3` starts 15 minutes, `=-2` \
 starts 25 minutes with a 10-minute offset) reports mode 'pomodoro_start' \
 with a `pomodoro_start` object (`raw` excludes `=`, plus 5-minute \
-`duration_units`/`offset_units`) and a `pomodoro_start` span covering the \
-whole token; the parse stays purely lexical and never guesses current \
-ledger times. A counted token with extra text, markers, or child lines \
-(`=3 more`, `=3x`), an exact token with child lines, and an oversized \
-suffix report 'pomodoro_start' plus an `invalid_pomodoro_start` diagnostic \
-(the extra text, the child line, or the token for overflow), while `bob \
-capture` keeps its strict execution errors for the same text. A named \
-whole-item start (`=#bugs`, `=3#bugs`) starts that Pomodoro: `section` \
-carries the typed name with a `pomodoro_name` span over the name bytes \
-only (the `#` is in no span), `=<X>#` with no name reports mode \
+`duration_units`/`offset_units` and the additive `drop` list) and a \
+`pomodoro_start` span covering the whole token (only `=<X>` when a `~<K>` \
+drop part is present, with a `pomodoro_start_drop` span covering `~<K>` \
+including the `~`); the human `start` line reads `=3#bugs~1,3 (15m, \
+offset 0u · drop 1, 3)`. The parse stays purely lexical and never guesses \
+current ledger times. A counted or drop-carrying token with extra text, \
+markers, or child lines (`=3 more`, `=3x`, `=~2 more`), an exact token \
+with child lines, and an oversized suffix report 'pomodoro_start' plus an \
+`invalid_pomodoro_start` diagnostic (the extra text, the child line, or \
+the token for overflow), while `bob capture` keeps its strict execution \
+errors for the same text. A trailing `~<K>` drop list (`=~2`, `=3~2,4`, \
+`=3#bugs~1`) starts the next session without those queued Task Links; a \
+dangling `~`/`,` (`=~`, `=~2,`) reports mode 'incomplete' needing \
+`pomodoro_start_task` with the partial spec, the spans typed so far, and \
+one `interactive_placeholder` span over the separator, and every malformed \
+list (a `0`, a duplicate, a second `~`, a `!`, a `#name` after the list, a \
+bad character, an oversized number, or a space inside the list, which gets \
+the no-spaces hint) reports `invalid_pomodoro_start` on the precise range. \
+A named whole-item start (`=#bugs`, `=3#bugs`) starts that Pomodoro: \
+`section` carries the typed name with a `pomodoro_name` span over the name \
+bytes only (the `#` is in no span), `=<X>#` with no name reports mode \
 'incomplete' needing `pomodoro_name` with an `interactive_placeholder` \
 span over `#` and the partial `pomodoro_start` spec, and `=x#name` reports \
 mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
@@ -218,7 +229,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x1~2'\n  bob capture-parse -f json -- '=x0!2'\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, pomodoro_close_task, now_tag",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x1~2'\n  bob capture-parse -f json -- '=x0!2'\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- '=x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, pomodoro_close_task, pomodoro_start_task, now_tag",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -658,20 +669,38 @@ fn print_human_success_with_styler(
 }
 
 /// Render a validated whole-item start for human output: the whole
-/// typed token (`=<X>` plus `#name` for a named start) plus its resolved
-/// 5-minute duration and offset units.
+/// typed token (`=<X>` plus `#name` for a named start plus `~<K>` for a
+/// drop list) plus its resolved 5-minute duration and offset units.
 fn format_pomodoro_start(
     start: &PomodoroStartSpec,
     section: Option<&str>,
 ) -> String {
-    let token = match section {
+    let mut token = match section {
         Some(name) => format!("={}#{name}", start.raw),
         None => format!("={}", start.raw),
     };
+    if !start.drop.is_empty() {
+        let compact = start
+            .drop
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        token.push('~');
+        token.push_str(&compact);
+    }
+    if start.drop.is_empty() {
+        return format!(
+            "{token} ({}m, offset {}u)",
+            start.duration_units.saturating_mul(5),
+            start.offset_units
+        );
+    }
     format!(
-        "{token} ({}m, offset {}u)",
+        "{token} ({}m, offset {}u · drop {})",
         start.duration_units.saturating_mul(5),
-        start.offset_units
+        start.offset_units,
+        join_numbers(&start.drop)
     )
 }
 

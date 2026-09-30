@@ -1134,3 +1134,61 @@ fn capture_complete_pomodoro_start_name_human_labels_rows() {
     );
     assert_stdout_has_no_ansi(&output);
 }
+
+#[test]
+fn capture_complete_pomodoro_start_drop_protocol() {
+    // A cursor anywhere inside a start `~<K>` drop part, including a
+    // dangling separator, returns an empty success.
+    for (text, cursor) in [
+        ("=~2", 1),
+        ("=~2", 2),
+        ("=~2", 3),
+        ("=~", 2),
+        ("=~2,", 4),
+        ("=3#bugs~1", 9),
+        ("=3#bugs~", 8),
+    ] {
+        let output = bob_command()
+            .arg("capture-complete")
+            .arg("-c")
+            .arg(cursor.to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("run capture-complete");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("complete JSON");
+        assert_eq!(json["ok"], true, "{text} {cursor}");
+        assert_eq!(
+            json["candidates"],
+            serde_json::json!([]),
+            "{text} {cursor}"
+        );
+    }
+
+    // The named replacement stops before `~`, so accepting a name keeps a
+    // typed drop list.
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-c")
+        .arg("6")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=3#bugs~1")
+        .output()
+        .expect("run capture-complete");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
+    assert_eq!(json["context"], "pomodoro_start_name", "{json}");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({ "start": 3, "end": 7 }),
+        "{json}"
+    );
+}

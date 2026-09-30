@@ -6,6 +6,7 @@ use super::editor_parse::*;
 use super::item::*;
 use super::markers::*;
 use super::model::*;
+use super::start_selection::*;
 use super::tokens::*;
 
 /// Whole-item session operator for the live editor: one sign resizes,
@@ -241,12 +242,20 @@ pub(super) fn editor_start_invalid_outcome<'a>(
 /// diagnostic reusing the execution texts: E2/E3 over the name, E4 over
 /// the extra text or child line, overflow over `=<X>`. Purely lexical: it
 /// never guesses current ledger times.
+///
+/// A trailing `~<K>` drop part claims the item like a counted token. When
+/// present, the `pomodoro_start` span covers only `=<X>`, a
+/// `pomodoro_start_drop` span covers `~<K>` including the `~`, and the
+/// `pomodoro_start` spec carries the sorted list. A dangling `~`/`,`
+/// reports `incomplete` needing `pomodoro_start_task` with the partial spec
+/// and an `interactive_placeholder` span over the separator.
 pub(super) fn parse_editor_named_start_item<'a>(
     item: &CaptureItem<'a>,
     parent_trimmed: &str,
     suffix: String,
     name: String,
     len: usize,
+    drop: Option<(usize, String)>,
 ) -> Option<EditorItemOutcome<'a>> {
     let parent = item.lines.first().expect("nonempty item");
     let leading = parent.raw.text.len() - parent.raw.text.trim_start().len();
@@ -274,11 +283,66 @@ pub(super) fn parse_editor_named_start_item<'a>(
         });
     }
     let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+    let drop_text = drop.as_ref().map(|(_, text)| text.as_str());
+    let token_without_drop = match drop.as_ref() {
+        Some((offset, _)) => token_text.get(..*offset).unwrap_or(token_text),
+        None => token_text,
+    };
+    // Lex the drop part with absolute offsets, mirroring execution's
+    // message and range byte for byte.
+    enum DropLex {
+        None,
+        Valid(Vec<u32>, (usize, usize)),
+        Incomplete(Vec<u32>, Option<(usize, usize)>, (usize, usize), char),
+        Invalid(String, (usize, usize)),
+    }
+    let drop_lex = match drop.as_ref() {
+        None => DropLex::None,
+        Some((_, after_tilde)) => {
+            let base = token_start + (token_text.len() - after_tilde.len());
+            match lex_start_drop(after_tilde, base, token_text) {
+                Ok(StartDropOutcome::Valid(lex)) => {
+                    DropLex::Valid(lex.drop, lex.drop_range)
+                }
+                Ok(StartDropOutcome::Incomplete(incomplete)) => {
+                    DropLex::Incomplete(
+                        incomplete.drop,
+                        incomplete.drop_range,
+                        incomplete.separator_range,
+                        incomplete.separator,
+                    )
+                }
+                Err(error) => DropLex::Invalid(error.message, error.range),
+            }
+        }
+    };
     let exact = parent_trimmed.len() == len && item.lines.len() == 1;
     if exact {
         if name.is_empty() {
-            // `=<X>#` is an editing state, never a mistake: the partial
-            // spec, the spans typed so far, and no diagnostic.
+            // `=<X>#` is an editing state, never a mistake — unless a drop
+            // part was typed (`=#~2`), which reports the empty-name error.
+            if drop.is_some() {
+                let (message, range) = named_start_token_diagnostic(
+                    token_without_drop,
+                    &suffix,
+                    &name,
+                    drop_text,
+                    NamedStartOffsets {
+                        token_start,
+                        prefix_len,
+                        name_start,
+                        name_end,
+                    },
+                )
+                .expect("empty name errors");
+                return Some(editor_named_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    spans,
+                    message,
+                    Some(range),
+                ));
+            }
             return Some(editor_named_incomplete_outcome(
                 item,
                 parent_trimmed,
@@ -287,13 +351,16 @@ pub(super) fn parse_editor_named_start_item<'a>(
             ));
         }
         if let Some((message, range)) = named_start_token_diagnostic(
-            token_text,
+            token_without_drop,
             &suffix,
             &name,
-            token_start,
-            prefix_len,
-            name_start,
-            name_end,
+            drop_text,
+            NamedStartOffsets {
+                token_start,
+                prefix_len,
+                name_start,
+                name_end,
+            },
         ) {
             return Some(editor_named_invalid_outcome(
                 item,
@@ -303,33 +370,66 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 Some(range),
             ));
         }
-        let spec = parse_pomodoro_start_suffix(&suffix)
+        let mut spec = parse_pomodoro_start_suffix(&suffix)
             .expect("named token checked before spec");
-        return Some(EditorItemOutcome {
-            item: EditorItemParse {
-                index: item.index,
-                start: item.start,
-                end: item.end,
-                line_start: item.line_start,
-                line_end: item.line_end,
-                body: parent_trimmed.to_string(),
-                mode: EditorMode::PomodoroStart,
-                route: None,
-                section: Some(name),
-                block_id: None,
-                needs: Vec::new(),
-                pomodoro_start: Some(spec),
-                pomodoro_adjust: None,
-                pomodoro_shift: None,
-                pomodoro_close: None,
-                spans,
-                diagnostics: Vec::new(),
-                sub_bullets: Vec::new(),
-                has_local_destination: false,
-                local_destination_markers: Vec::new(),
-            },
-            declarations: Vec::new(),
-        });
+        match drop_lex {
+            DropLex::None => {
+                return Some(editor_named_valid_outcome(
+                    item,
+                    parent_trimmed,
+                    spans,
+                    spec,
+                    name,
+                ));
+            }
+            DropLex::Valid(list, range) => {
+                spec.drop = list;
+                spans.push(Span {
+                    start: range.0,
+                    end: range.1,
+                    kind: SpanKind::PomodoroStartDrop,
+                });
+                return Some(editor_named_valid_outcome(
+                    item,
+                    parent_trimmed,
+                    spans,
+                    spec,
+                    name,
+                ));
+            }
+            DropLex::Incomplete(list, drop_range, sep_range, sep) => {
+                spec.drop = list;
+                if let Some(range) = drop_range {
+                    spans.push(Span {
+                        start: range.0,
+                        end: range.1,
+                        kind: SpanKind::PomodoroStartDrop,
+                    });
+                }
+                spans.push(Span {
+                    start: sep_range.0,
+                    end: sep_range.1,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+                return Some(editor_start_drop_incomplete_outcome(
+                    item,
+                    parent_trimmed,
+                    spans,
+                    spec,
+                    Some(name),
+                    sep,
+                ));
+            }
+            DropLex::Invalid(message, range) => {
+                return Some(editor_named_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    spans,
+                    message,
+                    Some(range),
+                ));
+            }
+        }
     }
     // Extra text or child lines: a broken token reports its own diagnostic
     // first (E1 through E3, or overflow), exactly like execution.
@@ -347,13 +447,16 @@ pub(super) fn parse_editor_named_start_item<'a>(
         ));
     }
     if let Some((message, range)) = named_start_token_diagnostic(
-        token_text,
+        token_without_drop,
         &suffix,
         &name,
-        token_start,
-        prefix_len,
-        name_start,
-        name_end,
+        drop_text,
+        NamedStartOffsets {
+            token_start,
+            prefix_len,
+            name_start,
+            name_end,
+        },
     ) {
         let range = if name.is_empty() && !has_extra {
             // `=<X>#` with child lines only: the child line is the range,
@@ -371,6 +474,30 @@ pub(super) fn parse_editor_named_start_item<'a>(
             range,
         ));
     }
+    // A broken drop list reports its own error first, exactly like
+    // execution. A dangling separator with extra text falls through to
+    // the no-spaces hint or the shape error, like closes.
+    if let DropLex::Invalid(message, range) = drop_lex {
+        return Some(editor_named_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            Some(range),
+        ));
+    }
+    if has_extra {
+        let nospace: String = parent_trimmed.split_whitespace().collect();
+        if super::item::spaceless_start_drop_is_valid(&nospace) {
+            return Some(editor_named_invalid_outcome(
+                item,
+                parent_trimmed,
+                spans,
+                start_drop_no_spaces_error(),
+                Some(extra_text_range(token_start, parent_trimmed, len)),
+            ));
+        }
+    }
     // A well-formed token with extra text or child lines: E4. An empty
     // name here means child lines only (extra text took the no-space
     // branch above).
@@ -380,12 +507,18 @@ pub(super) fn parse_editor_named_start_item<'a>(
             item,
             parent_trimmed,
             spans,
-            pomodoro_named_start_incomplete_error(token_text),
+            pomodoro_named_start_incomplete_error(token_without_drop),
             Some((child.raw.start, child.raw.end)),
         ));
     }
-    let message =
-        named_shape_error(token_text, &suffix, &name, parent_trimmed, len);
+    let message = super::item::named_shape_error_with_drop(
+        token_without_drop,
+        &suffix,
+        &name,
+        parent_trimmed,
+        len,
+        drop_text,
+    );
     let range = if has_extra {
         extra_text_range(token_start, parent_trimmed, len)
     } else {
@@ -401,19 +534,108 @@ pub(super) fn parse_editor_named_start_item<'a>(
     ))
 }
 
-/// Classify a named start token's own error the way execution's
-/// `named_token_error` does (E1/E3/E2/overflow order), paired with the
-/// editor range for that error: E1 over the `#`, E2/E3 over the name,
-/// overflow over `=<X>`. `None` when the token itself is well-formed.
-fn named_start_token_diagnostic(
-    token: &str,
-    suffix: &str,
-    name: &str,
+/// Build a valid named-start outcome with the given spans and spec.
+fn editor_named_valid_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    spans: Vec<Span>,
+    spec: PomodoroStartSpec,
+    name: String,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::PomodoroStart,
+            route: None,
+            section: Some(name),
+            block_id: None,
+            needs: Vec::new(),
+            pomodoro_start: Some(spec),
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            spans,
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    }
+}
+
+/// Build a drop-incomplete outcome: mode `incomplete`, need
+/// `pomodoro_start_task`, the partial spec, the spans typed so far, and an
+/// `interactive_placeholder` span over the dangling separator.
+fn editor_start_drop_incomplete_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    spans: Vec<Span>,
+    spec: PomodoroStartSpec,
+    section: Option<String>,
+    _separator: char,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::Incomplete,
+            route: None,
+            section,
+            block_id: None,
+            needs: vec![Need::PomodoroStartTask],
+            pomodoro_start: Some(spec),
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            spans,
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    }
+}
+
+/// Absolute byte offsets of a named start token's parts: `token_start` is
+/// the `=` byte, `prefix_len` is the `=<X>` byte length, and `name_start`
+/// / `name_end` bound the name part.
+struct NamedStartOffsets {
     token_start: usize,
     prefix_len: usize,
     name_start: usize,
     name_end: usize,
+}
+
+/// Classify a named start token's own error the way execution's
+/// `named_token_error` does (E1/E3/E2/overflow order), paired with the
+/// editor range for that error: E1 over the `#`, E2/E3 over the name,
+/// overflow over `=<X>`. `token` is the token without its drop part;
+/// `drop_text` keeps the typed `~<K>` in the order suggestion. `None` when
+/// the token itself is well-formed.
+fn named_start_token_diagnostic(
+    token: &str,
+    suffix: &str,
+    name: &str,
+    drop_text: Option<&str>,
+    offsets: NamedStartOffsets,
 ) -> Option<(String, (usize, usize))> {
+    let NamedStartOffsets {
+        token_start,
+        prefix_len,
+        name_start,
+        name_end,
+    } = offsets;
     if name.is_empty() {
         return Some((
             pomodoro_named_start_incomplete_error(token),
@@ -424,8 +646,12 @@ fn named_start_token_diagnostic(
         && suffix.is_empty()
         && parse_pomodoro_start_suffix(after).is_ok()
     {
+        let drop_suffix =
+            drop_text.map(|text| format!("~{text}")).unwrap_or_default();
         return Some((
-            pomodoro_named_start_order_error(token, before, after),
+            format!(
+                "write the duration before the name: `={after}#{before}{drop_suffix}` instead of `{token}`"
+            ),
             (name_start, name_end),
         ));
     }
@@ -512,33 +738,106 @@ fn editor_named_invalid_outcome<'a>(
 
 /// Whole-item `=`/`=<X>` start for the live editor. Mirrors the start
 /// branch of [`parse_pomodoro_equals_item`] but never fails: an exact
-/// single-token start reports `pomodoro_start` with its spec and one span
-/// over the whole token, while a counted token with extra text (or an
-/// exact token with child lines) reports `pomodoro_start` plus an
-/// `invalid_pomodoro_start` diagnostic. Bare tokens with prose stay prose.
-/// Range policy matches `invalid_pomodoro_close`: the extra text for
-/// trailing text, the child line for child-line misses, the token for
-/// overflow.
+/// single-token start reports `pomodoro_start` with its spec and spans over
+/// `=<X>` plus `~<K>`, while a claimed token (counted or drop) with extra
+/// text (or an exact token with child lines) reports `pomodoro_start` plus
+/// an `invalid_pomodoro_start` diagnostic. Bare tokens with prose stay
+/// prose. A dangling `~`/`,` reports `incomplete` needing
+/// `pomodoro_start_task`. Range policy matches `invalid_pomodoro_close`:
+/// the extra text for trailing text, the child line for child-line misses,
+/// the token for overflow.
 pub(super) fn parse_editor_start_item<'a>(
     item: &CaptureItem<'a>,
     parent_trimmed: &str,
     suffix: String,
     counted: bool,
     len: usize,
+    drop: Option<(usize, String)>,
 ) -> Option<EditorItemOutcome<'a>> {
     let parent = item.lines.first().expect("nonempty item");
     let leading = parent.raw.text.len() - parent.raw.text.trim_start().len();
     let token_start = parent.raw.start + leading;
     let token_end = token_start + len;
-    let span = Span {
+    let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+    // When a drop part is present the `pomodoro_start` span covers only
+    // `=<X>`; otherwise it is unchanged over the whole token.
+    let prefix_len = 1 + suffix.len();
+    let base_span = Span {
         start: token_start,
-        end: token_end,
+        end: if drop.is_some() {
+            token_start + prefix_len
+        } else {
+            token_end
+        },
         kind: SpanKind::PomodoroStart,
     };
+    enum DropLex {
+        None,
+        Valid(Vec<u32>, (usize, usize)),
+        Incomplete(Vec<u32>, Option<(usize, usize)>, (usize, usize), char),
+        Invalid(String, (usize, usize)),
+    }
+    let drop_lex = match drop.as_ref() {
+        None => DropLex::None,
+        Some((_, after_tilde)) => {
+            let base = token_start + (token_text.len() - after_tilde.len());
+            match lex_start_drop(after_tilde, base, token_text) {
+                Ok(StartDropOutcome::Valid(lex)) => {
+                    DropLex::Valid(lex.drop, lex.drop_range)
+                }
+                Ok(StartDropOutcome::Incomplete(incomplete)) => {
+                    DropLex::Incomplete(
+                        incomplete.drop,
+                        incomplete.drop_range,
+                        incomplete.separator_range,
+                        incomplete.separator,
+                    )
+                }
+                Err(error) => DropLex::Invalid(error.message, error.range),
+            }
+        }
+    };
+    let mut valid_spans = vec![base_span];
+    if let DropLex::Valid(_, range) = &drop_lex {
+        valid_spans.push(Span {
+            start: range.0,
+            end: range.1,
+            kind: SpanKind::PomodoroStartDrop,
+        });
+    }
+    let claims = counted || drop.is_some();
     let exact = parent_trimmed.len() == len && item.lines.len() == 1;
     if !exact {
-        if counted || (parent_trimmed.len() == len && item.lines.len() > 1) {
-            let token_text = &parent_trimmed[..len];
+        if claims || (parent_trimmed.len() == len && item.lines.len() > 1) {
+            // A broken drop list reports its own error first, exactly like
+            // execution. A dangling separator with extra text falls through
+            // to the no-spaces hint or the shape error, like closes.
+            if let DropLex::Invalid(message, range) = drop_lex {
+                return Some(editor_start_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    base_span,
+                    message,
+                    Some(range),
+                ));
+            }
+            if parent_trimmed.len() > len {
+                let nospace: String =
+                    parent_trimmed.split_whitespace().collect();
+                if super::item::spaceless_start_drop_is_valid(&nospace) {
+                    return Some(editor_start_invalid_outcome(
+                        item,
+                        parent_trimmed,
+                        base_span,
+                        start_drop_no_spaces_error(),
+                        Some(extra_text_range(
+                            token_start,
+                            parent_trimmed,
+                            len,
+                        )),
+                    ));
+                }
+            }
             let message = pomodoro_start_shape_error(token_text, &suffix);
             // Exact token with child lines: the child line is the range.
             if parent_trimmed.len() == len {
@@ -546,12 +845,12 @@ pub(super) fn parse_editor_start_item<'a>(
                 return Some(editor_start_invalid_outcome(
                     item,
                     parent_trimmed,
-                    span,
+                    base_span,
                     message,
                     Some((child.raw.start, child.raw.end)),
                 ));
             }
-            // Counted token with trailing text: the extra text is the
+            // Claimed token with trailing text: the extra text is the
             // range, mirroring the close's extra-text policy.
             let rest_in_trimmed = &parent_trimmed[len..];
             let rest_trimmed = rest_in_trimmed.trim_start();
@@ -559,7 +858,7 @@ pub(super) fn parse_editor_start_item<'a>(
                 return Some(editor_start_invalid_outcome(
                     item,
                     parent_trimmed,
-                    span,
+                    base_span,
                     message,
                     Some((item.start, item.end)),
                 ));
@@ -570,15 +869,28 @@ pub(super) fn parse_editor_start_item<'a>(
             return Some(editor_start_invalid_outcome(
                 item,
                 parent_trimmed,
-                span,
+                base_span,
                 message,
                 Some((rest_start, rest_start + rest_trimmed.len())),
             ));
         }
         return None;
     }
-    match parse_pomodoro_start_suffix(&suffix) {
-        Ok(spec) => Some(EditorItemOutcome {
+    // Suffix errors win over the drop list.
+    let base_spec = match parse_pomodoro_start_suffix(&suffix) {
+        Ok(spec) => spec,
+        Err(message) => {
+            return Some(editor_start_invalid_outcome(
+                item,
+                parent_trimmed,
+                base_span,
+                message,
+                Some((token_start, token_start + prefix_len)),
+            ));
+        }
+    };
+    match drop_lex {
+        DropLex::None => Some(EditorItemOutcome {
             item: EditorItemParse {
                 index: item.index,
                 start: item.start,
@@ -591,11 +903,11 @@ pub(super) fn parse_editor_start_item<'a>(
                 section: None,
                 block_id: None,
                 needs: Vec::new(),
-                pomodoro_start: Some(spec),
+                pomodoro_start: Some(base_spec),
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
                 pomodoro_close: None,
-                spans: vec![span],
+                spans: vec![base_span],
                 diagnostics: Vec::new(),
                 sub_bullets: Vec::new(),
                 has_local_destination: false,
@@ -603,12 +915,66 @@ pub(super) fn parse_editor_start_item<'a>(
             },
             declarations: Vec::new(),
         }),
-        Err(message) => Some(editor_start_invalid_outcome(
+        DropLex::Valid(list, _) => {
+            let mut spec = base_spec;
+            spec.drop = list;
+            Some(EditorItemOutcome {
+                item: EditorItemParse {
+                    index: item.index,
+                    start: item.start,
+                    end: item.end,
+                    line_start: item.line_start,
+                    line_end: item.line_end,
+                    body: parent_trimmed.to_string(),
+                    mode: EditorMode::PomodoroStart,
+                    route: None,
+                    section: None,
+                    block_id: None,
+                    needs: Vec::new(),
+                    pomodoro_start: Some(spec),
+                    pomodoro_adjust: None,
+                    pomodoro_shift: None,
+                    pomodoro_close: None,
+                    spans: valid_spans,
+                    diagnostics: Vec::new(),
+                    sub_bullets: Vec::new(),
+                    has_local_destination: false,
+                    local_destination_markers: Vec::new(),
+                },
+                declarations: Vec::new(),
+            })
+        }
+        DropLex::Incomplete(list, drop_range, sep_range, sep) => {
+            let mut spec = base_spec;
+            spec.drop = list;
+            let mut spans = vec![base_span];
+            if let Some(range) = drop_range {
+                spans.push(Span {
+                    start: range.0,
+                    end: range.1,
+                    kind: SpanKind::PomodoroStartDrop,
+                });
+            }
+            spans.push(Span {
+                start: sep_range.0,
+                end: sep_range.1,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+            Some(editor_start_drop_incomplete_outcome(
+                item,
+                parent_trimmed,
+                spans,
+                spec,
+                None,
+                sep,
+            ))
+        }
+        DropLex::Invalid(message, range) => Some(editor_start_invalid_outcome(
             item,
             parent_trimmed,
-            span,
+            base_span,
             message,
-            Some((token_start, token_end)),
+            Some(range),
         )),
     }
 }
@@ -640,6 +1006,7 @@ pub(super) fn parse_editor_close_item<'a>(
             counted,
             len,
             name,
+            drop,
         } => {
             if let Some(selector) = name {
                 return parse_editor_named_start_item(
@@ -648,6 +1015,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     suffix,
                     selector,
                     len,
+                    drop,
                 );
             }
             return parse_editor_start_item(
@@ -656,6 +1024,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 suffix,
                 counted,
                 len,
+                drop,
             );
         }
         EqualsToken::Close => {}

@@ -458,18 +458,6 @@ pub(super) fn pomodoro_named_start_name_error(
     )
 }
 
-/// Named-start E3: link-form order (`#name=<X>`). `before` is the text
-/// before the first `=` in the name, `after` the text after it.
-pub(super) fn pomodoro_named_start_order_error(
-    token: &str,
-    before: &str,
-    after: &str,
-) -> String {
-    format!(
-        "write the duration before the name: `={after}#{before}` instead of `{token}`"
-    )
-}
-
 /// Named-start E4 base: extra text or child lines on a named start.
 pub(super) fn pomodoro_named_start_shape_error(
     token: &str,
@@ -478,19 +466,6 @@ pub(super) fn pomodoro_named_start_shape_error(
 ) -> String {
     format!(
         "Pomodoro start `{token}` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session in a named Pomodoro instead, use `^route:block-id#{name}={suffix}`)"
-    )
-}
-
-/// Named-start E4 hint when the extra text is all valid name components:
-/// join multi-word names with `-`.
-pub(super) fn pomodoro_named_start_multiword_hint(
-    suffix: &str,
-    name: &str,
-    words: &[&str],
-) -> String {
-    let joined = words.join("-");
-    format!(
-        "; to name a multi-word Pomodoro, join the words with `-`: `={suffix}#{name}-{joined}`"
     )
 }
 
@@ -604,6 +579,41 @@ pub(super) fn close_selection_incomplete_error(
     separator: char,
 ) -> String {
     format!("`{token}` is incomplete: type a task number after `{separator}`")
+}
+
+// ---------------------------------------------------------------------------
+// `=[<X>][#name]~<K>` start-drop diagnostics
+// ---------------------------------------------------------------------------
+
+/// A second `~` in a start drop list points at the second tilde.
+pub(super) fn start_drop_one_tilde_error() -> String {
+    "use one `~` list: `=~2,3`".to_string()
+}
+
+/// A bad byte in a start drop list fails from that byte through the token end.
+pub(super) fn start_drop_bad_list_error(token: &str) -> String {
+    format!(
+        "`{token}` is not a drop list: write `~`, then comma-separated task numbers (for example `=~2,3`)"
+    )
+}
+
+/// `!` never belongs on a start: it completes links when closing.
+pub(super) fn start_drop_bang_error() -> String {
+    "a start can only drop Task Links; `!` completes them when you close (`=x!3`)".to_string()
+}
+
+/// A `#name` typed after the drop list belongs before it. `suggestion` keeps
+/// the typed `<X>` (for example `=3#bugs~2`).
+pub(super) fn start_drop_hash_error(suggestion: &str, token: &str) -> String {
+    format!(
+        "write the drop list after the name: `{suggestion}` instead of `{token}`"
+    )
+}
+
+/// A spaceless join that lexes as a start drop list gets this hint instead
+/// of the shape error.
+pub(super) fn start_drop_no_spaces_error() -> String {
+    "write the task numbers right after `~`, with no spaces (for example `=~2,3`)".to_string()
 }
 
 // ---------------------------------------------------------------------------

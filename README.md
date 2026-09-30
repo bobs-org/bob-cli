@@ -213,8 +213,9 @@ typed on that same item. The whole batch is planned before anything is written.
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes); the item must contain only the start token (quote in zsh) |
 | `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name, otherwise a new named session is created and started; the item must contain only the start token (quote in zsh) |
+| `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`); `~` drops, the drop part always comes last (quote in zsh) |
 | `=x[<N>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, `!`/`~` in either order); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; the item must contain only the token (quote in zsh, since `!` history expansion also applies) |
-| `+2 =x`, `=x =`, `=x =#bugs` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items |
+| `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items (`=x =~2` closes then starts without link 2) |
 | `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it; numbers refer to the post-link lineup |
 | `<text> @route:id=x…` | Create the new task in the running session, then close it |
 | `@route^id+` | New project note `<route>_<id>.md`; the daily note and the parent note are left unchanged |
@@ -297,7 +298,10 @@ options are rejected on adjustments.
 
 Capture a whole item `=`/`=<X>` to start today's next future Pomodoro
 (`bob capture '='` starts 25 minutes, `bob capture '=3'` starts 15 minutes;
-quote in zsh, which expands a leading `=word`).
+quote in zsh, which expands a leading `=word`). A trailing `~<K>` drop list
+(`bob capture '=~2'`, `bob capture '=3#bugs~1'`) starts without those queued
+Task Links: `~` drops, so `=~2` drops task 2 from the session you start the
+way `=x~2` drops task 2 from the session you stop.
 
 Capture a whole item `=x[<N>][!<M>][~<K>]` to close today's running timed
 Pomodoro the way Obsidian's Ctrl+Enter completion does, plus an

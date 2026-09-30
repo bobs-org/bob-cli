@@ -7,6 +7,7 @@ use super::line::*;
 use super::markers::*;
 use super::model::*;
 use super::project_tasks::*;
+use super::start_selection::*;
 use super::tokens::*;
 
 pub(super) struct ParsedCaptureItemOutcome<'a> {
@@ -518,15 +519,19 @@ pub(crate) enum EqualsToken {
     /// is never a start-suffix character. `=x#…` still lexes as `Close`.
     Close,
     /// `=` plus the longest `[0-9]*(-[0-9]*)?` run, plus an optional
-    /// `#name` part. `suffix` excludes the `=`, `counted` is true when the
-    /// suffix holds at least one digit, `name` is `Some` when a `#`
-    /// immediately follows the suffix (possibly empty, as in `=#`), and
-    /// `len` is the token's byte length including the name part.
+    /// `#name` part, plus an optional `~<K>` drop part. `suffix` excludes
+    /// the `=`, `counted` is true when the suffix holds at least one digit,
+    /// `name` is `Some` when a `#` immediately follows the suffix
+    /// (possibly empty, as in `=#`; it ends at the first ASCII whitespace
+    /// or `~`), `drop` holds the `~` offset inside the token plus the text
+    /// after it when a `~` immediately follows the suffix or name, and
+    /// `len` is the token's byte length including the name and drop parts.
     Start {
         suffix: String,
         counted: bool,
         len: usize,
         name: Option<String>,
+        drop: Option<(usize, String)>,
     },
 }
 
@@ -535,9 +540,10 @@ pub(crate) enum EqualsToken {
 /// with `=`, so ordinary parsing continues. A bare token (`=`, `=-`) has
 /// an empty or digit-free suffix; a counted token (`=3`, `=-2`, `=3-`,
 /// `=2-1`, `=0`) carries at least one digit. An optional `#name` part
-/// immediately after the suffix extends the token to the next ASCII
-/// whitespace (or end of line); the `#` must come immediately after the
-/// suffix.
+/// immediately after the suffix ends at the first ASCII whitespace or `~`;
+/// the `#` must come immediately after the suffix. An optional `~<K>` drop
+/// part immediately after the suffix or name extends the token to the next
+/// ASCII whitespace (or end of line).
 pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     let rest = text.strip_prefix('=')?;
     if rest
@@ -565,16 +571,28 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     if rest.as_bytes().get(len) == Some(&b'#') {
         let after_hash = &rest[len + 1..];
         let name_len = after_hash
-            .find(|character: char| character.is_ascii_whitespace())
+            .find(|character: char| {
+                character.is_ascii_whitespace() || character == '~'
+            })
             .unwrap_or(after_hash.len());
         name = Some(after_hash[..name_len].to_string());
         token_len += 1 + name_len;
+    }
+    let mut drop: Option<(usize, String)> = None;
+    if rest.as_bytes().get(token_len - 1) == Some(&b'~') {
+        let after_tilde = &rest[token_len..];
+        let drop_len = after_tilde
+            .find(|character: char| character.is_ascii_whitespace())
+            .unwrap_or(after_tilde.len());
+        drop = Some((token_len, after_tilde[..drop_len].to_string()));
+        token_len += 1 + drop_len;
     }
     Some(EqualsToken::Start {
         suffix,
         counted,
         len: token_len,
         name,
+        drop,
     })
 }
 
@@ -597,9 +615,13 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
     }
     match session_equals_token(token) {
         Some(EqualsToken::Start {
-            counted, len, name, ..
+            counted,
+            len,
+            name,
+            drop,
+            ..
         }) => {
-            if name.is_some() {
+            if name.is_some() || drop.is_some() {
                 return true;
             }
             len == token.len() || counted
@@ -745,8 +767,16 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
 
 /// A named start token's own error, in E1/E3/E2/overflow order. `None`
 /// when the token itself is well-formed (callers then report E4 for extra
-/// text or accept the exact token).
-fn named_token_error(token: &str, suffix: &str, name: &str) -> Option<String> {
+/// text or accept the exact token). `token` is the token without its
+/// `~<K>` drop part; `drop_text` is the text after `~` when one was typed,
+/// kept in the order-error suggestion (for example `=#bugs=3~2` teaches
+/// `=3#bugs~2`).
+fn named_token_error(
+    token: &str,
+    suffix: &str,
+    name: &str,
+    drop_text: Option<&str>,
+) -> Option<String> {
     if name.is_empty() {
         return Some(pomodoro_named_start_incomplete_error(token));
     }
@@ -754,7 +784,11 @@ fn named_token_error(token: &str, suffix: &str, name: &str) -> Option<String> {
         && suffix.is_empty()
         && parse_pomodoro_start_suffix(after).is_ok()
     {
-        return Some(pomodoro_named_start_order_error(token, before, after));
+        let drop_suffix =
+            drop_text.map(|text| format!("~{text}")).unwrap_or_default();
+        return Some(format!(
+            "write the duration before the name: `={after}#{before}{drop_suffix}` instead of `{token}`"
+        ));
     }
     if !is_pomodoro_selector_component(name) {
         return Some(pomodoro_named_start_name_error(name, token));
@@ -766,12 +800,15 @@ fn named_token_error(token: &str, suffix: &str, name: &str) -> Option<String> {
 }
 
 /// E4 for a well-formed named token with extra text or child lines.
-pub(super) fn named_shape_error(
+/// `token` is the token without its drop part; a multi-word hint keeps the
+/// typed `~<K>`.
+pub(super) fn named_shape_error_with_drop(
     token: &str,
     suffix: &str,
     name: &str,
     parent_trimmed: &str,
     len: usize,
+    drop_text: Option<&str>,
 ) -> String {
     if name.is_empty()
         && let Some(nospace) = named_nospace_error(suffix, parent_trimmed, len)
@@ -787,12 +824,75 @@ pub(super) fn named_shape_error(
                 .iter()
                 .all(|word| is_pomodoro_selector_component(word))
         {
-            message.push_str(&pomodoro_named_start_multiword_hint(
-                suffix, name, &words,
+            let joined = words.join("-");
+            let drop_suffix =
+                drop_text.map(|text| format!("~{text}")).unwrap_or_default();
+            message.push_str(&format!(
+                "; to name a multi-word Pomodoro, join the words with `-`: `={suffix}#{name}-{joined}{drop_suffix}`"
             ));
         }
     }
     message
+}
+
+/// Absolute byte offset of a whole-item start token's `after_tilde` text
+/// (the drop list after the first `~`), so drop diagnostics point at the
+/// original input. `token_text` is the parent line's first token.
+fn start_drop_offset(
+    parent_line: &ItemLine<'_>,
+    token_text: &str,
+    after_tilde: &str,
+) -> usize {
+    let leading =
+        parent_line.raw.text.len() - parent_line.raw.text.trim_start().len();
+    parent_line.raw.start + leading + (token_text.len() - after_tilde.len())
+}
+
+/// Lex a start drop part for execution: a valid list, an incomplete
+/// separator error, or the list's own diagnostic. `token_text` is the
+/// display token interpolated into diagnostics.
+fn lex_start_drop_for_execution(
+    parent_line: &ItemLine<'_>,
+    token_text: &str,
+    after_tilde: &str,
+) -> Result<Vec<u32>, String> {
+    let offset = start_drop_offset(parent_line, token_text, after_tilde);
+    match lex_start_drop(after_tilde, offset, token_text) {
+        Ok(StartDropOutcome::Valid(lex)) => Ok(lex.drop),
+        Ok(StartDropOutcome::Incomplete(incomplete)) => Err(
+            close_selection_incomplete_error(token_text, incomplete.separator),
+        ),
+        Err(error) => Err(error.message),
+    }
+}
+
+/// Whether the spaceless join of a start line lexes as a valid whole-item
+/// start with a drop list, in which case the no-spaces hint wins over the
+/// shape error.
+pub(super) fn spaceless_start_drop_is_valid(nospace: &str) -> bool {
+    let Some(EqualsToken::Start {
+        suffix,
+        name,
+        drop: Some((_, after_tilde)),
+        len,
+        ..
+    }) = session_equals_token(nospace)
+    else {
+        return false;
+    };
+    if len != nospace.len() {
+        return false;
+    }
+    if parse_pomodoro_start_suffix(&suffix).is_err() {
+        return false;
+    }
+    if let Some(selector) = name
+        && (selector.is_empty() || !is_pomodoro_selector_component(&selector))
+    {
+        return false;
+    }
+    lex_start_drop(&after_tilde, 0, nospace)
+        .is_ok_and(|outcome| matches!(outcome, StartDropOutcome::Valid(_)))
 }
 
 /// E4 no-space variant for `=# <word>`: the name must follow `#` directly.
@@ -953,47 +1053,90 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             counted,
             len,
             name,
+            drop,
         } => {
             if let Some(selector) = name {
                 let token_text =
                     parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+                let drop_text = drop.as_ref().map(|(_, text)| text.as_str());
+                // Named diagnostics interpolate the token without the drop
+                // part; `=#~2` reports the existing empty-name error on `=#`.
+                let token_without_drop = match drop.as_ref() {
+                    Some((offset, _)) => {
+                        token_text.get(..*offset).unwrap_or(token_text)
+                    }
+                    None => token_text,
+                };
+                // Suffix and name errors win over the drop list.
+                if let Some(error) = named_token_error(
+                    token_without_drop,
+                    &suffix,
+                    &selector,
+                    drop_text,
+                ) {
+                    let exact =
+                        parent_trimmed.len() == len && item.lines.len() == 1;
+                    if exact {
+                        return Err(error);
+                    }
+                    let has_extra = parent_trimmed.len() > len;
+                    if selector.is_empty()
+                        && has_extra
+                        && let Some(nospace) =
+                            named_nospace_error(&suffix, parent_trimmed, len)
+                    {
+                        return Err(nospace);
+                    }
+                    return Err(error);
+                }
+                // A drop part claims the item, like a counted token.
                 let exact =
                     parent_trimmed.len() == len && item.lines.len() == 1;
                 if !exact {
                     let has_extra = parent_trimmed.len() > len;
                     let has_children = item.lines.len() > 1;
                     if has_extra || has_children {
-                        if let Some(error) =
-                            named_token_error(token_text, &suffix, &selector)
-                        {
-                            if selector.is_empty()
-                                && has_extra
-                                && let Some(nospace) = named_nospace_error(
-                                    &suffix,
-                                    parent_trimmed,
-                                    len,
-                                )
+                        // A broken drop list reports its own error first; a
+                        // dangling separator with extra text falls through
+                        // to the no-spaces hint or the shape error.
+                        if let Some((_, after_tilde)) = drop.as_ref() {
+                            let offset = start_drop_offset(
+                                parent_line,
+                                token_text,
+                                after_tilde,
+                            );
+                            if let Err(error) =
+                                lex_start_drop(after_tilde, offset, token_text)
                             {
-                                return Err(nospace);
+                                return Err(error.message);
                             }
-                            return Err(error);
                         }
-                        return Err(named_shape_error(
-                            token_text,
+                        if has_extra {
+                            let nospace: String =
+                                parent_trimmed.split_whitespace().collect();
+                            if spaceless_start_drop_is_valid(&nospace) {
+                                return Err(start_drop_no_spaces_error());
+                            }
+                        }
+                        return Err(named_shape_error_with_drop(
+                            token_without_drop,
                             &suffix,
                             &selector,
                             parent_trimmed,
                             len,
+                            drop_text,
                         ));
                     }
                     return Ok(None);
                 }
-                if let Some(error) =
-                    named_token_error(token_text, &suffix, &selector)
-                {
-                    return Err(error);
+                let mut spec = parse_pomodoro_start_suffix(&suffix)?;
+                if let Some((_, after_tilde)) = drop.as_ref() {
+                    spec.drop = lex_start_drop_for_execution(
+                        parent_line,
+                        token_text,
+                        after_tilde,
+                    )?;
                 }
-                let spec = parse_pomodoro_start_suffix(&suffix)?;
                 if forced_route.is_some() || forced_section.is_some() {
                     return Err(POMODORO_START_FORCED_ERROR.to_string());
                 }
@@ -1016,24 +1159,62 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     None,
                 )));
             }
+            // A drop part claims the item, the same way a counted token
+            // does. It is never prose, near misses included. A bare `=`
+            // followed by separate text (`= ~2`, `= foo`) stays prose.
+            let claims = counted || drop.is_some();
             let exact = parent_trimmed.len() == len && item.lines.len() == 1;
             if !exact {
-                // A counted token claims the item even with extra text:
-                // `=3 more`, `=-2 @work`, `=3s:1`, `=2-1-`, `=3x`. An
-                // exact token with child lines claims it too, bare or
-                // counted. A bare token with more text on the same line
-                // (`= foo`, `==`) stays prose.
-                if counted
+                if claims
                     || (parent_trimmed.len() == len && item.lines.len() > 1)
                 {
-                    let token_text = &parent_trimmed[..len];
+                    let token_text =
+                        parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+                    // A broken drop list reports its own error first; a
+                    // dangling separator with extra text falls through to
+                    // the no-spaces hint or the shape error, like closes.
+                    if let Some((_, after_tilde)) = drop.as_ref() {
+                        let offset = start_drop_offset(
+                            parent_line,
+                            token_text,
+                            after_tilde,
+                        );
+                        if let Err(error) =
+                            lex_start_drop(after_tilde, offset, token_text)
+                        {
+                            return Err(error.message);
+                        }
+                        // Valid or dangling list with extra text or child
+                        // lines: the no-spaces hint wins when the spaceless
+                        // join lexes, else the existing shape error.
+                        let nospace: String =
+                            parent_trimmed.split_whitespace().collect();
+                        if spaceless_start_drop_is_valid(&nospace) {
+                            return Err(start_drop_no_spaces_error());
+                        }
+                    } else if parent_trimmed.len() > len {
+                        let nospace: String =
+                            parent_trimmed.split_whitespace().collect();
+                        if spaceless_start_drop_is_valid(&nospace) {
+                            return Err(start_drop_no_spaces_error());
+                        }
+                    }
                     return Err(pomodoro_start_shape_error(
                         token_text, &suffix,
                     ));
                 }
                 return Ok(None);
             }
-            let spec = parse_pomodoro_start_suffix(&suffix)?;
+            // Suffix errors win over the drop list.
+            let mut spec = parse_pomodoro_start_suffix(&suffix)?;
+            if let Some((_, after_tilde)) = drop.as_ref() {
+                let token_text = parent_trimmed;
+                spec.drop = lex_start_drop_for_execution(
+                    parent_line,
+                    token_text,
+                    after_tilde,
+                )?;
+            }
             if forced_route.is_some() || forced_section.is_some() {
                 return Err(POMODORO_START_FORCED_ERROR.to_string());
             }
