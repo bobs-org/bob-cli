@@ -124,7 +124,7 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Description: Read before creating, consuming, resolving, linking, or managing
   retention for SASE artifact references and indexed files.
 - Lines: 108
-- Approx. tokens: 1114
+- Approx. tokens: 1116
 
 ### `sase/memory/sase_beads.md`
 
@@ -134,8 +134,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
   types and tiers, the status lifecycle agents must never hand-edit, task-bead triage,
   phase-bead description prefixes, and non-cascading close, resolution, and note
   semantics.
-- Lines: 145
-- Approx. tokens: 1949
+- Lines: 150
+- Approx. tokens: 2024
 
 ### `sase/memory/sase_sizes.md`
 
@@ -152,8 +152,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Core notes: 1
 - Reference notes: 4
 - Web descriptor notes: 2
-- Total lines: 439
-- Total approx. tokens: 5239
+- Total lines: 444
+- Total approx. tokens: 5316
 
 ## Commands
 
