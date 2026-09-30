@@ -90,6 +90,7 @@ separate `bob` subcommands.
 | Task link | A `[[note#^id]]` (or embed) pointing at a task. When that is the only content of a Pomodoro child bullet, it is that session's planned work |
 | Schedule Log | A managed `🗓️ **SCHEDULE LOG**` child that records each schedule change |
 | Work Log | A managed `🛠️ **WORK LOG**` child that records work summaries |
+| Cancel Log | A managed ❌ **CANCEL LOG** child (placed first) that records why a task was cancelled |
 
 ## Daily workflow
 

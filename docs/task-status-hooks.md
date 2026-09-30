@@ -170,6 +170,13 @@ only; canceled-reference cleanup uses the full list-item subtree. When a
 completed parent bullet is relocated, any independently canceled descendant
 subtree is omitted from the moved content.
 
+The `Ctrl+Shift+P` Cancel row in Bob Navigation Hotkeys applies this same
+removal at once, using the deferral prune's dedicated-bullet/token semantics
+(a dedicated link bullet is removed with its subtree; otherwise only the link
+token is removed). Struck links, closed Pomodoros, and other days' notes are
+untouched either way. This command stays authoritative: it re-derives the
+same cleanup on its next run.
+
 ### Empty Pomodoros
 
 After duplicate-line removal, canceled-reference subtree removal,
@@ -356,7 +363,14 @@ tasks, and serializes recovery with closed-reference retirement. A later
 may promote the recovered task to Next or In Progress. Closing a dependency
 never reopens a Done, canceled, non-task, unknown, unrelated, or already-active
 dependent, and Ctrl+Enter does not clean unrelated Blocked tasks with no
-dependencies.
+dependencies. Two guards keep this recovery truthful: a Blocked dependent
+with a strictly future `scheduled` date stays Blocked (recovered only once
+the date is reached or removed), and `Ctrl+Enter` on a Task Link that
+resolves to a Cancelled task is consumed with a "reopen it first" notice
+instead of completing the owning Pomodoro. The picker's Cancel gesture reuses
+this same recovery through Task Status Cycler's versioned
+`api.recoverBlockedDependents` entry point; when that API is missing or fails,
+the cancel still lands and this command recovers the dependent later.
 
 Hand-unblocking with the Task Status Cycler plugin's option-bracket cycle
 (`<option+]>`/`<option+[>` on a `[?]` task, to Ready or Cancelled) retires the

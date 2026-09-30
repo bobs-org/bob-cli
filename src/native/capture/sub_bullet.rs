@@ -275,6 +275,10 @@ pub(crate) fn first_child_indentation(
 // the canonical or legacy bold label, an optional colon, and no trailing
 // text. Direct-child ancestry skips blanks and uses the nearest shallower
 // list item, so a log nested under another child does not move insertion.
+// Parity note: the navigation-hotkeys-only `❌ **CANCEL LOG**` is
+// deliberately NOT a managed-log anchor here. It is placed first under the
+// task, so newly captured notes land below it via the Schedule/Work Log
+// anchors, and emoji-led bullets are never task sections anyway.
 pub(super) const SCHEDULE_LOG_EMOJI: &str = "🗓️";
 pub(super) const WORK_LOG_EMOJI: &str = "🛠️";
 pub(super) const MANAGED_TASK_LOG_LABELS: &[(&str, ManagedTaskLogKind)] = &[

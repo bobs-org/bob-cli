@@ -29,6 +29,7 @@ that task instead of asking users to edit machine-facing metadata directly.
 - [Priority property and scheduled rolls](#priority-property-and-scheduled-rolls)
 - [Schedule-log reason prompt](#schedule-log-reason-prompt)
 - [Deferring a task prunes it from today's open Pomodoros](#deferring-a-task-prunes-it-from-todays-open-pomodoros)
+- [Cancelling a task](#cancelling-a-task)
 - [Warnings](#warnings)
 - [Examples](#examples)
 
@@ -504,6 +505,65 @@ The picker's notice reports what happened with a `removed N Pomodoro link`
 chip; if the daily note changed underneath the picker between the snapshot
 and the write, the schedule itself is still kept and the notice instead shows
 a `not removed` chip — the write is never retried automatically.
+
+### Cancelling a task
+
+The `Ctrl+Shift+P` picker (`bob-navigation-hotkeys:set-bullet-property`)
+offers a pinned **Cancel** row as its last row. It appears only when at least
+one target is an open `#task` (`" "`, `*`, `/`, or `?`); it is hidden on
+closed tasks, plain bullets, and anywhere the cursor is not on a task or Task
+Link. Choosing the row (arrow to it or filter with `can`, `drop`, or
+`obsolete`, then `↵`) opens a reason stage — nothing is written yet. Type an
+optional reason and press `↵` to cancel; `Esc` at either stage writes nothing.
+
+The row supports the picker's three target modes: the `#task` line under the
+cursor, a counted session (`N<Ctrl+Shift+P>` cancels the current task plus
+the next N tasks, skipping already-closed targets), and a Task Link session
+(cancels the linked open tasks in their own notes). `^prj` lifecycle tasks
+are allowed; `bob projects sync` already maps `[-]` to `status: canceled`.
+
+Each cancelled task is rewritten as `[-]` with `[cancelled:: YYYY-MM-DD]`
+upserted before any trailing `^block-id` (replacing an existing `cancelled`
+field), matching what Obsidian Tasks itself writes so Tasks queries, `done`
+filters, and `### Done & Canceled` grouping treat it the same. Nothing else
+on the line changes: `scheduled`, `dependsOn`, `id`, `priority`, `created`,
+`#hide`, and `#now` are untouched (`#now` is user-owned, and a cancelled
+`#now` task drops out of NOW by itself since Cancelled counts as done).
+
+```markdown
+- [-] #task Add new `Agents` sub-tab to `Artifacts` tab! [priority:: high] [created::
+  2026-08-14] [cancelled:: 2026-09-30] ^agents-tab
+  - ❌ **CANCEL LOG**
+    - _2026-09-30_ — Superseded by [[sase_art_links_panel#^agents-sub-tab]]
+```
+
+The reason is recorded in a managed `❌ **CANCEL LOG**` child (the `❌` is
+U+274C, written without a variation selector). Its entries use the same
+`*YYYY-MM-DD* — <reason>` shape as the Schedule Log, newest first. A new log
+is inserted as the task's **first** direct child — the verdict reads first —
+while a task that already keeps one (cancelled, reopened, cancelled again)
+gets the new entry prepended under the existing marker, wherever it sits. A
+marker nested under a grandchild does not count. An empty reason writes no
+log, unless the task already keeps one: then it gets
+`*YYYY-MM-DD* — 🤷 no reason given`, the same "a kept history has no gaps"
+rule the Schedule Log uses.
+
+Side effects apply immediately, for feedback. Every live link to a cancelled
+task with a block ID is removed from today's open Pomodoros with the same
+dedicated-bullet/token semantics as the deferral prune above (a dedicated
+link bullet goes with its subtree; otherwise only the link token goes), and
+[`bob task-status-hooks`](task-status-hooks.md) stays authoritative for the
+same rule. After the writes land, the picker reuses the Task Status Cycler
+`api.recoverBlockedDependents` recovery: a Blocked dependent with no
+remaining open dependency and no future `scheduled` date becomes Ready. The
+notice card summarizes the result with `removed N Pomodoro links`,
+`unblocked N dependents`, `NOW c/cap`, and plan-budget chips as applicable.
+
+Refusals write nothing: recurring tasks (a `[repeat:: …]`, `(repeat:: …)`, or
+`🔁` line — cancel those with Obsidian Tasks so the next occurrence is
+handled), stale preimages (the note changed under the picker), and a failed
+Pomodoro prune (reported as a `Pomodoro links not removed` warning chip,
+never rolled back). A single cancel is one editor undo step.
 
 ## Warnings
 
