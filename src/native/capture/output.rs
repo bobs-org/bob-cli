@@ -114,6 +114,10 @@ pub(super) struct CaptureResult {
     /// today's Pomodoros section. Never per item.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) plan_budget: Option<CapturePlanBudget>,
+    /// Batch-level Pomodoro blocks in first-touch order, present only
+    /// when the batch touched a Pomodoro. Never per item.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -130,6 +134,7 @@ impl CaptureResult {
         global_destination: Option<GlobalDestinationSummary>,
         warnings: Vec<String>,
         plan_budget: Option<CapturePlanBudget>,
+        pomodoro_blocks: Vec<PomodoroBlockJson>,
     ) -> Self {
         let item = items
             .first()
@@ -142,6 +147,7 @@ impl CaptureResult {
             global_destination,
             warnings,
             plan_budget,
+            pomodoro_blocks,
         }
     }
 }

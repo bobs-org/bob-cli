@@ -1145,3 +1145,59 @@ fn capture_pomodoro_whole_item_start_reports_queued_tasks() {
         "{task_json}"
     );
 }
+
+#[test]
+fn capture_pomodoro_whole_item_start_reports_moved_block() {
+    let temp = TempDir::new("bob-cli-capture-start-blocks");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — GTD\n",
+            "\t- [[#^gtd]]\n",
+            "\t- more context\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+        ),
+    );
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:42:00",
+        &["="],
+    );
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 3,
+                "name": "GTD",
+                "time_range": "0945-1010",
+                "status": "running",
+                "created": false,
+                "roles": ["started"],
+                "lines": [
+                    {
+                        "text": "- [ ] (**0945-1010** [t:: 25m]) — GTD",
+                        "depth": 0,
+                        "change": "changed",
+                        "before": "- [ ] () — GTD",
+                    },
+                    {
+                        "text": "\t- [[#^gtd]]",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t- more context",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                ],
+            },
+        ])
+    );
+}

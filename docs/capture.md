@@ -893,7 +893,9 @@ The started session reports its queued Task Links (direct-child Task Links
 of the started entry, resolved read-only): JSON kind `pomodoro_start` keeps
 schema version 1 with `text` = the raw token, `task_line` = the started
 ledger line, `placement: "started"`, and the existing `pomodoro_start`
-object with `created_pomodoro: false` plus an additive `tasks` array.
+object with `created_pomodoro: false` plus an additive `tasks` array. The
+started session also appears in the batch-level `pomodoro_blocks` array;
+see [Pomodoro blocks](#pomodoro-blocks).
 Human output prints the started file, the session range and line, the
 canonical ledger line, one row per queued task, and `nothing queued` when
 empty.
@@ -971,6 +973,8 @@ result without writing, and any failure rolls the whole batch back. JSON
 kind `pomodoro_start` keeps schema version 1 with `text` = the raw token,
 `task_line`, `placement: "started"`, the existing `pomodoro_start` object
 plus `pomodoro_name`, `created_pomodoro`, and the additive `tasks` array.
+The started session also appears in the batch-level `pomodoro_blocks`
+array; see [Pomodoro blocks](#pomodoro-blocks).
 Human output prints `started` (dry-run: `would start`), the session name,
 range, and line with ` (created)` when the entry was created, the canonical
 ledger line, one row per queued task, and `nothing queued` when empty. A
@@ -1029,7 +1033,9 @@ one line: `+2 =x` extends then closes atomically.
 JSON keeps every existing key and schema version 1 stable and reports a
 distinct `pomodoro_adjust` kind with an additive `pomodoro_adjust` object
 (direction/requested units, actual delta minutes, before/after
-start/end/duration, resolved line/name, rendered new range). Human output
+start/end/duration, resolved line/name, rendered new range). The adjusted
+session also appears in the batch-level `pomodoro_blocks` array; see
+[Pomodoro blocks](#pomodoro-blocks). Human output
 names what changed and where; dry-run says what would change.
 
 ### Shifting the current Pomodoro
@@ -1084,7 +1090,9 @@ the end-of-options marker and carries no text; pipe the draft
 JSON keeps every existing key and schema version 1 stable and reports a
 distinct `pomodoro_shift` kind with an additive `pomodoro_shift` object
 (direction, requested units, signed delta minutes, before/after
-start/end/duration, resolved line/name, rendered new range). Human output
+start/end/duration, resolved line/name, rendered new range). The shifted
+session also appears in the batch-level `pomodoro_blocks` array; see
+[Pomodoro blocks](#pomodoro-blocks). Human output
 names what shifted and where (`shifted 2026/20260928.md`, `FOCUS 0900-0925
 to 0915-0940 (25m), 15m later at line 5`); dry-run says what would shift.
 
@@ -1165,7 +1173,10 @@ without decrementing. The start guards now append ``(close it with `=x`)``.
 
 JSON keeps schema version 1 and reports kind `"pomodoro_close"` (link and
 task forms keep their kind) with an additive `pomodoro_close` object
-(timing, per-target transitions, carried links, notes, next session).
+(timing, per-target transitions, carried links, notes, next session). A
+whole-item `=x` close also reports the closed session — and the next
+session it names — in the batch-level `pomodoro_blocks` array; see
+[Pomodoro blocks](#pomodoro-blocks).
 Field notes:
 
 - `pomodoro_close.raw` is the typed token including `=` and any selection
@@ -2044,7 +2055,8 @@ stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`, and
 `placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
-`"pomodoro_adjust"`, `"pomodoro_close"`, or `"pomodoro_link"`, and
+`"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
+`"pomodoro_close"`, or `"pomodoro_link"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
 the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
@@ -2174,6 +2186,63 @@ Pomodoro's ledger line and text, but omit `block_id`, `block_link`,
 since the ledger checkbox is not an Obsidian task. Human output prints an
 `under <parent_text>` line without a status marker, then the rendered
 `- <text>` bullet.
+
+#### Pomodoro blocks
+
+`bob capture -f json` (dry run and real run alike) gains one additive,
+batch-level top-level key. It sits next to `plan_budget`, never appears per
+item or inside `captures[]`, and is omitted when empty:
+
+```json
+"pomodoro_blocks": [
+  {
+    "relative_target": "2026/20260930.md",
+    "line": 5,
+    "name": "CLEANUP",
+    "time_range": "0620-0735",
+    "status": "running",
+    "created": false,
+    "roles": ["adjusted"],
+    "lines": [
+      {"text": "- [ ] (**0620-0735** [t:: 75m]) — CLEANUP", "depth": 0,
+       "change": "changed", "before": "- [ ] (**0620-0710** [t:: 50m]) — CLEANUP"},
+      {"text": "\t- [[sase#^re-launch-failed]]", "depth": 1, "change": "unchanged"}
+    ]
+  }
+]
+```
+
+Field rules:
+
+- `relative_target` is the day file relative to the vault, `line` is the
+  1-based headline line in the final staged day file, and `name` /
+  `time_range` (plain `HHMM-HHMM`) come from the final ledger scan. Each is
+  omitted when the entry has none.
+- `status` is `"completed"` for a completed entry, `"running"` for an open
+  entry with a time range, and `"queued"` for an open entry without one.
+- `created` is true when the entry did not exist before the batch.
+- `roles` is an informational, deduplicated list in first-touch order. The
+  vocabulary is `"adjusted"`, `"shifted"`, `"started"`, `"closed"`,
+  `"next"`, `"linked"`, `"unlinked"`, and `"changed"` (auto-detected);
+  clients must not depend on it.
+- `lines` is the block in document order — the headline plus every
+  following line up to the first non-blank zero-indent line or the end of
+  the `## Pomodoros` section, trailing blanks trimmed — with removed lines
+  interleaved where they used to be. `text` is the verbatim line with no
+  terminator; `depth` is the nesting level relative to the headline (the
+  headline is 0, its direct children are 1, a non-list continuation line
+  takes its parent list item's depth + 1, a blank line is 0); `change` is
+  `"unchanged"`, `"added"`, `"removed"`, or `"changed"`; and `before` holds
+  the old text only on `"changed"` rows. A created block's lines are all
+  `"added"`.
+
+Blocks appear in first-touch order across the batch. A chain such as
+`+2 =x` touches the same session twice but reports it once, in its final
+state, with the cumulative diff against the ledger before the capture.
+Whole-item adjust, shift, start (including named starts), and close report
+their sessions; link and task forms report theirs through auto-detection
+until they carry explicit refs. Dry-run JSON equals real-run JSON except
+for `dry_run`. Human output does not change.
 
 ### Interactive editor markers
 

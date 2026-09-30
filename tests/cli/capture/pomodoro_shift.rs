@@ -790,3 +790,69 @@ fn capture_pomodoro_shift_rejects_bad_grammar_and_targets() {
         );
     }
 }
+
+#[test]
+fn capture_pomodoro_shift_reports_full_block() {
+    let temp = TempDir::new("bob-cli-capture-shift-blocks");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260930.md");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "\n",
+            "## Pomodoros\n",
+            "\n",
+            "- [ ] (**0620-0710** [t:: 50m]) — CLEANUP\n",
+            "\t- [[sase#^re-launch-failed]]\n",
+            "\t- [[sase#^clean-prompt-history]]\n",
+            "\t- [[bob#^decision-web]]\n",
+            "- [ ] () — GTD\n",
+            "\t- [[#^gtd]]\n",
+        ),
+    );
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-30 07:20:00",
+        &["++1"],
+    );
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "2026/20260930.md",
+                "line": 5,
+                "name": "CLEANUP",
+                "time_range": "0625-0715",
+                "status": "running",
+                "created": false,
+                "roles": ["shifted"],
+                "lines": [
+                    {
+                        "text": "- [ ] (**0625-0715** [t:: 50m]) — CLEANUP",
+                        "depth": 0,
+                        "change": "changed",
+                        "before": "- [ ] (**0620-0710** [t:: 50m]) — CLEANUP",
+                    },
+                    {
+                        "text": "\t- [[sase#^re-launch-failed]]",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t- [[sase#^clean-prompt-history]]",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t- [[bob#^decision-web]]",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                ],
+            },
+        ])
+    );
+}

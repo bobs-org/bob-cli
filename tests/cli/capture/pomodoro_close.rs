@@ -1208,3 +1208,222 @@ fn capture_pomodoro_close_links_batches_and_files() {
         "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop"
     ));
 }
+
+#[test]
+fn capture_pomodoro_close_reports_full_blocks() {
+    let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-blocks");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x"],
+    );
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "2026/20260928.md",
+                "line": 5,
+                "name": "CAPTURE",
+                "time_range": "0920-0940",
+                "status": "completed",
+                "created": false,
+                "roles": ["closed"],
+                "lines": [
+                    {
+                        "text": "- [x] (**0920-0940** [t:: 20m]) — CAPTURE",
+                        "depth": 0,
+                        "change": "changed",
+                        "before": "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+                    },
+                    {
+                        "text": "\t- 🍅 [[bob#^capture-stop]]",
+                        "depth": 1,
+                        "change": "changed",
+                        "before": "\t- [[bob#^capture-stop]]",
+                    },
+                    {
+                        "text": "\t\t- Designed the `=x` grammar",
+                        "depth": 2,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t\t\t- chose `x` for done",
+                        "depth": 3,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t\t- Wrote the plan",
+                        "depth": 2,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t- [[bob#^web-capture]]#",
+                        "depth": 1,
+                        "change": "removed",
+                    },
+                    {
+                        "text": "\t- ~~[[sase#^axe-restart]]~~",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t\t- Restarted axe",
+                        "depth": 2,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t- quick note",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                ],
+            },
+            {
+                "relative_target": "2026/20260928.md",
+                "line": 13,
+                "name": "CAPTURE",
+                "status": "queued",
+                "created": true,
+                "roles": ["next"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — CAPTURE",
+                        "depth": 0,
+                        "change": "added",
+                    },
+                    {
+                        "text": "\t- [[bob#^capture-stop]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                    {
+                        "text": "\t- [[bob#^web-capture]]",
+                        "depth": 1,
+                        "change": "added",
+                    },
+                ],
+            },
+        ])
+    );
+}
+
+#[test]
+fn capture_pomodoro_close_reports_unchanged_next_block() {
+    let temp = TempDir::new("bob-cli-close-unchanged-next");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+            "\t- quick note\n",
+            "- [ ] () — GTD\n",
+            "\t- [[#^gtd]]\n",
+        ),
+    );
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x"],
+    );
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "2026/20260928.md",
+                "line": 2,
+                "name": "CAPTURE",
+                "time_range": "0920-0940",
+                "status": "completed",
+                "created": false,
+                "roles": ["closed"],
+                "lines": [
+                    {
+                        "text": "- [x] (**0920-0940** [t:: 20m]) — CAPTURE",
+                        "depth": 0,
+                        "change": "changed",
+                        "before": "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+                    },
+                    {
+                        "text": "\t- quick note",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                ],
+            },
+            {
+                "relative_target": "2026/20260928.md",
+                "line": 4,
+                "name": "GTD",
+                "status": "queued",
+                "created": false,
+                "roles": ["next"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — GTD",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t- [[#^gtd]]",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                ],
+            },
+        ])
+    );
+}
+
+#[test]
+fn capture_pomodoro_close_tracks_blocks_past_day_file_work_log() {
+    // A linked task living in the day file above `## Pomodoros` makes the
+    // close insert Work Log lines there, so the ledger-reported lines go
+    // stale against the final staged text.
+    let temp = TempDir::new("bob-cli-close-day-work-log");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "\n",
+            "- [*] #task Build thing [created::2026-09-28] ^build\n",
+            "\n",
+            "## Pomodoros\n",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+            "\t- [[#^build]]\n",
+            "\t\t- did stuff\n",
+            "- [ ] () — GTD\n",
+            "\t- [[#^gtd]]\n",
+        ),
+    );
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x"],
+    );
+    let blocks = &json["pomodoro_blocks"];
+    assert_eq!(blocks[0]["name"], "CAPTURE");
+    assert_eq!(blocks[0]["line"], 8);
+    assert_eq!(blocks[0]["roles"], serde_json::json!(["closed"]));
+    assert_eq!(
+        blocks[0]["lines"][0],
+        serde_json::json!({
+            "text": "- [x] (**0920-0940** [t:: 20m]) — CAPTURE",
+            "depth": 0,
+            "change": "changed",
+            "before": "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        })
+    );
+    assert_eq!(blocks[1]["name"], "CAPTURE");
+    assert_eq!(blocks[1]["line"], 11);
+    assert_eq!(blocks[1]["roles"], serde_json::json!(["next"]));
+    assert_eq!(blocks[1]["created"], true);
+}

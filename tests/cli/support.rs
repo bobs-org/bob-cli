@@ -553,6 +553,54 @@ pub(crate) fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Run a `bob capture -f json` batch as a dry run and for real against the
+/// same vault, then assert both JSON results are identical except for
+/// `dry_run`. Returns the real-run JSON. Dry runs stage the same planner
+/// state, so batch-level keys (`pomodoro_blocks`, `plan_budget`) must agree.
+pub(crate) fn capture_json_dry_run_matches_real(
+    vault: &Path,
+    day_file: &Path,
+    now: &str,
+    args: &[&str],
+) -> serde_json::Value {
+    let run = |dry_run: bool| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(vault)
+            .arg("-f")
+            .arg("json");
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        command.arg("--").args(args);
+        let output = command
+            .env("BOB_DAY_FILE", day_file)
+            .env("BOB_NOW", now)
+            .output()
+            .expect("run capture");
+        assert_success(&output);
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
+    };
+    let dry: serde_json::Value = run(true);
+    assert_eq!(dry["dry_run"], true);
+    let real: serde_json::Value = run(false);
+    assert_eq!(real["dry_run"], false);
+    let mut masked = dry.clone();
+    masked["dry_run"] = serde_json::Value::Bool(false);
+    if let Some(serde_json::Value::Array(items)) = masked.get_mut("captures") {
+        for item in items {
+            item["dry_run"] = serde_json::Value::Bool(false);
+        }
+    }
+    assert_eq!(
+        masked, real,
+        "dry-run JSON must equal real-run JSON except for dry_run"
+    );
+    real
+}
+
 pub(crate) fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }

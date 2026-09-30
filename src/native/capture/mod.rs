@@ -52,6 +52,7 @@ mod ensure_next;
 mod output;
 mod plan;
 mod pomodoro_adjust;
+mod pomodoro_blocks;
 mod pomodoro_close;
 mod pomodoro_insert;
 mod pomodoro_link;
@@ -71,6 +72,7 @@ use ensure_next::*;
 use output::*;
 use plan::*;
 use pomodoro_adjust::*;
+use pomodoro_blocks::*;
 use pomodoro_close::*;
 use pomodoro_insert::*;
 use pomodoro_link::*;
@@ -133,5 +135,6 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.global_destination,
         batch.warnings,
         batch.plan_budget,
+        batch.pomodoro_blocks,
     ))
 }

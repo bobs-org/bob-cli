@@ -584,6 +584,22 @@ pub(super) fn plan_pomodoro_close_item(
         }
     }
     stage_close_plan(planner, &plan)?;
+    let post_day = planner.read_existing(&day_file)?;
+    let mut pomodoro_refs = vec![PomodoroBlockRef::at(
+        PomodoroBlockRole::Closed,
+        plan.summary.running.line.saturating_sub(1),
+        locate_close_headline(&post_day, &summary),
+    )];
+    // The next entry is named by the close card, so the preview shows it
+    // even when the close left it byte-identical.
+    if let Some(next) = summary.next_pomodoro.as_ref() {
+        let after = locate_next_headline(&post_day, next);
+        pomodoro_refs.push(if next.created {
+            PomodoroBlockRef::created(PomodoroBlockRole::Next, after)
+        } else {
+            PomodoroBlockRef::resolved(PomodoroBlockRole::Next, after)
+        });
+    }
     let relative_target = day_file
         .strip_prefix(&request.bob_dir)
         .map(Path::to_path_buf)
@@ -642,7 +658,66 @@ pub(super) fn plan_pomodoro_close_item(
             toggle_task_description: None,
         },
         clip_plan: None,
+        pomodoro_refs,
     })
+}
+
+/// Post-state headline index for the closed entry. `summary.pomodoro_line`
+/// is pre-image; when the close inserts Work Log lines above
+/// `## Pomodoros` (a linked task living in the day file), every section
+/// line drifts — and `summary.entry_line` reads the same stale line, so it
+/// cannot locate the rewrite. Prefer the candidate when its text still
+/// matches, else find the newly completed entry with this name and time
+/// range, nearest to the candidate.
+fn locate_close_headline(
+    post_day: &str,
+    summary: &PomodoroCloseSummaryJson,
+) -> usize {
+    let lines: Vec<&str> = post_day.lines().collect();
+    let candidate = summary.pomodoro_line.saturating_sub(1);
+    if !summary.entry_line.is_empty()
+        && lines
+            .get(candidate)
+            .is_some_and(|line| *line == summary.entry_line)
+    {
+        return candidate;
+    }
+    let scan = capture_pomodoros::scan(post_day);
+    let closed_range =
+        format!("{}-{}", summary.closed.start, summary.closed.end);
+    let mut named = scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == capture_pomodoros::PomodoroState::Completed
+                && entry.name == summary.pomodoro_name
+        })
+        .collect::<Vec<_>>();
+    named.sort_by_key(|entry| entry.line.saturating_sub(1).abs_diff(candidate));
+    if let Some(entry) = named
+        .iter()
+        .find(|entry| entry.time_range.as_deref() == Some(&closed_range))
+        .or_else(|| named.first())
+    {
+        return entry.line.saturating_sub(1);
+    }
+    candidate
+}
+
+/// Post-state headline index for the next entry, matched by name and time
+/// range against the post-state scan (nearest to the ledger-reported line
+/// wins), with the ledger line as fallback.
+fn locate_next_headline(post_day: &str, next: &PomodoroCloseNextJson) -> usize {
+    let fallback = next.line.saturating_sub(1);
+    let scan = capture_pomodoros::scan(post_day);
+    scan.entries
+        .iter()
+        .filter(|entry| {
+            entry.name == next.name && entry.time_range == next.time_range
+        })
+        .min_by_key(|entry| entry.line.abs_diff(next.line))
+        .map(|entry| entry.line.saturating_sub(1))
+        .unwrap_or(fallback)
 }
 
 pub(super) fn close_link_hint_for_solo(
@@ -1107,6 +1182,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             toggle_task_description: Some(task_description),
         },
         clip_plan: None,
+        pomodoro_refs: Vec::new(),
     })
 }
 
@@ -1321,5 +1397,6 @@ pub(super) fn plan_pomodoro_close_task_item(
             toggle_task_description: None,
         },
         clip_plan: None,
+        pomodoro_refs: Vec::new(),
     })
 }

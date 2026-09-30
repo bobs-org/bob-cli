@@ -259,3 +259,44 @@ fn named_start_human_created_dry_run_and_forced_flags() {
         .expect("run forced");
     assert!(!forced.status.success());
 }
+
+#[test]
+fn named_start_created_reports_added_block() {
+    let (_temp, vault, day_file) = named_vault(
+        "bob-cli-named-created-blocks",
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0620-0710** [t:: 50m]) — CLEANUP\n",
+            "- [ ] () — GTD\n",
+            "\t- [[#^gtd]]\n",
+        ),
+    );
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-30 07:20:00",
+        &["=#focus"],
+    );
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "day.md",
+                "line": 3,
+                "name": "FOCUS",
+                "time_range": "0720-0745",
+                "status": "running",
+                "created": true,
+                "roles": ["started"],
+                "lines": [
+                    {
+                        "text": "- [ ] (**0720-0745** [t:: 25m]) — FOCUS",
+                        "depth": 0,
+                        "change": "added",
+                    },
+                ],
+            },
+        ])
+    );
+}

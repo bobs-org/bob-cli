@@ -55,6 +55,23 @@ impl CaptureBatchPlanner {
             .then(|| self.files[index].current.clone()))
     }
 
+    /// Non-loading peek at a file's staged text: `None` when the file
+    /// was never touched (so batches that never touch the day file gain
+    /// no new error path) or does not exist.
+    pub(super) fn peek_text(&self, path: &Path) -> Option<String> {
+        let index = *self.by_path.get(path)?;
+        let file = &self.files[index];
+        file.present.then(|| file.current.clone())
+    }
+
+    /// Original and current text for an already-loaded file that exists.
+    pub(super) fn loaded_texts(&self, path: &Path) -> Option<(String, String)> {
+        let index = *self.by_path.get(path)?;
+        let file = &self.files[index];
+        file.present
+            .then(|| (file.original.clone(), file.current.clone()))
+    }
+
     pub(super) fn staged_snapshot(&self) -> BTreeMap<PathBuf, Option<String>> {
         self.files
             .iter()

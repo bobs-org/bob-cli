@@ -658,6 +658,31 @@ fn checkbox_status_symbol(line: &str) -> Option<char> {
     Some(status_symbol)
 }
 
+/// Block extent for a Pomodoro headline: the headline plus every
+/// following line up to, but not including, the first non-blank
+/// zero-indent line or `section_end`. Trailing blank lines are trimmed.
+/// This shares its boundary walk with [`direct_child_count`] but keeps
+/// fenced lines and interior blanks verbatim, since blocks render exact
+/// bytes. `headline_index` and `section_end` are 0-based line indices.
+pub(crate) fn pomodoro_block_range(
+    lines: &[&str],
+    headline_index: usize,
+    section_end: usize,
+) -> std::ops::Range<usize> {
+    let mut end = headline_index + 1;
+    while end < section_end && end < lines.len() {
+        let line = lines[end];
+        if !line.trim().is_empty() && leading_spaces_or_tabs_len(line) == 0 {
+            break;
+        }
+        end += 1;
+    }
+    while end > headline_index + 1 && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    headline_index..end
+}
+
 fn direct_child_count(
     lines: &[LineSpan<'_>],
     parent_index: usize,

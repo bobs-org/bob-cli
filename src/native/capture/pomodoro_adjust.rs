@@ -435,6 +435,11 @@ pub(super) fn plan_pomodoro_adjust_item(
             toggle_task_description: None,
         },
         clip_plan: None,
+        pomodoro_refs: vec![PomodoroBlockRef::at(
+            PomodoroBlockRole::Adjusted,
+            target_line.saturating_sub(1),
+            target_line.saturating_sub(1),
+        )],
     })
 }
 
@@ -593,6 +598,11 @@ pub(super) fn plan_pomodoro_shift_item(
             toggle_task_description: None,
         },
         clip_plan: None,
+        pomodoro_refs: vec![PomodoroBlockRef::at(
+            PomodoroBlockRole::Shifted,
+            target_line.saturating_sub(1),
+            target_line.saturating_sub(1),
+        )],
     })
 }
 

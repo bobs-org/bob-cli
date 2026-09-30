@@ -7,11 +7,15 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) global_destination: Option<GlobalDestinationSummary>,
     pub(super) warnings: Vec<String>,
     pub(super) plan_budget: Option<CapturePlanBudget>,
+    pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
 }
 
 pub(super) struct PlannedCaptureItem {
     pub(super) result: CaptureItemResult,
     pub(super) clip_plan: Option<capture_clip::ClipPlan>,
+    /// Pomodoro block touches this item reported. The batch loop feeds
+    /// them to the block tracker; this field is never serialized.
+    pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
 }
 
 pub(super) fn plan_capture_batch(
@@ -45,11 +49,16 @@ pub(super) fn plan_capture_batch(
     let mut planner = CaptureBatchPlanner::default();
     let mut clip_reservations = capture_clip::ClipReservations::default();
     let mut items = Vec::new();
+    let day_file = pomodoro::day_file_for(&request.bob_dir);
+    let day_relative =
+        capture_pomodoros::relative_day_file(&day_file, &request.bob_dir);
+    let mut block_tracker = PomodoroBlockTracker::new(day_relative);
 
     for parsed_item in parsed_items {
         let item_number = parsed_item.index + 1;
         let line_start = parsed_item.line_start;
-        let planned = plan_capture_item(
+        let pre_day = planner.peek_text(&day_file);
+        let mut planned = plan_capture_item(
             request,
             parsed_item,
             now,
@@ -66,15 +75,31 @@ pub(super) fn plan_capture_batch(
             );
             error
         })?;
+        let refs = std::mem::take(&mut planned.pomodoro_refs);
+        match planner.loaded_texts(&day_file) {
+            Some((original, current)) => {
+                let pre = pre_day.unwrap_or(original);
+                block_tracker.track_item(Some(&pre), Some(&current), refs);
+            }
+            None => {
+                debug_assert!(
+                    refs.is_empty(),
+                    "pomodoro block refs without a loaded day file"
+                );
+            }
+        }
         items.push(planned);
     }
 
+    let final_day = planner.peek_text(&day_file);
+    let pomodoro_blocks = block_tracker.finish(final_day.as_deref());
     Ok(PlannedCaptureBatch {
         items,
         text_files: planner.into_staged_files(),
         global_destination,
         warnings,
         plan_budget: None,
+        pomodoro_blocks,
     })
 }
 
@@ -229,6 +254,7 @@ pub(super) fn plan_capture_item(
                 toggle_task_description: Some(toggle.task_description.clone()),
             },
             clip_plan: None,
+            pomodoro_refs: Vec::new(),
         });
     }
     if let CaptureKind::PomodoroLink {
@@ -327,6 +353,7 @@ pub(super) fn plan_capture_item(
                 toggle_task_description: Some(link.task_description.clone()),
             },
             clip_plan: None,
+            pomodoro_refs: Vec::new(),
         });
     }
     if matches!(parsed.kind, CaptureKind::ProjectNote { .. }) {
@@ -692,6 +719,7 @@ pub(super) fn plan_capture_item(
             toggle_task_description: None,
         },
         clip_plan,
+        pomodoro_refs: Vec::new(),
     })
 }
 

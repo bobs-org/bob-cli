@@ -712,6 +712,11 @@ pub(super) fn plan_pomodoro_start_item(
             toggle_task_description: None,
         },
         clip_plan: None,
+        pomodoro_refs: vec![PomodoroBlockRef::at(
+            PomodoroBlockRole::Started,
+            index,
+            moved_index,
+        )],
     })
 }
 
@@ -825,6 +830,15 @@ fn plan_named_pomodoro_start_item(
             parsed.body,
         )));
     }
+    let start_before = match &selection {
+        capture_pomodoros::NamedSelection::Found(entry) => {
+            PomodoroBlockBefore::At(entry.line.saturating_sub(1))
+        }
+        capture_pomodoros::NamedSelection::CompletedOnly(_)
+        | capture_pomodoros::NamedSelection::Missing { .. } => {
+            PomodoroBlockBefore::Created
+        }
+    };
     let (updated, moved_index, created, suggestion_warning) = match selection {
         capture_pomodoros::NamedSelection::Found(entry) => {
             if !(entry.state == capture_pomodoros::PomodoroState::Open
@@ -1000,5 +1014,10 @@ fn plan_named_pomodoro_start_item(
             toggle_task_description: None,
         },
         clip_plan: None,
+        pomodoro_refs: vec![PomodoroBlockRef {
+            role: PomodoroBlockRole::Started,
+            before: start_before,
+            after: Some(moved_index),
+        }],
     })
 }

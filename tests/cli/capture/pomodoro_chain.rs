@@ -250,6 +250,149 @@ fn chain_capture_parse_reports_per_token_items() {
     );
 }
 
+fn chain_blocks_vault(
+    name: &str,
+) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260930.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0620-0710** [t:: 50m]) — CLEANUP\n",
+            "\t- quick note\n",
+            "- [ ] () — GTD\n",
+            "\t- [[#^gtd]]\n",
+        ),
+    );
+    (temp, vault, day_file)
+}
+
+#[test]
+fn chain_adjust_then_close_reports_one_cumulative_block() {
+    let (_temp, vault, day_file) =
+        chain_blocks_vault("bob-cli-chain-blocks-adjust-close");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-30 07:20:00",
+        &["+2 =x"],
+    );
+    assert_eq!(json["captures"][0]["kind"], "pomodoro_adjust");
+    assert_eq!(json["captures"][1]["kind"], "pomodoro_close");
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "2026/20260930.md",
+                "line": 2,
+                "name": "CLEANUP",
+                "time_range": "0620-0720",
+                "status": "completed",
+                "created": false,
+                "roles": ["adjusted", "closed"],
+                "lines": [
+                    {
+                        "text": "- [x] (**0620-0720** [t:: 60m]) — CLEANUP",
+                        "depth": 0,
+                        "change": "changed",
+                        "before": "- [ ] (**0620-0710** [t:: 50m]) — CLEANUP",
+                    },
+                    {
+                        "text": "\t- quick note",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                ],
+            },
+            {
+                "relative_target": "2026/20260930.md",
+                "line": 4,
+                "name": "GTD",
+                "status": "queued",
+                "created": false,
+                "roles": ["next"],
+                "lines": [
+                    {
+                        "text": "- [ ] () — GTD",
+                        "depth": 0,
+                        "change": "unchanged",
+                    },
+                    {
+                        "text": "\t- [[#^gtd]]",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                ],
+            },
+        ])
+    );
+}
+
+#[test]
+fn chain_close_then_start_reports_next_started_block() {
+    let (_temp, vault, day_file) =
+        chain_blocks_vault("bob-cli-chain-blocks-close-start");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-30 07:20:00",
+        &["=x ="],
+    );
+    assert_eq!(json["captures"][0]["kind"], "pomodoro_close");
+    assert_eq!(json["captures"][1]["kind"], "pomodoro_start");
+    assert_eq!(
+        json["pomodoro_blocks"],
+        serde_json::json!([
+            {
+                "relative_target": "2026/20260930.md",
+                "line": 2,
+                "name": "CLEANUP",
+                "time_range": "0620-0710",
+                "status": "completed",
+                "created": false,
+                "roles": ["closed"],
+                "lines": [
+                    {
+                        "text": "- [x] (**0620-0710** [t:: 50m]) — CLEANUP",
+                        "depth": 0,
+                        "change": "changed",
+                        "before": "- [ ] (**0620-0710** [t:: 50m]) — CLEANUP",
+                    },
+                    {
+                        "text": "\t- quick note",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                ],
+            },
+            {
+                "relative_target": "2026/20260930.md",
+                "line": 4,
+                "name": "GTD",
+                "time_range": "0720-0745",
+                "status": "running",
+                "created": false,
+                "roles": ["next", "started"],
+                "lines": [
+                    {
+                        "text": "- [ ] (**0720-0745** [t:: 25m]) — GTD",
+                        "depth": 0,
+                        "change": "changed",
+                        "before": "- [ ] () — GTD",
+                    },
+                    {
+                        "text": "\t- [[#^gtd]]",
+                        "depth": 1,
+                        "change": "unchanged",
+                    },
+                ],
+            },
+        ])
+    );
+}
+
 #[test]
 fn chain_capture_complete_returns_no_candidates() {
     for (text, cursor) in [("+2 =x", 1), ("+2 =x", 4)] {
