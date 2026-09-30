@@ -45,7 +45,7 @@ pub(super) fn print_human_pomodoro_start_success(
         return;
     };
     // Dropped rows print inline in index order, in the close's exact
-    // wording, with the NOW caption and then the nested-line caption.
+    // wording, with the lane caption and then the nested-line caption.
     let mut dropped: Vec<&PomodoroStartTaskJson> =
         start.dropped.iter().collect();
     dropped.sort_by_key(|row| row.index);
@@ -142,11 +142,12 @@ fn print_human_start_kept_row(
 }
 
 fn print_human_start_dropped_row(task: &PomodoroStartTaskJson) {
-    // The close's exact dropped wording; unresolved dropped rows still name
-    // their number and link (the `warning` lives in JSON).
+    // The close's exact dropped wording: a dropped task keeps its lane, so
+    // the row says which status it stays in. Unresolved dropped rows still
+    // name their number and link (the `warning` lives in JSON).
     let mut line = format!("dropped {} {}", task.index, task.block_link);
-    if task.now == Some(true) {
-        line.push_str(" · stays in NOW");
+    if let Some(status) = task.status_name.as_deref() {
+        line.push_str(&format!(" · stays {status}"));
     }
     if task.nested_lines == 1 {
         line.push_str(" · +1 nested line");

@@ -208,9 +208,9 @@ fn capture_task_toggle_ensure_next_covers_open_states_and_failures() {
             name: "in-progress-move",
             target: "- [/] #task Busy ^busy\n",
             day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n- [ ] () — LATER\n  - [[cash#^busy]]\n",
-            expected_status: "*",
+            expected_status: "/",
             link_action: "moved",
-            status_changed: true,
+            status_changed: false,
         },
         Case {
             name: "already-next-move-only",
@@ -756,12 +756,88 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&bang).trim()).expect("json");
     assert!(json.get("toggle_behavior").is_none(), "{json}");
-    assert_eq!(json["toggle_direction"], "next");
+    assert_eq!(json["toggle_direction"], "link");
+    assert_eq!(json["status_changed"], true);
     assert!(json["removed_pomodoro_links"].as_u64().unwrap_or(0) == 0);
     assert!(
         fs::read_to_string(&day_file)
             .expect("day")
             .contains("- [[cash#^noleak]]"),
         "explicit toggle may insert a missing link"
+    );
+}
+
+#[test]
+fn capture_task_toggle_ensure_next_keeps_in_progress() {
+    // Ensure Next on In Progress moves the link and keeps the lane.
+    let temp = TempDir::new("bob-cli-capture-ensure-next-in-progress");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&target, "- [/] #task Busy ^busy\n");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - context\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^busy]]\n",
+        ),
+    );
+
+    let dry_run = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--")
+        .arg("@cash+busy")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("dry-run ensure-Next in progress");
+    assert_success(&dry_run);
+    assert_stdout_has_no_ansi(&dry_run);
+    let human = stdout(&dry_run);
+    assert!(human.contains("would ensure"), "{human}");
+    assert!(human.contains("stays In Progress"), "{human}");
+    assert!(human.contains("moved Task Link"), "{human}");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+busy")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("ensure-Next in progress task");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["toggle_direction"], "next");
+    assert_eq!(json["toggle_behavior"], "ensure_next");
+    assert_eq!(json["status_changed"], false);
+    assert_eq!(json["status_symbol"], "/");
+    assert_eq!(json["status_name"], "In Progress");
+    assert_eq!(json["pomodoro_link_action"], "moved");
+    assert_eq!(
+        fs::read_to_string(&target).expect("target"),
+        "- [/] #task Busy ^busy\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - context\n",
+            "  - [[cash#^busy]]\n",
+            "- [ ] () — LATER\n",
+        )
     );
 }

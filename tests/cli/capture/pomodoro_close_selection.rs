@@ -1408,8 +1408,8 @@ fn capture_pomodoro_close_selection_drop() {
 
 #[test]
 fn capture_pomodoro_close_selection_drop_human_output() {
-    // Dropped rows read `dropped <K> [[T]]` (with `stays in NOW` for
-    // `#now` tasks) plus a `Dropped <K>` summary.
+    // Dropped rows read `dropped <K> [[T]]` (with a `stays <status>`
+    // lane caption) plus a `Dropped <K>` summary.
     let (_temp, vault, day_file) =
         drop_worked_vault("bob-cli-close-sel-drop-hu");
     let output = bob_command()
@@ -1427,7 +1427,7 @@ fn capture_pomodoro_close_selection_drop_human_output() {
     let out = stdout(&output);
     assert!(out.contains("closed CAPTURE 0920-0950"), "{out}");
     assert!(
-        out.contains("dropped 3 [[bob#^ready]] · stays in NOW"),
+        out.contains("dropped 3 [[bob#^ready]] · stays Ready"),
         "{out}"
     );
     assert!(out.contains("Dropped 3"), "{out}");

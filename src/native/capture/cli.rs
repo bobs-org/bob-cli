@@ -232,8 +232,8 @@ after now (never extended; an overrun is reported). A bare `=x` keeps \
 today's behavior; `=x<N>` keeps only the numbered Task Links in `<N>` in \
 progress and defers the rest, `=x!<M>` completes the links in `<M>`, \
 `=x~<K>` drops the links in `<K>` (removed from the closed session, not \
-carried and not started; the next hooks run demotes Next to Ready and \
-`#now` keeps a dropped task in view), and combined forms do each part at \
+carried and not started; a dropped task keeps its lane), and combined \
+forms do each part at \
 once. `<N>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
 `--dry-run`, and as JSON `task_links`); a lone `0` means no \
@@ -258,7 +258,7 @@ their kind with an additive `pomodoro_close` object) carrying the typed \
 and `role` (with a `dropped` role and a `now` flag for `#now` tasks); \
 human output names the session, the range change, the file, and the line, \
 prefixing numbered rows with their index, listing dropped rows (with a \
-`stays in NOW` caption for `#now` tasks), and summarizing `Dropped <K>`. \
+`stays <status>` lane caption), and summarizing `Dropped <K>`. \
 Single-quote the argument: zsh expands a leading `=word` and `!` \
 history expansion applies.\n\n\
 Use '@<route>^<block-id>' in the same leading or trailing position to create \
@@ -319,8 +319,11 @@ ensures Next and moves that existing Task Link subtree to the named open \
 Pomodoro, or creates that named future Pomodoro and moves the subtree there. \
 Neither unsuffixed form synthesizes a missing Task Link. A terminal '!' on the \
 unsuffixed marker-only form, '@<route>+<block-id>!', is the only spelling that \
-explicitly toggles Ready/Blocked <-> Next and adds or removes its Pomodoro Task \
-Link; '!' cannot be combined with '#<pomodoro>'.\n\n\
+toggles the Pomodoro Task Link itself: when no matching link sits under an \
+open Pomodoro the task links (Ready/Blocked rise to Next while Next/In \
+Progress keep their lane), and when a matching link is already there every \
+such link is removed with the lane unchanged; '!' cannot be combined with \
+'#<pomodoro>'.\n\n\
 Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
 Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
 no '#task' marker, and no block ID. The daily note comes from BOB_DAY_FILE or \

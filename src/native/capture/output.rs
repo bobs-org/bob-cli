@@ -740,15 +740,19 @@ pub(super) fn print_human_pomodoro_close_success(
     };
     for task in &close.tasks {
         // Dropped rows name the task number directly (`dropped 4
-        // [[sase#^x]]`), with a NOW caption while the task keeps its
-        // `#now` tag elsewhere.
+        // [[sase#^x]]`), with a lane caption: a dropped task keeps its
+        // lane, so every dropped row says which status it stays in.
         if task.role == "dropped" && task.resolved {
             let mut line = match task.index {
                 Some(index) => format!("dropped {index} {}", task.block_link),
                 None => format!("dropped {}", task.block_link),
             };
-            if task.now == Some(true) {
-                line.push_str(" · stays in NOW");
+            if let Some(status) = task
+                .status_name
+                .as_deref()
+                .or(task.previous_status_name.as_deref())
+            {
+                line.push_str(&format!(" · stays {status}"));
             }
             println!("  {line}");
             continue;
@@ -919,6 +923,50 @@ pub(super) fn print_human_pomodoro_shift_success(
     println!("  {}", styler.dim(&result.task_line));
 }
 
+/// Second line for the `@route+block-id!` link-presence toggle:
+/// `linked ^id under NAME · set Next`, `linked ^id under NAME · stays In
+/// Progress`, or `unlinked ^id from N open Pomodoros · stays Next`.
+fn print_human_link_toggle_summary(
+    result: &CaptureItemResult,
+    styler: &Styler,
+) {
+    let id = result
+        .block_id
+        .as_deref()
+        .map(|id| format!("^{id}"))
+        .unwrap_or_else(|| "^?".to_string());
+    let id = styler.cyan(&id);
+    if result.toggle_direction == Some("unlink") {
+        let removed = result.removed_pomodoro_links.unwrap_or(0);
+        let source = if removed == 1 {
+            "1 open Pomodoro".to_string()
+        } else {
+            format!("{removed} open Pomodoros")
+        };
+        let status = result.status_name.as_deref().unwrap_or(
+            match result.status_symbol {
+                Some('/') => "In Progress",
+                Some('*') => "Next",
+                Some('?') => "Blocked",
+                _ => "Ready",
+            },
+        );
+        println!("  unlinked {id} from {source} · stays {status}");
+        return;
+    }
+    let destination = result
+        .pomodoro_name
+        .as_deref()
+        .map(|name| format!("under {name}"))
+        .unwrap_or_else(|| "under current/next Pomodoro".to_string());
+    let verdict = match (result.previous_status_symbol, result.status_symbol) {
+        (Some(previous), Some(current)) if previous != current => "set Next",
+        (_, Some('/')) => "stays In Progress",
+        _ => "stays Next",
+    };
+    println!("  linked {id} {destination} · {verdict}");
+}
+
 pub(super) fn print_human_task_toggle_success(
     result: &CaptureItemResult,
     styler: &Styler,
@@ -952,7 +1000,13 @@ pub(super) fn print_human_task_toggle_success(
         .as_deref()
         .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
         .unwrap_or_default();
-    if ensure_next && result.status_changed == Some(false) {
+    if !ensure_next {
+        print_human_link_toggle_summary(result, styler);
+    } else if result.status_changed == Some(false)
+        && result.status_symbol == Some('/')
+    {
+        println!("  {next_marker} stays In Progress  {description}{block_id}");
+    } else if result.status_changed == Some(false) {
         println!("  {next_marker} already Next  {description}{block_id}");
     } else {
         println!(
@@ -991,14 +1045,14 @@ pub(super) fn print_human_task_toggle_success(
         let under = result
             .pomodoro_name
             .as_deref()
-            .filter(|_| result.toggle_direction == Some("next"))
+            .filter(|_| result.toggle_direction == Some("link"))
             .map(|name| format!(" · under {}", styler.cyan(name)))
             .unwrap_or_default();
         println!("  {}{under}", styler.cyan(day_file));
     }
 
     match result.toggle_direction {
-        Some("next") => {
+        Some("link") => {
             if let Some(block_link) = result.block_link.as_deref() {
                 let marker = styler.green("+");
                 println!("  {marker} {block_link}");
@@ -1011,7 +1065,7 @@ pub(super) fn print_human_task_toggle_success(
                 );
             }
         }
-        Some("open") => {
+        Some("unlink") => {
             print_removed_pomodoro_links(
                 styler,
                 result.removed_pomodoro_links.unwrap_or(0),

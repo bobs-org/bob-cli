@@ -1,5 +1,6 @@
-//! Pure planners for the `@route+block-id` task-status toggle (the
-//! `<ctrl+shift+enter>` keymap's semantics, reproduced in Rust).
+//! Pure planners for the `@route+block-id!` link-presence toggle and the
+//! Ensure Next relocation (link policy once shared with the
+//! `<ctrl+shift+enter>` keymap).
 //!
 //! Read `plugins/block-id-prompt/main.js` in the `bob-plugins` repo first --
 //! `planTargetTaskUpdate`, `planTargetTaskOpenUpdate`,
@@ -236,27 +237,6 @@ pub(crate) fn plan_task_link(
         new_status_symbol,
         removed_scheduled,
         schedule_log,
-    })
-}
-
-/// Next `[*]` -> Ready `[ ]`, and nothing else. Returns `None` for the same
-/// reasons as [`plan_task_next`].
-pub(crate) fn plan_task_open(
-    contents: &str,
-    task_line_index: usize,
-) -> Option<TaskTogglePlan> {
-    let lines = line_spans(contents);
-    let line = *lines.get(task_line_index)?;
-    let previous_status_symbol = current_status_symbol(line.text)?;
-    let updated_text = set_task_line_status(line.text, ' ')?;
-    let content =
-        replace_line(contents, &lines, task_line_index, &updated_text);
-    Some(TaskTogglePlan {
-        content,
-        previous_status_symbol,
-        new_status_symbol: ' ',
-        removed_scheduled: None,
-        schedule_log: None,
     })
 }
 
@@ -1836,22 +1816,9 @@ mod tests {
     }
 
     #[test]
-    fn plan_task_open_sets_ready_status_only() {
-        let contents = "- [*] Doing it ^task1\n";
-        let plan = plan_task_open(contents, 0).expect("plan");
-        assert_eq!(plan.previous_status_symbol, '*');
-        assert_eq!(plan.new_status_symbol, ' ');
-        assert_eq!(plan.content, "- [ ] Doing it ^task1\n");
-        assert_eq!(plan.removed_scheduled, None);
-        assert!(plan.schedule_log.is_none());
-    }
-
-    #[test]
     fn returns_none_for_non_task_or_out_of_range_lines() {
         assert!(plan_task_next("plain text\n", 0, date(2026, 6, 15)).is_none());
-        assert!(plan_task_open("plain text\n", 0).is_none());
         assert!(plan_task_next("- [ ] Task\n", 5, date(2026, 6, 15)).is_none());
-        assert!(plan_task_open("- [ ] Task\n", 5).is_none());
     }
 
     #[test]

@@ -28,7 +28,9 @@ pub(super) fn plan_ensure_next_capture(
         }
     }
 
-    let task_plan = capture_task_toggle::plan_task_next(contents, task_line_index, today)
+    // Link semantics: Ready/Blocked rise to Next, while Next and In
+    // Progress keep their lane (sticky lanes: no capture path demotes).
+    let task_plan = capture_task_toggle::plan_task_link(contents, task_line_index, today)
         .ok_or_else(|| {
             CaptureError::io("task toggle capture invariant failed: task line could not be updated")
         })?;

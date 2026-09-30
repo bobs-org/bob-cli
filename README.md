@@ -229,7 +229,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
 | `@route+id#pomodoro` with no other text | Ensure Next and move that existing Task Link to the named Pomodoro, creating the named future Pomodoro if needed |
-| `@route+id!` with no other text | Explicitly toggle that task between Ready and Next and add or remove its Pomodoro task link |
+| `@route+id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready/Blocked rise to Next) or unlink it when linked (lane unchanged) |
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
 | `s:<N>` | Schedule N days from today; checkbox-bearing captures start Blocked, including `s:0` |
 | `p:<N>` | Write priority level N and roll a scheduled date, so checkbox-bearing captures start Blocked |
@@ -267,16 +267,20 @@ Pomodoro when no open match exists. Neither unsuffixed form toggles Next back
 to Ready or creates a missing link. Repeating the request when the task is
 already Next and the link is already at the destination is a no-op.
 
-Use `@route+id!` to explicitly run the two-way toggle: Ready `[ ]` and Blocked
-`[?]` become Next `[*]` and get `[[route#^id]]` under the implicit current/next
-open Pomodoro; Next becomes Ready and removes matching links from every open
-Pomodoro. `!` cannot be combined with `#pomodoro`. Future schedules are retired
-only when the task has exactly one valid future `[scheduled::YYYY-MM-DD]`, and
-a Schedule Log entry is written only if the task already has that log. In
-Progress, done, canceled, missing, duplicate, and non-task IDs are rejected
+Use `@route+id!` to toggle the Pomodoro Task Link itself: an unlinked Ready
+`[ ]` or Blocked `[?]` task becomes Next `[*]` and gets `[[route#^id]]` under
+the implicit current/next open Pomodoro; an unlinked Next `[*]` or In Progress
+`[/]` task links with its status unchanged; a linked task of any open status
+unlinks every matching link under every open Pomodoro with its status
+unchanged. `!` cannot be combined with `#pomodoro`. Future schedules are retired
+only when the link direction sets the task to Next and the task has exactly one
+valid future `[scheduled::YYYY-MM-DD]`, and
+a Schedule Log entry is written only if the task already has that log. Done,
+canceled, missing, duplicate, and non-task IDs are rejected
 before any note is written. Users upgrading from the initial `!`
 implementation should note this reversal: the unsuffixed forms are now the
-idempotent default, and `!` is the add/clear escape hatch.
+idempotent default, and `!` is the link/unlink escape hatch that never lowers
+a lane.
 
 Append `=<X>` to a Pomodoro-linked marker to start its session in the same
 transaction: `bob capture 'Write outline @sase:outline=3'` starts a

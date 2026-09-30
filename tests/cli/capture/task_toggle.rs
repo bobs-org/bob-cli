@@ -4,8 +4,8 @@ use crate::support::*;
 use std::fs;
 
 #[test]
-fn capture_task_toggle_next_and_open_updates_notes_and_reports_json() {
-    let temp = TempDir::new("bob-cli-capture-task-toggle-next-open");
+fn capture_task_toggle_link_and_unlink_updates_notes_and_reports_json() {
+    let temp = TempDir::new("bob-cli-capture-task-toggle-link-unlink");
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
@@ -40,51 +40,50 @@ fn capture_task_toggle_next_and_open_updates_notes_and_reports_json() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
+    // The task starts linked (under LATER), so the first toggle unlinks:
+    // the lane is kept and only the ledger changes.
     assert_eq!(json["kind"], "task_toggle");
     assert_eq!(json["placement"], "toggled");
-    assert_eq!(json["toggle_direction"], "next");
+    assert_eq!(json["toggle_direction"], "unlink");
+    assert_eq!(json["status_changed"], false);
     assert!(json.get("toggle_behavior").is_none(), "{json}");
-    assert!(json.get("status_changed").is_none(), "{json}");
     assert!(json.get("pomodoro_link_action").is_none(), "{json}");
     assert_eq!(json["previous_status_symbol"], " ");
     assert_eq!(json["previous_status_name"], "Ready");
-    assert_eq!(json["status_symbol"], "*");
-    assert_eq!(json["status_name"], "Next");
+    assert_eq!(json["status_symbol"], " ");
+    assert_eq!(json["status_name"], "Ready");
     assert_eq!(
         json["previous_task_line"],
         "- [ ] #task Finish packet [dependsOn::root] ^goog-exit"
     );
     assert_eq!(
         json["task_line"],
-        "- [*] #task Finish packet [dependsOn::root] ^goog-exit"
+        "- [ ] #task Finish packet [dependsOn::root] ^goog-exit"
     );
     assert_eq!(json["block_id"], "goog-exit");
     assert_eq!(json["block_link"], "[[cash#^goog-exit]]");
-    assert_eq!(json["pomodoro_name"], "CODING");
+    assert!(json.get("pomodoro_name").is_none(), "{json}");
     assert_eq!(json["creates_pomodoro"], false);
     assert_eq!(json["pomodoro_already_linked"], false);
     assert_eq!(json["removed_pomodoro_links"], 1);
-    assert!(
-        json["warnings"][0]
-            .as_str()
-            .is_some_and(|warning| warning.contains("declares dependencies")),
-        "{json}"
+    // No dependency warning: the status did not become Next.
+    assert!(json.get("warnings").is_none(), "{json}");
+    assert_eq!(
+        fs::read_to_string(&target).expect("read unlinked target"),
+        "- [ ] #task Finish packet [dependsOn::root] ^goog-exit\n"
     );
     assert_eq!(
-        fs::read_to_string(&target).expect("read toggled target"),
-        "- [*] #task Finish packet [dependsOn::root] ^goog-exit\n"
-    );
-    assert_eq!(
-        fs::read_to_string(&day_file).expect("read toggled day"),
+        fs::read_to_string(&day_file).expect("read unlinked day"),
         concat!(
             "## Pomodoros\n",
             "- [ ] (**0900-0930**) — CODING\n",
             "  - context\n",
-            "  - [[cash#^goog-exit]]\n",
             "- [ ] () — LATER\n",
         )
     );
 
+    // Now unlinked, the second toggle links: Ready rises to Next (with the
+    // dependency warning) and the link lands under CODING.
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -96,22 +95,74 @@ fn capture_task_toggle_next_and_open_updates_notes_and_reports_json() {
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 10:05:00")
         .output()
-        .expect("explicitly toggle next task open");
+        .expect("explicitly link unlinked task");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
-    assert_eq!(json["toggle_direction"], "open");
-    assert_eq!(json["previous_status_symbol"], "*");
-    assert_eq!(json["status_symbol"], " ");
+    assert_eq!(json["toggle_direction"], "link");
+    assert_eq!(json["status_changed"], true);
+    assert_eq!(json["previous_status_symbol"], " ");
+    assert_eq!(json["previous_status_name"], "Ready");
+    assert_eq!(json["status_symbol"], "*");
+    assert_eq!(json["status_name"], "Next");
+    assert_eq!(json["pomodoro_name"], "CODING");
+    assert_eq!(json["creates_pomodoro"], false);
+    assert_eq!(json["pomodoro_already_linked"], false);
+    assert_eq!(json["removed_pomodoro_links"], 0);
     assert_eq!(json["pomodoro_selector_unused"], false);
     assert!(json.get("toggle_behavior").is_none(), "{json}");
-    assert_eq!(json["removed_pomodoro_links"], 1);
-    assert_eq!(
-        fs::read_to_string(&target).expect("read opened target"),
-        "- [ ] #task Finish packet [dependsOn::root] ^goog-exit\n"
+    assert!(json.get("pomodoro_link_action").is_none(), "{json}");
+    assert!(
+        json["warnings"][0]
+            .as_str()
+            .is_some_and(|warning| warning.contains("declares dependencies")),
+        "{json}"
     );
     assert_eq!(
-        fs::read_to_string(&day_file).expect("read opened day"),
+        fs::read_to_string(&target).expect("read linked target"),
+        "- [*] #task Finish packet [dependsOn::root] ^goog-exit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read linked day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CODING\n",
+            "  - context\n",
+            "  - [[cash#^goog-exit]]\n",
+            "- [ ] () — LATER\n",
+        )
+    );
+
+    // Linked again, a third toggle unlinks while keeping Next.
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+goog-exit!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:10:00")
+        .output()
+        .expect("explicitly unlink linked next task");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
+    assert_eq!(json["toggle_direction"], "unlink");
+    assert_eq!(json["status_changed"], false);
+    assert_eq!(json["previous_status_symbol"], "*");
+    assert_eq!(json["status_symbol"], "*");
+    assert_eq!(json["status_name"], "Next");
+    assert_eq!(json["removed_pomodoro_links"], 1);
+    assert!(json.get("removed_scheduled").is_none(), "{json}");
+    assert!(json.get("schedule_log").is_none(), "{json}");
+    assert_eq!(
+        fs::read_to_string(&target).expect("read relinked target"),
+        "- [*] #task Finish packet [dependsOn::root] ^goog-exit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read relinked day"),
         concat!(
             "## Pomodoros\n",
             "- [ ] (**0900-0930**) — CODING\n",
@@ -405,20 +456,20 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
 
     let cases = vec![
         ErrorCase {
-            name: "in-progress",
-            target: "- [/] #task Busy ^busy\n",
-            day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
-            args: vec!["@cash+busy!"],
-            exit: 1,
-            expected: "toggling from In Progress needs a work summary",
-        },
-        ErrorCase {
             name: "done",
             target: "- [x] #task Done already ^done\n",
             day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
             args: vec!["@cash+done!"],
             exit: 1,
-            expected: "task ^done is Done; only Ready, Blocked, and Next tasks can be toggled",
+            expected: "task ^done is Done; only Ready, Blocked, Next, and In Progress tasks can be toggled",
+        },
+        ErrorCase {
+            name: "cancelled",
+            target: "- [-] #task Dropped idea ^dropped\n",
+            day: "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n",
+            args: vec!["@cash+dropped!"],
+            exit: 1,
+            expected: "only Ready, Blocked, Next, and In Progress tasks can be toggled",
         },
         ErrorCase {
             name: "missing-id",
@@ -521,8 +572,8 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
 
 #[test]
 fn capture_task_toggle_reports_inserted_link_block() {
-    // A two-way toggle that inserts a fresh Task Link is auto-detected:
-    // no planner ref is pushed for toggles.
+    // A link-direction toggle that inserts a fresh Task Link is
+    // auto-detected: no planner ref is pushed for toggles.
     let temp = TempDir::new("bob-cli-capture-toggle-blocks-insert");
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
@@ -540,7 +591,7 @@ fn capture_task_toggle_reports_inserted_link_block() {
         &["@cash+fresh!"],
     );
     assert_eq!(json["kind"], "task_toggle");
-    assert_eq!(json["toggle_direction"], "next");
+    assert_eq!(json["toggle_direction"], "link");
     assert_eq!(
         json["pomodoro_blocks"],
         serde_json::json!([
@@ -674,15 +725,16 @@ fn capture_task_toggle_reports_created_named_entry() {
 }
 
 #[test]
-fn capture_task_toggle_reports_open_removal_from_two_entries() {
-    // Open-direction cleanup removes the link from every open entry, and
-    // auto-detection reports each touched block with its removed line.
+fn capture_task_toggle_reports_unlink_removal_from_two_entries() {
+    // Unlink-direction cleanup removes the link from every open entry while
+    // keeping the lane, and auto-detection reports each touched block with
+    // its removed line.
     let temp = TempDir::new("bob-cli-capture-toggle-blocks-removal");
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
     write_toggle_task_settings(&vault);
-    write_file(&target, "- [*] #task Done work ^done\n");
+    write_file(&target, "- [*] #task Queued work ^done\n");
     let day_before = concat!(
         "## Pomodoros\n",
         "- [ ] (**0900-0930**) — ONE\n",
@@ -699,7 +751,11 @@ fn capture_task_toggle_reports_open_removal_from_two_entries() {
         &["@cash+done!"],
     );
     assert_eq!(json["kind"], "task_toggle");
-    assert_eq!(json["toggle_direction"], "open");
+    assert_eq!(json["toggle_direction"], "unlink");
+    assert_eq!(json["status_changed"], false);
+    assert_eq!(json["status_symbol"], "*");
+    assert_eq!(json["status_name"], "Next");
+    assert_eq!(json["removed_pomodoro_links"], 2);
     assert_eq!(
         json["pomodoro_blocks"],
         serde_json::json!([
@@ -751,5 +807,164 @@ fn capture_task_toggle_reports_open_removal_from_two_entries() {
         day_after,
         "## Pomodoros\n- [ ] (**0900-0930**) — ONE\n- [ ] () — TWO\n"
     );
+    // The route note is untouched: unlinking keeps Next.
+    assert_eq!(
+        fs::read_to_string(&target).expect("read toggled target"),
+        "- [*] #task Queued work ^done\n"
+    );
     assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}
+
+#[test]
+fn capture_task_toggle_links_unlinked_lanes_without_status_change() {
+    // Unlinked Next, In Progress, and Blocked tasks all link under the
+    // implicit entry; only Ready/Blocked rise to Next.
+    let temp = TempDir::new("bob-cli-capture-toggle-link-lanes");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        concat!(
+            "- [*] #task Queued ^next\n",
+            "- [/] #task Busy ^busy\n",
+            "- [?] #task Waiting ^blocked\n",
+        ),
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () — CURRENT\n");
+
+    // Human dry run first: In Progress links with its lane kept.
+    let human = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--")
+        .arg("@cash+busy!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("dry-run link human");
+    assert_success(&human);
+    assert_stdout_has_no_ansi(&human);
+    let out = stdout(&human);
+    assert!(out.contains("would toggle"), "{out}");
+    assert!(
+        out.contains("linked ^busy under CURRENT · stays In Progress"),
+        "{out}"
+    );
+
+    for (arg, previous, current, name, changed) in [
+        ("@cash+next!", "*", "*", "Next", false),
+        ("@cash+busy!", "/", "/", "In Progress", false),
+        ("@cash+blocked!", "?", "*", "Next", true),
+    ] {
+        let json = capture_json_dry_run_matches_real(
+            &vault,
+            &day_file,
+            "2026-07-10 10:00:00",
+            &[arg],
+        );
+        assert_eq!(json["toggle_direction"], "link", "{arg}");
+        assert_eq!(
+            json["status_changed"],
+            serde_json::Value::Bool(changed),
+            "{arg}"
+        );
+        assert_eq!(json["previous_status_symbol"], previous, "{arg}");
+        assert_eq!(json["status_symbol"], current, "{arg}");
+        assert_eq!(json["status_name"], name, "{arg}");
+        assert_eq!(json["pomodoro_name"], "CURRENT", "{arg}");
+        assert!(json.get("toggle_behavior").is_none(), "{json}");
+    }
+    assert_eq!(
+        fs::read_to_string(&target).expect("read linked target"),
+        concat!(
+            "- [*] #task Queued ^next\n",
+            "- [/] #task Busy ^busy\n",
+            "- [*] #task Waiting ^blocked\n",
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read linked day"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — CURRENT\n",
+            "\t- [[cash#^next]]\n",
+            "\t- [[cash#^busy]]\n",
+            "\t- [[cash#^blocked]]\n",
+        )
+    );
+}
+
+#[test]
+fn capture_task_toggle_unlink_keeps_every_lane() {
+    // Linked tasks of any open status unlink with the route note untouched.
+    let temp = TempDir::new("bob-cli-capture-toggle-unlink-lanes");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    let target_before =
+        concat!("- [/] #task Busy ^busy\n", "- [ ] #task Ready ^ready\n",);
+    write_file(&target, target_before);
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — CURRENT\n",
+            "  - [[cash#^busy]]\n",
+            "  - [[cash#^ready]]\n",
+        ),
+    );
+
+    // Human dry run first: unlinking names the kept lane.
+    let human = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--")
+        .arg("@cash+ready!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("dry-run unlink human");
+    assert_success(&human);
+    assert_stdout_has_no_ansi(&human);
+    let out = stdout(&human);
+    assert!(out.contains("would toggle"), "{out}");
+    assert!(
+        out.contains("unlinked ^ready from 1 open Pomodoro · stays Ready"),
+        "{out}"
+    );
+
+    for (arg, symbol, name) in [
+        ("@cash+busy!", "/", "In Progress"),
+        ("@cash+ready!", " ", "Ready"),
+    ] {
+        let json = capture_json_dry_run_matches_real(
+            &vault,
+            &day_file,
+            "2026-07-10 10:00:00",
+            &[arg],
+        );
+        assert_eq!(json["toggle_direction"], "unlink", "{arg}");
+        assert_eq!(json["status_changed"], false, "{arg}");
+        assert_eq!(json["previous_status_symbol"], symbol, "{arg}");
+        assert_eq!(json["status_symbol"], symbol, "{arg}");
+        assert_eq!(json["status_name"], name, "{arg}");
+        assert_eq!(json["removed_pomodoro_links"], 1, "{arg}");
+        assert!(json.get("removed_scheduled").is_none(), "{json}");
+        assert!(json.get("schedule_log").is_none(), "{json}");
+    }
+    assert_eq!(
+        fs::read_to_string(&target).expect("read unlinked target"),
+        target_before
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read unlinked day"),
+        "## Pomodoros\n- [ ] () — CURRENT\n"
+    );
 }

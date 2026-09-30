@@ -244,8 +244,8 @@ pub(super) struct CaptureWritePlan {
     pub(super) toggle: Option<TaskToggleCaptureDetails>,
     pub(super) pomodoro_link: Option<PomodoroLinkCaptureDetails>,
     /// Pomodoro block touches the batch loop feeds to the block tracker.
-    /// Empty for captures that never touch the day file; two-way toggles,
-    /// Pomodoro notes, and project notes stay empty and rely on
+    /// Empty for captures that never touch the day file; link-presence
+    /// toggles, Pomodoro notes, and project notes stay empty and rely on
     /// auto-detection instead.
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
 }
@@ -406,14 +406,16 @@ pub(super) struct PomodoroNoteDetails {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TaskToggleDirection {
     Next,
-    Open,
+    Link,
+    Unlink,
 }
 
 impl TaskToggleDirection {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Next => "next",
-            Self::Open => "open",
+            Self::Link => "link",
+            Self::Unlink => "unlink",
         }
     }
 }

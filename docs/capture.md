@@ -35,7 +35,7 @@ workflow guide.
   - [Chaining session operators on one line](#chaining-session-operators-on-one-line)
   - [Project notes](#project-notes)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
-  - [Task status toggle](#task-status-toggle)
+  - [Task Link toggle](#task-link-toggle)
   - [Pomodoro notes](#pomodoro-notes)
   - [Section bullets](#section-bullets)
   - [Command-line options](#command-line-options)
@@ -87,7 +87,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
 | `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's implicit current/next Pomodoro |
 | `@route+block-id#pomodoro` with no other text | Ensure Next and move that existing Task Link subtree to the named open Pomodoro, or create that named future Pomodoro and move the subtree there |
-| `@route+block-id!` with no other text | Explicitly toggle that task between Ready `[ ]` and Next `[*]` and add or remove its Pomodoro task link |
+| `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready/Blocked rise to Next) or unlink it when linked (lane unchanged) |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
 | trailing `#now` | This week's bet (see below): resolves the route in front of it, then moves to the end of the body |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
@@ -102,7 +102,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@notes#Ideas` | Bullet under a heading in `notes.md` |
 | `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
 | `@cash+id#requirements` | Child under that task's `REQUIREMENTS` section |
-| `@cash+id#coding` with no other text | Toggle that task and select the `CODING` Pomodoro |
+| `@cash+id#coding` with no other text | Ensure that task is Next and move its Task Link to the `CODING` Pomodoro |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
 | `@sase:deep-fix#bugs=-2` | Same, starting a 25-minute session with a 10-minute offset |
 | `^sase:deep-fix#bugs` | Link the existing `^deep-fix` task under open `BUGS`; the `#` names a Pomodoro, and `^` is the active-task spelling |
@@ -1015,9 +1015,8 @@ any drop list fails before insertion.
 
 Each dropped Task Link bullet is removed together with its nested child
 lines (which belong to that link in a session about to start — unlike a
-close, which keeps notes as history). No task note is written; `bob
-task-status-hooks` reconciles status as it does for any removed Pomodoro
-link, and `#now` keeps a dropped task in view this week. Dry-run computes
+close, which keeps notes as history). No task note is written and no lane
+changes: a dropped task keeps its status. Dry-run computes
 without writing, and any failure rolls the whole batch back.
 
 JSON kind `pomodoro_start` keeps schema version 1: `text` is the raw token,
@@ -1026,7 +1025,7 @@ JSON kind `pomodoro_start` keeps schema version 1: `text` is the raw token,
 `now`), and `pomodoro_start.dropped[]` are the removed rows (with `index`,
 `now`, the pre-image `ledger_line`, and `nested_lines`, omitted when 0).
 Human output numbers the queued rows, prints dropped rows inline (`dropped
-2 [[T]] · stays in NOW · +1 nested line`), follows with a dim `Dropped <K>`
+2 [[T]] · stays Next · +1 nested line`), follows with a dim `Dropped <K>`
 summary, and prints `nothing queued` when nothing is left.
 
 Worked example (`BOB_NOW=2026-09-30 09:42:00`, TAB indentation;
@@ -1384,7 +1383,7 @@ Human output prints `closed NAME old → new (Nm, −Xm) · file line N` (or a
 single range with no decrement, plus `(ran Nm over)` on overruns), always
 naming the day file; one line per task as `transition text route ^id`
 plus `+N Work Log` counts; dropped rows read `dropped <K> [[T]]`
-(with a `stays in NOW` caption while the task keeps its `#now` tag) and a
+(with a `stays <status>` lane caption: a dropped task keeps its status) and a
 `Dropped <K>` summary follows the rows; and the next session, which reads
 `carries 1 link` in the singular. When at least one row is numbered, every
 task row is prefixed with a right-aligned index column (width = digits of
@@ -1536,7 +1535,7 @@ stay byte-identical.
 | in progress (`N`, or the ledger default) | yes | yes | started `[/]` |
 | deferred | no (removed) | yes | none |
 | complete (`!M`) | embedded | no | closed |
-| **dropped (`~K`)** | **no (removed)** | **no** | **none** (the next hooks run demotes Next → Ready; `#now` keeps it in view) |
+| **dropped (`~K`)** | **no (removed)** | **no** | **none** — the task keeps its lane |
 
 An omitted `<N>` keeps the ledger default for unlisted links. A typed
 `<N>` defers the unlisted ones, exactly as today. Dropped links count as
@@ -1969,7 +1968,7 @@ task:
 	- FUTURE WORK
 ```
 
-### Task status toggle
+### Task Link toggle
 
 A capture item that is exactly `@route+block-id`, with no body text and no
 authored child bullets, updates that existing task instead of writing a child
@@ -1989,31 +1988,33 @@ canonical named future Pomodoro and then moves the existing Task Link subtree
 into it. Ensure Next never creates a missing Task Link; that remains an
 explicit reason to use `@route+block-id!`.
 
-The two-way Ready `[ ]` / Blocked `[?]` <-> Next `[*]` toggle, including
-Pomodoro-link insertion and open-link deletion, is reserved for the terminal
-`@route+block-id!` spelling. `!` cannot be combined with `#pomodoro`.
+The link-presence toggle, including Pomodoro-link insertion and
+all-open-link removal, is reserved for the terminal `@route+block-id!`
+spelling. `!` cannot be combined with `#pomodoro`. The ledger decides the
+direction: no matching link under an open Pomodoro links the task, and any
+matching link unlinks it. No toggle path ever lowers a lane.
 
-Status transitions for `@route+block-id!` are:
+Link presence for `@route+block-id!` is:
 
-| Current status | Result |
-| --- | --- |
-| Ready `[ ]` | Next `[*]`, with `[[route#^block-id]]` linked under the implicit current/next open Pomodoro |
-| Blocked `[?]` | Next `[*]`, with the same Pomodoro link; `dependsOn` on the task line also emits a warning |
-| Next `[*]` | Ready `[ ]`, with matching links removed from every open Pomodoro |
-| In Progress `[/]` | Error: `task ^<id> is In Progress; toggling from In Progress needs a work summary, so use <ctrl+shift+enter> in Obsidian` |
-| Done, canceled, or unknown | Error: `task ^<id> is <Status Name>; only Ready, Blocked, and Next tasks can be toggled` |
+| Linked under an open Pomodoro today? | Status | Result |
+| --- | --- | --- |
+| no | Ready `[ ]` / Blocked `[?]` | Next `[*]`, with `[[route#^block-id]]` linked under the implicit current/next open Pomodoro; `dependsOn` on the task line also emits a warning, and only when the task became Next |
+| no | Next `[*]` / In Progress `[/]` | Link inserted under the implicit current/next open Pomodoro; status unchanged |
+| yes | any open status | Every matching link under every open Pomodoro removed; status unchanged |
+| — | done, canceled, or unknown | Error: `task ^<id> is <Status Name>; only Ready, Blocked, Next, and In Progress tasks can be toggled` |
 
-When a Ready or Blocked task is promoted to Next with `!`, Bob inserts the task
-link under the selected Pomodoro unless that entry already has the same link. In
-that idempotent case no duplicate is written and JSON reports
-`pomodoro_already_linked: true`. Matching duplicate links under later still-open
-Pomodoros are removed. Completed Pomodoros are not cleaned up. When a Next task
-is cleared back to Ready, every matching link under every open Pomodoro is
-removed. Neither unsuffixed marker-only form can enter that insertion or
-removal cleanup.
+When an unlinked task links with `!`, Bob inserts the task
+link under the implicit current/next open Pomodoro unless that entry already
+has the same link. In that idempotent case no duplicate is written and JSON
+reports `pomodoro_already_linked: true`. Matching duplicate links under later
+still-open Pomodoros are removed. Completed Pomodoros are not cleaned up.
+When a linked task unlinks, every matching link under every open Pomodoro is
+removed and the route note is left untouched. Neither unsuffixed marker-only
+form can enter that insertion or removal cleanup.
 
 If the task line has exactly one valid future `[scheduled::YYYY-MM-DD]` field
-and the toggle sets the task to Next, Bob removes that scheduled field. When
+and the link direction sets the task to Next, Bob removes that scheduled field.
+Unlinking never touches the task line, so it never retires a schedule. When
 the task already owns a direct-child `🗓️ **SCHEDULE LOG**`, Bob prepends a
 dated entry under it:
 
@@ -2040,11 +2041,13 @@ child bullets with `task toggle capture cannot have authored child bullets`.
 
 The marker-only `@route+block-id` and `@route+block-id#pomodoro` forms are
 Ensure Next operations. Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and
-Next `[*]` are eligible and all end as Next. Done, canceled, unknown, missing,
+Next `[*]` are eligible: Ready and Blocked rise to Next while Next and In
+Progress keep their lane. Done, canceled, unknown, missing,
 non-task, and duplicate-ID targets keep actionable errors. This default
 reverses the initial `!` implementation: use the unsuffixed forms for
 idempotent relocation, and use `@route+block-id!` only when you intentionally
-want the explicit two-way toggle to add a missing link or clear a Next task.
+want to toggle the link itself — add a missing link, or remove every
+open-Pomodoro link with the lane unchanged.
 
 The plain form's destination is today's implicit current/next open Pomodoro:
 the single open timed entry when present, otherwise the first open entry in
@@ -2061,8 +2064,8 @@ historical and are never edited. A link embedded in surrounding prose is not
 a dedicated Task Link.
 
 When the sole link is already under the selected destination, the daily file
-is left byte-for-byte unchanged. The task-side plan is independent: a
-non-Next open status still becomes Next and a single future schedule is still
+is left byte-for-byte unchanged. The task-side plan is independent: a Ready
+or Blocked status still becomes Next and a single future schedule is still
 retired when an existing Schedule Log is present. An already-Next task whose
 link is already at the destination is a true no-op. When relocation is
 needed, Bob moves the dedicated link bullet and its complete descendant
@@ -2070,7 +2073,8 @@ subtree, adapting only the root indentation to the destination's established
 child indentation.
 
 Human output says `would ensure` / `ensured` rather than `would toggle` /
-`toggled`, distinguishes "set Next" from "already Next", and prints either
+`toggled`, distinguishes "set Next" from "already Next" and "stays In
+Progress", and prints either
 the source-to-destination Pomodoro move (naming both Pomodoros, and naming a
 created destination) or `Task Link already in <name>; no ledger change.` /
 `Task Link already in current/next Pomodoro; no ledger change.` JSON stays
@@ -2078,7 +2082,7 @@ schema version 1 and kind `"task_toggle"` with `toggle_direction: "next"`.
 Additive fields let new clients render the outcome precisely while old
 clients ignore them:
 
-- `toggle_behavior: "ensure_next"` (omitted for the two-way toggle)
+- `toggle_behavior: "ensure_next"` (omitted for the `!` toggle)
 - `status_changed: true|false`
 - `pomodoro_link_action: "moved"|"already_current"`
 - `pomodoro_link_source` and `pomodoro_link_destination` objects with
@@ -2089,13 +2093,22 @@ clients ignore them:
 - `removed_pomodoro_links: 0` with no `pomodoro_selector_unused` clearing story
 
 A terminal `!` on the same marker-only shape, `@route+block-id!`, opts into
-the established two-way toggle. It is accepted only as the final byte of that
+the link-presence toggle. It is accepted only as the final byte of that
 exact marker: not on `@route+id#name`, `@@route+id`, body-bearing items,
 authored children, clipboard, schedule, priority, or forced destination flags.
-Ordinary `!` in capture prose stays literal. Ready `[ ]` and Blocked `[?]`
-become Next `[*]` and use the existing link-insertion path; Next becomes Ready
-and removes matching links from every open Pomodoro. In Progress and closed
-states retain the normal toggle errors.
+Ordinary `!` in capture prose stays literal. An unlinked Ready `[ ]` or
+Blocked `[?]` task becomes Next `[*]` and uses the existing link-insertion
+path; an unlinked Next `[*]` or In Progress `[/]` task links with its status
+unchanged; a linked task of any open status unlinks with its status unchanged.
+Done, canceled, and unknown states keep the normal toggle errors.
+
+Human output says `would toggle` / `toggled` and prints a link summary:
+`linked ^id under NAME · set Next`, `linked ^id under NAME · stays Next`,
+`linked ^id under NAME · stays In Progress`, or `unlinked ^id from N open
+Pomodoros · stays <Status>`, followed by the day file and ledger lines. JSON
+stays schema version 1 and kind `"task_toggle"` with `toggle_direction:
+"link"` or `"unlink"`, `status_changed`, `removed_pomodoro_links` for unlink,
+and the existing insertion fields for link.
 
 Compatibility fields: `pomodoro_name` is the resolved destination name when
 one exists, `creates_pomodoro` is `true` only when this Ensure Next created
@@ -2331,7 +2344,8 @@ parent's ID, omitting it when a task-ref selected a parent without one.
 
 Task-toggle results use kind `"task_toggle"`, `placement: "toggled"`,
 `routed: true`, `text: ""`, and `task_line` set to the resulting task line.
-They additionally include `toggle_direction` (`"next"` or `"open"`),
+They additionally include `toggle_direction` (`"link"` or `"unlink"` for the
+`!` toggle, `"next"` for Ensure Next), `status_changed`,
 `previous_task_line`, `status_symbol`, `status_name`,
 `previous_status_symbol`, `previous_status_name`, `block_id`, `day_file`,
 `block_link`, `removed_pomodoro_links`, `removed_scheduled` when a future
@@ -2339,16 +2353,16 @@ scheduled date was retired, and `schedule_log` when that retirement wrote an
 entry under an existing Schedule Log. Link-direction toggles also report
 `pomodoro_link_placement` when a link was inserted, `pomodoro_name` when a
 named entry was selected or created, `creates_pomodoro`,
-`pomodoro_already_linked`, and any later-link removals. Clearing with `!`
-reports the all-open-Pomodoro cleanup count. `pomodoro_selector_unused` is
-reserved for older two-way named-clearing results and is not part of the
+`pomodoro_already_linked`, and any later-link removals. Unlinking with `!`
+reports the all-open-Pomodoro cleanup count and leaves the route note
+untouched. `pomodoro_selector_unused` is always `false` and is not part of the
 Ensure Next contract. Toggle results omit `sub_bullets`, `clip`, `priority`,
 `priority_label`, `parent_*`, and `scheduled`. Ensure Next results add
-`toggle_behavior`, `status_changed`, `pomodoro_link_action`, and the
+`toggle_behavior`, `pomodoro_link_action`, and the
 source/destination endpoint objects described under
-[Task status toggle](#task-status-toggle). An Ensure Next destination — and
-any Pomodoro a two-way toggle insert, named creation, or open-direction
-removal touches — also appears in the batch-level `pomodoro_blocks` array;
+[Task Link toggle](#task-link-toggle). An Ensure Next destination — and
+any Pomodoro a link-direction toggle insert or unlink cleanup touches — also
+appears in the batch-level `pomodoro_blocks` array;
 see [Pomodoro blocks](#pomodoro-blocks).
 
 Pomodoro-note results use kind `"pomodoro_note"` with `routed: false`, `route:

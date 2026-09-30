@@ -210,7 +210,8 @@ pub(crate) struct PomodoroStartSpec {
 /// How a marker-only `@route+block-id` capture should change an existing task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskToggleIntent {
-    /// Two-way Ready/Blocked <-> Next toggle. Only the terminal
+    /// Link-presence toggle: link when no matching Task Link sits under
+    /// an open Pomodoro, unlink when one does. Only the terminal
     /// `@route+block-id!` spelling carries this intent.
     Toggle,
     /// One-way ensure-Next plus Task Link relocation. Both unsuffixed

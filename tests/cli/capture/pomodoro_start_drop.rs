@@ -209,7 +209,7 @@ fn start_drop_bare_removes_link_with_nested_note() {
     assert!(out.contains("  1 [*]"), "{out}");
     assert!(
         out.contains(
-            "dropped 2 [[bob#^web-capture]] · stays in NOW · +1 nested line"
+            "dropped 2 [[bob#^web-capture]] · stays Next · +1 nested line"
         ),
         "{out}"
     );
