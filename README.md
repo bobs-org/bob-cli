@@ -457,6 +457,17 @@ Pomodoros section still reports `TODAY 0` and the lanes, and exits 0.
 The full definition, JSON contract, lint codes, and conformance
 examples live in [`docs/plan.md`](docs/plan.md).
 
+## Task freshness
+
+Every visible, non-recurring Ready task carries a human-confirmed
+`[fresh:: YYYY-MM-DD]`: the date a human last confirmed it still needs
+doing as written. Tasks never confirmed, or confirmed longer ago than
+their refresh interval (7 days by default, overridable per task, per
+note, and in config), are due for review. Supported keymaps and
+`bob capture` edits stamp the tasks they rewrite; creation and
+automation never do. The definition, placement and state rules, and
+conformance vectors live in [`docs/freshness.md`](docs/freshness.md).
+
 ## Projects
 
 ```bash
@@ -995,6 +1006,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | --- | --- |
 | Capture grammar, JSON, and picker protocol | [`docs/capture.md`](docs/capture.md) |
 | `bob query` Dataview and Tasks | [`docs/dataview.md`](docs/dataview.md) |
+| Task freshness review lease, placement, and evaluation | [`docs/freshness.md`](docs/freshness.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |

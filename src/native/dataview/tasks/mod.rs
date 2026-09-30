@@ -19,6 +19,9 @@ mod result;
 mod settings;
 mod task;
 
+pub(crate) use settings::TaskFormat;
+pub(crate) use task::{parse_details, TaskDetails};
+
 struct Execution {
     query: QueryAst,
     result: TaskResult,

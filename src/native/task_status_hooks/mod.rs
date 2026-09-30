@@ -263,6 +263,6 @@ use sync::*;
 pub(crate) use compose::{grouping_eligible_note, task_group_classification};
 pub(crate) use model::{TaskStatusDefinition, TaskStatusType, TasksSettings};
 pub(crate) use output::SyncError;
-pub(crate) use parse::markdown_files;
+pub(crate) use parse::{markdown_files, task_metadata, TaskMetadata};
 pub(crate) use settings::{read_tasks_settings, validate_blocked_status};
 pub(crate) use sync::daily_anchor_date;

@@ -53,7 +53,7 @@ impl Default for TasksSettings {
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize,
 )]
-pub(super) enum TaskFormat {
+pub(crate) enum TaskFormat {
     #[serde(rename = "dataview")]
     Dataview,
     #[default]

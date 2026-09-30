@@ -8,8 +8,10 @@ use serde::Deserialize;
 
 use super::env as bob_env;
 
+pub(crate) mod freshness;
 pub(crate) mod plan;
 
+pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use plan::{load_plan_config, PlanConfig};
 
 const CONFIG_RELATIVE_PATH: &str = "bob/config.yml";
@@ -309,6 +311,8 @@ pub(crate) struct RawConfig {
     gkeep: Option<RawGkeep>,
     #[serde(default)]
     pub(crate) plan: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub(crate) freshness: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Deserialize)]

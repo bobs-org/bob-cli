@@ -113,13 +113,13 @@ pub(super) fn parse_task_line(
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct TaskMetadata {
-    pub(super) task_id: Option<String>,
-    pub(super) depends_on: Vec<String>,
-    pub(super) scheduled: Option<NaiveDate>,
+pub(crate) struct TaskMetadata {
+    pub(crate) task_id: Option<String>,
+    pub(crate) depends_on: Vec<String>,
+    pub(crate) scheduled: Option<NaiveDate>,
 }
 
-pub(super) fn task_metadata(
+pub(crate) fn task_metadata(
     body: &str,
     block_id: Option<&str>,
 ) -> TaskMetadata {

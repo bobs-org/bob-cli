@@ -41,6 +41,7 @@ mod collect_done;
 mod config;
 mod dataview;
 mod env;
+mod freshness;
 mod gkeep;
 mod highlights_ref;
 mod markdown;

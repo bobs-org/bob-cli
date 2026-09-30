@@ -164,7 +164,7 @@ impl StatusRegistry {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-pub(super) enum Priority {
+pub(crate) enum Priority {
     Highest,
     High,
     Medium,
@@ -222,7 +222,7 @@ impl Priority {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TaskDate {
+pub(crate) struct TaskDate {
     pub(super) raw: String,
     pub(super) value: Option<String>,
     pub(super) valid: bool,
@@ -513,24 +513,24 @@ fn parse_task_line(line: &str) -> Option<TaskLineComponents> {
     })
 }
 
-#[derive(Debug, Default)]
-struct TaskDetails {
-    description: String,
-    priority: Priority,
-    created: Option<TaskDate>,
-    start: Option<TaskDate>,
-    scheduled: Option<TaskDate>,
-    due: Option<TaskDate>,
-    done: Option<TaskDate>,
-    cancelled: Option<TaskDate>,
-    recurrence_source: Option<String>,
-    on_completion: String,
-    id: String,
-    depends_on: Vec<String>,
-    tags: Vec<String>,
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct TaskDetails {
+    pub(crate) description: String,
+    pub(crate) priority: Priority,
+    pub(crate) created: Option<TaskDate>,
+    pub(crate) start: Option<TaskDate>,
+    pub(crate) scheduled: Option<TaskDate>,
+    pub(crate) due: Option<TaskDate>,
+    pub(crate) done: Option<TaskDate>,
+    pub(crate) cancelled: Option<TaskDate>,
+    pub(crate) recurrence_source: Option<String>,
+    pub(crate) on_completion: String,
+    pub(crate) id: String,
+    pub(crate) depends_on: Vec<String>,
+    pub(crate) tags: Vec<String>,
 }
 
-fn parse_details(line: &str, format: TaskFormat) -> TaskDetails {
+pub(crate) fn parse_details(line: &str, format: TaskFormat) -> TaskDetails {
     let mut details = TaskDetails::default();
     let mut state = line.trim().to_string();
     let mut trailing_tags = Vec::new();
