@@ -635,6 +635,70 @@ fn project_task_id_before_a_child_line_route_marker_still_completes() {
 }
 
 #[test]
+fn pomodoro_start_name_completes_after_hash_on_a_named_start() {
+    // `=#` offers an empty insertion point at the cursor; `#` itself is
+    // never inside the replacement.
+    let empty = field("=#", 2).expect("start name field");
+    assert_eq!(empty.context, CompletionContext::PomodoroStartName);
+    assert_eq!(empty.route, None);
+    assert_eq!(empty.block_id, None);
+    assert_eq!(empty.query, "");
+    assert_eq!(empty.replacement, (2, 2));
+
+    let counted = field("=3#", 3).expect("counted start name field");
+    assert_eq!(counted.context, CompletionContext::PomodoroStartName);
+    assert_eq!(counted.query, "");
+    assert_eq!(counted.replacement, (3, 3));
+
+    // A mid-name cursor reports the typed prefix but replaces the whole
+    // name part.
+    let raw = "=#deep";
+    let mid = field(raw, 4).expect("mid-name field");
+    assert_eq!(mid.context, CompletionContext::PomodoroStartName);
+    assert_eq!(mid.query, "de");
+    assert_eq!(mid.replacement, (2, 6));
+
+    let end = field(raw, raw.len()).expect("end-of-name field");
+    assert_eq!(end.query, "deep");
+    assert_eq!(end.replacement, (2, 6));
+
+    // A cursor on `=<X>` or at the `#` byte itself offers nothing.
+    assert_eq!(field("=#bugs", 0), None);
+    assert_eq!(field("=#bugs", 1), None);
+    assert_eq!(field("=3#bugs", 2), None);
+    assert_eq!(field("=#", 1), None);
+
+    // Bare starts offer nothing.
+    assert_eq!(field("=", 1), None);
+    assert_eq!(field("=3", 2), None);
+
+    // `=x#bugs` is a close near miss, never a start name.
+    assert_eq!(field("=x#bugs", 7), None);
+}
+
+#[test]
+fn pomodoro_start_name_completes_per_token_inside_chains() {
+    let chain = "=x =#de";
+    let completion = field(chain, chain.len()).expect("chain name field");
+    assert_eq!(completion.context, CompletionContext::PomodoroStartName);
+    assert_eq!(completion.query, "de");
+    assert_eq!(completion.replacement, (5, 7));
+
+    // A cursor inside the close token stays an empty success.
+    assert_eq!(field(chain, 1), None);
+}
+
+#[test]
+fn pomodoro_start_name_leaves_link_form_names_alone() {
+    // `@route:id#name` still completes the link-form Pomodoro name.
+    let raw = "x @dev:some-id#bu";
+    let completion = field(raw, raw.len()).expect("link name field");
+    assert_eq!(completion.context, CompletionContext::PomodoroName);
+    assert_eq!(completion.route.as_deref(), Some("dev"));
+    assert_eq!(completion.block_id.as_deref(), Some("some-id"));
+}
+
+#[test]
 fn project_task_block_id_completes_only_first_level_project_bullets() {
     // Nested bullets never complete.
     let nested = "Finish it @cash^goog-exit+\n- Draft the memo :draft\n  - keep it short :x";

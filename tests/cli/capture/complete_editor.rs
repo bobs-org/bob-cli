@@ -990,3 +990,147 @@ fn capture_complete_pomodoro_close_selection_protocol() {
         );
     }
 }
+
+#[test]
+fn capture_complete_pomodoro_start_name_json_covers_empty_and_new_queries() {
+    let temp = TempDir::new("bob-cli-capture-complete-start-name");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("dev.md"), "---\ntype: [[area]]\n---\n");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "  - [[sase#^plan-day]]\n",
+            "- [ ] () — BUGS\n",
+            "  - [[sase#^deep-fix]]\n",
+            "- [ ] () — DEEP WORK\n",
+            "  - [[bob#^outline]]\n",
+            "  - [[bob#^draft]]\n",
+            "- [ ] ()\n",
+            "  - [[bob#^inbox-zero]]\n",
+        ),
+    );
+
+    let complete = |draft: &str| {
+        bob_command()
+            .arg("capture-complete")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-c")
+            .arg(draft.len().to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .env("BOB_DAY_FILE", &day_file)
+            .output()
+            .expect("run start-name completion")
+    };
+
+    let empty = complete("=#");
+    assert_success(&empty);
+    let empty_json: serde_json::Value =
+        serde_json::from_str(stdout(&empty).trim()).expect("json");
+    assert_eq!(empty_json["context"], "pomodoro_start_name");
+    assert_eq!(
+        empty_json["replacement"],
+        serde_json::json!({ "start": 2, "end": 2 })
+    );
+    let rows = empty_json["candidates"].as_array().expect("candidates");
+    let replacements = rows
+        .iter()
+        .map(|row| row["replacement"].as_str().expect("replacement"))
+        .collect::<Vec<_>>();
+    assert_eq!(replacements, vec!["bugs", "deep-work", "plan", ""]);
+    assert_eq!(rows[0]["next_up"], true);
+    assert_eq!(rows[0]["name"], "BUGS");
+    assert_eq!(rows[2]["state"], "completed");
+    assert_eq!(rows[2]["time_range"], "0830-0855");
+    assert_eq!(rows[2]["creates_pomodoro"], true);
+    assert_eq!(rows[3]["requires_name"], true);
+    assert!(empty_json.get("warnings").is_none(), "{empty_json}");
+
+    let novel = complete("=#rev");
+    assert_success(&novel);
+    let novel_json: serde_json::Value =
+        serde_json::from_str(stdout(&novel).trim()).expect("json");
+    assert_eq!(novel_json["context"], "pomodoro_start_name");
+    assert_eq!(
+        novel_json["replacement"],
+        serde_json::json!({ "start": 2, "end": 5 })
+    );
+    let novel_rows = novel_json["candidates"].as_array().expect("candidates");
+    assert_eq!(novel_rows[0]["replacement"], "rev");
+    assert_eq!(novel_rows[0]["name"], "REV");
+    assert_eq!(novel_rows[0]["creates_pomodoro"], true);
+    assert!(novel_rows[0].get("next_up").is_none(), "{novel_json}");
+    assert!(novel_rows[0].get("ref").is_none(), "{novel_json}");
+
+    // A cursor on the suffix side of `#` stays an empty success.
+    let at_hash = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("1")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=#rev")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run start-name completion at hash");
+    assert_success(&at_hash);
+    let at_hash_json: serde_json::Value =
+        serde_json::from_str(stdout(&at_hash).trim()).expect("json");
+    assert!(at_hash_json["context"].is_null(), "{at_hash_json}");
+    assert_eq!(
+        at_hash_json["candidates"],
+        serde_json::json!([]),
+        "{at_hash_json}"
+    );
+}
+
+#[test]
+fn capture_complete_pomodoro_start_name_human_labels_rows() {
+    let temp = TempDir::new("bob-cli-capture-complete-start-name-human");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "- [ ] () — BUGS\n",
+            "  - [[sase#^deep-fix]]\n",
+            "- [ ] ()\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("2")
+        .arg("--")
+        .arg("=#")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run start-name human completion");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert_text_order(
+        &out,
+        &[
+            "pomodoro_start_name",
+            "next up · 1 link",
+            "again · last 0830-0855",
+            "name it · Empty",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}

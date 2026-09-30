@@ -22,6 +22,7 @@ pub(crate) enum CompletionContext {
     TaskBlockId,
     ProjectTaskBlockId,
     PomodoroName,
+    PomodoroStartName,
     Task,
     TaskSection,
     ActiveTask,
@@ -215,6 +216,47 @@ pub(super) fn caret_link_field(
     })
 }
 
+/// Completion field for the name part of a `=<X>#name` named Pomodoro
+/// start. The cursor must lie inside `[name_start, name_end]`: just after
+/// `#` through the end of the name part. A cursor on `=<X>` or at the `#`
+/// byte itself yields nothing, and `#` is never inside the replacement.
+/// The replacement covers the whole name part regardless of where the
+/// cursor sits inside it. The lexer decides what counts as a named start;
+/// validity never matters here, so near misses complete the same way
+/// valid tokens do.
+fn pomodoro_start_name_field(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let parent = item.lines.first()?;
+    let text = parent.raw.text;
+    let trimmed = text.trim();
+    let super::item::EqualsToken::Start {
+        suffix,
+        name: Some(name),
+        ..
+    } = super::item::session_equals_token(trimmed)?
+    else {
+        return None;
+    };
+    let leading = text.len() - text.trim_start().len();
+    let token_start = parent.raw.start + leading;
+    let prefix_len = 1 + suffix.len();
+    let name_start = token_start + prefix_len + 1;
+    let name_end = name_start + name.len();
+    if cursor < name_start || cursor > name_end {
+        return None;
+    }
+    let query = name.get(..cursor - name_start)?.to_string();
+    Some(CompletionField {
+        context: CompletionContext::PomodoroStartName,
+        route: None,
+        block_id: None,
+        query,
+        replacement: (name_start, name_end),
+    })
+}
+
 pub(crate) fn completion_field_at(
     raw_text: &str,
     cursor: usize,
@@ -244,6 +286,13 @@ pub(crate) fn completion_field_at(
             })
             .map(|(line_index, line)| (item, line_index, line.raw))
     })?;
+    // The name part of a `=<X>#name` named Pomodoro start completes
+    // start-aware session rows, whether the token is valid, a near miss,
+    // or the `=<X>#` incomplete state. This runs before the session-item
+    // early return below so named starts keep their name completion.
+    if let Some(field) = pomodoro_start_name_field(item, cursor) {
+        return Some(field);
+    }
     // A whole-item `+[N]`/`-[N]` adjustment, `++[N]`/`--[N]` shift,
     // `=x` close, or `=`/`=<X>` start is an action, never a routed
     // capture: it requests no route or task completion candidates. The

@@ -128,7 +128,14 @@ plan_themes_cap (omitted when the daily note or the plan config is \
 unavailable). Accepting \
 that row only canonicalizes the marker; `bob capture` creates the named \
 placeholder later. Exact or prefix open-name matches stay first and do not \
-receive a create row. Empty queries stay the existing discovery list. A \
+receive a create row. Empty queries stay the existing discovery list. \
+Pomodoro-start-name completion covers the name part of a `=<X>#name` named \
+start and the `=<X>#` incomplete state, backed by today's ledger: start \
+rows for planned placeholders (the entry a bare `=` would start carries \
+`next_up`), a create row for a missing name, `again` rows that start a \
+new session named like a completed one, `name it` rows for placeholders \
+that still need a name, and the running entry last. The `pomodoro_name` \
+context is unchanged. A \
 missing daily note, a missing Pomodoros section, and multiple open timed \
 Pomodoros stay write-free warnings without a create row. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` start suffix is \
 never completable: block and Pomodoro-name replacement ranges end before \
@@ -137,7 +144,7 @@ a candidate preserves the typed suffix. The `=x[<N>][!<M>][~<K>]` close suffix b
 same way: it is never a completion field, replacements still stop before \
 `#`/`=`, and a cursor anywhere inside the suffix, including the task-number \
 lists and a dangling `,`/`!`/`~` separator, returns an empty success. A whole-item \
-`+[N]`/`-[N]` Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`, or `--` is one unit), `=x[<N>][!<M>][~<K>]` close, or `=`/`=<X>` start (a bare `=` starts 25 minutes) is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Pomodoro block-ID \
+`+[N]`/`-[N]` Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`, or `--` is one unit), `=x[<N>][!<M>][~<K>]` close, or a bare `=`/`=<X>` start (a bare `=` starts 25 minutes) is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. A `=<X>#name` named start instead completes the name after `#` as `pomodoro_start_name`, per token inside chains; a cursor on `=<X>` or at the `#` byte itself returns an empty success. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
 `bob capture-tasks` and, by default, only offer tasks that already carry a \
@@ -175,7 +182,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, task, task_section, active_task, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -385,6 +392,12 @@ struct PomodoroNameCandidate {
     requires_name: bool,
     #[serde(skip_serializing_if = "is_false")]
     creates_pomodoro: bool,
+    /// Marks the row `bob capture` with a bare `=` would start. Only set
+    /// in the `pomodoro_start_name` context; always false (and therefore
+    /// omitted) in the `pomodoro_name` context so that output stays
+    /// byte-identical.
+    #[serde(skip_serializing_if = "is_false")]
+    next_up: bool,
     /// Resulting theme count and cap when this create row is accepted.
     /// Only on `creates_pomodoro` rows; omitted when the daily note or
     /// the plan config is unavailable.
@@ -498,6 +511,7 @@ fn build_result(
             | CompletionContext::TaskBlockId
             | CompletionContext::ProjectTaskBlockId
             | CompletionContext::PomodoroName
+            | CompletionContext::PomodoroStartName
             | CompletionContext::Task
             | CompletionContext::TaskSection
             | CompletionContext::ActiveTask => {
@@ -626,6 +640,9 @@ fn build_result(
         }
         CompletionContext::PomodoroName => {
             pomodoro_name_candidates(bob_dir, &field.query)?
+        }
+        CompletionContext::PomodoroStartName => {
+            pomodoro_start_name_candidates(bob_dir, &field.query)?
         }
         CompletionContext::ActiveTask => {
             active_task_candidates(bob_dir, &field.query)
@@ -1055,6 +1072,228 @@ fn pomodoro_name_candidates_at(
     Ok((Candidates::PomodoroName(candidates), warnings))
 }
 
+fn pomodoro_start_name_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let day_file = pomodoro::day_file_for(bob_dir);
+    pomodoro_start_name_candidates_at(&day_file, query)
+}
+
+fn pomodoro_start_name_candidates_at(
+    day_file: &Path,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let contents = match fs::read_to_string(day_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok((
+                Candidates::PomodoroName(Vec::new()),
+                vec![bounded_warning(format!(
+                    "Bob daily note does not exist: {}",
+                    day_file.display()
+                ))],
+            ));
+        }
+        Err(error) => {
+            return Err(CompleteError::io(format!(
+                "read daily note {}: {error}",
+                day_file.display()
+            )));
+        }
+    };
+
+    let scan = capture_pomodoros::scan(&contents);
+    let mut warnings = Vec::new();
+    if !scan.has_section {
+        warnings.push(bounded_warning(format!(
+            "Bob daily note has no Pomodoros section: {}",
+            day_file.display()
+        )));
+    }
+    warnings.extend(scan.warnings.iter().cloned());
+    let plan_hint = plan_creation_hint(&contents, &scan);
+    let candidates = pomodoro_start_name_candidates_from_scan_with_hint(
+        &scan, query, plan_hint,
+    );
+
+    Ok((Candidates::PomodoroName(candidates), warnings))
+}
+
+#[cfg(test)]
+fn pomodoro_start_name_candidates_from_scan(
+    scan: &capture_pomodoros::PomodoroScan,
+    query: &str,
+) -> Vec<PomodoroNameCandidate> {
+    pomodoro_start_name_candidates_from_scan_with_hint(scan, query, None)
+}
+
+fn pomodoro_start_name_candidates_from_scan_with_hint(
+    scan: &capture_pomodoros::PomodoroScan,
+    query: &str,
+    plan_hint: Option<PlanCreationHint>,
+) -> Vec<PomodoroNameCandidate> {
+    let next_up_line =
+        capture_pomodoros::next_future_pomodoro(scan).map(|entry| entry.line);
+
+    let mut seen_slugs = Vec::<&str>::new();
+    let mut start = Vec::new();
+    for entry in &scan.entries {
+        if entry.state != PomodoroState::Open
+            || entry.time_range.is_some()
+            || !entry.placeholder
+            || !entry.selectable
+            || seen_slugs.contains(&entry.slug.as_str())
+        {
+            continue;
+        }
+        let match_count = scan
+            .entries
+            .iter()
+            .filter(|candidate| {
+                candidate.state == PomodoroState::Open
+                    && candidate.selectable
+                    && candidate.slug == entry.slug
+            })
+            .count();
+        seen_slugs.push(&entry.slug);
+        start.push(pomodoro_name_candidate_with_next_up(
+            entry,
+            false,
+            match_count,
+            next_up_line == Some(entry.line),
+        ));
+    }
+    let start = rank(start, query, |candidate| candidate.replacement.as_str());
+
+    let open_slugs = scan
+        .entries
+        .iter()
+        .filter(|entry| entry.state == PomodoroState::Open)
+        .map(|entry| entry.slug.as_str())
+        .collect::<Vec<_>>();
+    // Deduplicate completed slugs keeping the latest in document order,
+    // then list the most recent first so an empty query resurfaces the
+    // last session first.
+    let mut again_entries = Vec::<&PomodoroEntry>::new();
+    for entry in &scan.entries {
+        if entry.state != PomodoroState::Completed
+            || !entry.selectable
+            || open_slugs.contains(&entry.slug.as_str())
+        {
+            continue;
+        }
+        if let Some(position) = again_entries
+            .iter()
+            .position(|existing| existing.slug == entry.slug)
+        {
+            again_entries[position] = entry;
+        } else {
+            again_entries.push(entry);
+        }
+    }
+    again_entries.reverse();
+    let mut again = Vec::new();
+    for entry in again_entries {
+        let match_count = scan
+            .entries
+            .iter()
+            .filter(|candidate| {
+                candidate.state == PomodoroState::Completed
+                    && candidate.selectable
+                    && candidate.slug == entry.slug
+            })
+            .count();
+        let mut candidate = pomodoro_name_candidate_with_next_up(
+            entry,
+            false,
+            match_count,
+            false,
+        );
+        // An "again" row starts a new session named like the completed
+        // one, so it creates and reports that entry's history.
+        candidate.replacement = entry.slug.clone();
+        candidate.name = capture_pomodoros::canonicalize_pomodoro_name(
+            entry.name.as_deref().unwrap_or(&entry.slug),
+        )
+        .or_else(|| entry.name.clone());
+        candidate.creates_pomodoro = true;
+        again.push(candidate);
+    }
+    let again = rank(again, query, |candidate| candidate.replacement.as_str());
+
+    let mut combined = start;
+    if let Some(creation) =
+        pomodoro_start_creation_candidate(scan, query, plan_hint.as_ref())
+    {
+        insert_pomodoro_creation_candidate(&mut combined, creation, query);
+    }
+    combined.extend(again);
+
+    combined.extend(scan.entries.iter().filter_map(|entry| {
+        if entry.state != PomodoroState::Open
+            || entry.time_range.is_some()
+            || !entry.placeholder
+            || entry.selectable
+        {
+            return None;
+        }
+        Some(pomodoro_name_candidate_with_next_up(
+            entry,
+            true,
+            1,
+            next_up_line == Some(entry.line),
+        ))
+    }));
+
+    combined.extend(scan.entries.iter().filter_map(|entry| {
+        if entry.state != PomodoroState::Open
+            || entry.time_range.is_none()
+            || !entry.selectable
+        {
+            return None;
+        }
+        let match_count = scan
+            .entries
+            .iter()
+            .filter(|candidate| {
+                candidate.state == PomodoroState::Open
+                    && candidate.selectable
+                    && candidate.slug == entry.slug
+            })
+            .count();
+        Some(pomodoro_name_candidate_with_next_up(
+            entry,
+            false,
+            match_count,
+            false,
+        ))
+    }));
+
+    combined
+}
+
+/// The start-specific create row: only a `Missing` query may create, so a
+/// completed-only match ("again") never also offers a duplicate create
+/// row. Placement, naming, and plan-budget preview reuse the shared link
+/// helper; `named_creation_name` stays untouched for link-form callers.
+fn pomodoro_start_creation_candidate(
+    scan: &capture_pomodoros::PomodoroScan,
+    query: &str,
+    plan_hint: Option<&PlanCreationHint>,
+) -> Option<PomodoroNameCandidate> {
+    if query.is_empty() {
+        return None;
+    }
+    if !matches!(
+        capture_pomodoros::select_named(scan, query),
+        capture_pomodoros::NamedSelection::Missing { .. }
+    ) {
+        return None;
+    }
+    pomodoro_creation_candidate(scan, query, plan_hint)
+}
+
 /// Theme count preview for a `creates_pomodoro` row: today's theme
 /// count plus one for the new name, with the configured cap. `None`
 /// when the ledger or the plan config is unavailable.
@@ -1137,6 +1376,7 @@ fn pomodoro_creation_candidate(
         name: Some(name),
         requires_name: false,
         creates_pomodoro: true,
+        next_up: false,
         plan_themes_after,
         plan_themes_cap,
         line: None,
@@ -1206,6 +1446,23 @@ fn pomodoro_name_candidate(
     requires_name: bool,
     match_count: usize,
 ) -> PomodoroNameCandidate {
+    pomodoro_name_candidate_with_next_up(
+        entry,
+        requires_name,
+        match_count,
+        false,
+    )
+}
+
+/// [`pomodoro_name_candidate`] plus the start-aware `next_up` marker. The
+/// shared `pomodoro_name` context always passes false so its JSON stays
+/// byte-identical; only `pomodoro_start_name` candidates set it.
+fn pomodoro_name_candidate_with_next_up(
+    entry: &PomodoroEntry,
+    requires_name: bool,
+    match_count: usize,
+    next_up: bool,
+) -> PomodoroNameCandidate {
     PomodoroNameCandidate {
         replacement: if requires_name {
             String::new()
@@ -1216,6 +1473,7 @@ fn pomodoro_name_candidate(
         name: entry.name.clone(),
         requires_name,
         creates_pomodoro: false,
+        next_up,
         plan_themes_after: None,
         plan_themes_cap: None,
         line: Some(entry.line),
@@ -1389,7 +1647,7 @@ fn print_human_success_with_styler(
 
     println!();
     println!("  Candidates");
-    for line in candidate_lines(&result.candidates) {
+    for line in candidate_lines(&result.candidates, result.context) {
         println!("    {} {}", styler.cyan(&line.0), styler.dim(&line.1));
     }
     print_warnings(result, styler);
@@ -1433,7 +1691,10 @@ fn plural_candidates(result: &CaptureCompleteResult) -> &'static str {
     }
 }
 
-fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
+fn candidate_lines(
+    candidates: &Candidates,
+    context: Option<CompletionContext>,
+) -> Vec<(String, String)> {
     match candidates {
         Candidates::Route(items) => items
             .iter()
@@ -1497,6 +1758,9 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
         Candidates::PomodoroName(items) => items
             .iter()
             .map(|item| {
+                if context == Some(CompletionContext::PomodoroStartName) {
+                    return pomodoro_start_name_line(item);
+                }
                 let name =
                     item.name.clone().unwrap_or_else(|| "unnamed".to_string());
                 let slug = if item.replacement.is_empty() {
@@ -1550,6 +1814,35 @@ fn candidate_lines(candidates: &Candidates) -> Vec<(String, String)> {
     }
 }
 
+/// Human row for one `pomodoro_start_name` candidate: the visible name
+/// plus the row-kind label (start/next-up, new, again, name-it, running)
+/// with its link count or time range.
+fn pomodoro_start_name_line(item: &PomodoroNameCandidate) -> (String, String) {
+    let name = item.name.clone().unwrap_or_else(|| "unnamed".to_string());
+    let links = match item.child_count {
+        0 => "Empty".to_string(),
+        1 => "1 link".to_string(),
+        count => format!("{count} links"),
+    };
+    let detail = if item.requires_name {
+        format!("name it · {links}")
+    } else if item.creates_pomodoro && item.state == PomodoroState::Completed {
+        match item.time_range.as_deref() {
+            Some(range) => format!("again · last {range}"),
+            None => "again".to_string(),
+        }
+    } else if item.creates_pomodoro {
+        "new session".to_string()
+    } else if item.time_range.is_some() {
+        format!("running {}", item.time_range.as_deref().unwrap_or(""))
+    } else if item.next_up {
+        format!("next up · {links}")
+    } else {
+        format!("planned · {links}")
+    };
+    (name, detail)
+}
+
 fn pomodoro_name_badges(item: &PomodoroNameCandidate) -> Vec<String> {
     let mut badges = Vec::new();
     if item.is_current {
@@ -1575,6 +1868,7 @@ fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::TaskBlockId => "task_block_id",
         CompletionContext::ProjectTaskBlockId => "project_task_block_id",
         CompletionContext::PomodoroName => "pomodoro_name",
+        CompletionContext::PomodoroStartName => "pomodoro_start_name",
         CompletionContext::Task => "task",
         CompletionContext::TaskSection => "task_section",
         CompletionContext::ActiveTask => "active_task",
@@ -1949,7 +2243,7 @@ mod tests {
 
         let value =
             with_env("BOB_DAY_FILE", &day_file, || result(temp.path(), "^", 1));
-        let rows = candidate_lines(&value.candidates);
+        let rows = candidate_lines(&value.candidates, value.context);
         assert_eq!(
             rows,
             vec![
@@ -2474,6 +2768,278 @@ mod tests {
         assert!(warnings[0].contains("no Pomodoros section"));
     }
 
+    /// The plan's worked-example ledger: a completed PLAN session, open
+    /// BUGS and DEEP WORK placeholders, and one unnamed placeholder.
+    fn named_start_ledger() -> capture_pomodoros::PomodoroScan {
+        capture_pomodoros::scan(concat!(
+            "# 2026-07-10\n",
+            "\n",
+            "## Pomodoros\n",
+            "\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "  - 🍅 [[sase#^plan-day]]\n",
+            "- [ ] () — BUGS\n",
+            "  - [[sase#^deep-fix]]\n",
+            "- [ ] () — DEEP WORK\n",
+            "  - [[bob#^outline]]\n",
+            "  - [[bob#^draft]]\n",
+            "- [ ] ()\n",
+            "  - [[bob#^inbox-zero]]\n",
+        ))
+    }
+
+    #[test]
+    fn pomodoro_start_name_lists_start_again_and_name_it_rows() {
+        let scan = named_start_ledger();
+        let candidates = pomodoro_start_name_candidates_from_scan(&scan, "");
+        let rows = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.replacement.as_str(),
+                    candidate.name.as_deref(),
+                    candidate.requires_name,
+                    candidate.creates_pomodoro,
+                    candidate.state,
+                    candidate.time_range.as_deref(),
+                    candidate.next_up,
+                    candidate.child_count,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "bugs",
+                    Some("BUGS"),
+                    false,
+                    false,
+                    PomodoroState::Open,
+                    None,
+                    true,
+                    1
+                ),
+                (
+                    "deep-work",
+                    Some("DEEP WORK"),
+                    false,
+                    false,
+                    PomodoroState::Open,
+                    None,
+                    false,
+                    2
+                ),
+                (
+                    "plan",
+                    Some("PLAN"),
+                    false,
+                    true,
+                    PomodoroState::Completed,
+                    Some("0830-0855"),
+                    false,
+                    1
+                ),
+                ("", None, true, false, PomodoroState::Open, None, false, 1),
+            ]
+        );
+        assert_eq!(candidates[0].line, Some(7));
+        assert_eq!(candidates[1].line, Some(9));
+        assert_eq!(candidates[2].line, Some(5));
+        assert!(candidates[2].pomodoro_ref.is_some());
+        assert!(candidates.iter().filter(|row| row.next_up).count() == 1);
+        assert!(
+            candidates.iter().all(|row| !row.creates_pomodoro
+                || row.state == PomodoroState::Completed),
+            "{candidates:?}"
+        );
+    }
+
+    #[test]
+    fn pomodoro_start_name_filters_and_creates_by_query() {
+        let scan = named_start_ledger();
+
+        let prefix = pomodoro_start_name_candidates_from_scan(&scan, "de");
+        let prefix_rows = prefix
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(prefix_rows, vec!["deep-work", ""]);
+
+        let completed = pomodoro_start_name_candidates_from_scan(&scan, "pl");
+        let completed_rows = completed
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(completed_rows, vec!["plan", ""]);
+        assert!(completed[0].creates_pomodoro);
+        assert_eq!(completed[0].state, PomodoroState::Completed);
+
+        let novel = pomodoro_start_name_candidates_from_scan(&scan, "rev");
+        let novel_rows = novel
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(novel_rows, vec!["rev", ""]);
+        assert_eq!(novel[0].name.as_deref(), Some("REV"));
+        assert!(novel[0].creates_pomodoro);
+        assert!(novel[0].pomodoro_ref.is_none());
+        assert!(novel[0].line.is_none());
+        assert!(!novel[0].next_up);
+    }
+
+    #[test]
+    fn pomodoro_start_name_puts_the_running_entry_last() {
+        let scan = capture_pomodoros::scan(concat!(
+            "## Pomodoros\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "- [ ] (**0840-0905** [t:: 25m]) — BUGS\n",
+            "  - [[sase#^deep-fix]]\n",
+            "- [ ] () — DEEP WORK\n",
+            "  - [[bob#^outline]]\n",
+            "  - [[bob#^draft]]\n",
+            "- [ ] ()\n",
+            "  - [[bob#^inbox-zero]]\n",
+        ));
+        let candidates = pomodoro_start_name_candidates_from_scan(&scan, "");
+        let rows = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.replacement.as_str(),
+                    candidate.name.as_deref(),
+                    candidate.requires_name,
+                    candidate.creates_pomodoro,
+                    candidate.state,
+                    candidate.time_range.as_deref(),
+                    candidate.next_up,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "deep-work",
+                    Some("DEEP WORK"),
+                    false,
+                    false,
+                    PomodoroState::Open,
+                    None,
+                    true
+                ),
+                (
+                    "plan",
+                    Some("PLAN"),
+                    false,
+                    true,
+                    PomodoroState::Completed,
+                    Some("0830-0855"),
+                    false
+                ),
+                ("", None, true, false, PomodoroState::Open, None, false),
+                (
+                    "bugs",
+                    Some("BUGS"),
+                    false,
+                    false,
+                    PomodoroState::Open,
+                    Some("0840-0905"),
+                    false
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn pomodoro_start_name_matches_pomodoro_name_warnings() {
+        let temp = TempDir::new("bob-cli-capture-complete-start-name-warns");
+        let missing_day = temp.path().join("2026/20260828.md");
+        let (candidates, warnings) =
+            pomodoro_start_name_candidates_at(&missing_day, "")
+                .expect("warning success");
+        assert_eq!(candidates.len(), 0);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("does not exist"));
+
+        let sectionless = temp.path().join("2026/20260829.md");
+        write_file(&sectionless, "# Day\n");
+        let (candidates, warnings) =
+            pomodoro_start_name_candidates_at(&sectionless, "")
+                .expect("warning success");
+        assert_eq!(candidates.len(), 0);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("no Pomodoros section"));
+
+        // Several open timed entries leave no place for a new session.
+        let ambiguous = capture_pomodoros::scan(concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — MEMORY\n",
+            "- [ ] (1000-1030) — BUGS\n",
+            "- [ ] ()\n",
+        ));
+        let candidates =
+            pomodoro_start_name_candidates_from_scan(&ambiguous, "future");
+        assert!(
+            candidates.iter().all(|row| row.replacement != "future"),
+            "{candidates:?}"
+        );
+    }
+
+    #[test]
+    fn pomodoro_start_name_human_labels_cover_every_row_kind() {
+        let scan = named_start_ledger();
+        let candidates = pomodoro_start_name_candidates_from_scan(&scan, "");
+        assert_eq!(
+            candidate_lines(
+                &Candidates::PomodoroName(candidates),
+                Some(CompletionContext::PomodoroStartName),
+            ),
+            vec![
+                ("BUGS".to_string(), "next up · 1 link".to_string()),
+                ("DEEP WORK".to_string(), "planned · 2 links".to_string()),
+                ("PLAN".to_string(), "again · last 0830-0855".to_string()),
+                ("unnamed".to_string(), "name it · 1 link".to_string()),
+            ]
+        );
+
+        let novel = pomodoro_start_name_candidates_from_scan(&scan, "rev");
+        assert_eq!(
+            candidate_lines(
+                &Candidates::PomodoroName(novel),
+                Some(CompletionContext::PomodoroStartName),
+            )[0],
+            ("REV".to_string(), "new session".to_string()),
+        );
+
+        let running = capture_pomodoros::scan(concat!(
+            "## Pomodoros\n",
+            "- [ ] (0840-0905) — BUGS\n",
+            "- [ ] () — DEEP WORK\n",
+            "- [ ] ()\n",
+        ));
+        let running_candidates =
+            pomodoro_start_name_candidates_from_scan(&running, "");
+        let lines = candidate_lines(
+            &Candidates::PomodoroName(running_candidates),
+            Some(CompletionContext::PomodoroStartName),
+        );
+        assert_eq!(
+            lines.last().expect("running row"),
+            &("BUGS".to_string(), "running 0840-0905".to_string()),
+        );
+    }
+
+    #[test]
+    fn pomodoro_name_candidates_omit_next_up() {
+        // The shared `pomodoro_name` context never sets `next_up`, so its
+        // JSON stays byte-identical now that the field exists.
+        let scan = named_start_ledger();
+        let candidates = pomodoro_name_candidates_from_scan(&scan, "");
+        let json = serde_json::to_string(&candidates).expect("json");
+        assert!(!json.contains("next_up"), "{json}");
+    }
+
     #[test]
     fn default_task_completion_stays_identified_only() {
         let temp = TempDir::new("bob-cli-capture-complete-identified-only");
@@ -2867,7 +3433,8 @@ mod tests {
             pomodoro_name_candidates_from_entries(&scan.entries, ""),
         );
 
-        let lines = candidate_lines(&candidates);
+        let lines =
+            candidate_lines(&candidates, Some(CompletionContext::PomodoroName));
 
         assert_eq!(lines[0].0, "MEMORY");
         assert_eq!(lines[0].1, "memory  0900-0930  current 2 matches");
@@ -2885,7 +3452,8 @@ mod tests {
         let candidates = Candidates::PomodoroName(
             pomodoro_name_candidates_from_scan(&scan, "future"),
         );
-        let lines = candidate_lines(&candidates);
+        let lines =
+            candidate_lines(&candidates, Some(CompletionContext::PomodoroName));
 
         assert_eq!(lines[0].0, "FUTURE");
         assert_eq!(lines[0].1, "future  planned  create");
