@@ -284,13 +284,13 @@ report, 1 for an I/O failure, 2 for usage or an invalid plan config.
 | Surface | What it shows |
 | --- | --- |
 | `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
-| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin renders PLAN, TODAY, and lane chips, a theme line, and any lints. (Later phase: the plugin moves to api v2.) The affected chip shows a dash when the daily note, Pomodoros section, or Tasks plugin data is unavailable. |
-| `dash.md` | Its configured PLAN, TODAY, and lane chips and mutually exclusive TODAY / PENDING / NEXT / READY sections use the Bob Ledger Tools API. (Later phase: the dash rebuild.) |
+| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v2: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`) renders PLAN, TODAY, and lane chips, a theme line, and any lints. The affected chip shows a dash when the daily note, Pomodoros section, or Tasks plugin data is unavailable. |
+| `dash.md` | Its TODAY, PENDING, NEXT, READY, BLOCKED, and PLAN chips and mutually exclusive TODAY / PENDING / NEXT / READY sections use the Bob Ledger Tools api v2. |
 | `bob tmux-pomodoro` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |
 | `bob task-status-hooks` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
 | `bob capture` | When a capture changes today's Pomodoros section, a before/after theme and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap theme. |
 | Bob Mac Capture | The same budget in Themes and Links capsules, warning captions, and shorter destination rows such as `→ GOALS · next up` or `→ running GOALS 0945–1015`. |
-| Obsidian Notices | A plan suffix such as `· plan 3/3 · 11/10 🔴` on Task Link changes. (Later phase: lane-aware Notices.) |
+| Obsidian Notices | A lane-aware suffix on Task Link changes, for example `Linked · Next · NEXT 13/15` or `→ Ready · 2 tasks · unlinked 1 from today · NEXT 11/15 · PENDING 7/10`, with 🔴 plus a prune hint when over a lane cap. |
 
 ## Conformance examples
 
