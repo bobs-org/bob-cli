@@ -185,6 +185,23 @@ pub(super) fn explicit_toggle_unsupported_message(
     Some(EXPLICIT_TOGGLE_ONLY_MARKER_ERROR)
 }
 
+/// A task-link picker query claim: a single-line item whose parent line is
+/// one whitespace-delimited token starting with `:`. The returned token
+/// covers the whole query including the sigil. Execution, the editor, and
+/// completion all call this one predicate; nothing else re-derives the rule.
+pub(super) fn task_link_query_token<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<Token<'a>> {
+    let [line] = item.lines.as_slice() else {
+        return None;
+    };
+    let tokens = tokenize_line_with_spans(&line.raw);
+    let [token] = tokens.as_slice() else {
+        return None;
+    };
+    token.text.starts_with(':').then_some(*token)
+}
+
 /// Return whether one already-whitespace-free selector component is typeable
 /// as a task-section third component (`@route+id#section`).
 ///

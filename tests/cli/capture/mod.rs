@@ -32,5 +32,6 @@ mod sections;
 mod sub_bullet;
 mod targets;
 mod task_id;
+mod task_link;
 mod task_marker;
 mod task_toggle;

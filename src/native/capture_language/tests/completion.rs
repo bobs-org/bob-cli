@@ -747,3 +747,48 @@ fn project_task_block_id_completes_only_first_level_project_bullets() {
     let sigil = raw.rfind(':').expect("sigil");
     assert_eq!(field(raw, sigil), None);
 }
+
+#[test]
+fn task_link_query_completes_the_sigil_inclusive_token() {
+    // The cursor before the sigil, just after it, in the middle, and at
+    // the end all report the `task_link` context; the query runs from
+    // just after the sigil to the cursor and the replacement covers the
+    // whole token including the sigil.
+    let before = field(":dee", 0).expect("before sigil");
+    assert_eq!(before.context, CompletionContext::TaskLink);
+    assert_eq!(before.query, "");
+    assert_eq!(before.replacement, (0, 4));
+
+    let after_sigil = field(":dee", 1).expect("after sigil");
+    assert_eq!(after_sigil.context, CompletionContext::TaskLink);
+    assert_eq!(after_sigil.query, "");
+    assert_eq!(after_sigil.replacement, (0, 4));
+
+    let middle = field(":dee", 2).expect("middle");
+    assert_eq!(middle.context, CompletionContext::TaskLink);
+    assert_eq!(middle.query, "d");
+    assert_eq!(middle.replacement, (0, 4));
+
+    let end = field(":dee", 4).expect("end");
+    assert_eq!(end.context, CompletionContext::TaskLink);
+    assert_eq!(end.query, "dee");
+    assert_eq!(end.replacement, (0, 4));
+
+    let bare = field(":", 1).expect("bare sigil");
+    assert_eq!(bare.context, CompletionContext::TaskLink);
+    assert_eq!(bare.query, "");
+    assert_eq!(bare.replacement, (0, 1));
+
+    // The second item of a batch completes with draft-absolute offsets.
+    let batch = "Buy milk\n\n:dee";
+    let second = field(batch, batch.len()).expect("second item");
+    assert_eq!(second.context, CompletionContext::TaskLink);
+    assert_eq!(second.query, "dee");
+    assert_eq!(second.replacement, (10, 14));
+
+    // Multi-token and multi-line cases stay prose and offer nothing.
+    assert_eq!(field(":dee more", 9), None);
+    assert_eq!(field("Buy :dee", 8), None);
+    let parented = ":dee\n- x";
+    assert_eq!(field(parented, parented.len()), None);
+}

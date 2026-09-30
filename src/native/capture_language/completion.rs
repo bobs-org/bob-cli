@@ -26,6 +26,7 @@ pub(crate) enum CompletionContext {
     Task,
     TaskSection,
     ActiveTask,
+    TaskLink,
     NowTag,
     WikilinkNote,
     WikilinkHeading,
@@ -81,6 +82,39 @@ pub(super) struct CompletionParts<'a> {
 /// indentation plus bullet marker itself is never completable, matching the
 /// authored-bullet grammar `bob capture` and `bob capture-parse` execute
 /// with.
+/// Complete a solo leading `:` token: the query is the token text between
+/// the sigil and the cursor (empty at or just after the sigil), and the
+/// replacement covers the whole token including the sigil, because
+/// accepting rewrites the query into the canonical `@route:block-id`
+/// marker. The cursor may sit anywhere in `[token.start, token.end]`,
+/// including just before the sigil so clients can refetch the full list at
+/// `replacement.start`. Multi-token and multi-line items stay prose and
+/// return `None`, exactly like the claim predicate.
+pub(super) fn task_link_completion_field_at(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let token = task_link_query_token(item)?;
+    if cursor < token.start || cursor > token.end {
+        return None;
+    }
+    let relative = cursor - token.start;
+    // A cursor just before the sigil refetches the full list with an empty
+    // query; `get(1..0)` would be `None`, so spell that case directly.
+    let query = if relative == 0 {
+        String::new()
+    } else {
+        token.text.get(1..relative)?.to_string()
+    };
+    Some(CompletionField {
+        context: CompletionContext::TaskLink,
+        route: None,
+        block_id: None,
+        query,
+        replacement: (token.start, token.end),
+    })
+}
+
 /// Complete a solo leading `^` token: the `route:block-id` part (up to the
 /// cursor, so typed suffixes survive an accept) offers vault-wide active
 /// tasks, while a cursor after `#` offers Pomodoro names for the resolved
@@ -312,6 +346,17 @@ pub(crate) fn completion_field_at(
         return Some(field);
     }
     let leading = line_index == 0;
+
+    // A solo leading `:` token completes vault-wide linkable tasks
+    // instead of offering `@` route completion: the query runs from just
+    // after the sigil to the cursor and the replacement covers the whole
+    // token including the sigil, so accepting rewrites the query into the
+    // canonical link. This runs before the `^` path; both only fire on the
+    // item's leading line.
+    if leading && let Some(field) = task_link_completion_field_at(item, cursor)
+    {
+        return Some(field);
+    }
 
     // A solo leading `^` token completes active tasks vault-wide instead of
     // offering `@` route completion: the cursor inside the `route:block-id`

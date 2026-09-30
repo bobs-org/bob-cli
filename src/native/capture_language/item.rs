@@ -54,6 +54,16 @@ pub(super) fn parse_capture_item<'a>(
             return Err(now_tag_body_error());
         }
     }
+    // A `:` picker query is never executable: it rejects with a teaching
+    // error before any other item parser, so the whole batch rolls back.
+    // Forced flags do not change this.
+    if let Some(token) = task_link_query_token(item) {
+        let query = token.text.strip_prefix(':').unwrap_or_default();
+        if parse_caret_link_token(&format!("^{query}")).is_ok() {
+            return Err(task_link_picker_at_error(token.text, query));
+        }
+        return Err(task_link_picker_error(token.text));
+    }
     if let Some(outcome) = parse_pomodoro_equals_item(
         item,
         parent_line,
@@ -928,8 +938,8 @@ fn close_after_x_offset(
 /// upstream in `draft.rs`, so this parser only ever sees an exact
 /// single-token item here.
 ///
-/// Runs first (before session operators, caret links, and ordinary
-/// parsing). Returns `Ok(None)` when the item is not `=`-shaped and
+/// Runs after the `:` task-link query check (before session operators,
+/// caret links, and ordinary parsing). Returns `Ok(None)` when the item is not `=`-shaped and
 /// ordinary parsing should continue. Returns `Ok(Some(outcome))` for an
 /// exact single-token close or start. Returns `Err` for every near miss: a
 /// leading `=x` token with extra text, markers, or child lines; a counted

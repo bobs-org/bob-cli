@@ -132,6 +132,11 @@ exists so typing '^' completes In Progress, Next, and Ready `#now` tasks. JSON \
 reports a distinct 'pomodoro_link' kind with the status transition, the \
 ledger action (linked, moved, or already_current), and the resolved \
 destination.\n\n\
+A single-token, single-line item starting with ':' (for example ':' or \
+':dee') is a task-picker query, never a capture: it fails with a teaching \
+error so an unfinished query cannot create a junk inbox task. Accepting the \
+picked task in a picker inserts its '@<route>:<block-id>' link, which \
+captures exactly like a typed link.\n\n\
 Capture a whole item `+N` or `-N` (for example `+5` or `-2`) to adjust \
 today's current timed Pomodoro by N five-minute units: `+5` extends by 25 \
 minutes, `-2` shortens by 10 minutes. The count is optional and defaults \

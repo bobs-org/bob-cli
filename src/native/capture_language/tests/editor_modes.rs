@@ -1638,6 +1638,37 @@ fn editor_rejects_checkbox_only_project_task_ids_over_the_id_token() {
 }
 
 #[test]
+fn editor_reports_task_link_queries_as_incomplete() {
+    // Every claimed shape reports the Design's incomplete outcome: empty
+    // body, no route/section/block ID, no diagnostics, and one need.
+    for raw in [":", ":dee", "  :dee", ":déjà"] {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parse.body, "", "{raw}");
+        assert_eq!(parse.needs, vec![Need::TaskLink], "{raw}");
+        assert!(parse.route.is_none(), "{raw}");
+        assert!(parse.section.is_none(), "{raw}");
+        assert!(parse.block_id.is_none(), "{raw}");
+        assert!(parse.diagnostics.is_empty(), "{raw}");
+    }
+    // A batch judges each item alone: the query item stays incomplete
+    // while its neighbor stays a task.
+    let batch = parse_for_editor("Buy milk\n\n:dee");
+    assert_eq!(batch.items.len(), 2, "batch");
+    assert_eq!(batch.items[0].mode, EditorMode::Task, "batch");
+    assert_eq!(batch.items[1].mode, EditorMode::Incomplete, "batch");
+    assert_eq!(batch.items[1].needs, vec![Need::TaskLink], "batch");
+    assert_eq!(batch.items[1].body, "", "batch");
+    // A `@@` declaration never applies to a query item.
+    let declared = parse_for_editor("@@work\n\n:dee");
+    assert_eq!(declared.items.len(), 1, "declared");
+    assert_eq!(declared.items[0].mode, EditorMode::Incomplete, "declared");
+    assert_eq!(declared.items[0].needs, vec![Need::TaskLink], "declared");
+    assert!(declared.items[0].route.is_none(), "declared");
+    assert!(declared.items[0].diagnostics.is_empty(), "declared");
+}
+
+#[test]
 fn editor_holds_unused_pomodoro_while_a_colon_id_is_unfinished() {
     let pending = editor("Finish it @cash^x+#admin\n- Draft :");
     assert_eq!(pending.mode, EditorMode::Incomplete);

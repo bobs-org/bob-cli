@@ -408,6 +408,22 @@ pub(super) const POMODORO_LINK_PROJECT_ERROR: &str = "`^route:block-id+` is not 
 
 pub(super) const POMODORO_LINK_TOGGLE_ERROR: &str = "Pomodoro link `^route:block-id!` is a task toggle; use `@route+block-id!` for the explicit toggle";
 
+/// T1: a `:` picker query whose suffix is not a complete caret link. The
+/// query is only a picker search; it is never captured.
+pub(super) fn task_link_picker_error(token: &str) -> String {
+    format!(
+        "`{token}` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"
+    )
+}
+
+/// T2: a `:` picker query whose suffix parses as a complete caret link
+/// (`route:block-id[#name][=<X>|=x…]`). It teaches the `@` spelling.
+pub(super) fn task_link_picker_at_error(token: &str, query: &str) -> String {
+    format!(
+        "`{token}` opens the task picker; to link that task, write `@{query}`"
+    )
+}
+
 pub(super) const POMODORO_ADJUST_ZERO_ERROR: &str = "Pomodoro adjustment magnitude must be positive; `+0` and `-0` adjust nothing (for example `+5` extends by 25 minutes)";
 
 pub(super) const POMODORO_ADJUST_OVERFLOW_ERROR: &str =

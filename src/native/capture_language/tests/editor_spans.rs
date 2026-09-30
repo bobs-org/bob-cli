@@ -713,6 +713,35 @@ fn editor_reports_a_now_tag_without_task_text() {
 }
 
 #[test]
+fn task_link_query_spans_the_whole_token_as_a_placeholder() {
+    // One `interactive_placeholder` span covers the token, sigil included.
+    for (raw, range) in [
+        (":", (0, 1)),
+        (":dee", (0, 4)),
+        ("  :dee", (2, 6)),
+        (":déjà", (0, 7)),
+    ] {
+        let parse = editor(raw);
+        assert_eq!(
+            ranges(&parse),
+            vec![(range.0, range.1, SpanKind::InteractivePlaceholder)],
+            "{raw}"
+        );
+    }
+    // In a batch the second item's span uses draft-absolute offsets.
+    let batch = parse_for_editor("Buy milk\n\n:dee");
+    assert_eq!(
+        batch.items[1]
+            .spans
+            .iter()
+            .map(|span| (span.start, span.end, span.kind))
+            .collect::<Vec<_>>(),
+        vec![(10, 14, SpanKind::InteractivePlaceholder)],
+        "batch"
+    );
+}
+
+#[test]
 fn diagnostics_serialize_with_a_nullable_range_pair() {
     let parse = editor("Body @dev+bad.id");
     let value = serde_json::to_value(&parse.diagnostics).expect("json");

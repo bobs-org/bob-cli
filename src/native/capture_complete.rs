@@ -544,6 +544,7 @@ fn build_result(
             | CompletionContext::Task
             | CompletionContext::TaskSection
             | CompletionContext::ActiveTask
+            | CompletionContext::TaskLink
             | CompletionContext::NowTag => {
                 unreachable!("link field context")
             }
@@ -676,6 +677,11 @@ fn build_result(
         }
         CompletionContext::ActiveTask => {
             active_task_candidates(bob_dir, &field.query)
+        }
+        // Phase `complete` replaces this placeholder with vault-wide
+        // `task_link` candidates; the empty list keeps the context pinned.
+        CompletionContext::TaskLink => {
+            (Candidates::Task(Vec::new()), Vec::new())
         }
         CompletionContext::NowTag => {
             (Candidates::NowTag(vec![now_tag_candidate()]), Vec::new())
@@ -1932,6 +1938,7 @@ fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::Task => "task",
         CompletionContext::TaskSection => "task_section",
         CompletionContext::ActiveTask => "active_task",
+        CompletionContext::TaskLink => "task_link",
         CompletionContext::NowTag => "now_tag",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",

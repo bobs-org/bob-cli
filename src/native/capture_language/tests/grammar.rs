@@ -1783,3 +1783,129 @@ fn execution_keeps_other_trailing_hash_tags_rejected() {
     assert_eq!(parsed.body, "Fix #now");
     assert_eq!(parsed.route.as_deref(), Some("work"));
 }
+
+#[test]
+fn task_link_query_rejects_single_colon_tokens_with_teaching_errors() {
+    // T1: the query is only a picker search, never a capture.
+    for raw in [
+        ":",
+        ":dee",
+        ":déjà",
+        ":)",
+        ":sase:",
+        ":sase",
+        ":foo#bar",
+        ":a=b",
+        ":sase:deep-fix#",
+    ] {
+        let error = execute(raw).expect_err(&format!("{raw} is a query"));
+        assert_eq!(
+            error,
+            format!(
+                "`{raw}` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"
+            ),
+            "{raw}"
+        );
+    }
+    // T2: the query parses as a complete caret link, so the error teaches
+    // the `@` spelling.
+    for (raw, query) in [
+        (":sase:out", "sase:out"),
+        (":sase:deep-fix", "sase:deep-fix"),
+        (":sase:deep-fix#bugs", "sase:deep-fix#bugs"),
+        (":sase:deep-fix=", "sase:deep-fix="),
+        (":sase:deep-fix#bugs=3", "sase:deep-fix#bugs=3"),
+        (":sase:deep-fix=x1", "sase:deep-fix=x1"),
+        (":r:id", "r:id"),
+        (":SASE:DEEP-FIX", "SASE:DEEP-FIX"),
+    ] {
+        let error = execute(raw).expect_err(&format!("{raw} is a query"));
+        assert_eq!(
+            error,
+            format!(
+                "`{raw}` opens the task picker; to link that task, write `@{query}`"
+            ),
+            "{raw}"
+        );
+    }
+    // Surrounding whitespace does not change the claim; the error names
+    // the trimmed token.
+    let error = execute("  :dee  ").expect_err("padded query");
+    assert_eq!(
+        error,
+        "`:dee` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)",
+        "padded"
+    );
+    // Forced flags do not change the rejection.
+    let forced =
+        parse_capture_text_with_clip_control(":dee", Some("work"), None, true)
+            .expect_err("forced query");
+    assert!(forced.contains("opens the task picker"), "{forced}");
+}
+
+#[test]
+fn task_link_query_leaves_prose_byte_identical() {
+    // Several tokens, a leading token elsewhere, or child lines stay prose.
+    for (raw, body) in [
+        (": dee", ": dee"),
+        (":dee more", ":dee more"),
+        ("Buy :dee", "Buy :dee"),
+    ] {
+        let parsed = execute(raw).expect(&format!("{raw} stays prose"));
+        assert_eq!(parsed.body, body, "{raw}");
+        assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
+    }
+    let parented = execute(":dee\n- x").expect("query with a child");
+    assert_eq!(parented.body, ":dee");
+    assert_eq!(sub_bullet_bodies(&parented.sub_bullets), vec!["x"]);
+}
+
+#[test]
+fn task_link_claim_is_equivalent_across_execution_editor_and_completion() {
+    // About twenty inputs where all three paths must agree: execution
+    // fails with T1/T2, the editor needs `task_link`, and completion at
+    // the token end reports the `task_link` context.
+    for (raw, expected) in [
+        (":", "`:` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"),
+        (":dee", "`:dee` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"),
+        (":déjà", "`:déjà` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"),
+        (":)", "`:)` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"),
+        (":sase:", "`:sase:` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"),
+        (":sase", "`:sase` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"),
+        (":foo#bar", "`:foo#bar` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"),
+        (":a=b", "`:a=b` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"),
+        (":sase:deep-fix#", "`:sase:deep-fix#` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)"),
+        (":sase:out", "`:sase:out` opens the task picker; to link that task, write `@sase:out`"),
+        (":sase:deep-fix", "`:sase:deep-fix` opens the task picker; to link that task, write `@sase:deep-fix`"),
+        (":sase:deep-fix#bugs", "`:sase:deep-fix#bugs` opens the task picker; to link that task, write `@sase:deep-fix#bugs`"),
+        (":sase:deep-fix=", "`:sase:deep-fix=` opens the task picker; to link that task, write `@sase:deep-fix=`"),
+        (":sase:deep-fix#bugs=3", "`:sase:deep-fix#bugs=3` opens the task picker; to link that task, write `@sase:deep-fix#bugs=3`"),
+        (":sase:deep-fix=x1", "`:sase:deep-fix=x1` opens the task picker; to link that task, write `@sase:deep-fix=x1`"),
+        (":r:id", "`:r:id` opens the task picker; to link that task, write `@r:id`"),
+    ] {
+        let error = execute(raw).expect_err(&format!("{raw} executes"));
+        assert_eq!(error, expected, "{raw}");
+        let parsed = editor(raw);
+        assert_eq!(parsed.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parsed.needs, vec![Need::TaskLink], "{raw}");
+        let completion = field(raw, raw.len()).expect(&format!("{raw} completes"));
+        assert_eq!(
+            completion.context,
+            CompletionContext::TaskLink,
+            "{raw}"
+        );
+    }
+    // The prose counter-cases disagree on all three paths at once.
+    for raw in [": dee", ":dee more", "Buy :dee", ":dee\n- x"] {
+        execute(raw).expect(&format!("{raw} executes as prose"));
+        let parsed = editor(raw);
+        assert_ne!(parsed.needs, vec![Need::TaskLink], "{raw}");
+        let completion = field(raw, raw.len());
+        assert!(
+            completion.is_none_or(
+                |field| field.context != CompletionContext::TaskLink
+            ),
+            "{raw}"
+        );
+    }
+}

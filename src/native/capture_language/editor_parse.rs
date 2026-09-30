@@ -265,15 +265,17 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         for item in &mut items {
             // Whole-item session operators, `=x[<N>][!<M>]` closes
             // (including dangling-separator editing states), `=`/`=<X>`
-            // starts, and `=<X>#` incomplete named starts (which carry
-            // the partial `pomodoro_start` spec) are their own mode: a
+            // starts, `=<X>#` incomplete named starts (which carry
+            // the partial `pomodoro_start` spec), and `:` task-link
+            // queries are their own mode: a
             // `@@` declaration routes ordinary items in the same draft
-            // but never turns an operator, close, or start into a task
+            // but never turns an operator, close, start, or query into a task
             // or changes its destination.
             if item.mode == EditorMode::PomodoroAdjust
                 || item.mode == EditorMode::PomodoroShift
                 || item.mode == EditorMode::PomodoroClose
                 || item.mode == EditorMode::PomodoroStart
+                || item.needs == [Need::TaskLink]
                 || item.pomodoro_close.is_some()
                 || item.pomodoro_start.is_some()
             {
@@ -444,6 +446,46 @@ pub(super) fn rekind_sub_bullet_spans(spans: &mut [Span]) {
     }
 }
 
+/// A `:` task-link picker query: a single-line, single-token item starting
+/// with `:`. It is never executable, so the editor reports `incomplete`
+/// needing `task_link` with one `interactive_placeholder` span over the
+/// whole token (sigil included) and no diagnostics. A `@@` declaration
+/// never applies to it, exactly like the `^` picker family.
+pub(super) fn parse_editor_task_link_item<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<EditorItemOutcome<'a>> {
+    let token = task_link_query_token(item)?;
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: String::new(),
+            mode: EditorMode::Incomplete,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: vec![Need::TaskLink],
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            spans: vec![Span {
+                start: token.start,
+                end: token.end,
+                kind: SpanKind::InteractivePlaceholder,
+            }],
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    })
+}
+
 /// A whole-item operator, close, or start followed by `#now` (`=x #now`,
 /// `=3 #now`, `+5 #now`): execution reports the tag error because no new
 /// task text remains, so the editor resolves the stripped item with the
@@ -502,6 +544,9 @@ pub(super) fn parse_editor_now_tag_item<'a>(
 pub(super) fn parse_editor_item<'a>(
     item: &CaptureItem<'a>,
 ) -> EditorItemOutcome<'a> {
+    if let Some(task_link) = parse_editor_task_link_item(item) {
+        return task_link;
+    }
     if let Some(now_tagged) = parse_editor_now_tag_item(item) {
         return now_tagged;
     }
