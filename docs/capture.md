@@ -26,6 +26,7 @@ workflow guide.
   - [Linking and starting existing tasks](#linking-and-starting-existing-tasks)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
+  - [Starting a named Pomodoro](#starting-a-named-pomodoro)
   - [Adjusting the current Pomodoro](#adjusting-the-current-pomodoro)
   - [Shifting the current Pomodoro](#shifting-the-current-pomodoro)
   - [Closing the running Pomodoro](#closing-the-running-pomodoro)
@@ -69,8 +70,9 @@ anything is written, and any failure rolls the whole batch back.
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends by 25 minutes, `-` shortens by 5 minutes; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15 minutes later, `--` moves 5 minutes earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
+| `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name ("again"), otherwise a new named session is created and started; the item must contain only the start token |
 | `=x[<N>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, with `!` and `~` in either order); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; the item must contain only the token |
-| `+2 =x`, `=x =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items |
+| `+2 =x`, `=x =`, `=x =#bugs` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items |
 | `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it; the same selection may follow the `x` and numbers refer to the post-link lineup |
 | `^route:block-id=x…` with no other text | Identical execution; `^` is the active-task spelling |
 | `<text> @route:block-id=x…` | Create the new Pomodoro-linked task in the running session, then close it; numbers refer to the post-link lineup |
@@ -127,6 +129,16 @@ anything is written, and any failure rolls the whole batch back.
 | `=x more` | Error: `` `=x` must be the whole capture item; to log a task while closing, use `@route:block-id=x` `` |
 | `+2 =x` | Extend by 10 minutes, then close; exactly like `+2`, blank line, `=x` |
 | `=x =` | Close the running session, then start the next future Pomodoro |
+| `=x =#bugs` | Close the running session, then start the open `BUGS` Pomodoro; a session switch in one line |
+| `=#deep-work` | Start the open `DEEP WORK` Pomodoro now for 25 minutes; whole-slug match wins, else prefix (`=#deep` matches too) |
+| `=3#bugs` | Start the open `BUGS` Pomodoro now for 15 minutes |
+| `=#` | Incomplete: type a Pomodoro name after `#` (`capture-parse` needs `pomodoro_name`) |
+| `=# bugs` | Error: write the name right after `#`, with no space (`=#bugs`) |
+| `=#deep work` | Error: join multi-word Pomodoro names with `-` (`=#deep-work`) |
+| `=#bugs=3` | Error: write the duration before the name (`=3#bugs`) |
+| `=#bugs+2` | Start the Pomodoro named `BUGS+2`; `+` is name charset, so the token stays one named start |
+| `=x#bugs` | Error: `` `=x` always closes the running Pomodoro; write `=x =#bugs` to close it and then start that Pomodoro `` |
+| `=3#bugs more` | Error: a named start item must contain only the token; remove extra text, markers, or child lines |
 | `= -2` vs `=-2` | `= -2` starts 25 minutes then shortens 10 minutes; `=-2` is one 25-minute start with a 10-minute offset |
 | `- -` | Two bare adjustments in a row; lines made only of bare operators are chains, not prose |
 | `@cash^goog-exit+` | New project note `cash_goog_exit.md`; the `+` is a project-note sigil, not a sub-bullet |
@@ -789,11 +801,12 @@ Pomodoro sessions form a lifecycle, taught in this order:
 | Item | Operator | Effect | Obsidian |
 | --- | --- | --- | --- |
 | `=` / `=<X>` | start | Start the next future Pomodoro now, timed like `se<X>` | `se<X>` + Tab inside `()` |
+| `=<X>#<pomodoro>` | start named | Start that named Pomodoro now, timed like `se<X>` (open match in place, completed match again, else created) | `se<X>` + Tab inside `() — NAME` |
 | `+[N]` / `-[N]` | resize | Move the running session's end N × 5 min later / earlier | `N\p` / `N\P` |
 | `++[N]` / `--[N]` | shift | Move the running session's start and end N × 5 min later / earlier | `N\o` / `N\O` |
 | `=x` | close | Close the running session | Ctrl+Enter |
 
-Mnemonic: "`=` starts the next session, `=x` stops the running one."
+Mnemonic: "`=` starts the next session, `=#name` starts that one, `=x` stops the running one."
 
 Recognition: let `t` be the item's first physical line trimmed of leading
 and trailing whitespace (the token after a chain split; see
@@ -849,6 +862,83 @@ empty.
 Quote `=` items in zsh, which expands a leading `=word` to a command path:
 `bob capture '='`, `bob capture '=3'`, `bob capture '=-2'`,
 `bob capture '=x'`.
+
+### Starting a named Pomodoro
+
+Capture a whole item `=<X>#pomodoro` to start one named Pomodoro now:
+
+```bash
+bob capture '=#deep-work'
+bob capture '=3#bugs'
+bob capture '=x =#bugs'
+```
+
+A named start token is `=` plus an `se<X>` suffix (possibly empty) plus `#`
+plus a name part: every byte after that `#` up to the next ASCII whitespace
+or the end of the line. The `#` must come immediately after the suffix, and
+the `<X>` always goes **before** the `#`. The name part is a Pomodoro
+selector with the usual charset (`A-Z`, `a-z`, `0-9`, `& ' ( ) + , . / -`);
+write spaces in names as `-`. A named start claims its item and is never
+prose: an exact token (the item's only text, on exactly one physical line)
+starts the session, and anything else is a precise error. Unchanged: `=`
+without `#`, every close form, `= #foo` (a bare `=` with prose stays prose),
+mid-body tokens (`Plan =#foo` stays prose), and the link forms
+(`^route:id#name=<X>` keep their `#name=<X>` order). `=x#…` is a claimed
+close near miss with a teaching error; it used to be prose.
+
+Resolution runs against the staged daily note, so chains and batches see
+earlier edits. Open entries match first (whole slug, else prefix), then
+completed ones the same way:
+
+| Match | Effect |
+| --- | --- |
+| Open untimed placeholder | Starts in place: the `()` becomes the canonical range and the entry, with its child block, moves to the current slot; `created_pomodoro: false` |
+| Completed entry ("again") | A new session is created with that entry's canonical name and started; history is never modified; `created_pomodoro: true` |
+| No match | A new session is created with the selector's canonical name and started; `created_pomodoro: true` |
+
+Creation inserts the placeholder after the last completed entry's block,
+otherwise before the first entry, otherwise at the section start — the same
+placement the named link start uses — and the subsequent move is then a
+no-op. An invalid name fails before anything is written, and when the name
+is only a near miss of an open entry the capture still succeeds but pushes
+a `did you mean …?` warning naming the open entry. A created entry reports
+`tasks: []`; a started open entry reports its direct-child Task Links
+through the existing queued lineup, exactly like an unnamed start.
+
+Guards, checked in order: a missing day file (the message still names the
+canonicalized selector), a missing `## Pomodoros` section, then name
+resolution, then more than one open timed entry, then exactly one open
+timed entry that *is* the matched session (already running: resize it with
+`+N`/`-N`, shift it with `++N`/`--N`, or close it with `=x`), and then
+exactly one open timed entry that is some *other* session (close it with
+`=x` first, or capture `=x =<X>#pomodoro` to switch sessions in one line).
+A matched open entry that is not an untimed placeholder fails with the
+existing selected-Pomodoro wording instead of starting.
+
+With `BOB_NOW=2026-07-10 09:02:00` and a ledger holding completed `PLAN`,
+open `BUGS` (with `[[sase#^deep-fix]]`), open `DEEP WORK` (with
+`[[bob#^outline]]` and `[[bob#^draft]]`), and an open unnamed entry:
+
+| Item | Result |
+| --- | --- |
+| `=#deep-work` | `DEEP WORK` becomes `(**0905-0930** [t:: 25m])` and moves ahead of `BUGS`; queued: `^outline`, `^draft` |
+| `=#deep` | Identical (prefix match) |
+| `=3#bugs` | `BUGS` becomes `(**0905-0920** [t:: 15m])` and stays in place |
+| `=#plan` | A new `PLAN` session is created and started (the old `PLAN` is completed history) |
+
+The bytes contract matches the unnamed start: checkbox, name, children,
+CRLF, and a missing final newline are preserved. Dry-run computes the same
+result without writing, and any failure rolls the whole batch back. JSON
+kind `pomodoro_start` keeps schema version 1 with `text` = the raw token,
+`task_line`, `placement: "started"`, the existing `pomodoro_start` object
+plus `pomodoro_name`, `created_pomodoro`, and the additive `tasks` array.
+Human output prints `started` (dry-run: `would start`), the session name,
+range, and line with ` (created)` when the entry was created, the canonical
+ledger line, one row per queued task, and `nothing queued` when empty. A
+`@@` declaration never applies to named starts, and forced `--route` /
+`--section` / `--task` / `--task-ref` / `--task-section` / `--clip` fail on
+them with the existing start error. Quote named starts in zsh like every
+other `=` item: `bob capture '=#deep-work'`.
 
 ### Adjusting the current Pomodoro
 
@@ -1354,13 +1444,14 @@ rolls the whole batch back.
 
 ### Chaining session operators on one line
 
-The six whole-item Pomodoro session operators — `+[N]`, `-[N]`, `++[N]`,
-`--[N]`, `=`/`=<X>`, and `=x[<N>][!<M>][~<K>]` — may share one physical line when
+The seven whole-item Pomodoro session operators — `+[N]`, `-[N]`, `++[N]`,
+`--[N]`, `=`/`=<X>`, `=<X>#pomodoro`, and `=x[<N>][!<M>][~<K>]` — may share one physical line when
 whitespace separates them:
 
 ```bash
 bob capture '+2 =x'
 bob capture '=x ='
+bob capture '=x =#bugs'
 ```
 
 Recognition: the line must hold at least two whitespace-separated tokens and
@@ -1375,8 +1466,10 @@ tokens.
 
 Tokens run left to right exactly like blank-line items: `+2 =x` extends then
 closes, `=x =` closes then starts the next future Pomodoro (a session switch
-in one line), `=x2 =3` closes keeping task 2 in progress then starts a
-15-minute session, `= +2` starts then extends, and `--2 +` shifts earlier
+in one line), `=x =#bugs` closes then starts the open `BUGS` session,
+`=x2 =3` closes keeping task 2 in progress then starts a
+15-minute session, `= +2` starts then extends, `=#bugs +2` starts `BUGS`
+then extends it, and `--2 +` shifts earlier
 then extends. Staging, rollback, and `--dry-run` match blank-line batches:
 later tokens see earlier staged edits through `CaptureBatchPlanner`, and any
 failure rolls the whole batch back. Output is per token: one JSON/human
@@ -1389,7 +1482,9 @@ becomes a prose task — including bare-first chains such as `+ =x` with a
 child bullet.
 
 Spacing is significant: `= -2` starts a 25-minute session then shortens it
-by 10 minutes, while `=-2` is one start with a 10-minute offset. Lines made
+by 10 minutes, while `=-2` is one start with a 10-minute offset; likewise
+`=#bugs +2` starts `BUGS` then extends it, while `=#bugs+2` is one start of
+the Pomodoro named `BUGS+2`. Lines made
 only of bare operators are newly recognized chains (`- -`, `+ -`, `= =`,
 `-- --`, `- - -`); they used to be prose. Runtime guards apply per token in
 order (`=x -2` closes then fails because nothing is running; `= =` fails on
@@ -2154,7 +2249,23 @@ start (for example `=` is 25 minutes, `=3` is 15 minutes) parses as
 covering the whole token; a counted token with extra text, an exact token
 with child lines, or an oversized suffix reports `pomodoro_start` plus an
 `invalid_pomodoro_start` diagnostic (the extra text, the child line, or the
-token for overflow). A whole-item `=x[<N>][!<M>][~<K>]` close
+token for overflow). A whole-item `=<X>#pomodoro` named start (for example
+`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes) parses as
+`pomodoro_start` with the same `pomodoro_start` object (`raw` excludes `=`,
+so `=3#bugs` reports `"3"`), `section` carrying the typed name, a
+`pomodoro_start` span covering the `=<X>` bytes, and a `pomodoro_name` span
+covering the name. `=<X>#` with an empty name is an editing state, never a
+mistake: mode `incomplete` needing `pomodoro_name`, with the partial spec,
+the `pomodoro_start` span typed so far, and one `interactive_placeholder`
+span over the `#`. Every other named-start near miss reports
+`pomodoro_start` plus an `invalid_pomodoro_start` diagnostic reusing
+`bob capture`'s exact wording: an empty name with extra text or child
+lines, a link-form order (`=#bugs=3`, ranged on the name), invalid name
+characters (ranged on the name), an oversized suffix (ranged on `=<X>`), or
+extra text, markers, or child lines on a well-formed token (ranged on the
+extra text or the child line, with the join-with-`-` hint when the extra
+text is all name characters). A `@@` declaration never applies to named
+starts either. A whole-item `=x[<N>][!<M>][~<K>]` close
 (case-insensitive `=X`, with `!` and `~` in either order) parses as
 `pomodoro_close` with a `pomodoro_close` object (`raw` plus the additive
 `in_progress` list, `null` when no `<N>` was typed, the `complete` list,
@@ -2240,7 +2351,10 @@ reports `pomodoro_close` with its spans and spec (a dangling `,`/`!`
 reports `incomplete` with the partial spec instead), and a
 whole-item `=`/`=<X>` reports `pomodoro_start` with a `pomodoro_start` span
 and spec, both with `needs: []` (the incomplete close needs
-`["pomodoro_close_task"]`). Lone `^`, `^fragment`, and
+`["pomodoro_close_task"]`). A whole-item `=<X>#pomodoro` reports
+`pomodoro_start` with the `pomodoro_start` / `pomodoro_name` spans, the
+spec, and `section` set to the typed name, also with `needs: []`, while
+`=<X>#` reports `incomplete` with `needs: ["pomodoro_name"]`. Lone `^`, `^fragment`, and
 `^route:` report `incomplete` with `needs: ["active_task"]` and one
 `interactive_placeholder` span over the token, while `^route:block-id#` needs
 `pomodoro_name`. Near misses and solo-link conflicts report an
@@ -2374,7 +2488,7 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `+` form, or a whole-item start near miss such as `=3 more` or `=3x` with the range on the extra text, child line, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`p:<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `+`, a `#name` without its `+`, or an `=` suffix), `retired_project_note_marker` (a `:` project-note spelling, teaching the `^` form), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `#name` with no ` :` task, ranged on the name), `unsupported_explicit_toggle`, `legacy_bullet_marker`,
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `+` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`p:<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `+`, a `#name` without its `+`, or an `=` suffix), `retired_project_note_marker` (a `:` project-note spelling, teaching the `^` form), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `#name` with no ` :` task, ranged on the name), `unsupported_explicit_toggle`, `legacy_bullet_marker`,
 `pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
 `s:<N>`, or `p:<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
@@ -2567,7 +2681,20 @@ dangling `,`/`!` separator, returns an empty success. A whole-item `+[N]`/`-[N]`
 Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`,
 or `--` is one unit), `=x[<N>][!<M>]` close, or `=`/`=<X>` start (a bare `=` starts
 25 minutes) is an action and requests no route or
-task completion candidates: a cursor on such an item returns an empty success. It is backed by the same scan as `bob capture-pomodoros`, offers only open
+task completion candidates: a cursor on such an item returns an empty success. A
+whole-item `=<X>#name` named start instead completes the name after `#` as
+`pomodoro_start_name`, per token inside chains: a cursor inside the name part
+completes it, while a cursor on `=<X>` or at the `#` byte itself returns an
+empty success. Near misses complete the same way valid tokens do. The name `replacement` covers only the name part, so accepting
+a candidate preserves the typed `=<X>#`. Candidates are start-aware, backed
+by today's ledger scan: open untimed placeholders first (with `next_up` on
+today's next future entry), then a create row for a missing name, then
+`again` rows for completed sessions (which start a new session with that
+name), then nameable rows for entries that still need a name
+(`requires_name: true`, never filtered out), and the running timed entry
+last. A completed-only match never also offers a duplicate create row, and
+`again` rows resurface the most recent session first on an empty query. The
+`pomodoro_name` context below is backed by the same scan as `bob capture-pomodoros`, offers only open
 entries, and returns Pomodoros in picker order: named rows first, then
 nameable rows. Named rows rank by slug prefix, then slug substring, and open
 entries with the same slug collapse to the first row with `match_count`

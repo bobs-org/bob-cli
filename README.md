@@ -212,8 +212,9 @@ typed on that same item. The whole batch is planned before anything is written.
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-` shortens 5m; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes); the item must contain only the start token (quote in zsh) |
+| `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name, otherwise a new named session is created and started; the item must contain only the start token (quote in zsh) |
 | `=x[<N>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, `!`/`~` in either order); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; the item must contain only the token (quote in zsh, since `!` history expansion also applies) |
-| `+2 =x`, `=x =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items |
+| `+2 =x`, `=x =`, `=x =#bugs` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items |
 | `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it; numbers refer to the post-link lineup |
 | `<text> @route:id=x…` | Create the new task in the running session, then close it |
 | `@route^id+` | New project note `<route>_<id>.md`; the daily note and the parent note are left unchanged |
@@ -235,7 +236,9 @@ typed on that same item. The whole batch is planned before anything is written.
 a heading in that note; `@route+id#…` selects an ALL-CAPS child section of that
 task once the item has body text, but selects a Pomodoro name when
 `@route+id#…` is the whole item; `@route:id#…` selects a matching named open
-Pomodoro or creates a named future Pomodoro. A `#` in the middle of the body
+Pomodoro or creates a named future Pomodoro; `=<X>#…` starts the named
+Pomodoro now (open match in place, completed match as a new "again" session,
+otherwise a new named session). A `#` in the middle of the body
 stays ordinary text. The retired `@route::id` spelling is not accepted; use
 `@route^id` for an ordinary task with a block ID.
 
