@@ -154,7 +154,6 @@ pub(super) struct FileScan {
     pub(super) relative_path: PathBuf,
     pub(super) contents: String,
     pub(super) tasks: Vec<TaskLine>,
-    pub(super) note_kind: NoteKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

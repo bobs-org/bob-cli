@@ -406,25 +406,6 @@ pub(super) fn resolve_recent_references(
     resolved_identities
 }
 
-pub(super) fn reachable_identities(
-    roots: &BTreeSet<(PathBuf, String)>,
-    edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
-) -> BTreeSet<(PathBuf, String)> {
-    let mut reachable = roots.clone();
-    let mut queue = roots.iter().cloned().collect::<VecDeque<_>>();
-    while let Some(source) = queue.pop_front() {
-        let Some(targets) = edges.get(&source) else {
-            continue;
-        };
-        for target in targets {
-            if reachable.insert(target.clone()) {
-                queue.push_back(target.clone());
-            }
-        }
-    }
-    reachable
-}
-
 pub(super) fn desired_statuses(
     direct: &BTreeSet<(PathBuf, String)>,
     edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,

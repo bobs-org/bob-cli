@@ -1079,7 +1079,7 @@ is only a near miss of an open entry the capture still succeeds but pushes
 a `did you mean …?` warning naming the open entry. A created entry reports
 `tasks: []`; a started open entry reports its direct-child Task Links
 through the existing queued lineup, exactly like an unnamed start, with
-the same `tasks[].index`/`tasks[].now` numbering.
+the same `tasks[].index` numbering.
 
 Guards, checked in order: a missing day file (the message still names the
 canonicalized selector), a missing `## Pomodoros` section, then name

@@ -279,13 +279,11 @@ pub(super) fn sync_task_statuses(
                 ))
             })?;
         let tasks = parse_tasks(&contents, &settings);
-        let note_kind = note_kind(&contents);
         files.push(FileScan {
             path,
             relative_path,
             contents,
             tasks,
-            note_kind,
         });
     }
 
@@ -397,7 +395,6 @@ pub(super) fn sync_task_statuses(
     }) {
         file.contents = normalized_daily.clone();
         file.tasks = parse_tasks(&file.contents, &settings);
-        file.note_kind = note_kind(&file.contents);
     }
     let note_index = NoteIndex::from_paths(
         files.iter().map(|file| file.relative_path.clone()),

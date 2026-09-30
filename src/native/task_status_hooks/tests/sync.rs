@@ -158,23 +158,6 @@ fn note_kind_uses_shared_area_and_project_frontmatter_predicates() {
 }
 
 #[test]
-fn rolling_reachability_is_cycle_safe_and_includes_dependencies() {
-    let root = identity("root");
-    let child = identity("child");
-    let leaf = identity("leaf");
-    let edges = BTreeMap::from([
-        (root.clone(), BTreeSet::from([child.clone()])),
-        (child.clone(), BTreeSet::from([leaf.clone()])),
-        (leaf.clone(), BTreeSet::from([root.clone()])),
-    ]);
-
-    assert_eq!(
-        reachable_identities(&BTreeSet::from([root.clone()]), &edges),
-        BTreeSet::from([root, child, leaf])
-    );
-}
-
-#[test]
 fn resolves_exact_and_unique_case_insensitive_basenames() {
     let index = NoteIndex::from_paths([
         PathBuf::from("Areas/Home.md"),
@@ -231,14 +214,12 @@ fn fenced_column_zero_content_does_not_end_dependency_scan() {
             relative_path: PathBuf::from("A.md"),
             contents: a_contents.to_string(),
             tasks: parse_tasks(a_contents, &settings),
-            note_kind: NoteKind::Other,
         },
         FileScan {
             path: PathBuf::from("B.md"),
             relative_path: PathBuf::from("B.md"),
             contents: b_contents.to_string(),
             tasks: parse_tasks(b_contents, &settings),
-            note_kind: NoteKind::Other,
         },
     ];
     let index = NoteIndex::from_paths(
@@ -342,7 +323,6 @@ fn task_dependency_index_matches_tasks_duplicate_and_missing_id_semantics() {
         relative_path: PathBuf::from("tasks.md"),
         contents: contents.to_string(),
         tasks: parse_tasks(contents, &settings),
-        note_kind: NoteKind::Other,
     }];
     let states = task_dependency_states(&files);
     assert_eq!(states[&(0, 5)].open_dependency_ids, ["self"]);
