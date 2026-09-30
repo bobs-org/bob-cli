@@ -166,7 +166,13 @@ accepting a row inserts the full `route:block-id` in one step while a \
 typed `#name`/`=<X>` suffix survives. Candidates whose task line carries \
 `#now` set `now: true`. A `#name` after `^route:block-id` completes \
 Pomodoro names exactly as it does after `@route:block-id`, and a cursor \
-inside `=<X>` or `=x[<N>][!<M>]` offers nothing. A trailing `#n`/`#no` \
+inside `=<X>` or `=x[<N>][!<M>]` offers nothing. A solo leading `:` token \
+completes `task_link`: every linkable open task (Ready, Blocked, Next, In \
+Progress) in the routable inbox, area, and non-terminal project notes, in \
+canonical picker order and ranked by the query with ID-less tasks always \
+included; the replacement covers the whole `:` token, sigil included, \
+because accepting rewrites the query into the canonical `@route:block-id` \
+link. A trailing `#n`/`#no` \
 (or `#now`) completes as `now_tag` with the single `#now` candidate \
 (this week's bet). The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
 candidates and an additive `block_id` object carrying intent, used IDs, and suggestions. A project-note `+` \
@@ -188,7 +194,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, now_tag, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_link, now_tag, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
@@ -374,6 +380,38 @@ struct ActiveTaskPomodoroCandidate {
     is_current: bool,
 }
 
+/// One `task_link` (`:` picker) candidate: any linkable open task in a
+/// routable inbox, area, or non-terminal project note. The JSON keys match
+/// the picker contract: `replacement` is the `@route:id` an accept inserts
+/// (empty for ID-less tasks, which clients must never insert),
+/// `requires_block_id` marks those rows, and `now` / `pulls_forward` are
+/// omitted when false.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct TaskLinkCandidate {
+    replacement: String,
+    #[serde(rename = "ref")]
+    task_ref: String,
+    route: String,
+    note_kind: CaptureTargetKind,
+    block_id: Option<String>,
+    requires_block_id: bool,
+    block_id_suggestions: Vec<String>,
+    status_symbol: char,
+    status_name: String,
+    status_type: &'static str,
+    text: String,
+    section: Option<String>,
+    depth: usize,
+    line: usize,
+    group: capture_link_tasks::LinkTaskGroup,
+    #[serde(skip_serializing_if = "is_false")]
+    now: bool,
+    scheduled: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pulls_forward: bool,
+    pomodoro: Option<ActiveTaskPomodoroCandidate>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct ActiveTaskCandidate {
     replacement: String,
@@ -453,6 +491,7 @@ enum Candidates {
     TaskSection(Vec<TaskSectionCandidate>),
     PomodoroName(Vec<PomodoroNameCandidate>),
     ActiveTask(Vec<ActiveTaskCandidate>),
+    TaskLink(Vec<TaskLinkCandidate>),
     NowTag(Vec<NowTagCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
@@ -468,6 +507,7 @@ impl Candidates {
             Self::TaskSection(items) => items.len(),
             Self::PomodoroName(items) => items.len(),
             Self::ActiveTask(items) => items.len(),
+            Self::TaskLink(items) => items.len(),
             Self::NowTag(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
@@ -679,10 +719,8 @@ fn build_result(
         CompletionContext::ActiveTask => {
             active_task_candidates(bob_dir, &field.query)
         }
-        // Phase `complete` replaces this placeholder with vault-wide
-        // `task_link` candidates; the empty list keeps the context pinned.
         CompletionContext::TaskLink => {
-            (Candidates::Task(Vec::new()), Vec::new())
+            task_link_candidates(bob_dir, &field.query)
         }
         CompletionContext::NowTag => {
             (Candidates::NowTag(vec![now_tag_candidate()]), Vec::new())
@@ -1072,6 +1110,52 @@ fn active_task_candidates(
         })
         .collect();
     (Candidates::ActiveTask(candidates), discovered.warnings)
+}
+
+/// `task_link` candidates for a solo leading `:` token: every linkable
+/// open task (Ready, Blocked, Next, In Progress) in the routable inbox,
+/// area, and non-terminal project notes, in canonical order and ranked by
+/// the query. ID-less tasks are always included; `--all-tasks` does not
+/// affect this context. The `replacement` covers the whole `:` token,
+/// sigil included, because accepting rewrites the query into the canonical
+/// `@route:block-id` marker.
+fn task_link_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_link_tasks::discover(bob_dir);
+    let candidates = capture_link_tasks::rank(&discovered.tasks, query)
+        .into_iter()
+        .map(|task| TaskLinkCandidate {
+            replacement: task.replacement(),
+            task_ref: task.task_ref.clone(),
+            route: task.route.clone(),
+            note_kind: task.note_kind,
+            block_id: task.block_id.clone(),
+            requires_block_id: task.block_id.is_none(),
+            block_id_suggestions: task.block_id_suggestions.clone(),
+            status_symbol: task.status_symbol,
+            status_name: task.status_name.clone(),
+            status_type: task.status_type,
+            text: task.text.clone(),
+            section: task.section.clone(),
+            depth: task.depth,
+            line: task.line,
+            group: task.group,
+            now: task.now,
+            scheduled: task.scheduled.clone(),
+            pulls_forward: task.pulls_forward,
+            pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
+                ActiveTaskPomodoroCandidate {
+                    line: pomodoro.line,
+                    name: pomodoro.name.clone(),
+                    time_range: pomodoro.time_range.clone(),
+                    is_current: pomodoro.is_current,
+                }
+            }),
+        })
+        .collect();
+    (Candidates::TaskLink(candidates), discovered.warnings)
 }
 
 fn pomodoro_name_candidates_at(
@@ -1749,6 +1833,51 @@ fn plural_candidates(result: &CaptureCompleteResult) -> &'static str {
     }
 }
 
+/// Human row for one `task_link` candidate: the `@route:id` (or
+/// `@route:…` for ID-less tasks) plus `[status] text  · tail`, where the
+/// tail is the queued Pomodoro name (`Planned` when unnamed), `In
+/// Progress`, `Next`, `#now`, or the note label, with `· needs ID
+/// (^suggestion)` on ID-less rows and `· scheduled DATE` whenever the task
+/// carries a scheduled date.
+fn task_link_line(item: &TaskLinkCandidate) -> (String, String) {
+    let tail = match item.pomodoro.as_ref() {
+        Some(pomodoro) => pomodoro
+            .name
+            .clone()
+            .unwrap_or_else(|| "Planned".to_string()),
+        None => match item.group {
+            capture_link_tasks::LinkTaskGroup::Queued => "Planned".to_string(),
+            capture_link_tasks::LinkTaskGroup::InProgress => {
+                "In Progress".to_string()
+            }
+            capture_link_tasks::LinkTaskGroup::Next => "Next".to_string(),
+            capture_link_tasks::LinkTaskGroup::Now => "#now".to_string(),
+            capture_link_tasks::LinkTaskGroup::Note => {
+                format!("{}.md", item.route)
+            }
+        },
+    };
+    let mut detail =
+        format!("[{}] {}  · {tail}", item.status_symbol, item.text);
+    if item.requires_block_id {
+        match item.block_id_suggestions.first() {
+            Some(suggestion) => {
+                detail.push_str(&format!(" · needs ID (^{suggestion})"))
+            }
+            None => detail.push_str(" · needs ID"),
+        }
+    }
+    if let Some(scheduled) = &item.scheduled {
+        detail.push_str(&format!("  · scheduled {scheduled}"));
+    }
+    let label = if item.requires_block_id {
+        format!("@{}:…", item.route)
+    } else {
+        item.replacement.clone()
+    };
+    (label, detail)
+}
+
 fn candidate_lines(
     candidates: &Candidates,
     context: Option<CompletionContext>,
@@ -1813,6 +1942,9 @@ fn candidate_lines(
                 )
             })
             .collect(),
+        Candidates::TaskLink(items) => {
+            items.iter().map(task_link_line).collect()
+        }
         Candidates::NowTag(items) => items
             .iter()
             .map(|item| {
@@ -2390,6 +2522,285 @@ mod tests {
                     "[/] Outline talk  · Not queued".to_string(),
                 ),
             ]
+        );
+    }
+
+    /// The `:` picker worked example: vault-wide linkable tasks in
+    /// canonical order behind a `BOB_DAY_FILE` ledger, with the capture
+    /// clock pinned so pull-forward flags are deterministic.
+    fn task_link_fixture(root: &Path) -> PathBuf {
+        write_file(
+            &root.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+            r##"{
+              "globalFilter": "#task",
+              "statusSettings": {
+                "coreStatuses": [
+                  {"symbol":" ","name":"Todo","type":"TODO"},
+                  {"symbol":"x","name":"Done","type":"DONE"},
+                  {"symbol":"/","name":"In Progress","type":"IN_PROGRESS"},
+                  {"symbol":"*","name":"Next","type":"ON_HOLD"},
+                  {"symbol":"-","name":"Canceled","type":"CANCELLED"}
+                ],
+                "customStatuses": [
+                  {"symbol":"?","name":"Blocked","type":"ON_HOLD"}
+                ]
+              }
+            }"##,
+        );
+        write_file(
+            &root.join("mac_inbox.md"),
+            "---\ntype: [[area]]\n---\n- [ ] #task Call the bank [created::2026-09-29]\n",
+        );
+        write_file(
+            &root.join("health.md"),
+            "---\ntype: [[area]]\n---\n## Errands\n- [?] #task Book dentist [scheduled::2026-10-03]\n",
+        );
+        write_file(
+            &root.join("bob.md"),
+            "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Polish capture picker ^polish\n\t- [ ] #task Tune fuzzy weights\n",
+        );
+        write_file(
+            &root.join("sase.md"),
+            "---\ntype: [[project]]\nstatus: wip\n---\n## Bugs\n- [*] #task Fix deep bug ^deep-fix\n- [ ] #task Fix flaky gkeep test\n- [x] #task Old fix ^old-fix\n## Writing\n- [/] #task Draft outline ^outline\n- [ ] #task Ship blog post #now ^blog\n- [-] #task Dropped idea\n",
+        );
+        write_file(
+            &root.join("archive.md"),
+            "---\ntype: [[project]]\nstatus: done\n---\n- [ ] #task Leftover ^leftover\n",
+        );
+        write_file(&root.join("scratch.md"), "- [ ] #task Loose end ^loose\n");
+        let day_file = root.join("2026/20260930.md");
+        write_file(
+            &day_file,
+            "## Pomodoros\n- [ ] () — BUGS\n\t- [[sase#^deep-fix]]\n",
+        );
+        day_file
+    }
+
+    fn task_link_result(
+        root: &Path,
+        day_file: &Path,
+        raw: &str,
+        cursor: usize,
+    ) -> CaptureCompleteResult {
+        with_env("BOB_DAY_FILE", day_file, || {
+            with_env("BOB_NOW", "2026-09-30 09:02:00", || {
+                result(root, raw, cursor)
+            })
+        })
+    }
+
+    #[test]
+    fn task_link_completion_lists_worked_example_in_canonical_order() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-task-link");
+        let day_file = task_link_fixture(temp.path());
+
+        let value = task_link_result(temp.path(), &day_file, ":", 1);
+        assert_eq!(value.context, Some(CompletionContext::TaskLink));
+        assert_eq!(value.replacement, Replacement { start: 0, end: 1 });
+        let Candidates::TaskLink(candidates) = &value.candidates else {
+            panic!("expected task-link candidates");
+        };
+        let replacements: Vec<&str> = candidates
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect();
+        assert_eq!(
+            replacements,
+            vec![
+                "@sase:deep-fix",
+                "@sase:outline",
+                "@sase:blog",
+                "",
+                "",
+                "@bob:polish",
+                "",
+                "",
+            ]
+        );
+        assert!(value.warnings.is_empty());
+    }
+
+    #[test]
+    fn task_link_completion_pins_json_shape_and_omissions() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-task-link-json");
+        let day_file = task_link_fixture(temp.path());
+
+        let value = task_link_result(temp.path(), &day_file, ":", 1);
+        let json = serde_json::to_value(&value).expect("serialize result");
+        assert_eq!(json["context"], "task_link");
+        assert_eq!(json["schema_version"], 1);
+        assert!(json.get("block_id").is_none());
+
+        let identified = &json["candidates"][0];
+        assert_eq!(
+            identified,
+            &serde_json::json!({
+                "replacement": "@sase:deep-fix",
+                "ref": identified["ref"],
+                "route": "sase",
+                "note_kind": "project",
+                "block_id": "deep-fix",
+                "requires_block_id": false,
+                "block_id_suggestions": [],
+                "status_symbol": "*",
+                "status_name": "Next",
+                "status_type": "ON_HOLD",
+                "text": "Fix deep bug",
+                "section": "Bugs",
+                "depth": 0,
+                "line": 6,
+                "group": "queued",
+                "scheduled": null,
+                "pomodoro": {
+                    "line": 2,
+                    "name": "BUGS",
+                    "time_range": null,
+                    "is_current": false,
+                },
+            })
+        );
+        assert!(identified.get("now").is_none());
+        assert!(identified.get("pulls_forward").is_none());
+
+        let missing = &json["candidates"][7];
+        assert_eq!(missing["replacement"], "");
+        assert_eq!(missing["route"], "sase");
+        assert_eq!(missing["note_kind"], "project");
+        assert!(missing["block_id"].is_null());
+        assert_eq!(missing["requires_block_id"], true);
+        assert_eq!(
+            missing["block_id_suggestions"],
+            serde_json::json!(["fix-flaky-gkeep", "flaky-gkeep-test"])
+        );
+        assert_eq!(missing["status_symbol"], " ");
+        assert_eq!(missing["text"], "Fix flaky gkeep test");
+        assert_eq!(missing["section"], "Bugs");
+        assert_eq!(missing["group"], "note");
+        assert!(missing["scheduled"].is_null());
+        assert!(missing["pomodoro"].is_null());
+        assert!(missing.get("now").is_none());
+        assert!(missing.get("pulls_forward").is_none());
+
+        // The `#now` bet and the pull-forward flag serialize when set.
+        assert_eq!(json["candidates"][2]["now"], true);
+        assert_eq!(json["candidates"][4]["pulls_forward"], true);
+        assert_eq!(
+            json["candidates"][4]["scheduled"],
+            serde_json::json!("2026-10-03")
+        );
+    }
+
+    #[test]
+    fn task_link_completion_queries_cover_the_sigil_and_rank() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-task-link-query");
+        let day_file = task_link_fixture(temp.path());
+
+        // `:dee` narrows to the queued row with a sigil-inclusive range.
+        let raw = ":dee";
+        let ranked = task_link_result(temp.path(), &day_file, raw, raw.len());
+        assert_eq!(ranked.context, Some(CompletionContext::TaskLink));
+        assert_eq!(ranked.replacement, Replacement { start: 0, end: 4 });
+        let Candidates::TaskLink(candidates) = &ranked.candidates else {
+            panic!("expected task-link candidates");
+        };
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].replacement, "@sase:deep-fix");
+
+        // A cursor just before the sigil refetches the full list.
+        let full = task_link_result(temp.path(), &day_file, raw, 0);
+        assert_eq!(full.context, Some(CompletionContext::TaskLink));
+        assert_eq!(full.replacement, Replacement { start: 0, end: 4 });
+        assert_eq!(full.candidates.len(), 8);
+    }
+
+    #[test]
+    fn task_link_completion_scopes_to_the_batch_second_item() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-task-link-batch");
+        let day_file = task_link_fixture(temp.path());
+
+        let raw = "Buy milk\n\n:dee";
+        let value = task_link_result(temp.path(), &day_file, raw, raw.len());
+        assert_eq!(value.context, Some(CompletionContext::TaskLink));
+        assert_eq!(value.replacement, Replacement { start: 10, end: 14 });
+        let Candidates::TaskLink(candidates) = &value.candidates else {
+            panic!("expected task-link candidates");
+        };
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].replacement, "@sase:deep-fix");
+    }
+
+    #[test]
+    fn task_link_human_rows_name_queues_and_missing_ids() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-task-link-human");
+        let day_file = task_link_fixture(temp.path());
+
+        let value = task_link_result(temp.path(), &day_file, ":", 1);
+        let rows = candidate_lines(&value.candidates, value.context);
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "@sase:deep-fix".to_string(),
+                    "[*] Fix deep bug  · BUGS".to_string(),
+                ),
+                (
+                    "@sase:outline".to_string(),
+                    "[/] Draft outline  · In Progress".to_string(),
+                ),
+                (
+                    "@sase:blog".to_string(),
+                    "[ ] Ship blog post #now  · #now".to_string(),
+                ),
+                (
+                    "@mac_inbox:…".to_string(),
+                    "[ ] Call the bank  · mac_inbox.md · needs ID (^call-bank)"
+                        .to_string(),
+                ),
+                (
+                    "@health:…".to_string(),
+                    "[?] Book dentist  · health.md · needs ID (^book-dentist)  · scheduled 2026-10-03"
+                        .to_string(),
+                ),
+                (
+                    "@bob:polish".to_string(),
+                    "[ ] Polish capture picker  · bob.md".to_string(),
+                ),
+                (
+                    "@bob:…".to_string(),
+                    "[ ] Tune fuzzy weights  · bob.md · needs ID (^tune-fuzzy-weights)"
+                        .to_string(),
+                ),
+                (
+                    "@sase:…".to_string(),
+                    "[ ] Fix flaky gkeep test  · sase.md · needs ID (^fix-flaky-gkeep)"
+                        .to_string(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn task_link_completion_keeps_candidates_when_the_day_file_is_missing() {
+        let _guard = day_file_guard();
+        let temp = TempDir::new("bob-cli-capture-complete-task-link-warn");
+        let day_file = task_link_fixture(temp.path());
+        let missing =
+            day_file.parent().expect("day parent").join("20990101.md");
+
+        let value = task_link_result(temp.path(), &missing, ":", 1);
+        assert_eq!(value.context, Some(CompletionContext::TaskLink));
+        assert_eq!(value.candidates.len(), 8);
+        assert!(
+            value.warnings.iter().any(
+                |warning| warning.contains("Bob daily note does not exist")
+            ),
+            "a missing ledger warns without dropping candidates: {:?}",
+            value.warnings
         );
     }
 

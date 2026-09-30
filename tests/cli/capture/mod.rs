@@ -7,6 +7,7 @@ mod clip;
 mod complete_block_id;
 mod complete_editor;
 mod complete_query;
+mod complete_task_link;
 mod ensure_next;
 mod parse;
 mod parse_pomodoro;

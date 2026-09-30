@@ -7,7 +7,7 @@
 //! and a deterministic tiered fuzzy ranker. The completion-contract phase
 //! wires this into `capture-complete`'s `task_link` context.
 
-use std::{cmp::Reverse, fs, io, path::Path};
+use std::{cmp::Reverse, collections::HashSet, fs, io, path::Path};
 
 use chrono::NaiveDate;
 use serde::Serialize;
@@ -16,8 +16,8 @@ use super::{
     capture_active_tasks::{self, ActiveTaskPomodoro},
     capture_block_ids,
     capture_targets::{self, CaptureTargetKind},
-    capture_task_toggle, capture_tasks, collect_done, env as bob_env,
-    note_tasks, plan_budget, pomodoro, task_fields,
+    capture_tasks, collect_done, env as bob_env, note_tasks, plan_budget,
+    pomodoro, task_fields,
 };
 
 /// Whether a task status can be linked into a Pomodoro: Ready, Blocked,
@@ -137,6 +137,9 @@ pub(crate) fn discover_at(
     for (target_index, (target, contents)) in notes.iter().enumerate() {
         let scan = note_tasks::scan(contents, &settings);
         let used_ids = collect_done::block_ids_in_markdown(contents);
+        // One used-ID set per note: rebuilding it per ID-less task would
+        // re-hash the same list hundreds of times on large notes.
+        let used: HashSet<&str> = used_ids.iter().map(String::as_str).collect();
         let lines: Vec<&str> = contents.lines().collect();
         for task in scan
             .open_tasks()
@@ -174,6 +177,9 @@ pub(crate) fn discover_at(
                 LinkTaskGroup::Now => (3, 0, 0),
                 LinkTaskGroup::Note => (4, target_index, task.line_index),
             };
+            // One field pass per task line feeds both the displayed
+            // date and the pull-forward flag.
+            let (scheduled, pulls_forward) = scheduled_facts(raw_line, today);
             ordered.push((
                 LinkTask {
                     route: target.route.clone(),
@@ -182,10 +188,10 @@ pub(crate) fn discover_at(
                     block_id_suggestions: if task.block_id.is_some() {
                         Vec::new()
                     } else {
-                        capture_block_ids::suggest_ids(
+                        capture_block_ids::suggest_ids_with_used(
                             &task.description,
                             ':',
-                            &used_ids,
+                            &used,
                         )
                     },
                     status_symbol: task.status_symbol,
@@ -199,12 +205,8 @@ pub(crate) fn discover_at(
                     line: task.line_index + 1,
                     task_ref: task.task_ref(),
                     now,
-                    scheduled: first_scheduled(raw_line),
-                    pulls_forward:
-                        capture_task_toggle::find_single_future_scheduled_field(
-                            raw_line, today,
-                        )
-                        .is_some(),
+                    scheduled,
+                    pulls_forward,
                     pomodoro,
                     group,
                 },
@@ -237,15 +239,24 @@ fn secondary_order(
     }
 }
 
-/// The first strict `YYYY-MM-DD` scheduled value on a raw task line, in
-/// line order, or `None` when the line carries no valid one.
-fn first_scheduled(raw_line: &str) -> Option<String> {
-    task_fields::inline_fields(raw_line, "scheduled")
-        .into_iter()
-        .find_map(|field| {
-            task_fields::parse_strict_calendar_date(&field.value)
-                .map(|_| field.value)
-        })
+/// The schedule facts for one raw task line from a single field pass:
+/// the first strict `YYYY-MM-DD` scheduled value in line order (or `None`
+/// when the line carries no valid one), and whether linking would retire a
+/// future date — exactly one recognized `scheduled` field, strictly valid,
+/// and later than `today`, matching
+/// `capture_task_toggle::find_single_future_scheduled_field`.
+fn scheduled_facts(raw_line: &str, today: NaiveDate) -> (Option<String>, bool) {
+    let fields = task_fields::inline_fields(raw_line, "scheduled");
+    let scheduled = fields.iter().find_map(|field| {
+        task_fields::parse_strict_calendar_date(&field.value)
+            .map(|_| field.value.clone())
+    });
+    let pulls_forward = match fields.as_slice() {
+        [only] => task_fields::parse_strict_calendar_date(&only.value)
+            .is_some_and(|date| date > today),
+        _ => false,
+    };
+    (scheduled, pulls_forward)
 }
 
 /// Rank candidates for a `:` query: every whitespace-separated term must

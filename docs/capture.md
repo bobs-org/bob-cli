@@ -24,6 +24,7 @@ workflow guide.
   - [Pomodoro-linked tasks](#pomodoro-linked-tasks)
   - [Starting the session atomically](#starting-the-session-atomically)
   - [Linking and starting existing tasks](#linking-and-starting-existing-tasks)
+  - [Picking any open task with ':'](#picking-any-open-task-with-)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
   - [Starting a named Pomodoro](#starting-a-named-pomodoro)
@@ -67,6 +68,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
 | `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); `=<X>` starts the resolved session atomically |
 | `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress, Next, and Ready `#now` tasks |
+| `:<query>` | Incomplete: pick any open task to link (`capture-parse` needs `task_link`); accepting inserts `@route:block-id`, and execution never captures it |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends by 25 minutes, `-` shortens by 5 minutes; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15 minutes later, `--` moves 5 minutes earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
@@ -785,6 +787,68 @@ Human output follows the Ensure Next style: a `link`/`would link` or
 Next`, `[/] stays In Progress`), a ledger line (`Linked … under BUGS`,
 `Moved Task Link BUGS → FOCUS (created FOCUS)`, or `Task Link already in
 BUGS; no ledger change.`), and the existing start phrasing.
+
+### Picking any open task with ':'
+
+Type `:` at the very start of an input to fuzzy-search any open task in any
+area or project note. Accepting a row replaces the `:` query with the
+canonical `@route:block-id` link, which captures exactly like a typed link:
+as-is it links the task, and with a trailing `=` it also starts that
+session. A `:` query is only ever a picker query — it is never executable
+and never a third spelling of the link.
+
+An item is a task-link query exactly when it has one physical line and that
+line (ignoring leading and trailing whitespace) is a single
+whitespace-delimited token starting with `:`. The token is the sigil plus a
+query of any non-whitespace characters, possibly empty. Each item of a
+blank-line-separated batch draft is judged alone, so bulk linking works, and
+a `@@` declaration never applies to a query item.
+
+| Draft item | Reading |
+| --- | --- |
+| `:` | Query `""`: the picker opens on the full list |
+| `:dee` | Query `dee` |
+| `:sase:deep-fix` | Query; execution teaches the `@` spelling (T2 below) |
+| `:sase:deep-fix=` | Query; execution teaches the `@` spelling (T2 below) |
+| `: dee`, `:dee more`, `Buy :dee` | Prose: several tokens, unchanged |
+| `:dee` with a child line | Prose: several lines, unchanged |
+
+`bob capture` (and `--dry-run`) rejects a claimed item before any other item
+parser, so the whole batch rolls back and forced flags change nothing. The
+teaching errors keep the usual `capture item K starting on line L: …`
+prefix. T1 reads `` `:dee` opens the task picker; pick a task to insert its
+`@<route>:<block-id>` link, or write the link yourself (for example
+`@sase:deep-fix`) ``. T2 applies when `^` plus the query parses as a
+complete caret link, and reads `` `:sase:deep-fix=` opens the task picker;
+to link that task, write `@sase:deep-fix=` ``. A finished query can never
+silently become a junk inbox task.
+
+Only statuses the link path accepts are listed: Ready `[ ]`, Blocked `[?]`,
+Next `[*]`, and In Progress `[/]`. Notes are the `capture-targets` set: the
+inbox (when the file exists), area notes A→Z, then non-terminal project
+notes A→Z. Done, canceled, and unknown statuses are excluded, as are notes
+in terminal projects and untyped vault-root files.
+
+Groups, in precedence: `queued` (an identified task whose dedicated
+`[[route#^id]]` link sits under an open Pomodoro today), `in_progress`,
+`next`, `now` (Ready or Blocked with `#now`), and `note` (everything else).
+The empty query keeps the canonical order: `queued` in ledger order, then
+`in_progress`, `next`, and `now` each by route then line, then `note` tasks
+in targets order and document order. Ranking splits the query into lowercase
+whitespace-separated terms that must all match over `route:block-id`, the
+block ID, the text, the route, the section, and the Pomodoro name — field
+prefix first, then word prefix, substring, and in-order subsequence — with
+ties keeping the canonical order.
+
+Tasks without a block ID always list, with `requires_block_id: true`, an
+empty `replacement` clients must never insert, and up to 3 deterministic
+`block_id_suggestions` that are free in that note (for example
+`Fix flaky gkeep test` suggests `fix-flaky-gkeep`). Name one with
+`bob capture-task-id --route sase --task-ref <ref> --block-id fix-flaky-gkeep`
+using the candidate's `route` and `ref`, then capture the link with an
+optional `=` as usual. Linking retires a single future
+`[scheduled::YYYY-MM-DD]` exactly like a typed link; candidates flag that
+with `pulls_forward: true` and the `scheduled` date.
 
 ### Plan budget and strict mode
 
@@ -2408,7 +2472,13 @@ Ready `#now`); accepting a row inserts the full
 accept. `^`, `^fragment`, and `^route:` report `incomplete` with
 `needs: ["active_task"]`, `^route:block-id#` needs `pomodoro_name`, and a
 complete `^route:block-id[#pomodoro][=<X>]` reports `pomodoro_link` and links
-the existing task on capture. A `=x` close keeps the `pomodoro_close` span
+the existing task on capture. A solo leading `:` opens the task-link picker
+instead of creating a task: any single-token, single-line item starting with
+`:` — `:`, `:dee`, even `:)` — reports `incomplete` with
+`needs: ["task_link"]`, an empty body, `route`/`section`/`block_id` all
+`null`, no diagnostics, and one `interactive_placeholder` span over the whole
+token, sigil included. Multi-token (`: dee`), multi-line, and non-leading
+(`Buy :dee`) shapes stay prose. A `=x` close keeps the `pomodoro_close` span
 out of completion gating, and typing `=x` with nothing running surfaces the
 `no running Pomodoro` diagnostic both in the CLI and in the Mac preview.
 
@@ -2608,7 +2678,7 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `pomodoro_close_task`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `pomodoro_close_task`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` with no body text reports mode
 `incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode
@@ -2978,7 +3048,19 @@ find their tasks. `replacement` runs from just after `^` to the end of that
 part and always stops before `#`/`=`, so typed suffixes survive an accept,
 and `query` is the text from after `^` to the cursor. A `#name` after
 `^route:block-id` completes Pomodoro names exactly as it does after
-`@route:block-id`, and a cursor inside `=<X>` or `=x[<N>][!<M>][~<K>]` returns an empty success.
+`@route:block-id`, and a cursor inside `=<X>` or `=x[<N>][!<M>][~<K>]` returns an empty success. A solo
+leading `:` token completes `task_link`: while the cursor is anywhere in
+`[token.start, token.end]` — including just before the sigil, so clients can
+refetch the full list at `replacement.start` — the context offers every
+linkable open task (Ready, Blocked, Next, In Progress) in the routable inbox,
+area, and non-terminal project notes, in canonical picker order and ranked by
+the query, with ID-less tasks always included (`--all-tasks` does not affect
+this context). The `replacement` covers the whole `:` token, sigil included,
+because accepting rewrites the query into the canonical `@route:block-id`
+link, and `query` is the token text between the sigil and the cursor (empty
+at or just after the sigil). For example `bob capture-complete -c 1 -- ':'`
+lists the whole vault, and `-c 4 -- ':dee'` narrows to the matching rows with
+`replacement` `{0, 4}`.
 `@route:` (`pomodoro_block_id`) completion now carries the `block_id` object
 and link-only filtering above; an empty-query marker-only `@route:` still
 lists that note's linkable tasks in document order. An empty block-ID component (`@route+#`) returns a successful empty
@@ -3025,7 +3107,7 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `task`,
-`task_section`, `active_task`, `now_tag`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+`task_section`, `active_task`, `task_link`, `now_tag`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
 active. `now_tag` covers a cursor inside a trailing `#n`, `#no`, or `#now`
 token; its single candidate is `{ "replacement": "#now", "label": "#now",
 "text": "This week's bet", "kind": "tag" }`. `task_block_id` covers `@route^prefix` once the route resolves;
@@ -3102,7 +3184,20 @@ context) has `replacement` (`route:block-id`), `ref`, `route`, `block_id`,
 nullable `pomodoro` (`line`, nullable `name`, nullable `time_range`,
 `is_current`; `null` when the task is not queued), plus `now: true` when the
 task line carries `#now` (omitted when false). Human rows read
-`sase:deep-fix  [*] Fix deep bug  · BUGS`. Missing-ID tasks, which appear only when
+`sase:deep-fix  [*] Fix deep bug  · BUGS`. A task-link candidate (`task_link`
+context) has `replacement` (`@route:block-id`, or `""` for ID-less tasks,
+which clients must never insert), `ref`, `route`, `note_kind` (`inbox`,
+`area`, or `project`), nullable `block_id`, `requires_block_id`,
+`block_id_suggestions` (up to 3, `[]` for identified tasks),
+`status_symbol`, `status_name`, `status_type`, `text`, nullable `section`,
+`depth`, 1-based `line`, `group` (`queued`, `in_progress`, `next`, `now`, or
+`note`), nullable `scheduled`, and nullable `pomodoro` with the exact
+`active_task` shape (`null` unless the task is queued), plus `now: true` and
+`pulls_forward: true` when set (both omitted when false). Human rows read
+`@sase:deep-fix  [*] Fix deep bug  · BUGS`, with the tail naming the queued
+Pomodoro (`Planned` when unnamed), `In Progress`, `Next`, `#now`, or the note
+label, plus `· needs ID (^suggestion)` on ID-less rows and
+`· scheduled YYYY-MM-DD` whenever the task carries a scheduled date. Missing-ID tasks, which appear only when
 `--all-tasks` is set in the `task` context, have `block_id: null`,
 `requires_block_id: true`, and an empty placeholder `replacement` that the
 updated client must never insert. A wikilink note candidate has `path`, `name`, optional `alias`,
@@ -3225,7 +3320,7 @@ bob capture-task-id --route NAME --task-ref REF --block-id ID [-b|--bob-dir DIR]
 
 Assigns a user-authored Obsidian block ID to one open task in a routed note.
 This is the only write needed to turn a missing-ID `capture-complete --all-tasks`
-candidate into an identified task. The command validates `--route` and
+or `task_link` candidate into an identified task. The command validates `--route` and
 `--block-id` with Bob's shared grammar (`A-Z`, `a-z`, `0-9`, and `-` for the
 ID; routes also allow `_`), resolves `--task-ref` with the same stale-safe
 `<line>:<digest>` recovery as `bob capture --task-ref`, and then confirms the

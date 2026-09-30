@@ -602,6 +602,16 @@ pub(crate) fn suggest_ids(
     used_ids: &[String],
 ) -> Vec<String> {
     let used: HashSet<&str> = used_ids.iter().map(String::as_str).collect();
+    suggest_ids_with_used(body, marker, &used)
+}
+
+/// [`suggest_ids`] with a caller-held used-ID set, so vault-wide scans can
+/// build the set once per note instead of once per task. Pure function.
+pub(crate) fn suggest_ids_with_used(
+    body: &str,
+    marker: char,
+    used: &HashSet<&str>,
+) -> Vec<String> {
     let mut candidates: Vec<String> = Vec::new();
 
     let prose = words_in(body);
