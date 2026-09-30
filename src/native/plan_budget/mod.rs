@@ -122,8 +122,8 @@ impl PlanReport {
 
 /// The full report shared by `bob plan`, the hooks, and capture:
 /// the pure ledger half plus the NOW count. NOW over-cap appends
-/// `now_cap_exceeded`, and any over-cap half sets `status` to
-/// `over`. Being exactly at a cap is fine.
+/// `now_cap_exceeded` but never changes `status`: status depends
+/// only on themes and links (rule 8). Being exactly at a cap is fine.
 pub(crate) fn assemble_report(
     today: NaiveDate,
     daily_file: &str,
@@ -143,11 +143,7 @@ pub(crate) fn assemble_report(
             line: None,
         });
     }
-    let status = if ledger.status == PlanStatus::Over || now.over {
-        PlanStatus::Over
-    } else {
-        PlanStatus::Ok
-    };
+    let status = ledger.status;
     PlanReport {
         date: today.format("%Y-%m-%d").to_string(),
         daily_file: daily_file.to_string(),
@@ -231,7 +227,17 @@ pub(crate) fn count_now(
 /// Pure ledger budget and lint engine implementing `docs/plan.md`
 /// rules 1-9. Only open entries count; completed and cancelled
 /// entries are history.
-pub(crate) fn compute(contents: &str, config: &PlanConfig) -> LedgerBudget {
+///
+/// `daily_file` is the daily note's vault-relative path without `.md`
+/// (for example `2026/20260930`); an empty link target, that path,
+/// and its basename all mean the daily note itself (rule 6). Callers
+/// that know the day file must pass it; `compute` keeps the old
+/// behaviour for callers that do not.
+pub(crate) fn compute_for_daily(
+    contents: &str,
+    config: &PlanConfig,
+    daily_file: Option<&str>,
+) -> LedgerBudget {
     let lines: Vec<&str> = contents.lines().collect();
     let Some(section) = pomodoro::pomodoros_section_range(&lines) else {
         return empty_budget(config);
@@ -305,6 +311,7 @@ pub(crate) fn compute(contents: &str, config: &PlanConfig) -> LedgerBudget {
             &entry_lines,
             entry.line,
             exempt_entry,
+            daily_file,
         );
         if components.is_empty() && entry_links.is_empty() {
             // An empty `()` placeholder never counts.
@@ -440,7 +447,7 @@ fn meter(count: usize, cap: u32) -> PlanMeter {
 }
 
 /// Split a merged entry name (`BOB + DECKS`) into components.
-fn split_components(name: &str) -> Vec<String> {
+pub(crate) fn split_components(name: &str) -> Vec<String> {
     name.split('+')
         .map(str::trim)
         .filter(|component| !component.is_empty())
@@ -458,6 +465,7 @@ fn collect_entry_links(
     entry_lines: &BTreeSet<usize>,
     entry_line: usize,
     exempt_entry: bool,
+    daily_file: Option<&str>,
 ) -> Vec<(String, String)> {
     if exempt_entry {
         return Vec::new();
@@ -478,7 +486,7 @@ fn collect_entry_links(
         if !line.is_empty() && !line.starts_with([' ', '\t']) {
             break;
         }
-        for link in block_links(line) {
+        for link in block_links(line, daily_file) {
             links.push(link);
         }
     }
@@ -488,7 +496,11 @@ fn collect_entry_links(
 /// Block links `[[target#^id]]` (also `![[…]]` and `[[…|alias]]`,
 /// with or without a trailing `#` move-only marker) outside
 /// `~~…~~` struck spans.
-fn block_links(line: &str) -> Vec<(String, String)> {
+///
+/// An empty target, the daily note's vault-relative path without
+/// `.md`, and its basename all canonicalize to the daily path
+/// itself (rule 6) when `daily_file` is known.
+fn block_links(line: &str, daily_file: Option<&str>) -> Vec<(String, String)> {
     let struck = struck_inner_spans(line);
     let mut links = Vec::new();
     let mut rest = line;
@@ -520,6 +532,7 @@ fn block_links(line: &str) -> Vec<(String, String)> {
                 if let Some(stripped) = target.strip_suffix(".md") {
                     target = stripped.to_string();
                 }
+                let target = canonical_link_target(&target, daily_file);
                 links.push((target, block_id.to_string()));
             }
         }
@@ -527,6 +540,35 @@ fn block_links(line: &str) -> Vec<(String, String)> {
         rest = &line[base..];
     }
     links
+}
+
+/// Vault-relative daily key (`YYYY/YYYYMMDD`) for a day-file path.
+/// Returns the parent directory plus the file stem, so an absolute
+/// path still yields the vault-relative key the ledger links use.
+pub(crate) fn daily_key_from_path(day_file: &Path) -> Option<String> {
+    let stem = day_file.file_stem()?.to_str()?;
+    let parent = day_file.parent()?.file_name()?.to_str()?;
+    Some(format!("{parent}/{stem}"))
+}
+
+/// Canonical daily-note link target (rule 6): an empty target, the
+/// daily note's vault-relative path without `.md`, and its basename
+/// are the same key. A `.md` suffix is stripped before comparing,
+/// and the canonical key is the daily path itself.
+fn canonical_link_target(target: &str, daily_file: Option<&str>) -> String {
+    let Some(daily) = daily_file else {
+        return target.to_string();
+    };
+    let daily = daily.strip_suffix(".md").unwrap_or(daily);
+    if daily.is_empty() {
+        return target.to_string();
+    }
+    let basename = daily.rsplit('/').next().unwrap_or(daily);
+    if target.is_empty() || target == daily || target == basename {
+        daily.to_string()
+    } else {
+        target.to_string()
+    }
 }
 
 /// Inner spans of `~~…~~` struck pairs on one line: from just
@@ -552,7 +594,7 @@ mod tests {
     use super::*;
 
     fn budget(contents: &str) -> LedgerBudget {
-        compute(contents, &PlanConfig::default())
+        compute_for_daily(contents, &PlanConfig::default(), None)
     }
 
     fn codes(budget: &LedgerBudget) -> Vec<&str> {
@@ -814,5 +856,63 @@ mod tests {
         )
         .expect("NOW query parses and runs");
         assert!(descriptions.is_empty());
+    }
+
+    #[test]
+    fn now_over_never_changes_status() {
+        let ledger = budget(
+            "## Pomodoros\n\
+            \n\
+            - [ ] () — GOALS\n",
+        );
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 30).expect("date");
+        let config = PlanConfig::default();
+        let now = NowBudget {
+            count: config.max_now() as usize + 1,
+            cap: config.max_now(),
+            over: true,
+        };
+        let report =
+            assemble_report(today, "2026/20260930.md", &config, &ledger, now);
+        assert_eq!(report.status, PlanStatus::Ok);
+        assert_eq!(codes(&ledger), Vec::<&str>::new());
+        assert_eq!(
+            report
+                .warnings
+                .iter()
+                .map(|w| w.code.as_str())
+                .collect::<Vec<_>>(),
+            vec![LINT_NOW_CAP]
+        );
+    }
+
+    #[test]
+    fn eleven_links_are_over_the_cap() {
+        let mut contents = String::from("## Pomodoros\n\n- [ ] () — GOALS\n");
+        for index in 0..11 {
+            contents.push_str(&format!("    - [[task#^{index:04}]]\n"));
+        }
+        let ledger = budget(&contents);
+        assert_eq!(ledger.links.count, 11);
+        assert!(ledger.links.over);
+        assert_eq!(ledger.status, PlanStatus::Over);
+        assert_eq!(codes(&ledger), vec![LINT_LINK_CAP]);
+    }
+
+    #[test]
+    fn empty_target_means_the_daily_note() {
+        let contents = "## Pomodoros\n\
+            \n\
+            - [ ] () — GOALS\n\
+            \x20   - [[#^aaa]]\n\
+            \x20   - [[2026/20260930#^aaa]]\n\
+            \x20   - [[20260930#^aaa]]\n";
+        let daily = "2026/20260930";
+        let ledger =
+            compute_for_daily(contents, &PlanConfig::default(), Some(daily));
+        assert_eq!(ledger.links.count, 1);
+        assert_eq!(ledger.entries[0].links, 1);
+        let without_daily = budget(contents);
+        assert_eq!(without_daily.links.count, 3);
     }
 }

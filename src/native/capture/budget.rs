@@ -8,6 +8,12 @@
 //! when a non-start item creates a new named Pomodoro past the theme cap.
 use super::*;
 
+fn pomodoros_section_text(contents: &str) -> Option<String> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let range = pomodoro::pomodoros_section_range(&lines)?;
+    Some(lines[range].join("\n"))
+}
+
 /// One cap warning inside [`CapturePlanBudget`]: only the theme and
 /// link caps ever fire here, and only while growing past the cap.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -46,6 +52,17 @@ pub(super) fn append_plan_budget(
     request: &CaptureRequest,
     batch: &mut PlannedCaptureBatch,
 ) -> Result<(), CaptureError> {
+    let day_file = pomodoro::day_file_for(&request.bob_dir);
+    let Some(staged) =
+        batch.text_files.iter().find(|file| file.target == day_file)
+    else {
+        return Ok(());
+    };
+    if pomodoros_section_text(&staged.original_target)
+        == pomodoros_section_text(&staged.updated_target)
+    {
+        return Ok(());
+    }
     let config = match config::load_plan_config(&config::config_path()) {
         Ok(config) => config,
         Err(error) => {
@@ -59,14 +76,21 @@ pub(super) fn append_plan_budget(
             return Ok(());
         }
     };
-    let day_file = pomodoro::day_file_for(&request.bob_dir);
-    let Some(staged) =
-        batch.text_files.iter().find(|file| file.target == day_file)
-    else {
-        return Ok(());
-    };
-    let before = plan_budget::compute(&staged.original_target, &config);
-    let after = plan_budget::compute(&staged.updated_target, &config);
+    let daily_key = day_file
+        .strip_prefix(&request.bob_dir)
+        .map(|path| path.display().to_string())
+        .ok()
+        .or_else(|| plan_budget::daily_key_from_path(&day_file));
+    let before = plan_budget::compute_for_daily(
+        &staged.original_target,
+        &config,
+        daily_key.as_deref(),
+    );
+    let after = plan_budget::compute_for_daily(
+        &staged.updated_target,
+        &config,
+        daily_key.as_deref(),
+    );
     let themes_grew = after.themes.count > before.themes.count;
     let links_grew = after.links.count > before.links.count;
 

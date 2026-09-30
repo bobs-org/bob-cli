@@ -1461,7 +1461,7 @@ lexically: ``task 1 is listed twice in `=x1,1` ``,
 ``task 1 cannot both stay in progress and complete in `=x1!1` ``,
 ``task 1 cannot both stay in progress and drop in `=x1~1` ``,
 ``task 2 cannot both complete and drop in `=x!2~2` ``,
-``` `0` means no task stays in progress; use it alone, as `=x0` or `=x0!2` ```
+``` `0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2` ```
 (for `=x0,2`, `=x0,`, and `=x00`), `task numbers start at 1` (for `=x!0`
 and `=x~0`), `` expected a task
 number before `,` ``, `` expected a task number after `,` `` (for `=x1,!2`), `` use one `!` list: `=x1!2,3` ``,
@@ -2505,7 +2505,7 @@ close items never inherit a `@@` declaration.
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
-`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_complete`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `now_tag`, `project_note_marker`, `sub_bullet_route`,
+`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `now_tag`, `project_note_marker`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,

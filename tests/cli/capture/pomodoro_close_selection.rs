@@ -1092,15 +1092,15 @@ fn capture_pomodoro_close_selection_diagnostics() {
         ),
         (
             vec!["=x0,2"],
-            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`",
+            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`",
         ),
         (
             vec!["=x0,"],
-            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`",
+            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`",
         ),
         (
             vec!["=x00"],
-            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`",
+            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`",
         ),
         (vec!["=x!0"], "task numbers start at 1"),
         (vec!["=x~0"], "task numbers start at 1"),

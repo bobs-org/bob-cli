@@ -760,7 +760,7 @@ without changing any file. Warnings go to stderr. A no-op prints a single
 `already in sync` line only when task statuses, daily-note links, grouping,
 and grouping diagnostics are all unchanged.
 
-Both the changed and no-op reports end with one plan-budget stats line, for
+Both the changed and no-op reports print one plan-budget stats line right after the stats line, for
 example `plan 3/3 themes · 7/10 links · NOW 12/15`. Over-cap meters are red.
 When the report carries plan warnings, the line appends the count and points
 at `bob plan`, for example `· 2 plan warnings (run bob plan)`; individual
@@ -927,7 +927,15 @@ JSON mode prints one object on stdout with these stable fields:
   "recovery_directory": null,
   "kept_next": 0,
   "kept_in_progress": 1,
-  "unresolved_references": []
+  "unresolved_references": [],
+  "plan_budget": {
+    "date": "2026-07-10",
+    "daily_file": "2026/20260710.md",
+    "status": "ok",
+    "themes": { "count": 2, "cap": 3, "over": false },
+    "links": { "count": 3, "cap": 10, "over": false },
+    "now": { "count": 0, "cap": 15, "over": false }
+  }
 }
 ```
 

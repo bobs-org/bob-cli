@@ -559,7 +559,7 @@ pub(super) fn close_selection_overlap_complete_drop_error(
 }
 
 pub(super) fn close_selection_zero_alone_error() -> String {
-    "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`"
+    "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`"
         .to_string()
 }
 

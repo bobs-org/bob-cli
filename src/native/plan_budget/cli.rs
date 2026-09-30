@@ -20,8 +20,8 @@ use super::{
         env as bob_env, pomodoro,
         style::Styler,
     },
-    assemble_report, compute, count_now, LedgerBudget, NowBudget, PlanReport,
-    PlanStatus,
+    assemble_report, compute_for_daily, count_now, LedgerBudget, NowBudget,
+    PlanReport, PlanStatus,
 };
 
 const COMMAND_NAME: &str = "bob plan";
@@ -149,6 +149,7 @@ impl PlanRequest {
 struct PlanSuccess {
     report: PlanReport,
     no_daily_note: bool,
+    has_section: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,6 +185,7 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
                     now,
                 ),
                 no_daily_note: true,
+                has_section: false,
             });
         }
         Err(error) => {
@@ -194,7 +196,9 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
         }
     };
 
-    let ledger = compute(&contents, &config);
+    let ledger =
+        compute_for_daily(&contents, &config, Some(&relative_day_file));
+    let has_section = ledger.has_section;
     Ok(PlanSuccess {
         report: assemble_report(
             today,
@@ -204,6 +208,7 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
             now,
         ),
         no_daily_note: false,
+        has_section,
     })
 }
 
@@ -283,7 +288,7 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
             sep = styler.separator(),
             date = report.date,
         ));
-    } else if report.entries.is_empty() && report.theme_names.is_empty() {
+    } else if !result.has_section {
         output.push_str(&format!(
             "bob plan {sep} {weekday} {date} {sep} no Pomodoros section\n",
             sep = styler.separator(),
@@ -328,14 +333,15 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
             .max()
             .unwrap_or(0)
             .max(5);
-        let time_width = report
+        let max_range = report
             .entries
             .iter()
             .filter_map(|entry| entry.time_range.as_deref())
             .map(|range| range.len())
             .max()
-            .unwrap_or(0)
-            + "▶ ".chars().count();
+            .unwrap_or(0);
+        let time_width =
+            (max_range + "▶ ".chars().count()).max("exempt".chars().count());
         for entry in &report.entries {
             let star = if entry.highlight {
                 styler.yellow("★")
@@ -359,7 +365,12 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
                 format!("{} links", entry.links)
             };
             let row = format!("  {star} {name}  {time_cell}  {links}\n");
-            output.push_str(&if entry.exempt { styler.dim(&row) } else { row });
+            if entry.exempt {
+                let row = row.replace("\u{1b}[0m", "\u{1b}[0m\u{1b}[2m");
+                output.push_str(&styler.dim(&row));
+            } else {
+                output.push_str(&row);
+            }
         }
         output.push('\n');
     }

@@ -274,6 +274,16 @@ fn trailing_now_tag_fragment_completes_the_tag() {
 }
 
 #[test]
+fn now_tag_completion_needs_body_text() {
+    assert_eq!(field("=x #n", 5), None);
+    assert_eq!(field("@r:id #n", 8), None);
+    assert_eq!(field("#n", 2), None);
+    assert_eq!(field("#now", 4), None);
+    let completion = field("Fix it #n", 9).expect("body keeps the tag");
+    assert_eq!(completion.context, CompletionContext::NowTag);
+}
+
+#[test]
 fn retired_double_colon_marker_has_no_completion_field() {
     assert_eq!(field("Do work @Dev::new-id", 12), None);
     assert_eq!(field("Do work @Dev::new-id", 14), None);

@@ -658,7 +658,7 @@ mod tests {
         let zero = error("=x0,2");
         assert_eq!(
             zero.message,
-            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`"
+            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`"
         );
         assert_eq!(zero.range, (2, 3));
 
@@ -712,14 +712,14 @@ mod tests {
         let zero_trailing = error("=x0,");
         assert_eq!(
             zero_trailing.message,
-            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`"
+            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`"
         );
         assert_eq!(zero_trailing.range, (2, 3));
 
         let zero_padded = error("=x00");
         assert_eq!(
             zero_padded.message,
-            "`0` means no task stays in progress; use it alone, as `=x0` or `=x0!2`"
+            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`"
         );
         assert_eq!(zero_padded.range, (2, 4));
     }

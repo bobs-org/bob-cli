@@ -188,7 +188,7 @@ bob plan · Wed 2026-09-30 · 2026/20260930.md
   ★ GOALS    ▶ 0945-1015   3 links
     DECKS                  2 links
     BOB                    2 links
-    GTD      exempt        1 link
+    GTD      exempt        0 links
 
   ⚠ MISC is an inventory label, not a theme (line 60)  inventory_label_open
 ```
@@ -204,15 +204,15 @@ an I/O failure, 2 for usage or an invalid plan config.
 
 ## Surfaces
 
-| Surface | What Bryan sees | Phase |
-| --- | --- | --- |
-| `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), and lints with hints | plan-core |
-| Daily note, above `## Pomodoros` | A live ` ```bob-plan ` block: `PLAN 3/3 · 7/10`, `NOW 12/15`, then `★ GOALS · DECKS · BOB` | ledger-plan-view, rollout |
-| `dash.md` chip bar | `NOW 12/15` and `PLAN 3/3 · 7/10` chips, red when over the cap; a `### NOW Tasks` section | vault-now, rollout |
-| tmux status line | `[<23m] 0945-1015 — GOALS · plan 3/3 · 7/10`, reverse video when over | hooks-tmux |
-| `bob task-status-hooks` | A `plan_budget` JSON block and one human line | hooks-tmux |
-| `bob capture` / Bob Mac Capture | Where the Task Link lands ("→ GOALS · next up"), a before→after meter, cap warnings, and optional strict refusal | capture-budget, mac-budget |
-| Obsidian Notices | `· plan 3/3 · 11/10 🔴` on Ctrl+Shift+Enter; `#now added · NOW 13/15` on the toggle | link-notice-budget, now-toggle |
+| Surface | What Bryan sees |
+| --- | --- |
+| `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), and lints with hints |
+| Daily note, above `## Pomodoros` | A live ` ```bob-plan ` block: `PLAN 3/3 · 7/10`, `NOW 12/15`, then `★ GOALS · DECKS · BOB` |
+| `dash.md` chip bar | `NOW 12/15` and `PLAN 3/3 · 7/10` chips, red when over the cap; a `### NOW Tasks` section |
+| tmux status line | `<status> · plan T/Tc · L/Lc \| ` (for example `0945-1015 — GOALS · plan 3/3 · 7/10 \| `), reverse video when over |
+| `bob task-status-hooks` | A `plan_budget` JSON block and one human line (`plan 3/3 themes · 7/10 links · NOW 12/15`) |
+| `bob capture` / Bob Mac Capture | Where the Task Link lands (`→ under GOALS (next up)`, `→ into running GOALS (0945-1015)`, `→ new Pomodoro BOB`), a before→after meter, cap warnings, and optional strict refusal |
+| Obsidian Notices | `· plan 3/3 · 11/10 🔴` on Ctrl+Shift+Enter; `#now added · NOW 13/15` on the toggle |
 
 ## Conformance examples
 
@@ -328,3 +328,17 @@ unless noted.
    ```
 
    Themes are `GOALS` (1/3); links are 1/10.
+
+8. **Empty target means the daily note.** In `2026/20260930.md`,
+   these three targets are the same link when the block ID matches:
+
+   ```markdown
+   ## Pomodoros
+
+   - [ ] () — GOALS
+       - [[#^aaa]]
+       - [[2026/20260930#^aaa]]
+       - [[20260930#^aaa]]
+   ```
+
+   Links are 1/10.

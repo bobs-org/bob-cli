@@ -685,3 +685,178 @@ fn capture_complete_create_row_omits_plan_themes_without_config() {
     assert!(created.get("plan_themes_after").is_none());
     assert!(created.get("plan_themes_cap").is_none());
 }
+
+#[test]
+fn capture_without_ledger_change_has_no_plan_budget() {
+    let temp = TempDir::new("bob-cli-capture-budget-quiet");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing\n");
+    write_file(&day_file, three_theme_day());
+
+    let output = capture_json(
+        &vault,
+        &day_file,
+        &["Plain", "work", "without", "pomodoro.", "@dev"],
+        None,
+    );
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert!(json.get("plan_budget").is_none(), "{json}");
+}
+
+#[test]
+fn capture_invalid_config_without_ledger_change_has_no_warning() {
+    let temp = TempDir::new("bob-cli-capture-budget-quiet-bad-config");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    let config = temp.path().join("config.yml");
+    write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing\n");
+    write_file(&day_file, three_theme_day());
+    write_file(&config, "plan:\n  max_themes: 0\n");
+
+    let output = capture_json(
+        &vault,
+        &day_file,
+        &["Plain", "work", "without", "pomodoro.", "@dev"],
+        Some(&config),
+    );
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert!(json.get("plan_budget").is_none(), "{json}");
+    let warnings = json["warnings"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| w.as_str().unwrap_or("").contains("plan budget")),
+        "non-ledger capture must not warn about the plan config: {json}"
+    );
+}
+
+#[test]
+fn capture_strict_mode_refuses_toggle_path() {
+    let temp = TempDir::new("bob-cli-capture-strict-toggle");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    let config = temp.path().join("config.yml");
+    write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing ^newid\n");
+    write_file(
+        &day_file,
+        concat!(
+            "# 2026-07-10\n",
+            "## Pomodoros\n",
+            "- [ ] () — GOALS\n",
+            "  - [[dev#^aaa]]\n",
+            "  - [[dev#^newid]]\n",
+            "- [ ] () — DECKS\n",
+            "  - [[dev#^bbb]]\n",
+            "- [ ] () — BOB\n",
+            "  - [[dev#^ccc]]\n",
+            "## Later\n",
+        ),
+    );
+    write_file(&config, "plan:\n  strict: true\n");
+    write_toggle_task_settings(&vault);
+
+    let output =
+        capture_json(&vault, &day_file, &["@dev+newid#NEWT"], Some(&config));
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "toggle should be refused: {}",
+        format_output(&output)
+    );
+    let json = parse_json(&output);
+    assert_eq!(json["code"], "plan_theme_cap_exceeded", "{json}");
+}
+
+#[test]
+fn capture_strict_mode_refuses_project_note_path() {
+    let temp = TempDir::new("bob-cli-capture-strict-project-note");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    let config = temp.path().join("config.yml");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    write_file(&day_file, three_theme_day());
+    write_file(&config, "plan:\n  strict: true\n");
+
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 13:40:00")
+            .env("BOB_CONFIG_FILE", &config),
+        "Body @cash^human1+#NEWT\n- Draft the memo :draft-memo\n",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "project-note should be refused: {}",
+        format_output(&output)
+    );
+    let json = parse_json(&output);
+    assert_eq!(json["code"], "plan_theme_cap_exceeded", "{json}");
+}
+
+#[test]
+fn capture_parse_link_close_with_drop_reports_close() {
+    for raw in ["^r:id=x~1", "Text @r:id=x~1"] {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(raw)
+            .output()
+            .expect("run bob capture-parse");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+        let close = &json["pomodoro_close"];
+        assert!(close.is_object(), "{raw} should report a close: {json}");
+        assert_eq!(close["drop"], serde_json::json!([1]), "{raw}: {json}");
+    }
+}
+
+#[test]
+fn capture_now_tag_writes_task_line_with_created_and_id() {
+    let temp = TempDir::new("bob-cli-capture-now-e2e");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    write_file(&target, "# Dev\n## Tasks\n");
+    write_file(&day_file, "# 2026-07-10\n## Pomodoros\n");
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        r##"{"globalFilter":"#task","statusSettings":{"coreStatuses":[{"symbol":" ","name":"Todo","type":"TODO"},{"symbol":"x","name":"Done","type":"DONE"}],"customStatuses":[]}}"##,
+    );
+
+    let output = capture_json(
+        &vault,
+        &day_file,
+        &["Ship", "the", "thing", "@dev", "#now"],
+        None,
+    );
+    assert_success(&output);
+    let json = parse_json(&output);
+    let task_line = json["task_line"].as_str().expect("task line");
+    assert!(
+        task_line.starts_with("- [ ] #task Ship the thing #now [created::"),
+        "task line should carry #task, #now and created stamp:\n{task_line}"
+    );
+    let body = fs::read_to_string(&target).expect("read target");
+    assert!(
+        body.contains("- [ ] #task Ship the thing #now [created::"),
+        "written file should carry #task, #now and created stamp:\n{body}"
+    );
+}

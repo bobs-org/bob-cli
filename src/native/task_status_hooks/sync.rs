@@ -151,15 +151,19 @@ pub(super) fn plan_budget_for_sync(
             return None;
         }
     };
-    let ledger = plan_budget::compute(daily_contents, &config);
-    if !ledger.has_section {
-        return None;
-    }
-    let now = plan_budget::count_now(bob_dir, anchor, &config);
     let daily_file = daily_path
         .strip_prefix(bob_dir)
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| daily_path.display().to_string());
+    let ledger = plan_budget::compute_for_daily(
+        daily_contents,
+        &config,
+        Some(&daily_file),
+    );
+    if !ledger.has_section {
+        return None;
+    }
+    let now = plan_budget::count_now(bob_dir, anchor, &config);
     Some(plan_budget::assemble_report(
         anchor,
         &daily_file,

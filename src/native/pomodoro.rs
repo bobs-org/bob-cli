@@ -104,7 +104,12 @@ fn budget_meter() -> Option<String> {
     // defaults silently on this surface.
     let plan_config =
         config::load_plan_config(&config::config_path()).unwrap_or_default();
-    let ledger = plan_budget::compute(&contents, &plan_config);
+    let daily_key = plan_budget::daily_key_from_path(&day_file);
+    let ledger = plan_budget::compute_for_daily(
+        &contents,
+        &plan_config,
+        daily_key.as_deref(),
+    );
     if !ledger.has_section {
         return None;
     }
@@ -590,6 +595,7 @@ is no status), wrapped in `#[reverse]...#[noreverse]` when over the cap.
 With `BOB_CLI_USE_SCRIPT=1` the script fallback stays budget-less.
 
 environment:
+  BOB_CONFIG_FILE  exact Bob config file; defaults to ~/.config/bob/config.yml
   BOB_DAY_FILE  exact daily note path to read
   BOB_DIR       Bob vault root used to find the default daily note
   BOB_NOW       override the current timestamp for status calculations

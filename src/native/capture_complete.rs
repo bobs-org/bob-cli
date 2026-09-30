@@ -1099,7 +1099,8 @@ fn pomodoro_name_candidates_at(
         )));
     }
     warnings.extend(scan.warnings.iter().cloned());
-    let plan_hint = plan_creation_hint(&contents, &scan);
+    let daily_key = plan_budget::daily_key_from_path(day_file);
+    let plan_hint = plan_creation_hint(&contents, &scan, daily_key.as_deref());
     let candidates =
         pomodoro_name_candidates_from_scan_with_hint(&scan, query, plan_hint);
 
@@ -1146,7 +1147,8 @@ fn pomodoro_start_name_candidates_at(
         )));
     }
     warnings.extend(scan.warnings.iter().cloned());
-    let plan_hint = plan_creation_hint(&contents, &scan);
+    let daily_key = plan_budget::daily_key_from_path(day_file);
+    let plan_hint = plan_creation_hint(&contents, &scan, daily_key.as_deref());
     let candidates = pomodoro_start_name_candidates_from_scan_with_hint(
         &scan, query, plan_hint,
     );
@@ -1338,22 +1340,29 @@ fn pomodoro_start_creation_candidate(
 struct PlanCreationHint {
     before: usize,
     keys: Vec<String>,
+    exempt: Vec<String>,
     cap: u32,
 }
 
 fn plan_creation_hint(
     contents: &str,
     scan: &capture_pomodoros::PomodoroScan,
+    daily_file: Option<&str>,
 ) -> Option<PlanCreationHint> {
     if !scan.has_section {
         return None;
     }
     let config = config::load_plan_config(&config::config_path()).ok()?;
-    let ledger = plan_budget::compute(contents, &config);
+    let ledger = plan_budget::compute_for_daily(contents, &config, daily_file);
     Some(PlanCreationHint {
         before: ledger.themes.count,
         keys: ledger
             .theme_names
+            .iter()
+            .map(|name| plan_budget::normalize_component(name))
+            .collect(),
+        exempt: config
+            .exempt()
             .iter()
             .map(|name| plan_budget::normalize_component(name))
             .collect(),
@@ -1368,13 +1377,17 @@ fn plan_themes_after_for(
     let Some(hint) = hint else {
         return (None, None);
     };
-    let key = plan_budget::normalize_component(name);
-    let after = if hint.keys.iter().any(|known| *known == key) {
-        hint.before
-    } else {
-        hint.before + 1
-    };
-    (Some(after), Some(hint.cap))
+    let mut fresh: Vec<String> = Vec::new();
+    for component in plan_budget::split_components(name) {
+        let key = plan_budget::normalize_component(&component);
+        if hint.exempt.contains(&key) || hint.keys.contains(&key) {
+            continue;
+        }
+        if !fresh.contains(&key) {
+            fresh.push(key);
+        }
+    }
+    (Some(hint.before + fresh.len()), Some(hint.cap))
 }
 
 #[cfg(test)]
@@ -3011,6 +3024,7 @@ mod tests {
                 "deep work".to_string(),
                 "goals".to_string(),
             ],
+            exempt: vec!["gtd".to_string()],
             cap: 3,
         };
         let candidates = pomodoro_start_name_candidates_from_scan_with_hint(
@@ -3048,6 +3062,7 @@ mod tests {
                 "deep work".to_string(),
                 "goals".to_string(),
             ],
+            exempt: vec!["gtd".to_string()],
             cap: 3,
         };
         let novel = pomodoro_start_name_candidates_from_scan_with_hint(
@@ -3080,6 +3095,7 @@ mod tests {
                 "deep work".to_string(),
                 "goals".to_string(),
             ],
+            exempt: vec!["gtd".to_string()],
             cap: 3,
         };
         let running = pomodoro_start_name_candidates_from_scan_with_hint(
@@ -3698,6 +3714,59 @@ mod tests {
         assert_eq!(json["candidates"][0]["placeholder"], true);
         assert!(json["candidates"][0].get("ref").is_none());
         assert!(json["candidates"][0].get("line").is_none());
+    }
+
+    #[test]
+    fn plan_themes_after_counts_only_fresh_non_exempt_components() {
+        let hint = PlanCreationHint {
+            before: 2,
+            keys: vec!["a".to_string(), "goals".to_string()],
+            exempt: vec!["gtd".to_string()],
+            cap: 3,
+        };
+        assert_eq!(
+            plan_themes_after_for(Some(&hint), "GTD"),
+            (Some(2), Some(3))
+        );
+        assert_eq!(
+            plan_themes_after_for(Some(&hint), "A + B"),
+            (Some(3), Some(3))
+        );
+        assert_eq!(
+            plan_themes_after_for(Some(&hint), "B + C"),
+            (Some(4), Some(3))
+        );
+        assert_eq!(plan_themes_after_for(None, "B"), (None, None));
+
+        let scan = capture_pomodoros::scan("## Pomodoros\n- [ ] () — A\n");
+        for candidates in [
+            pomodoro_name_candidates_from_scan_with_hint(
+                &scan,
+                "gtd",
+                Some(PlanCreationHint {
+                    before: 2,
+                    keys: vec!["a".to_string(), "goals".to_string()],
+                    exempt: vec!["gtd".to_string()],
+                    cap: 3,
+                }),
+            ),
+            pomodoro_start_name_candidates_from_scan_with_hint(
+                &scan,
+                "gtd",
+                Some(PlanCreationHint {
+                    before: 2,
+                    keys: vec!["a".to_string(), "goals".to_string()],
+                    exempt: vec!["gtd".to_string()],
+                    cap: 3,
+                }),
+            ),
+        ] {
+            let created = candidates
+                .iter()
+                .find(|row| row.creates_pomodoro)
+                .expect("creation row");
+            assert_eq!(created.plan_themes_after, Some(2));
+        }
     }
 
     fn write_settings(root: &Path) {

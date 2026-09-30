@@ -218,6 +218,34 @@ fn plan_without_pomodoros_section_still_shows_now() {
 }
 
 #[test]
+fn plan_placeholder_only_section_shows_daily_file() {
+    let temp = TempDir::new("bob-cli-plan-placeholder");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("2026/20260930.md"),
+        "## Pomodoros\n\n- [ ] ()\n- [x] () — DONE\n",
+    );
+
+    let output = bob_command()
+        .arg("plan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260930.md"))
+        .output()
+        .expect("run bob plan with placeholder-only section");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("2026/20260930.md"),
+        "placeholder-only section keeps the daily file header, not no-section:\n{out}"
+    );
+    assert!(
+        !out.contains("no Pomodoros section"),
+        "placeholder-only section must not print no-section:\n{out}"
+    );
+}
+
+#[test]
 fn plan_reports_over_cap_with_lints() {
     let temp = TempDir::new("bob-cli-plan-over");
     let vault = vault_dir(&temp);

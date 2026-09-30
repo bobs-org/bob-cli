@@ -349,12 +349,32 @@ pub(crate) fn completion_field_at(
     // A trailing `#n`, `#no`, or `#now` completes the weekly-bet tag: the
     // cursor inside the token requests the `now_tag` context whose single
     // candidate is `#now`, while a lone `#` stays the Pomodoro-note marker.
+    // Execution rejects `#now` on items with no body text, so the candidate
+    // is offered only where `#now` would be accepted.
     let scan_tokens = tokenize_line_with_spans(&scan_line);
     if let Some(last) = scan_tokens.last()
         && cursor >= last.start
         && cursor <= last.end
         && (is_now_tag(last.text) || is_now_tag_prefix(last.text))
     {
+        let relative = last.start.saturating_sub(scan_line.start);
+        let prefix = scan_line
+            .text
+            .get(..relative.min(scan_line.text.len()))
+            .unwrap_or("")
+            .trim();
+        let has_body = if prefix.is_empty() {
+            false
+        } else if prefix.split_whitespace().count() == 1
+            && prefix.starts_with(['=', '+', '-', '@', '^', '#'])
+        {
+            false
+        } else {
+            true
+        };
+        if !has_body {
+            return None;
+        }
         return Some(CompletionField {
             context: CompletionContext::NowTag,
             route: None,
