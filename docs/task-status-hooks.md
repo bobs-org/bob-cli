@@ -757,11 +757,13 @@ heading ancestry, open intake count, per-group root-task counts, and moved-block
 successful live write that changed notes also prints the recovery-copy
 directory. Dry-run uses the same planning path and reports what would happen
 without changing any file. Warnings go to stderr. A no-op prints a single
-`already in sync` line only when task statuses, daily-note links, grouping,
+`already in sync` summary line only when task statuses, daily-note links, grouping,
 and grouping diagnostics are all unchanged.
 
-Both the changed and no-op reports print one plan-budget stats line right after the stats line, for
-example `plan 3/3 themes · 7/10 links · NOW 12/15`. Over-cap meters are red.
+When a plan budget is available, both changed and no-op reports print one
+meter line, for example `plan 3/3 themes · 7/10 links · NOW 12/15`.
+It follows the sync stats line on changed runs and the `already in sync`
+summary on no-op runs. Over-cap meters are red.
 When the report carries plan warnings, the line appends the count and points
 at `bob plan`, for example `· 2 plan warnings (run bob plan)`; individual
 plan lints are never printed here. The budget is read-only: it never changes
@@ -931,10 +933,24 @@ JSON mode prints one object on stdout with these stable fields:
   "plan_budget": {
     "date": "2026-07-10",
     "daily_file": "2026/20260710.md",
+    "caps": { "max_themes": 3, "max_links": 10, "max_now": 15, "strict": false },
     "status": "ok",
-    "themes": { "count": 2, "cap": 3, "over": false },
-    "links": { "count": 3, "cap": 10, "over": false },
-    "now": { "count": 0, "cap": 15, "over": false }
+    "themes": { "count": 1, "cap": 3, "over": false },
+    "links": { "count": 2, "cap": 10, "over": false },
+    "now": { "count": 0, "cap": 15, "over": false },
+    "theme_names": ["GOALS"],
+    "entries": [
+      {
+        "line": 5,
+        "name": "GOALS",
+        "components": ["GOALS"],
+        "exempt": false,
+        "running": false,
+        "highlight": true,
+        "links": 2
+      }
+    ],
+    "warnings": []
   }
 }
 ```
@@ -999,27 +1015,9 @@ carry `"plan_budget": null`.
 `embedded_completed_references` is a deprecated, always-empty compatibility
 field for one contract cycle.
 
-`plan_budget` holds the shared plan report from `docs/plan.md` (date, daily
-file, caps, status, themes/links/NOW meters, entries, and warnings),
-computed read-only from the daily note before the sync rewrites it. It is
-`null` when there is no daily note or no Pomodoros section, and on an invalid
-plan config. A typical on-cap report trims to its meters like this:
-
-```json
-{
-  "plan_budget": {
-    "date": "2026-07-10",
-    "daily_file": "2026/20260710.md",
-    "caps": {
-      "max_themes": 3,
-      "max_links": 10,
-      "max_now": 15,
-      "strict": false
-    },
-    "status": "ok",
-    "themes": { "count": 2, "cap": 3, "over": false },
-    "links": { "count": 3, "cap": 10, "over": false },
-    "now": { "count": 0, "cap": 15, "over": false }
-  }
-}
-```
+`plan_budget` holds the shared plan report described in
+[`plan.md`](plan.md): date, daily file, caps, status, themes/links/NOW
+meters, theme names, entries, and warnings. It is computed read-only from
+the original daily note, before this run's ledger cleanup, so a live sync
+can leave the final ledger with different counts. It is `null` when there
+is no daily note or Pomodoros section, or when the plan config is invalid.

@@ -1461,7 +1461,7 @@ lexically: ``task 1 is listed twice in `=x1,1` ``,
 ``task 1 cannot both stay in progress and complete in `=x1!1` ``,
 ``task 1 cannot both stay in progress and drop in `=x1~1` ``,
 ``task 2 cannot both complete and drop in `=x!2~2` ``,
-``` `0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2` ```
+`` `0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2` ``
 (for `=x0,2`, `=x0,`, and `=x00`), `task numbers start at 1` (for `=x!0`
 and `=x~0`), `` expected a task
 number before `,` ``, `` expected a task number after `,` `` (for `=x1,!2`), `` use one `!` list: `=x1!2,3` ``,
@@ -2492,11 +2492,13 @@ items never inherit a `@@` declaration.
 
 `pomodoro_close` is an optional object, omitted for every input without a
 close, with the typed `raw` close text including the `=` and any selection
-(`=x`, `=X` when typed that way, or `=x1,3!2`), the `in_progress` list
+(`=x`, `=X` when typed that way, or `=x1,3!2~4`), the `in_progress` list
 (`null` when no `<N>` was typed, `[]` for `=x0`, otherwise the typed
-numbers sorted ascending), and the `complete` list, so schema version 1 is
-unchanged for older inputs. An incomplete close (`=x1,`) reports the
-partial `in_progress`/`complete` typed so far. A lexically invalid close
+numbers sorted ascending), and the `complete` and `drop` lists. The `drop`
+field is omitted when no `~<K>` list was typed, so older closes keep their
+version 1 shape. In `=x0~2`, `0` is the entire in-progress list; task 2 is
+dropped. An incomplete close (`=x1~`) reports the partial lists typed so far.
+A lexically invalid close
 token reports no `pomodoro_close` object at all, only the
 `invalid_pomodoro_close` diagnostic. Multi-item drafts report each item's
 own `pomodoro_close` alongside the top-level preview of the first item;
@@ -2515,8 +2517,9 @@ marks the part of a marker the user has not filled in yet: the trailing `+` in
 `@cash+` or `@@cash+`, the trailing `#` in `@cash+id#` or `@cash:id#`, the dangling `,` or `!` in `=x1,` or `=x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
 `@@` when the route is still empty too. For example, `=x1,3!2` gives
 `[0,2) pomodoro_close`, `[2,5) pomodoro_close_in_progress`, and
-`[5,7) pomodoro_close_complete`; link forms put the same three spans after
-the route and block-ID spans. A project-note marker adds one
+`[5,7) pomodoro_close_complete`; `=x1,3!2~4` adds
+`[7,9) pomodoro_close_drop`. Link forms put these spans after the route and
+block-ID spans. A project-note marker adds one
 `project_note_marker` span covering the single `+` byte; its route and
 block-ID components keep their base-family span kinds (`task_block_id_route`
 / `task_block_id`), and its `#name` keeps the `pomodoro_name` span. An

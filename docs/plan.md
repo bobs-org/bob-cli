@@ -1,10 +1,18 @@
 # Plan budget and NOW
 
-Today is closed: GTD plus at most 3 themes. The first theme is the
-highlight. Nothing is copied forward by default. This week is `#now`:
-at most 15 tasks. Dropping a link from today never loses it, because
-`#now` keeps it in view. Everything else is READY (next) or deferred
-with a P-level (later).
+By default, the plan budget allows 3 themes and 10 distinct Task Links
+under today's open Pomodoros. GTD is exempt. The first open, non-exempt
+Pomodoro is the highlight. Separately, the NOW budget allows 15 visible
+`#now` tasks. `#now` is a tag for this week's work: removing a Task Link
+does not add the tag. Tag an eligible task before removing its link if
+you want it to remain in the NOW view. The task's status after unlinking
+depends on the operation and the next task-status sync.
+
+For a typical day, capture or link work into the daily Pomodoro ledger,
+inspect it with read-only `bob plan`, then run `bob task-status-hooks`
+after capture or session close to reconcile task statuses and clean up
+links. Run `bob plan` again for counts after that cleanup: the budget
+included in a hooks run describes the ledger as it was before the run.
 
 This page is the authoritative definition. The Rust engine
 (`src/native/plan_budget/`) implements it; `bob-ledger-tools` mirrors
@@ -46,8 +54,10 @@ placeholder never counts.
 ## Links
 
 The number of distinct `(target, block_id)` pairs among block links
-in any descendant bullet of an open, non-exempt entry. Accepted
-forms:
+on indented lines below an open, non-exempt entry, up to the next
+column-0 entry, heading, or prose line. Indented prose lines count too;
+the budget checks link syntax but does not look up the target task.
+Accepted forms:
 
 - `[[target#^id]]`, `![[target#^id]]`, and `[[target#^id|alias]]`;
 - with or without 🍅 markers;
@@ -140,8 +150,8 @@ strings.
 `-f/--format human|json`, `-h/--help`. Environment: `BOB_DIR`,
 `BOB_DAY_FILE`, `BOB_NOW`, `BOB_CONFIG_FILE`, `NO_COLOR`.
 
-JSON is `{"ok": true, "schema_version": 1, …report…}` where the
-report looks like this:
+JSON adds `ok: true` and `schema_version: 1` to the report. This example
+shows all report fields for one open theme and one exempt entry:
 
 ```json
 {
@@ -149,9 +159,10 @@ report looks like this:
   "daily_file": "2026/20260930.md",
   "caps": { "max_themes": 3, "max_links": 10, "max_now": 15, "strict": false },
   "status": "ok",
-  "themes": { "count": 3, "cap": 3, "over": false },
-  "links": { "count": 7, "cap": 10, "over": false },
+  "themes": { "count": 1, "cap": 3, "over": false },
+  "links": { "count": 3, "cap": 10, "over": false },
   "now": { "count": 12, "cap": 15, "over": false },
+  "theme_names": ["GOALS"],
   "entries": [
     {
       "line": 24,
@@ -162,15 +173,20 @@ report looks like this:
       "highlight": true,
       "time_range": "0945-1015",
       "links": 3
+    },
+    {
+      "line": 30,
+      "name": "GTD",
+      "components": ["GTD"],
+      "exempt": true,
+      "running": false,
+      "highlight": false,
+      "links": 0
     }
   ],
-  "warnings": [
-    {
-      "code": "inventory_label_open",
-      "message": "MISC is an inventory label, not a theme",
-      "line": 60
-    }
-  ]
+  "warnings": [],
+  "ok": true,
+  "schema_version": 1
 }
 ```
 
@@ -183,19 +199,17 @@ Human output:
 ```text
 bob plan · Wed 2026-09-30 · 2026/20260930.md
 
-  PLAN  3/3 themes · 7/10 links        NOW  12/15
+  PLAN  1/3 themes · 3/10 links        NOW  12/15
 
-  ★ GOALS    ▶ 0945-1015   3 links
-    DECKS                  2 links
-    BOB                    2 links
-    GTD      exempt        0 links
-
-  ⚠ MISC is an inventory label, not a theme (line 60)  inventory_label_open
+  ★ GOALS  ▶ 0945-1015  3 links
+    GTD    exempt       0 links
 ```
 
 Meters are green within the cap and red when over. ★ is yellow and
-▶ is cyan; exempt rows are dimmed. Lints are yellow, with the code
-dimmed.
+▶ is cyan; exempt rows are dimmed. When lints occur, they appear below
+the entries in yellow, with the code dimmed. An open inventory label such
+as MISC appears as a row and counts as a theme even though it also raises
+`inventory_label_open`.
 
 With no daily note the header says `no daily note yet`; with no
 Pomodoros section it says `no Pomodoros section`. NOW is still
@@ -204,15 +218,16 @@ an I/O failure, 2 for usage or an invalid plan config.
 
 ## Surfaces
 
-| Surface | What Bryan sees |
+| Surface | What it shows |
 | --- | --- |
-| `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), and lints with hints |
-| Daily note, above `## Pomodoros` | A live ` ```bob-plan ` block: `PLAN 3/3 · 7/10`, `NOW 12/15`, then `★ GOALS · DECKS · BOB` |
-| `dash.md` chip bar | `NOW 12/15` and `PLAN 3/3 · 7/10` chips, red when over the cap; a `### NOW Tasks` section |
-| tmux status line | `<status> · plan T/Tc · L/Lc \| ` (for example `0945-1015 — GOALS · plan 3/3 · 7/10 \| `), reverse video when over |
-| `bob task-status-hooks` | A `plan_budget` JSON block and one human line (`plan 3/3 themes · 7/10 links · NOW 12/15`) |
-| `bob capture` / Bob Mac Capture | Where the Task Link lands (`→ under GOALS (next up)`, `→ into running GOALS (0945-1015)`, `→ new Pomodoro BOB`), a before→after meter, cap warnings, and optional strict refusal |
-| Obsidian Notices | `· plan 3/3 · 11/10 🔴` on Ctrl+Shift+Enter; `#now added · NOW 13/15` on the toggle |
+| `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), and lint messages with codes |
+| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin renders PLAN and NOW chips, a theme line, and any lints. The affected chip shows a dash when the daily note, Pomodoros section, or Tasks plugin data is unavailable. |
+| `dash.md` | Its configured PLAN and NOW chips and `### NOW Tasks` section use the Bob Ledger Tools API. |
+| `bob tmux-pomodoro` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |
+| `bob task-status-hooks` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · NOW 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
+| `bob capture` | When a capture changes today's Pomodoros section, a before/after theme and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap theme. |
+| Bob Mac Capture | The same budget in Themes and Links capsules, warning captions, and shorter destination rows such as `→ GOALS · next up` or `→ running GOALS 0945–1015`. |
+| Obsidian Notices | A plan suffix such as `· plan 3/3 · 11/10 🔴` on Task Link changes; a NOW toggle Notice such as `#now added · 1 task · NOW 13/15`. |
 
 ## Conformance examples
 
@@ -329,8 +344,8 @@ unless noted.
 
    Themes are `GOALS` (1/3); links are 1/10.
 
-8. **Empty target means the daily note.** In `2026/20260930.md`,
-   these three targets are the same link when the block ID matches:
+8. **Daily-note target aliases.** When evaluating `2026/20260930.md`,
+   these three links count as one because they have the same block ID:
 
    ```markdown
    ## Pomodoros
