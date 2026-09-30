@@ -573,6 +573,8 @@ pub(super) fn plan_pomodoro_link_with_start(
                         created_pomodoro: false,
                         time_range: time_range.clone(),
                         tasks: None,
+                        drop: Vec::new(),
+                        dropped: Vec::new(),
                     };
                     return Ok(CaptureWritePlan {
                         placement: Placement::Linked,
@@ -682,6 +684,8 @@ pub(super) fn plan_pomodoro_link_with_start(
                     created_pomodoro: false,
                     time_range: time_range.clone(),
                     tasks: None,
+                    drop: Vec::new(),
+                    dropped: Vec::new(),
                 };
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
@@ -804,6 +808,8 @@ pub(super) fn plan_pomodoro_link_with_start(
                     created_pomodoro: true,
                     time_range: time_range.clone(),
                     tasks: None,
+                    drop: Vec::new(),
+                    dropped: Vec::new(),
                 };
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
@@ -892,6 +898,8 @@ pub(super) fn plan_pomodoro_link_with_start(
         created_pomodoro: false,
         time_range: time_range.clone(),
         tasks: None,
+        drop: Vec::new(),
+        dropped: Vec::new(),
     };
     let _ = (q_line_index, q_subtree_end);
     Ok(CaptureWritePlan {

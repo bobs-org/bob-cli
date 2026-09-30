@@ -59,6 +59,7 @@ mod pomodoro_link;
 mod pomodoro_start;
 mod project_note;
 mod sections;
+mod start_output;
 mod sub_bullet;
 mod task_toggle;
 #[cfg(test)]
@@ -79,6 +80,7 @@ use pomodoro_link::*;
 use pomodoro_start::*;
 use project_note::*;
 use sections::*;
+use start_output::*;
 use sub_bullet::*;
 use task_toggle::*;
 

@@ -1444,7 +1444,10 @@ fn remove_span_with_space_collapse(
 /// own child block (to bound the Schedule Log marker search) and a Schedule
 /// Log marker's or Pomodoro entry's own children (both always top-level, so
 /// this naturally stops at the Pomodoros section boundary too).
-fn child_block_end_line(lines: &[LineSpan<'_>], parent_index: usize) -> usize {
+pub(crate) fn child_block_end_line(
+    lines: &[LineSpan<'_>],
+    parent_index: usize,
+) -> usize {
     let parent_indent = leading_spaces_or_tabs_len(lines[parent_index].text);
     let mut end_index = parent_index;
     let mut index = parent_index + 1;

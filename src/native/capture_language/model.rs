@@ -200,6 +200,11 @@ pub(crate) struct PomodoroStartSpec {
     pub(crate) duration_units: u64,
     /// Number of 5-minute offset units.
     pub(crate) offset_units: u64,
+    /// Queued lineup numbers to drop from the started session, empty when
+    /// no `~<K>` list was typed. Every parser leaves it empty until the
+    /// start-drop grammar lands; the lineup engine already applies it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) drop: Vec<u32>,
 }
 
 /// How a marker-only `@route+block-id` capture should change an existing task.

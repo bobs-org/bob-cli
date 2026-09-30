@@ -178,7 +178,7 @@ impl fmt::Display for CloseSelectionError {
 
 impl std::error::Error for CloseSelectionError {}
 
-fn join_numbers(numbers: &[u32]) -> String {
+pub(crate) fn join_numbers(numbers: &[u32]) -> String {
     match numbers {
         [] => String::new(),
         [single] => single.to_string(),

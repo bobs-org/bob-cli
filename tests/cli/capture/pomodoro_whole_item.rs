@@ -980,6 +980,7 @@ fn capture_pomodoro_whole_item_start_reports_queued_tasks() {
     assert_eq!(
         row(0),
         &serde_json::json!({
+            "index": 1,
             "block_link": "[[bob#^ready-task]]",
             "embedded": false,
             "ledger_line": 3,
@@ -1006,6 +1007,7 @@ fn capture_pomodoro_whole_item_start_reports_queued_tasks() {
     assert_eq!(
         row(4),
         &serde_json::json!({
+            "index": 5,
             "block_link": "[[bob#^embed-task]]",
             "embedded": true,
             "ledger_line": 7,
@@ -1026,6 +1028,7 @@ fn capture_pomodoro_whole_item_start_reports_queued_tasks() {
     assert_eq!(
         row(5),
         &serde_json::json!({
+            "index": 6,
             "block_link": "[[bob#^gone]]",
             "embedded": false,
             "ledger_line": 8,
@@ -1078,6 +1081,7 @@ fn capture_pomodoro_whole_item_start_reports_queued_tasks() {
     assert_eq!(
         staged_json["captures"][1]["pomodoro_start"]["tasks"],
         serde_json::json!([{
+            "index": 1,
             "block_link": "[[bob#^fresh]]",
             "embedded": false,
             "ledger_line": 3,

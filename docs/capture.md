@@ -890,15 +890,19 @@ items, and forced `--route`/`--section`/`--task`/`--task-ref`/
 counted token are shape errors by construction.
 
 The started session reports its queued Task Links (direct-child Task Links
-of the started entry, resolved read-only): JSON kind `pomodoro_start` keeps
+of the started entry, resolved read-only). The lineup is numbered 1..N in
+ledger order on the staged pre-image, so every whole-item start shows which
+number a queued link holds: JSON kind `pomodoro_start` keeps
 schema version 1 with `text` = the raw token, `task_line` = the started
 ledger line, `placement: "started"`, and the existing `pomodoro_start`
-object with `created_pomodoro: false` plus an additive `tasks` array. The
+object with `created_pomodoro: false` plus an additive `tasks` array where
+each row carries its `index` (its lineup number) and `now: true` when the
+linked task's line carries `#now` (omitted otherwise). The
 started session also appears in the batch-level `pomodoro_blocks` array;
 see [Pomodoro blocks](#pomodoro-blocks).
 Human output prints the started file, the session range and line, the
-canonical ledger line, one row per queued task, and `nothing queued` when
-empty.
+canonical ledger line, one numbered row per queued task, and `nothing queued`
+when empty.
 
 Quote `=` items in zsh, which expands a leading `=word` to a command path:
 `bob capture '='`, `bob capture '=3'`, `bob capture '=-2'`,
@@ -944,7 +948,8 @@ no-op. An invalid name fails before anything is written, and when the name
 is only a near miss of an open entry the capture still succeeds but pushes
 a `did you mean …?` warning naming the open entry. A created entry reports
 `tasks: []`; a started open entry reports its direct-child Task Links
-through the existing queued lineup, exactly like an unnamed start.
+through the existing queued lineup, exactly like an unnamed start, with
+the same `tasks[].index`/`tasks[].now` numbering.
 
 Guards, checked in order: a missing day file (the message still names the
 canonicalized selector), a missing `## Pomodoros` section, then name
@@ -977,8 +982,9 @@ The started session also appears in the batch-level `pomodoro_blocks`
 array; see [Pomodoro blocks](#pomodoro-blocks).
 Human output prints `started` (dry-run: `would start`), the session name,
 range, and line with ` (created)` when the entry was created, the canonical
-ledger line, one row per queued task, and `nothing queued` when empty. A
-`@@` declaration never applies to named starts, and forced `--route` /
+ledger line, one numbered row per queued task, and `nothing queued` when
+empty. A `@@` declaration never applies to named starts, and forced
+`--route` /
 `--section` / `--task` / `--task-ref` / `--task-section` / `--clip` fail on
 them with the existing start error. Quote named starts in zsh like every
 other `=` item: `bob capture '=#deep-work'`.

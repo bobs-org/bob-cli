@@ -299,13 +299,26 @@ pub(super) struct PomodoroStartSummary {
     /// always report it, possibly empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) tasks: Option<Vec<PomodoroStartTaskJson>>,
+    /// The typed `~<K>` list, ascending, omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) drop: Vec<u32>,
+    /// Rows removed by `~<K>`, omitted when empty. Dropped rows stay out of
+    /// `tasks`, so an older client's "N queued tasks" stays truthful.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) dropped: Vec<PomodoroStartTaskJson>,
 }
 
 /// One queued Task Link row on a started Pomodoro, following the close
 /// row's explicit-null convention: unresolved rows carry `None` fields and
-/// a `warning` instead of failing the start.
+/// a `warning` instead of failing the start. Kept rows hold their pre-image
+/// lineup number (so a drop leaves gaps like 1, 3); dropped rows carry the
+/// pre-image ledger line plus the removed nested-line count.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroStartTaskJson {
+    pub(super) index: u32,
+    /// Present only when the linked task's line carries `#now`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) now: Option<bool>,
     pub(super) block_link: String,
     pub(super) embedded: bool,
     pub(super) ledger_line: usize,
@@ -316,6 +329,14 @@ pub(super) struct PomodoroStartTaskJson {
     pub(super) status_symbol: Option<char>,
     pub(super) status_name: Option<String>,
     pub(super) warning: Option<String>,
+    /// Non-blank descendant lines removed with a dropped link, omitted
+    /// when 0 (always 0 on kept rows).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) nested_lines: u32,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -40,4 +40,4 @@ pub(crate) use links::{
     strikethrough_inner_spans, strip_pomodoro_markers, wikilink_tokens,
     WikiToken,
 };
-pub(crate) use selection::CloseSelection;
+pub(crate) use selection::{join_numbers, CloseSelection};

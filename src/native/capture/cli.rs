@@ -205,7 +205,8 @@ bare `=`/`=<X>` start needs a future `- [ ] ()` placeholder; a named start \
 creates its session when no open entry matches. Both forms refuse while a \
 timed entry is running; a running session names itself and teaches the \
 `=x`-then-`=` switch idiom (`=x =#name` switches sessions in one line). The started entry moves to \
-the current slot and reports its queued Task Links. A `@@` declaration \
+the current slot and reports its queued Task Links, numbered 1..N in \
+ledger order with a numbered human index column. A `@@` declaration \
 never applies to start items, and forced \
 destination/task/section/clipboard options are rejected on them. Later items \
 see earlier staged edits, dry-run reports without writing, and any failure \

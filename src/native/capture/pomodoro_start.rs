@@ -129,6 +129,8 @@ pub(super) fn plan_pomodoro_start(
                         created_pomodoro: false,
                         time_range,
                         tasks: None,
+                        drop: Vec::new(),
+                        dropped: Vec::new(),
                     },
                 ));
             }
@@ -163,6 +165,8 @@ pub(super) fn plan_pomodoro_start(
                         created_pomodoro: true,
                         time_range,
                         tasks: None,
+                        drop: Vec::new(),
+                        dropped: Vec::new(),
                     },
                 ));
             }
@@ -212,6 +216,8 @@ pub(super) fn plan_pomodoro_start(
                 created_pomodoro: false,
                 time_range,
                 tasks: None,
+                drop: Vec::new(),
+                dropped: Vec::new(),
             },
         ));
     }
@@ -236,6 +242,8 @@ pub(super) fn plan_pomodoro_start(
             created_pomodoro: true,
             time_range,
             tasks: None,
+            drop: Vec::new(),
+            dropped: Vec::new(),
         },
     ))
 }
@@ -586,7 +594,9 @@ pub(super) fn plan_pomodoro_start_item(
                 Some(name) => format!("{name} {range}"),
                 None => format!("the current session {range}"),
             };
-        let token = format!("={}", spec.raw);
+        // Echo the full typed token (including any `~<K>` drop list) so
+        // the taught switch idiom stays copy-pasteable.
+        let token = parsed.body.clone();
         return Err(CaptureError::io(format!(
             "cannot start the next Pomodoro: {subject} is still running at line {}; close it with `=x` first, or capture `=x`, a blank line, then `{token}` to switch sessions",
             running.line,
@@ -608,8 +618,22 @@ pub(super) fn plan_pomodoro_start_item(
         )
     })?;
     let entry_name = entry.name.clone();
+    // Drops apply after the guards above and before the start rewrite, on
+    // the staged pre-image; removals sit after the entry line, so `index`
+    // still points at the entry afterwards.
+    let token = parsed.body.clone();
+    let owner = match entry_name.as_deref().filter(|name| !name.is_empty()) {
+        Some(name) => capture_pomodoro_start::StartOwner::Named {
+            name: name.to_string(),
+        },
+        None => capture_pomodoro_start::StartOwner::Next,
+    };
+    let drop_plan = capture_pomodoro_start::plan_start_drop(
+        &staged, index, &spec.drop, &owner, &token,
+    )
+    .map_err(|error| CaptureError::io(error.to_string()))?;
     let (updated, moved_index) =
-        start_existing_pomodoro_entry(&staged, index, &time_range)?;
+        start_existing_pomodoro_entry(&drop_plan.contents, index, &time_range)?;
     let task_line = line_spans(&updated)
         .get(moved_index)
         .map(|line| line.text.to_string())
@@ -619,34 +643,27 @@ pub(super) fn plan_pomodoro_start_item(
             )
         })?;
     planner.stage(&day_file, updated)?;
+    warnings.extend(drop_plan.warnings);
     let relative_target = day_file
         .strip_prefix(&request.bob_dir)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| day_file.clone());
-    // Queued-task lineup: list the started entry's direct-child Task Links
-    // from the post-image day file and resolve them read-only through the
-    // batch planner's staged vault view, so a task captured earlier in the
-    // same draft resolves.
+    // Queued-task lineup: zip the post-image day file's direct-child Task
+    // Links with the kept pre-image numbers and resolve both kept and
+    // dropped rows read-only through the batch planner's staged vault view,
+    // so a task captured earlier in the same draft resolves.
     let staged_day = planner.read_existing(&day_file)?;
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
-    let tasks =
-        capture_pomodoro_start::list_queued_links(&staged_day, moved_index);
-    let tasks =
-        capture_pomodoro_start::resolve_queued_links(&vault, &day_file, &tasks)
-            .into_iter()
-            .map(|task| PomodoroStartTaskJson {
-                block_link: task.block_link,
-                embedded: task.embedded,
-                ledger_line: task.ledger_line,
-                resolved: task.resolved,
-                relative_target: task.relative_target,
-                block_id: task.block_id,
-                text: task.text,
-                status_symbol: task.status_symbol,
-                status_name: task.status_name,
-                warning: task.warning,
-            })
-            .collect::<Vec<_>>();
+    let (tasks, dropped) = plan_start_rows_json(
+        &vault,
+        &day_file,
+        &staged_day,
+        moved_index,
+        &drop_plan.kept,
+        &drop_plan.dropped,
+    );
+    let mut drop_list = spec.drop.clone();
+    drop_list.sort_unstable();
     let summary = PomodoroStartSummary {
         start,
         end,
@@ -657,6 +674,8 @@ pub(super) fn plan_pomodoro_start_item(
         created_pomodoro: false,
         time_range,
         tasks: Some(tasks),
+        drop: drop_list,
+        dropped,
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -718,6 +737,69 @@ pub(super) fn plan_pomodoro_start_item(
             moved_index,
         )],
     })
+}
+
+/// One lineup row as JSON, with the close's explicit-null convention:
+/// unresolved rows carry `None` fields plus a `warning`.
+fn start_task_json(
+    task: &capture_pomodoro_start::StartTaskRow,
+    index: u32,
+    nested_lines: u32,
+) -> PomodoroStartTaskJson {
+    PomodoroStartTaskJson {
+        index,
+        now: task.now.then_some(true),
+        block_link: task.block_link.clone(),
+        embedded: task.embedded,
+        ledger_line: task.ledger_line,
+        resolved: task.resolved,
+        relative_target: task.relative_target.clone(),
+        block_id: task.block_id.clone(),
+        text: task.text.clone(),
+        status_symbol: task.status_symbol,
+        status_name: task.status_name.clone(),
+        warning: task.warning.clone(),
+        nested_lines,
+    }
+}
+
+/// Zip the post-image lineup at `moved_index` with the kept pre-image
+/// numbers (in ledger order, so a drop leaves gaps) and resolve the
+/// dropped rows, all through the same staged vault view.
+fn plan_start_rows_json(
+    vault: &SnapshotCloseVault,
+    day_file: &Path,
+    staged_day: &str,
+    moved_index: usize,
+    kept: &[u32],
+    dropped: &[capture_pomodoro_start::StartDroppedLink],
+) -> (Vec<PomodoroStartTaskJson>, Vec<PomodoroStartTaskJson>) {
+    let links =
+        capture_pomodoro_start::list_queued_links(staged_day, moved_index);
+    let rows =
+        capture_pomodoro_start::resolve_queued_links(vault, day_file, &links);
+    let tasks = rows
+        .iter()
+        .zip(kept.iter().copied())
+        .map(|(row, index)| start_task_json(row, index, 0))
+        .collect();
+    // Resolution maps each link to exactly one row, so the zip below
+    // holds every dropped row.
+    let dropped_links: Vec<capture_pomodoro_start::StartLink> =
+        dropped.iter().map(|row| row.link.clone()).collect();
+    let dropped_rows = capture_pomodoro_start::resolve_queued_links(
+        vault,
+        day_file,
+        &dropped_links,
+    );
+    let dropped = dropped
+        .iter()
+        .zip(dropped_rows.iter())
+        .map(|(row, task)| {
+            start_task_json(task, row.link.index, row.nested_lines)
+        })
+        .collect();
+    (tasks, dropped)
 }
 
 fn named_relocation_error(
@@ -839,80 +921,122 @@ fn plan_named_pomodoro_start_item(
             PomodoroBlockBefore::Created
         }
     };
-    let (updated, moved_index, created, suggestion_warning) = match selection {
-        capture_pomodoros::NamedSelection::Found(entry) => {
-            if !(entry.state == capture_pomodoros::PomodoroState::Open
-                && entry.placeholder
-                && entry.time_range.is_none())
-            {
-                return Err(CaptureError::io(format!(
-                    "selected Pomodoro `#{}` is not an untimed open placeholder; finish the current Pomodoro first or choose an untimed placeholder",
-                    entry.slug
-                )));
+    // A created or "again" named session starts empty, so any drop list
+    // fails before insertion with the created-session diagnostic.
+    if !spec.drop.is_empty() {
+        match &selection {
+            capture_pomodoros::NamedSelection::Found(_) => {}
+            _ => {
+                let mut bad = spec.drop.clone();
+                bad.sort_unstable();
+                bad.dedup();
+                return Err(CaptureError::io(
+                    capture_pomodoro_start::StartDropError {
+                        token: parsed.body.clone(),
+                        bad_numbers: bad,
+                        total: 0,
+                        owner: capture_pomodoro_start::StartOwner::Created {
+                            name: display_name.clone(),
+                        },
+                    }
+                    .to_string(),
+                ));
             }
-            let index = entry.line.checked_sub(1).ok_or_else(|| {
-                CaptureError::io(
-                    "Pomodoro capture invariant failed: started entry is out of range",
+        }
+    }
+    let (updated, moved_index, created, suggestion_warning, drop_plan) =
+        match selection {
+            capture_pomodoros::NamedSelection::Found(entry) => {
+                if !(entry.state == capture_pomodoros::PomodoroState::Open
+                    && entry.placeholder
+                    && entry.time_range.is_none())
+                {
+                    return Err(CaptureError::io(format!(
+                        "selected Pomodoro `#{}` is not an untimed open placeholder; finish the current Pomodoro first or choose an untimed placeholder",
+                        entry.slug
+                    )));
+                }
+                let index = entry.line.checked_sub(1).ok_or_else(|| {
+                    CaptureError::io(
+                        "Pomodoro capture invariant failed: started entry is out of range",
+                    )
+                })?;
+                // Drops apply after the guards above and before the start
+                // rewrite, on the staged pre-image.
+                let token = parsed.body.clone();
+                let owner = capture_pomodoro_start::StartOwner::Named {
+                    name: display_name.clone(),
+                };
+                let drop_plan = capture_pomodoro_start::plan_start_drop(
+                    &staged, index, &spec.drop, &owner, &token,
                 )
-            })?;
-            let (updated, moved_index) =
-                start_existing_pomodoro_entry(&staged, index, time_range)?;
-            (updated, moved_index, false, None)
-        }
-        capture_pomodoros::NamedSelection::CompletedOnly(entry) => {
-            let name = entry
-                .name
-                .as_deref()
-                .and_then(capture_pomodoros::canonicalize_pomodoro_name)
-                .or_else(|| {
-                    capture_pomodoros::canonicalize_pomodoro_name(selector)
-                })
-                .ok_or_else(|| {
-                    CaptureError::usage(format!(
-                        "cannot create Pomodoro `#{selector}`: {}",
-                        capture_pomodoros::POMODORO_NAME_USAGE
-                    ))
-                })?;
-            let (with_placeholder, created_line, _) =
-                capture_task_toggle::insert_named_placeholder(&staged, &name)
-                    .map_err(named_relocation_error)?;
-            let (updated, moved_index) = start_existing_pomodoro_entry(
-                &with_placeholder,
-                created_line,
-                time_range,
-            )?;
-            (updated, moved_index, true, None)
-        }
-        capture_pomodoros::NamedSelection::Missing { suggestion } => {
-            let name = capture_pomodoros::canonicalize_pomodoro_name(selector)
-                .ok_or_else(|| {
-                    CaptureError::usage(format!(
-                        "cannot create Pomodoro `#{selector}`: {}",
-                        capture_pomodoros::POMODORO_NAME_USAGE
-                    ))
-                })?;
-            let warning = suggestion.map(|entry| {
-                let suggestion_name = entry
+                .map_err(|error| CaptureError::io(error.to_string()))?;
+                let (updated, moved_index) = start_existing_pomodoro_entry(
+                    &drop_plan.contents,
+                    index,
+                    time_range,
+                )?;
+                (updated, moved_index, false, None, Some(drop_plan))
+            }
+            capture_pomodoros::NamedSelection::CompletedOnly(entry) => {
+                let name = entry
                     .name
-                    .clone()
-                    .unwrap_or_else(|| entry.slug.clone());
-                let slug = entry.slug.clone();
-                let raw = spec.raw.clone();
-                format!(
-                    "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `={raw}#{slug}`)"
-                )
-            });
-            let (with_placeholder, created_line, _) =
-                capture_task_toggle::insert_named_placeholder(&staged, &name)
+                    .as_deref()
+                    .and_then(capture_pomodoros::canonicalize_pomodoro_name)
+                    .or_else(|| {
+                        capture_pomodoros::canonicalize_pomodoro_name(selector)
+                    })
+                    .ok_or_else(|| {
+                        CaptureError::usage(format!(
+                            "cannot create Pomodoro `#{selector}`: {}",
+                            capture_pomodoros::POMODORO_NAME_USAGE
+                        ))
+                    })?;
+                let (with_placeholder, created_line, _) =
+                    capture_task_toggle::insert_named_placeholder(
+                        &staged, &name,
+                    )
                     .map_err(named_relocation_error)?;
-            let (updated, moved_index) = start_existing_pomodoro_entry(
-                &with_placeholder,
-                created_line,
-                time_range,
-            )?;
-            (updated, moved_index, true, warning)
-        }
-    };
+                let (updated, moved_index) = start_existing_pomodoro_entry(
+                    &with_placeholder,
+                    created_line,
+                    time_range,
+                )?;
+                (updated, moved_index, true, None, None)
+            }
+            capture_pomodoros::NamedSelection::Missing { suggestion } => {
+                let name =
+                    capture_pomodoros::canonicalize_pomodoro_name(selector)
+                        .ok_or_else(|| {
+                            CaptureError::usage(format!(
+                                "cannot create Pomodoro `#{selector}`: {}",
+                                capture_pomodoros::POMODORO_NAME_USAGE
+                            ))
+                        })?;
+                let warning = suggestion.map(|entry| {
+                    let suggestion_name = entry
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| entry.slug.clone());
+                    let slug = entry.slug.clone();
+                    let raw = spec.raw.clone();
+                    format!(
+                        "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `={raw}#{slug}`)"
+                    )
+                });
+                let (with_placeholder, created_line, _) =
+                    capture_task_toggle::insert_named_placeholder(
+                        &staged, &name,
+                    )
+                    .map_err(named_relocation_error)?;
+                let (updated, moved_index) = start_existing_pomodoro_entry(
+                    &with_placeholder,
+                    created_line,
+                    time_range,
+                )?;
+                (updated, moved_index, true, warning, None)
+            }
+        };
     planner.stage(day_file, updated)?;
     if let Some(warning) = suggestion_warning {
         warnings.push(warning);
@@ -923,24 +1047,37 @@ fn plan_named_pomodoro_start_item(
         .unwrap_or_else(|_| day_file.to_path_buf());
     let staged_day = planner.read_existing(day_file)?;
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
-    let tasks =
-        capture_pomodoro_start::list_queued_links(&staged_day, moved_index);
-    let tasks =
-        capture_pomodoro_start::resolve_queued_links(&vault, day_file, &tasks)
-            .into_iter()
-            .map(|task| PomodoroStartTaskJson {
-                block_link: task.block_link,
-                embedded: task.embedded,
-                ledger_line: task.ledger_line,
-                resolved: task.resolved,
-                relative_target: task.relative_target,
-                block_id: task.block_id,
-                text: task.text,
-                status_symbol: task.status_symbol,
-                status_name: task.status_name,
-                warning: task.warning,
-            })
-            .collect::<Vec<_>>();
+    // Zip the post-image lineup with the kept pre-image numbers; created
+    // sessions keep the whole (empty) lineup.
+    let (kept, dropped_links) = match drop_plan.as_ref() {
+        Some(plan) => (plan.kept.clone(), plan.dropped.clone()),
+        None => (Vec::new(), Vec::new()),
+    };
+    let (tasks, dropped) = if drop_plan.is_some() {
+        let (tasks, dropped) = plan_start_rows_json(
+            &vault,
+            day_file,
+            &staged_day,
+            moved_index,
+            &kept,
+            &dropped_links,
+        );
+        if let Some(plan) = drop_plan.as_ref() {
+            warnings.extend(plan.warnings.clone());
+        }
+        (tasks, dropped)
+    } else {
+        let links =
+            capture_pomodoro_start::list_queued_links(&staged_day, moved_index);
+        let rows = capture_pomodoro_start::resolve_queued_links(
+            &vault, day_file, &links,
+        );
+        let tasks = rows
+            .iter()
+            .map(|row| start_task_json(row, row.index, 0))
+            .collect();
+        (tasks, Vec::new())
+    };
     let task_line = line_spans(&staged_day)
         .get(moved_index)
         .map(|line| line.text.to_string())
@@ -949,6 +1086,8 @@ fn plan_named_pomodoro_start_item(
                 "Pomodoro capture invariant failed: started entry is out of range",
             )
         })?;
+    let mut drop_list = spec.drop.clone();
+    drop_list.sort_unstable();
     let summary = PomodoroStartSummary {
         start: start.to_string(),
         end: end.to_string(),
@@ -959,6 +1098,8 @@ fn plan_named_pomodoro_start_item(
         created_pomodoro: created,
         time_range: time_range.to_string(),
         tasks: Some(tasks),
+        drop: drop_list,
+        dropped,
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
