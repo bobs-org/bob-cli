@@ -397,7 +397,7 @@ pub(super) const POMODORO_SHIFT_SHAPE_ERROR: &str = "Pomodoro shift items must c
 
 pub(super) const POMODORO_SHIFT_FORCED_ERROR: &str = "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the shift alone";
 
-pub(super) const POMODORO_CLOSE_SHAPE_ERROR: &str = "`=x` must be the whole capture item; to log a task while closing, use `@route:block-id=x`";
+pub(super) const POMODORO_CLOSE_SHAPE_ERROR: &str = "`=x` takes no child lines; write Work Log entries on its line (for example `=x 1 wrote the tests`)";
 
 pub(crate) const POMODORO_START_FORCED_ERROR: &str = "Pomodoro start `=<X>` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the start alone";
 
@@ -550,6 +550,58 @@ pub(super) fn close_selection_incomplete_error(
     separator: char,
 ) -> String {
     format!("`{token}` is incomplete: type a task number after `{separator}`")
+}
+
+// ---------------------------------------------------------------------------
+// `=x` Work Log tail diagnostics (shared by `bob capture` and `capture-parse`)
+// ---------------------------------------------------------------------------
+
+/// The tail does not start with a task number.
+pub(super) fn close_log_tail_start_error() -> String {
+    "after `=x`, write a task number and then its Work Log text (for example `=x 1 wrote the tests`); to link a task while closing, use `^route:block-id=x`".to_string()
+}
+
+/// A tail index that is not worked by this close. `list_suggestion` adds the
+/// index to `<N>` (for example `=x2,3`) and `complete_suggestion` adds it to
+/// `!<M>` (for example `=x2!3`).
+pub(super) fn close_log_not_worked_error(
+    index: u32,
+    token: &str,
+    list_suggestion: &str,
+    complete_suggestion: &str,
+) -> String {
+    format!(
+        "task {index} isn't worked by `{token}`; list it (`{list_suggestion}`) or complete it (`{complete_suggestion}`) to log to it"
+    )
+}
+
+/// A tail index that is dropped by `~<K>`: `drop` renders the typed drop
+/// list including the `~` (for example `~2`).
+pub(super) fn close_log_dropped_error(index: u32, drop: &str) -> String {
+    format!("task {index} is dropped by `{drop}`, so it can't take a Work Log entry")
+}
+
+/// An index with no text before the next index starts.
+pub(super) fn close_log_empty_entry_error(prev: u32, next: u32) -> String {
+    format!("type Work Log text after task {prev} (write `\\{next}` to log the number {next})")
+}
+
+/// A dangling index at execution: `display` is the close item text up to the
+/// dangling index (for example `=x 1`).
+pub(super) fn close_log_dangling_error(display: &str, index: u32) -> String {
+    format!(
+        "`{display}` is incomplete: type the Work Log text after task {index}"
+    )
+}
+
+/// A block link inside a Work Log entry.
+pub(super) fn close_log_block_link_error(link: &str) -> String {
+    format!("a Work Log entry can't contain the block link `{link}`; the close would treat it as a Task Link")
+}
+
+/// Entry text that starts with a code fence.
+pub(super) fn close_log_fence_error() -> String {
+    "a Work Log entry can't start with a code fence".to_string()
 }
 
 // ---------------------------------------------------------------------------

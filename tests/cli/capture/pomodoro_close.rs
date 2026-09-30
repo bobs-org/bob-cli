@@ -478,7 +478,10 @@ fn capture_pomodoro_close_diagnostics() {
         "2026-09-28 09:37:00",
         &["=x more"],
     );
-    assert!(error.contains("must be the whole capture item"), "{error}");
+    assert!(
+        error.contains("write a task number and then its Work Log text"),
+        "{error}"
+    );
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -748,7 +751,7 @@ fn capture_pomodoro_close_diagnostics() {
     );
     assert!(!output.status.success());
     assert!(
-        stdout(&output).contains("must be the whole capture item"),
+        stdout(&output).contains("takes no child lines"),
         "{}",
         format_output(&output)
     );

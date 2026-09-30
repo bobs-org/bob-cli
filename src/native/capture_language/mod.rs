@@ -13,6 +13,7 @@
 //! `capture/` wraps the returned message in `CaptureError::usage(...)`, so
 //! the message text is the single source of truth for both callers.
 
+mod close_log;
 mod close_selection;
 mod completion;
 mod draft;

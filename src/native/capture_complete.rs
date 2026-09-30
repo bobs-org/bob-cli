@@ -502,6 +502,35 @@ struct CaptureCompleteResult {
     warnings: Vec<String>,
 }
 
+/// `true` when `cursor` sits inside a whole-item `=x` Work Log tail (after
+/// the `=x` token, within the close item's range). Block-link completion is
+/// suppressed there because entries reject block links.
+fn cursor_in_close_tail(raw_text: &str, cursor: usize) -> bool {
+    let parse = capture_language::parse_for_editor(raw_text);
+    let Some(item) = parse
+        .items
+        .iter()
+        .find(|item| cursor >= item.start && cursor <= item.end)
+    else {
+        return false;
+    };
+    let is_close = matches!(
+        item.mode,
+        capture_language::EditorMode::PomodoroClose
+            | capture_language::EditorMode::Incomplete
+    );
+    if !is_close {
+        return false;
+    }
+    let Some(close_end) = item.spans.iter().find_map(|span| {
+        (span.kind == capture_language::SpanKind::PomodoroClose)
+            .then_some(span.end)
+    }) else {
+        return false;
+    };
+    cursor > close_end && cursor <= item.end
+}
+
 impl CaptureCompleteResult {
     fn empty(cursor: usize) -> Self {
         Self {
@@ -535,6 +564,14 @@ fn build_result(
     if let Some(field) =
         capture_links::completion_field_at(raw_text, cursor, current_note_path)
     {
+        // Inside a close Work Log tail, block-link candidates are suppressed
+        // because entries reject block links; note and heading completion
+        // keeps working.
+        if matches!(field.context, CompletionContext::WikilinkBlock)
+            && cursor_in_close_tail(raw_text, cursor)
+        {
+            return Ok(CaptureCompleteResult::empty(cursor));
+        }
         let index = capture_links::NoteIndex::read(bob_dir)
             .map_err(CompleteError::io)?;
         let candidates = match field.context {
@@ -2434,6 +2471,21 @@ mod tests {
             result(temp.path(), raw, 14)
         });
         assert_eq!(link.context, Some(CompletionContext::ActiveTask));
+    }
+
+    #[test]
+    fn close_tail_suppresses_wikilink_block_but_keeps_note() {
+        let temp = TempDir::new("bob-cli-capture-complete-close-tail");
+        write_file(&temp.path().join("Design notes.md"), "line ^web-capture\n");
+        // Note completion keeps working inside a close tail.
+        let note = result(temp.path(), "=x 1 see [[Design", 17);
+        assert_eq!(note.context, Some(CompletionContext::WikilinkNote));
+        assert_ne!(note.candidates.len(), 0);
+        // Block completion is suppressed inside a close tail.
+        let raw = "=x 1 see [[Design notes#^web";
+        let block = result(temp.path(), raw, raw.len());
+        assert_eq!(block.context, None);
+        assert_eq!(block.candidates.len(), 0);
     }
 
     #[test]

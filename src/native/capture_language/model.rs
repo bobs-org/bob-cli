@@ -71,9 +71,9 @@ pub(crate) enum CaptureKind {
         close: Option<PomodoroCloseSpec>,
         spelling: PomodoroLinkSpelling,
     },
-    /// A whole-item `=x` Pomodoro close. The item must contain only the
-    /// close token; any extra text, marker, or child line is an invalid
-    /// close, never a task.
+    /// A whole-item `=x` Pomodoro close, with an optional Work Log tail
+    /// (`=x 1 wired the lexer`). Child lines are invalid; extra text lexes
+    /// as the tail, never a task.
     PomodoroClose {
         spec: PomodoroCloseSpec,
     },

@@ -135,6 +135,88 @@ pub(super) fn session_chain_tokens<'a>(
     }
 }
 
+/// Whether a whitespace-separated token can open a Work Log tail: a plain
+/// `=x`/`=X` or a selection-shaped `=x…` token. `=x#…` never takes a tail.
+fn is_close_tail_opener(token: &str) -> bool {
+    token.eq_ignore_ascii_case("=x")
+        || super::close_selection::whole_item_close_after_x(token).is_some()
+}
+
+/// Whether a whitespace-separated token can open a trailing start run after
+/// a close tail: any `=`-family start (`=`, `=<X>`, `=#name`, `=~<K>`).
+fn is_trailing_start_opener(token: &str) -> bool {
+    matches!(
+        super::item::session_equals_token(token),
+        Some(super::item::EqualsToken::Start { .. })
+    )
+}
+
+/// Split a parent line holding a close with a Work Log tail: leading session
+/// operators become per-token items, the close plus its tail becomes one
+/// item whose range covers the close token and its tail, and a trailing
+/// start run (when present) splits into per-token items. Returns `None`
+/// unless the line holds a close opener after only session tokens with at
+/// least one token after it, and the line is not an all-session chain
+/// (those keep today's rules) nor prose-first (`Plan =x 1 foo` stays prose).
+fn close_tail_split<'a>(
+    line: &RawLine<'a>,
+) -> Option<(Vec<Token<'a>>, Token<'a>, Vec<Token<'a>>, Vec<Token<'a>>)> {
+    let tokens = tokenize_line_with_spans(line);
+    if tokens.len() < 2 {
+        return None;
+    }
+    if tokens
+        .iter()
+        .all(|token| super::item::is_session_chain_token(token.text))
+    {
+        return None;
+    }
+    let close_index = tokens
+        .iter()
+        .enumerate()
+        .find(|(_, token)| is_close_tail_opener(token.text))
+        .map(|(index, _)| index)?;
+    if close_index + 1 >= tokens.len() {
+        return None;
+    }
+    // Leading tokens must all be session operators; a prose-first line fails
+    // here because its first token is not a chain token.
+    if !tokens[..close_index]
+        .iter()
+        .all(|token| super::item::is_session_chain_token(token.text))
+    {
+        return None;
+    }
+    let close = tokens[close_index];
+    let remaining = &tokens[close_index + 1..];
+    // Longest trailing run of session tokens.
+    let mut suffix_start = remaining.len();
+    while suffix_start > 0
+        && super::item::is_session_chain_token(remaining[suffix_start - 1].text)
+    {
+        suffix_start -= 1;
+    }
+    let (tail_tokens, trailing_tokens) = if suffix_start < remaining.len()
+        && is_trailing_start_opener(remaining[suffix_start].text)
+        && suffix_start >= 2
+    {
+        // At least an index plus one text token before the trailing run
+        // ("after the first entry's text"); otherwise the start token
+        // stays tail text (or the dangling case stays incomplete).
+        (
+            remaining[..suffix_start].to_vec(),
+            remaining[suffix_start..].to_vec(),
+        )
+    } else {
+        (remaining.to_vec(), Vec::new())
+    };
+    // A trailing run that does not begin with a start token stays text: the
+    // suffix search above already leaves it inside the tail when its first
+    // token is not a start.
+    let leading = tokens[..close_index].to_vec();
+    Some((leading, close, tail_tokens, trailing_tokens))
+}
+
 /// Push one blank-line-separated item. When the parent line is a session
 /// chain, push one single-token item per operator instead: each synthetic
 /// item holds a single [`ItemLine`] over that token's absolute range on the
@@ -142,6 +224,10 @@ pub(super) fn session_chain_tokens<'a>(
 /// lines attach to the last token's item (extending its `lines`, `end`,
 /// and `line_end`), so the last token's family parser reports its existing
 /// exact-token-with-child-lines shape error.
+///
+/// A close with a Work Log tail splits the same way: leading operators run
+/// first, the close plus its tail runs as one item, and a trailing start
+/// run splits into per-token items.
 pub(super) fn push_capture_item<'a>(
     items: &mut Vec<CaptureItem<'a>>,
     current: &mut Vec<ItemLine<'a>>,
@@ -149,6 +235,116 @@ pub(super) fn push_capture_item<'a>(
     let Some(first) = current.first().copied() else {
         return;
     };
+    if let Some((leading, close, tail_tokens, trailing_tokens)) =
+        close_tail_split(&first.raw)
+    {
+        let rest: Vec<ItemLine<'a>> = current[1..].to_vec();
+        let last_child = rest.last().copied();
+        // Leading operators: one single-token item each.
+        for token in leading {
+            items.push(CaptureItem {
+                index: items.len(),
+                start: token.start,
+                end: token.end,
+                line_start: first.line_number,
+                line_end: first.line_number,
+                lines: vec![ItemLine {
+                    raw: RawLine {
+                        text: token.text,
+                        start: token.start,
+                        end: token.end,
+                    },
+                    line_number: first.line_number,
+                }],
+            });
+        }
+        // Close plus its tail: one item covering the close token through
+        // the last tail token.
+        let tail_end = tail_tokens
+            .last()
+            .map(|token| token.end)
+            .unwrap_or(close.end);
+        // Slice the parent line's text from the close token through the tail.
+        let close_offset = close.start.saturating_sub(first.raw.start);
+        let tail_offset = tail_end.saturating_sub(first.raw.start);
+        let close_text = first
+            .raw
+            .text
+            .get(close_offset..tail_offset)
+            .unwrap_or(close.text);
+        let close_line = ItemLine {
+            raw: RawLine {
+                text: close_text,
+                start: close.start,
+                end: tail_end,
+            },
+            line_number: first.line_number,
+        };
+        if trailing_tokens.is_empty() {
+            let mut lines = vec![close_line];
+            lines.extend(rest.iter().copied());
+            let (end, line_end) = match last_child {
+                Some(child) => (child.raw.end, child.line_number),
+                None => (tail_end, first.line_number),
+            };
+            items.push(CaptureItem {
+                index: items.len(),
+                start: close.start,
+                end,
+                line_start: first.line_number,
+                line_end,
+                lines,
+            });
+        } else {
+            items.push(CaptureItem {
+                index: items.len(),
+                start: close.start,
+                end: tail_end,
+                line_start: first.line_number,
+                line_end: first.line_number,
+                lines: vec![close_line],
+            });
+            for (position, token) in trailing_tokens.iter().copied().enumerate()
+            {
+                let is_last = position + 1 == trailing_tokens.len();
+                let token_line = ItemLine {
+                    raw: RawLine {
+                        text: token.text,
+                        start: token.start,
+                        end: token.end,
+                    },
+                    line_number: first.line_number,
+                };
+                if is_last {
+                    let mut lines = vec![token_line];
+                    lines.extend(rest.iter().copied());
+                    let (end, line_end) = match last_child {
+                        Some(child) => (child.raw.end, child.line_number),
+                        None => (token.end, first.line_number),
+                    };
+                    items.push(CaptureItem {
+                        index: items.len(),
+                        start: token.start,
+                        end,
+                        line_start: first.line_number,
+                        line_end,
+                        lines,
+                    });
+                } else {
+                    items.push(CaptureItem {
+                        index: items.len(),
+                        start: token.start,
+                        end: token.end,
+                        line_start: first.line_number,
+                        line_end: first.line_number,
+                        lines: vec![token_line],
+                    });
+                }
+            }
+        }
+        current.clear();
+        return;
+    }
     if let Some(tokens) = session_chain_tokens(&first.raw) {
         let rest: Vec<ItemLine<'a>> = current[1..].to_vec();
         let last_child = rest.last().copied();

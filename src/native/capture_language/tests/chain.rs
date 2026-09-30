@@ -306,10 +306,7 @@ fn execution_rejects_chain_child_lines_with_the_close_shape_error() {
             error.contains("capture item 2 starting on line 1"),
             "{raw}: {error}"
         );
-        assert!(
-            error.contains("`=x` must be the whole capture item"),
-            "{raw}: {error}"
-        );
+        assert!(error.contains("takes no child lines"), "{raw}: {error}");
     }
 }
 
@@ -339,7 +336,7 @@ fn execution_leaves_non_chains_unchanged() {
     assert!(error.contains("with no spaces"), "{error}");
     let error = execute_draft("=x ^bob:ready=").unwrap_err();
     assert!(
-        error.contains("`=x` must be the whole capture item"),
+        error.contains("write a task number and then its Work Log text"),
         "{error}"
     );
     for raw in ["Plan +2 =x", "- foo"] {

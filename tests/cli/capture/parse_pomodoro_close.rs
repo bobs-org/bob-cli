@@ -246,10 +246,9 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         );
     }
 
-    // Spaced lists get the no-spaces hint on the extra text.
-    for (text, range) in
-        [("=x 1,3", [3, 6]), ("=x1, 3", [5, 6]), ("=x1 !2", [4, 6])]
-    {
+    // Spaced lists get the no-spaces hint on the extra text (only when the
+    // first tail token is not a bare number).
+    for (text, range) in [("=x 1,3", [3, 6]), ("=x1 !2", [4, 6])] {
         let value = parse(text);
         assert_eq!(
             value["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -270,13 +269,31 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         );
     }
 
-    // Extra-text ranges are computed from the first token's end.
-    for (text, range) in [
-        ("=x1 1", [4, 5]),
-        ("=x1,3 3", [6, 7]),
-        ("=x1 x1", [4, 6]),
-        ("  =x1 1", [6, 7]),
-    ] {
+    // A dangling close index with a space (`=x1, 3`) is an editing state for
+    // the close token itself, not the no-spaces hint.
+    let spaced_incomplete = parse("=x1, 3");
+    assert_eq!(spaced_incomplete["mode"], "incomplete", "=x1, 3");
+    assert_eq!(
+        spaced_incomplete["needs"],
+        serde_json::json!(["pomodoro_close_task"]),
+        "=x1, 3"
+    );
+
+    // A close with a dangling Work Log index is an editing state needing
+    // `pomodoro_close_log_text`.
+    for text in ["=x1 1", "=x1,3 3", "  =x1 1", "=x 2"] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "incomplete", "{text}");
+        assert_eq!(
+            value["needs"],
+            serde_json::json!(["pomodoro_close_log_text"]),
+            "{text}"
+        );
+    }
+
+    // Other extra text keeps an `invalid_pomodoro_close` diagnostic on the
+    // first tail token.
+    for (text, range) in [("=x1 x1", [4, 6])] {
         let value = parse(text);
         assert_eq!(
             value["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -305,7 +322,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         "invalid_pomodoro_link"
     );
 
-    // A selection with other text still reports the close shape error.
+    // A close with other text reports the tail-start error.
     let more = parse("=x1 more");
     assert_eq!(
         more["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -315,7 +332,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         more["diagnostics"][0]["message"]
             .as_str()
             .expect("message")
-            .starts_with("`=x` must be the whole"),
+            .starts_with("after `=x`, write a task number"),
         "{more}"
     );
     let child = parse_stdin("=x1\n- detail\n");

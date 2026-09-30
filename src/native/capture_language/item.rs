@@ -1,5 +1,6 @@
 //! Capture-item and session-operator parsing.
 
+use super::close_log::*;
 use super::close_selection::*;
 use super::draft::*;
 use super::editor_parse::*;
@@ -1022,24 +1023,134 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 }
                 return Err(POMODORO_CLOSE_SHAPE_ERROR.to_string());
             }
-            // Extra text on the parent line: a broken first token reports
-            // its own diagnostic first.
-            if let Some(after_x) = selection_after_x {
-                let offset = close_after_x_offset(parent_line, first, after_x);
-                if let Err(error) = lex_close_selection(after_x, offset, first)
+            // A close with tail text: lex the selection first (a broken
+            // first token reports its own diagnostic, a dangling separator
+            // stays incomplete), then the shared tail lexer. Child lines
+            // keep the child-line error.
+            if item.lines.len() > 1 {
+                if let Some(after_x) = selection_after_x {
+                    let offset =
+                        close_after_x_offset(parent_line, first, after_x);
+                    if let Err(error) =
+                        lex_close_selection(after_x, offset, first)
+                    {
+                        return Err(error.message);
+                    }
+                    match lex_close_selection(after_x, offset, first) {
+                        Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+                            return Err(close_selection_incomplete_error(
+                                first,
+                                incomplete.separator,
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+                return Err(POMODORO_CLOSE_SHAPE_ERROR.to_string());
+            }
+            if forced_route.is_some() || forced_section.is_some() {
+                return Err(POMODORO_CLOSE_FORCED_ERROR.to_string());
+            }
+            let lexed_selection = match selection_after_x {
+                None => CloseSelectionLex {
+                    in_progress: None,
+                    complete: Vec::new(),
+                    drop: Vec::new(),
+                    in_progress_range: None,
+                    complete_range: None,
+                    drop_range: None,
+                },
+                Some(after_x) => {
+                    let offset =
+                        close_after_x_offset(parent_line, first, after_x);
+                    match lex_close_selection(after_x, offset, first) {
+                        Ok(CloseSelectionOutcome::Valid(lex)) => lex,
+                        Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+                            return Err(close_selection_incomplete_error(
+                                first,
+                                incomplete.separator,
+                            ));
+                        }
+                        Err(error) => return Err(error.message),
+                    }
+                }
+            };
+            let line_tokens = tokenize_line_with_spans(&parent_line.raw);
+            let tail_tokens: Vec<Token<'_>> =
+                if line_tokens.first().is_some_and(|token| token.text == first)
                 {
-                    return Err(error.message);
+                    line_tokens[1..].to_vec()
+                } else {
+                    // Fallback for leading-whitespace quirks: skip the close
+                    // token by text match.
+                    let mut skipped = false;
+                    let mut tail = Vec::new();
+                    for token in line_tokens {
+                        if !skipped && token.text == first {
+                            skipped = true;
+                            continue;
+                        }
+                        if skipped {
+                            tail.push(token);
+                        }
+                    }
+                    tail
+                };
+            // The no-spaces hint still wins when the spaceless join forms a
+            // selection and the first tail token is not a bare number.
+            let first_tail_is_bare_number =
+                tail_tokens.first().is_some_and(|token| {
+                    !token.text.is_empty()
+                        && token.text.bytes().all(|byte| byte.is_ascii_digit())
+                });
+            if !first_tail_is_bare_number {
+                let nospace: String =
+                    parent_trimmed.split_whitespace().collect();
+                if whole_item_close_after_x(&nospace).is_some_and(|after_x| {
+                    lex_close_selection(after_x, 0, &nospace).is_ok()
+                }) {
+                    return Err(close_selection_no_spaces_error());
                 }
             }
-            // A spaceless join that forms a selection (`=x 1,3`, `=x1, 3`)
-            // gets the no-spaces hint instead of the shape error.
-            let nospace: String = parent_trimmed.split_whitespace().collect();
-            if whole_item_close_after_x(&nospace).is_some_and(|after_x| {
-                lex_close_selection(after_x, 0, &nospace).is_ok()
-            }) {
-                return Err(close_selection_no_spaces_error());
-            }
-            Err(POMODORO_CLOSE_SHAPE_ERROR.to_string())
+            let outcome = match lex_close_log_tail(
+                &tail_tokens,
+                first,
+                lexed_selection.in_progress.as_deref(),
+                &lexed_selection.complete,
+                &lexed_selection.drop,
+            ) {
+                Ok(outcome) => outcome,
+                Err(error) => return Err(error.message),
+            };
+            let entries = match outcome {
+                CloseLogOutcome::Valid(valid) => {
+                    log_entries_from_lex(&valid.entries)
+                }
+                CloseLogOutcome::Dangling(dangling) => {
+                    return Err(close_log_dangling_error(
+                        parent_trimmed,
+                        dangling.index,
+                    ));
+                }
+            };
+            let mut spec =
+                close_spec_from_lex(first.to_string(), &lexed_selection);
+            spec.log = entries;
+            let body = parent_trimmed.to_string();
+            return Ok(Some(parsed_capture_item_outcome(
+                item,
+                ParsedCaptureText {
+                    body,
+                    clip: None,
+                    route: None,
+                    kind: CaptureKind::PomodoroClose { spec },
+                    scheduled_offset: None,
+                    priority_level: None,
+                    sub_bullets: Vec::new(),
+                },
+                Vec::new(),
+                None,
+            )));
         }
         EqualsToken::Start {
             suffix,

@@ -17,6 +17,7 @@ mod plan_budget;
 mod pomodoro_adjust;
 mod pomodoro_chain;
 mod pomodoro_close;
+mod pomodoro_close_log;
 mod pomodoro_close_selection;
 mod pomodoro_link;
 mod pomodoro_name;
