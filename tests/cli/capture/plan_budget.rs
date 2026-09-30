@@ -501,6 +501,146 @@ fn capture_complete_create_row_reports_plan_themes() {
 }
 
 #[test]
+fn capture_complete_start_name_again_row_reports_plan_themes() {
+    let temp = TempDir::new("bob-cli-complete-start-name-again-themes");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(&vault.join("dev.md"), "# Dev\n## Tasks\n");
+    write_file(
+        &day_file,
+        concat!(
+            "# 2026-07-10\n",
+            "## Pomodoros\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "  - [[dev#^old]]\n",
+            "- [ ] () — GOALS\n",
+            "- [ ] () — DECKS\n",
+            "- [ ] () — BOB\n",
+            "## Later\n",
+        ),
+    );
+
+    let draft = "=#";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run capture-complete");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
+    assert_eq!(json["context"], "pomodoro_start_name");
+    let candidates = json["candidates"].as_array().expect("candidates array");
+    let again = candidates
+        .iter()
+        .find(|candidate| candidate["replacement"] == "plan")
+        .expect("an again PLAN row");
+    assert_eq!(again["creates_pomodoro"], true);
+    assert_eq!(again["plan_themes_after"], 4);
+    assert_eq!(again["plan_themes_cap"], 3);
+    for candidate in candidates {
+        if candidate["creates_pomodoro"] != true {
+            assert!(
+                candidate.get("plan_themes_after").is_none(),
+                "{candidate}"
+            );
+            assert!(candidate.get("plan_themes_cap").is_none(), "{candidate}");
+        }
+    }
+}
+
+#[test]
+fn capture_complete_start_name_new_row_reports_plan_themes() {
+    let temp = TempDir::new("bob-cli-complete-start-name-new-themes");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(&vault.join("dev.md"), "# Dev\n## Tasks\n");
+    write_file(
+        &day_file,
+        concat!(
+            "# 2026-07-10\n",
+            "## Pomodoros\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "  - [[dev#^old]]\n",
+            "- [ ] () — GOALS\n",
+            "- [ ] () — DECKS\n",
+            "- [ ] () — BOB\n",
+            "## Later\n",
+        ),
+    );
+
+    let draft = "=#fr";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run capture-complete");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
+    assert_eq!(json["context"], "pomodoro_start_name");
+    let candidates = json["candidates"].as_array().expect("candidates array");
+    let created = candidates
+        .iter()
+        .find(|candidate| candidate["replacement"] == "fr")
+        .expect("a new FR row");
+    assert_eq!(created["creates_pomodoro"], true);
+    assert_eq!(created["plan_themes_after"], 4);
+    assert_eq!(created["plan_themes_cap"], 3);
+}
+
+#[test]
+fn capture_strict_mode_never_refuses_named_starts() {
+    let temp = TempDir::new("bob-cli-capture-budget-strict-named");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    let config = temp.path().join("config.yml");
+    write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing\n");
+    write_file(&day_file, three_theme_day());
+    write_file(&config, "plan:\n  strict: true\n");
+
+    let output =
+        capture_json(&vault, &day_file, &["--", "=#fresh"], Some(&config));
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["kind"], "pomodoro_start");
+    assert_eq!(json["pomodoro_start"]["created_pomodoro"], true);
+    assert_eq!(
+        json["plan_budget"]["added_themes"],
+        serde_json::json!(["FRESH"])
+    );
+    let warnings = json["plan_budget"]["warnings"]
+        .as_array()
+        .expect("budget warnings");
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning["code"] == "plan_theme_cap_exceeded"),
+        "{json}"
+    );
+}
+
+#[test]
 fn capture_complete_create_row_omits_plan_themes_without_config() {
     let temp = TempDir::new("bob-cli-complete-plan-themes-bad-config");
     let vault = temp.path().join("vault");

@@ -134,8 +134,9 @@ start and the `=<X>#` incomplete state, backed by today's ledger: start \
 rows for planned placeholders (the entry a bare `=` would start carries \
 `next_up`), a create row for a missing name, `again` rows that start a \
 new session named like a completed one, `name it` rows for placeholders \
-that still need a name, and the running entry last. The `pomodoro_name` \
-context is unchanged. A \
+that still need a name, and the running entry last. Its new and again rows \
+preview the plan budget with the same `plan_themes_after`/`plan_themes_cap` \
+fields. The `pomodoro_name` context is unchanged. A \
 missing daily note, a missing Pomodoros section, and multiple open timed \
 Pomodoros stay write-free warnings without a create row. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` start suffix is \
 never completable: block and Pomodoro-name replacement ranges end before \
@@ -424,8 +425,9 @@ struct PomodoroNameCandidate {
     #[serde(skip_serializing_if = "is_false")]
     next_up: bool,
     /// Resulting theme count and cap when this create row is accepted.
-    /// Only on `creates_pomodoro` rows; omitted when the daily note or
-    /// the plan config is unavailable.
+    /// Only on `creates_pomodoro` rows (new and again rows in
+    /// `pomodoro_start_name`); omitted when the daily note or the plan
+    /// config is unavailable.
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_themes_after: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1250,6 +1252,10 @@ fn pomodoro_start_name_candidates_from_scan_with_hint(
         )
         .or_else(|| entry.name.clone());
         candidate.creates_pomodoro = true;
+        let display =
+            candidate.name.clone().unwrap_or_else(|| entry.slug.clone());
+        (candidate.plan_themes_after, candidate.plan_themes_cap) =
+            plan_themes_after_for(plan_hint.as_ref(), &display);
         again.push(candidate);
     }
     let again = rank(again, query, |candidate| candidate.replacement.as_str());
@@ -2993,6 +2999,102 @@ mod tests {
         assert!(novel[0].pomodoro_ref.is_none());
         assert!(novel[0].line.is_none());
         assert!(!novel[0].next_up);
+    }
+
+    #[test]
+    fn pomodoro_start_name_again_rows_preview_plan_budget() {
+        let scan = named_start_ledger();
+        let hint = PlanCreationHint {
+            before: 3,
+            keys: vec![
+                "bugs".to_string(),
+                "deep work".to_string(),
+                "goals".to_string(),
+            ],
+            cap: 3,
+        };
+        let candidates = pomodoro_start_name_candidates_from_scan_with_hint(
+            &scan,
+            "",
+            Some(hint),
+        );
+        let again = candidates
+            .iter()
+            .find(|row| row.replacement == "plan")
+            .expect("again PLAN row");
+        assert!(again.creates_pomodoro);
+        assert_eq!(again.plan_themes_after, Some(4));
+        assert_eq!(again.plan_themes_cap, Some(3));
+        for slug in ["bugs", "deep-work"] {
+            let row = candidates
+                .iter()
+                .find(|row| row.replacement == slug)
+                .expect("start row");
+            assert!(!row.creates_pomodoro, "{slug}");
+            assert_eq!(row.plan_themes_after, None, "{slug}");
+            assert_eq!(row.plan_themes_cap, None, "{slug}");
+        }
+        let name_it = candidates
+            .iter()
+            .find(|row| row.requires_name)
+            .expect("name-it row");
+        assert_eq!(name_it.plan_themes_after, None);
+        assert_eq!(name_it.plan_themes_cap, None);
+
+        let hint = PlanCreationHint {
+            before: 3,
+            keys: vec![
+                "bugs".to_string(),
+                "deep work".to_string(),
+                "goals".to_string(),
+            ],
+            cap: 3,
+        };
+        let novel = pomodoro_start_name_candidates_from_scan_with_hint(
+            &scan,
+            "fresh",
+            Some(hint),
+        );
+        let created = novel
+            .iter()
+            .find(|row| row.replacement == "fresh")
+            .expect("new FRESH row");
+        assert!(created.creates_pomodoro);
+        assert_eq!(created.plan_themes_after, Some(4));
+        assert_eq!(created.plan_themes_cap, Some(3));
+
+        let running_scan = capture_pomodoros::scan(concat!(
+            "## Pomodoros\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "- [ ] (**0840-0905** [t:: 25m]) — BUGS\n",
+            "  - [[sase#^deep-fix]]\n",
+            "- [ ] () — DEEP WORK\n",
+            "  - [[bob#^outline]]\n",
+            "- [ ] ()\n",
+            "  - [[bob#^inbox-zero]]\n",
+        ));
+        let hint = PlanCreationHint {
+            before: 3,
+            keys: vec![
+                "bugs".to_string(),
+                "deep work".to_string(),
+                "goals".to_string(),
+            ],
+            cap: 3,
+        };
+        let running = pomodoro_start_name_candidates_from_scan_with_hint(
+            &running_scan,
+            "",
+            Some(hint),
+        );
+        let timed = running
+            .iter()
+            .find(|row| {
+                row.state == PomodoroState::Open && row.time_range.is_some()
+            })
+            .expect("running row");
+        assert_eq!(timed.plan_themes_after, None);
+        assert_eq!(timed.plan_themes_cap, None);
     }
 
     #[test]

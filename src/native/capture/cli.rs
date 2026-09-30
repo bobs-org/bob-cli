@@ -191,7 +191,7 @@ Capture a whole item `=`/`=<X>` (for example `=`, `=3`, `=-2`, `=2-1`) to \
 start today's next future Pomodoro now with the same timing as the `se<X>` \
 snippet: empty is 25 minutes, `3` is 15 minutes, `-` is 25 minutes with a \
 5-minute offset, `2-1` is 10 minutes with a 5-minute offset. Write \
-``=`<X>`#<pomodoro>`` (for example `=#deep-work`, `=3#bugs`) to start the \
+`=<X>#<pomodoro>` (for example `=#deep-work`, `=3#bugs`) to start the \
 named Pomodoro now with `se<X>` timing: an open match (whole slug, else \
 prefix) starts in place, a completed match starts a new session with that \
 name (an \"again\" start), and otherwise a new named session is created \
@@ -200,10 +200,11 @@ must contain only the start token (leading/trailing whitespace is fine) \
 and have exactly one physical line; a counted token with extra text, \
 markers, or child lines (`=3 more`, `=3x`) and an exact token with child \
 lines fail instead of creating a task, while a bare token with prose \
-(`= foo`, `==`) and mid-body tokens (`Plan =3`) stay ordinary prose. The \
-start needs a future `- [ ] ()` placeholder and no running timed entry; a \
-running session names itself and teaches the `=x`-then-`=` switch idiom \
-(`=x =#name` switches sessions in one line). The started entry moves to \
+(`= foo`, `==`) and mid-body tokens (`Plan =3`) stay ordinary prose. A \
+bare `=`/`=<X>` start needs a future `- [ ] ()` placeholder; a named start \
+creates its session when no open entry matches. Both forms refuse while a \
+timed entry is running; a running session names itself and teaches the \
+`=x`-then-`=` switch idiom (`=x =#name` switches sessions in one line). The started entry moves to \
 the current slot and reports its queued Task Links. A `@@` declaration \
 never applies to start items, and forced \
 destination/task/section/clipboard options are rejected on them. Later items \

@@ -796,7 +796,9 @@ With `plan.strict: true`, the whole batch is refused, atomically, when
 a non-start item creates a new named Pomodoro entry past the theme cap
 (`<text> @r:id#NAME`, `@r^id+#NAME` project notes, `@r+id#NAME`
 toggles, and any other non-start creation path). Session starts (`=`,
-`#NAME=`, and link starts) are never refused. The refusal is an
+`=<X>#NAME`, `#NAME=`, and link starts) are never refused. A named start
+that creates a theme still reports `plan_budget` and the cap warning. The
+refusal is an
 I/O-class error (exit 1) whose JSON carries a machine-readable `code`:
 
 ```json
@@ -816,7 +818,9 @@ landing spot: `→ into running GOALS (0945-1015)`, `→ under GOALS (next
 up)`, `→ under GOALS (named)`, or `→ new Pomodoro BOB`. In the
 `pomodoro_name` completion context, `creates_pomodoro` rows preview the
 result with `plan_themes_after` and `plan_themes_cap`, omitted when the
-daily note or the plan config is unavailable.
+daily note or the plan config is unavailable. In the `pomodoro_start_name`
+context, the new and again rows carry `plan_themes_after` and
+`plan_themes_cap` too.
 
 ### Starting the next Pomodoro
 
@@ -864,8 +868,10 @@ stay ordinary prose.
 Guards, checked in order on the staged daily note: a missing day file, a
 missing `## Pomodoros` section, exactly one open timed entry (named with its
 range and line, teaching the `=x`-then-`=` switch idiom), more than one open
-timed entry, and no future Pomodoro (`=` never creates an entry; that stays
-the job of `^route:block-id=`). "Next future Pomodoro" means the first entry
+timed entry, and no future Pomodoro (a bare `=` never creates an entry;
+`=<X>#<name>` creates and starts a named session (see "Starting a named
+Pomodoro"), and `^route:block-id=` starts a task's session). "Next future
+Pomodoro" means the first entry
 in document order that is open, a placeholder, and untimed — the same session
 the `=x` diagnostic names as "next up".
 
@@ -2711,12 +2717,12 @@ must already resolve because the Pomodoro list does not depend on the block
 ID. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` suffix is never
 a completion field: block and name replacement ranges end before the `=`, a
 cursor inside the suffix returns an empty success, and accepting a candidate
-preserves the typed suffix. The `=x[<N>][!<M>]` close suffix behaves the same way: it
+preserves the typed suffix. The `=x[<N>][!<M>][~<K>]` close suffix behaves the same way: it
 is never a completion field, replacements still stop before `#`/`=`, and a
 cursor anywhere inside the suffix, including the task-number lists and a
-dangling `,`/`!` separator, returns an empty success. A whole-item `+[N]`/`-[N]`
+dangling `,`/`!`/`~` separator, returns an empty success. A whole-item `+[N]`/`-[N]`
 Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`,
-or `--` is one unit), `=x[<N>][!<M>]` close, or `=`/`=<X>` start (a bare `=` starts
+or `--` is one unit), `=x[<N>][!<M>][~<K>]` close, or `=`/`=<X>` start (a bare `=` starts
 25 minutes) is an action and requests no route or
 task completion candidates: a cursor on such an item returns an empty success. A
 whole-item `=<X>#name` named start instead completes the name after `#` as
@@ -2731,6 +2737,8 @@ name), then nameable rows for entries that still need a name
 (`requires_name: true`, never filtered out), and the running timed entry
 last. A completed-only match never also offers a duplicate create row, and
 `again` rows resurface the most recent session first on an empty query. The
+new and again rows carry the plan-budget preview with `plan_themes_after`
+and `plan_themes_cap`. The
 `pomodoro_name` context below is backed by the same scan as `bob capture-pomodoros`, offers only open
 entries, and returns Pomodoros in picker order: named rows first, then
 nameable rows. Named rows rank by slug prefix, then slug substring, and open
@@ -2780,7 +2788,7 @@ find their tasks. `replacement` runs from just after `^` to the end of that
 part and always stops before `#`/`=`, so typed suffixes survive an accept,
 and `query` is the text from after `^` to the cursor. A `#name` after
 `^route:block-id` completes Pomodoro names exactly as it does after
-`@route:block-id`, and a cursor inside `=<X>` or `=x[<N>][!<M>]` returns an empty success.
+`@route:block-id`, and a cursor inside `=<X>` or `=x[<N>][!<M>][~<K>]` returns an empty success.
 `@route:` (`pomodoro_block_id`) completion now carries the `block_id` object
 and link-only filtering above; an empty-query marker-only `@route:` still
 lists that note's linkable tasks in document order. An empty block-ID component (`@route+#`) returns a successful empty

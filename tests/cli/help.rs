@@ -515,6 +515,58 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
 }
 
 #[test]
+fn capture_named_start_help_mentions_start_forms() {
+    let capture = bob_command()
+        .arg("capture")
+        .arg("--help")
+        .output()
+        .expect("run bob capture --help");
+    assert_success(&capture);
+    let help = stdout(&capture);
+    for needle in [
+        "=<X>#<pomodoro>",
+        "bob capture '=#deep-work'",
+        "bob capture '=3#bugs'",
+        "bob capture '=x =#bugs'",
+    ] {
+        assert!(
+            help.contains(needle),
+            "expected `{needle}` in capture help:\n{}",
+            format_output(&capture)
+        );
+    }
+    assert!(
+        !help.contains("=`<X>`#"),
+        "fixed typo must stay gone:\n{}",
+        format_output(&capture)
+    );
+
+    let parse = bob_command()
+        .arg("capture-parse")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-parse --help");
+    assert_success(&parse);
+    assert!(
+        stdout(&parse).contains("=<X>#"),
+        "expected named-start mention:\n{}",
+        format_output(&parse)
+    );
+
+    let complete = bob_command()
+        .arg("capture-complete")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-complete --help");
+    assert_success(&complete);
+    assert!(
+        stdout(&complete).contains("pomodoro_start_name"),
+        "expected start-name context:\n{}",
+        format_output(&complete)
+    );
+}
+
+#[test]
 fn public_help_surfaces_do_not_list_long_only_options() {
     let bob_cases: &[(&[&str], &str)] = &[
         (&["--help"], "bob --help"),
