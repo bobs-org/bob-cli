@@ -272,13 +272,12 @@ pub(super) fn plan_pomodoro_link_capture(
     let previous_task_line =
         line_text_at(&contents, task_line_index)?.to_string();
 
-    match previous_status_symbol {
-        ' ' | '?' | '*' | '/' => {}
-        _ => {
-            return Err(CaptureError::io(format!(
-                "task ^{block_id} is {previous_status_name}; only Ready, Blocked, Next, and In Progress tasks can be linked to a Pomodoro"
-            )));
-        }
+    if !crate::native::capture_link_tasks::is_linkable_status(
+        previous_status_symbol,
+    ) {
+        return Err(CaptureError::io(format!(
+            "task ^{block_id} is {previous_status_name}; only Ready, Blocked, Next, and In Progress tasks can be linked to a Pomodoro"
+        )));
     }
 
     let task_plan =

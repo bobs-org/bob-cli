@@ -20,6 +20,7 @@ mod capture_block_ids;
 mod capture_clip;
 mod capture_complete;
 mod capture_language;
+mod capture_link_tasks;
 mod capture_links;
 mod capture_parse;
 mod capture_pomodoro_close;

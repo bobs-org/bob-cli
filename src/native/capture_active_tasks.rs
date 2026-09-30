@@ -251,6 +251,13 @@ pub(crate) struct Ledger {
     positions: HashMap<TaskKey, (usize, usize)>,
 }
 
+impl Ledger {
+    /// Ledger order for a queued link: entry order, then child order.
+    pub(crate) fn position(&self, key: &TaskKey) -> Option<(usize, usize)> {
+        self.positions.get(key).copied()
+    }
+}
+
 /// Today's open entries and their dedicated links.
 pub(crate) fn read_ledger(
     day_file: &Path,
@@ -349,7 +356,7 @@ fn queue_key(
     (3, 0, 0)
 }
 
-fn bounded_warning(message: String) -> String {
+pub(crate) fn bounded_warning(message: String) -> String {
     const LIMIT: usize = 300;
     if message.chars().count() <= LIMIT {
         return message;

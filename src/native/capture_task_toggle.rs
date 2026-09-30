@@ -1379,7 +1379,7 @@ pub(crate) fn set_task_line_status(
 /// Recognizes the same task-level `scheduled` forms as `bob task-status-hooks`
 /// and `plugins/block-id-prompt/main.js`'s `SCHEDULED_FIELD_RE`, shared with
 /// the other task-field consumers through `task_fields`.
-struct ScheduledFieldMatch {
+pub(crate) struct ScheduledFieldMatch {
     start: usize,
     end: usize,
     value: String,
@@ -1401,7 +1401,7 @@ fn scheduled_field_matches(line: &str) -> Vec<ScheduledFieldMatch> {
 /// Exactly one recognized `scheduled` field, syntactically valid, and
 /// strictly later than `today` -- the only shape that qualifies for
 /// future-schedule removal.
-fn find_single_future_scheduled_field(
+pub(crate) fn find_single_future_scheduled_field(
     line: &str,
     today: NaiveDate,
 ) -> Option<ScheduledFieldMatch> {

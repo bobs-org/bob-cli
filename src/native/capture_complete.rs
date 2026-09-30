@@ -16,6 +16,7 @@ use serde_json::json;
 use super::{
     capture, capture_active_tasks, capture_block_ids,
     capture_language::{self, CompletionContext},
+    capture_link_tasks,
     capture_links::{
         self, WikilinkBlockCandidate, WikilinkHeadingCandidate,
         WikilinkNoteCandidate,
@@ -820,7 +821,7 @@ fn link_candidates(
     let scan = note_tasks::scan(&contents, &settings);
     let linkable = scan.open_tasks().filter(|task| {
         task.block_id.is_some()
-            && matches!(task.status_symbol, ' ' | '?' | '*' | '/')
+            && capture_link_tasks::is_linkable_status(task.status_symbol)
     });
     let ranked =
         rank_task_group(linkable.collect(), query, TaskSearch::BlockIdOnly);
