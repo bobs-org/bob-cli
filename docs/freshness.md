@@ -74,7 +74,10 @@ One helper per language, pinned by the shared vectors below.
 
 1. **Scope.** The helpers handle Tasks' Dataview format only, which is
    the vault's format. `bob freshness` refuses to run when the vault's
-   Tasks settings use another format.
+   Tasks settings use another format. Task-line detection strips
+   leading `>` quote markers first (up to three spaces before each
+   `>`, one optional space after), matching both Rust parsers — a
+   quoted task is still a task.
 2. **The Tasks suffix.** Scan from the end of the line, the way both
    parsers do:
    - first an optional trailing ` ^id` (the `BLOCK_LINK` grammar);
@@ -335,6 +338,11 @@ D = `2026-10-08`. Each gives the input line, the expected line, and
   `\t- [?] #task Deferred [fresh:: 2026-10-08] [created::2026-09-01] [scheduled:: 2026-10-20]`
 - **P17 done refused:** `- [x] #task Old [completion:: 2026-10-01]` →
   unchanged, refused as `closed`
+- **P18 quoted:** `> - [ ] #task Quoted [created::2026-09-01]` →
+  `> - [ ] #task Quoted [fresh:: 2026-10-08] [created::2026-09-01]`
+  (quote markers are stripped for task detection only, mirroring the
+  vault scanner; the `>` bytes stay in place, and more than three
+  leading spaces before `>` is still not a task)
 
 ## 10. State conformance examples
 

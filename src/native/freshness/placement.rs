@@ -366,8 +366,28 @@ fn remove_fields(text: &str) -> String {
     output
 }
 
+/// Drop leading `>` quote markers the way the vault scanner does
+/// (`strip_blockquote_prefixes` in `dataview::tasks`): up to three
+/// spaces, `>`, one optional space, repeated. Both Rust parsers read
+/// quoted tasks, so the stamper must recognize the same lines the
+/// seed scans — otherwise the cutover refuses on the first quoted
+/// task in the vault.
+fn strip_blockquote_prefix(mut line: &str) -> &str {
+    loop {
+        let spaces = line.bytes().take_while(|byte| *byte == b' ').count();
+        if spaces > 3 || line.as_bytes().get(spaces) != Some(&b'>') {
+            return line;
+        }
+        line = &line[spaces + 1..];
+        if let Some(rest) = line.strip_prefix(' ') {
+            line = rest;
+        }
+    }
+}
+
 /// The checkbox status on a task line, if `line` is a task line.
 fn task_status(line: &str) -> Option<char> {
+    let line = strip_blockquote_prefix(line);
     let bytes = line.as_bytes();
     let mut index = bytes
         .iter()
@@ -463,6 +483,11 @@ fn has_misplaced_field(line: &str) -> bool {
 /// leading `#task` global-filter token. The suffix scan never moves
 /// left of it.
 fn scan_floor(line: &str) -> Option<usize> {
+    // Quote markers are detection-only: strip them, then shift the
+    // floor back into the original line's coordinates.
+    let stripped = strip_blockquote_prefix(line);
+    let offset = line.len() - stripped.len();
+    let line = stripped;
     let bytes = line.as_bytes();
     let mut index = bytes
         .iter()
@@ -483,9 +508,9 @@ fn scan_floor(line: &str) -> Option<usize> {
         || body.starts_with("#task ")
         || body.starts_with("#task\t")
     {
-        Some(body_start + "#task".len())
+        Some(offset + body_start + "#task".len())
     } else {
-        Some(body_start)
+        Some(offset + body_start)
     }
 }
 

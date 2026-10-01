@@ -1,4 +1,4 @@
-//! Placement conformance vectors P1–P17 from `docs/freshness.md`,
+//! Placement conformance vectors P1–P18 from `docs/freshness.md`,
 //! plus parse-invariance through both Rust parsers and the hooks
 //! preservation test. D = `2026-10-08`.
 
@@ -222,6 +222,33 @@ fn p17_done_refused() {
 }
 
 #[test]
+fn p18_quoted_task_stamps_with_prefix_kept() {
+    let stamped = stamp("> - [ ] #task Quoted [created::2026-09-01]");
+    assert_eq!(
+        stamped.line,
+        "> - [ ] #task Quoted [fresh:: 2026-10-08] [created::2026-09-01]"
+    );
+    assert!(stamped.changed);
+    assert_eq!(stamped.refused, None);
+}
+
+#[test]
+fn p18_nested_quote_stamps() {
+    let stamped = stamp(">> - [ ] #task Nested");
+    assert_eq!(stamped.line, ">> - [ ] #task Nested [fresh:: 2026-10-08]");
+    assert!(stamped.changed);
+    assert_eq!(stamped.refused, None);
+}
+
+#[test]
+fn p18_deeply_indented_quote_is_not_a_task() {
+    let line = "    > - [ ] #task Not a quoted task";
+    let stamped = stamp(line);
+    assert_eq!(stamped.line, line);
+    assert_eq!(stamped.refused, Some(Refusal::NotTask));
+}
+
+#[test]
 fn non_task_lines_are_refused() {
     for line in [
         "Just a bullet",
@@ -282,6 +309,7 @@ fn parse_invariance_across_all_vectors() {
         "- [ ] #task Call mom (created:: 2026-09-01)",
         "\t- [?] #task Deferred [created::2026-09-01] [scheduled:: 2026-10-20]",
         "- [x] #task Old [completion:: 2026-10-01]",
+        "> - [ ] #task Quoted [created::2026-09-01]",
     ];
     for input in vectors {
         let output = stamp_fresh(input, day()).line;
