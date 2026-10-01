@@ -278,8 +278,8 @@ an invalid `freshness:` block or a non-Dataview task format.
 | `bob capture` | capture-stamps |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0) |
 | bob-navigation-hotkeys | nav-review, nav-stamps |
-| task-status-cycler | cycler-link-stamps |
-| block-id-prompt | cycler-link-stamps |
+| task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
+| block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
 | `freshness.md` | vault-review |
 | `dash.md` | vault-review |
 
