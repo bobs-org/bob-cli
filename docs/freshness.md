@@ -276,7 +276,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 | ------- | ----- |
 | `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`) |
 | `bob capture` | capture-stamps |
-| bob-ledger-tools | ledger-freshness |
+| bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0) |
 | bob-navigation-hotkeys | nav-review, nav-stamps |
 | task-status-cycler | cycler-link-stamps |
 | block-id-prompt | cycler-link-stamps |
