@@ -71,10 +71,20 @@ impl NoteBlock {
 /// The `docs/plan.md` NEXT lane query: every Next task visible
 /// today. It mirrors the old NOW query's defaults, replacing only the
 /// tag test with the status test, so the dash and `bob plan` agree.
+///
+/// `status.symbol is` is bob-cli native-internal syntax (see
+/// [`parse::ParseDialect`]): it parses only in the native dialect for these
+/// internal lane constants and is rejected in user-authored Obsidian Tasks
+/// blocks, where the dashboard NEXT block uses
+/// `filter by function task.status.symbol === "*"`.
 pub(crate) const NEXT_QUERY: &str = "not done\nstatus.symbol is *\nis not blocked\ntags do not include #hide\nfolder does not include _templates\npath does not include _conflicts\n(no scheduled date) OR (scheduled on or before today)";
 
 /// The `docs/plan.md` PENDING lane query: every In Progress task
 /// visible today. Same defaults as [`NEXT_QUERY`].
+///
+/// Like [`NEXT_QUERY`], `status.symbol is` here is native-internal syntax
+/// (see [`parse::ParseDialect`]), not valid Obsidian Tasks syntax; the
+/// dashboard PENDING block uses `status.type is IN_PROGRESS`.
 pub(crate) const PENDING_QUERY: &str = "not done\nstatus.symbol is /\nis not blocked\ntags do not include #hide\nfolder does not include _templates\npath does not include _conflicts\n(no scheduled date) OR (scheduled on or before today)";
 
 /// The `docs/freshness.md` READY lane query: every Ready task
@@ -146,7 +156,13 @@ pub(crate) fn query_matching_descriptions(
 ) -> Result<Vec<String>, DataviewError> {
     let settings = TasksSettings::read(vault)?;
     let index = TaskIndex::read(vault, &settings, now)?;
-    let parsed = parse::parse(vault, None, query, &settings)?;
+    let parsed = parse::parse(
+        vault,
+        None,
+        query,
+        &settings,
+        parse::ParseDialect::Native,
+    )?;
     let mut javascript =
         js::JsSandbox::new(&index.tasks, parsed.context.as_ref(), now)?;
     let execution =
@@ -168,7 +184,13 @@ pub(crate) fn query_rich_tasks(
 ) -> Result<Vec<RichTask>, DataviewError> {
     let settings = TasksSettings::read(vault)?;
     let index = TaskIndex::read(vault, &settings, now)?;
-    let parsed = parse::parse(vault, None, query, &settings)?;
+    let parsed = parse::parse(
+        vault,
+        None,
+        query,
+        &settings,
+        parse::ParseDialect::Native,
+    )?;
     let mut javascript =
         js::JsSandbox::new(&index.tasks, parsed.context.as_ref(), now)?;
     let execution =
@@ -207,7 +229,13 @@ pub(super) fn run(
     let settings = TasksSettings::read(vault)?;
     let now = bob_env::current_datetime();
     let index = TaskIndex::read(vault, &settings, now)?;
-    let query = parse::parse(vault, origin, query, &settings)?;
+    let query = parse::parse(
+        vault,
+        origin,
+        query,
+        &settings,
+        parse::ParseDialect::Upstream,
+    )?;
     let mut javascript =
         js::JsSandbox::new(&index.tasks, query.context.as_ref(), now)?;
     let execution =
@@ -233,7 +261,15 @@ pub(super) fn run_note(
     let index = TaskIndex::read(vault, &settings, now)?;
     let parsed = blocks
         .iter()
-        .map(|block| parse::parse(vault, Some(note), &block.query, &settings))
+        .map(|block| {
+            parse::parse(
+                vault,
+                Some(note),
+                &block.query,
+                &settings,
+                parse::ParseDialect::Upstream,
+            )
+        })
         .collect::<Vec<_>>();
     let first_query = parsed.iter().find_map(|query| query.as_ref().ok());
     let mut javascript = first_query

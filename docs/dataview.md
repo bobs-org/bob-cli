@@ -122,7 +122,8 @@ to stderr and the command prints the paths it can derive.
 
 `-t, --tasks <QUERY>` runs an inline Obsidian Tasks query. Newline-separated
 instructions are accepted. Empty or comment-only input returns every task
-allowed by the configured global filter.
+allowed by the configured global filter. User-supplied Tasks queries reject
+the native-only `status.symbol` filter, as Tasks 8.4.0 does.
 
 `-T, --tasks-file <PATH>` reads an Obsidian Tasks query from a file. Use `-` to
 read the query from stdin.

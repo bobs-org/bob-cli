@@ -147,8 +147,9 @@ the whole-lane budgets through one tested base predicate; status and
 TODAY are layered on top (PENDING uses `IN_PROGRESS`, NEXT uses symbol
 `*`).
 
-A NEXT task is a `#task` line that the native Tasks engine (the one
-behind `bob query --tasks`) matches with this query:
+A NEXT task is a `#task` line that bob-cli's native-internal lane query
+matches with this query (`status.symbol is` is native-internal syntax, not
+valid Obsidian Tasks syntax):
 
 ```text
 not done
@@ -160,17 +161,23 @@ path does not include _conflicts
 (no scheduled date) OR (scheduled on or before today)
 ```
 
-The PENDING query is identical with `status.type is IN_PROGRESS`. This
-matches the dash's own defaults.
+The native-internal PENDING query is identical with `status.symbol is /`;
+the dashboard PENDING block uses `status.type is IN_PROGRESS` instead.
+The dashboard NEXT block uses
+`filter by function task.status.symbol === "*"` (Tasks 8.4.0 syntax for the
+same `[*]` selection). This matches the dash's own defaults.
 
 The dashboard and the whole lane differ on TODAY by design. The
 dashboard PENDING/NEXT sections exclude TODAY (plus `dash.md` itself);
 `bob plan`, navigation notices, native CLI parity, and other callers
 keep the **whole lane, Today included**, so those counts don't swing
-during the day. The dashboard badges show the **section count** as the
-primary number (for example `PENDING 49`) with the whole-lane pressure
+during the day. The dashboard badges show the **section count over the
+whole-lane cap** as the primary number (for example `PENDING 49/10`),
+red when the whole lane exceeds the cap, with the whole-lane pressure
 in the tooltip and accessible label (for example `49 in this section;
 whole lane 50/10; 1 in TODAY`); cap warnings still use the full lane.
+In the rare case where section <= cap < lane, the badge can read, for
+example, `NEXT 15/15` in red.
 `dashboardLaneBudget("pending" | "next")` in bob-ledger-tools is the
 versioned dashboard contract. When Tasks data or the current-day Today
 cache is not ready, the dashboard section is unavailable (`–`), never a

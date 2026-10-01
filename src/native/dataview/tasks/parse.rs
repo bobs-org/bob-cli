@@ -320,6 +320,20 @@ impl Default for LayoutOptions {
     }
 }
 
+/// Which Tasks query dialect to parse.
+///
+/// - `Upstream` matches Obsidian Tasks 8.4.0: user-authored `--tasks`,
+///   `--tasks-file`, and `--tasks-note` blocks reject the native-only
+///   `status.symbol` filter with Tasks' own error.
+/// - `Native` keeps the `status.symbol is` / `is not` extension for bob-cli's
+///   internal lane constants (`NEXT_QUERY`, `PENDING_QUERY`), which never
+///   reach Obsidian.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ParseDialect {
+    Upstream,
+    Native,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct QueryContext {
     pub(super) file: TaskFile,
@@ -331,12 +345,14 @@ pub(super) fn parse(
     origin: Option<&Path>,
     source: &str,
     settings: &TasksSettings,
+    dialect: ParseDialect,
 ) -> Result<QueryAst, DataviewError> {
     let context = QueryContext::read(vault, origin)?;
     let defaults = query_file_defaults(context.as_ref());
     let parser = Parser {
         settings,
         context: context.as_ref(),
+        dialect,
     };
 
     let mut defaults_and_query = QueryAst::default();
@@ -586,6 +602,7 @@ fn yaml_truthy(value: &serde_yaml::Value) -> bool {
 struct Parser<'a> {
     settings: &'a TasksSettings,
     context: Option<&'a QueryContext>,
+    dialect: ParseDialect,
 }
 
 impl Parser<'_> {
@@ -670,11 +687,13 @@ impl Parser<'_> {
                     continue;
                 }
 
-                let parsed = parse_instruction(trimmed).map_err(|message| {
-                    query_error(&format!(
-                        "{message}\nProblem line: \"{trimmed}\""
-                    ))
-                })?;
+                let parsed = parse_instruction(trimmed, self.dialect).map_err(
+                    |message| {
+                        query_error(&format!(
+                            "{message}\nProblem line: \"{trimmed}\""
+                        ))
+                    },
+                )?;
                 query.apply_statement(Statement {
                     source: statement_source,
                     instruction: trimmed.to_string(),
@@ -894,7 +913,10 @@ fn strip_prefix_ci<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
     value.get(prefix.len()..)
 }
 
-fn parse_instruction(line: &str) -> Result<Instruction, String> {
+fn parse_instruction(
+    line: &str,
+    dialect: ParseDialect,
+) -> Result<Instruction, String> {
     if line.starts_with('#') {
         return Ok(Instruction::Comment);
     }
@@ -928,7 +950,7 @@ fn parse_instruction(line: &str) -> Result<Instruction, String> {
     if starts_with_ci(line, "hide ") || starts_with_ci(line, "show ") {
         return parse_layout(line);
     }
-    parse_filter_expr(line)
+    parse_filter_expr(line, dialect)
         .map(|expression| Instruction::Filter { expression })
         .map_err(|message| {
             if message.is_empty() {
@@ -1158,12 +1180,15 @@ fn starts_with_ci(value: &str, prefix: &str) -> bool {
         .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
 }
 
-fn parse_filter_expr(line: &str) -> Result<FilterExpr, String> {
+fn parse_filter_expr(
+    line: &str,
+    dialect: ParseDialect,
+) -> Result<FilterExpr, String> {
     let line = line.trim();
     if looks_boolean(line) {
-        return parse_boolean(line);
+        return parse_boolean(line, dialect);
     }
-    parse_leaf_filter(line)
+    parse_leaf_filter(line, dialect)
 }
 
 fn looks_boolean(line: &str) -> bool {
@@ -1175,13 +1200,17 @@ fn looks_boolean(line: &str) -> bool {
         || is_wrapped_filter(line)
 }
 
-fn parse_boolean(line: &str) -> Result<FilterExpr, String> {
-    parse_boolean_inner(line.trim(), line)
+fn parse_boolean(
+    line: &str,
+    dialect: ParseDialect,
+) -> Result<FilterExpr, String> {
+    parse_boolean_inner(line.trim(), line, dialect)
 }
 
 fn parse_boolean_inner(
     source: &str,
     original: &str,
+    dialect: ParseDialect,
 ) -> Result<FilterExpr, String> {
     let source = source.trim();
     // Quoted operands are always leaves. Quotes and apostrophes inside an
@@ -1189,7 +1218,7 @@ fn parse_boolean_inner(
     if matches!(source.chars().next(), Some('\'' | '"'))
         && let Some(unwrapped) = strip_wrapping_delimiters(source)
     {
-        return parse_leaf_filter(unwrapped);
+        return parse_leaf_filter(unwrapped, dialect);
     }
 
     if let Some(unwrapped) = strip_wrapping_delimiters(source) {
@@ -1197,9 +1226,9 @@ fn parse_boolean_inner(
             || (starts_with_ci(unwrapped, "NOT ")
                 && !unwrapped.eq_ignore_ascii_case("not done"))
         {
-            parse_boolean_inner(unwrapped, original)
+            parse_boolean_inner(unwrapped, original, dialect)
         } else {
-            parse_leaf_filter(unwrapped)
+            parse_leaf_filter(unwrapped, dialect)
         };
     }
 
@@ -1212,8 +1241,10 @@ fn parse_boolean_inner(
             if left_source.is_empty() || right_source.is_empty() {
                 return Err(boolean_delimiter_error(original));
             }
-            let left = Box::new(parse_boolean_inner(left_source, original)?);
-            let right = Box::new(parse_boolean_inner(right_source, original)?);
+            let left =
+                Box::new(parse_boolean_inner(left_source, original, dialect)?);
+            let right =
+                Box::new(parse_boolean_inner(right_source, original, dialect)?);
             return Ok(match operator {
                 " OR " => FilterExpr::Or { left, right },
                 " XOR " => FilterExpr::Xor { left, right },
@@ -1230,13 +1261,13 @@ fn parse_boolean_inner(
             ));
         }
         return Ok(FilterExpr::Not {
-            expression: Box::new(parse_boolean_inner(rest, original)?),
+            expression: Box::new(parse_boolean_inner(rest, original, dialect)?),
         });
     }
 
     // A leaf in a Boolean instruction must have had its own delimiters; if we
     // reach it here, an operator had an undelimited operand.
-    parse_leaf_filter(source).and_then(|_| Err(boolean_delimiter_error(original))).map_err(|message| {
+    parse_leaf_filter(source, dialect).and_then(|_| Err(boolean_delimiter_error(original))).map_err(|message| {
         if message.is_empty() {
             format!(
                 "Could not interpret the following instruction as a Boolean combination:\n    {original}"
@@ -1381,7 +1412,10 @@ fn entire_quoted_expression(line: &str, quote: char) -> bool {
     false
 }
 
-fn parse_leaf_filter(line: &str) -> Result<FilterExpr, String> {
+fn parse_leaf_filter(
+    line: &str,
+    dialect: ParseDialect,
+) -> Result<FilterExpr, String> {
     if line.eq_ignore_ascii_case("done") {
         return Ok(FilterExpr::Done { done: true });
     }
@@ -1436,7 +1470,7 @@ fn parse_leaf_filter(line: &str) -> Result<FilterExpr, String> {
     if let Some(filter) = parse_date_filter(line)? {
         return Ok(filter);
     }
-    if let Some(filter) = parse_text_filter(line)? {
+    if let Some(filter) = parse_text_filter(line, dialect)? {
         return Ok(filter);
     }
     Err(String::new())
@@ -1688,7 +1722,24 @@ fn looks_like_date_expression(value: &str) -> bool {
     })
 }
 
-fn parse_text_filter(line: &str) -> Result<Option<FilterExpr>, String> {
+fn is_status_symbol_filter(line: &str) -> bool {
+    if let Some(rest) = strip_prefix_ci(line.trim_start(), "status.symbol") {
+        return rest.starts_with(char::is_whitespace);
+    }
+    false
+}
+
+fn parse_text_filter(
+    line: &str,
+    dialect: ParseDialect,
+) -> Result<Option<FilterExpr>, String> {
+    // Obsidian Tasks 8.4.0 has no `status.symbol` filter; it is a
+    // bob-cli native extension (see `ParseDialect::Native`). Reject it in the
+    // upstream dialect with Tasks' own error, at top level or inside boolean
+    // expressions. `filter by function task.status.symbol ...` is unaffected.
+    if dialect == ParseDialect::Upstream && is_status_symbol_filter(line) {
+        return Err("do not understand query".to_string());
+    }
     for (name, field) in [
         ("status.name", TextField::StatusName),
         ("status.symbol", TextField::StatusSymbol),
@@ -1831,7 +1882,6 @@ mod tests {
             "done",
             "status.type is IN_PROGRESS",
             "status.name includes Next",
-            "status.symbol is not x",
             "due on or before this week",
             "has scheduled date",
             "scheduled date is invalid",
@@ -1846,16 +1896,21 @@ mod tests {
             "\"due this week\" AND \"description includes Hello World\"",
             "[due this week] XOR {description includes Hello World}",
         ] {
-            parse_filter_expr(line).unwrap_or_else(|error| {
+            parse_filter_expr(line, ParseDialect::Native).unwrap_or_else(|error| {
                 panic!("failed to parse {line:?}: {error}")
             });
         }
+        // `status.symbol` is native-internal syntax (see `ParseDialect`); it
+        // parses only in the native dialect.
+        parse_filter_expr("status.symbol is not x", ParseDialect::Native)
+            .unwrap();
     }
 
     #[test]
     fn boolean_chains_use_tasks_precedence_and_allow_operand_apostrophes() {
         let expression = parse_filter_expr(
             "(done) OR (is blocked) OR (has due date) AND (not done)",
+            ParseDialect::Native,
         )
         .unwrap();
         let FilterExpr::Or { left, right } = expression else {
@@ -1864,10 +1919,14 @@ mod tests {
         assert!(matches!(*left, FilterExpr::Or { .. }));
         assert!(matches!(*right, FilterExpr::And { .. }));
 
-        parse_filter_expr("(description includes John's) AND (not done)")
-            .unwrap();
+        parse_filter_expr(
+            "(description includes John's) AND (not done)",
+            ParseDialect::Native,
+        )
+        .unwrap();
         parse_filter_expr(
             "(description includes \"quoted\" words) AND (not done)",
+            ParseDialect::Native,
         )
         .unwrap();
     }
@@ -1885,10 +1944,13 @@ mod tests {
             "priority below high",
             "priority not low",
         ] {
-            parse_filter_expr(query)
+            parse_filter_expr(query, ParseDialect::Native)
                 .unwrap_or_else(|error| panic!("{query}: {error}"));
         }
-        assert!(parse_filter_expr("status.typeis TODO").is_err());
+        assert!(
+            parse_filter_expr("status.typeis TODO", ParseDialect::Native)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1969,17 +2031,50 @@ mod tests {
     }
 
     #[test]
+    fn upstream_dialect_rejects_status_symbol_with_tasks_error() {
+        for line in [
+            "status.symbol is *",
+            "status.symbol is not x",
+            "(status.symbol is *) OR (done)",
+        ] {
+            let error =
+                parse_filter_expr(line, ParseDialect::Upstream).unwrap_err();
+            assert!(
+                error.contains("do not understand query"),
+                "{line:?}: {error}"
+            );
+        }
+        // The native dialect keeps the extension for the internal lane
+        // constants; `filter by function` stays valid upstream.
+        parse_filter_expr("status.symbol is *", ParseDialect::Native).unwrap();
+        parse_filter_expr(
+            "filter by function task.status.symbol === \"*\"",
+            ParseDialect::Upstream,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn rejects_malformed_filters_with_actionable_errors() {
-        assert!(parse_filter_expr("due spaghetti").is_err());
+        assert!(
+            parse_filter_expr("due spaghetti", ParseDialect::Native).is_err()
+        );
         let boolean = parse_filter_expr(
             "status.type is TODO OR status.type is IN_PROGRESS",
+            ParseDialect::Native,
         )
         .unwrap_err();
         assert!(boolean.contains("inside parentheses"), "{boolean}");
-        assert!(parse_filter_expr("status.type maybe TODO").is_err());
-        assert!(
-            parse_filter_expr("description regex matches /pattern/ii").is_err()
-        );
+        assert!(parse_filter_expr(
+            "status.type maybe TODO",
+            ParseDialect::Native
+        )
+        .is_err());
+        assert!(parse_filter_expr(
+            "description regex matches /pattern/ii",
+            ParseDialect::Native
+        )
+        .is_err());
     }
 
     #[test]
@@ -2000,6 +2095,7 @@ mod tests {
             Some(Path::new("Folder/Query.md")),
             "status.type is TODO",
             &settings,
+            ParseDialect::Native,
         )
         .unwrap();
         assert_eq!(ast.filters.len(), 4);
@@ -2033,6 +2129,7 @@ mod tests {
             Some(Path::new("Query.md")),
             "status.type is TODO",
             &settings,
+            ParseDialect::Native,
         )
         .unwrap();
         assert_eq!(ast.filters.len(), 1);

@@ -805,6 +805,49 @@ fn tasks_note_reports_the_failing_block_context() {
 }
 
 #[test]
+fn tasks_note_rejects_status_symbol_but_function_filter_selects_next() {
+    let temp = TempDir::new("bob-cli-tasks-status-symbol");
+    write_file(
+        &temp.path().join("Tasks.md"),
+        "- [*] Next task\n- [ ] Ready task\n- [/] Pending task\n",
+    );
+    write_file(
+        &temp.path().join("Queries.md"),
+        concat!(
+            "# Queries\n\n## Broken\n\n```tasks\nstatus.symbol is *\n```\n",
+            "\n## Working\n\n```tasks\nfilter by function task.status.symbol === \"*\"\n```\n",
+        ),
+    );
+    let output = run_tasks(
+        temp.path(),
+        &["--format", "json", "--tasks-note", "Queries.md"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let actual = json_stdout(&output);
+    let broken = actual["blocks"][0]["error"].as_str().unwrap();
+    assert!(broken.contains("do not understand query"), "{broken}");
+    assert!(broken.contains("Problem line:"), "{broken}");
+    assert!(broken.contains("status.symbol is *"), "{broken}");
+    assert_eq!(actual["blocks"][0]["result"], Value::Null);
+    assert_eq!(actual["blocks"][1]["error"], Value::Null);
+    let tasks = actual["blocks"][1]["result"]["tasks"]
+        .as_array()
+        .expect("working block tasks");
+    assert_eq!(tasks.len(), 1, "{tasks:?}");
+    // The inline --tasks surface rejects the native-only filter as well.
+    let inline = run_tasks(
+        temp.path(),
+        &["--format", "json", "--tasks", "status.symbol is *"],
+    );
+    assert_eq!(inline.status.code(), Some(1), "{}", format_output(&inline));
+    assert!(
+        stderr(&inline).contains("do not understand query"),
+        "{}",
+        format_output(&inline)
+    );
+}
+
+#[test]
 fn tasks_query_parser_composes_dash_defaults_and_serializes_the_ast() {
     let output = run_fixture(&[
         "--format",
