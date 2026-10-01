@@ -283,7 +283,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
 | `freshness.md` | vault-review (landed: review note grouping NEW → DUE) |
 | `dash.md` | vault-review (landed: REVIEW chip) |
-| freshness mark | fresh-mark (pending: bob-ledger-tools Live Preview + rendered views) |
+| freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
 
 ## 9. Placement conformance examples
 
@@ -503,6 +503,26 @@ Dataview pill in Live Preview is a non-canonical stamp, shown at full
 opacity with a dashed orange border. Session toggle: the "Toggle task
 freshness marks" command (default on) flips the marks and the body
 class, refreshes every editor, and shows a Notice.
+
+**Live verification (Bryan, in Obsidian).**
+
+- Task lines in Live Preview show `✓ today`, the ring with `Nd`,
+  and `⟳ Nd` in an orange capsule; no Dataview `FRESH` pill appears
+  beside a mark.
+- Moving the cursor into a mark, or clicking it, reveals
+  `[fresh:: …]` for editing.
+- Alt+F on a `⟳` task flips it to `✓ today` within about a second.
+- Ctrl+Shift+P → refresh 14 shows `/14d` from the next day.
+- `dash.md` and `freshness.md` Tasks results and reading view show
+  marks; the freshness.md DUE group shows `⟳`.
+- A hand-broken stamp (`[fresh:: 2026-13-01]`) shows the dashed
+  repair pill.
+- "Toggle task freshness marks" restores the old pills and back
+  again.
+- The marks look right in the light and dark themes.
+- Metadata Menu does not double-decorate the field.
+- Tooltips show their lines. If Obsidian collapses `\n`, record
+  that as a follow-up rather than changing the format.
 
 **Rejected alternatives.** Stored-syntax changes (emoji, compact
 codes, stored relative ages) would leave Dataview's field index,
