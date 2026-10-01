@@ -52,9 +52,11 @@ all fail closed with a `hint:` line and exit code 1, writing nothing.
 The adapter starts headless and retries headed automatically when it meets
 a bot challenge. That retry needs a display nobody sees: a private Xvfb
 display on Linux (as on athena) or an off-screen window on macOS. Hosts
-with no browser (apollo has none) fail closed with an install hint.
-`bob highlights doctor` reports the `web clip uv`, `web clip adapter`,
-`web clip browser`, and `web clip headed fallback` rows.
+with no usable browser fail closed with an install hint; Playwright's
+bundled Chromium counts when one is present (apollo captured headed over
+an SSH-forwarded display). `bob highlights doctor` reports the `web clip
+uv`, `web clip adapter`, `web clip browser`, and `web clip headed
+fallback` rows.
 
 ## The `--html` escape hatch
 
@@ -113,3 +115,39 @@ browser, and headed fallback for `doctor`. The adapter exits 0 whenever it
 wrote a response. Non-JSON stdout or a nonzero exit is a protocol error,
 reported with the stderr tail. The full request/response shapes live in
 `src/native/highlights_ref/clip_adapter.rs`.
+
+## Verified (2026-10-01)
+
+Live gate for `https://openai.com/index/open-source-codex-orchestration-symphony/`,
+built from this tree (`cargo build --release`) and copied to athena's
+`/tmp/bob-clip-verify/bob` (never installed over athena's `~/.cargo/bin/bob`):
+
+- `highlights doctor` on athena: uv, adapter (playwright 1.62.0, defuddle
+  0.19.4), browser (chrome 154.0.8037.92), and headed fallback (xvfb) all OK.
+- Dry run: target `~/bob/xlib/blogs/open_source_codex_orchestration_symphony.pdf`,
+  title, author, published 2026-04-27 (visible-date), capture headed (Xvfb)
+  after a headless challenge, fidelity ok.
+- Scratch-vault capture (`-b /tmp/bob-clip-verify/vault`): 38 pages, images
+  2/2, code blocks 1/1, 8912 words, 483.5 KB. Rendered pages 1-6 and 24 at
+  80 dpi and viewed: clean masthead, both SVG diagrams are the light
+  variants and clearly visible, the spec code block wraps, footers read
+  `n / N` (first page without title), no site navigation or junk.
+  `mutool draw -F txt` finds no U+00AD, U+2060, U+200B-D, U+FEFF, or
+  ligature code points (U+FB00-FB06).
+- Scratch scan (`--no-hooks`, scratch vault only): `ref/blogs/<stem>.md`
+  carries `type: "[[ref]]"`, `ref_type: blogs`, `title`, `id`, `source_url`,
+  `author`, `published`, `captured`, and the `^ref` task line; a second scan
+  is a no-op (1 unchanged, writes: none).
+- Real capture on athena into `~/bob/xlib/blogs/`; a re-run refuses the
+  occupied target (exit 1, `--force` hint). The Mac's `bob_xlib_pull`
+  drained the queue and created the ref note; vault git sync carried it to
+  athena (and apollo) with all provenance fields intact.
+- Static-site check (`https://lilianweng.github.io/posts/2023-06-23-agent/`,
+  scratch vault): headless, no headed fallback, 28 pages, images 13/13,
+  fidelity ok; figures and code blocks render correctly.
+- apollo note: this host has Playwright's bundled Chromium 151, so with the
+  session's SSH-forwarded `DISPLAY` it captured the OpenAI URL headed
+  instead of failing closed (38 pages, 2/2 images). The stray real-vault
+  PDF this produced was deleted; `~/bob/xlib/` is empty. Truly
+  browser-less hosts still fail closed via the `browser`/`blocked` errors
+  covered by the CLI and adapter fixture tests.
