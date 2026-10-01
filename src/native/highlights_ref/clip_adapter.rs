@@ -120,9 +120,8 @@ impl ClipAdapterClient {
                 script.display()
             ))
             .with_hint(
-                "this bob build predates the web clip adapter; rebuild after \
-                 the adapter-capture phase lands, or set \
-                 BOB_WEB_CLIP_ADAPTER=/path/to/adapter",
+                "reinstall bob so it materializes its embedded web clip \
+                 adapter, or set BOB_WEB_CLIP_ADAPTER=/path/to/adapter",
             ));
         }
         Ok(Self::new(

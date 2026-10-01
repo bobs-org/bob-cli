@@ -134,7 +134,7 @@ Paths below are relative to `BOB_DIR` (`~/bob` by default):
 | `img/`, `file/` | Images and saved clipboard snippets written by `bob capture` |
 | `_conflicts/` | Local copies of vault files `bob vault-sync` could not merge |
 | `.obsidian/plugins/` | Installed community plugins, including Bob's custom plugins |
-| `xlib/` | Highlights intake PDFs from `bob highlights create` |
+| `xlib/` | Highlights intake PDFs from `bob highlights create` and `bob highlights clip` |
 | `lib/` | Highlights library PDFs after `bob highlights scan` |
 | `old_lib/` | Archival predecessor of `lib/`; tracked in the vault Git repo, which is now the vault's only sync channel |
 | `ref/` | Generated Highlights reference notes |
@@ -586,8 +586,8 @@ bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-d
 bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
-Turns Markdown into Highlights-ready PDFs and turns Highlights annotations into
-Obsidian reference notes.
+Turns Markdown and web articles into Highlights-ready PDFs and turns
+Highlights annotations into Obsidian reference notes.
 
 - `clip <URL>` captures a web article in reader mode through the pinned
   web-clip adapter into `xlib/blogs/<slug>.pdf` (override the subdirectory
@@ -815,6 +815,11 @@ The documented workflows use these external-tool integrations:
   fallback order)
 - `pandoc` and `xelatex` for `bob highlights create`; override pandoc with
   `BOB_PANDOC_COMMAND`
+- `uv` plus Google Chrome or Chromium (or `BOB_CHROME`) for
+  `bob highlights clip`: `uv` fetches Python ≥3.10 and the pinned Playwright,
+  Pillow, and nh3 on first run (override the whole spawn with
+  `BOB_WEB_CLIP_ADAPTER`); on Linux, `Xvfb` lets it retry bot-protected sites
+  headed
 - `bash` for the embedded shell fallback and for sourcing
   `~/.ssh-agent-thing`; the Pomodoro shell fallback additionally uses `perl`
 - `uv` for `bob gkeep`: it fetches Python ≥3.10 and the pinned `gkeepapi` on
@@ -836,6 +841,9 @@ maintenance.
 by `bob vault-sync`. The default is
 `$XDG_STATE_HOME/bob-cli/vault-sync.json`, or
 `$HOME/.local/state/bob-cli/vault-sync.json` when `XDG_STATE_HOME` is unset.
+
+`BOB_CHROME` sets the Chrome or Chromium executable the `bob highlights clip`
+adapter launches instead of auto-discovering one.
 
 `BOB_CLI_USE_SCRIPT=1` selects an embedded shell implementation where one is
 available. See [Compatibility shims](#compatibility-shims) for the exact command
@@ -946,6 +954,17 @@ integer seed so a `--dry-run` preview matches a real capture. Unset means each
 capture rolls independently. `bob randomize` also reads it as the default base
 seed when `--seed` is omitted.
 
+`BOB_WEB_CLIP_ADAPTER` is the path of an executable that speaks the web-clip
+adapter protocol and replaces `uv run --script …` for `bob highlights clip`
+and the `doctor` web-clip rows. It is the test hook, like `BOB_GKEEP_ADAPTER`.
+
+`BOB_WEB_CLIP_KEEP_WORKDIR=1` keeps the `bob highlights clip` scratch
+directory for debugging and prints its path.
+
+`BOB_WEB_CLIP_TIMEOUT_SECS` sets the overall `bob highlights clip` adapter
+timeout in seconds. It defaults to 300; the first run may download the pinned
+Python dependencies.
+
 `DATE` preserves the legacy date override behavior, including the date used by
 `bob capture` when `BOB_NOW` is unset. It can be a date command prefix such as
 `date --utc`, or a timestamp in the same formats accepted by `BOB_NOW`.
@@ -1033,6 +1052,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | `bob query` Dataview and Tasks | [`docs/dataview.md`](docs/dataview.md) |
 | Task freshness review lease, placement, and evaluation | [`docs/freshness.md`](docs/freshness.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
+| Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |
 | Custom plugin list and vault deploy | [`docs/plugins.md`](docs/plugins.md) |

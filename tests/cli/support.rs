@@ -24,10 +24,15 @@ pub(crate) static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const BOB_BIN: &str = env!("CARGO_BIN_EXE_bob");
 pub(crate) const TEST_MISSING_CONFIG_FILE: &str =
     "/definitely/missing/bob-cli-test-config.yml";
+/// Keeps `highlights doctor` from spawning the real `uv` web-clip adapter;
+/// clip tests override it with their fake adapter.
+pub(crate) const TEST_MISSING_WEB_CLIP_ADAPTER: &str =
+    "/definitely/missing/bob-cli-test-web-clip-adapter";
 
 pub(crate) fn bob_command() -> Command {
     let mut command = Command::new(BOB_BIN);
     command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
+    command.env("BOB_WEB_CLIP_ADAPTER", TEST_MISSING_WEB_CLIP_ADAPTER);
     let nonce = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let isolation = std::env::temp_dir()
         .join(format!("bob-cli-test-iso-{}-{nonce}", std::process::id()));
