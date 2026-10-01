@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hostile page | Example</title>
+</head>
+<body>
+<h1>A page with hostile markup</h1>
+<p id="fnref-1">Real content with a footnote anchor <a href="#fn-1">[1]</a>.</p>
+<p>Second paragraph of genuine text that must survive sanitizing intact.</p>
+<script>alert("xss");</script>
+<img src="https://example.com/tracker.png" onerror="steal(document.cookie)" alt="tracker">
+<p><a href="javascript:steal()">click me</a></p>
+<iframe src="https://evil.example/embed"></iframe>
+<form action="https://evil.example/submit"><input name="q"><button>Go</button></form>
+<svg viewBox="0 0 10 10" width="100" height="100"><script>alert("svg")</script><circle cx="5" cy="5" r="4" fill="red"/></svg>
+<math><mi>x</mi><mo>+</mo><mn>1</mn></math>
+<pre><code>kept code block</code></pre>
+<details><summary>kept details</summary><p>kept body</p></details>
+</body>
+</html>

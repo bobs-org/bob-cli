@@ -36,6 +36,13 @@ check-scripts:
 check-adapter:
     python3 -m py_compile scripts/gkeep_adapter.py && uv run --quiet --script scripts/gkeep_adapter.py --self-test
 
+# Type-check the pinned web-clip adapter and run its offline self-test.
+# Not part of `all`: the first run fetches the pinned Python deps, and the
+# browser-backed fixture checks run only when a browser is discovered
+# (otherwise they print "skipped: no browser" and still pass).
+check-web-clip-adapter:
+    python3 -m py_compile scripts/web_clip/web_clip_adapter.py scripts/web_clip/web_clip_render.py && uv run --quiet --script scripts/web_clip/web_clip_adapter.py --self-test
+
 package-list:
     cargo package --list
 

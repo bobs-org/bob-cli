@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>An open-source spec for orchestration: Symphony | Example</title>
+<meta property="og:title" content="An open-source spec for orchestration: Symphony">
+<meta property="og:site_name" content="Example">
+<meta name="description" content="Learn how Symphony coordinates fleets of coding agents.">
+</head>
+<body>
+<header>
+<nav>Home Products Research Company</nav>
+</header>
+<main>
+<article>
+<script type="application/json">{"updated": "2020-01-01", "note": "data-island decoy, never a publish date"}</script>
+<time datetime="2026-04-27T10:00:00Z">April 27, 2026</time>
+<h1>An open-source spec for orchestration: Symphony</h1>
+<p>By Alex Kotliarskyi, Victor Zhu, and Zach Brock</p>
+<p>Coordinating a fleet of coding agents turns out to look less like traditional
+scheduling and more like conducting an orchestra where every musician can
+improvise&#x00AD;around the score while still landing on the same final chord
+together at the very end of the performance each evening.</p>
+<p>The specification describes a small set of primitives that agents share when
+they work on the same repository at the same time without stepping on each
+other or duplicating effort across branches that nobody will ever merge back
+into the main line of development history.</p>
+<p>At the center of the design sits a work queue that hands out bounded tasks
+with clear acceptance criteria so that each agent knows exactly when its own
+piece of the larger puzzle is finished and ready for review by a human being
+who understands the broader goals of the project.</p>
+<pre><code>symphony run --fleet small --task "migrate the parser"
+symphony status --watch
+symphony land --task parser-migration
+</code></pre>
+<p>State is exchanged through plain files on disk rather than through a hidden
+database, which means that a developer can inspect everything with ordinary
+tools and can reconstruct the reasoning behind every automated decision weeks
+after the fleet has finished its assigned work and gone quiet.</p>
+<figure>
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="https://example.com/img/diagram-Desktop-Dark-800.svg 800w, https://example.com/img/diagram-Desktop-Dark-1600.svg 1600w" type="image/svg+xml">
+<source media="(min-width: 768px)" srcset="https://example.com/img/diagram-Desktop-Light-800.svg 800w, https://example.com/img/diagram-Desktop-Light-1600.svg 1600w" type="image/svg+xml">
+<img src="https://example.com/img/diagram-Desktop-Light-fallback.svg" alt="Symphony orchestration diagram" width="1200" height="600">
+</picture>
+<figcaption>The Symphony coordination loop.</figcaption>
+</figure>
+<p>Failure handling is explicit at every level of the stack, so when an agent
+gets stuck it records what it tried and yields its task back to the queue
+instead of spinning forever on a problem that needs a fresh pair of eyes or
+a different strategy chosen by the orchestrator.</p>
+<p>Observability comes from a structured event log that streams from each
+worker to a single dashboard where the whole run can be replayed step by step
+until the exact moment that something surprising happened during the night.</p>
+<blockquote class="twitter-tweet" data-theme="light">
+<p>Shipping Symphony today! <a href="https://twitter.com/symphonydev">@symphonydev</a></p>
+&mdash; Symphony Dev (@symphonydev) <a href="https://twitter.com/symphonydev/status/1">March 8, 2026</a>
+<time datetime="2026-03-08T03:45:54Z">March 8, 2026</time>
+</blockquote>
+<p>Security boundaries follow the repository boundary, which keeps secrets out
+of prompts by construction and lets teams adopt the tool without a lengthy
+review of a brand new trust model that nobody in the organization has ever
+seen or audited before this quarter began.</p>
+<p>The reference implementation is small on purpose, because the authors want
+the specification itself to carry the weight while competing orchestrators
+experiment freely with scheduling policies that suit their own users best.</p>
+<details>
+<summary>What does the reference implementation include?</summary>
+<p>A queue, a worker pool, an event log, and a command line interface that ties
+the three together into a single binary that runs anywhere a modern system
+with sufficient memory and disk space can be found today.</p>
+</details>
+<p>Adoption starts with a single command that converts an existing checklist
+into a queue, and teams usually see their first fully autonomous run finish
+within an hour of installing the tool for the very first time ever.</p>
+</article>
+</main>
+<footer>Cookie preferences Newsletter Signup All rights reserved</footer>
+<script>window.__tracking = 1;</script>
+</body>
+</html>

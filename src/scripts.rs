@@ -68,6 +68,42 @@ pub const SUPPORT_ASSETS: &[EmbeddedAsset] = &[
         contents: include_bytes!("../scripts/gkeep_adapter.py"),
         executable: false,
     },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/web_clip_adapter.py",
+        install_path: "web_clip/web_clip_adapter.py",
+        contents: include_bytes!("../scripts/web_clip/web_clip_adapter.py"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/snapshot.js",
+        install_path: "web_clip/snapshot.js",
+        contents: include_bytes!("../scripts/web_clip/snapshot.js"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/web_clip_render.py",
+        install_path: "web_clip/web_clip_render.py",
+        contents: include_bytes!("../scripts/web_clip/web_clip_render.py"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/vendor/defuddle.full.js",
+        install_path: "web_clip/vendor/defuddle.full.js",
+        contents: include_bytes!("../scripts/web_clip/vendor/defuddle.full.js"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/vendor/DEFUDDLE_LICENSE",
+        install_path: "web_clip/vendor/DEFUDDLE_LICENSE",
+        contents: include_bytes!("../scripts/web_clip/vendor/DEFUDDLE_LICENSE"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/vendor/README.md",
+        install_path: "web_clip/vendor/README.md",
+        contents: include_bytes!("../scripts/web_clip/vendor/README.md"),
+        executable: false,
+    },
 ];
 
 pub fn script_names() -> impl Iterator<Item = &'static str> {
