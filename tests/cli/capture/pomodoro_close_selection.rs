@@ -131,7 +131,7 @@ fn capture_pomodoro_close_selection_defer_rest() {
                 "\n",
                 "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
                 "{}",
-                "- [/] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
+                "- [/] #task Add capture support for web URLs! [fresh:: 2026-09-28] [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
             ),
             plain_bob_work_log(),
@@ -224,7 +224,7 @@ fn capture_pomodoro_close_selection_in_progress_and_complete() {
             concat!(
                 "## Tasks\n",
                 "\n",
-                "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+                "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
                 "{}",
                 "- [x] #task Add capture support for web URLs! [created::2026-09-21]  [completion:: 2026-09-28] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
@@ -523,9 +523,9 @@ fn capture_pomodoro_close_selection_listed_matches_ledger() {
             concat!(
                 "## Tasks\n",
                 "\n",
-                "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+                "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
                 "{}",
-                "- [/] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
+                "- [/] #task Add capture support for web URLs! [fresh:: 2026-09-28] [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
             ),
             plain_bob_work_log(),
@@ -770,7 +770,7 @@ fn capture_pomodoro_close_selection_link_forms() {
     );
     let bob_after = fs::read_to_string(vault.join("bob.md")).expect("bob");
     assert!(bob_after.contains(
-        "- [/] #task Plain ready task [created::2026-09-20] ^ready\n"
+        "- [/] #task Plain ready task [fresh:: 2026-09-28] [created::2026-09-20] ^ready\n"
     ));
     assert!(bob_after.contains(
         "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n"

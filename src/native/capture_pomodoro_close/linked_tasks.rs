@@ -507,6 +507,22 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             return Ok(());
         };
         let updated = normalize_task_metadata_spacing(&updated);
+        // Freshness: stamp the `[/]` close as the last transformation.
+        // A refusal (recurring/closed) leaves the line as it is.
+        let updated =
+            match chrono::NaiveDate::parse_from_str(&self.date, "%Y-%m-%d") {
+                Ok(close_date) => {
+                    let stamped = super::super::freshness::stamp_fresh(
+                        &updated, close_date,
+                    );
+                    if stamped.refused.is_none() {
+                        stamped.line
+                    } else {
+                        updated
+                    }
+                }
+                Err(_) => updated,
+            };
         if self.replace_task_line(&key, &task, updated)? {
             self.refresh_task_row(&key, false)?;
         }

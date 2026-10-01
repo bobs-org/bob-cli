@@ -269,7 +269,7 @@ fn capture_pomodoro_close_worked_example() {
         concat!(
             "## Tasks\n",
             "\n",
-            "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
             "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
             "\t\t\t- chose `x` for done\n",
@@ -863,7 +863,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
     );
     let bob_after = fs::read_to_string(vault.join("bob.md")).expect("bob");
     assert!(bob_after.contains(
-        "- [/] #task Plain ready task [created::2026-09-20] ^ready\n"
+        "- [/] #task Plain ready task [fresh:: 2026-09-28] [created::2026-09-20] ^ready\n"
     ));
 
     // Moved: the subtree leaves SASE for CAPTURE with the pre-image
@@ -908,7 +908,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
     );
     let sase_after = fs::read_to_string(vault.join("sase.md")).expect("sase");
     assert!(sase_after.contains(
-        "- [/] #task Recovery panel [created::2026-09-25] ^recovery-panel\n"
+        "- [/] #task Recovery panel [fresh:: 2026-09-28] [created::2026-09-25] ^recovery-panel\n"
     ));
 
     // Already current: file post-images are byte-identical to plain `=x`.
@@ -960,14 +960,14 @@ fn capture_pomodoro_close_links_batches_and_files() {
         concat!(
             "## Tasks\n",
             "\n",
-            "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
             "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- *2026-09-28* — Wrote the plan\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
-            "- [/] #task Draft docs [created::2026-09-28] ^draft-docs\n",
+            "- [/] #task Draft docs [fresh:: 2026-09-28] [created::2026-09-28] ^draft-docs\n",
         )
     );
 
@@ -1150,11 +1150,11 @@ fn capture_pomodoro_close_links_batches_and_files() {
         );
         let bob_after = fs::read_to_string(vault.join("bob.md")).expect("bob");
         assert!(bob_after.contains(
-            "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop"
+            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
         ), "{args}");
         if args != "=x" {
             assert!(bob_after.contains(
-                "- [/] #task Plain ready task [created::2026-09-20] ^ready"
+                "- [/] #task Plain ready task [fresh:: 2026-09-28] [created::2026-09-20] ^ready"
             ));
         }
     }
@@ -1193,7 +1193,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
     let raw = fs::read(&note).expect("read");
     assert!(raw.windows(2).any(|pair| pair == b"\r\n"));
     assert!(String::from_utf8_lossy(&raw).contains(
-        "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop"
+        "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
     ));
 
     let (_temp, vault, day_file) =
@@ -1208,7 +1208,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
     let raw = fs::read(&note).expect("read");
     assert!(!raw.ends_with(b"\n"));
     assert!(String::from_utf8_lossy(&raw).contains(
-        "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop"
+        "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
     ));
 }
 

@@ -120,7 +120,7 @@ fn capture_task_toggle_link_and_unlink_updates_notes_and_reports_json() {
     );
     assert_eq!(
         fs::read_to_string(&target).expect("read linked target"),
-        "- [*] #task Finish packet [dependsOn::root] ^goog-exit\n"
+        "- [*] #task Finish packet [fresh:: 2026-07-10] [dependsOn::root] ^goog-exit\n"
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("read linked day"),
@@ -159,7 +159,7 @@ fn capture_task_toggle_link_and_unlink_updates_notes_and_reports_json() {
     assert!(json.get("schedule_log").is_none(), "{json}");
     assert_eq!(
         fs::read_to_string(&target).expect("read relinked target"),
-        "- [*] #task Finish packet [dependsOn::root] ^goog-exit\n"
+        "- [*] #task Finish packet [fresh:: 2026-07-10] [dependsOn::root] ^goog-exit\n"
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("read relinked day"),
@@ -255,7 +255,7 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     assert_eq!(
         fs::read_to_string(&target).expect("read target"),
         concat!(
-            "- [*] #task Scheduled work ^sched\n",
+            "- [*] #task Scheduled work [fresh:: 2026-07-10] ^sched\n",
             "  - 🗓️ **SCHEDULE LOG**
 ",
             "    - _2026-07-20 → 2026-07-10_ — 🍅 pulled into today's Pomodoro\n",
@@ -284,12 +284,12 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     assert_eq!(
         fs::read_to_string(&target).expect("read target"),
         concat!(
-            "- [*] #task Scheduled work ^sched\n",
+            "- [*] #task Scheduled work [fresh:: 2026-07-10] ^sched\n",
             "  - 🗓️ **SCHEDULE LOG**
 ",
             "    - _2026-07-20 → 2026-07-10_ — 🍅 pulled into today's Pomodoro\n",
             "    - *2026-07-01* — older\n",
-            "- [*] #task No log ^nolog\n",
+            "- [*] #task No log [fresh:: 2026-07-10] ^nolog\n",
         )
     );
     assert_eq!(
@@ -345,7 +345,7 @@ fn capture_task_toggle_can_edit_task_in_daily_note() {
             "- [ ] (**0900-0930**) — DAILY\n",
             "\t- [[day#^daily]]\n",
             "## Tasks\n",
-            "- [*] #task Daily task ^daily\n",
+            "- [*] #task Daily task [fresh:: 2026-07-10] ^daily\n",
         )
     );
 }
@@ -403,7 +403,7 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
     );
     assert_eq!(
         fs::read_to_string(&cash).expect("read cash"),
-        "- [*] #task Alpha ^alpha\n- [*] #task Beta ^beta\n",
+        "- [*] #task Alpha [fresh:: 2026-07-10] ^alpha\n- [*] #task Beta [fresh:: 2026-07-10] ^beta\n",
     );
 
     let rollback_temp = TempDir::new("bob-cli-capture-task-toggle-rollback");
@@ -883,7 +883,7 @@ fn capture_task_toggle_links_unlinked_lanes_without_status_change() {
         concat!(
             "- [*] #task Queued ^next\n",
             "- [/] #task Busy ^busy\n",
-            "- [*] #task Waiting ^blocked\n",
+            "- [*] #task Waiting [fresh:: 2026-07-10] ^blocked\n",
         )
     );
     assert_eq!(

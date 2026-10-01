@@ -86,7 +86,7 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
     );
     assert_eq!(
         fs::read_to_string(&target).expect("target"),
-        "- [*] #task Finish packet [dependsOn::root] ^goog-exit\n"
+        "- [*] #task Finish packet [fresh:: 2026-07-10] [dependsOn::root] ^goog-exit\n"
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("day"),
@@ -432,7 +432,7 @@ fn capture_task_toggle_ensure_next_same_note_batch_and_rollback() {
             "  - [[day#^daily]]\n",
             "- [ ] () — LATER\n",
             "## Tasks\n",
-            "- [*] #task Daily task ^daily\n",
+            "- [*] #task Daily task [fresh:: 2026-07-10] ^daily\n",
         )
     );
 
@@ -681,7 +681,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
     assert_eq!(json["removed_pomodoro_links"], 0);
     assert_eq!(
         fs::read_to_string(&target).expect("target"),
-        "- [*] #task Finish packet ^goog-exit\n"
+        "- [*] #task Finish packet [fresh:: 2026-07-10] ^goog-exit\n"
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("day"),

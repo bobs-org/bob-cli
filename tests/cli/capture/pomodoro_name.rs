@@ -711,7 +711,7 @@ fn capture_pomodoro_link_solo_grammar_and_atomic_execution() {
     assert_eq!(json["pomodoro_link_action"], "linked");
     assert!(fs::read_to_string(&target)
         .expect("t")
-        .contains("- [*] #task Ready task ^ready"));
+        .contains("- [*] #task Ready task [fresh:: 2026-07-10] ^ready"));
 
     // Named start with offset.
     let (_t, vault, _target, day_file) = link_vault("bob-cli-link-offset");

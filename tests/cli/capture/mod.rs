@@ -9,6 +9,7 @@ mod complete_editor;
 mod complete_query;
 mod complete_task_link;
 mod ensure_next;
+mod freshness_stamps;
 mod parse;
 mod parse_pomodoro;
 mod parse_pomodoro_close;

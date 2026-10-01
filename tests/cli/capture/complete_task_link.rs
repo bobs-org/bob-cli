@@ -258,12 +258,11 @@ fn complete_task_link_round_trip_for_a_task_without_an_id() {
     assert_eq!(captured["kind"], "pomodoro_link");
 
     // The task is Next with its new ID, and BUGS started.
+    // Linking stamps freshness (creation never does).
     let sase = fs::read_to_string(vault.join("sase.md")).expect("read sase");
     assert!(
         sase.contains(&format!(
-            "- [*] #task Fix flaky gkeep test [created::2026-09-30] ^{suggestion}"
-        )) || sase.contains(&format!(
-            "- [*] #task Fix flaky gkeep test ^{suggestion}"
+            "- [*] #task Fix flaky gkeep test [fresh:: 2026-09-30] ^{suggestion}"
         )),
         "named task should be Next with its ID:\n{sase}"
     );

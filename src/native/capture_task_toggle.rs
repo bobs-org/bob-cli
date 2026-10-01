@@ -25,7 +25,7 @@ use super::{
     },
     capture_pomodoros::{self, NamedSelection, PomodoroEntry, PomodoroState},
     capture_schedule_log::{ScheduleLog, SEPARATOR, TRANSITION},
-    markdown, pomodoro,
+    freshness, markdown, pomodoro,
     task_fields::{
         format_calendar_date, inline_fields, parse_strict_calendar_date,
     },
@@ -180,6 +180,17 @@ pub(crate) fn plan_task_link(
         removed_scheduled = Some(field.value.clone());
     }
     updated_text = set_task_line_status(&updated_text, new_status_symbol)?;
+    // Freshness: stamp the rewritten line as the last transformation,
+    // but only when the link changed it (status or retired schedule).
+    // A byte-identical Next/In Progress line means no write, matching
+    // block-id-prompt. A refusal (recurring/closed/not-a-task) leaves
+    // the line as it is.
+    if updated_text != line.text {
+        let stamped = freshness::stamp_fresh(&updated_text, today);
+        if stamped.refused.is_none() {
+            updated_text = stamped.line;
+        }
+    }
 
     let content_after_status =
         replace_line(contents, &lines, task_line_index, &updated_text);

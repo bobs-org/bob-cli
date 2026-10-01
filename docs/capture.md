@@ -1295,7 +1295,9 @@ untouched notes; `![[…#^id]]` embeds are closed recursively and retired to
 deferred (removed from the session, carried without the `#`, target not
 started); other plain block links are worked-on (kept, given exactly one
 `🍅 `, carried); a worked-on line that is exactly one bare link is
-startable (`[ ]`/`[*]` → `[/]`); everything else stays as an uncarried note.
+startable (`[ ]`/`[*]` → `[/]`, stamping `[fresh:: TODAY]` in the same write;
+see `docs/freshness.md`); everything else stays as an uncarried note. Completing
+a task (`!` selection → `[x]`) never stamps.
 Carried lines (worked-on then deferred, in source order, at original
 indentation) move into a new `- [ ] ()` (or `- [ ] () — NAME`) placeholder
 inserted after the session's sub-bullet range, created iff something is
@@ -2080,7 +2082,11 @@ dated entry under it:
 ```
 
 No Schedule Log is created for a task that does not already have one, and past,
-today, invalid, or multiple scheduled fields are left alone.
+today, invalid, or multiple scheduled fields are left alone. When the link
+direction rewrites the task line, Bob stamps `[fresh:: TODAY]` before the
+trailing Tasks fields in the same write (see `docs/freshness.md`); unlinking
+never touches the task line and never stamps, and a Next or In Progress link
+that retires no future schedule leaves the note untouched.
 
 Task lookup errors match sub-bullet capture: unresolved route notes, missing
 block IDs, duplicate block IDs, non-task block IDs, close-match suggestions,
@@ -2099,7 +2105,8 @@ child bullets with `task toggle capture cannot have authored child bullets`.
 The marker-only `@route+block-id` and `@route+block-id#pomodoro` forms are
 Ensure Next operations. Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and
 Next `[*]` are eligible: Ready and Blocked rise to Next while Next and In
-Progress keep their lane. Done, canceled, unknown, missing,
+Progress keep their lane. Like the `!` link direction, Ensure Next stamps
+`[fresh:: TODAY]` whenever it rewrites the task line (see `docs/freshness.md`). Done, canceled, unknown, missing,
 non-task, and duplicate-ID targets keep actionable errors. This default
 reverses the initial `!` implementation: use the unsuffixed forms for
 idempotent relocation, and use `@route+block-id!` only when you intentionally
