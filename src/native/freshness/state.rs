@@ -14,7 +14,7 @@ use crate::native::config::freshness::FreshnessConfig;
 pub(crate) enum FreshState {
     New,
     Resurfaced,
-    Stale,
+    Rotten,
     Fresh,
 }
 
@@ -23,20 +23,18 @@ impl FreshState {
         match self {
             Self::New => "new",
             Self::Resurfaced => "resurfaced",
-            Self::Stale => "stale",
+            Self::Rotten => "rotten",
             Self::Fresh => "fresh",
         }
     }
 
     /// Stable read-time bucket for dashboard gating (`docs/freshness.md`
-    /// §4): `new` tasks surface in NEW, `resurfaced` and `stale` tasks
+    /// §4): `new` tasks surface in NEW, `resurfaced` and `rotten` tasks
     /// surface in ROTTEN review, and `fresh` tasks stay in READY.
-    /// Machine `state` names are unchanged; only this bucket mapping
-    /// uses the `rotten` vocabulary until the vocab-rotten migration.
     pub(crate) fn bucket(self) -> Option<&'static str> {
         match self {
             Self::New => Some("new"),
-            Self::Resurfaced | Self::Stale => Some("rotten"),
+            Self::Resurfaced | Self::Rotten => Some("rotten"),
             Self::Fresh => None,
         }
     }
@@ -162,7 +160,7 @@ pub(crate) fn evaluate(
         };
     };
 
-    // RESURFACED beats STALE: a deferral that returned is due as soon
+    // RESURFACED beats ROTTEN: a deferral that returned is due as soon
     // as it returns, however old the stamp is.
     if let Some(scheduled) = row.scheduled
         && fresh < scheduled
@@ -186,7 +184,7 @@ pub(crate) fn evaluate(
     if today >= due_on {
         let days_overdue = today.signed_duration_since(due_on).num_days();
         return Evaluated {
-            state: Some(FreshState::Stale),
+            state: Some(FreshState::Rotten),
             fresh: Some(fresh),
             interval_days,
             interval_source,
@@ -253,7 +251,7 @@ fn parse_note_refresh(raw: Option<&str>) -> (Option<u16>, Option<String>) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QueueEntry {
     pub(crate) rank: u32,
-    /// `new` or `due` (resurfaced and stale together).
+    /// `new` or `due` (resurfaced and rotten together).
     pub(crate) tier: &'static str,
     pub(crate) state: FreshState,
     pub(crate) path: String,
@@ -323,7 +321,7 @@ pub(crate) struct Counts {
     pub(crate) due: u32,
     pub(crate) new: u32,
     pub(crate) resurfaced: u32,
-    pub(crate) stale: u32,
+    pub(crate) rotten: u32,
     /// In-scope FRESH tasks.
     pub(crate) fresh: u32,
     /// Tasks of any status outside `_templates` / `_conflicts` whose
@@ -342,7 +340,7 @@ pub(crate) fn counts(
     let mut due = 0;
     let mut new = 0;
     let mut resurfaced = 0;
-    let mut stale = 0;
+    let mut rotten = 0;
     let mut fresh = 0;
     let mut refreshed_today = 0;
 
@@ -364,8 +362,8 @@ pub(crate) fn counts(
                 resurfaced += 1;
                 due += 1;
             }
-            FreshState::Stale => {
-                stale += 1;
+            FreshState::Rotten => {
+                rotten += 1;
                 due += 1;
             }
             FreshState::Fresh => {
@@ -374,7 +372,7 @@ pub(crate) fn counts(
         }
     }
 
-    let budget = config.stale_daily_budget;
+    let budget = config.rotten_daily_budget;
     let budget_met =
         budget.is_some_and(|goal| refreshed_today >= goal && new == 0);
 
@@ -382,7 +380,7 @@ pub(crate) fn counts(
         due,
         new,
         resurfaced,
-        stale,
+        rotten,
         fresh,
         refreshed_today,
         budget,

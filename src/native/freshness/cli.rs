@@ -19,8 +19,8 @@ use super::super::{
 };
 use super::{
     scan::{
-        collect_warnings, refreshed_today, scan, RowCtx, ScanError, Snapshot,
-        Warning,
+        collect_warnings, lint_message, refreshed_today, scan, RowCtx,
+        ScanError, Snapshot, Warning,
     },
     seed::{run_seed, SeedError, SeedReport},
     state::{
@@ -33,7 +33,7 @@ const COMMAND_NAME: &str = "bob freshness";
 
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -261,9 +261,8 @@ struct ListedRow {
     rank: u32,
     tier: &'static str,
     state: FreshState,
-    /// Stable read-time bucket (`new`, `rotten`, or null); schema 1
-    /// keeps the machine `state`/`counts` names, so this additive
-    /// field is how dashboards gate without a schema bump.
+    /// Stable read-time bucket (`new`, `rotten`, or null) for
+    /// dashboard gating.
     bucket: Option<&'static str>,
     path: String,
     line: u32,
@@ -372,17 +371,28 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
     // tasks; refreshed_today needs every status (S15).
     counts.refreshed_today = refreshed_today(&snapshot.all, today);
     counts.budget_met = config
-        .stale_daily_budget
+        .rotten_daily_budget
         .is_some_and(|goal| counts.refreshed_today >= goal && counts.new == 0);
 
     let mut warnings = collect_warnings(&snapshot.all, today, config);
+    // One deprecation diagnostic per loaded config — never one per
+    // task — when the removed `stale_daily_budget` key supplied the
+    // budget or was ignored beside the canonical key.
+    if config.stale_budget_deprecated {
+        warnings.push(Warning {
+            code: "freshness_stale_daily_budget_deprecated".to_string(),
+            path: super::super::config::config_path().display().to_string(),
+            line: None,
+            message: lint_message("freshness_stale_daily_budget_deprecated"),
+        });
+    }
     warnings.extend(snapshot.today_warnings.clone());
 
     ListReport {
         date: today.format("%Y-%m-%d").to_string(),
         weekday: snapshot.weekday.clone(),
         interval: config.interval,
-        budget: config.stale_daily_budget,
+        budget: config.rotten_daily_budget,
         counts,
         rows,
         warnings,
@@ -438,12 +448,12 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
     output.push('\n');
     let _ = writeln!(
         output,
-        "  REVIEW {due} due {sep} {new} new {sep} {resurfaced} resurfaced {sep} {stale} rotten {sep} {today}",
+        "  REVIEW {due} due {sep} {new} new {sep} {resurfaced} resurfaced {sep} {rotten} rotten {sep} {today}",
         due = report.counts.due,
         sep = styler.separator(),
         new = report.counts.new,
         resurfaced = report.counts.resurfaced,
-        stale = report.counts.stale,
+        rotten = report.counts.rotten,
         today = today_meter(report),
     );
 
@@ -494,7 +504,7 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
             row.scheduled.as_deref().unwrap_or("?"),
             sep = styler.separator(),
         ),
-        FreshState::Stale => match row.days_overdue {
+        FreshState::Rotten => match row.days_overdue {
             Some(0) => "due today".to_string(),
             Some(days) => format!("rotten {days}d"),
             None => "rotten".to_string(),
@@ -509,7 +519,7 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
             sep = styler.separator()
         ));
     }
-    if row.state == FreshState::Stale || row.state == FreshState::Fresh {
+    if row.state == FreshState::Rotten || row.state == FreshState::Fresh {
         detail.push_str(&format!(
             " {sep} every {interval}d ({source})",
             sep = styler.separator(),
@@ -532,13 +542,13 @@ fn json_list(report: &ListReport) -> serde_json::Value {
         "date": report.date,
         "config": {
             "interval": report.interval,
-            "stale_daily_budget": report.budget,
+            "rotten_daily_budget": report.budget,
         },
         "counts": {
             "due": report.counts.due,
             "new": report.counts.new,
             "resurfaced": report.counts.resurfaced,
-            "stale": report.counts.stale,
+            "rotten": report.counts.rotten,
             "fresh": report.counts.fresh,
             "refreshed_today": report.counts.refreshed_today,
             "budget": report.counts.budget,

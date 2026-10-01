@@ -478,5 +478,5 @@ fn hooks_blocked_signals_survive_and_checkbox_swap_preserves_fresh() {
 fn freshness_config_defaults_match_contract() {
     let config = FreshnessConfig::default();
     assert_eq!(config.interval(), 7);
-    assert_eq!(config.stale_daily_budget(), None);
+    assert_eq!(config.rotten_daily_budget(), None);
 }

@@ -24,16 +24,18 @@ fn default_config() -> FreshnessConfig {
 fn config_with_interval(days: u16) -> FreshnessConfig {
     FreshnessConfig {
         interval: days,
-        stale_daily_budget: None,
+        rotten_daily_budget: None,
         interval_from_config: true,
+        stale_budget_deprecated: false,
     }
 }
 
 fn config_with_budget(budget: u32) -> FreshnessConfig {
     FreshnessConfig {
         interval: 7,
-        stale_daily_budget: Some(budget),
+        rotten_daily_budget: Some(budget),
         interval_from_config: false,
+        stale_budget_deprecated: false,
     }
 }
 
@@ -79,10 +81,10 @@ fn s02_fresh_with_due_on() {
 }
 
 #[test]
-fn s03_boundary_is_stale_with_zero_overdue() {
+fn s03_boundary_is_rotten_with_zero_overdue() {
     let evaluated =
         evaluate(&row(&fresh_line("2026-10-01")), today(), &default_config());
-    assert_eq!(evaluated.state, Some(FreshState::Stale));
+    assert_eq!(evaluated.state, Some(FreshState::Rotten));
     assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
     assert_eq!(evaluated.days_overdue, Some(0));
 }
@@ -91,7 +93,7 @@ fn s03_boundary_is_stale_with_zero_overdue() {
 fn s04_overdue_counts_days() {
     let evaluated =
         evaluate(&row(&fresh_line("2026-09-20")), today(), &default_config());
-    assert_eq!(evaluated.state, Some(FreshState::Stale));
+    assert_eq!(evaluated.state, Some(FreshState::Rotten));
     assert_eq!(evaluated.due_on, Some(date(2026, 9, 27)));
     assert_eq!(evaluated.days_overdue, Some(11));
 }
@@ -113,7 +115,7 @@ fn s06_note_interval_beats_config() {
     let mut input = row(&fresh_line("2026-10-05"));
     input.note_refresh_raw = Some("3".to_string());
     let evaluated = evaluate(&input, today(), &default_config());
-    assert_eq!(evaluated.state, Some(FreshState::Stale));
+    assert_eq!(evaluated.state, Some(FreshState::Rotten));
     assert_eq!(evaluated.interval_days, 3);
     assert_eq!(evaluated.interval_source, IntervalSource::Note);
     assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
@@ -143,8 +145,8 @@ fn s08_invalid_overrides_fall_through_with_lints() {
         .contains(&"task_refresh_invalid".to_string()));
     assert_eq!(evaluated.interval_days, 7);
     assert_eq!(evaluated.interval_source, IntervalSource::Default);
-    // 2026-10-01 + 7d is due today: stale.
-    assert_eq!(evaluated.state, Some(FreshState::Stale));
+    // 2026-10-01 + 7d is due today: rotten.
+    assert_eq!(evaluated.state, Some(FreshState::Rotten));
 }
 
 #[test]
@@ -254,7 +256,7 @@ fn s14_queue_order_new_then_due() {
         line: 9,
         ..row("- [ ] #task New aye")
     };
-    let stale_c = FreshnessRow {
+    let rotten_c = FreshnessRow {
         path: "c.md".to_string(),
         line: 2,
         ..row("- [ ] #task Old [fresh:: 2026-09-24]")
@@ -265,7 +267,7 @@ fn s14_queue_order_new_then_due() {
         ..row("- [ ] #task Back [fresh:: 2026-10-05]")
     };
     resurfaced_a.scheduled = Some(date(2026, 10, 7));
-    let stale_a = FreshnessRow {
+    let rotten_a = FreshnessRow {
         path: "a.md".to_string(),
         line: 2,
         ..row("- [ ] #task Older [fresh:: 2026-09-30]")
@@ -273,7 +275,7 @@ fn s14_queue_order_new_then_due() {
     // Sanity on the crafted due dates: c.md:2 due 2026-10-01, a.md:2
     // due 2026-10-07, a.md:4 resurfaced due 2026-10-07.
     let ordered = queue(
-        &[new_b, new_a, stale_c, resurfaced_a, stale_a],
+        &[new_b, new_a, rotten_c, resurfaced_a, rotten_a],
         today(),
         &config,
     );
@@ -352,7 +354,7 @@ fn bucket_partition_vectors() {
         row("- [ ] #task Do it [fresh:: 2026-10-01] [refresh:: 14]");
     task_interval.note_refresh_raw = Some("3".to_string());
     assert_eq!(bucketed(&task_interval), None);
-    // S7's date is stale under the default interval (see S3 above);
+    // S7's date is rotten under the default interval (see S3 above);
     // the null case needs the config interval.
     let s7 = evaluate(
         &row(&fresh_line("2026-10-01")),

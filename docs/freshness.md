@@ -12,7 +12,7 @@ This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
 JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
-api v3, freshness namespace v2). The bob-ledger-tools JavaScript
+api v3, freshness namespace v3). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
 ## 1. Definition
@@ -22,7 +22,7 @@ tests use the conformance vectors below verbatim.
   It is stored as `[fresh:: YYYY-MM-DD]`.
 - **Stamp / refresh:** write today's date into `fresh`.
 - **Due for review:** an in-scope task in state NEW, RESURFACED, or
-  ROTTEN (human word for machine `STALE` until schema 2; see §4).
+  ROTTEN (see §4).
 - **Refreshed today:** a task whose `fresh` equals today.
 
 A missing stamp — not `created` — means new. `bob gkeep pull` sets
@@ -40,7 +40,7 @@ as NEW until a human confirms it.
 | `[refresh:: N]`                | task line, immediately after `fresh`           | optional integer days, 1–365             |
 | `task_refresh: N`              | frontmatter of the note containing the task    | optional integer days, 1–365             |
 | `freshness.interval`           | `~/.config/bob/config.yml`                     | integer days, 1–365, default 7           |
-| `freshness.stale_daily_budget` | `~/.config/bob/config.yml`                     | optional integer ≥ 1, default off        |
+| `freshness.rotten_daily_budget` | `~/.config/bob/config.yml`                    | optional integer ≥ 1, default off        |
 
 **Interval precedence.** `interval(t)` is the task's `refresh`, then
 the containing note's `task_refresh`, then `freshness.interval`, then
@@ -63,7 +63,7 @@ Example:
 ```yaml
 freshness:
   interval: 7 # days before a confirmed Ready task is due for review (docs/freshness.md)
-  # stale_daily_budget: 15 # optional daily goal meter; never hides tasks
+  # rotten_daily_budget: 15 # optional daily goal meter; never hides tasks
 ```
 
 **Mobile config caveat.** On mobile, when the config file is
@@ -140,19 +140,19 @@ fresh(t)      = the latest valid `fresh` date on the line; none if there is none
                 (malformed ⇒ ignored + lint; a future date ⇒ treated as none + lint)
 state(t)      = NEW         if no fresh(t)
               | RESURFACED  if scheduled(t) exists ∧ fresh(t) < scheduled(t) ≤ today
-              | STALE       if today ≥ fresh(t) + interval(t)   (stamped Mon at 7 ⇒ due next Mon)
+              | ROTTEN      if today ≥ fresh(t) + interval(t)   (stamped Mon at 7 ⇒ due next Mon)
               | FRESH       otherwise
-due_on(t)     = RESURFACED: scheduled(t); STALE/FRESH: fresh(t) + interval(t); NEW: none
+due_on(t)     = RESURFACED: scheduled(t); ROTTEN/FRESH: fresh(t) + interval(t); NEW: none
 due(t)        = in_scope(t) ∧ state(t) ≠ FRESH
-tier(t)       = NEW | DUE (RESURFACED and STALE together)
+tier(t)       = NEW | DUE (RESURFACED and ROTTEN together)
 queue order   = NEW by (path, line); then DUE by (due_on, path, line)
-counts        = due, new, resurfaced, stale, fresh (in-scope FRESH),
+counts        = due, new, resurfaced, rotten, fresh (in-scope FRESH),
                 refreshed_today (tasks of any status, outside _templates/_conflicts,
                 whose fresh(t) == today), budget, budget_met
                 (budget set ∧ refreshed_today ≥ budget ∧ new == 0)
 ```
 
-RESURFACED beats STALE when both hold: a deferral that returned is
+RESURFACED beats ROTTEN when both hold: a deferral that returned is
 due as soon as it returns. The tickler makes a short deferral (for
 example a P1 roll of 2–7 days) due as soon as it returns, without any
 hooks write.
@@ -162,7 +162,7 @@ gating:
 
 ```text
 bucket(t)     = new     if state(t) = NEW
-              | rotten  if state(t) = RESURFACED or STALE
+              | rotten  if state(t) = RESURFACED or ROTTEN
               | null    if state(t) = FRESH or null (out of scope)
 ```
 
@@ -177,15 +177,25 @@ Bucket conformance: S1 maps to `new`; S3, S4, and S11 map to
 `rotten`; S2, S5, S7, and S12 map to null; every S13 row maps to
 null.
 
-**Temporary state-name compatibility.** Human output, help, and docs
-say `rotten`; the machine contract keeps `stale` until the
-vocab-rotten migration publishes JSON schema 2: `state: "stale"`,
-`counts.stale`, and `freshness.stale_daily_budget` are unchanged, and
-each JSON queue row carries the additive `bucket` field (`"new"`,
-`"rotten"`, or null) under schema 1. Likewise bob-ledger-tools keeps
-the `"stale"` state string and bumps only the freshness namespace to
-v2 (`api.freshness.version === 2`, additive `bucket(task)` and
-`reviewModel()`; top-level api stays v3).
+**Machine vocabulary (schema 2).** Human output, help, and docs
+say `rotten`, and so does the machine contract since the vocab-rotten
+migration published JSON schema 2: `state: "rotten"`,
+`counts.rotten`, and `freshness.rotten_daily_budget`. Each JSON queue
+row still carries the `bucket` field (`"new"`, `"rotten"`, or null).
+Likewise bob-ledger-tools uses the `"rotten"` state string under
+freshness namespace v3 (`api.freshness.version === 3`; top-level api
+stays v3).
+
+**One-release legacy budget key.** A config that still sets
+`freshness.stale_daily_budget` keeps working for one release: when
+only the old key is present it supplies the budget, and when both
+keys are present the canonical `rotten_daily_budget` wins (including
+an explicit null, which means budget off) while the old value is
+ignored. Either case emits exactly one
+`freshness_stale_daily_budget_deprecated` diagnostic per loaded
+config — in `bob freshness` human/JSON warnings and in the plugin
+lints — without marking the config invalid. An invalid value for the
+selected key is still a config error.
 
 Line numbers are 1-based in JSON and docs. Tasks' `lineNumber` is
 0-based, so convert it.
@@ -193,8 +203,11 @@ Line numbers are 1-based in JSON and docs. Tasks' `lineNumber` is
 **Lints:** `fresh_malformed`, `fresh_future`, `fresh_duplicate`,
 `fresh_misplaced` (a `fresh`/`refresh` inside the Tasks suffix; the
 next stamp repairs it), `refresh_invalid` (per task) and
-`task_refresh_invalid` (per note). `today_link_unresolved` passes
-through unchanged from the Today engine.
+`task_refresh_invalid` (per note),
+`freshness_stale_daily_budget_deprecated` (once per loaded config
+when the removed `stale_daily_budget` key is present; see above).
+`today_link_unresolved` passes through unchanged from the Today
+engine.
 
 ## 5. Who stamps
 
@@ -287,9 +300,9 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The JSON contract is `schema_version: 1` with `ok`, `date`,
-`config` (`interval`, `stale_daily_budget`), `counts` (`due`,
-`new`, `resurfaced`, `stale`, `fresh`, `refreshed_today`, `budget`,
+The JSON contract is `schema_version: 2` with `ok`, `date`,
+`config` (`interval`, `rotten_daily_budget`), `counts` (`due`,
+`new`, `resurfaced`, `rotten`, `fresh`, `refreshed_today`, `budget`,
 `budget_met`), `queue` (each with `rank`, `tier`, `state`, `bucket`
 (`"new"`, `"rotten"`, or null), `path`, `line`, `block_id`,
 `status_symbol`, `text`, `created`, `fresh`, `interval`,
@@ -311,7 +324,7 @@ whole run with no writes when any changed line parses differently
 under either Rust parser, re-reads each file just before writing and
 refuses when one changed, and writes through a temp file plus rename.
 A same-day rerun finds nothing to stamp and reports zeros. The JSON
-contract is `schema_version: 1` with `ok`, `date`, `dry_run`,
+contract is `schema_version: 2` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`.
@@ -402,14 +415,14 @@ JavaScript tests use these verbatim.
 
 - **S1 new:** no `fresh` → `new`
 - **S2 fresh:** `fresh 2026-10-02` → `fresh`, `due_on 2026-10-09`
-- **S3 boundary:** `fresh 2026-10-01` → `stale`, `due_on 2026-10-08`,
+- **S3 boundary:** `fresh 2026-10-01` → `rotten`, `due_on 2026-10-08`,
   `days_overdue 0`
-- **S4 overdue:** `fresh 2026-09-20` → `stale`, `due_on 2026-09-27`,
+- **S4 overdue:** `fresh 2026-09-20` → `rotten`, `due_on 2026-09-27`,
   `days_overdue 11`
 - **S5 task beats note:** `[refresh:: 14]`, note `task_refresh: 3`,
   `fresh 2026-10-01` → `fresh` (task source, due 2026-10-15)
 - **S6 note beats config:** note `task_refresh: 3`, `fresh 2026-10-05`
-  → `stale` (note source)
+  → `rotten` (note source)
 - **S7 config:** `freshness.interval: 10`, `fresh 2026-10-01` →
   `fresh` (config source, due 2026-10-11)
 - **S8 invalid overrides fall through:** `[refresh:: 0]` →
@@ -425,8 +438,8 @@ JavaScript tests use these verbatim.
   with a future `scheduled`; `[*]`; `[/]`; `#hide`; `_templates/x.md`;
   daily note `2026/20261008.md`; a Ready task linked under today's
   open Pomodoro; a `[ ]` whose `dependsOn` names an open task
-- **S14 queue order.** Given NEW `b.md:3` and NEW `a.md:9`; STALE due
-  2026-10-01 at `c.md:2`; RESURFACED due 2026-10-07 at `a.md:4`; STALE
+- **S14 queue order.** Given NEW `b.md:3` and NEW `a.md:9`; ROTTEN due
+  2026-10-01 at `c.md:2`; RESURFACED due 2026-10-07 at `a.md:4`; ROTTEN
   due 2026-10-07 at `a.md:2`. The order is `a.md:9`, `b.md:3`,
   `c.md:2`, `a.md:2`, `a.md:4`.
 - **S15 counts:** `refreshed_today` counts a `[*]` and an `[x]`
@@ -464,7 +477,7 @@ on the text baseline.
 | ---- | ---- | ----- | ----- |
 | `today` | age 0 on an open task | circle-check (full ring + tick) | `--task-status-next` green |
 | `aging` | evaluator says FRESH, or the task is unresolved | lease ring: faint track + arc for the remaining lease | `--text-muted` |
-| `due` | evaluator says STALE or RESURFACED | `⟳` (rotate-cw) | `--color-orange`: the only loud tone (14% tinted capsule, 1px inset ring, weight 650) |
+| `due` | evaluator says ROTTEN or RESURFACED | `⟳` (rotate-cw) | `--color-orange`: the only loud tone (14% tinted capsule, 1px inset ring, weight 650) |
 | `resting` | evaluator says out of scope (Next, In Progress, Blocked, linked today, …) or the task is closed | lease ring | `--text-faint`, quieter still |
 
 Each tone is also distinguished by its glyph, and `due` by its
@@ -477,7 +490,7 @@ unit, matching `bob freshness`. The interval follows the existing
 precedence: task `refresh`, then the note's `task_refresh`, then
 `freshness.interval`, then 7. `remaining =
 clamp((interval − ageDays) / interval, 0, 1)`, rounded to 4 decimals:
-full on the day of confirmation, empty exactly when STALE (at 0 only
+full on the day of confirmation, empty exactly when ROTTEN (at 0 only
 the faint track is drawn). The ring starts at 12 o'clock, drawn
 clockwise for `remaining`. The interval suffix `/{N}d` appears only
 when this task's own `[refresh:: N]` is folded into the mark, and
@@ -493,7 +506,7 @@ days` (or `every 1 day`), plus ` (this task)`, ` (this note)`, or
 ` (config)` for those sources and nothing for the default. Line 1:
 `Confirmed today` at age 0, otherwise `Confirmed {date} ·
 {relative}`. Line 2 is picked by resolution rather than tone: closed
-or out of scope → `Not in the review queue: {reason}`; STALE → `Due
+or out of scope → `Not in the review queue: {reason}`; ROTTEN → `Due
 for review since {dueOn} · every …`; RESURFACED → `Resurfaced
 {scheduled}: scheduled after it was confirmed`; FRESH or unresolved
 with the lease running → `Next review {fresh+interval} · every …`;
@@ -597,7 +610,7 @@ these vectors verbatim.
   remaining 0.5714, tone `aging`, glyph `ring`. Tooltip:
   `Confirmed Mon, Oct 5 · 3 days ago ⏎ Next review Mon, Oct 12 ·
   every 7 days`.
-- **M3 boundary:** `[fresh:: 2026-10-01]` → STALE; tone `due`, glyph
+- **M3 boundary:** `[fresh:: 2026-10-01]` → ROTTEN; tone `due`, glyph
   `refresh`, label `7d`, remaining 0. Tooltip:
   `Confirmed Thu, Oct 1 · 7 days ago ⏎ Due for review since Thu, Oct
   8 · every 7 days ⏎ Alt+F to confirm`.
@@ -672,7 +685,7 @@ these vectors verbatim.
   - N6 not a task: `- Buy milk [fresh:: 2026-10-05]`.
 - **C1–C3, consensus:**
   - C1: two `a.md` rows with source `[fresh:: 2026-10-01]`, both Ready
-    and STALE → the `due` model.
+    and ROTTEN → the `due` model.
   - C2: the same pair, but one row is Next → null, so the mark is
     unresolved.
   - C3: no candidate rows → null.

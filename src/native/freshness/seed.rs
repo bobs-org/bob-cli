@@ -4,7 +4,7 @@
 //! Ready tasks without a valid `fresh` are bin-packed by note into 7
 //! buckets, oldest first, so nothing is due on cutover day; every
 //! other open, non-recurring task gets today so returning deferrals
-//! arrive as RESURFACED or STALE, never NEW. The seed aborts with no
+//! arrive as RESURFACED or ROTTEN, never NEW. The seed aborts with no
 //! writes when a second seed is detected (unless `--force`), when any
 //! changed line would parse differently, or when a file changed since
 //! the scan.

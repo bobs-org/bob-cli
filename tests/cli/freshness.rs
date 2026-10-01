@@ -80,10 +80,10 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
-    assert!(value["config"]["stale_daily_budget"].is_null());
+    assert!(value["config"]["rotten_daily_budget"].is_null());
 
     let counts = &value["counts"];
     // NEW: New capture, Bad date, Future stamp. DUE: Stale bread,
@@ -91,7 +91,7 @@ fn list_json_reports_queue_counts_and_contract() {
     // plus Slow note task is FRESH (task interval 14).
     assert_eq!(counts["new"], 3);
     assert_eq!(counts["resurfaced"], 1);
-    assert_eq!(counts["stale"], 2);
+    assert_eq!(counts["rotten"], 2);
     assert_eq!(counts["due"], 6);
     // FRESH: Fresh eggs, Slow note task, Root.
     assert_eq!(counts["fresh"], 3);
@@ -112,11 +112,11 @@ fn list_json_reports_queue_counts_and_contract() {
         .collect();
     assert_eq!(
         states,
-        vec!["new", "new", "new", "stale", "resurfaced", "stale"]
+        vec!["new", "new", "new", "rotten", "resurfaced", "rotten"]
     );
-    // Schema 1 keeps the machine `state` names; the additive `bucket`
-    // carries the stable gating vocabulary: new → new, stale and
-    // resurfaced → rotten.
+    // Schema 2 uses the rotten vocabulary for machine `state` names;
+    // the `bucket` still carries the stable gating vocabulary: new →
+    // new, rotten and resurfaced → rotten.
     let buckets: Vec<Option<&str>> =
         queue.iter().map(|entry| entry["bucket"].as_str()).collect();
     assert_eq!(
@@ -142,15 +142,16 @@ fn list_json_reports_queue_counts_and_contract() {
     assert_eq!(first["interval_source"], "default");
     assert!(first["due_on"].is_null());
 
-    let stale = &queue[3];
-    assert_eq!(stale["path"], "a.md");
-    assert_eq!(stale["line"], 2);
-    assert_eq!(stale["fresh"], "2026-09-20");
-    assert_eq!(stale["due_on"], "2026-09-27");
-    assert_eq!(stale["days_overdue"], 11);
+    let rotten = &queue[3];
+    assert_eq!(rotten["path"], "a.md");
+    assert_eq!(rotten["line"], 2);
+    assert_eq!(rotten["fresh"], "2026-09-20");
+    assert_eq!(rotten["due_on"], "2026-09-27");
+    assert_eq!(rotten["days_overdue"], 11);
 
     let resurfaced = &queue[4];
     assert_eq!(resurfaced["state"], "resurfaced");
+    assert_eq!(resurfaced["bucket"], "rotten");
     assert_eq!(resurfaced["due_on"], "2026-10-07");
     assert_eq!(resurfaced["days_overdue"], 1);
 
@@ -271,7 +272,7 @@ fn list_config_interval_and_budget() {
     let config = temp.path().join("config.yml");
     write_file(
         &config,
-        "freshness:\n  interval: 10\n  stale_daily_budget: 15\n",
+        "freshness:\n  interval: 10\n  rotten_daily_budget: 15\n",
     );
     let mut command = bob_command();
     command
@@ -286,18 +287,121 @@ fn list_config_interval_and_budget() {
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
-    // Stale bread (fresh 09-20 + 10d = 09-30) is still stale, but with
+    // Stale bread (fresh 09-20 + 10d = 09-30) is still rotten, but with
     // a config source now.
     assert_eq!(value["config"]["interval"], 10);
-    assert_eq!(value["config"]["stale_daily_budget"], 15);
+    assert_eq!(value["config"]["rotten_daily_budget"], 15);
     let queue = value["queue"].as_array().expect("queue array");
-    let stale = queue
+    let rotten = queue
         .iter()
         .find(|entry| entry["text"] == "Stale bread")
         .expect("stale bread queues");
-    assert_eq!(stale["interval_source"], "config");
+    assert_eq!(rotten["state"], "rotten");
+    assert_eq!(rotten["interval_source"], "config");
     assert_eq!(value["counts"]["budget"], 15);
     assert_eq!(value["counts"]["budget_met"], false);
+}
+
+#[test]
+fn list_legacy_budget_key_warns_once_and_still_counts() {
+    let temp = freshness_vault("bob-cli-freshness-legacy");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "freshness:\n  stale_daily_budget: 15\n");
+    let mut command = bob_command();
+    command
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .arg("-f")
+        .arg("json");
+    let output = command.output().expect("run with legacy config");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("list JSON");
+    // The legacy key still supplies the budget under schema 2.
+    assert_eq!(value["config"]["rotten_daily_budget"], 15);
+    assert_eq!(value["counts"]["budget"], 15);
+    // Exactly one deprecation diagnostic, not one per task.
+    let deprecated: Vec<&Value> = value["warnings"]
+        .as_array()
+        .expect("warnings array")
+        .iter()
+        .filter(|warning| {
+            warning["code"] == "freshness_stale_daily_budget_deprecated"
+        })
+        .collect();
+    assert_eq!(deprecated.len(), 1);
+    assert!(deprecated[0]["line"].is_null());
+
+    // The same legacy config warns in human output too.
+    let human = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run legacy config human");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(
+        text.contains("freshness_stale_daily_budget_deprecated"),
+        "expected the deprecation lint:\n{text}"
+    );
+}
+
+#[test]
+fn list_canonical_budget_key_wins_and_warns() {
+    let temp = freshness_vault("bob-cli-freshness-both-keys");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "freshness:\n  rotten_daily_budget: 20\n  stale_daily_budget: 15\n",
+    );
+    let mut command = bob_command();
+    command
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .arg("-f")
+        .arg("json");
+    let output = command.output().expect("run with both keys");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("list JSON");
+    assert_eq!(value["config"]["rotten_daily_budget"], 20);
+    assert_eq!(value["counts"]["budget"], 20);
+    assert!(
+        value["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|warning| warning["code"]
+                == "freshness_stale_daily_budget_deprecated"),
+        "expected the deprecation lint:\n{value}"
+    );
+}
+
+#[test]
+fn list_invalid_canonical_budget_exits_2() {
+    let temp = freshness_vault("bob-cli-freshness-bad-budget");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "freshness:\n  rotten_daily_budget: soon\n");
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run with invalid budget");
+    assert_eq!(output.status.code(), Some(2));
 }
 
 #[test]
@@ -380,7 +484,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);

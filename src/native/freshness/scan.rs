@@ -275,6 +275,10 @@ pub(crate) fn lint_message(code: &str) -> String {
             "note task_refresh is not 1-365 days; falling through to config"
                 .to_string()
         }
+        "freshness_stale_daily_budget_deprecated" => {
+            "freshness.stale_daily_budget is deprecated; use freshness.rotten_daily_budget"
+                .to_string()
+        }
         "today_link_unresolved" => {
             "a Today Task Link resolves to no countable task".to_string()
         }
