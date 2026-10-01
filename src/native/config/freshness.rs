@@ -25,10 +25,13 @@ impl Default for FreshnessConfig {
 }
 
 impl FreshnessConfig {
+    // Test-only getters: production reads the fields directly.
+    #[cfg(test)]
     pub(crate) fn interval(&self) -> u16 {
         self.interval
     }
 
+    #[cfg(test)]
     pub(crate) fn stale_daily_budget(&self) -> Option<u32> {
         self.stale_daily_budget
     }
@@ -90,18 +93,18 @@ fn parse_freshness_config(
 
     let mut interval = defaults.interval;
     let mut interval_from_config = false;
-    if let Some(value) = get("interval") {
-        if !value.is_null() {
-            interval = parse_interval(&value, &path_display.to_string())?;
-            interval_from_config = true;
-        }
+    if let Some(value) = get("interval")
+        && !value.is_null()
+    {
+        interval = parse_interval(&value, &path_display.to_string())?;
+        interval_from_config = true;
     }
 
     let mut budget = defaults.stale_daily_budget;
-    if let Some(value) = get("stale_daily_budget") {
-        if !value.is_null() {
-            budget = Some(parse_budget(&value, &path_display.to_string())?);
-        }
+    if let Some(value) = get("stale_daily_budget")
+        && !value.is_null()
+    {
+        budget = Some(parse_budget(&value, &path_display.to_string())?);
     }
 
     // Unknown keys are ignored, like every other config block.

@@ -40,11 +40,12 @@ use sources::{
     collect_native_markdown_paths, native_frontmatter_block,
     native_link_target, normalize_note_path, note_stem, unquote_native_scalar,
 };
+#[cfg(test)]
+pub(crate) use tasks::{parse_details, TaskDetails};
 pub(crate) use tasks::{
-    parse_details, query_matching_descriptions, query_rich_tasks,
-    read_task_format, scan_all_rich_tasks, tasks_fingerprint, RichTask,
-    TaskDetails, TaskFormat, NEXT_QUERY, OPEN_QUERY, PENDING_QUERY,
-    READY_QUERY,
+    query_matching_descriptions, query_rich_tasks, read_task_format,
+    scan_all_rich_tasks, tasks_fingerprint, RichTask, TaskFormat, NEXT_QUERY,
+    OPEN_QUERY, PENDING_QUERY, READY_QUERY,
 };
 
 const COMMAND_NAME: &str = "bob query";

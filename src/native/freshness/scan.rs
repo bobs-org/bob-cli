@@ -27,6 +27,13 @@ use super::{
     state::{evaluate, FreshnessRow},
 };
 
+/// Today membership plus warnings for one daily note.
+type TodayScan = (
+    BTreeSet<(String, String)>,
+    BTreeSet<(String, u32)>,
+    Vec<Warning>,
+);
+
 /// A scanned task row plus the scope inputs the evaluator needs.
 #[derive(Debug, Clone)]
 pub(crate) struct RowCtx {
@@ -118,10 +125,11 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
     let format = dataview::read_task_format(bob_dir)
         .map_err(|error| ScanError::Io(dataview_message(&error)))?;
     if format != TaskFormat::Dataview {
-        return Err(ScanError::Usage(format!(
+        return Err(ScanError::Usage(
             "bob freshness needs the vault's Tasks task format to be \
             Dataview (docs/freshness.md rule 1); refusing to run"
-        )));
+                .to_string(),
+        ));
     }
 
     let now = bob_env::current_datetime();
@@ -168,7 +176,7 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
             note_refresh_raw,
             is_daily_note: canonical_daily_date(Path::new(&task.path))
                 .is_some(),
-            is_today: is_today_task(&task, &today_blocks, &today_lines),
+            is_today: is_today_task(task, &today_blocks, &today_lines),
         })
     };
 
@@ -301,14 +309,7 @@ fn read_today(
     bob_dir: &Path,
     day_file: &Path,
     daily_relative: &str,
-) -> Result<
-    (
-        BTreeSet<(String, String)>,
-        BTreeSet<(String, u32)>,
-        Vec<Warning>,
-    ),
-    ScanError,
-> {
+) -> Result<TodayScan, ScanError> {
     let contents = match fs::read_to_string(day_file) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {

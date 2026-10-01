@@ -4,8 +4,6 @@
 //! bob-ledger-tools (`api.freshness.state`, `queue`, `counts`); both
 //! sides run the state conformance vectors in that doc verbatim.
 
-use std::collections::BTreeSet;
-
 use chrono::NaiveDate;
 
 use super::placement::read_freshness;
@@ -64,6 +62,8 @@ pub(crate) struct FreshnessRow {
     pub(crate) path: String,
     /// 1-based line number, as in JSON and docs.
     pub(crate) line: u32,
+    // Contract field: written by the scanner for the vectors, not read yet.
+    #[allow(dead_code)]
     pub(crate) status: char,
     pub(crate) is_todo: bool,
     pub(crate) recurring: bool,
@@ -71,6 +71,8 @@ pub(crate) struct FreshnessRow {
     pub(crate) is_daily_note: bool,
     pub(crate) is_today: bool,
     pub(crate) scheduled: Option<NaiveDate>,
+    // Contract field: written by the scanner for the vectors, not read yet.
+    #[allow(dead_code)]
     pub(crate) created: Option<NaiveDate>,
     pub(crate) raw_line: String,
     /// The note's raw `task_refresh` frontmatter value, if present.
@@ -371,25 +373,6 @@ pub(crate) fn counts(
 fn is_excluded_count_path(path: &str) -> bool {
     path.split('/')
         .any(|segment| segment == "_templates" || segment == "_conflicts")
-}
-
-/// Collect the distinct lint codes over `rows`, in first-seen order.
-pub(crate) fn collect_lints(
-    rows: &[FreshnessRow],
-    today: NaiveDate,
-    config: &FreshnessConfig,
-) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut ordered = Vec::new();
-    for row in rows {
-        let evaluated = evaluate(row, today, config);
-        for lint in &evaluated.lints {
-            if seen.insert(lint.clone()) {
-                ordered.push(lint.clone());
-            }
-        }
-    }
-    ordered
 }
 
 fn push_lint(lints: &mut Vec<String>, code: &str) {

@@ -130,7 +130,7 @@ fn worked_example_updates_tasks_and_writes_dated_work_logs() {
     assert_eq!(
         plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
         Some(concat!(
-            "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- 🛠️ **WORK LOG**\n",
             "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
             "\t\t\t- chose `x` for done\n",
@@ -317,8 +317,9 @@ fn day_file_can_also_be_a_task_note_and_receives_its_work_log() {
     let path = Path::new("2026/20260928.md");
     let plan = run_close(&vault, path, day);
     let post = &plan.changed_files[path];
-    assert!(post
-        .contains("- [/] #task Same daily note [created:: 2026-09-20] ^self"));
+    assert!(post.contains(
+        "- [/] #task Same daily note [fresh:: 2026-09-28] [created:: 2026-09-20] ^self"
+    ));
     assert!(post.contains("*2026-09-28* — Drafted this task's notes"));
     assert_eq!(plan.changed_files.len(), 1);
 }
@@ -330,7 +331,7 @@ fn close_plan_preserves_crlf_in_changed_task_notes() {
     let day = "## Pomodoros\r\n- [ ] (**0920-0950** [t:: 30m])\r\n\t- [[bob#^ready]]\r\n";
     let plan = run_close(&vault, Path::new("2026/20260928.md"), day);
     let bob = &plan.changed_files[Path::new("bob.md")];
-    assert_eq!(bob, "- [/] #task Ready ^ready\r\n");
+    assert_eq!(bob, "- [/] #task Ready [fresh:: 2026-09-28] ^ready\r\n");
     assert!(!bob.replace("\r\n", "").contains('\n'));
     assert!(!plan
         .summary
@@ -471,7 +472,7 @@ fn selection_in_progress_and_complete_updates_both_tasks() {
     assert_eq!(
         plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
         Some(concat!(
-            "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
             "\t\t- *2026-09-28* \u{2014} Designed the `=x` grammar\n",
             "\t\t\t- chose `x` for done\n",
@@ -606,7 +607,7 @@ fn typed_entry_lands_in_task_work_log_as_typed_subset() {
     assert_eq!(
         plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
         Some(concat!(
-            "- [/] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
             "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
             "\t\t\t- chose `x` for done\n",

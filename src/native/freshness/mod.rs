@@ -11,11 +11,4 @@ pub(crate) mod scan;
 pub(crate) mod seed;
 pub(crate) mod state;
 
-pub(crate) use placement::{
-    read_freshness, set_refresh, stamp_fresh, tasks_suffix_start, FreshRead,
-    Refusal, Stamp,
-};
-pub(crate) use state::{
-    collect_lints, counts, evaluate, queue, Counts, Evaluated, FreshState,
-    FreshnessRow, IntervalSource, QueueEntry,
-};
+pub(crate) use placement::stamp_fresh;

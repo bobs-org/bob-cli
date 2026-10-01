@@ -22,7 +22,9 @@ mod settings;
 mod task;
 
 pub(crate) use settings::TaskFormat;
-pub(crate) use task::{parse_details, tasks_fingerprint, TaskDetails};
+pub(crate) use task::tasks_fingerprint;
+#[cfg(test)]
+pub(crate) use task::{parse_details, TaskDetails};
 
 struct Execution {
     query: QueryAst,

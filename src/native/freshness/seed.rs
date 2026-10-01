@@ -200,12 +200,13 @@ pub(crate) fn run_seed(
 
     // A same-day rerun finds no candidates: an idempotent no-op that
     // reports zeros rather than refusing on its own bucket dates.
-    if !ready_candidates.is_empty() || !other_candidates.is_empty() {
-        if old_stamp_count > 0 && !force {
-            return Err(SeedError::AlreadySeeded {
-                count: old_stamp_count,
-            });
-        }
+    if (!ready_candidates.is_empty() || !other_candidates.is_empty())
+        && old_stamp_count > 0
+        && !force
+    {
+        return Err(SeedError::AlreadySeeded {
+            count: old_stamp_count,
+        });
     }
 
     let buckets = bucket_ready(&ready_candidates, today);
@@ -465,7 +466,7 @@ fn strip_checkbox(line: &str) -> String {
         .iter()
         .find_map(|marker| trimmed.strip_prefix(marker))
         .unwrap_or(trimmed);
-    let after_marker = if let Some(rest) = after_marker.strip_prefix('[') {
+    if let Some(rest) = after_marker.strip_prefix('[') {
         match rest.find(']') {
             Some(end) => rest[end + 1..].trim_start().to_string(),
             None => after_marker.to_string(),
@@ -476,8 +477,7 @@ fn strip_checkbox(line: &str) -> String {
         after_marker[dot + 2..].to_string()
     } else {
         after_marker.to_string()
-    };
-    after_marker
+    }
 }
 
 fn task_block_id(body: &str) -> Option<&str> {
@@ -570,6 +570,22 @@ fn write_changes(
         written.push(path.to_string());
     }
     Ok(())
+}
+
+fn write_atomically(path: &Path, contents: &str) -> Result<(), String> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("no file name in {}", path.display()))?;
+    let temp =
+        path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
+    let _ = fs::remove_file(&temp);
+    fs::write(&temp, contents)
+        .map_err(|error| format!("write {}: {error}", temp.display()))?;
+    fs::rename(&temp, path).map_err(|error| {
+        let _ = fs::remove_file(&temp);
+        format!("rename {}: {error}", path.display())
+    })
 }
 
 #[cfg(test)]
@@ -714,20 +730,4 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&dir);
     }
-}
-
-fn write_atomically(path: &Path, contents: &str) -> Result<(), String> {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| format!("no file name in {}", path.display()))?;
-    let temp =
-        path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
-    let _ = fs::remove_file(&temp);
-    fs::write(&temp, contents)
-        .map_err(|error| format!("write {}: {error}", temp.display()))?;
-    fs::rename(&temp, path).map_err(|error| {
-        let _ = fs::remove_file(&temp);
-        format!("rename {}: {error}", path.display())
-    })
 }

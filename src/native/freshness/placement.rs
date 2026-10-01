@@ -91,6 +91,8 @@ pub(crate) fn stamp_fresh(line: &str, date: NaiveDate) -> Stamp {
 ///
 /// `Some(days)` must hold 1–365; out-of-range values clear the field
 /// instead of writing an invalid one. `None` removes the field.
+// P12 vector helper: only the conformance tests exercise refresh edits.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn set_refresh(
     line: &str,
     days: Option<u16>,
@@ -107,7 +109,10 @@ pub(crate) fn set_refresh(
 #[derive(Debug, Clone, Copy)]
 enum RefreshEdit {
     Keep,
+    // P12 vector variants: only set_refresh (test-only) constructs these.
+    #[cfg_attr(not(test), allow(dead_code))]
     Set(u16),
+    #[cfg_attr(not(test), allow(dead_code))]
     Clear,
 }
 
@@ -239,12 +244,12 @@ fn suffix_start_inner(line: &str) -> Option<usize> {
     let mut leftmost: Option<usize> = None;
 
     // An optional trailing ` ^id` block link opens the run.
-    if let Some(block_start) = trailing_block_start(&line[..cursor]) {
-        if block_start >= floor {
-            leftmost = Some(block_start);
-            cursor = block_start;
-            cursor = trim_end_to(&line[..cursor], cursor);
-        }
+    if let Some(block_start) = trailing_block_start(&line[..cursor])
+        && block_start >= floor
+    {
+        leftmost = Some(block_start);
+        cursor = block_start;
+        cursor = trim_end_to(&line[..cursor], cursor);
     }
 
     loop {
