@@ -190,7 +190,8 @@ bob-ledger-tools (api `version >= 3`), with a source comment at each
 call site. A missing stamp only means Bryan sees the task once more;
 a misplaced stamp hides Tasks fields — so the risky part lives in one
 place, and when ledger-tools is absent or old the gesture simply
-doesn't stamp.
+doesn't stamp. Clicking a freshness mark only reveals the raw field
+for editing and never stamps.
 
 ## 6. Review ritual
 
@@ -282,6 +283,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
 | `freshness.md` | vault-review (landed: review note grouping NEW → DUE) |
 | `dash.md` | vault-review (landed: REVIEW chip) |
+| freshness mark | fresh-mark (pending: bob-ledger-tools Live Preview + rendered views) |
 
 ## 9. Placement conformance examples
 
@@ -383,3 +385,226 @@ JavaScript tests use these verbatim.
   stamped 2026-10-08, but not a Ready task stamped 2026-10-07. With
   budget 15, 15 refreshed and 0 new → `budget_met: true`; with 1 new
   → `false`.
+
+## 11. Display: the freshness mark
+
+The freshness mark is display-only and lives only in bob-ledger-tools.
+Nothing ever writes it: `[fresh:: YYYY-MM-DD]` stays the only stored
+form, and Rust surfaces already strip inline fields
+(`note_tasks::clean_description`). The mark is computed at render time
+from the stamp, the interval, and the shared evaluator that also
+drives `bob freshness list`, the status bar, Ctrl+Alt+J, and
+`freshness.md`.
+
+**Principles.** Store absolute, show relative. One glyph lifecycle,
+borrowed from the status bar: `✓` when confirmed today, a lease ring
+that drains as the task ages, `⟳` when due (Alt+F turns `⟳` back into
+`✓`). Loud only when actionable: only tasks the evaluator says are
+due get color and a capsule. Truthful or neutral: when the plugin
+cannot identify the exact task, the mark shows only the neutral lease
+and never a guessed "due"; non-canonical stamps keep their Dataview
+pill, flagged as needing repair. Reversible and editable: the cursor
+or a click reveals the raw text, source mode shows raw text, a session
+toggle restores the old pills, and without bob-ledger-tools the vault
+falls back to today's pills.
+
+**Anatomy and tones.** A mark is `[glyph][label][interval?]`,
+rendered at 0.8em in the interface font with tabular numerals, sitting
+on the text baseline.
+
+| Tone | When | Glyph | Color |
+| ---- | ---- | ----- | ----- |
+| `today` | age 0 on an open task | circle-check (full ring + tick) | `--task-status-next` green |
+| `aging` | evaluator says FRESH, or the task is unresolved | lease ring: faint track + arc for the remaining lease | `--text-muted` |
+| `due` | evaluator says STALE or RESURFACED | `⟳` (rotate-cw) | `--color-orange`: the only loud tone (14% tinted capsule, 1px inset ring, weight 650) |
+| `resting` | evaluator says out of scope (Next, In Progress, Blocked, linked today, …) or the task is closed | lease ring | `--text-faint`, quieter still |
+
+Each tone is also distinguished by its glyph, and `due` by its
+capsule, so the marks stay readable for color-blind users.
+
+**Label, ring, and interval.** `ageDays = days(fresh → today)`, never
+negative because future stamps get no mark. The label is `today` at
+age 0, otherwise `{N}d` (`1d`, `7d`, `282d`); days are always the
+unit, matching `bob freshness`. The interval follows the existing
+precedence: task `refresh`, then the note's `task_refresh`, then
+`freshness.interval`, then 7. `remaining =
+clamp((interval − ageDays) / interval, 0, 1)`, rounded to 4 decimals:
+full on the day of confirmation, empty exactly when STALE (at 0 only
+the faint track is drawn). The ring starts at 12 o'clock, drawn
+clockwise for `remaining`. The interval suffix `/{N}d` appears only
+when this task's own `[refresh:: N]` is folded into the mark, and
+never on the `today` tone; note and config intervals stay
+tooltip-only.
+
+**Tooltip.** An `aria-label` with `data-tooltip-position="top"`,
+lines joined with `\n`, never containing `::`. Dates use fixed English
+names independent of locale (`Thu, Oct 1`; the year is appended only
+when it differs from today's year: `Tue, Dec 30, 2025`). Relative
+age: `today`, `yesterday`, or `N days ago`. `every …` reads `every N
+days` (or `every 1 day`), plus ` (this task)`, ` (this note)`, or
+` (config)` for those sources and nothing for the default. Line 1:
+`Confirmed today` at age 0, otherwise `Confirmed {date} ·
+{relative}`. Line 2 is picked by resolution rather than tone: closed
+or out of scope → `Not in the review queue: {reason}`; STALE → `Due
+for review since {dueOn} · every …`; RESURFACED → `Resurfaced
+{scheduled}: scheduled after it was confirmed`; FRESH or unresolved
+with the lease running → `Next review {fresh+interval} · every …`;
+unresolved with the lease over → `Review lease ended
+{fresh+interval} · every …`. Line 3, `due` tone only: `Alt+F to
+confirm`. Reasons by status symbol: `*` Next, `/` In Progress, `?`
+Blocked, `x`/`X` Done, `-` Cancelled, any other non-space symbol
+`status [s]`; for `[ ]`, the first that applies: `linked today`, `in
+a daily note`, `recurring`, `in _templates or _conflicts`,
+`scheduled for {date}`, otherwise `hidden or dependency-blocked`.
+
+**Eligibility.** A Live Preview task line gets a mark only when
+`freshnessTaskStatus(line) !== null` (quote-aware), the line has
+exactly one `fresh` field and it is square-bracketed, and
+`readFreshness(line, today)` yields a date with none of
+`fresh_malformed`, `fresh_future`, `fresh_duplicate`, or
+`fresh_misplaced`. Refresh folding: when the line's only `refresh`
+field is square-bracketed, starts exactly one space after the `fresh`
+field, and parses (1–365), it folds into the mark; otherwise it stays
+a Dataview pill. Space folding: when the character before `[fresh::`
+is a space, the decoration range starts at that space and the widget
+restores the gap, so the mark wins over Dataview's widget by
+position. Lines inside code and lines in source mode never get a
+mark. Rendered views (a text node) skip the task-line and misplaced
+checks, because Tasks may have split off the suffix: the node must
+hold exactly one square-bracketed `fresh` field with a strict,
+non-future date, with adjacent refresh folding as above; text inside
+`code`, `pre`, `.bob-fresh-mark`, or `.dataview.inline-field` is
+never touched.
+
+**Resolution.** Exact first: a memo row with the same `path`, the
+same 0-based line, and `rawLine === lineText` (Live Preview only),
+modelled via `freshnessEvaluate`. Then consensus: every memo row in
+`path` whose own mark source text equals this mark's source text;
+when at least one candidate exists and all models are deep-equal, use
+it. Otherwise unresolved: a neutral lease with tone `today` or
+`aging`, the interval from the line plus `noteFreshnessRawFor(path)`
+plus config, and `data-resolved="false"`. In Live Preview the line's
+own status symbol always applies the closed override, even when the
+memo is a moment behind.
+
+**Interaction and surfaces.** Live Preview: the mark hides while any
+selection range overlaps the field span (Dataview's inclusive rule),
+so moving the cursor in shows the raw text; a mousedown on the mark
+places the cursor at the start of the field and focuses the editor
+(the mark never writes; Alt+F confirms); marks recompute on edits,
+viewport and selection changes, the debounced freshness refresh, and
+the date rollover, with widgets comparing a model key in `eq()` so an
+unchanged mark never flickers. Rendered views (reading view, Tasks
+query results such as `dash.md` and `freshness.md`, embeds, hover
+previews) render when the host renders and refresh when it
+re-renders. Repair flag: while marks are on,
+`body.bob-fresh-marks` is set and any leftover `fresh`/`refresh`
+Dataview pill in Live Preview is a non-canonical stamp, shown at full
+opacity with a dashed orange border. Session toggle: the "Toggle task
+freshness marks" command (default on) flips the marks and the body
+class, refreshes every editor, and shows a Notice.
+
+**Rejected alternatives.** Stored-syntax changes (emoji, compact
+codes, stored relative ages) would leave Dataview's field index,
+rot overnight, and rewrite both implementations plus ~540 vault
+lines. CSS-only restyles cannot compute an age, lease, or review
+state. Hiding `fresh` entirely loses the due signal. Lane-by-CSS
+accents contradict the queue for `#hide`, linked-today, and
+RESURFACED tasks; exact-or-neutral wins.
+
+## 12. Mark conformance examples
+
+Today `2026-10-08` (Thursday), config interval 7. Each M vector is a
+Ready, visible, non-recurring task in `a.md` that the evaluator
+resolves, unless noted. Tooltip lines are separated by `⏎` here; the
+code joins them with `\n`. The bob-ledger-tools JavaScript tests use
+these vectors verbatim.
+
+- **M1 today:**
+  `- [ ] #task Buy milk [fresh:: 2026-10-08] [created::2026-09-29]`
+  → text `[fresh:: 2026-10-08]`, foldSpace true; tone `today`, glyph
+  `check`, label `today`, intervalLabel null, remaining 1. Tooltip:
+  `Confirmed today ⏎ Next review Thu, Oct 15 · every 7 days`.
+- **M2 aging:** `[fresh:: 2026-10-05]` → age 3, label `3d`,
+  remaining 0.5714, tone `aging`, glyph `ring`. Tooltip:
+  `Confirmed Mon, Oct 5 · 3 days ago ⏎ Next review Mon, Oct 12 ·
+  every 7 days`.
+- **M3 boundary:** `[fresh:: 2026-10-01]` → STALE; tone `due`, glyph
+  `refresh`, label `7d`, remaining 0. Tooltip:
+  `Confirmed Thu, Oct 1 · 7 days ago ⏎ Due for review since Thu, Oct
+  8 · every 7 days ⏎ Alt+F to confirm`.
+- **M4 yesterday:** `[fresh:: 2026-10-07]` → label `1d`, remaining
+  0.8571. Tooltip:
+  `Confirmed Wed, Oct 7 · yesterday ⏎ Next review Wed, Oct 14 · every
+  7 days`.
+- **M5 folded refresh:**
+  `- [ ] #task Rename queue input [fresh:: 2026-10-05] [refresh:: 14] [created::2026-09-10] [priority:: low]`
+  → text `[fresh:: 2026-10-05] [refresh:: 14]`; label `3d`,
+  intervalLabel `/14d`, remaining 0.7857. Tooltip:
+  `Confirmed Mon, Oct 5 · 3 days ago ⏎ Next review Mon, Oct 19 ·
+  every 14 days (this task)`.
+- **M6 refresh today:** `[fresh:: 2026-10-08] [refresh:: 14]` → tone
+  `today`, label `today`, intervalLabel null. Tooltip:
+  `Confirmed today ⏎ Next review Thu, Oct 22 · every 14 days (this
+  task)`.
+- **M7 note interval:** note `task_refresh: 3`,
+  `[fresh:: 2026-10-06]` → label `2d`, remaining 0.3333,
+  intervalLabel null. Tooltip:
+  `Confirmed Tue, Oct 6 · 2 days ago ⏎ Next review Fri, Oct 9 ·
+  every 3 days (this note)`.
+- **M8 resurfaced:**
+  `- [ ] #task Week habits [fresh:: 2026-10-05] [scheduled:: 2026-10-07]`
+  → tone `due`, glyph `refresh`, label `3d`, remaining 0.5714.
+  Tooltip:
+  `Confirmed Mon, Oct 5 · 3 days ago ⏎ Resurfaced Wed, Oct 7:
+  scheduled after it was confirmed ⏎ Alt+F to confirm`.
+- **M9 resting Next:** `- [*] #task Ship it [fresh:: 2026-09-20]` →
+  tone `resting`, glyph `ring`, label `18d`, remaining 0. Tooltip:
+  `Confirmed Sun, Sep 20 · 18 days ago ⏎ Not in the review queue:
+  Next`.
+- **M10 Next stamped today:**
+  `- [*] #task Ship it [fresh:: 2026-10-08]` → tone `today`.
+  Tooltip: `Confirmed today ⏎ Not in the review queue: Next`.
+- **M11 closed:**
+  `- [x] #task Old [fresh:: 2026-10-08] [completion:: 2026-10-08]` →
+  tone `resting`, glyph `ring`, label `today`. Tooltip:
+  `Confirmed today ⏎ Not in the review queue: Done`.
+- **M12 unresolved, running:** as M2 with no resolution → tone
+  `aging`, resolved false, tooltip as M2.
+- **M13 unresolved, lease over:** `[fresh:: 2026-09-20]` on `[ ]`,
+  unresolved → tone `aging`, label `18d`, remaining 0. Tooltip:
+  `Confirmed Sun, Sep 20 · 18 days ago ⏎ Review lease ended Sun, Sep
+  27 · every 7 days`.
+- **M14 linked today:** a Ready `[fresh:: 2026-10-05]` task linked
+  under today's open Pomodoro → tone `resting`. Line 2:
+  `Not in the review queue: linked today`.
+- **M15 other year:** `[fresh:: 2025-12-30]`, unresolved → label
+  `282d`. Tooltip:
+  `Confirmed Tue, Dec 30, 2025 · 282 days ago ⏎ Review lease ended
+  Tue, Jan 6 · every 7 days`.
+- **M16 quoted:**
+  `> - [ ] #task Quoted [fresh:: 2026-10-05] [created::2026-09-01]` →
+  a mark with foldSpace true.
+- **M17 invalid refresh is not folded:**
+  `[fresh:: 2026-10-05] [refresh:: 0]` → text
+  `[fresh:: 2026-10-05]`, interval 7 (default), intervalLabel null;
+  the refresh stays a pill.
+- **M18 non-adjacent refresh:**
+  `- [ ] #task X [refresh:: 14] [fresh:: 2026-10-05]` → text
+  `[fresh:: 2026-10-05]`, interval 14 `(this task)`, intervalLabel
+  null.
+- **N1–N6, no mark (source null):**
+  - N1 malformed `[fresh:: 2026-13-01]`;
+  - N2 future `[fresh:: 2026-10-09]`;
+  - N3 duplicate:
+    `- [ ] #task A [fresh:: 2026-09-01] B [fresh:: 2026-09-20] [created::2026-09-01]`;
+  - N4 misplaced:
+    `- [ ] #task Buy milk [created::2026-09-29] [fresh:: 2026-10-01]`;
+  - N5 parenthesized: `- [ ] #task Call mom (fresh:: 2026-10-05)`;
+  - N6 not a task: `- Buy milk [fresh:: 2026-10-05]`.
+- **C1–C3, consensus:**
+  - C1: two `a.md` rows with source `[fresh:: 2026-10-01]`, both Ready
+    and STALE → the `due` model.
+  - C2: the same pair, but one row is Next → null, so the mark is
+    unresolved.
+  - C3: no candidate rows → null.

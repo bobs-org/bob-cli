@@ -468,6 +468,7 @@ note, and in config), are due for review. Supported keymaps and
 `bob capture` edits stamp the tasks they rewrite; creation and
 automation never do. The definition, placement and state rules, and
 conformance vectors live in [`docs/freshness.md`](docs/freshness.md).
+The freshness mark display contract lives in §11 of that file.
 
 ```bash
 bob freshness [-b|--bob-dir DIR] [-f|--format human|json] [-l|--limit N]
@@ -1050,7 +1051,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | --- | --- |
 | Capture grammar, JSON, and picker protocol | [`docs/capture.md`](docs/capture.md) |
 | `bob query` Dataview and Tasks | [`docs/dataview.md`](docs/dataview.md) |
-| Task freshness review lease, placement, and evaluation | [`docs/freshness.md`](docs/freshness.md) |
+| Task freshness review lease, placement, evaluation, and display | [`docs/freshness.md`](docs/freshness.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
