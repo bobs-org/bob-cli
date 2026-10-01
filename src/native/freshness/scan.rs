@@ -226,6 +226,19 @@ pub(crate) fn refreshed_today(rows: &[RowCtx], today: NaiveDate) -> u32 {
     count
 }
 
+/// Bucket and confirmation date for one Ready-lane row, sharing
+/// the single `RowCtx::freshness_row(true)` construction so
+/// `note_ready` never duplicates it.
+pub(crate) fn row_bucket(
+    row: &RowCtx,
+    today: NaiveDate,
+    config: &FreshnessConfig,
+) -> (Option<&'static str>, Option<NaiveDate>) {
+    use super::state::bucket_for_state;
+    let evaluated = evaluate(&row.freshness_row(true), today, config);
+    (bucket_for_state(evaluated.state), evaluated.fresh)
+}
+
 /// Collect one warning per linted row over every task, in scan order.
 pub(crate) fn collect_warnings(
     rows: &[RowCtx],

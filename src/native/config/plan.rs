@@ -10,6 +10,7 @@ pub(crate) struct PlanConfig {
     pub(crate) max_next: u32,
     pub(crate) max_pending: u32,
     pub(crate) max_ready: u32,
+    pub(crate) max_ready_per_note: u32,
     pub(crate) strict: bool,
     pub(crate) exempt: Vec<String>,
     pub(crate) inventory_labels: Vec<String>,
@@ -23,6 +24,7 @@ impl Default for PlanConfig {
             max_next: 15,
             max_pending: 10,
             max_ready: 100,
+            max_ready_per_note: 5,
             strict: false,
             exempt: vec!["GTD".to_string()],
             inventory_labels: vec![
@@ -54,6 +56,10 @@ impl PlanConfig {
 
     pub(crate) fn max_ready(&self) -> u32 {
         self.max_ready
+    }
+
+    pub(crate) fn max_ready_per_note(&self) -> u32 {
+        self.max_ready_per_note
     }
 
     pub(crate) fn strict(&self) -> bool {
@@ -161,6 +167,48 @@ fn parse_plan_config(
         })
     };
 
+    let capped_cap = |name: &str,
+                      value: Option<serde_yaml::Value>,
+                      fallback: u32| {
+        let Some(value) = value else {
+            return Ok(fallback);
+        };
+        if value.is_null() {
+            return Ok(fallback);
+        }
+        let number = match &value {
+            serde_yaml::Value::Number(number) => {
+                if let Some(int) = number.as_i64() {
+                    int
+                } else if let Some(uint) = number.as_u64()
+                    && let Ok(int) = i64::try_from(uint)
+                {
+                    int
+                } else {
+                    return Err(ConfigError::Invalid(format!(
+                            "plan.{name} in {path_display} must be an integer from 1 to 999; got {value:?}"
+                        )));
+                }
+            }
+            _ => {
+                return Err(ConfigError::Invalid(format!(
+                        "plan.{name} in {path_display} must be an integer from 1 to 999; got {}",
+                        render_scalar(&value)
+                    )));
+            }
+        };
+        if !(1..=999).contains(&number) {
+            return Err(ConfigError::Invalid(format!(
+                    "plan.{name} in {path_display} must be an integer from 1 to 999; got {number}"
+                )));
+        }
+        u32::try_from(number).map_err(|_| {
+                ConfigError::Invalid(format!(
+                    "plan.{name} in {path_display} must be an integer from 1 to 999; got {number}"
+                ))
+            })
+    };
+
     let strict_value = match get("strict") {
         None | Some(serde_yaml::Value::Null) => defaults.strict,
         Some(serde_yaml::Value::Bool(flag)) => flag,
@@ -218,6 +266,11 @@ fn parse_plan_config(
             defaults.max_pending,
         )?,
         max_ready: cap("max_ready", get("max_ready"), defaults.max_ready)?,
+        max_ready_per_note: capped_cap(
+            "max_ready_per_note",
+            get("max_ready_per_note"),
+            defaults.max_ready_per_note,
+        )?,
         strict: strict_value,
         exempt: strings("exempt", get("exempt"))?,
         inventory_labels: strings("inventory_labels", get("inventory_labels"))?,
@@ -253,6 +306,7 @@ mod tests {
         assert_eq!(config.max_next(), 15);
         assert_eq!(config.max_pending(), 10);
         assert_eq!(config.max_ready(), 100);
+        assert_eq!(config.max_ready_per_note(), 5);
         assert!(!config.strict());
         assert_eq!(config.exempt(), ["GTD"]);
         assert_eq!(
@@ -288,6 +342,7 @@ mod tests {
             \x20 max_next: 20\n\
             \x20 max_pending: 7\n\
             \x20 max_ready: 42\n\
+            \x20 max_ready_per_note: 3\n\
             \x20 max_now: 99\n\
             \x20 strict: true\n\
             \x20 exempt: [GTD, ADMIN]\n\
@@ -301,6 +356,7 @@ mod tests {
         assert_eq!(config.max_next(), 20);
         assert_eq!(config.max_pending(), 7);
         assert_eq!(config.max_ready(), 42);
+        assert_eq!(config.max_ready_per_note(), 3);
         assert!(config.strict());
         assert_eq!(config.exempt(), ["GTD", "ADMIN"]);
         assert_eq!(config.inventory_labels(), ["LATER"]);
@@ -318,6 +374,12 @@ mod tests {
             "plan:\n  max_ready: 1.5\n",
             "plan:\n  max_ready: many\n",
             "plan:\n  max_ready: 4294967296\n",
+            "plan:\n  max_ready_per_note: 0\n",
+            "plan:\n  max_ready_per_note: 1000\n",
+            "plan:\n  max_ready_per_note: -1\n",
+            "plan:\n  max_ready_per_note: 1.5\n",
+            "plan:\n  max_ready_per_note: many\n",
+            "plan:\n  max_ready_per_note: 4294967296\n",
             "plan:\n  max_themes: many\n",
             "plan:\n  strict: \"yes\"\n",
             "plan:\n  exempt: GTD\n",
@@ -334,6 +396,44 @@ mod tests {
                 "expected invalid config for {text:?}, got {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn max_ready_per_note_bounds_and_message() {
+        for (text, expected) in [
+            ("plan:\n  max_ready_per_note: 1\n", 1),
+            ("plan:\n  max_ready_per_note: 5\n", 5),
+            ("plan:\n  max_ready_per_note: 999\n", 999),
+        ] {
+            let config = parse_plan_config(text, Path::new("/config.yml"))
+                .expect("boundary cap parses");
+            assert_eq!(config.max_ready_per_note(), expected);
+        }
+        let error = parse_plan_config(
+            "plan:\n  max_ready_per_note: 0\n",
+            Path::new("/cfg.yml"),
+        )
+        .expect_err("0 is invalid");
+        assert_eq!(
+            error.message(),
+            "plan.max_ready_per_note in /cfg.yml must be an integer from 1 to 999; got 0"
+        );
+    }
+
+    #[test]
+    fn absent_max_ready_per_note_falls_back_to_default() {
+        let config = parse_plan_config(
+            "plan:\n  max_ready: 42\n",
+            Path::new("/config.yml"),
+        )
+        .expect("absent per-note cap");
+        assert_eq!(config.max_ready_per_note(), 5);
+        let nulled = parse_plan_config(
+            "plan:\n  max_ready_per_note: null\n",
+            Path::new("/config.yml"),
+        )
+        .expect("null per-note cap");
+        assert_eq!(nulled.max_ready_per_note(), 5);
     }
 
     #[test]

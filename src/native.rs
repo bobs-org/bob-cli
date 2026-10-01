@@ -46,6 +46,7 @@ mod gkeep;
 mod highlights_ref;
 mod markdown;
 mod nightly;
+mod note_ready;
 mod note_tasks;
 mod notify;
 mod ob;

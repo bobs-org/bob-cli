@@ -189,6 +189,37 @@ fn project_parser_reports_malformed_and_multiple_prj_lines() {
 }
 
 #[test]
+fn type_forms_all_match_project_and_area() {
+    // R11: every type form is eligible in both Rust and JS.
+    for contents in [
+        "---\ntype: \"[[project]]\"\n---\n",
+        "---\ntype: '[[area]]'\n---\n",
+        "---\ntype: [[project]]\n---\n",
+        "---\ntype: [\"[[area]]\"]\n---\n",
+        "---\ntype: ['[[project]]']\n---\n",
+        "---\ntype:\n  - \"[[project]]\"\n---\n",
+        "---\ntype:\n  - '[[area]]'\n---\n",
+    ] {
+        let frontmatter =
+            parse_frontmatter(contents).expect("frontmatter parses");
+        let is_project = frontmatter_is_project(&frontmatter);
+        let is_area = frontmatter_is_area(&frontmatter);
+        assert!(
+            is_project || is_area,
+            "type form should match: {contents:?}"
+        );
+    }
+    let project_list = parse_frontmatter("---\ntype: [\"[[project]]\"]\n---\n")
+        .expect("flow list parses");
+    assert!(frontmatter_is_project(&project_list));
+    assert!(!frontmatter_is_area(&project_list));
+    let block_area = parse_frontmatter("---\ntype:\n  - \"[[area]]\"\n---\n")
+        .expect("block list parses");
+    assert!(frontmatter_is_area(&block_area));
+    assert!(!frontmatter_is_project(&block_area));
+}
+
+#[test]
 fn non_project_notes_are_ignored() {
     let mut issues = Vec::new();
     let note = parse_project(

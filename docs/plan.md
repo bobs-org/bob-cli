@@ -97,6 +97,8 @@ one applies:
 | `next_cap_exceeded` | NEXT is over the cap; never changes `status`, nothing is refused |
 | `pending_cap_exceeded` | PENDING is over the cap; never changes `status`, nothing is refused |
 | `ready_cap_exceeded` | READY is over the cap; Obsidian `bob-plan` block only (`bob plan` has no READY count); never changes `status`, nothing is refused |
+| `note_ready_cap_invalid` | a note's `ready_cap` is not `1–999` or `off`; emitted once per note, then the default cap applies |
+| `note_ready_in_terminal_project` | a done/canceled project still holds counted Ready tasks; not capped, listed under "not capped" |
 | `today_link_unresolved` | a ledger link resolves to no countable task (missing or ambiguous note, unreadable file, or no open task behind the block ID) |
 
 ## Today
@@ -222,6 +224,113 @@ when the PLAN portion describes that older file's ledger. `READY –`
 means Tasks data, required Today state, or the count is unavailable;
 zero is reserved for a successfully evaluated empty queue.
 
+## Ready cap per note
+
+Every area/project note has a soft cap on its Ready lane
+(`plan.max_ready_per_note`, default 5, per-note `ready_cap`
+override). Crowded notes are named, counted, and easy to act on:
+in `bob ready`, a dash CROWDED chip, and a live chip on each note's
+`## Tasks` heading. All surfaces share one read-time contract,
+implemented in Rust (`src/native/note_ready/`) and in
+bob-ledger-tools and pinned by shared vectors R1–R14.
+
+The cap counts the whole Ready lane by residence, whatever its
+freshness: the lane (not the gated READY backlog) is counted
+because a gated per-note count would hide work behind the rot
+cliff and invert review (skipping review would lower the count
+without lowering pressure).
+
+```text
+counted(t)  = lane(t) ∧ ¬recurring(t) ∧ block_id(t) ≠ "prj"
+lane(t)     = the existing READY_QUERY / readyTaskVisible ∧ ¬planTaskIsBlocked predicate:
+              TODO-type status, not done, not dependency-blocked, no #hide tag, not under
+              _templates/ or _conflicts/, no scheduled date or scheduled ≤ today.
+              Freshness bucket and Today are NOT filters (whole lane).
+note(t)     = the vault file that holds t (residence; never parent, heading, embed, backlink)
+eligible(n) = type(n) ∈ {[[area]], [[project]]} (quoted, single-quoted, bare, flow-list,
+              block-list forms) ∧ (area ∨ status ∉ {done, canceled, cancelled})
+              ∧ path not under .git/ .obsidian/ _templates/ _conflicts/ _generated/ done/
+cap(n)      = ready_cap integer 1–999 → (cap, source "note")
+              | ready_cap off / false → exempt
+              | ready_cap present but invalid → lint note_ready_cap_invalid, then default
+              | absent → plan.max_ready_per_note (source "config") else 5 (source "default")
+count(n)    = |{ t : note(t) = n ∧ counted(t) }|   (each row counts; nested child tasks count)
+make_up(n)  = { new, rotten, ready = count − new − rotten } from freshness buckets
+              (rotten includes resurfaced; null when freshness is unavailable)
+recurring(n)= lane rows in n excluded only because they recur (shown as ↻ k)
+state(n)    = exempt | crowded (count > cap) | full (count = cap) | room (0 < count < cap)
+              | empty (count = 0); surfaces add "unavailable" when no snapshot exists
+totals      = notes (eligible, not exempt) with areas/projects split, crowded, full, room,
+              empty, exempt, counted (Σ count over capped notes),
+              excess (Σ max(0, count − cap)), recurring
+lint note_ready_in_terminal_project: a done/canceled project still holding counted rows
+              (not capped; listed under "not capped")
+```
+
+The note-entry field names are shared by CLI JSON and
+`api.noteReady`: `path`, `name` (stem), `kind` (`area`|`project`),
+`status`, `parent`, `count`, `cap`, `cap_source`
+(`note`|`config`|`default`|`preview`), `state`, `over_by`,
+`make_up` (`{ready,new,rotten}` or null), and `recurring`. Lints
+are `{code, path, message}`, emitted once per note, never once per
+row.
+
+**Words:** a note is **crowded**, **full**, or has **room**. An
+exempt note has **no cap**. The verbs are always
+**split · sequence · defer · drop**. The UI never suggests
+"promote to Next".
+
+**States:** room is dim/muted (`ready 3/5`); full is muted with
+`· full` text and no amber; crowded is red with `+k`
+(`bob-plan-over` in Obsidian); exempt is muted (`ready 65 · no cap`
+/ `no cap`); unavailable is `–`, never `0`; fixed is green
+(`CROWDED 0 ✓`). Color always comes with text. Numbers use tabular
+numerals with a stable width. Obsidian styling uses theme variables
+only (no hex), and motion respects `prefers-reduced-motion`. Chips
+and rows carry aria labels and tooltips that spell out the count,
+for example `11 ready-lane tasks = 11 ready + 0 new + 0 rotten ·
+cap 5 (Bob config) · 6 over · split, sequence, defer, or drop`.
+
+**`ready_cap`:** a per-note frontmatter integer `1–999`, or `off`
+(case-insensitive) or YAML `false` for exempt. YAML 1.1 parsers read
+a bare `off` as `false`. An invalid value emits
+`note_ready_cap_invalid` once per note and falls back to the
+default.
+
+**Failure behavior:** an invalid global `plan.max_ready_per_note`
+exits 2 for `bob plan`/`bob ready` (with a JSON error envelope under
+`-f json`); every other caller falls back to defaults. An invalid
+per-note `ready_cap` produces a lint and falls back to the default.
+A vault I/O failure exits 1. A non-Dataview task format exits 2.
+Crowded notes never fail the report. Only `--check` maps them to
+exit 3 (in `bob ready`). A missing Tasks plugin or a non-`Warm`
+Tasks cache gives `available: false` in the plugin, and every
+surface shows `–`. Unavailable freshness gives `make_up: null`;
+counts are still shown.
+
+**Mobile:** `config.yml` is unreadable there, so the default cap
+applies and the tooltip says so. Per-note `ready_cap` works
+everywhere.
+
+**Conformance vectors (copied verbatim into Rust and JS tests):**
+
+| #   | Fixture                                                                                                                                                                                | Expected                                                                                                     |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| R1  | 6 `[ ]` tasks, default cap                                                                                                                                                             | `count 6`, crowded, `over_by 1`, `excess 1`                                                                  |
+| R2  | 5 `[ ]` tasks                                                                                                                                                                          | full, no lint                                                                                                |
+| R3  | `#hide`, `#Hide`, `#hide/x`, future `scheduled`, dependency-blocked, `[?]`, `[*]`, `[/]`, `[x]`, `[-]`                                                                                 | none count                                                                                                   |
+| R4  | 3 tasks: one unstamped (NEW), one stamped 8 days ago (ROTTEN), one fresh                                                                                                               | `count 3`, make-up `1 ready + 1 new + 1 rotten`                                                              |
+| R5  | `[repeat:: every day]` and `🔁` tasks                                                                                                                                                  | not counted; `recurring 2`                                                                                   |
+| R6  | a visible `^prj` task                                                                                                                                                                  | not counted                                                                                                  |
+| R7  | tasks in a daily note, an untyped note, `_templates/`, `done/`, `dash.md`                                                                                                              | absent from the per-note list                                                                                |
+| R8  | `ready_cap: 8` / `off` / `OFF` / `false` / `0` / `lots` / `1000`                                                                                                                       | cap 8 (source `note`) / exempt / exempt / exempt / lint then default / lint then default / lint then default |
+| R9  | a parent `[ ]` with 2 child `[ ]` tasks                                                                                                                                                | `count 3`                                                                                                    |
+| R10 | `status: done` (and `cancelled`) project with 2 `[ ]` tasks                                                                                                                            | not capped; lint `note_ready_in_terminal_project`                                                            |
+| R11 | `type: "[[project]]"`, `type: '[[area]]'`, bare `type: [[project]]` (Obsidian parses it as nested array `[["project"]]`), flow list `["[[area]]"]`, block list, nested folder `x/y.md` | all eligible; Rust and JS agree                                                                              |
+| R12 | stamping `[fresh::]` on a NEW task (Alt+Shift+F) in a note at 5                                                                                                                        | count stays 5 (full); make-up moves 1 from new to ready                                                      |
+| R13 | a Today-linked `[ ]` task                                                                                                                                                              | counted (whole lane)                                                                                         |
+| R14 | `plan.max_ready_per_note: 3`; one note with `ready_cap: 8`                                                                                                                             | other notes cap 3 (source `config`); that note cap 8 (source `note`)                                         |
+
 ## Config
 
 ```yaml
@@ -232,6 +341,7 @@ plan:
   max_next: 15 # open Next tasks visible today (see above)
   max_pending: 10 # open In Progress tasks visible today (see above)
   max_ready: 100 # soft limit for dashboard READY tasks, excluding Today (see above)
+  max_ready_per_note: 5 # soft cap per area/project note; frontmatter ready_cap overrides
   strict: false # refuse #NAME captures that would create a theme past max_themes
   exempt: [GTD] # open entries that never count as themes
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open names that are storage, not themes
@@ -241,8 +351,8 @@ The block is optional. A missing file or a missing block means the
 defaults above, shared by Rust and JavaScript. Unknown keys stay
 ignored.
 
-**Validation.** Caps are integers ≥ 1, and the lists hold non-empty
-strings.
+**Validation.** Caps are integers ≥ 1 (`max_ready_per_note` is
+`1–999`), and the lists hold non-empty strings.
 
 **Invalid values:**
 

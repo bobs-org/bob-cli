@@ -291,9 +291,81 @@ pub(super) fn frontmatter_has_type(
     frontmatter: &Frontmatter<'_>,
     expected: &str,
 ) -> bool {
-    frontmatter_value(frontmatter, "type")
-        .map(trim_yaml_scalar)
-        .is_some_and(|value| value == expected)
+    // Scalar forms: quoted, single-quoted, and bare (`type: [[project]]`).
+    if let Some(raw) = frontmatter_value(frontmatter, "type") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            // Flow-list form: `type: ["[[project]]"]`.
+            if trimmed.starts_with('[') {
+                return flow_list_contains(trimmed, expected);
+            }
+            return trim_yaml_scalar(trimmed) == expected;
+        }
+    }
+    // Block-list form:
+    // `type:` followed by `  - "[[project]]"` lines.
+    block_list_contains(frontmatter, expected)
+}
+
+fn flow_list_contains(raw: &str, expected: &str) -> bool {
+    let inner = raw.trim().strip_prefix('[').unwrap_or(raw);
+    let inner = inner.strip_suffix(']').unwrap_or(inner);
+    inner.split(',').any(|item| {
+        let item = item.trim();
+        if item.is_empty() {
+            return false;
+        }
+        // Bare YAML wikilinks parse as a nested array (`[["project"]]`);
+        // accept the inner scalar too.
+        let unquoted = trim_yaml_scalar(item).trim();
+        unquoted == expected
+            || unquoted.trim_matches(['[', ']', '"', '\'']).trim() == "project"
+                && expected == "[[project]]"
+            || unquoted.trim_matches(['[', ']', '"', '\'']).trim() == "area"
+                && expected == "[[area]]"
+    })
+}
+
+fn block_list_contains(frontmatter: &Frontmatter<'_>, expected: &str) -> bool {
+    let mut in_list = false;
+    for line in &frontmatter.lines {
+        if !in_list {
+            let Some(rest) = line.strip_prefix("type") else {
+                continue;
+            };
+            let Some(value) = rest.strip_prefix(':') else {
+                continue;
+            };
+            if !value.trim().is_empty() {
+                return false;
+            }
+            in_list = true;
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(item) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix('-'))
+        else {
+            break;
+        };
+        let item = trim_yaml_scalar(item.trim());
+        if item == expected {
+            return true;
+        }
+        // Nested `[["project"]]` scalar inside a block list.
+        let inner = item.trim_matches(['[', ']', '"', '\'']).trim();
+        if inner == "project" && expected == "[[project]]" {
+            return true;
+        }
+        if inner == "area" && expected == "[[area]]" {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn frontmatter_value<'a>(
@@ -323,6 +395,101 @@ pub(crate) fn trim_yaml_scalar(value: &str) -> &str {
         }
     }
     value
+}
+
+/// One typed area/project note for the per-note Ready cap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TypedNote {
+    /// Vault-relative path with forward slashes.
+    pub(crate) path: String,
+    /// File stem without `.md`.
+    pub(crate) stem: String,
+    /// `area` or `project`.
+    pub(crate) kind: String,
+    pub(crate) status: crate::native::projects::ProjectStatus,
+    /// Parent note stem, when `parent: "[[...]]"` parses.
+    pub(crate) parent: Option<String>,
+    /// Raw `ready_cap` frontmatter value, if present and non-empty.
+    pub(crate) ready_cap_raw: Option<String>,
+}
+
+/// Walk the vault for typed area/project notes, reusing the project
+/// directory exclusions. Returns path, stem, kind, status, parent
+/// stem, and the raw `ready_cap` value.
+pub(crate) fn walk_typed_notes(bob_dir: &Path) -> Vec<TypedNote> {
+    let mut notes = Vec::new();
+    walk_typed_directory(bob_dir, bob_dir, &mut notes);
+    notes.sort_by(|a: &TypedNote, b: &TypedNote| a.path.cmp(&b.path));
+    notes
+}
+
+fn walk_typed_directory(root: &Path, dir: &Path, notes: &mut Vec<TypedNote>) {
+    let entries = match read_sorted_directory(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries {
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if file_type.is_dir() {
+            if is_excluded_directory(&path) {
+                continue;
+            }
+            walk_typed_directory(root, &path, notes);
+            continue;
+        }
+        if !file_type.is_file() || !is_markdown_file(&path) {
+            continue;
+        }
+        let relative = relative_or_original(root, &path);
+        let relative_slash = relative.to_string_lossy().replace('\\', "/");
+        // Contract exclusions beyond directories: `done/` and daily
+        // paths are never per-note entries; `dash.md` never is either.
+        if relative_slash.starts_with("done/")
+            || relative_slash == "done"
+            || relative_slash == "dash.md"
+        {
+            continue;
+        }
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(_) => continue,
+        };
+        let Some(frontmatter) = parse_frontmatter(&contents) else {
+            continue;
+        };
+        let kind = if frontmatter_is_area(&frontmatter) {
+            "area"
+        } else if frontmatter_is_project(&frontmatter) {
+            "project"
+        } else {
+            continue;
+        };
+        let status = crate::native::projects::ProjectStatus::parse(
+            frontmatter_value(&frontmatter, "status"),
+        );
+        let parent =
+            frontmatter_value(&frontmatter, "parent").and_then(wikilink_target);
+        let ready_cap_raw = frontmatter_value(&frontmatter, "ready_cap")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let stem = relative
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("")
+            .to_string();
+        notes.push(TypedNote {
+            path: relative_slash,
+            stem,
+            kind: kind.to_string(),
+            status,
+            parent,
+            ready_cap_raw,
+        });
+    }
 }
 
 pub(super) fn wikilink_target(value: &str) -> Option<String> {

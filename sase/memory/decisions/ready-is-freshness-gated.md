@@ -11,8 +11,9 @@ summary:
   sections and NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; review
   clears NEW then ROTTEN; no tags, fields, or status changes store review state."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-10-01
+  superseded_by: decisions/note-ready-cap-counts-the-lane
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault, dash.
@@ -61,3 +62,5 @@ case).
 
 Supersedes in part [[decisions/today-is-read-from-the-ledger]] for the dash
 section list only.
+
+Superseded in part: chip list only — see [[decisions/note-ready-cap-counts-the-lane]].
