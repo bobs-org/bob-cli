@@ -499,9 +499,7 @@ pub(super) fn reject_pomodoro_close_conflicts(
         ));
     }
     if !parsed.sub_bullets.is_empty() {
-        return Err(CaptureError::usage(
-            "a close never carries authored sub-bullets",
-        ));
+        return Err(CaptureError::usage(POMODORO_CLOSE_INTERNAL_BULLETS_ERROR));
     }
     Ok(())
 }

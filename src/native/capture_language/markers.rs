@@ -397,7 +397,7 @@ pub(super) const POMODORO_SHIFT_SHAPE_ERROR: &str = "Pomodoro shift items must c
 
 pub(super) const POMODORO_SHIFT_FORCED_ERROR: &str = "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the shift alone";
 
-pub(super) const POMODORO_CLOSE_INTERNAL_BULLETS_ERROR: &str =
+pub(crate) const POMODORO_CLOSE_INTERNAL_BULLETS_ERROR: &str =
     "a close never carries authored sub-bullets";
 
 pub(crate) const POMODORO_START_FORCED_ERROR: &str = "Pomodoro start `=<X>` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the start alone";

@@ -2710,9 +2710,11 @@ text) and carry the spec, `^r:id=x1,`, `^r:id=x1!`, and `^r:id=x1~` report
 project-note `=x`, and malformed lists report `invalid_pomodoro_close` on
 the conflicting component or the precise list range. A `@@` declaration
 never applies to close or `=`/`=<X>` items, and neither is ever rewritten.
-A start or close item requests no completion: a cursor on such an item,
-including anywhere inside the task-number lists or a dangling separator,
-returns an empty success. The picker's in-progress
+A start token or a close token requests no completion: a cursor on that
+token, including anywhere inside the task-number lists or a dangling
+separator, returns an empty success. On a Work Log bullet line under the
+close, marker and block-link completion are suppressed and note and heading
+completion keep working. The picker's in-progress
 `@^`, `@route^`, `@^id`, `@:`, `@route:`, and `@:id` spellings are unchanged,
 and `@^id+` carries the project-note intent with `needs: ["route"]`. A `:` project-note
 spelling (`@:id+`, `@route:id+`, `@route:id+#name`) is a
@@ -3197,9 +3199,10 @@ ordinary link text. `wikilink_note` searches Markdown note paths, stems, and
 frontmatter aliases. `wikilink_heading` searches ATX headings in a resolved
 target, in the current capture destination for `[[#...]]`, or across the vault
 for `[[##...]]`. `wikilink_block` searches named block IDs in the analogous
-target, current-destination, or `[[^^...]]` vault-wide scope, except inside a
-whole-item `=x` Work Log tail, where block candidates are suppressed (entries
-reject block links) while note and heading completion keeps working. The note index is
+target, current-destination, or `[[^^...]]` vault-wide scope, except on a
+Work Log bullet line under a whole-item `=x`, where block candidates are
+suppressed (entries reject block links) while note and heading completion
+keeps working. The note index is
 read-only, skips hidden directories plus `.git`, `.obsidian`, `_generated`, and
 `_templates`, never follows directory symlinks, and returns bounded warnings for
 individual unreadable notes or malformed alias frontmatter while keeping path
