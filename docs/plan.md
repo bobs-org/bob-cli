@@ -139,9 +139,13 @@ task-line field, or a file-path filter.
 
 **NEXT** is every `[*]` task and **PENDING** every `[/]` task that
 the dash's defaults show: not done, not dependency-blocked, not
-`#hide`, not under `_templates`, not under `_conflicts`, and no
-scheduled date after today. Each counts the **whole lane, Today
-included**, so counts don't swing during the day.
+`#hide` (case-insensitive substring, so `#hide/x` and `#Hide` are out),
+not under `_templates`, not under `_conflicts` (both case-insensitive),
+not in `dash.md` itself for dashboard sections, and no scheduled date
+after today. Lane visibility is shared by the dashboard sections and
+the whole-lane budgets through one tested base predicate; status and
+TODAY are layered on top (PENDING uses `IN_PROGRESS`, NEXT uses symbol
+`*`).
 
 A NEXT task is a `#task` line that the native Tasks engine (the one
 behind `bob query --tasks`) matches with this query:
@@ -156,9 +160,23 @@ path does not include _conflicts
 (no scheduled date) OR (scheduled on or before today)
 ```
 
-The PENDING query is identical with `status.symbol is /`. This
-matches the dash's own defaults, so the chips, the lane sections
-and `bob plan` always agree.
+The PENDING query is identical with `status.type is IN_PROGRESS`. This
+matches the dash's own defaults.
+
+The dashboard and the whole lane differ on TODAY by design. The
+dashboard PENDING/NEXT sections exclude TODAY (plus `dash.md` itself);
+`bob plan`, navigation notices, native CLI parity, and other callers
+keep the **whole lane, Today included**, so those counts don't swing
+during the day. The dashboard badges show the **section count** as the
+primary number (for example `PENDING 49`) with the whole-lane pressure
+in the tooltip and accessible label (for example `49 in this section;
+whole lane 50/10; 1 in TODAY`); cap warnings still use the full lane.
+`dashboardLaneBudget("pending" | "next")` in bob-ledger-tools is the
+versioned dashboard contract. When Tasks data or the current-day Today
+cache is not ready, the dashboard section is unavailable (`–`), never a
+silent zero; a plugin too old for that API keeps the inline fallback,
+which applies the same base visibility and whatever TODAY predicate is
+available.
 
 ## READY backlog (dashboard and daily badge)
 
@@ -323,8 +341,8 @@ report, 1 for an I/O failure, 2 for usage or an invalid plan config.
 | Surface | What it shows |
 | --- | --- |
 | `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
-| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v3: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, PENDING, NEXT, READY chips, a theme line, and any lints. TODAY is the theme/link budget (`TODAY 3/3 · 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. |
-| `dash.md` | Its NEW, PENDING, NEXT, READY, BLOCKED, ROTTEN, and TODAY chips in that order and mutually exclusive TODAY / NEW / PENDING / NEXT / READY sections (section order TODAY → NEW → PENDING → NEXT → READY) use the Bob Ledger Tools api v3 with freshness namespace v3 (`readyBudget`/`renderReadyBadge` for gated READY plus `renderReviewChip`/`reviewModel` for NEW/ROTTEN, with a guarded inline fallback when the plugin is older or unloaded). TODAY is that same theme/link budget and opens today's daily note. |
+| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v3: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `dashboardLaneBudget`, `renderDashboardLaneBadge`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, PENDING, NEXT, READY chips, a theme line, and any lints. TODAY is the theme/link budget (`TODAY 3/3 · 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. Daily PENDING/NEXT keep whole-lane `pendingBudget`/`nextBudget`; only the dashboard uses the section budgets. |
+| `dash.md` | Its NEW, PENDING, NEXT, READY, BLOCKED, ROTTEN, and TODAY chips in that order and mutually exclusive TODAY / NEW / PENDING / NEXT / READY sections (section order TODAY → NEW → PENDING → NEXT → READY) use the Bob Ledger Tools api v3 with freshness namespace v3 (`dashboardLaneBudget`/`renderDashboardLaneBadge` for PENDING/NEXT sections, `readyBudget`/`renderReadyBadge` for gated READY plus `renderReviewChip`/`reviewModel` for NEW/ROTTEN, with a guarded inline fallback when the plugin is older or unloaded). PENDING/NEXT badges show the section count with the whole-lane pressure in the tooltip; non-dashboard `pendingBudget`/`nextBudget` keep whole-lane semantics. TODAY is that same theme/link budget and opens today's daily note. |
 | `bob tmux-pomodoro` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |
 | `bob task-status-hooks` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
 | `bob capture` | When a capture changes today's Pomodoros section, a before/after theme and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap theme. |
