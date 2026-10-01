@@ -97,6 +97,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::CaptureTasks,
     },
     Subcommand {
+        name: "freshness",
+        script_command: None,
+        about: "Review Ready tasks for freshness and seed the cutover",
+        native_command: NativeCommand::Freshness,
+    },
+    Subcommand {
         name: "gkeep",
         script_command: None,
         about: "Drain the Google Keep inbox into Obsidian tasks",
@@ -354,6 +360,8 @@ Examples:
                                  List picker tasks for one capture target
   bob query --source '#project'
                                  Print matching note paths
+  bob freshness list -f json
+                                 List the tasks due for freshness review
   bob gkeep
                                  Show the Keep inbox and gkeep_inbox.md side by side
   bob gkeep pull --dry-run

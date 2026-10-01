@@ -242,6 +242,78 @@ fn capture_tasks_help_lists_options_alphabetically() {
 }
 
 #[test]
+fn freshness_help_lists_subcommands_alphabetically() {
+    let output = bob_command()
+        .arg("freshness")
+        .arg("--help")
+        .output()
+        .expect("run bob freshness --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Review Ready tasks for freshness")
+            && help.contains("bob freshness seed --dry-run"),
+        "expected freshness long help:\n{help}"
+    );
+    assert_text_order(&help, &["\n  list ", "\n  seed "]);
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn freshness_list_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .arg("--help")
+        .output()
+        .expect("run bob freshness list --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("List the tasks due for freshness review")
+            && help.contains("--limit"),
+        "expected freshness list long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &["-b, --bob-dir", "-f, --format", "-h, --help", "-l, --limit"],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn freshness_seed_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("freshness")
+        .arg("seed")
+        .arg("--help")
+        .output()
+        .expect("run bob freshness seed --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Stamp the one-time freshness cutover seed")
+            && help.contains("--dry-run")
+            && help.contains("--force"),
+        "expected freshness seed long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-F, --force",
+            "-f, --format",
+            "-h, --help",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_targets_help_lists_options_alphabetically() {
     let output = bob_command()
         .arg("capture-targets")

@@ -265,4 +265,4 @@ pub(crate) use model::{TaskStatusDefinition, TaskStatusType, TasksSettings};
 pub(crate) use output::SyncError;
 pub(crate) use parse::{markdown_files, task_metadata, TaskMetadata};
 pub(crate) use settings::{read_tasks_settings, validate_blocked_status};
-pub(crate) use sync::daily_anchor_date;
+pub(crate) use sync::{canonical_daily_date, daily_anchor_date};

@@ -309,7 +309,7 @@ fn status_name(settings: &NoteTaskSettings, symbol: char) -> String {
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
-fn clean_description(
+pub(crate) fn clean_description(
     body: &str,
     global_filter: &str,
     block_id: Option<&str>,

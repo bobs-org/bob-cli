@@ -12,7 +12,7 @@ pub(crate) fn daily_anchor_date(
         .unwrap_or(effective_date)
 }
 
-pub(super) fn canonical_daily_date(relative_path: &Path) -> Option<NaiveDate> {
+pub(crate) fn canonical_daily_date(relative_path: &Path) -> Option<NaiveDate> {
     let mut components = relative_path.components();
     let Component::Normal(year_component) = components.next()? else {
         return None;

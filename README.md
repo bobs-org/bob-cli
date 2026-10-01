@@ -159,6 +159,7 @@ Bob's workflow commands are:
 | `capture-task-id` | Assign a user-authored block ID to an open capture task |
 | `capture-task-sections` | List the ALL-CAPS child sections of a capture task |
 | `capture-tasks` | List the open tasks in a routed note |
+| [`freshness`](#task-freshness) | List the tasks due for freshness review and seed the cutover |
 | [`gkeep`](#gkeep) | Drain the Google Keep inbox into Obsidian tasks |
 | [`highlights`](#highlights) | Synchronize Highlights PDF annotations with reference notes |
 | [`move-done-tasks`](#move-done-tasks) | Archive done and canceled task blocks and repair their links |
@@ -467,6 +468,19 @@ note, and in config), are due for review. Supported keymaps and
 `bob capture` edits stamp the tasks they rewrite; creation and
 automation never do. The definition, placement and state rules, and
 conformance vectors live in [`docs/freshness.md`](docs/freshness.md).
+
+```bash
+bob freshness [-b|--bob-dir DIR] [-f|--format human|json] [-l|--limit N]
+bob freshness list [-b|--bob-dir DIR] [-f|--format human|json] [-l|--limit N]
+bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format human|json]
+```
+
+Running `bob freshness` with no subcommand runs `list`: the tasks due
+for review (never confirmed, resurfaced, or stale), with whole-vault
+counts. `seed` stamps the one-time cutover: Ready tasks staggered
+across the last 7 days by note, every other open task today. The seed
+refuses a second run, aborts on any parse change, and `--dry-run`
+previews without writing.
 
 ## Projects
 

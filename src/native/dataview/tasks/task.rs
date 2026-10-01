@@ -530,6 +530,55 @@ pub(crate) struct TaskDetails {
     pub(crate) tags: Vec<String>,
 }
 
+/// Canonical fingerprint of the Tasks fields on one task line, for
+/// the `bob freshness seed` parse-invariance guard (`docs/freshness.md`
+/// placement rule 6): status, dates, priority, recurrence, `id`,
+/// `dependsOn`, tags, and block ID. The description itself is excluded:
+/// stamping `[fresh:: …]` changes it by design. Returns `None` for a
+/// line that is not a task line.
+pub(crate) fn tasks_fingerprint(line: &str) -> Option<String> {
+    let components = parse_task_line(line)?;
+    let body = components.body.clone();
+    let (block_start, block_id) = BLOCK_LINK
+        .captures(&body)
+        .and_then(|captures| {
+            Some((
+                captures.get(0)?.start(),
+                captures.get(1)?.as_str().to_string(),
+            ))
+        })
+        .unwrap_or((body.len(), String::new()));
+    let body = body[..block_start].trim().to_string();
+    let details = parse_details(&body, TaskFormat::Dataview);
+    let date = |date: &Option<TaskDate>| {
+        date.as_ref()
+            .map(|date| date.raw.clone())
+            .unwrap_or_default()
+    };
+    Some(
+        [
+            format!("status={}", components.status),
+            format!("priority={}", details.priority.number()),
+            format!("created={}", date(&details.created)),
+            format!("start={}", date(&details.start)),
+            format!("scheduled={}", date(&details.scheduled)),
+            format!("due={}", date(&details.due)),
+            format!("done={}", date(&details.done)),
+            format!("cancelled={}", date(&details.cancelled)),
+            format!(
+                "recurrence={}",
+                details.recurrence_source.as_deref().unwrap_or_default()
+            ),
+            format!("on_completion={}", details.on_completion),
+            format!("id={}", details.id),
+            format!("depends_on={}", details.depends_on.join(",")),
+            format!("tags={}", details.tags.join(",")),
+            format!("block_id={block_id}"),
+        ]
+        .join("\n"),
+    )
+}
+
 pub(crate) fn parse_details(line: &str, format: TaskFormat) -> TaskDetails {
     let mut details = TaskDetails::default();
     let mut state = line.trim().to_string();

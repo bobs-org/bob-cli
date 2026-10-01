@@ -5,7 +5,10 @@
 //! Both sides (this crate and bob-ledger-tools) run that doc's
 //! conformance vectors verbatim.
 
+pub(crate) mod cli;
 pub(crate) mod placement;
+pub(crate) mod scan;
+pub(crate) mod seed;
 pub(crate) mod state;
 
 pub(crate) use placement::{

@@ -1,13 +1,15 @@
 use std::{fs, path::Path};
 
+use chrono::NaiveDate;
 use serde::Serialize;
 use serde_json::Value;
 
 use super::{bob_env, print_json, DataviewError, OutputFormat};
+use crate::native::note_tasks::clean_description;
 
 use self::{
     index::TaskIndex, parse::QueryAst, result::TaskResult,
-    settings::TasksSettings,
+    settings::TasksSettings, task::TaskDate,
 };
 
 mod filter;
@@ -20,7 +22,7 @@ mod settings;
 mod task;
 
 pub(crate) use settings::TaskFormat;
-pub(crate) use task::{parse_details, TaskDetails};
+pub(crate) use task::{parse_details, tasks_fingerprint, TaskDetails};
 
 struct Execution {
     query: QueryAst,
@@ -73,6 +75,64 @@ pub(crate) const NEXT_QUERY: &str = "not done\nstatus.symbol is *\nis not blocke
 /// visible today. Same defaults as [`NEXT_QUERY`].
 pub(crate) const PENDING_QUERY: &str = "not done\nstatus.symbol is /\nis not blocked\ntags do not include #hide\nfolder does not include _templates\npath does not include _conflicts\n(no scheduled date) OR (scheduled on or before today)";
 
+/// The `docs/freshness.md` READY lane query: every Ready task
+/// visible today. It mirrors [`NEXT_QUERY`]'s defaults, replacing only
+/// the status test with the status-type TODO test, so the review queue
+/// and `bob plan` agree on lane visibility.
+pub(crate) const READY_QUERY: &str = "not done\nstatus.type is TODO\nis not blocked\ntags do not include #hide\nfolder does not include _templates\npath does not include _conflicts\n(no scheduled date) OR (scheduled on or before today)";
+
+/// A looser open-task query for the freshness seed universe and the
+/// `refreshed_today` base: every open task, whatever its lane.
+pub(crate) const OPEN_QUERY: &str = "not done";
+
+/// One task row for the freshness review queue and seed, read through
+/// the native Tasks engine so custom statuses, blocked derivation,
+/// and the vault's Tasks settings are honored exactly as in
+/// `bob plan`.
+#[derive(Debug, Clone)]
+pub(crate) struct RichTask {
+    /// Vault-relative path with forward slashes.
+    pub(crate) path: String,
+    /// 1-based line number, as in JSON and docs.
+    pub(crate) line: u32,
+    pub(crate) status_symbol: String,
+    /// Tasks status type (`TODO`, `DONE`, `IN_PROGRESS`, …).
+    pub(crate) status_type: String,
+    pub(crate) original_markdown: String,
+    /// Clean description: inline fields, block ID, and the global
+    /// filter stripped, as `bob freshness list -f json` reports it.
+    pub(crate) text: String,
+    pub(crate) created: Option<NaiveDate>,
+    pub(crate) scheduled: Option<NaiveDate>,
+    pub(crate) is_recurring: bool,
+    pub(crate) is_blocked: bool,
+    pub(crate) tags: Vec<String>,
+    pub(crate) block_id: Option<String>,
+}
+
+/// The vault's Tasks format, so `bob freshness` can refuse to run on
+/// a non-Dataview vault (see `docs/freshness.md` rule 1).
+pub(crate) fn read_task_format(
+    vault: &Path,
+) -> Result<TaskFormat, DataviewError> {
+    Ok(TasksSettings::read(vault)?.task_format)
+}
+
+/// Every task in the vault, unfiltered: the base for
+/// `refreshed_today` (tasks of any status) and freshness warnings.
+pub(crate) fn scan_all_rich_tasks(
+    vault: &Path,
+    now: chrono::NaiveDateTime,
+) -> Result<Vec<RichTask>, DataviewError> {
+    let settings = TasksSettings::read(vault)?;
+    let index = TaskIndex::read(vault, &settings, now)?;
+    Ok(index
+        .tasks
+        .iter()
+        .map(|task| rich_task(task, &settings))
+        .collect())
+}
+
 /// The descriptions of the tasks matching `query` through the native
 /// Tasks engine, so plan-budget lane counts honor the vault's Tasks
 /// settings. Callers apply their own whole-token tag predicates (the
@@ -95,6 +155,45 @@ pub(crate) fn query_matching_descriptions(
         .iter()
         .map(|task| task.description.clone())
         .collect())
+}
+
+/// The rich rows matching `query` through the native Tasks engine.
+/// See [`query_matching_descriptions`] for the engine contract.
+pub(crate) fn query_rich_tasks(
+    vault: &Path,
+    query: &str,
+    now: chrono::NaiveDateTime,
+) -> Result<Vec<RichTask>, DataviewError> {
+    let settings = TasksSettings::read(vault)?;
+    let index = TaskIndex::read(vault, &settings, now)?;
+    let parsed = parse::parse(vault, None, query, &settings)?;
+    let mut javascript =
+        js::JsSandbox::new(&index.tasks, parsed.context.as_ref(), now)?;
+    let execution =
+        execute_query(parsed, &settings, &index, now, &mut javascript)?;
+    Ok(execution
+        .result
+        .tasks
+        .iter()
+        .map(|task| rich_task(task, &settings))
+        .collect())
+}
+
+fn rich_task(task: &task::Task, settings: &TasksSettings) -> RichTask {
+    RichTask {
+        path: task.path.clone(),
+        line: u32::try_from(task.line_number + 1).unwrap_or(u32::MAX),
+        status_symbol: task.status.symbol.clone(),
+        status_type: task.status.status_type.as_str().to_string(),
+        original_markdown: task.original_markdown.clone(),
+        text: clean_description(&task.text, &settings.global_filter, None),
+        created: task.created.as_ref().and_then(TaskDate::valid_date),
+        scheduled: task.scheduled.as_ref().and_then(TaskDate::valid_date),
+        is_recurring: task.is_recurring,
+        is_blocked: task.is_blocked,
+        tags: task.tags.clone(),
+        block_id: task.block_id.clone(),
+    }
 }
 
 pub(super) fn run(

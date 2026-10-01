@@ -2,6 +2,7 @@
 
 mod capture;
 mod dataview;
+mod freshness;
 mod help;
 mod help_options;
 mod highlights;

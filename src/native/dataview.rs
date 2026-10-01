@@ -41,8 +41,10 @@ use sources::{
     native_link_target, normalize_note_path, note_stem, unquote_native_scalar,
 };
 pub(crate) use tasks::{
-    parse_details, query_matching_descriptions, TaskDetails, TaskFormat,
-    NEXT_QUERY, PENDING_QUERY,
+    parse_details, query_matching_descriptions, query_rich_tasks,
+    read_task_format, scan_all_rich_tasks, tasks_fingerprint, RichTask,
+    TaskDetails, TaskFormat, NEXT_QUERY, OPEN_QUERY, PENDING_QUERY,
+    READY_QUERY,
 };
 
 const COMMAND_NAME: &str = "bob query";

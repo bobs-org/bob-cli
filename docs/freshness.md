@@ -214,14 +214,64 @@ cancel); wording wrong (edit, then Alt+F).
 
 Headless review queue (`bob freshness list`, human and JSON) and a
 guarded, idempotent, staggered cutover seed (`bob freshness seed`)
-that aborts on any parse change. Landed by `fresh-cli`; this section
-is a placeholder until then.
+that aborts on any parse change.
+
+Running `bob freshness` with no subcommand runs `list`.
+
+`list` options: `-f/--format human|json` (default `human`) and
+`-l/--limit N` (queue rows only; counts always cover the whole
+vault). Human output is colored only on a TTY:
+
+```text
+bob freshness · Thu 2026-10-08 · every 7d
+
+  REVIEW 23 due · 3 new · 2 resurfaced · 18 stale · ✓ 12 today
+
+  NEW
+    gkeep_inbox.md:14   Pick up our daughter          created 2026-09-30
+  DUE
+    a.md:2              Rename queue input            stale 3d · fresh 2026-09-28 · every 7d (note)
+    b.md:40             Week habits                   resurfaced · scheduled 2026-10-07
+```
+
+With a budget the meter reads `✓ 12/15 today`. Lints go last.
+`text` is the clean description; queue `line` numbers are 1-based.
+The JSON contract is `schema_version: 1` with `ok`, `date`,
+`config` (`interval`, `stale_daily_budget`), `counts` (`due`,
+`new`, `resurfaced`, `stale`, `fresh`, `refreshed_today`, `budget`,
+`budget_met`), `queue` (each with `rank`, `tier`, `state`, `path`,
+`line`, `block_id`, `status_symbol`, `text`, `created`, `fresh`,
+`interval`, `interval_source`, `due_on`, `days_overdue`), and
+`warnings` (`code`, `path`, `line`, `message`).
+
+`seed` options: `-d/--dry-run`, `-F/--force`, `-f/--format
+human|json`. Ready tasks without a valid `fresh` are grouped by note
+and bin-packed largest-note-first into 7 buckets; a note bigger than
+`ceil(total / 7)` splits into consecutive line-order chunks, and ties
+break by path, then bucket index. Bucket `k` (1–7) lands on `today −
+7 + k`, raised per task to `max(bucket date, today − interval(t) +
+1, scheduled(t) when due)` so nothing is due on cutover day and
+nothing arrives RESURFACED, and clamped to today. Every other open,
+non-recurring task outside `#hide`, `_templates`, `_conflicts`, and
+daily notes gets today. The seed refuses when any such task already
+carries a `fresh` dated before today (unless `--force`), aborts the
+whole run with no writes when any changed line parses differently
+under either Rust parser, re-reads each file just before writing and
+refuses when one changed, and writes through a temp file plus rename.
+A same-day rerun finds nothing to stamp and reports zeros. The JSON
+contract is `schema_version: 1` with `ok`, `date`, `dry_run`,
+`stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
+`notes`), `skipped` (`already_stamped`, `recurring`,
+`out_of_scope`), `files`, and `warnings`.
+
+Exit codes: 0 on success; 1 for I/O errors and seed refusals; 2 for
+an invalid `freshness:` block or a non-Dataview task format.
 
 ## 8. Surfaces
 
 | Surface | Phase |
 | ------- | ----- |
-| `bob freshness` | fresh-cli |
+| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`) |
 | `bob capture` | capture-stamps |
 | bob-ledger-tools | ledger-freshness |
 | bob-navigation-hotkeys | nav-review, nav-stamps |

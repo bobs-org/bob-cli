@@ -56,6 +56,9 @@ install-smoke:
     "${root}/bin/bob" capture-task-id --help >/dev/null
     "${root}/bin/bob" capture-task-sections --help >/dev/null
     "${root}/bin/bob" capture-tasks --help >/dev/null
+    "${root}/bin/bob" freshness --help >/dev/null
+    "${root}/bin/bob" freshness list --help >/dev/null
+    "${root}/bin/bob" freshness seed --help >/dev/null
     "${root}/bin/bob" gkeep --help >/dev/null
     "${root}/bin/bob" gkeep doctor --help >/dev/null
     "${root}/bin/bob" gkeep list --help >/dev/null

@@ -596,6 +596,15 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             "bob capture-task-sections --help",
         ),
         (&["capture-tasks", "--help"], "bob capture-tasks --help"),
+        (&["freshness", "--help"], "bob freshness --help"),
+        (
+            &["freshness", "list", "--help"],
+            "bob freshness list --help",
+        ),
+        (
+            &["freshness", "seed", "--help"],
+            "bob freshness seed --help",
+        ),
         (&["gkeep", "--help"], "bob gkeep --help"),
         (&["gkeep", "doctor", "--help"], "bob gkeep doctor --help"),
         (&["gkeep", "list", "--help"], "bob gkeep list --help"),
@@ -911,6 +920,7 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "capture-task-id",
         "capture-task-sections",
         "capture-tasks",
+        "freshness",
         "highlights",
         "move-done-tasks",
         "nightly",
