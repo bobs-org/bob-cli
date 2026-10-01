@@ -2,21 +2,19 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::{self, Command, Stdio},
 };
 
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
-use lopdf::{dictionary, Document, Object};
 
 use super::{
-    atomic_save_pdf, bob_dir_arg, dry_run_arg, lib_dir_arg,
-    parse_marker_with_normalization, pdf_text_string, ref_dir_arg,
-    render_marker, validate_marker_parent_value, validate_required_marker_keys,
-    xlib_dir_arg, CommandError, Config, MarkerValue, Projection, Result,
-    FIELD_ID, FIELD_PARENT, FIELD_STATUS,
+    bob_dir_arg, compose_marker, dry_run_arg, lib_dir_arg, plan_default_target,
+    plan_exact_output, print_next_step, ref_dir_arg, stamp_and_install,
+    xlib_dir_arg, CommandError, Config, PdfInfo, Result, TargetPlan,
+    TargetWorkflow,
 };
-use crate::native::{env as bob_env, style::Styler};
+use crate::native::style::Styler;
 
 const DEFAULT_PARENT: &str = "obsidian_ref";
 const DEFAULT_REF_TYPE: &str = "chat";
@@ -74,21 +72,24 @@ struct CreateOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum CreateWorkflow {
-    Intake { library_destination: PathBuf },
-    Library,
-    External,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 struct CreatePlan {
     source: PathBuf,
     target: PathBuf,
     sidecar: PathBuf,
-    workflow: CreateWorkflow,
+    workflow: TargetWorkflow,
     title: String,
     id: Option<String>,
     marker: String,
+}
+
+impl CreatePlan {
+    fn target_plan(&self) -> TargetPlan {
+        TargetPlan {
+            target: self.target.clone(),
+            sidecar: self.sidecar.clone(),
+            workflow: self.workflow.clone(),
+        }
+    }
 }
 
 pub(super) fn command() -> ClapCommand {
@@ -275,7 +276,7 @@ fn create_pdf(
         println!("id: {id}");
     }
     println!("pages: {page_count}");
-    print_next_step(&plan);
+    print_next_step(&plan.target_plan());
     Ok(())
 }
 
@@ -302,22 +303,15 @@ fn plan_create(
         ))
     })?;
     let title = extract_title(&markdown, &source)?;
-    if options.output.is_none() {
-        validate_ref_type(&options.ref_type)?;
-    }
     let marker = compose_marker(
         &options.status,
         &options.parent,
         &title,
         id.as_deref(),
+        &[],
     )?;
-    let (target, workflow) = match &options.output {
-        Some(output) => {
-            let target = resolve_exact_output_path(output)?;
-            validate_pdf_output_path(&target)?;
-            let workflow = classify_create_target(config, &target)?;
-            (target, workflow)
-        }
+    let target_plan = match &options.output {
+        Some(output) => plan_exact_output(config, output, options.force)?,
         None => {
             let stem = source.file_stem().ok_or_else(|| {
                 CommandError::new(format!(
@@ -325,179 +319,19 @@ fn plan_create(
                     source.display()
                 ))
             })?;
-            let target = config
-                .xlib_dir
-                .join(&options.ref_type)
-                .join(stem)
-                .with_extension("pdf");
-            let library_destination = config
-                .lib_dir
-                .join(&options.ref_type)
-                .join(stem)
-                .with_extension("pdf");
-            (
-                target,
-                CreateWorkflow::Intake {
-                    library_destination,
-                },
-            )
+            plan_default_target(config, stem, &options.ref_type, options.force)?
         }
     };
-    let sidecar = target.with_extension("md");
-    refuse_create_collisions(&target, &sidecar, &workflow, options.force)?;
 
     Ok(CreatePlan {
         source,
-        target,
-        sidecar,
-        workflow,
+        target: target_plan.target,
+        sidecar: target_plan.sidecar,
+        workflow: target_plan.workflow,
         title,
         id,
         marker,
     })
-}
-
-fn refuse_create_collisions(
-    target: &Path,
-    sidecar: &Path,
-    workflow: &CreateWorkflow,
-    force: bool,
-) -> Result<()> {
-    if sidecar.exists() {
-        return Err(CommandError::new(format!(
-            "refusing to create {} because Highlights would treat the existing Markdown file as its sidecar: {}",
-            target.display(),
-            sidecar.display()
-        )));
-    }
-    if let CreateWorkflow::Intake {
-        library_destination,
-    } = workflow
-    {
-        if library_destination.exists() {
-            return Err(CommandError::new(format!(
-                "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new PDF over it)",
-                target.display(),
-                library_destination.display()
-            )));
-        }
-        for library_sidecar in library_destination_sidecars(library_destination)
-        {
-            if library_sidecar.exists() {
-                return Err(CommandError::new(format!(
-                    "refusing to create {} because the library destination sidecar already exists: {}; remove or rename the archived sidecar before recreating it (bob highlights scan would refuse to move the new PDF sidecar over it)",
-                    target.display(),
-                    library_sidecar.display()
-                )));
-            }
-        }
-    }
-    if target.exists() && !force {
-        return Err(CommandError::new(format!(
-            "target PDF already exists: {}; pass --force to overwrite it",
-            target.display()
-        )));
-    }
-    Ok(())
-}
-
-fn resolve_exact_output_path(path: &Path) -> Result<PathBuf> {
-    if path.as_os_str().is_empty() {
-        return Err(CommandError::new(
-            "output path must include a nonempty filename with a .pdf extension",
-        ));
-    }
-    let cwd = env::current_dir().map_err(|error| {
-        CommandError::new(format!("resolve current directory: {error}"))
-    })?;
-    Ok(resolve_exact_output_path_from(path, &cwd))
-}
-
-fn resolve_exact_output_path_from(path: &Path, cwd: &Path) -> PathBuf {
-    let expanded = bob_env::expand_tilde(path);
-    let absolute = if expanded.is_absolute() {
-        expanded
-    } else {
-        cwd.join(expanded)
-    };
-    normalize_lexically(&absolute)
-}
-
-fn validate_pdf_output_path(path: &Path) -> Result<()> {
-    let file_name = path
-        .file_name()
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| {
-            CommandError::new(format!(
-                "output path must include a nonempty filename: {}",
-                path.display()
-            ))
-        })?;
-    let is_pdf = Path::new(file_name)
-        .extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
-    if !is_pdf {
-        return Err(CommandError::new(format!(
-            "output path must have a .pdf extension: {}",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-fn classify_create_target(
-    config: &Config,
-    target: &Path,
-) -> Result<CreateWorkflow> {
-    let intake = resolve_exact_output_path(&config.xlib_dir)?;
-    let library = resolve_exact_output_path(&config.lib_dir)?;
-    if let Some(relative) = relative_inside(target, &intake) {
-        return Ok(CreateWorkflow::Intake {
-            library_destination: library.join(relative),
-        });
-    }
-    if path_is_inside(target, &library) {
-        return Ok(CreateWorkflow::Library);
-    }
-    Ok(CreateWorkflow::External)
-}
-
-fn relative_inside(child: &Path, parent: &Path) -> Option<PathBuf> {
-    let child = normalize_lexically(child);
-    let parent = normalize_lexically(parent);
-    child.strip_prefix(parent).ok().and_then(|relative| {
-        (!relative.as_os_str().is_empty()).then(|| relative.to_path_buf())
-    })
-}
-
-fn path_is_inside(child: &Path, parent: &Path) -> bool {
-    relative_inside(child, parent).is_some()
-}
-
-fn normalize_lexically(path: &Path) -> PathBuf {
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => match components.last() {
-                Some(Component::Normal(_)) => {
-                    components.pop();
-                }
-                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
-                _ => components.push(component),
-            },
-            other => components.push(other),
-        }
-    }
-    components.iter().collect()
-}
-
-fn library_destination_sidecars(library_destination: &Path) -> [PathBuf; 2] {
-    [
-        library_destination.with_extension("md"),
-        library_destination.with_extension("textbundle"),
-    ]
 }
 
 fn derive_marker_id(source: &Path) -> Result<String> {
@@ -533,21 +367,6 @@ fn validate_markdown_path(source: &Path) -> Result<()> {
         return Err(CommandError::new(format!(
             "Markdown input must have a .md extension: {}",
             source.display()
-        )));
-    }
-    Ok(())
-}
-
-fn validate_ref_type(ref_type: &str) -> Result<()> {
-    let path = Path::new(ref_type);
-    let mut components = path.components();
-    let valid = matches!(
-        components.next(),
-        Some(Component::Normal(value)) if !value.is_empty()
-    ) && components.next().is_none();
-    if !valid {
-        return Err(CommandError::new(format!(
-            "ref type must be one directory name, not a path: {ref_type:?}"
         )));
     }
     Ok(())
@@ -612,39 +431,6 @@ fn frontmatter_title(markdown: &str) -> Result<Option<String>> {
         return Ok(None);
     };
     Ok(Some(title.to_string()))
-}
-
-fn compose_marker(
-    status: &str,
-    parent: &str,
-    title: &str,
-    id: Option<&str>,
-) -> Result<String> {
-    validate_marker_parent_value(
-        parent,
-        2,
-        &MarkerValue::String(parent.to_string()),
-    )?;
-    let mut projection = Projection::new();
-    projection.insert(
-        FIELD_STATUS.to_string(),
-        MarkerValue::String(status.to_string()),
-    );
-    projection.insert(
-        FIELD_PARENT.to_string(),
-        MarkerValue::String(format!("[[{parent}]]")),
-    );
-    projection
-        .insert("title".to_string(), MarkerValue::String(title.to_string()));
-    if let Some(id) = id {
-        projection
-            .insert(FIELD_ID.to_string(), MarkerValue::String(id.to_string()));
-    }
-    validate_required_marker_keys(&projection, "create marker")?;
-    let marker = render_marker(&projection)?;
-    let normalized = parse_marker_with_normalization(&marker)?;
-    validate_required_marker_keys(&normalized.projection, "create marker")?;
-    render_marker(&normalized.projection)
 }
 
 fn render_temp_path(target: &Path) -> Result<PathBuf> {
@@ -731,78 +517,12 @@ fn render_and_install(
         )));
     }
 
-    let mut document = Document::load(render_path).map_err(|error| {
-        CommandError::new(format!(
-            "read rendered PDF {}: {error}",
-            render_path.display()
-        ))
-    })?;
-    let page_count = document.get_pages().len();
-    embed_marker(&mut document, &plan.marker)?;
-    atomic_save_pdf(&plan.target, &mut document)?;
-    Ok(page_count)
-}
-
-fn embed_marker(document: &mut Document, marker: &str) -> Result<()> {
-    let first_page_id = document
-        .page_iter()
-        .next()
-        .ok_or_else(|| CommandError::new("rendered PDF has no first page"))?;
-    let annotation_id = document.add_object(dictionary! {
-        "Type" => "Annot",
-        "Subtype" => "Text",
-        "Rect" => vec![
-            Object::Integer(0),
-            Object::Integer(0),
-            Object::Integer(24),
-            Object::Integer(24),
-        ],
-        "Contents" => pdf_text_string(marker),
-    });
-    let annotation = Object::Reference(annotation_id);
-    let annots = document
-        .get_dictionary(first_page_id)
-        .ok()
-        .and_then(|page| page.get(b"Annots").ok())
-        .cloned();
-
-    match annots {
-        None => document
-            .get_object_mut(first_page_id)
-            .and_then(Object::as_dict_mut)
-            .map_err(|error| {
-                CommandError::new(format!(
-                    "read rendered PDF first page: {error}"
-                ))
-            })?
-            .set("Annots", Object::Array(vec![annotation])),
-        Some(Object::Array(_)) => document
-            .get_object_mut(first_page_id)
-            .and_then(Object::as_dict_mut)
-            .and_then(|page| page.get_mut(b"Annots"))
-            .and_then(Object::as_array_mut)
-            .map_err(|error| {
-                CommandError::new(format!(
-                    "read rendered PDF page annotations: {error}"
-                ))
-            })?
-            .push(annotation),
-        Some(Object::Reference(id)) => document
-            .get_object_mut(id)
-            .and_then(Object::as_array_mut)
-            .map_err(|error| {
-                CommandError::new(format!(
-                    "read rendered PDF annotation array: {error}"
-                ))
-            })?
-            .push(annotation),
-        Some(_) => {
-            return Err(CommandError::new(
-                "rendered PDF first-page /Annots value is not an array",
-            ));
-        }
-    }
-    Ok(())
+    stamp_and_install(
+        render_path,
+        &plan.target,
+        &plan.marker,
+        &PdfInfo::default(),
+    )
 }
 
 fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
@@ -813,7 +533,7 @@ fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
     println!("source: {}", plan.source.display());
     println!("pdf: {}", plan.target.display());
     println!("sidecar_guard: {}", plan.sidecar.display());
-    if let CreateWorkflow::Intake {
+    if let TargetWorkflow::Intake {
         library_destination,
     } = &plan.workflow
     {
@@ -827,27 +547,16 @@ fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
     }
     println!("marker:");
     print!("{}", plan.marker);
-    if !matches!(plan.workflow, CreateWorkflow::Intake { .. }) {
-        print_next_step(plan);
-    }
-}
-
-fn print_next_step(plan: &CreatePlan) {
-    match &plan.workflow {
-        CreateWorkflow::Intake { .. } | CreateWorkflow::Library => {
-            println!("next: bob highlights scan");
-        }
-        CreateWorkflow::External => {
-            println!(
-                "scan: recursive scan will not discover this PDF because it is outside the configured library and intake directories"
-            );
-            println!("next: bob highlights sync {}", plan.target.display());
-        }
+    if !matches!(plan.workflow, TargetWorkflow::Intake { .. }) {
+        print_next_step(&plan.target_plan());
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        parse_marker_with_normalization, MarkerValue, FIELD_ID,
+    };
     use super::*;
 
     struct TempDir {
@@ -884,21 +593,6 @@ mod tests {
         }
     }
 
-    fn options_with_output(path: PathBuf) -> CreateOptions {
-        let mut options = options();
-        options.output = Some(path);
-        options
-    }
-
-    fn intake_destination(plan: &CreatePlan) -> &Path {
-        match &plan.workflow {
-            CreateWorkflow::Intake {
-                library_destination,
-            } => library_destination,
-            other => panic!("expected intake workflow, got {other:?}"),
-        }
-    }
-
     fn config(root: &Path) -> Config {
         Config {
             bob_dir: root.to_path_buf(),
@@ -927,36 +621,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_derives_ref_type_output_and_valid_marker() {
-        let temp = TempDir::new("plan");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let mut options = options();
-        options.ref_type = "books".to_string();
-
-        let plan =
-            plan_create(&config(&temp.path), &source, &options).expect("plan");
-
-        assert_eq!(plan.target, temp.path.join("xlib/books/report.pdf"));
-        assert_eq!(plan.sidecar, temp.path.join("xlib/books/report.md"));
-        assert_eq!(
-            intake_destination(&plan),
-            temp.path.join("lib/books/report.pdf")
-        );
-        let marker =
-            parse_marker_with_normalization(&plan.marker).expect("marker");
-        assert_eq!(
-            marker.projection.get(FIELD_PARENT),
-            Some(&MarkerValue::String(format!("[[{DEFAULT_PARENT}]]")))
-        );
-        assert_eq!(
-            marker.projection.get(FIELD_STATUS),
-            Some(&MarkerValue::String(DEFAULT_STATUS.to_string()))
-        );
-        assert!(!marker.projection.contains_key(FIELD_ID));
-    }
-
-    #[test]
     fn plan_embeds_markdown_stem_id_when_opted_in() {
         let temp = TempDir::new("include-id");
         let source = temp
@@ -977,351 +641,6 @@ mod tests {
         assert_eq!(
             marker.projection.get(FIELD_ID),
             Some(&MarkerValue::String("xprompt_role_binding".to_string()))
-        );
-    }
-
-    #[test]
-    fn plan_refuses_existing_pdf_without_force() {
-        let temp = TempDir::new("overwrite");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let target = temp.path.join("xlib/chat/report.pdf");
-        fs::create_dir_all(target.parent().expect("target parent"))
-            .expect("create target parent");
-        fs::write(&target, b"existing").expect("write target");
-
-        let error = plan_create(&config(&temp.path), &source, &options())
-            .expect_err("must refuse overwrite");
-        assert!(error.to_string().contains("--force"), "{error}");
-
-        let mut forced = options();
-        forced.force = true;
-        assert!(plan_create(&config(&temp.path), &source, &forced).is_ok());
-    }
-
-    #[test]
-    fn plan_refuses_highlights_markdown_sidecar_even_with_force() {
-        let temp = TempDir::new("sidecar");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let sidecar = temp.path.join("xlib/chat/report.md");
-        fs::create_dir_all(sidecar.parent().expect("sidecar parent"))
-            .expect("create sidecar parent");
-        fs::write(&sidecar, "# Sidecar\n").expect("write sidecar");
-        let mut forced = options();
-        forced.force = true;
-
-        let error = plan_create(&config(&temp.path), &source, &forced)
-            .expect_err("must refuse sidecar collision");
-        assert!(error.to_string().contains("sidecar"), "{error}");
-    }
-
-    #[test]
-    fn plan_refuses_existing_library_pdf_even_with_force() {
-        let temp = TempDir::new("library-pdf");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let library_destination = temp.path.join("lib/chat/report.pdf");
-        fs::create_dir_all(
-            library_destination
-                .parent()
-                .expect("library destination parent"),
-        )
-        .expect("create library destination parent");
-        fs::write(&library_destination, b"existing")
-            .expect("write library destination");
-        let mut forced = options();
-        forced.force = true;
-
-        let error = plan_create(&config(&temp.path), &source, &forced)
-            .expect_err("must refuse archived library destination");
-
-        let message = error.to_string();
-        assert!(message.contains("xlib/chat/report.pdf"), "{message}");
-        assert!(message.contains("lib/chat/report.pdf"), "{message}");
-        assert!(
-            message.contains("library destination already exists"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn plan_refuses_existing_library_sidecar() {
-        let temp = TempDir::new("library-sidecar");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let library_sidecar = temp.path.join("lib/chat/report.md");
-        fs::create_dir_all(library_sidecar.parent().expect("sidecar parent"))
-            .expect("create sidecar parent");
-        fs::write(&library_sidecar, "# Sidecar\n").expect("write sidecar");
-
-        let error = plan_create(&config(&temp.path), &source, &options())
-            .expect_err("must refuse archived library sidecar");
-
-        let message = error.to_string();
-        assert!(message.contains("xlib/chat/report.pdf"), "{message}");
-        assert!(message.contains("lib/chat/report.md"), "{message}");
-        assert!(message.contains("library destination sidecar"), "{message}");
-    }
-
-    #[test]
-    fn exact_output_keeps_nested_path_and_filename() {
-        let temp = TempDir::new("exact-nested");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let output = temp.path.join("xlib/books/deep/custom-name.pdf");
-
-        let plan = plan_create(
-            &config(&temp.path),
-            &source,
-            &options_with_output(output.clone()),
-        )
-        .expect("plan");
-
-        assert_eq!(plan.target, output);
-        assert_eq!(
-            plan.sidecar,
-            temp.path.join("xlib/books/deep/custom-name.md")
-        );
-        assert_eq!(
-            intake_destination(&plan),
-            temp.path.join("lib/books/deep/custom-name.pdf")
-        );
-    }
-
-    #[test]
-    fn exact_output_accepts_uppercase_pdf_extension() {
-        let temp = TempDir::new("exact-uppercase");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let output = temp.path.join("out/Report.PDF");
-
-        let plan = plan_create(
-            &config(&temp.path),
-            &source,
-            &options_with_output(output.clone()),
-        )
-        .expect("plan");
-
-        assert_eq!(plan.target, output);
-        assert_eq!(plan.workflow, CreateWorkflow::External);
-    }
-
-    #[test]
-    fn exact_output_resolves_relative_and_tilde_paths() {
-        let cwd = Path::new("/tmp/bob-cli-create-cwd");
-        assert_eq!(
-            resolve_exact_output_path_from(Path::new("nested/out.pdf"), cwd),
-            PathBuf::from("/tmp/bob-cli-create-cwd/nested/out.pdf")
-        );
-        assert_eq!(
-            resolve_exact_output_path_from(Path::new("./a/../b.pdf"), cwd),
-            PathBuf::from("/tmp/bob-cli-create-cwd/b.pdf")
-        );
-        assert_eq!(
-            resolve_exact_output_path_from(Path::new("~/vault/out.pdf"), cwd),
-            bob_env::home_dir().join("vault/out.pdf")
-        );
-        assert_eq!(
-            resolve_exact_output_path_from(Path::new("~"), cwd),
-            bob_env::home_dir()
-        );
-    }
-
-    #[test]
-    fn exact_output_rejects_non_pdf_paths() {
-        let temp = TempDir::new("exact-invalid");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-
-        for output in [
-            temp.path.join("out/report.txt"),
-            temp.path.join("out/report.pdf.md"),
-            temp.path.join("out"),
-            PathBuf::new(),
-        ] {
-            let error = plan_create(
-                &config(&temp.path),
-                &source,
-                &options_with_output(output.clone()),
-            )
-            .expect_err("must reject non-PDF output");
-            let message = error.to_string();
-            assert!(
-                message.contains(".pdf")
-                    || message.contains("nonempty filename"),
-                "output {}: {message}",
-                output.display()
-            );
-        }
-    }
-
-    #[test]
-    fn exact_output_does_not_treat_sibling_prefix_as_managed() {
-        let temp = TempDir::new("exact-prefix");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let output = temp.path.join("xlib-extra/report.pdf");
-
-        let plan = plan_create(
-            &config(&temp.path),
-            &source,
-            &options_with_output(output.clone()),
-        )
-        .expect("plan");
-
-        assert_eq!(plan.target, output);
-        assert_eq!(plan.workflow, CreateWorkflow::External);
-    }
-
-    #[test]
-    fn exact_output_classifies_direct_library_target() {
-        let temp = TempDir::new("exact-library");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let output = temp.path.join("lib/chat/report.pdf");
-
-        let plan = plan_create(
-            &config(&temp.path),
-            &source,
-            &options_with_output(output.clone()),
-        )
-        .expect("plan");
-
-        assert_eq!(plan.target, output);
-        assert_eq!(plan.workflow, CreateWorkflow::Library);
-    }
-
-    #[test]
-    fn exact_library_target_requires_force_and_skips_mirrored_check() {
-        let temp = TempDir::new("exact-library-force");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let output = temp.path.join("lib/chat/report.pdf");
-        fs::create_dir_all(output.parent().expect("output parent"))
-            .expect("create library parent");
-        fs::write(&output, b"existing").expect("write library pdf");
-
-        let error = plan_create(
-            &config(&temp.path),
-            &source,
-            &options_with_output(output.clone()),
-        )
-        .expect_err("must require force");
-        assert!(error.to_string().contains("--force"), "{error}");
-
-        let mut forced = options_with_output(output.clone());
-        forced.force = true;
-        let plan =
-            plan_create(&config(&temp.path), &source, &forced).expect("forced");
-        assert_eq!(plan.workflow, CreateWorkflow::Library);
-    }
-
-    #[test]
-    fn exact_intake_still_refuses_mirrored_library_pdf_with_force() {
-        let temp = TempDir::new("exact-intake-library");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let output = temp.path.join("xlib/papers/deep/report.pdf");
-        let library_destination = temp.path.join("lib/papers/deep/report.pdf");
-        fs::create_dir_all(
-            library_destination
-                .parent()
-                .expect("library destination parent"),
-        )
-        .expect("create library destination parent");
-        fs::write(&library_destination, b"existing")
-            .expect("write library destination");
-        let mut forced = options_with_output(output.clone());
-        forced.force = true;
-
-        let error = plan_create(&config(&temp.path), &source, &forced)
-            .expect_err("must refuse archived library destination");
-        let message = error.to_string();
-        assert!(
-            message.contains("library destination already exists"),
-            "{message}"
-        );
-        assert!(message.contains("xlib/papers/deep/report.pdf"), "{message}");
-        assert!(message.contains("lib/papers/deep/report.pdf"), "{message}");
-    }
-
-    #[test]
-    fn exact_intake_refuses_mirrored_library_sidecar() {
-        let temp = TempDir::new("exact-intake-sidecar");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let output = temp.path.join("xlib/papers/deep/report.pdf");
-        let library_sidecar = temp.path.join("lib/papers/deep/report.md");
-        fs::create_dir_all(library_sidecar.parent().expect("sidecar parent"))
-            .expect("create sidecar parent");
-        fs::write(&library_sidecar, "# Sidecar\n").expect("write sidecar");
-
-        let error = plan_create(
-            &config(&temp.path),
-            &source,
-            &options_with_output(output),
-        )
-        .expect_err("must refuse archived library sidecar");
-        let message = error.to_string();
-        assert!(message.contains("library destination sidecar"), "{message}");
-        assert!(message.contains("lib/papers/deep/report.md"), "{message}");
-    }
-
-    #[test]
-    fn exact_output_refuses_same_stem_markdown_sidecar_even_with_force() {
-        let temp = TempDir::new("exact-sidecar");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let output = temp.path.join("out/custom.pdf");
-        let sidecar = temp.path.join("out/custom.md");
-        fs::create_dir_all(sidecar.parent().expect("sidecar parent"))
-            .expect("create sidecar parent");
-        fs::write(&sidecar, "# Sidecar\n").expect("write sidecar");
-        let mut forced = options_with_output(output);
-        forced.force = true;
-
-        let error = plan_create(&config(&temp.path), &source, &forced)
-            .expect_err("must refuse sidecar collision");
-        assert!(error.to_string().contains("sidecar"), "{error}");
-    }
-
-    #[test]
-    fn exact_external_target_does_not_invent_library_destination() {
-        let temp = TempDir::new("exact-external");
-        let source = temp.path.join("report.md");
-        fs::write(&source, "# Report\n").expect("write source");
-        let output = temp.path.join("outside/custom.pdf");
-        let unrelated_library = temp.path.join("lib/chat/report.pdf");
-        fs::create_dir_all(unrelated_library.parent().expect("library parent"))
-            .expect("create library parent");
-        fs::write(&unrelated_library, b"existing")
-            .expect("write unrelated library pdf");
-
-        let plan = plan_create(
-            &config(&temp.path),
-            &source,
-            &options_with_output(output.clone()),
-        )
-        .expect("plan");
-
-        assert_eq!(plan.target, output);
-        assert_eq!(plan.workflow, CreateWorkflow::External);
-    }
-
-    #[test]
-    fn normalize_lexically_drops_dot_and_parent_components() {
-        assert_eq!(
-            normalize_lexically(Path::new("/vault/xlib/../lib/a.pdf")),
-            PathBuf::from("/vault/lib/a.pdf")
-        );
-        assert_eq!(
-            normalize_lexically(Path::new("/vault/./xlib/chat/./a.pdf")),
-            PathBuf::from("/vault/xlib/chat/a.pdf")
-        );
-        assert_eq!(
-            normalize_lexically(Path::new("/../a.pdf")),
-            PathBuf::from("/a.pdf")
         );
     }
 
@@ -1355,15 +674,6 @@ mod tests {
         assert!(
             latex.contains(r"\texttt{bead}"),
             "code without separators must stay a single span: {latex}"
-        );
-    }
-
-    #[test]
-    fn marker_rejects_wikilink_parent_and_unknown_status() {
-        assert!(compose_marker("ready", "[[obsidian_ref]]", "Report", None)
-            .is_err());
-        assert!(
-            compose_marker("unknown", "obsidian_ref", "Report", None).is_err()
         );
     }
 }

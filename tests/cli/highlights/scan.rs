@@ -998,3 +998,62 @@ Note: marker note mirrored from the PDF
         ],
     );
 }
+
+#[test]
+fn highlights_ref_scan_round_trips_provenance_marker_fields() {
+    let temp = TempDir::new("bob-cli-highlights-ref-provenance-round-trip");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/blogs/clipped.pdf");
+    let note = vault.join("ref/blogs/clipped.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: ready\n- parent: obsidian_ref\n- title: Clipped Article\n- id: clipped_article\n- source_url: https://example.com/article\n- author: Jane Doe\n- published: 2026-04-27\n- captured: 2026-10-01\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("scan provenance marker");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(report.contains("notes_created: 1"), "{report}");
+    let contents = fs::read_to_string(&note).expect("read generated note");
+    for needle in [
+        "source_url:",
+        "https://example.com/article",
+        "author:",
+        "Jane Doe",
+        "published: 2026-04-27",
+        "captured: 2026-10-01",
+        "id: clipped_article",
+    ] {
+        assert!(contents.contains(needle), "{needle}:\n{contents}");
+    }
+
+    let second = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("rescan provenance marker");
+
+    assert_success(&second);
+    let rerun = stdout(&second);
+    assert!(
+        rerun.contains("notes_created: 0")
+            && rerun.contains("notes_unchanged: 1"),
+        "{rerun}"
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note after rescan"),
+        contents,
+        "second scan must leave the note unchanged"
+    );
+}

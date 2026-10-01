@@ -358,11 +358,13 @@ sync. `type` is always rendered as `[[ref]]`; `ref_type` is rendered only when
 the PDF path is under `lib/<ref_type>/`.
 
 Standard synced user fields are `status`, `parent`, `title`, `id`, `research`,
-`aliases`, `topics`, `source_url`, `author`, and `published`. `id` is ordinary
+`aliases`, `topics`, `source_url`, `author`, `published`, and `captured`. `id` is ordinary
 user frontmatter for the basename-derived source identifier and does not
 require `highlights_marker_fields`. Existing `research` values remain legacy
 standard fields for repository-relative Markdown source paths; they round-trip
-without being renamed automatically to `id`.
+without being renamed automatically to `id`. `captured` is the snapshot date
+(`YYYY-MM-DD`) of a web capture; like the other provenance fields it is
+omitted rather than written wrong.
 
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or

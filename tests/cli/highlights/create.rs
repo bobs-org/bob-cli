@@ -558,3 +558,56 @@ fn highlights_create_output_renders_pdf_at_requested_path_when_available() {
     );
     assert!(marker.contains("- id: report\n"), "{marker}");
 }
+
+#[test]
+fn highlights_create_stamps_rendered_pdf_through_shared_install() {
+    let temp = TempDir::new("bob-cli-highlights-create-stamp");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Stamped Report\n");
+    let fixture = temp.path().join("rendered.pdf");
+    write_highlights_pdf_pages(&fixture, &[&[]]);
+    let pandoc = temp.path().join("pandoc");
+    write_executable(
+        &pandoc,
+        "#!/bin/sh\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\ncp \"$BOB_TEST_FIXTURE_PDF\" \"$out\"\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .env("BOB_TEST_FIXTURE_PDF", &fixture)
+        .output()
+        .expect("run bob highlights create with fake pandoc");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    let target = vault.join("xlib/chat/report.pdf");
+    assert!(target.is_file(), "stamped PDF must be installed");
+    assert!(
+        report.contains("created Highlights-ready PDF")
+            && report.contains("pdf: ")
+            && report.contains("title: Stamped Report")
+            && report.contains("pages: 1")
+            && report.contains("next: bob highlights scan"),
+        "{report}"
+    );
+
+    let marker_output = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&target)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect stamped PDF marker");
+    assert_success(&marker_output);
+    let marker = stdout(&marker_output);
+    assert!(marker.contains("- status: ready\n"), "{marker}");
+    assert!(marker.contains("- parent: obsidian_ref\n"), "{marker}");
+    assert!(marker.contains("- title: Stamped Report\n"), "{marker}");
+}

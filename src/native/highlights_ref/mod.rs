@@ -43,6 +43,7 @@ mod projection;
 mod report;
 mod sidecar;
 mod sidecar_render;
+mod stamp;
 mod sync;
 #[cfg(test)]
 mod tests;
@@ -62,6 +63,7 @@ use projection::*;
 use report::*;
 use sidecar::*;
 use sidecar_render::*;
+use stamp::*;
 use sync::*;
 use text::*;
 
@@ -140,6 +142,7 @@ const PIPELINE_FIELDS: &[&str] = &[
     FIELD_PIPELINE_VERSION,
 ];
 
+const FIELD_CAPTURED: &str = "captured";
 const COMMON_USER_FIELDS: &[&str] = &[
     FIELD_PARENT,
     "title",
@@ -150,6 +153,7 @@ const COMMON_USER_FIELDS: &[&str] = &[
     "source_url",
     "author",
     "published",
+    FIELD_CAPTURED,
 ];
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
