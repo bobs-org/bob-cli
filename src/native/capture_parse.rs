@@ -759,7 +759,8 @@ fn unit_noun(units: u64) -> &'static str {
 /// typed token plus the outcome summary. Plain `=x` prints alone; a typed
 /// `<N>` list always ends with `defer the rest`, and `=x0` reads
 /// `in progress none`. Typed Work Log entries render as
-/// `log 2 "wired the lexer"`, one per entry in typed order.
+/// `log 2 "wired the lexer"`, one per entry in typed order, each followed
+/// by `(+N detail)`/`(+N details)` when it carries details.
 fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
     let base = if close.raw.starts_with('=') {
         close.raw.clone()
@@ -772,7 +773,19 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
         let entries = close
             .log
             .iter()
-            .map(|entry| format!("{} {:?}", entry.index, entry.text))
+            .map(|entry| {
+                let head = format!("{} {:?}", entry.index, entry.text);
+                if entry.details.is_empty() {
+                    head
+                } else {
+                    let noun = if entry.details.len() == 1 {
+                        "detail"
+                    } else {
+                        "details"
+                    };
+                    format!("{head} (+{} {noun})", entry.details.len())
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ");
         Some(format!("log {entries}"))
@@ -1442,6 +1455,40 @@ mod tests {
         assert_eq!(value["items"][1]["mode"], "task");
         assert_eq!(value["items"][1]["route"], "bar");
         assert!(value["items"][1]["block_id"].is_null());
+    }
+
+    #[test]
+    fn format_pomodoro_close_reports_detail_counts() {
+        use crate::native::capture_language::CloseLogEntry;
+        let close = PomodoroCloseSpec {
+            raw: "=x1,2".to_string(),
+            in_progress: Some(vec![1, 2]),
+            complete: Vec::new(),
+            drop: Vec::new(),
+            log: vec![
+                CloseLogEntry {
+                    index: 1,
+                    text: "wired the lexer".to_string(),
+                    details: vec!["chose a hand-rolled lexer".to_string()],
+                },
+                CloseLogEntry {
+                    index: 2,
+                    text: "sketched the parser".to_string(),
+                    details: vec!["a".to_string(), "b".to_string()],
+                },
+                CloseLogEntry {
+                    index: 1,
+                    text: "opened the PR".to_string(),
+                    details: Vec::new(),
+                },
+            ],
+        };
+        assert_eq!(
+            format_pomodoro_close(&close),
+            "=x1,2 (in progress 1, 2 · log 1 \"wired the lexer\" (+1 detail), 2 \"sketched the parser\" (+2 details), 1 \"opened the PR\" · defer the rest)"
+        );
+        let plain = PomodoroCloseSpec::plain("=x".to_string());
+        assert_eq!(format_pomodoro_close(&plain), "=x");
     }
 
     #[test]

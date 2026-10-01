@@ -36,6 +36,13 @@ pub(super) struct PomodoroCloseTaskLinkJson {
 pub(super) struct PomodoroCloseLogEntryJson {
     pub(super) index: u32,
     pub(super) text: String,
+    /// Nested detail lines under the entry, omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) details: Vec<String>,
+}
+
+fn typed_work_log_details_is_empty(details: &[Vec<String>]) -> bool {
+    details.iter().all(Vec::is_empty)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -62,6 +69,10 @@ pub(super) struct PomodoroCloseTaskJson {
     /// order (a subset of `work_log`), omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) typed_work_log: Vec<String>,
+    /// Detail lines written under each typed entry, aligned 1:1 with
+    /// `typed_work_log`; omitted when no typed entry has details.
+    #[serde(default, skip_serializing_if = "typed_work_log_details_is_empty")]
+    pub(super) typed_work_log_details: Vec<Vec<String>>,
     pub(super) warning: Option<String>,
 }
 
@@ -625,6 +636,25 @@ pub(super) fn print_human_item_success(
     }
 }
 
+/// Render one close task row's typed Work Log entries, each followed by
+/// its details indented two more spaces. A missing details element counts
+/// as empty, so short rows still render.
+fn typed_work_log_lines(
+    task: &PomodoroCloseTaskJson,
+    log_indent: &str,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (position, entry) in task.typed_work_log.iter().enumerate() {
+        lines.push(format!("{log_indent}{entry}"));
+        if let Some(details) = task.typed_work_log_details.get(position) {
+            for detail in details {
+                lines.push(format!("{log_indent}  {detail}"));
+            }
+        }
+    }
+    lines
+}
+
 pub(super) fn print_human_pomodoro_close_success(
     result: &CaptureItemResult,
     close: &PomodoroCloseSummaryJson,
@@ -815,10 +845,11 @@ pub(super) fn print_human_pomodoro_close_success(
             }
         }
         println!("{prefix}{line}");
-        // Typed entries print first, all of them, not dimmed; up to two
-        // other entries follow, dimmed as before.
-        for entry in &task.typed_work_log {
-            println!("{log_indent}{entry}");
+        // Typed entries print first, all of them, not dimmed, each
+        // followed by its details indented two more spaces and not
+        // dimmed; up to two other entries follow, dimmed as before.
+        for line in typed_work_log_lines(task, &log_indent) {
+            println!("{line}");
         }
         let mut unprinted = task.typed_work_log.clone();
         let mut others = Vec::new();
@@ -1427,5 +1458,126 @@ impl CaptureErrorKind {
             Self::Usage => 2,
             Self::Io => 1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, to_value};
+
+    fn task_row(
+        typed_work_log: Vec<String>,
+        typed_work_log_details: Vec<Vec<String>>,
+    ) -> PomodoroCloseTaskJson {
+        PomodoroCloseTaskJson {
+            role: "worked",
+            block_link: "[[bob#^capture-stop]]".to_string(),
+            ledger_line: 6,
+            index: Some(1),
+            resolved: true,
+            relative_target: Some("bob.md".to_string()),
+            block_id: "capture-stop".to_string(),
+            text: Some("Add support for `=x` syntax!".to_string()),
+            previous_status_symbol: Some('*'),
+            previous_status_name: Some("Next".to_string()),
+            status_symbol: Some('/'),
+            status_name: Some("In Progress".to_string()),
+            status_changed: true,
+            carried: true,
+            work_log: Vec::new(),
+            work_log_created: true,
+            typed_work_log,
+            typed_work_log_details,
+            warning: None,
+        }
+    }
+
+    #[test]
+    fn typed_work_log_details_omitted_when_no_entry_has_details() {
+        let row = task_row(
+            vec!["*2026-09-28* — wired the lexer".to_string()],
+            vec![Vec::new()],
+        );
+        let value = to_value(&row).expect("serialize");
+        assert_eq!(
+            value.get("typed_work_log"),
+            Some(&json!(["*2026-09-28* — wired the lexer"]))
+        );
+        assert!(value.get("typed_work_log_details").is_none());
+
+        let bare = task_row(Vec::new(), Vec::new());
+        assert!(to_value(&bare)
+            .expect("serialize")
+            .get("typed_work_log_details")
+            .is_none());
+    }
+
+    #[test]
+    fn typed_work_log_details_align_with_entries_when_present() {
+        let row = task_row(
+            vec![
+                "*2026-09-28* — wired the lexer".to_string(),
+                "*2026-09-28* — sketched the parser".to_string(),
+            ],
+            vec![vec!["chose a hand-rolled lexer".to_string()], Vec::new()],
+        );
+        let value = to_value(&row).expect("serialize");
+        assert_eq!(
+            value.get("typed_work_log_details"),
+            Some(&json!([["chose a hand-rolled lexer"], []]))
+        );
+    }
+
+    #[test]
+    fn log_entry_details_omitted_when_empty() {
+        let plain = PomodoroCloseLogEntryJson {
+            index: 2,
+            text: "wired the lexer".to_string(),
+            details: Vec::new(),
+        };
+        let value = to_value(&plain).expect("serialize");
+        assert_eq!(value, json!({ "index": 2, "text": "wired the lexer" }));
+        let detailed = PomodoroCloseLogEntryJson {
+            index: 2,
+            text: "wired the lexer".to_string(),
+            details: vec!["chose a hand-rolled lexer".to_string()],
+        };
+        assert_eq!(
+            to_value(&detailed).expect("serialize"),
+            json!({
+                "index": 2,
+                "text": "wired the lexer",
+                "details": ["chose a hand-rolled lexer"],
+            })
+        );
+    }
+
+    #[test]
+    fn typed_entry_details_print_two_spaces_under_their_entry() {
+        let row = task_row(
+            vec![
+                "*2026-09-28* — wired the lexer".to_string(),
+                "*2026-09-28* — sketched the parser".to_string(),
+            ],
+            vec![vec!["chose a hand-rolled lexer".to_string()], Vec::new()],
+        );
+        assert_eq!(
+            typed_work_log_lines(&row, "      "),
+            vec![
+                "      *2026-09-28* — wired the lexer".to_string(),
+                "        chose a hand-rolled lexer".to_string(),
+                "      *2026-09-28* — sketched the parser".to_string(),
+            ]
+        );
+        // A short details array renders without panicking.
+        let short = task_row(
+            vec!["*2026-09-28* — wired the lexer".to_string()],
+            Vec::new(),
+        );
+        assert_eq!(
+            typed_work_log_lines(&short, "    "),
+            vec!["    *2026-09-28* — wired the lexer".to_string()]
+        );
     }
 }

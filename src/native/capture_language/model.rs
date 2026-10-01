@@ -167,13 +167,17 @@ pub(crate) struct PomodoroCloseSpec {
 }
 
 /// One typed Work Log entry on a close: the numbered Task Link it logs to
-/// plus the literal, unescaped entry text.
+/// plus the literal, unescaped entry text and its nested detail lines.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CloseLogEntry {
     /// Numbered Task Link the entry is logged under.
     pub(crate) index: u32,
     /// Literal entry text, unescaped and final.
     pub(crate) text: String,
+    /// Nested detail lines under the entry, in typed order; each is
+    /// unescaped, final, whitespace-normalized text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) details: Vec<String>,
 }
 
 impl PomodoroCloseSpec {

@@ -77,6 +77,28 @@ fn sel_log(
     sel_drop_log(in_progress, complete, Vec::new(), log, raw)
 }
 
+fn sel_detail_log(
+    log: Vec<(u32, &str, Vec<&str>)>,
+    raw: &str,
+) -> CloseSelection {
+    CloseSelection {
+        in_progress: None,
+        complete: BTreeSet::new(),
+        drop: BTreeSet::new(),
+        log: log
+            .into_iter()
+            .map(|(index, text, details)| {
+                super::super::capture_language::CloseLogEntry {
+                    index,
+                    text: text.to_string(),
+                    details: details.into_iter().map(str::to_string).collect(),
+                }
+            })
+            .collect(),
+        raw: raw.to_string(),
+    }
+}
+
 fn sel_drop_log(
     in_progress: Option<Vec<u32>>,
     complete: Vec<u32>,
@@ -95,6 +117,7 @@ fn sel_drop_log(
                 super::super::capture_language::CloseLogEntry {
                     index,
                     text: text.to_string(),
+                    details: Vec::new(),
                 }
             })
             .collect(),
@@ -1020,7 +1043,7 @@ fn log_entry_errors() {
     .expect_err("out of range entry");
     assert_eq!(
         error.to_string(),
-        "`=x` logs to task 5, but CAPTURE has 2 numbered Task Links (1–2); write `\\5` to keep the number as text"
+        "`- 5` logs to task 5, but CAPTURE has 2 numbered Task Links (1–2)"
     );
 
     let error = apply_close_selection(
@@ -1082,4 +1105,165 @@ fn log_entry_text_that_numbers_a_link_fails_loudly() {
         error.to_string(),
         "Work Log entry changed the Task Link lineup"
     );
+}
+
+#[test]
+fn log_entry_details_nest_one_level_under_the_entry() {
+    // Tab indentation: the entry steps one tab deeper, each detail one
+    // more, and the link below keeps its line.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_detail_log(
+            vec![(
+                1,
+                "wired the lexer",
+                vec!["chose a hand-rolled lexer", "kept it simple"],
+            )],
+            "=x",
+        ),
+    )
+    .expect("apply");
+    assert_eq!(
+        applied.contents,
+        note(&[
+            "## Pomodoros",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+            "\t- [[a#^one]]",
+            "\t\t- wired the lexer",
+            "\t\t\t- chose a hand-rolled lexer",
+            "\t\t\t- kept it simple",
+            "\t- [[a#^two]]",
+        ])
+    );
+    assert_eq!(applied.inserted_lines, vec![4]);
+    assert_eq!(
+        applied
+            .lineup
+            .iter()
+            .map(|link| (link.index, link.line))
+            .collect::<Vec<_>>(),
+        vec![(1, 3), (2, 7)]
+    );
+
+    // Two-space indentation doubles the step for entries and details.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "  - [[a#^one]]",
+        "  - [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_detail_log(vec![(2, "did it", vec!["a detail"])], "=x"),
+    )
+    .expect("apply");
+    assert!(applied
+        .contents
+        .contains("    - did it\n      - a detail\n"));
+    assert_eq!(applied.inserted_lines, vec![5]);
+
+    // A four-space link whose first child sits at eight steps the same
+    // way: the entry follows the child, the detail follows the entry.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "    - [[a#^one]]",
+        "        - hand note",
+        "    - [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_detail_log(vec![(1, "did it", vec!["a detail"])], "=x"),
+    )
+    .expect("apply");
+    assert!(applied.contents.contains("        - did it\n"));
+    assert!(applied.contents.contains("            - a detail\n"));
+}
+
+#[test]
+fn log_entry_details_keep_typed_order_for_repeated_index() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t\t- hand note",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_detail_log(
+            vec![
+                (1, "first", vec!["why first"]),
+                (1, "second", vec!["why second", "and more"]),
+            ],
+            "=x",
+        ),
+    )
+    .expect("apply");
+    assert_eq!(
+        applied.contents,
+        note(&[
+            "## Pomodoros",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+            "\t- [[a#^one]]",
+            "\t\t- hand note",
+            "\t\t- first",
+            "\t\t\t- why first",
+            "\t\t- second",
+            "\t\t\t- why second",
+            "\t\t\t- and more",
+        ])
+    );
+    // `inserted_lines` still points at the entry lines, never the details.
+    assert_eq!(applied.inserted_lines, vec![5, 7]);
+}
+
+#[test]
+fn log_entry_details_preserve_crlf_and_missing_final_newline() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+    ])
+    .replace('\n', "\r\n");
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_detail_log(vec![(1, "did it", vec!["a detail"])], "=x"),
+    )
+    .expect("apply");
+    assert!(applied.contents.contains("\t\t- did it\r\n"));
+    assert!(applied.contents.contains("\t\t\t- a detail\r\n"));
+    assert!(!applied.contents.replace("\r\n", "").contains('\n'));
+
+    let mut no_final = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+    ]);
+    no_final.pop();
+    let running = running_of(&no_final);
+    let applied = apply_close_selection(
+        &no_final,
+        &running,
+        &sel_detail_log(vec![(1, "did it", vec!["a detail"])], "=x"),
+    )
+    .expect("apply");
+    assert!(applied.contents.ends_with("\t\t\t- a detail"));
+    assert!(!applied.contents.ends_with('\n'));
+    assert_eq!(applied.inserted_lines, vec![4]);
 }

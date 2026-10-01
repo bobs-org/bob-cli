@@ -74,6 +74,9 @@ pub(crate) struct PomodoroCloseTask {
     /// Dated entries this close's typed Work Log entries produced, in typed
     /// order (a subset of `work_log`).
     pub typed_work_log: Vec<String>,
+    /// Detail lines written under each typed entry, aligned 1:1 with
+    /// `typed_work_log`; entries without details hold an empty list.
+    pub typed_work_log_details: Vec<Vec<String>>,
     pub warning: Option<String>,
     pub index: Option<u32>,
     resolved_path: Option<PathBuf>,
@@ -323,6 +326,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     work_log: Vec::new(),
                     work_log_created: false,
                     typed_work_log: Vec::new(),
+                    typed_work_log_details: Vec::new(),
                     warning: None,
                     index: None,
                     resolved_path: Some(path.clone()),
@@ -353,6 +357,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     work_log: Vec::new(),
                     work_log_created: false,
                     typed_work_log: Vec::new(),
+                    typed_work_log_details: Vec::new(),
                     warning: Some(warning.clone()),
                     index: None,
                     resolved_path: Some(path.clone()),
@@ -403,6 +408,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             work_log: Vec::new(),
             work_log_created: false,
             typed_work_log: Vec::new(),
+            typed_work_log_details: Vec::new(),
             warning: Some(warning.clone()),
             index: None,
             resolved_path,
@@ -618,6 +624,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         &mut self,
         ledger: &LedgerClosePlan,
         log_lines: &BTreeMap<usize, usize>,
+        log_entries: &[CloseLogEntry],
     ) -> Result<BTreeSet<usize>, PomodoroClosePlanError> {
         let mut groups: Vec<(
             TaskKey,
@@ -717,6 +724,18 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         for (index, mut pairs) in typed_by_row {
             pairs.sort();
             if let Some(row) = self.tasks.get_mut(index) {
+                // The descendants written under an inserted entry are
+                // exactly its typed details: the line after the insertion
+                // point is never deeper than the link.
+                row.typed_work_log_details = pairs
+                    .iter()
+                    .map(|(ordinal, _)| {
+                        log_entries
+                            .get(*ordinal)
+                            .map(|entry| entry.details.clone())
+                            .unwrap_or_default()
+                    })
+                    .collect();
                 row.typed_work_log =
                     pairs.into_iter().map(|(_, dated)| dated).collect();
             }
@@ -883,7 +902,7 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
             CloseTaskRole::Embedded,
         )?;
     }
-    let landed = planner.write_logs(&ledger, &log_lines)?;
+    let landed = planner.write_logs(&ledger, &log_lines, &log_entries)?;
     planner.retire_closed_embeds(&ledger, running.line.saturating_sub(1))?;
     let link_rows = link_row_mapping(
         planner.vault,

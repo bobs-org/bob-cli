@@ -1331,9 +1331,17 @@ Field notes:
   `pomodoro_close.drop` is the typed `~<K>` list, omitted when empty.
 - `pomodoro_close.log` is the typed Work Log tail in typed order
   (`[{ "index": 2, "text": "wired the lexer" }]`), omitted when empty.
+  Each entry carries `details`, the nested detail lines typed under it
+  (`[{ "index": 2, "text": "wired the lexer", "details": ["chose a hand-rolled lexer"] }]`),
+  omitted when the entry has none.
 - `pomodoro_close.tasks[].typed_work_log` holds the dated entries
   (`*YYYY-MM-DD* — text`, a subset of `work_log`) that this capture's typed
   entries produced, in typed order, omitted when empty.
+  `pomodoro_close.tasks[].typed_work_log_details` is aligned 1:1 with it:
+  element _i_ lists the detail lines written under typed entry _i_ (undated
+  sub-bullets of the dated entry, never counted in `+N Work Log`), with an
+  empty list for entries without details; omitted when no typed entry on
+  the row has details.
 - `pomodoro_close.task_links` is the numbered lineup, always present and
   possibly empty, in number order. Each entry carries `index` (1-based),
   `ledger_line` (the close's pre-image, after any link step), `block_link`

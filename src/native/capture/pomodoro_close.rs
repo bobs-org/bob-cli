@@ -362,6 +362,7 @@ pub(super) fn build_close_summary_json(
             work_log: task.work_log.clone(),
             work_log_created: task.work_log_created,
             typed_work_log: task.typed_work_log.clone(),
+            typed_work_log_details: task.typed_work_log_details.clone(),
             warning: task.warning.clone(),
         })
         .collect();
@@ -437,6 +438,7 @@ pub(super) fn build_close_summary_json(
             .map(|entry| PomodoroCloseLogEntryJson {
                 index: entry.index,
                 text: entry.text.clone(),
+                details: entry.details.clone(),
             })
             .collect(),
         task_links,

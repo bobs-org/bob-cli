@@ -147,7 +147,6 @@ pub(crate) enum CloseSelectionError {
         block_link: String,
     },
     LogOutOfRange {
-        raw: String,
         index: u32,
         total: usize,
         running_name: Option<String>,
@@ -214,7 +213,6 @@ impl fmt::Display for CloseSelectionError {
                 )
             }
             Self::LogOutOfRange {
-                raw,
                 index,
                 total,
                 running_name,
@@ -223,7 +221,7 @@ impl fmt::Display for CloseSelectionError {
                 let range = range_words(*total);
                 write!(
                     f,
-                    "`{raw}` logs to task {index}, but {owner} has {range}; write `\\{index}` to keep the number as text"
+                    "`- {index}` logs to task {index}, but {owner} has {range}"
                 )
             }
             Self::LogDeferred { index, block_link } => {
@@ -610,6 +608,9 @@ pub(crate) fn apply_close_selection(
 enum LineTag {
     Original(usize),
     Inserted(usize),
+    /// A detail line under the entry inserted for `ordinal`, so
+    /// `inserted_lines[ordinal]` stays the entry line.
+    InsertedDetail(usize),
 }
 
 fn validate_close_log_entries(
@@ -625,7 +626,6 @@ fn validate_close_log_entries(
     for entry in &selection.log {
         let Some(link) = by_index.get(&entry.index).copied() else {
             return Err(CloseSelectionError::LogOutOfRange {
-                raw: selection.raw.clone(),
                 index: entry.index,
                 total: lineup.len(),
                 running_name: running.name.clone(),
@@ -694,6 +694,25 @@ fn insert_close_log_entry(
     let indent = close_log_child_indent(&texts, target, end);
     lines.insert(end + 1, format!("{indent}- {}", entry.text));
     tags.insert(end + 1, LineTag::Inserted(ordinal));
+    if !entry.details.is_empty() {
+        // Step one level deeper exactly as the entry did: the entry
+        // indent with the link indent stripped as a prefix is the unit.
+        let link_indent = lines
+            .get(target)
+            .map(|line| line[..leading_spaces_or_tabs_len(line)].to_string())
+            .unwrap_or_default();
+        let unit = indent
+            .strip_prefix(link_indent.as_str())
+            .filter(|rest| !rest.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| child_indent_unit(&indent));
+        let detail_indent = format!("{indent}{unit}");
+        for (offset, detail) in entry.details.iter().enumerate() {
+            lines
+                .insert(end + 2 + offset, format!("{detail_indent}- {detail}"));
+            tags.insert(end + 2 + offset, LineTag::InsertedDetail(ordinal));
+        }
+    }
 }
 
 fn child_block_end(lines: &[&str], parent: usize) -> usize {

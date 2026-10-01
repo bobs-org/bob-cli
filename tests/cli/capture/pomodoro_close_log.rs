@@ -168,14 +168,16 @@ fn capture_pomodoro_close_log_execution_errors() {
         &["=x 1 fixed 3 bugs"],
     );
     // With no `<N>` both 1 and 3 are loggable, so 3 is parsed as a second
-    // entry and fails at execution as out of range.
+    // entry and fails at execution as out of range, quoting the bullet
+    // head instead of suggesting the retired `\N` escape.
     assert!(
         error.contains("task 3")
             || error.contains("out of range")
             || error.contains("numbered Task Links"),
         "{error}"
     );
-    assert!(error.contains("\\3") || error.contains("write"), "{error}");
+    assert!(error.contains("`- 3`"), "{error}");
+    assert!(!error.contains("\\3"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
     // Deferred target without `<N>`.

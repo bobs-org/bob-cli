@@ -385,6 +385,26 @@ fn selection_log(
         .map(|(index, text)| CloseLogEntry {
             index,
             text: text.to_string(),
+            details: Vec::new(),
+        })
+        .collect();
+    base
+}
+
+fn selection_detail_log(
+    in_progress: Option<Vec<u32>>,
+    complete: Vec<u32>,
+    log: Vec<(u32, &str, Vec<&str>)>,
+    raw: &str,
+) -> super::selection::CloseSelection {
+    use super::super::capture_language::CloseLogEntry;
+    let mut base = selection(in_progress, complete, raw);
+    base.log = log
+        .into_iter()
+        .map(|(index, text, details)| CloseLogEntry {
+            index,
+            text: text.to_string(),
+            details: details.into_iter().map(str::to_string).collect(),
         })
         .collect();
     base
@@ -692,4 +712,113 @@ fn unresolved_listed_row_warns_exactly_once() {
         .count();
     assert_eq!(count, 1);
     assert!(plan.summary.tasks[0].warning.is_some());
+}
+
+#[test]
+fn typed_details_nest_undated_in_task_work_log() {
+    let vault = worked_vault();
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        &worked_example_day(),
+        &selection_detail_log(
+            None,
+            vec![],
+            vec![(1, "wired the lexer", vec!["chose a hand-rolled lexer"])],
+            "=x",
+        ),
+    );
+    assert_eq!(
+        plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
+        Some(concat!(
+            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
+            "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
+            "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
+            "\t\t\t- chose `x` for done\n",
+            "\t\t- *2026-09-28* — Wrote the plan\n",
+            "\t\t- *2026-09-28* — wired the lexer\n",
+            "\t\t\t- chose a hand-rolled lexer\n",
+            "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
+            "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
+        ))
+    );
+    // Details nest undated: they are not entries and are never counted.
+    assert_eq!(plan.summary.tasks[0].work_log.len(), 3);
+    assert_eq!(
+        plan.summary.tasks[0].typed_work_log,
+        vec!["*2026-09-28* — wired the lexer".to_string()]
+    );
+    assert_eq!(
+        plan.summary.tasks[0].typed_work_log_details,
+        vec![vec!["chose a hand-rolled lexer".to_string()]]
+    );
+    assert!(plan.summary.tasks[1].typed_work_log.is_empty());
+    assert!(plan.summary.tasks[1].typed_work_log_details.is_empty());
+    // The closed session holds the entry with its detail one level under.
+    let day = &plan.changed_files[day_path];
+    assert!(day.contains("    - wired the lexer\n"));
+    assert!(day.contains("      - chose a hand-rolled lexer\n"));
+    assert_eq!(
+        plan.summary
+            .task_links
+            .iter()
+            .map(|link| (link.index, link.line))
+            .collect::<Vec<_>>(),
+        vec![(1, 6), (2, 12)]
+    );
+    assert_eq!(plan.summary.tasks[0].ledger_line, 6);
+    assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+}
+
+#[test]
+fn typed_details_align_with_typed_entries() {
+    let vault = worked_vault();
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        &worked_example_day(),
+        &selection_detail_log(
+            None,
+            vec![],
+            vec![(1, "first", vec!["why first"]), (1, "second", Vec::new())],
+            "=x",
+        ),
+    );
+    assert_eq!(plan.summary.tasks[0].typed_work_log.len(), 2);
+    assert_eq!(
+        plan.summary.tasks[0].typed_work_log_details,
+        vec![vec!["why first".to_string()], Vec::new()]
+    );
+    assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+}
+
+#[test]
+fn typed_details_on_complete_target_land_in_completed_task() {
+    let vault = worked_vault();
+    let day_path = Path::new("2026/20260928.md");
+    let plan = close_with_selection(
+        &vault,
+        day_path,
+        &worked_example_day(),
+        &selection_detail_log(
+            None,
+            vec![1],
+            vec![(1, "shipped it", vec!["polished the edges"])],
+            "=x!1",
+        ),
+    );
+    let bob = &plan.changed_files[Path::new("bob.md")];
+    assert!(bob.starts_with("- [x] #task Add support for `=x` syntax!"));
+    assert!(bob.contains("*2026-09-28* — shipped it"));
+    assert!(bob.contains("polished the edges"));
+    assert_eq!(
+        plan.summary.tasks[0].typed_work_log,
+        vec!["*2026-09-28* — shipped it".to_string()]
+    );
+    assert_eq!(
+        plan.summary.tasks[0].typed_work_log_details,
+        vec![vec!["polished the edges".to_string()]]
+    );
 }

@@ -443,6 +443,7 @@ pub(crate) fn log_entries_from_lex(
         .map(|entry| CloseLogEntry {
             index: entry.index,
             text: entry.text.clone(),
+            details: Vec::new(),
         })
         .collect()
 }
