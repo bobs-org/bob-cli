@@ -453,11 +453,78 @@ Pomodoros section it says `no Pomodoros section`. `TODAY 0` and the
 lanes are still shown, and the command exits 0. Exit codes: 0 for a
 report, 1 for an I/O failure, 2 for usage or an invalid plan config.
 
+## `bob ready`
+
+`bob ready` is read-only. Options: `[NOTE]`, `-a/--all`,
+`-b/--bob-dir DIR`, `-n/--cap N`, `-c/--check`, `-f/--format
+human|json`, `-h/--help`. Environment: `BOB_DIR`, `BOB_NOW`,
+`BOB_CONFIG_FILE`, `NO_COLOR`.
+
+The overview lists every area/project note against its cap: crowded
+notes with red overflow bars, full notes up to the cap marker, room
+notes as a compact `name count` list, and a footer with the empty
+count, the not-capped list, and the recurring total. `-a` expands
+room notes into bar rows, lists empty names, adds terminal projects
+to the not-capped list, and prints a `LINTS` block in the
+`freshness` style. With nothing crowded the summary reads
+`CROWDED 0 ✓ · every note has room` in green, and the quickest win
+(`Make room → bob ready <note>`, the smallest excess) is omitted.
+`--cap N` previews a different default cap for the run only: note
+overrides and exemptions still apply, and affected entries report
+`preview` as their cap source. `--check` exits 3 when any note is
+crowded, still printing the report (JSON included).
+
+`bob ready NOTE` lists one note's lane tasks in file order with
+`path:line` references, `new` / `rotten Nd` / `fresh Nd` labels, and
+`^block-id` markers, plus an `also here` line (next, pending,
+blocked, recurring) and a make-room footer. NOTE resolves as a vault
+path (with or without `.md`), then an exact stem, then a
+case-insensitive stem. An ambiguous stem exits 2 listing every
+candidate; an unknown or non-area/project note exits 2 with up to
+three closest-name suggestions.
+
+JSON adds `ok: true`, `schema_version: 1`, `definition:
+"ready_lane"`, and the shared note-entry fields (`path`, `name`,
+`kind`, `status`, `parent`, `count`, `cap`, `cap_source`, `state`,
+`over_by`, `make_up`, `recurring`) to the report. The overview
+carries `notes` (every eligible and exempt note, regardless of
+`-a`); the worklist carries `note`, `tasks` (`path`, `line`,
+`text`, `block_id`, `bucket`, `fresh_on`), and `also` (`next`,
+`pending`, `blocked`, `recurring`). Errors use
+`{ok: false, schema_version: 1, error: {code, message}}`.
+
+Human output (no ANSI without a TTY or with `NO_COLOR`, same glyphs
+and text):
+
+```text
+bob ready · Thu 2026-10-01 · cap 5 per note
+
+  CROWDED 1 · 2 over · 1 full · 3 notes (1 area · 2 projects)
+
+  CROWDED
+    sase_remote  7/5  ■■■■■│■■  +2   project · parent sase · 6 new
+  FULL
+    bob  5/5  ■■■■■│  full   project · 5 new
+  ROOM
+    cash 2
+
+  1 empty · not capped: gkeep_inbox 1 (ready_cap: off) · ↻ 1 recurring   (-a for all)
+
+  Make room → bob ready sase_remote
+  split Ctrl+Shift+N · sequence / defer / drop Ctrl+Shift+P
+```
+
+Exit codes: 0 for a report (even when notes are crowded), 1 for a
+vault I/O failure, 2 for an invalid `plan.max_ready_per_note`, a
+non-Dataview task format, or an unresolvable note, and 3 with
+`--check` when at least one note is crowded.
+
 ## Surfaces
 
 | Surface | What it shows |
 | --- | --- |
 | `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
+| `bob ready` | The per-note Ready cap report: crowded/full/room bar overview, the single-note worklist, schema-1 JSON, `--check` (exit 3), and `--cap` preview |
 | Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v3: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `dashboardLaneBudget`, `renderDashboardLaneBadge`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, PENDING, NEXT, READY chips, a theme line, and any lints. TODAY is the theme/link budget (`TODAY 3/3 · 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. Daily PENDING/NEXT keep whole-lane `pendingBudget`/`nextBudget`; only the dashboard uses the section budgets. |
 | `dash.md` | Its NEW, PENDING, NEXT, READY, BLOCKED, ROTTEN, and TODAY chips in that order and mutually exclusive TODAY / NEW / PENDING / NEXT / READY sections (section order TODAY → NEW → PENDING → NEXT → READY) use the Bob Ledger Tools api v3 with freshness namespace v3 (`dashboardLaneBudget`/`renderDashboardLaneBadge` for PENDING/NEXT sections, `readyBudget`/`renderReadyBadge` for gated READY plus `renderReviewChip`/`reviewModel` for NEW/ROTTEN, with a guarded inline fallback when the plugin is older or unloaded). PENDING/NEXT badges show the section count with the whole-lane pressure in the tooltip; non-dashboard `pendingBudget`/`nextBudget` keep whole-lane semantics. TODAY is that same theme/link budget and opens today's daily note. |
 | `bob tmux-pomodoro` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |

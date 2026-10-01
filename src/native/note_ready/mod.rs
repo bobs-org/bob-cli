@@ -4,9 +4,11 @@
 //! `bob-ledger-tools` mirrors it in JavaScript; both sides run the
 //! R1–R14 vectors verbatim.
 
+pub(crate) mod cli;
+mod render;
 mod scan;
 
-pub(crate) use scan::{default_cap_source, scan_note_ready, ScanError};
+pub(crate) use scan::{ReadyDetail, ScanReport};
 
 /// Lint when `ready_cap` is present but not `1–999`, `off`, or `false`.
 pub(crate) const LINT_NOTE_READY_CAP_INVALID: &str = "note_ready_cap_invalid";

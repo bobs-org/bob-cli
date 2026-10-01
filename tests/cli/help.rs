@@ -494,6 +494,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["plugins", "--help"], "bob plugins"),
         (&["pomodoro", "--help"], "usage: bob pomodoro"),
         (&["projects", "--help"], "bob projects"),
+        (&["ready", "--help"], "Usage: bob ready"),
         (&["tmux-pomodoro", "--help"], "usage: bob tmux-pomodoro"),
     ];
 
@@ -930,6 +931,8 @@ fn top_level_help_lists_commands_alphabetically_with_examples() {
         "pomodoro",
         "projects",
         "query",
+        "randomize",
+        "ready",
         "task-status-hooks",
         "tmux-pomodoro",
         "vault-sync",

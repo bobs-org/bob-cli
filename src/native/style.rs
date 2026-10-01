@@ -21,6 +21,11 @@ impl Styler {
         Self { color: false }
     }
 
+    #[cfg(test)]
+    pub(crate) fn colored() -> Self {
+        Self { color: true }
+    }
+
     pub(crate) fn is_color(self) -> bool {
         self.color
     }

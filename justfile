@@ -73,6 +73,7 @@ install-smoke:
     "${root}/bin/bob" gkeep pull --help >/dev/null
     "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" randomize --help >/dev/null
+    "${root}/bin/bob" ready --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null
     "${root}/bin/bob" highlights clip --help >/dev/null
     "${root}/bin/bob" highlights create --help >/dev/null

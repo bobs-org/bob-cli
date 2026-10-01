@@ -364,7 +364,8 @@ fn scan_fixture(vault: &std::path::Path) -> super::scan::ScanReport {
     // No global env mutation: the fixtures use dates relative to
     // today, and the default per-note cap (5) holds whether the
     // config file is absent or lacks the key.
-    super::scan::scan_note_ready(vault).expect("scan fixture vault")
+    super::scan::scan_note_ready_with_preview(vault, None)
+        .expect("scan fixture vault")
 }
 
 fn tomorrow_string() -> String {

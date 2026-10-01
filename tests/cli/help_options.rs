@@ -796,3 +796,31 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
     );
     assert_stdout_has_no_ansi(&output);
 }
+
+#[test]
+fn ready_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("ready")
+        .arg("--help")
+        .output()
+        .expect("run bob ready --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("per-note cap") && help.contains("[NOTE]"),
+        "expected ready long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-a, --all",
+            "-b, --bob-dir",
+            "-n, --cap",
+            "-c, --check",
+            "-f, --format",
+            "-h, --help",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}

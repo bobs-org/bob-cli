@@ -169,6 +169,12 @@ const SUBCOMMANDS: &[Subcommand] = &[
         native_command: NativeCommand::Randomize,
     },
     Subcommand {
+        name: "ready",
+        script_command: None,
+        about: "Show ready tasks per area/project note against the per-note cap",
+        native_command: NativeCommand::NoteReady,
+    },
+    Subcommand {
         name: "task-status-hooks",
         script_command: None,
         about: "Sync active task dependencies and Pomodoro links",
@@ -368,6 +374,7 @@ Examples:
                                  Preview the exact Markdown a pull would write
   bob randomize --dry-run
                                  Preview bulk re-roll of due prioritized tasks
+  bob ready -a                   Show ready tasks per area/project note
   bob highlights create report.md
                                  Render a Highlights-ready PDF
   bob highlights scan --dry-run

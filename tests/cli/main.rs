@@ -11,6 +11,7 @@ mod plan;
 mod plugins;
 mod pomodoro;
 mod projects;
+mod ready;
 mod support;
 mod task_status_hooks;
 mod vault_sync;

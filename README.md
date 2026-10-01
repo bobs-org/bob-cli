@@ -171,6 +171,7 @@ Bob's workflow commands are:
 | [`projects`](#projects) | Inspect and synchronize project lifecycle tasks |
 | [`query`](#query) | Run headless Dataview or Tasks queries, or live Dataview queries |
 | [`randomize`](#randomize) | Re-roll due prioritized tasks within their priority windows |
+| [`ready`](#ready-cap) | Show each area/project note's Ready lane against the per-note cap |
 | [`task-status-hooks`](#task-status-hooks) | Reconcile Pomodoro links, task ranks, and derived Blocked state |
 | [`tmux-pomodoro`](#pomodoro-status) | Print Pomodoro status for a tmux status line |
 | [`vault-sync`](#vault-sync) | Reconcile the Bob vault through Git |
@@ -485,6 +486,21 @@ ROTTEN. `seed` stamps the one-time cutover: Ready tasks staggered
 across the last 7 days by note, every other open task today. The seed
 refuses a second run, aborts on any parse change, and `--dry-run`
 previews without writing.
+
+## Ready cap
+
+```bash
+bob ready [NOTE] [-a|--all] [-b|--bob-dir DIR] [-n|--cap N] [-c|--check] [-f|--format human|json]
+```
+
+Every area/project note has a soft cap on its Ready lane
+(`plan.max_ready_per_note`, default 5, per-note `ready_cap`
+override). `bob ready` is read-only: it shows crowded notes with red
+overflow bars, full notes at the cap, room notes as a compact list,
+and the single-note worklist with `path:line` references. `--check`
+exits 3 when any note is crowded; `--cap N` previews a different
+default for one run. The full definition, JSON contract, and
+conformance vectors live in [`docs/plan.md`](docs/plan.md).
 
 ## Projects
 
