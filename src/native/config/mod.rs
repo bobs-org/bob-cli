@@ -655,6 +655,49 @@ properties:
     }
 
     #[test]
+    fn ignores_decay_and_rolls_keys() {
+        fn levels_of(text: &str) -> Vec<(String, String, u64, u64)> {
+            parse_priority_property(text, Path::new("/config.yml"))
+                .expect("decay keys stay parseable")
+                .levels()
+                .iter()
+                .map(|level| {
+                    (
+                        level.label().to_string(),
+                        level.value().to_string(),
+                        level.min_days,
+                        level.max_days,
+                    )
+                })
+                .collect()
+        }
+
+        let expected = levels_of(DEPLOYED_CONFIG);
+        assert_eq!(expected.len(), 4);
+
+        let with_decay_rolls = DEPLOYED_CONFIG.replacen(
+            "    schedules: scheduled\n",
+            "    schedules: scheduled\n    decay:\n      rolls: 2\n",
+            1,
+        );
+        assert_eq!(levels_of(&with_decay_rolls), expected);
+
+        let with_decay_false = DEPLOYED_CONFIG.replacen(
+            "    schedules: scheduled\n",
+            "    schedules: scheduled\n    decay: false\n",
+            1,
+        );
+        assert_eq!(levels_of(&with_decay_false), expected);
+
+        let with_level_rolls = DEPLOYED_CONFIG.replacen(
+            "        max_days: 7\n",
+            "        max_days: 7\n        rolls: 3\n",
+            1,
+        );
+        assert_eq!(levels_of(&with_level_rolls), expected);
+    }
+
+    #[test]
     fn parses_highlights_pre_scan_hook() {
         let config = parse_highlights_config(
             r#"

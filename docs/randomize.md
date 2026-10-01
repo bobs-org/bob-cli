@@ -132,6 +132,10 @@ Everything is computed in memory, one postimage per note:
    - If the task has a direct-child Schedule Log marker, the entry is
      prepended as that marker's first child (newest first). Legacy
      `**Schedule log**` markers are recognized too.
+   - `🎲 <level> randomize` entries are transparent to the priority-decay
+     roll streak: they are skipped when the streak is read, so catching up
+     after time away neither builds nor resets it (see
+     [projects.md](projects.md#recommended-roll-and-priority-decay)).
    - Otherwise `- 🗓️ **SCHEDULE LOG**` plus the entry is appended as the
      task's last direct child, which is how the picker creates a missing
      log.

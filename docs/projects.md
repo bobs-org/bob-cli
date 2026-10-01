@@ -27,6 +27,7 @@ that task instead of asking users to edit machine-facing metadata directly.
 - [Sync rules](#sync-rules)
 - [Scheduling from the `^prj` task](#scheduling-from-the-prj-task)
 - [Priority property and scheduled rolls](#priority-property-and-scheduled-rolls)
+- [Recommended roll and priority decay](#recommended-roll-and-priority-decay)
 - [Schedule-log reason prompt](#schedule-log-reason-prompt)
 - [Deferring a task prunes it from today's open Pomodoros](#deferring-a-task-prunes-it-from-todays-open-pomodoros)
 - [Cancelling a task](#cancelling-a-task)
@@ -372,6 +373,128 @@ task has the same configured priority. Choosing the suggestion writes
 immediately with its own deterministic reason instead of prompting; see
 [Schedule-log reason prompt](#schedule-log-reason-prompt).
 
+### Recommended roll and priority decay
+
+When the `scheduled` row is selected, `Ctrl+Enter` (`Cmd+Enter` on macOS)
+takes the recommended roll in one keypress, and the date it will write is
+shown on the `scheduled` row. The roll follows a configurable decay ladder
+read from the task's Schedule Log. A level is re-rolled `rolls` times
+(default 1), the next recommended roll moves the task one level down
+(P2 → P3), and past the last level it cancels the task.
+
+| Gesture | Behavior |
+| --- | --- |
+| `Ctrl+Enter` on `scheduled` (either picker stage) | Takes the recommended roll and closes the picker |
+| `↵` on `scheduled` | Opens the date list as before; never decays or cancels |
+| `↵` on the pinned `🎲 P2 roll` row | Explicit same-level roll; counts toward the streak |
+| `Ctrl+Enter` on any other row, or with no recommendation | Behaves exactly like `↵` |
+| `Ctrl+R` in stage one | Re-rolls the recommendation's date when it has one |
+
+A recommendation exists only for an open task whose priority value is one of
+the configured levels. There is none for implicit P0 (no priority field), an
+unconfigured value, plain bullets, or closed tasks.
+
+The ladder, with `level` the current level, `streak` its roll streak, and
+`limit` its roll limit (`levels[].rolls`, else `decay.rolls`, else `1`):
+
+| Condition | Recommendation | Writes |
+| --- | --- | --- |
+| decay disabled (`decay: false`) | roll at `level` | date in `level`'s window, `🎲 P2 roll …` |
+| `streak < limit` | roll at `level` (step `streak + 1` of `limit`) | date in `level`'s window, `🎲 P2 roll …` |
+| `streak >= limit` and a next level exists | decay to the next level | priority field → next level's value, date in the next window, `🎲 P2 → P3 decay …` |
+| `streak >= limit` at the last level | cancel | `[-]`, `[cancelled:: today]`, Cancel Log `🍂 decayed past P4 after 1 roll` |
+| cancel recommended on a recurring task | unavailable | nothing; the picker shows a notice and writes nothing |
+
+A decay does not count as the first roll at the new level: with the default
+`rolls: 1`, every level grants two windows — entering it, then one roll.
+Lifecycle with the default config (P1–P4 with windows 2–7, 8–30, 31–90,
+91–365):
+
+| # | Gesture | Entry written | Next `Ctrl+Enter` recommends |
+| --- | --- | --- | --- |
+| 0 | Priority row → P2 | `🎲 P0 → P2 · in **12** (8–30) days` | P2 roll (1/1) |
+| 1 | `Ctrl+Enter` | `🎲 P2 roll · in **20** (8–30) days` | P2 → P3 |
+| 2 | `Ctrl+Enter` | `🎲 P2 → P3 decay · in **45** (31–90) days` | P3 roll (1/1) |
+| 3 | `Ctrl+Enter` | `🎲 P3 roll · in **60** (31–90) days` | P3 → P4 |
+| 4 | `Ctrl+Enter` | `🎲 P3 → P4 decay · in **120** (91–365) days` | P4 roll (1/1) |
+| 5 | `Ctrl+Enter` | `🎲 P4 roll · in **200** (91–365) days` | Cancel task |
+| 6 | `Ctrl+Enter` | Cancel Log `*<today>* — 🍂 decayed past P4 after 1 roll` | — |
+
+The streak is derived from the Schedule Log, never stored. Only the marker's
+direct child bullets are read, newest first, and each entry's reason is
+classified:
+
+| Entry (head or reason) | Class | Effect on the streak |
+| --- | --- | --- |
+| `🎲 <L> roll` where `<L>` is the current level, with no `→` | roll | counts; keep walking |
+| `🎲 <anything> randomize` (from `bob randomize`) | randomize | transparent: skip it and keep walking |
+| `🎲 <from> → <to> decay` | decay | stops |
+| `🎲 <from> → <to>` or `🎲 <L>` (a priority row pick) | other | stops |
+| `🎲 <other label> roll` (the priority was hand-edited since) | other | stops |
+| a typed reason, `🤷 no reason given`, or any unparseable bullet | other | stops |
+
+In one sentence: only reasonless, same-level recommended rolls build a
+streak; any deliberate scheduling decision resets it. Conformance vectors
+(current level P2, limit 1 unless noted; entries newest first):
+
+| # | Schedule Log entries (reason only) | Streak | Recommendation |
+| --- | --- | --- | --- |
+| 1 | (no log) | 0 | roll P2, step 1/1 |
+| 2 | `🎲 P1 → P2 · in **9** (8–30) days` | 0 | roll P2 |
+| 3 | `🎲 P2 roll · in **17** (8–30) days`, `🎲 P1 → P2 · …` | 1 | decay P2 → P3 |
+| 4 | `🎲 P2 randomize · in **9** (8–30) days`, `🎲 P2 roll · …` | 1 | decay P2 → P3 |
+| 5 | `waiting on the API review`, `🎲 P2 roll · …` | 0 | roll P2 |
+| 6 | `🤷 no reason given`, `🎲 P2 roll · …` | 0 | roll P2 |
+| 7 | `🎲 P2 · in **12** (8–30) days`, `🎲 P2 roll · …` | 0 | roll P2 |
+| 8 | `🎲 P1 roll · …` | 0 | roll P2 |
+| 9 | `🎲 P2 roll · random in 8–30 days` | 1 | decay P2 → P3 |
+| 10 | current P4: `🎲 P4 roll · …` | 1 | cancel; a recurring task is unavailable instead |
+| 11 | `decay.rolls: 3`: two `🎲 P2 roll` entries, then three | 2, then 3 | roll P2 step 3/3, then decay |
+| 12 | `decay: false`: five `🎲 P2 roll` entries | 5 | roll P2, no step |
+| 13 | P2 has `rolls: 0`, no log | 0 | decay P2 → P3 |
+| 14 | current P3: `🎲 P2 → P3 decay · …` | 0 | roll P3 |
+| 15 | P4 has `rolls: 0`, current P4, no log | 0 | cancel |
+
+The `decay` block lives on the priority property in
+`~/.config/bob/config.yml`:
+
+```yaml
+- name: priority
+  values: priority
+  schedules: scheduled
+  # Ctrl+Enter on `scheduled` takes the recommended roll. Each level allows `rolls`
+  # same-level rolls (read from the task's Schedule Log); the next recommended roll
+  # decays the task one level (P2 → P3), and past the last level it cancels it.
+  # `decay: false` makes Ctrl+Enter a plain same-level roll that never decays.
+  decay:
+    rolls: 1
+  levels:
+    - label: P1
+      value: high
+      min_days: 2
+      max_days: 7
+      # rolls: 3   # optional: this level's own roll limit
+```
+
+`decay` absent, `true`, or `{}` means enabled with one roll per level.
+`decay: false` makes `Ctrl+Enter` a plain same-level roll that never decays.
+`decay.rolls` must be a non-negative integer (`0` means every recommended roll
+decays); `levels[].rolls` overrides it for one level. `decay` and `rolls` are
+rejected on non-priority properties, as `levels` is.
+
+In batch sessions (`N<Ctrl+Shift+P>` and Task Link), every open target with a
+configured priority gets its own recommendation from its own line and Schedule
+Log, and the `scheduled` row previews the mix (for example
+`4 tasks · 2 roll · 1 decay · 1 cancel`). Targets with no recommendation are
+skipped and reported. One `Ctrl+Enter` applies the whole batch in a single
+guarded write: one undo step in counted sessions, all-or-nothing preimages in
+link sessions. If any cancel target is recurring, the whole batch is refused
+and nothing is written.
+
+To keep a task at its level, re-pick its priority level or reschedule it with
+a typed reason — both reset the streak. `bob randomize` entries never count
+for or against it.
+
 ### Schedule-log reason prompt
 
 The log records every scheduled change the `Ctrl+Shift+P` picker makes; the
@@ -420,6 +543,7 @@ they read as machine-written months later — 🎲 for a date the software rolle
 | Priority level picked, task had no priority field             | `🎲 P0 → <to> · in **<chosen>** (<min>–<max>) days` |
 | Priority level re-picked unchanged                            | `🎲 <level> · in **<chosen>** (<min>–<max>) days` |
 | Pinned roll suggestion chosen in the `scheduled` stage         | `🎲 <level> roll · in **<chosen>** (<min>–<max>) days` |
+| `Ctrl+Enter` recommended decay on the `scheduled` row          | `🎲 <from> → <to> decay · in **<chosen>** (<min>–<max>) days` |
 | Reason prompt skipped on a task that already has a log         | `🤷 no reason given` |
 | `bob capture <text> p:<N>` rolls the scheduled date            | `🎲 P0 → <to> · in **<chosen>** (<min>–<max>) days` |
 | `bob randomize` re-rolls a due task                             | `🎲 <level> randomize · in **<chosen>** (<min>–<max>) days` |
@@ -432,6 +556,9 @@ append to.
 `bob randomize` rolls the same configured windows vault-wide for every due
 prioritized task and records the `🎲 <level> randomize` reason above; see
 [randomize.md](randomize.md).
+
+The recommended same-level roll (`Ctrl+Enter` when the streak is under the
+limit) writes the existing `🎲 <level> roll` reason, not a new one.
 
 An automatic entry — a roll, or a skipped prompt on a task with a log — is
 skipped when the resulting date equals the date the task already has, because
@@ -547,6 +674,11 @@ marker nested under a grandchild does not count. An empty reason writes no
 log, unless the task already keeps one: then it gets
 `*YYYY-MM-DD* — 🤷 no reason given`, the same "a kept history has no gaps"
 rule the Schedule Log uses.
+
+Past the last decay level, `Ctrl+Enter` on the `scheduled` row cancels with
+the reason `🍂 decayed past <level> after <n> roll(s)` — just
+`🍂 decayed past <level>` when the streak is 0; see
+[Recommended roll and priority decay](#recommended-roll-and-priority-decay).
 
 Side effects apply immediately, for feedback. Every live link to a cancelled
 task with a block ID is removed from today's open Pomodoros with the same
