@@ -160,7 +160,8 @@ mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
 `=x[<N>][!<M>][~<K>]` close (case-insensitive `=X`, with `!` and `~` in \
 either order) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` plus the additive `in_progress` list, null when no `<N>` was typed, \
-the `complete` list, the `drop` list, and the `log` entries in typed order) \
+the `complete` list, the `drop` list, and the `log` entries (`index`, \
+`text`, `details`) in typed order) \
 and spans covering the `=x` token (`pomodoro_close`), the `<N>` list \
 including its commas (`pomodoro_close_in_progress`), the `!<M>` list \
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including \
@@ -169,25 +170,30 @@ the `~` (`pomodoro_close_drop`), and each entry index \
 its wikilink spans); the human `close` line reads \
 `=x1,3!2~4 (in progress 1, 3 · complete 2 · drop 4 · defer the rest)`, with \
 `in progress none` for `=x0`, a bare `=x` for a plain close, and \
-`log 2 'wired the lexer'` for typed entries. A Work Log tail \
-(`=x<N> <n> <text> …`) appends literal entries under worked links \
-(`\\3` keeps 3 as text); a dangling index (`=x 1`) reports mode \
-'incomplete' needing `pomodoro_close_log_text` with the partial spec, the \
-spans typed so far, and one `interactive_placeholder` span over the index \
-instead of its index span. A tail that does not start with a task number, \
-a non-loggable index, an empty entry, a block link, or a fence reports \
-'pomodoro_close' plus an `invalid_pomodoro_close` diagnostic on the precise \
-range. A leading selection-shaped token with child lines reports \
-'pomodoro_close' plus an `invalid_pomodoro_close` diagnostic on the child \
-line, as does every malformed list (duplicates, overlaps, a misplaced `0`, \
-a second `!` or `~`, a bad character, an oversized number, or a space \
-inside the lists, which gets the no-spaces hint). A token ending in a \
+`log 2 'wired the lexer' (+1 detail)` for typed entries with details. \
+Work Log entries are child bullets below the close (`- <n> <text>`, with \
+two-space `  - <detail>` details nesting under their entry); only the \
+bullet's first token is an index and every backslash stays literal. A \
+dangling bullet (`- 1`) reports mode 'incomplete' needing \
+`pomodoro_close_log_text` with the partial spec (lists plus every complete \
+entry with its details), the spans typed so far, and one \
+`interactive_placeholder` span over each dangling number instead of its \
+index span. A bullet with no number, a non-loggable index, a bad number, a \
+block link, or a fence reports 'pomodoro_close' plus an \
+`invalid_pomodoro_close` diagnostic on the precise range. Extra text on the \
+close line reports 'pomodoro_close' plus an `invalid_pomodoro_close` \
+diagnostic: the no-spaces hint when the spaceless join lexes as a \
+selection, else the bullet hint echoing the tail as the bullet to write. \
+Every malformed list (duplicates, overlaps, a misplaced `0`, a second `!` \
+or `~`, a bad character, an oversized number, or a space inside the lists, \
+which gets the no-spaces hint) reports the same. A token ending in a \
 dangling separator (`=x1,`, `=x!`, `=x~`, `=x1!`, `=x!2,`, `=x0!`) reports \
 mode 'incomplete' needing `pomodoro_close_task`, with the partial spec, the \
 spans typed so far, and one `interactive_placeholder` span over the \
-separator. A same-line chain splits into one `items[]` entry per operator; \
-the close item's range covers its tail and a trailing start run \
-(`=x 1 wired it =`) splits into per-token items. Other `=`-prefixed tokens \
+separator. A same-line chain splits into one `items[]` entry per operator, \
+with child lines attaching to the line's `=x` (the last `=x` when it closes \
+twice); a chain whose `=x` is not last nests its item ranges, so they never \
+partially overlap. Other `=`-prefixed tokens \
 (`=xx`, `=xa`, `==`, `= foo`) and mid-body `=x` stay ordinary prose. On \
 link items the `=x…` suffix spans the same four span kinds after the route \
 and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' (or \
@@ -245,7 +251,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x1~2'\n  bob capture-parse -f json -- '=x0!2'\n  bob capture-parse -f json -- '=x 1 wired the lexer'\n  bob capture-parse -f json -- '=x 1'\n  bob capture-parse -f json -- '=x 1 wired it ='\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- '=x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, task_link, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x1~2'\n  bob capture-parse -f json -- '=x0!2'\n  printf '=x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf '=x\\n- 1\\n' | bob capture-parse -f json\n  printf '=x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- '=x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, task_link, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task",
         )
         .disable_help_flag(true)
         .arg(format_arg())

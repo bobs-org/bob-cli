@@ -71,9 +71,9 @@ pub(crate) enum CaptureKind {
         close: Option<PomodoroCloseSpec>,
         spelling: PomodoroLinkSpelling,
     },
-    /// A whole-item `=x` Pomodoro close, with an optional Work Log tail
-    /// (`=x 1 wired the lexer`). Child lines are invalid; extra text lexes
-    /// as the tail, never a task.
+    /// A whole-item `=x` Pomodoro close, with optional Work Log bullets as
+    /// child lines (`=x` plus `- 1 wired the lexer` below it). Extra text on
+    /// the close line is never a task.
     PomodoroClose {
         spec: PomodoroCloseSpec,
     },
@@ -142,9 +142,10 @@ pub(crate) enum SessionOperator {
 /// ascending. Plain `=x` reports `in_progress: None` and empty
 /// `complete`/`drop`, so version-tolerant readers see only additive fields.
 ///
-/// A Work Log tail (`=x<N> <n> <text> …`) appends `log` entries: each names
-/// a numbered Task Link plus the literal, unescaped entry text, in typed
-/// order. The text is final; the grammar phase fills it.
+/// Work Log bullets (`- <n> <text>` child lines under `=x[<N>][!<M>]`)
+/// append `log` entries: each names a numbered Task Link plus the literal
+/// entry text and its nested details, in typed order. The text is final; the
+/// grammar phase fills it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
     /// Raw close token exactly as typed: the `=`-prefixed token

@@ -397,7 +397,8 @@ pub(super) const POMODORO_SHIFT_SHAPE_ERROR: &str = "Pomodoro shift items must c
 
 pub(super) const POMODORO_SHIFT_FORCED_ERROR: &str = "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the shift alone";
 
-pub(super) const POMODORO_CLOSE_SHAPE_ERROR: &str = "`=x` takes no child lines; write Work Log entries on its line (for example `=x 1 wrote the tests`)";
+pub(super) const POMODORO_CLOSE_INTERNAL_BULLETS_ERROR: &str =
+    "a close never carries authored sub-bullets";
 
 pub(crate) const POMODORO_START_FORCED_ERROR: &str = "Pomodoro start `=<X>` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the start alone";
 
@@ -553,12 +554,30 @@ pub(super) fn close_selection_incomplete_error(
 }
 
 // ---------------------------------------------------------------------------
-// `=x` Work Log tail diagnostics (shared by `bob capture` and `capture-parse`)
+// `=x` Work Log bullet diagnostics (shared by `bob capture` and `capture-parse`)
 // ---------------------------------------------------------------------------
 
-/// The tail does not start with a task number.
-pub(super) fn close_log_tail_start_error() -> String {
-    "after `=x`, write a task number and then its Work Log text (for example `=x 1 wrote the tests`); to link a task while closing, use `^route:block-id=x`".to_string()
+/// Any token after the close token on its parent line. `bullet` is the
+/// echoed `- <n> <text>` bullet when the tail starts with a positive number
+/// (after an optional stray `-`/`*`/`+` token), or `None` for the generic
+/// hint.
+pub(super) fn close_parent_text_error(bullet: Option<&str>) -> String {
+    match bullet {
+        Some(bullet) => format!(
+            "`=x` takes no text on its line; put each Work Log entry on its own line below it, as a bullet: `{bullet}`"
+        ),
+        None => "`=x` takes no text on its line; log work as bullets below it (for example `- 1 wrote the tests`); to link a task while closing, use `^route:block-id=x`"
+            .to_string(),
+    }
+}
+
+/// A Work Log bullet whose first token is not a task number. `example` is
+/// the `- <n> <text>` fix that echoes the bullet's own text with the
+/// smallest loggable number.
+pub(super) fn close_log_missing_number_error(example: &str) -> String {
+    format!(
+        "start each Work Log bullet with the number of the task it logs to: `{example}`"
+    )
 }
 
 /// A tail index that is not worked by this close. `list_suggestion` adds the
@@ -581,27 +600,24 @@ pub(super) fn close_log_dropped_error(index: u32, drop: &str) -> String {
     format!("task {index} is dropped by `{drop}`, so it can't take a Work Log entry")
 }
 
-/// An index with no text before the next index starts.
-pub(super) fn close_log_empty_entry_error(prev: u32, next: u32) -> String {
-    format!("type Work Log text after task {prev} (write `\\{next}` to log the number {next})")
-}
-
-/// A dangling index at execution: `display` is the close item text up to the
-/// dangling index (for example `=x 1`).
-pub(super) fn close_log_dangling_error(display: &str, index: u32) -> String {
+/// A dangling bullet at execution: the bullet head (for example `- 1`).
+pub(super) fn close_log_dangling_error(
+    bullet_head: &str,
+    index: u32,
+) -> String {
     format!(
-        "`{display}` is incomplete: type the Work Log text after task {index}"
+        "`{bullet_head}` is incomplete: type the Work Log text after task {index}"
     )
 }
 
-/// A block link inside a Work Log entry.
+/// A block link inside a Work Log bullet.
 pub(super) fn close_log_block_link_error(link: &str) -> String {
-    format!("a Work Log entry can't contain the block link `{link}`; the close would treat it as a Task Link")
+    format!("a Work Log bullet can't contain the block link `{link}`; the close would treat it as a Task Link")
 }
 
-/// Entry text that starts with a code fence.
+/// Bullet text that starts with a code fence.
 pub(super) fn close_log_fence_error() -> String {
-    "a Work Log entry can't start with a code fence".to_string()
+    "a Work Log bullet can't start with a code fence".to_string()
 }
 
 // ---------------------------------------------------------------------------

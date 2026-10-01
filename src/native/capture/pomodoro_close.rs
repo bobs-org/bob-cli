@@ -500,7 +500,7 @@ pub(super) fn reject_pomodoro_close_conflicts(
     }
     if !parsed.sub_bullets.is_empty() {
         return Err(CaptureError::usage(
-            "`=x` takes no child lines; write Work Log entries on its line (for example `=x 1 wrote the tests`)",
+            "a close never carries authored sub-bullets",
         ));
     }
     Ok(())

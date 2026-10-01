@@ -57,6 +57,7 @@ pub(crate) use self::editor_model::Span;
 pub(crate) use self::editor_model::SpanKind;
 pub(crate) use self::editor_parse::editor_item_at;
 pub(crate) use self::editor_parse::parse_for_editor;
+pub(crate) use self::editor_pomodoro::cursor_on_close_bullet_line;
 pub(crate) use self::line::missing_text_error;
 pub(crate) use self::line::normalize_task_text;
 pub(crate) use self::line::selector_slug;

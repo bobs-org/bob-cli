@@ -478,10 +478,15 @@ fn capture_pomodoro_close_diagnostics() {
         "2026-09-28 09:37:00",
         &["=x more"],
     );
-    assert!(
-        error.contains("write a task number and then its Work Log text"),
-        "{error}"
+    assert!(error.contains("takes no text on its line"), "{error}");
+    // A bullet with no task number reports the missing-number error.
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x\n- detail"],
     );
+    assert!(error.contains("start each Work Log bullet"), "{error}");
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -735,7 +740,8 @@ fn capture_pomodoro_close_diagnostics() {
     assert!(error.contains("then `=` to switch sessions"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
-    // A real `=x` item with an authored child line fails the same way.
+    // A real `=x` item with a child bullet lexes it as a Work Log entry:
+    // a bullet with no task number fails with the missing-number error.
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-close-child-line");
     let output = run_with_stdin(
@@ -751,7 +757,7 @@ fn capture_pomodoro_close_diagnostics() {
     );
     assert!(!output.status.success());
     assert!(
-        stdout(&output).contains("takes no child lines"),
+        stdout(&output).contains("start each Work Log bullet"),
         "{}",
         format_output(&output)
     );

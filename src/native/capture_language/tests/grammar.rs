@@ -1027,7 +1027,7 @@ fn execution_parses_equals_family_starts_alongside_close() {
     );
     let close_shape = execute("=x more").expect_err("close shape");
     assert!(
-        close_shape.contains("write a task number and then its Work Log text"),
+        close_shape.contains("takes no text on its line"),
         "{close_shape}"
     );
     for raw in ["=xx", "=xa"] {

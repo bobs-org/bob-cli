@@ -187,7 +187,7 @@ fn draft_chain_works_with_a_global_declaration() {
 }
 
 #[test]
-fn draft_attaches_chain_child_lines_to_the_last_token() {
+fn draft_attaches_chain_child_lines_to_the_close() {
     let raw = "+2 =x\n- child";
     let draft = split_capture_draft(raw);
     assert_eq!(draft.items.len(), 2);
@@ -196,6 +196,22 @@ fn draft_attaches_chain_child_lines_to_the_last_token() {
     assert_eq!(draft.items[1].line_start, 1);
     assert_eq!(draft.items[1].line_end, 2);
     assert_eq!(draft.items[1].end, draft.items[1].lines[1].raw.end);
+    // `=x =` with children attaches them to the close (the first token),
+    // so the close item's range contains the later start token's range.
+    let raw = "=x =\n- 1 foo";
+    let draft = split_capture_draft(raw);
+    assert_eq!(draft.items.len(), 2);
+    assert_eq!(draft.items[0].lines.len(), 2);
+    assert_eq!(draft.items[1].lines.len(), 1);
+    assert_eq!(draft.items[0].line_end, 2);
+    assert!(draft.items[0].start < draft.items[1].start);
+    assert!(draft.items[0].end > draft.items[1].end);
+    // With no `=x` on the line, children still attach to the last token.
+    let raw = "= +2\n- child";
+    let draft = split_capture_draft(raw);
+    assert_eq!(draft.items.len(), 2);
+    assert_eq!(draft.items[0].lines.len(), 1);
+    assert_eq!(draft.items[1].lines.len(), 2);
 }
 
 #[test]
@@ -299,15 +315,64 @@ fn execution_reports_a_broken_second_token_on_its_own_range() {
 }
 
 #[test]
-fn execution_rejects_chain_child_lines_with_the_close_shape_error() {
+fn execution_attaches_chain_child_lines_to_the_close() {
+    // `+2 =x` plus a valid bullet: a close with an entry.
+    let draft = execute_draft("+2 =x\n- 1 foo").expect("close with entry");
+    assert_eq!(draft.items.len(), 2);
+    match &draft.items[1].parsed.kind {
+        CaptureKind::PomodoroClose { spec } => {
+            assert_eq!(spec.raw, "=x");
+            let texts = spec
+                .log
+                .iter()
+                .map(|entry| (entry.index, entry.text.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(texts, vec![(1, "foo".to_string())]);
+        }
+        other => panic!("expected close, got {other:?}"),
+    }
+    // A bullet with no number reports the missing-number error instead of
+    // the old child-shape error.
     for raw in ["+2 =x\n- child", "+ =x\n- child"] {
         let error = execute_draft(raw).unwrap_err();
         assert!(
             error.contains("capture item 2 starting on line 1"),
             "{raw}: {error}"
         );
-        assert!(error.contains("takes no child lines"), "{raw}: {error}");
+        assert!(
+            error.contains("start each Work Log bullet"),
+            "{raw}: {error}"
+        );
     }
+    // `=x =` plus a bullet attaches the bullet to the close, not the start.
+    let draft = execute_draft("=x =\n- 1 foo").expect("close then start");
+    assert_eq!(draft.items.len(), 2);
+    match &draft.items[0].parsed.kind {
+        CaptureKind::PomodoroClose { spec } => {
+            assert_eq!(spec.log.len(), 1);
+            assert_eq!(spec.log[0].index, 1);
+            assert_eq!(spec.log[0].text, "foo");
+        }
+        other => panic!("expected close, got {other:?}"),
+    }
+    assert!(
+        matches!(
+            draft.items[1].parsed.kind,
+            CaptureKind::PomodoroStart { .. }
+        ),
+        "second is start"
+    );
+    // The close item's range nests the later parent-line token: it runs
+    // from its token through its last bullet.
+    assert!(draft.items[0].start < draft.items[1].start);
+    assert!(draft.items[0].end > draft.items[1].end);
+    // With no `=x` on the line, children still fail the last token's shape
+    // rule.
+    let error = execute_draft("= +2\n- child").unwrap_err();
+    assert!(
+        error.contains("Pomodoro adjustment items must contain only"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -335,10 +400,7 @@ fn execution_leaves_non_chains_unchanged() {
     let error = execute_draft("=x 1,3").unwrap_err();
     assert!(error.contains("with no spaces"), "{error}");
     let error = execute_draft("=x ^bob:ready=").unwrap_err();
-    assert!(
-        error.contains("write a task number and then its Work Log text"),
-        "{error}"
-    );
+    assert!(error.contains("takes no text on its line"), "{error}");
     for raw in ["Plan +2 =x", "- foo"] {
         let draft = execute_draft(raw).expect("stays a task");
         assert_eq!(draft.items.len(), 1, "{raw}");

@@ -1,52 +1,56 @@
-//! Shared `=x` Work Log tail lexer for Pomodoro closes.
+//! Shared `=x` Work Log bullet lexer for Pomodoro closes.
 //!
 //! Both the execution parser (`bob capture`) and the editor parser
-//! (`capture-parse`, completion, rewrite) lex a close tail through
-//! [`lex_close_log_tail`], so a mistyped entry reports the same message and
-//! byte range everywhere. Diagnostic text lives in [`markers`]; this module
-//! only decides which diagnostic applies and where it points.
+//! (`capture-parse`, completion, rewrite) lex a close's child bullet lines
+//! through [`lex_close_log_bullets`], so a mistyped entry reports the same
+//! message and byte range everywhere. Diagnostic text lives in [`markers`];
+//! this module only decides which diagnostic applies and where it points.
 //!
-//! The tail is everything after the whitespace that follows the close token,
-//! already stripped of any trailing start run by `draft.rs`. Loggability is
-//! purely lexical: with `<N>` typed (including `=x0`) only the numbers in
-//! `<N>` or `!<M>` start entries, otherwise every number `>= 1` starts one
-//! except those in `~<K>`. A `\` before a digit or `=` escapes it into text.
+//! A whole-item close (`=x`/`=X` plus an optional selection, alone on its
+//! parent line) takes Work Log bullets as its child lines, using exactly the
+//! authored-bullet line rules. A first-level bullet is an entry: its first
+//! whitespace-separated token is the task number and everything after it is
+//! the entry text. A two-space nested bullet is a detail of the nearest
+//! preceding entry and its text is entirely literal. Loggability is purely
+//! lexical: with `<N>` typed (including `=x0`) only the numbers in `<N>` or
+//! `!<M>` start entries, otherwise every number `>= 1` starts one except
+//! those in `~<K>`. Every backslash is literal.
 
+use super::draft::*;
+use super::line::*;
 use super::markers::*;
 use super::model::*;
 use crate::native::capture_pomodoro_close::wikilink_tokens;
 
-/// One lexed Work Log entry: the numbered Task Link plus its literal,
-/// unescaped text and the absolute byte ranges of the index token and the
-/// entry text (first text token start through last text token end).
+/// One lexed Work Log entry: the numbered Task Link plus its literal text,
+/// its nested detail lines, and the absolute byte ranges of the index token,
+/// the entry text (first text token start through last text token end), and
+/// each detail (first token start through last token end).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CloseLogEntryLex {
     pub(crate) index: u32,
     pub(crate) text: String,
+    pub(crate) details: Vec<String>,
     pub(crate) index_range: (usize, usize),
     pub(crate) text_range: (usize, usize),
+    pub(crate) detail_ranges: Vec<(usize, usize)>,
 }
 
-/// A fully lexed tail: every entry in typed order.
+/// One dangling Work Log bullet: a first-level bullet whose body is only a
+/// task number. The editor reports it as an editing state; execution rejects
+/// it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CloseLogValid {
-    pub(crate) entries: Vec<CloseLogEntryLex>,
-}
-
-/// A tail ending in a dangling index: the complete entries plus the index
-/// that still needs its text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CloseLogDangling {
-    pub(crate) entries: Vec<CloseLogEntryLex>,
+pub(crate) struct CloseLogDanglingBullet {
     pub(crate) index: u32,
     pub(crate) index_range: (usize, usize),
 }
 
-/// The result of lexing a Work Log tail.
+/// A fully lexed bullet list: every complete entry in typed order plus every
+/// dangling bullet in source order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CloseLogOutcome {
-    Valid(CloseLogValid),
-    Dangling(CloseLogDangling),
+pub(crate) struct CloseLogLexed {
+    pub(crate) entries: Vec<CloseLogEntryLex>,
+    pub(crate) dangling: Vec<CloseLogDanglingBullet>,
 }
 
 /// One lexical failure with its absolute byte range.
@@ -54,68 +58,6 @@ pub(crate) enum CloseLogOutcome {
 pub(crate) struct CloseLogError {
     pub(crate) message: String,
     pub(crate) range: (usize, usize),
-}
-
-/// Whether a tail token is an entry index or entry text. Leading-zero
-/// numbers (`007`) and later `0` tokens are always text; overflow is always
-/// an error.
-enum TailTokenKind {
-    Index(u32),
-    Text(String),
-}
-
-/// Unescape one tail token: a leading `\` before a digit or `=` loses the
-/// backslash and is always text. Returns `None` when the token is not
-/// escaped.
-fn unescape_tail_token(token: &str) -> Option<String> {
-    let rest = token.strip_prefix('\\')?;
-    let second = rest.as_bytes().first()?;
-    if second.is_ascii_digit() || *second == b'=' {
-        Some(rest.to_string())
-    } else {
-        None
-    }
-}
-
-/// Classify one tail token. `is_first` selects the first-token error policy
-/// for `0` and leading-zero numbers.
-fn classify_tail_token(
-    token: &Token<'_>,
-    is_first: bool,
-) -> Result<TailTokenKind, CloseLogError> {
-    if let Some(unescaped) = unescape_tail_token(token.text) {
-        return Ok(TailTokenKind::Text(unescaped));
-    }
-    let text = token.text;
-    if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()) {
-        if text.len() > 1 && text.starts_with('0') {
-            if is_first {
-                return Err(CloseLogError {
-                    message: close_selection_starts_at_one_error(),
-                    range: (token.start, token.end),
-                });
-            }
-            return Ok(TailTokenKind::Text(text.to_string()));
-        }
-        if text == "0" {
-            if is_first {
-                return Err(CloseLogError {
-                    message: close_selection_starts_at_one_error(),
-                    range: (token.start, token.end),
-                });
-            }
-            return Ok(TailTokenKind::Text(text.to_string()));
-        }
-        match text.parse::<u32>() {
-            Ok(number) => Ok(TailTokenKind::Index(number)),
-            Err(_) => Err(CloseLogError {
-                message: close_selection_too_large_error(text),
-                range: (token.start, token.end),
-            }),
-        }
-    } else {
-        Ok(TailTokenKind::Text(text.to_string()))
-    }
 }
 
 /// `true` when `index` can start a Work Log entry under these lists.
@@ -129,6 +71,24 @@ fn is_loggable(
         list.contains(&index) || complete.contains(&index)
     } else {
         !drop.contains(&index)
+    }
+}
+
+/// The smallest loggable task number: the smallest of `<N>` union `!<M>`
+/// when `<N>` is typed and the union is non-empty, otherwise `1`. Used to
+/// build the missing-number example from the bullet's own text.
+fn smallest_loggable(in_progress: Option<&[u32]>, complete: &[u32]) -> u32 {
+    if let Some(list) = in_progress {
+        let mut smallest: Option<u32> = None;
+        for number in list.iter().chain(complete.iter()) {
+            smallest = Some(match smallest {
+                Some(current) => current.min(*number),
+                None => *number,
+            });
+        }
+        smallest.unwrap_or(1)
+    } else {
+        1
     }
 }
 
@@ -206,28 +166,45 @@ fn not_worked_suggestions(
     }
 }
 
-/// Validate one flushed entry's text: fences first, then block links.
-fn check_entry_text(
-    words: &[(String, (usize, usize))],
-) -> Result<String, CloseLogError> {
-    let Some((first_word, first_range)) = words.first() else {
+/// Tokenize a bullet body with absolute byte ranges. `body` is the text after
+/// the bullet marker and `body_start` is its absolute start offset.
+fn body_tokens(body: &str, body_start: usize) -> Vec<Token<'_>> {
+    tokenize_with_spans(body)
+        .into_iter()
+        .map(|token| Token {
+            text: token.text,
+            start: token.start + body_start,
+            end: token.end + body_start,
+        })
+        .collect()
+}
+
+/// Validate one bullet's literal text words: fences first, then block links.
+/// Returns the whitespace-normalized text.
+fn check_bullet_text(words: &[Token<'_>]) -> Result<String, CloseLogError> {
+    let Some(first) = words.first() else {
         return Ok(String::new());
     };
-    if first_word.starts_with("```") || first_word.starts_with("~~~") {
+    if first.text.starts_with("```") || first.text.starts_with("~~~") {
         return Err(CloseLogError {
             message: close_log_fence_error(),
-            range: *first_range,
+            range: (first.start, first.end),
         });
     }
-    for (word, range) in words {
-        let hits = wikilink_tokens(word);
+    for word in words {
+        let hits = wikilink_tokens(word.text);
         if let Some(hit) = hits.first() {
             let link = word
-                .get(hit.start.min(word.len())..hit.end.min(word.len()))
-                .unwrap_or(&word[..]);
+                .text
+                .get(
+                    hit.start.min(word.text.len())
+                        ..hit.end.min(word.text.len()),
+                )
+                .unwrap_or(word.text);
             // `wikilink_tokens` excludes a leading `!` from `token` but
             // includes it in the range; show what the user typed.
-            let display = if word.as_bytes().get(hit.start) == Some(&b'!') {
+            let display = if word.text.as_bytes().get(hit.start) == Some(&b'!')
+            {
                 link.to_string()
             } else {
                 hit.token.clone()
@@ -239,199 +216,228 @@ fn check_entry_text(
             };
             return Err(CloseLogError {
                 message: close_log_block_link_error(&display),
-                range: *range,
+                range: (word.start, word.end),
             });
         }
     }
     Ok(words
         .iter()
-        .map(|(word, _)| word.as_str())
+        .map(|word| word.text)
         .collect::<Vec<_>>()
         .join(" "))
 }
 
-/// Lex a Work Log tail: the whitespace-separated tokens after the close
-/// token, with absolute byte ranges. `close_token` is the display token
-/// (`=x`, `=x2`, `=x1!2`) interpolated into not-worked diagnostics;
-/// `in_progress`/`complete`/`drop` are the lexed selection lists.
-pub(crate) fn lex_close_log_tail(
-    tail_tokens: &[Token<'_>],
+/// Parse one first-level bullet's index token. Returns the index on success.
+fn parse_bullet_index(token: &Token<'_>) -> Result<u32, CloseLogError> {
+    let text = token.text;
+    if text == "0" || (text.len() > 1 && text.starts_with('0')) {
+        return Err(CloseLogError {
+            message: close_selection_starts_at_one_error(),
+            range: (token.start, token.end),
+        });
+    }
+    match text.parse::<u32>() {
+        Ok(number) => Ok(number),
+        Err(_) => Err(CloseLogError {
+            message: close_selection_too_large_error(text),
+            range: (token.start, token.end),
+        }),
+    }
+}
+
+/// Check one parsed index against the lexed selection lists.
+fn check_index_loggable(
+    index: u32,
+    index_range: (usize, usize),
     close_token: &str,
     in_progress: Option<&[u32]>,
     complete: &[u32],
     drop: &[u32],
-) -> Result<CloseLogOutcome, CloseLogError> {
-    if tail_tokens.is_empty() {
-        return Ok(CloseLogOutcome::Valid(CloseLogValid {
-            entries: Vec::new(),
-        }));
+) -> Result<(), CloseLogError> {
+    if is_loggable(index, in_progress, complete, drop) {
+        return Ok(());
     }
-    // The first tail token must be a loggable index.
-    let first = &tail_tokens[0];
-    if unescape_tail_token(first.text).is_some() {
+    if drop.contains(&index) {
+        let drop_text = format!(
+            "~{}",
+            drop.iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         return Err(CloseLogError {
-            message: close_log_tail_start_error(),
-            range: (first.start, first.end),
+            message: close_log_dropped_error(index, &drop_text),
+            range: index_range,
         });
     }
-    if first.text.bytes().all(|byte| byte.is_ascii_digit())
-        && !first.text.is_empty()
-    {
-        match classify_tail_token(first, true)? {
-            TailTokenKind::Index(number) => {
-                if !is_loggable(number, in_progress, complete, drop) {
-                    if drop.contains(&number) {
-                        let drop_text = format!(
-                            "~{}",
-                            drop.iter()
-                                .map(u32::to_string)
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        );
-                        return Err(CloseLogError {
-                            message: close_log_dropped_error(
-                                number, &drop_text,
-                            ),
-                            range: (first.start, first.end),
-                        });
-                    }
-                    let (listed, completed) = not_worked_suggestions(
-                        number,
-                        in_progress,
-                        complete,
-                        drop,
-                    );
-                    return Err(CloseLogError {
-                        message: close_log_not_worked_error(
-                            number,
-                            close_token,
-                            &listed,
-                            &completed,
-                        ),
-                        range: (first.start, first.end),
-                    });
-                }
-            }
-            TailTokenKind::Text(_) => {
-                return Err(CloseLogError {
-                    message: close_log_tail_start_error(),
-                    range: (first.start, first.end),
-                });
-            }
-        }
-    } else {
-        return Err(CloseLogError {
-            message: close_log_tail_start_error(),
-            range: (first.start, first.end),
-        });
-    }
+    let (listed, completed) =
+        not_worked_suggestions(index, in_progress, complete, drop);
+    Err(CloseLogError {
+        message: close_log_not_worked_error(
+            index,
+            close_token,
+            &listed,
+            &completed,
+        ),
+        range: index_range,
+    })
+}
 
+/// Lex a close's Work Log bullets: the close item's child `ItemLine`s.
+/// `close_token` is the display token (`=x`, `=x2`, `=x1!2`) interpolated
+/// into not-worked diagnostics; `in_progress`/`complete`/`drop` are the
+/// lexed selection lists.
+///
+/// Placeholder rows are skipped. Invalid and orphaned lines report the
+/// existing authored-bullet messages. Bullets are checked top to bottom and
+/// the first error wins; any error outranks a dangling bullet.
+pub(crate) fn lex_close_log_bullets(
+    child_lines: &[ItemLine<'_>],
+    close_token: &str,
+    in_progress: Option<&[u32]>,
+    complete: &[u32],
+    drop: &[u32],
+) -> Result<CloseLogLexed, CloseLogError> {
     let mut entries: Vec<CloseLogEntryLex> = Vec::new();
-    let mut current_index: Option<(u32, (usize, usize))> = None;
-    let mut current_text: Vec<(String, (usize, usize))> = Vec::new();
+    let mut dangling: Vec<CloseLogDanglingBullet> = Vec::new();
+    // Nearest preceding first-level bullet: `Some(entry_index)` for a
+    // complete entry, `None` for a dangling bullet, with `seen_first_level`
+    // tracking whether any first-level bullet precedes (for orphaned
+    // detection). Details under a dangling bullet are validated and dropped:
+    // the spec holds only complete entries.
+    let mut seen_first_level = false;
+    let mut last_entry: Option<Option<usize>> = None;
 
-    for (position, token) in tail_tokens.iter().enumerate() {
-        let is_first = position == 0;
-        // A bare-digit token that parses and is loggable starts a new
-        // entry; every other token (including non-loggable numbers, `0`,
-        // leading-zero numbers, and escapes) is entry text. Overflow still
-        // errors from the classifier.
-        enum TailAction {
-            Index(u32),
-            Text(String),
-        }
-        let action = match classify_tail_token(token, is_first)? {
-            TailTokenKind::Index(number)
-                if is_loggable(number, in_progress, complete, drop) =>
-            {
-                TailAction::Index(number)
+    for line in child_lines {
+        let authored = match classify_authored_line(line.raw) {
+            AuthoredLineClass::EmptyOrPlaceholder => continue,
+            AuthoredLineClass::Invalid => {
+                return Err(CloseLogError {
+                    message: invalid_child_line_error(line.line_number),
+                    range: (line.raw.start, line.raw.end),
+                });
             }
-            TailTokenKind::Index(number) => {
-                // Non-loggable bare number inside the tail is literal text.
-                // (The first token already reported dropped/not-worked, so
-                // later positions stay text, e.g. the `3` in
-                // `=x1 1 fixed 3 bugs`.)
-                TailAction::Text(number.to_string())
-            }
-            TailTokenKind::Text(word) => TailAction::Text(word),
+            AuthoredLineClass::Item(authored) => authored,
         };
-        if let TailAction::Index(number) = action {
-            if let Some((prev, _)) = current_index {
-                if current_text.is_empty() {
+        if authored.depth == AuthoredDepth::Nested && !seen_first_level {
+            return Err(CloseLogError {
+                message: orphaned_nested_bullet_error(line.line_number),
+                range: (line.raw.start, line.raw.end),
+            });
+        }
+        let tokens = body_tokens(authored.body, authored.body_start);
+        // The classifier guarantees non-empty bodies for items, but guard
+        // against an all-whitespace body anyway.
+        if tokens.is_empty() {
+            continue;
+        }
+        if authored.depth == AuthoredDepth::Nested {
+            let text = check_bullet_text(&tokens)?;
+            let detail_range = (
+                tokens
+                    .first()
+                    .map(|token| token.start)
+                    .unwrap_or(authored.body_start),
+                tokens
+                    .last()
+                    .map(|token| token.end)
+                    .unwrap_or(authored.body_start),
+            );
+            match last_entry {
+                Some(Some(entry_index)) => {
+                    entries[entry_index].details.push(text);
+                    entries[entry_index].detail_ranges.push(detail_range);
+                }
+                // Validated but dropped: the owning bullet is dangling, so
+                // no complete entry carries it yet.
+                Some(None) => {}
+                None => {
                     return Err(CloseLogError {
-                        message: close_log_empty_entry_error(prev, number),
-                        range: (token.start, token.end),
+                        message: orphaned_nested_bullet_error(line.line_number),
+                        range: (line.raw.start, line.raw.end),
                     });
                 }
-                let (prev_number, prev_range) =
-                    current_index.take().expect("pending index");
-                let text = check_entry_text(&current_text)?;
-                let text_range = (
-                    current_text
-                        .first()
-                        .map(|(_, range)| range.0)
-                        .unwrap_or(prev_range.1),
-                    current_text
-                        .last()
-                        .map(|(_, range)| range.1)
-                        .unwrap_or(prev_range.1),
-                );
-                entries.push(CloseLogEntryLex {
-                    index: prev_number,
-                    text,
-                    index_range: prev_range,
-                    text_range,
-                });
-                current_text = Vec::new();
             }
-            current_index = Some((number, (token.start, token.end)));
-        } else {
-            let TailAction::Text(word) = action else {
-                unreachable!("index handled above");
-            };
-            // The first token is always an index (checked above), so text
-            // here always belongs to a pending entry.
-            if current_index.is_none() {
-                return Err(CloseLogError {
-                    message: close_log_tail_start_error(),
-                    range: (token.start, token.end),
-                });
-            }
-            current_text.push((word, (token.start, token.end)));
+            continue;
         }
+        // First-level bullet: the first token must be a task number.
+        seen_first_level = true;
+        let first = &tokens[0];
+        if first.text.is_empty()
+            || !first.text.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            let normalized = normalize_task_text(authored.body);
+            let smallest = smallest_loggable(in_progress, complete);
+            let example = if normalized.is_empty() {
+                format!("- {smallest}")
+            } else {
+                format!("- {smallest} {normalized}")
+            };
+            return Err(CloseLogError {
+                message: close_log_missing_number_error(&example),
+                range: (first.start, first.end),
+            });
+        }
+        let index = parse_bullet_index(first)?;
+        check_index_loggable(
+            index,
+            (first.start, first.end),
+            close_token,
+            in_progress,
+            complete,
+            drop,
+        )?;
+        if tokens.len() == 1 {
+            dangling.push(CloseLogDanglingBullet {
+                index,
+                index_range: (first.start, first.end),
+            });
+            last_entry = Some(None);
+            continue;
+        }
+        let text = check_bullet_text(&tokens[1..])?;
+        let text_range = (
+            tokens[1].start,
+            tokens.last().map(|token| token.end).unwrap_or(first.end),
+        );
+        entries.push(CloseLogEntryLex {
+            index,
+            text,
+            details: Vec::new(),
+            index_range: (first.start, first.end),
+            text_range,
+            detail_ranges: Vec::new(),
+        });
+        last_entry = Some(Some(entries.len() - 1));
     }
 
-    let Some((number, index_range)) = current_index else {
-        return Err(CloseLogError {
-            message: close_log_tail_start_error(),
-            range: (tail_tokens[0].start, tail_tokens[0].end),
-        });
+    Ok(CloseLogLexed { entries, dangling })
+}
+
+/// Build the parent-line bullet hint for extra text after the close token.
+/// `tail_tokens` are the whitespace-separated tokens after the close token.
+/// Returns the echoed `- <n> <text>` bullet when the tail starts with a
+/// positive number (after an optional stray `-`/`*`/`+` token), or `None`
+/// for the generic hint.
+pub(crate) fn close_tail_bullet_hint(
+    tail_tokens: &[Token<'_>],
+) -> Option<String> {
+    let words: Vec<&str> = tail_tokens.iter().map(|token| token.text).collect();
+    let words: &[&str] = match words.first() {
+        Some(first) if matches!(*first, "-" | "*" | "+") => words.get(1..)?,
+        Some(_) => &words,
+        None => return None,
     };
-    if current_text.is_empty() {
-        return Ok(CloseLogOutcome::Dangling(CloseLogDangling {
-            entries,
-            index: number,
-            index_range,
-        }));
+    let Some(head) = words.first() else {
+        return None;
+    };
+    if head.is_empty()
+        || !head.bytes().all(|byte| byte.is_ascii_digit())
+        || *head == "0"
+    {
+        return None;
     }
-    let text = check_entry_text(&current_text)?;
-    let text_range = (
-        current_text
-            .first()
-            .map(|(_, range)| range.0)
-            .unwrap_or(index_range.1),
-        current_text
-            .last()
-            .map(|(_, range)| range.1)
-            .unwrap_or(index_range.1),
-    );
-    entries.push(CloseLogEntryLex {
-        index: number,
-        text,
-        index_range,
-        text_range,
-    });
-    Ok(CloseLogOutcome::Valid(CloseLogValid { entries }))
+    Some(format!("- {}", words.join(" ")))
 }
 
 /// Convert lexed entries into the execution/editor model entries.
@@ -443,7 +449,7 @@ pub(crate) fn log_entries_from_lex(
         .map(|entry| CloseLogEntry {
             index: entry.index,
             text: entry.text.clone(),
-            details: Vec::new(),
+            details: entry.details.clone(),
         })
         .collect()
 }
@@ -453,141 +459,170 @@ mod tests {
     use super::super::close_selection::*;
     use super::*;
 
-    fn tail_tokens(text: &str) -> Vec<Token<'_>> {
-        super::super::model::tokenize_with_spans(text)
-            .into_iter()
-            .map(|token| Token {
-                text: token.text,
-                start: token.start,
-                end: token.end,
-            })
-            .collect()
-    }
-
-    fn lex_tail(
-        close: &str,
-        tail: &str,
-    ) -> Result<CloseLogOutcome, CloseLogError> {
+    fn selection_lists(close: &str) -> (Option<Vec<u32>>, Vec<u32>, Vec<u32>) {
         let after_x = whole_item_close_after_x(close).unwrap_or("");
         let base = close.len() - after_x.len();
-        let selection = match lex_close_selection(after_x, base, close)
+        match lex_close_selection(after_x, base, close)
             .expect("valid selection")
         {
-            CloseSelectionOutcome::Valid(lex) => lex,
+            CloseSelectionOutcome::Valid(lex) => {
+                (lex.in_progress, lex.complete, lex.drop)
+            }
             CloseSelectionOutcome::Incomplete(_) => {
                 panic!("{close}: expected valid selection")
             }
-        };
-        // Tail offsets sit after the close token plus one space.
-        let offset = close.len() + 1;
-        let raw_tokens = tail_tokens(tail);
-        let tokens: Vec<Token<'_>> = raw_tokens
+        }
+    }
+
+    fn lex_bullets(
+        close: &str,
+        draft: &str,
+    ) -> Result<CloseLogLexed, CloseLogError> {
+        let lines = split_physical_lines(draft);
+        let item_lines: Vec<ItemLine<'_>> = lines
             .into_iter()
-            .map(|token| Token {
-                text: token.text,
-                start: token.start + offset,
-                end: token.end + offset,
+            .enumerate()
+            .map(|(index, raw)| ItemLine {
+                raw,
+                line_number: index + 1,
             })
             .collect();
-        lex_close_log_tail(
-            &tokens,
+        let (in_progress, complete, drop) = selection_lists(close);
+        lex_close_log_bullets(
+            &item_lines[1..],
             close,
-            selection.in_progress.as_deref(),
-            &selection.complete,
-            &selection.drop,
+            in_progress.as_deref(),
+            &complete,
+            &drop,
         )
     }
 
-    fn valid_entries(close: &str, tail: &str) -> Vec<(u32, String)> {
-        match lex_tail(close, tail).expect("valid tail") {
-            CloseLogOutcome::Valid(valid) => valid
-                .entries
-                .into_iter()
-                .map(|entry| (entry.index, entry.text))
-                .collect(),
-            CloseLogOutcome::Dangling(dangling) => {
-                panic!("{close} {tail}: dangling at {}", dangling.index)
+    fn valid_entries(
+        close: &str,
+        draft: &str,
+    ) -> Vec<(u32, String, Vec<String>)> {
+        match lex_bullets(close, draft).expect("valid bullets") {
+            CloseLogLexed { entries, dangling } => {
+                assert!(dangling.is_empty(), "unexpected dangling");
+                entries
+                    .into_iter()
+                    .map(|entry| (entry.index, entry.text, entry.details))
+                    .collect()
             }
         }
     }
 
     #[test]
-    fn lexes_the_worked_table() {
+    fn lexes_entries_and_details() {
         assert_eq!(
-            valid_entries("=x", "1 wired the lexer"),
-            vec![(1, "wired the lexer".to_string())]
+            valid_entries("=x", "=x\n- 1 wired the lexer"),
+            vec![(1, "wired the lexer".to_string(), Vec::new())]
         );
         assert_eq!(
-            valid_entries("=x1,2", "2 sketched the URL parser"),
-            vec![(2, "sketched the URL parser".to_string())]
-        );
-        assert_eq!(
-            valid_entries("=x1", "1 fixed 3 bugs"),
-            vec![(1, "fixed 3 bugs".to_string())]
-        );
-        assert_eq!(
-            valid_entries("=x", "1 wrote docs 1 opened the PR"),
+            valid_entries("=x1,2", "=x1,2\n- 1 wired the lexer\n  - chose a hand-rolled lexer\n- 2 sketched the URL parser"),
             vec![
-                (1, "wrote docs".to_string()),
-                (1, "opened the PR".to_string())
+                (
+                    1,
+                    "wired the lexer".to_string(),
+                    vec!["chose a hand-rolled lexer".to_string()]
+                ),
+                (2, "sketched the URL parser".to_string(), Vec::new()),
             ]
         );
+        // Only the first token is an index: later numbers stay text.
         assert_eq!(
-            valid_entries("=x", "1 fixed \\3 bugs"),
-            vec![(1, "fixed 3 bugs".to_string())]
+            valid_entries("=x1", "=x1\n- 1 fixed 3 bugs"),
+            vec![(1, "fixed 3 bugs".to_string(), Vec::new())]
         );
+        // Markers stay literal in bullets.
         assert_eq!(
-            valid_entries("=x", "1 foo \\="),
-            vec![(1, "foo =".to_string())]
+            valid_entries("=x", "=x\n- 1 moved @@inbox s:3"),
+            vec![(1, "moved @@inbox s:3".to_string(), Vec::new())]
         );
+        // Backslashes stay literal: no escape.
         assert_eq!(
-            valid_entries("=x", "1 moved @@inbox"),
-            vec![(1, "moved @@inbox".to_string())]
+            valid_entries("=x", "=x\n- 1 fixed \\3 bugs"),
+            vec![(1, "fixed \\3 bugs".to_string(), Vec::new())]
+        );
+        // Placeholders are skipped.
+        assert_eq!(
+            valid_entries("=x", "=x\n- 1 wired the lexer\n- "),
+            vec![(1, "wired the lexer".to_string(), Vec::new())]
         );
     }
 
     #[test]
-    fn rejects_bad_tails() {
-        let not_worked = lex_tail("=x1", "2 foo").expect_err("not worked");
+    fn rejects_bad_bullets() {
+        let missing = lex_bullets("=x", "=x\n- wired the lexer")
+            .expect_err("missing number");
+        assert!(
+            missing.message.contains("start each Work Log bullet"),
+            "{}",
+            missing.message
+        );
+        let not_worked =
+            lex_bullets("=x1", "=x1\n- 2 foo").expect_err("not worked");
         assert!(
             not_worked.message.contains("isn't worked by `=x1`"),
             "{}",
             not_worked.message
         );
-        let dropped = lex_tail("=x~2", "2 foo").expect_err("dropped");
+        let dropped =
+            lex_bullets("=x~2", "=x~2\n- 2 foo").expect_err("dropped");
         assert!(
             dropped.message.contains("is dropped by `~2`"),
             "{}",
             dropped.message
         );
-        let empty = lex_tail("=x", "1 2 foo").expect_err("empty");
-        assert!(
-            empty.message.contains("type Work Log text after task 1"),
-            "{}",
-            empty.message
-        );
-        let block = lex_tail("=x", "1 see [[bob#^web-capture]]")
+        let zero = lex_bullets("=x", "=x\n- 0 foo").expect_err("zero");
+        assert!(zero.message.contains("start at 1"), "{}", zero.message);
+        let block = lex_bullets("=x", "=x\n- 1 see [[bob#^web-capture]]")
             .expect_err("block link");
         assert!(
             block.message.contains("can't contain the block link"),
             "{}",
             block.message
         );
-        let fence = lex_tail("=x", "1 ```rust").expect_err("fence");
+        let fence = lex_bullets("=x", "=x\n- 1 ```rust").expect_err("fence");
         assert!(
             fence.message.contains("can't start with a code fence"),
             "{}",
             fence.message
         );
+        let detail_block = lex_bullets("=x", "=x\n- 1 ok\n  - ![[bob#^x]]")
+            .expect_err("detail block");
+        assert!(
+            detail_block
+                .message
+                .contains("can't contain the block link"),
+            "{}",
+            detail_block.message
+        );
     }
 
     #[test]
     fn reports_dangling() {
-        match lex_tail("=x", "1").expect("dangling") {
-            CloseLogOutcome::Dangling(dangling) => {
-                assert_eq!(dangling.index, 1);
+        match lex_bullets("=x", "=x\n- 1").expect("dangling") {
+            CloseLogLexed { entries, dangling } => {
+                assert!(entries.is_empty());
+                assert_eq!(dangling.len(), 1);
+                assert_eq!(dangling[0].index, 1);
             }
-            CloseLogOutcome::Valid(_) => panic!("expected dangling"),
         }
+    }
+
+    #[test]
+    fn bullet_hint_echoes_numbers() {
+        let tokens = tokenize_with_spans("2 foo bar baz");
+        assert_eq!(
+            close_tail_bullet_hint(&tokens),
+            Some("- 2 foo bar baz".to_string())
+        );
+        let stray = tokenize_with_spans("- 2 foo");
+        assert_eq!(close_tail_bullet_hint(&stray), Some("- 2 foo".to_string()));
+        let prose = tokenize_with_spans("more");
+        assert_eq!(close_tail_bullet_hint(&prose), None);
+        let zero = tokenize_with_spans("0 foo");
+        assert_eq!(close_tail_bullet_hint(&zero), None);
     }
 }

@@ -1131,7 +1131,7 @@ fn capture_pomodoro_close_selection_diagnostics() {
         ),
         (
             vec!["=x1 more"],
-            "after `=x`, write a task number and then its Work Log text",
+            "`=x` takes no text on its line",
         ),
     ] {
         let error = run_close_expect_error(
@@ -1168,7 +1168,8 @@ fn capture_pomodoro_close_selection_diagnostics() {
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
-    // A dangling Work Log index is an incomplete editing state.
+    // A spaced selection is the no-spaces hint now that the inline tail is
+    // retired (`=x 1` means `=x1`).
     for args in ["=x 2", "=x1 1", "=x1,3 3"] {
         let error = run_close_expect_error(
             &vault,
@@ -1177,10 +1178,23 @@ fn capture_pomodoro_close_selection_diagnostics() {
             &[args],
         );
         assert!(
-            error.contains("is incomplete: type the Work Log text after task"),
+            error.contains("write the task numbers right after `=x`"),
             "{args}: {error}"
         );
     }
+    // A dangling Work Log bullet is an incomplete editing state.
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x\n- 1"],
+    );
+    assert!(
+        error.contains(
+            "`- 1` is incomplete: type the Work Log text after task 1"
+        ),
+        "{error}"
+    );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
     // A `^` link close ending in `!` is incomplete, not a toggle.

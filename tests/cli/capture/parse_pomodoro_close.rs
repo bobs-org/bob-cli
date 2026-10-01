@@ -246,9 +246,17 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         );
     }
 
-    // Spaced lists get the no-spaces hint on the extra text (only when the
-    // first tail token is not a bare number).
-    for (text, range) in [("=x 1,3", [3, 6]), ("=x1 !2", [4, 6])] {
+    // Spaced lists get the no-spaces hint on the extra text: the spaceless
+    // join lexes as a selection, so it wins over the bullet hint even when
+    // the tail starts with a bare number (`=x 1` means `=x1`).
+    for (text, range) in [
+        ("=x 1,3", [3, 6]),
+        ("=x1 !2", [4, 6]),
+        ("=x 1", [3, 4]),
+        ("=x1 1", [4, 5]),
+        ("=x1,3 3", [6, 7]),
+        ("=x 2", [3, 4]),
+    ] {
         let value = parse(text);
         assert_eq!(
             value["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -279,17 +287,26 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         "=x1, 3"
     );
 
-    // A close with a dangling Work Log index is an editing state needing
-    // `pomodoro_close_log_text`.
-    for text in ["=x1 1", "=x1,3 3", "  =x1 1", "=x 2"] {
-        let value = parse(text);
-        assert_eq!(value["mode"], "incomplete", "{text}");
-        assert_eq!(
-            value["needs"],
-            serde_json::json!(["pomodoro_close_log_text"]),
-            "{text}"
-        );
-    }
+    // A close with a dangling Work Log bullet is an editing state needing
+    // `pomodoro_close_log_text`, with a placeholder over the number.
+    let dangling = parse("=x\n- 1");
+    assert_eq!(dangling["mode"], "incomplete");
+    assert_eq!(
+        dangling["needs"],
+        serde_json::json!(["pomodoro_close_log_text"])
+    );
+    assert!(
+        dangling["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .any(|span| {
+                span["kind"] == "interactive_placeholder"
+                    && span["start"] == 5
+                    && span["end"] == 6
+            }),
+        "{dangling}"
+    );
 
     // Other extra text keeps an `invalid_pomodoro_close` diagnostic on the
     // first tail token.
@@ -322,7 +339,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         "invalid_pomodoro_link"
     );
 
-    // A close with other text reports the tail-start error.
+    // A close with other text reports the bullet hint.
     let more = parse("=x1 more");
     assert_eq!(
         more["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -332,13 +349,29 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         more["diagnostics"][0]["message"]
             .as_str()
             .expect("message")
-            .starts_with("after `=x`, write a task number"),
+            .starts_with("`=x` takes no text on its line"),
         "{more}"
+    );
+    // A tail starting with a number echoes it as the bullet to write.
+    let echo = parse("=x2,3 2 foo bar baz");
+    assert!(
+        echo["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("`- 2 foo bar baz`"),
+        "{echo}"
     );
     let child = parse_stdin("=x1\n- detail\n");
     assert_eq!(child["mode"], "pomodoro_close");
     assert_eq!(
         child["diagnostics"][0]["code"], "invalid_pomodoro_close",
+        "{child}"
+    );
+    assert!(
+        child["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message")
+            .starts_with("start each Work Log bullet"),
         "{child}"
     );
 

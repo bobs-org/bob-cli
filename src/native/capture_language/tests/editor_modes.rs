@@ -1139,9 +1139,21 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
     assert_eq!(shape.mode, EditorMode::PomodoroClose, "=x more");
     assert_eq!(codes(&shape), vec!["invalid_pomodoro_close"], "=x more");
     assert_eq!(shape.diagnostics[0].range, Some((3, 7)), "=x more");
+    assert!(
+        shape.diagnostics[0]
+            .message
+            .starts_with("`=x` takes no text on its line"),
+        "=x more"
+    );
     let child = editor("=x\n- child");
     assert_eq!(child.mode, EditorMode::PomodoroClose, "=x child");
     assert_eq!(codes(&child), vec!["invalid_pomodoro_close"], "=x child");
+    assert!(
+        child.diagnostics[0]
+            .message
+            .starts_with("start each Work Log bullet"),
+        "=x child"
+    );
     let named = editor("@r:id#n=x");
     assert_eq!(codes(&named), vec!["invalid_pomodoro_close"], "@r:id#n=x");
     assert_eq!(named.diagnostics[0].range, Some((5, 7)), "@r:id#n=x");

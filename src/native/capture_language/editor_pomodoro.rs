@@ -1175,100 +1175,29 @@ pub(super) fn parse_editor_close_item<'a>(
             }
         }
     }
-    if single_token_parent {
-        // A single-token parent with authored child lines: a broken list
-        // reports its own diagnostic, anything else the shape error on the
-        // child line.
-        if let Some(after_x) = selection_after_x {
-            let base = token_start + (first.len() - after_x.len());
-            if let Err(error) = lex_close_selection(after_x, base, first) {
-                return Some(editor_close_outcome(
-                    item,
-                    parent_trimmed,
-                    EditorMode::PomodoroClose,
-                    None,
-                    vec![close_span],
-                    Vec::new(),
-                    vec![Diagnostic {
-                        severity: Severity::Error,
-                        code: "invalid_pomodoro_close",
-                        message: error.message,
-                        range: Some(error.range),
-                    }],
-                ));
-            }
-        }
-        let child = &item.lines[1];
-        return Some(editor_close_outcome(
-            item,
-            parent_trimmed,
-            EditorMode::PomodoroClose,
-            None,
-            vec![close_span],
-            Vec::new(),
-            vec![Diagnostic {
-                severity: Severity::Error,
-                code: "invalid_pomodoro_close",
-                message: POMODORO_CLOSE_SHAPE_ERROR.to_string(),
-                range: Some((child.raw.start, child.raw.end)),
-            }],
-        ));
+    // Lex the selection once for every path below. A broken list reports
+    // its own diagnostic; a dangling separator stays incomplete, and bullets
+    // get no spans or diagnostics until the selection is complete.
+    enum EditorSelection {
+        Plain(CloseSelectionLex),
+        Incomplete(CloseSelectionIncomplete, Vec<Span>),
+        Err(String, (usize, usize)),
     }
-    // A close with tail text: lex the selection first, then the shared tail
-    // lexer. A broken first token reports its own diagnostic, a dangling
-    // separator stays incomplete, and child lines keep the child-line error.
-    // Valid tails report `pomodoro_close` with index spans; a dangling index
-    // reports `incomplete` needing `pomodoro_close_log_text` with a
-    // placeholder over the index instead of its index span.
-    if item.lines.len() > 1 {
-        if let Some(after_x) = selection_after_x {
-            let base = token_start + (first.len() - after_x.len());
-            if let Err(error) = lex_close_selection(after_x, base, first) {
-                return Some(editor_close_outcome(
-                    item,
-                    parent_trimmed,
-                    EditorMode::PomodoroClose,
-                    None,
-                    vec![close_span],
-                    Vec::new(),
-                    vec![Diagnostic {
-                        severity: Severity::Error,
-                        code: "invalid_pomodoro_close",
-                        message: error.message,
-                        range: Some(error.range),
-                    }],
-                ));
-            }
-        }
-        let child = &item.lines[1];
-        return Some(editor_close_outcome(
-            item,
-            parent_trimmed,
-            EditorMode::PomodoroClose,
-            None,
-            vec![close_span],
-            Vec::new(),
-            vec![Diagnostic {
-                severity: Severity::Error,
-                code: "invalid_pomodoro_close",
-                message: POMODORO_CLOSE_SHAPE_ERROR.to_string(),
-                range: Some((child.raw.start, child.raw.end)),
-            }],
-        ));
-    }
-    let lexed_selection = match selection_after_x {
-        None => CloseSelectionLex {
+    let editor_selection = match selection_after_x {
+        None => EditorSelection::Plain(CloseSelectionLex {
             in_progress: None,
             complete: Vec::new(),
             drop: Vec::new(),
             in_progress_range: None,
             complete_range: None,
             drop_range: None,
-        },
+        }),
         Some(after_x) => {
             let base = token_start + (first.len() - after_x.len());
             match lex_close_selection(after_x, base, first) {
-                Ok(CloseSelectionOutcome::Valid(lex)) => lex,
+                Ok(CloseSelectionOutcome::Valid(lex)) => {
+                    EditorSelection::Plain(lex)
+                }
                 Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
                     let mut spans = vec![close_span];
                     if let Some((start, end)) = incomplete.in_progress_range {
@@ -1297,38 +1226,183 @@ pub(super) fn parse_editor_close_item<'a>(
                         end: incomplete.separator_range.1,
                         kind: SpanKind::InteractivePlaceholder,
                     });
-                    return Some(editor_close_outcome(
-                        item,
-                        parent_trimmed,
-                        EditorMode::Incomplete,
-                        Some(close_spec_from_incomplete(
-                            first.to_string(),
-                            &incomplete,
-                        )),
-                        spans,
-                        vec![Need::PomodoroCloseTask],
-                        Vec::new(),
-                    ));
+                    EditorSelection::Incomplete(incomplete, spans)
                 }
-                Err(error) => {
+                Err(error) => EditorSelection::Err(error.message, error.range),
+            }
+        }
+    };
+    // Selection spans stay visible on every path below, including bullet
+    // lines; the old child-line branch dropped them.
+    let selection_spans = |lex: &CloseSelectionLex| {
+        let mut spans = vec![close_span];
+        if let Some((start, end)) = lex.in_progress_range {
+            spans.push(Span {
+                start,
+                end,
+                kind: SpanKind::PomodoroCloseInProgress,
+            });
+        }
+        if let Some((start, end)) = lex.complete_range {
+            spans.push(Span {
+                start,
+                end,
+                kind: SpanKind::PomodoroCloseComplete,
+            });
+        }
+        if let Some((start, end)) = lex.drop_range {
+            spans.push(Span {
+                start,
+                end,
+                kind: SpanKind::PomodoroCloseDrop,
+            });
+        }
+        spans
+    };
+    if single_token_parent {
+        // A single-token parent with Work Log bullet child lines. Borrow
+        // here: the parent-text path below matches `editor_selection` again.
+        let lexed_selection: &CloseSelectionLex = match &editor_selection {
+            EditorSelection::Plain(lex) => lex,
+            EditorSelection::Incomplete(incomplete, spans) => {
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::Incomplete,
+                    Some(close_spec_from_incomplete(
+                        first.to_string(),
+                        incomplete,
+                    )),
+                    spans.clone(),
+                    vec![Need::PomodoroCloseTask],
+                    Vec::new(),
+                ));
+            }
+            EditorSelection::Err(message, range) => {
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroClose,
+                    None,
+                    vec![close_span],
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_close",
+                        message: message.clone(),
+                        range: Some(*range),
+                    }],
+                ));
+            }
+        };
+        let mut base_spans = selection_spans(lexed_selection);
+        match lex_close_log_bullets(
+            &item.lines[1..],
+            first,
+            lexed_selection.in_progress.as_deref(),
+            &lexed_selection.complete,
+            &lexed_selection.drop,
+        ) {
+            Ok(lexed) => {
+                for entry in &lexed.entries {
+                    base_spans.push(Span {
+                        start: entry.index_range.0,
+                        end: entry.index_range.1,
+                        kind: SpanKind::PomodoroCloseLogIndex,
+                    });
+                }
+                if lexed.dangling.is_empty() {
+                    base_spans.sort_by_key(|span| (span.start, span.end));
+                    let mut spec =
+                        close_spec_from_lex(first.to_string(), lexed_selection);
+                    spec.log = log_entries_from_lex(&lexed.entries);
                     return Some(editor_close_outcome(
                         item,
                         parent_trimmed,
                         EditorMode::PomodoroClose,
-                        None,
-                        vec![close_span],
+                        Some(spec),
+                        base_spans,
                         Vec::new(),
-                        vec![Diagnostic {
-                            severity: Severity::Error,
-                            code: "invalid_pomodoro_close",
-                            message: error.message,
-                            range: Some(error.range),
-                        }],
+                        Vec::new(),
                     ));
                 }
+                for dangling in &lexed.dangling {
+                    base_spans.push(Span {
+                        start: dangling.index_range.0,
+                        end: dangling.index_range.1,
+                        kind: SpanKind::InteractivePlaceholder,
+                    });
+                }
+                base_spans.sort_by_key(|span| (span.start, span.end));
+                let mut spec =
+                    close_spec_from_lex(first.to_string(), lexed_selection);
+                spec.log = log_entries_from_lex(&lexed.entries);
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::Incomplete,
+                    Some(spec),
+                    base_spans,
+                    vec![Need::PomodoroCloseLogText],
+                    Vec::new(),
+                ));
+            }
+            Err(error) => {
+                let spans = selection_spans(lexed_selection);
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroClose,
+                    None,
+                    spans,
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_close",
+                        message: error.message,
+                        range: Some(error.range),
+                    }],
+                ));
             }
         }
-    };
+    }
+    // A parent line with extra text after the close token: the parent-line
+    // error wins even when child lines follow. Steps in order: `=x#name`
+    // (handled above), a broken selection token, a dangling separator
+    // (incomplete), the no-spaces hint, then the bullet hint.
+    match editor_selection {
+        EditorSelection::Incomplete(incomplete, spans) => {
+            return Some(editor_close_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::Incomplete,
+                Some(close_spec_from_incomplete(
+                    first.to_string(),
+                    &incomplete,
+                )),
+                spans,
+                vec![Need::PomodoroCloseTask],
+                Vec::new(),
+            ));
+        }
+        EditorSelection::Err(message, range) => {
+            return Some(editor_close_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::PomodoroClose,
+                None,
+                vec![close_span],
+                Vec::new(),
+                vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_close",
+                    message,
+                    range: Some(range),
+                }],
+            ));
+        }
+        EditorSelection::Plain(_) => {}
+    }
     let parent_raw = &parent.raw;
     let line_tokens = super::editor_parse::tokenize_line_with_spans(parent_raw);
     let tail_tokens: Vec<Token<'_>> =
@@ -1348,146 +1422,75 @@ pub(super) fn parse_editor_close_item<'a>(
             }
             tail
         };
-    let first_tail_is_bare_number = tail_tokens.first().is_some_and(|token| {
-        !token.text.is_empty()
-            && token.text.bytes().all(|byte| byte.is_ascii_digit())
-    });
-    if !first_tail_is_bare_number {
-        let nospace: String = parent_trimmed.split_whitespace().collect();
-        if whole_item_close_after_x(&nospace).is_some_and(|after_x| {
-            lex_close_selection(after_x, 0, &nospace).is_ok()
-        }) {
-            let after_first = &parent_trimmed[first.len()..];
-            let rest = after_first.trim_start();
-            let skipped = after_first.len() - rest.len();
-            let rest_start = token_start + first.len() + skipped;
-            let range = (rest_start, rest_start + rest.len());
-            return Some(editor_close_outcome(
-                item,
-                parent_trimmed,
-                EditorMode::PomodoroClose,
-                None,
-                vec![close_span],
-                Vec::new(),
-                vec![Diagnostic {
-                    severity: Severity::Error,
-                    code: "invalid_pomodoro_close",
-                    message: close_selection_no_spaces_error(),
-                    range: Some(range),
-                }],
-            ));
+    // The no-spaces hint wins when the spaceless join of the line lexes as
+    // a selection (`=x 1,3`, `=x1 !2`, `=x 1`).
+    let nospace: String = parent_trimmed.split_whitespace().collect();
+    if whole_item_close_after_x(&nospace).is_some_and(|after_x| {
+        lex_close_selection(after_x, 0, &nospace).is_ok()
+    }) {
+        let after_first = &parent_trimmed[first.len()..];
+        let rest = after_first.trim_start();
+        let skipped = after_first.len() - rest.len();
+        let rest_start = token_start + first.len() + skipped;
+        let range = (rest_start, rest_start + rest.len());
+        return Some(editor_close_outcome(
+            item,
+            parent_trimmed,
+            EditorMode::PomodoroClose,
+            None,
+            vec![close_span],
+            Vec::new(),
+            vec![Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_close",
+                message: close_selection_no_spaces_error(),
+                range: Some(range),
+            }],
+        ));
+    }
+    let hint = close_tail_bullet_hint(&tail_tokens);
+    let tail_range = tail_tokens
+        .first()
+        .zip(tail_tokens.last())
+        .map(|(first_token, last_token)| (first_token.start, last_token.end));
+    Some(editor_close_outcome(
+        item,
+        parent_trimmed,
+        EditorMode::PomodoroClose,
+        None,
+        vec![close_span],
+        Vec::new(),
+        vec![Diagnostic {
+            severity: Severity::Error,
+            code: "invalid_pomodoro_close",
+            message: close_parent_text_error(hint.as_deref()),
+            range: tail_range,
+        }],
+    ))
+}
+
+/// `true` when `cursor` sits on a Work Log bullet line: any physical line
+/// after the parent line inside a close item's line range. Line-based, so a
+/// chain close whose range contains later parent-line tokens still matches.
+/// Bullet text is literal: marker and block-link completion stay suppressed
+/// there while note and heading wikilink completion keeps working.
+pub(crate) fn cursor_on_close_bullet_line(
+    raw_text: &str,
+    cursor: usize,
+) -> bool {
+    let draft = super::draft::split_capture_draft(raw_text);
+    for item in &draft.items {
+        let Some(line_index) = item.lines.iter().position(|line| {
+            cursor >= line.raw.start && cursor <= line.raw.end
+        }) else {
+            continue;
+        };
+        if line_index == 0 {
+            return false;
         }
+        return parse_editor_close_item(item).is_some();
     }
-    let mut base_spans = vec![close_span];
-    if let Some((start, end)) = lexed_selection.in_progress_range {
-        base_spans.push(Span {
-            start,
-            end,
-            kind: SpanKind::PomodoroCloseInProgress,
-        });
-    }
-    if let Some((start, end)) = lexed_selection.complete_range {
-        base_spans.push(Span {
-            start,
-            end,
-            kind: SpanKind::PomodoroCloseComplete,
-        });
-    }
-    if let Some((start, end)) = lexed_selection.drop_range {
-        base_spans.push(Span {
-            start,
-            end,
-            kind: SpanKind::PomodoroCloseDrop,
-        });
-    }
-    match lex_close_log_tail(
-        &tail_tokens,
-        first,
-        lexed_selection.in_progress.as_deref(),
-        &lexed_selection.complete,
-        &lexed_selection.drop,
-    ) {
-        Ok(CloseLogOutcome::Valid(valid)) => {
-            let mut spans = base_spans;
-            for entry in &valid.entries {
-                spans.push(Span {
-                    start: entry.index_range.0,
-                    end: entry.index_range.1,
-                    kind: SpanKind::PomodoroCloseLogIndex,
-                });
-            }
-            spans.sort_by_key(|span| (span.start, span.end));
-            let mut spec =
-                close_spec_from_lex(first.to_string(), &lexed_selection);
-            spec.log = log_entries_from_lex(&valid.entries);
-            Some(editor_close_outcome(
-                item,
-                parent_trimmed,
-                EditorMode::PomodoroClose,
-                Some(spec),
-                spans,
-                Vec::new(),
-                Vec::new(),
-            ))
-        }
-        Ok(CloseLogOutcome::Dangling(dangling)) => {
-            let mut spans = base_spans;
-            for entry in &dangling.entries {
-                spans.push(Span {
-                    start: entry.index_range.0,
-                    end: entry.index_range.1,
-                    kind: SpanKind::PomodoroCloseLogIndex,
-                });
-            }
-            spans.push(Span {
-                start: dangling.index_range.0,
-                end: dangling.index_range.1,
-                kind: SpanKind::InteractivePlaceholder,
-            });
-            spans.sort_by_key(|span| (span.start, span.end));
-            let mut spec =
-                close_spec_from_lex(first.to_string(), &lexed_selection);
-            spec.log = log_entries_from_lex(
-                &dangling
-                    .entries
-                    .iter()
-                    .map(|entry| CloseLogEntryLex {
-                        index: entry.index,
-                        text: entry.text.clone(),
-                        index_range: entry.index_range,
-                        text_range: entry.text_range,
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            Some(editor_close_outcome(
-                item,
-                parent_trimmed,
-                EditorMode::Incomplete,
-                Some(spec),
-                spans,
-                vec![Need::PomodoroCloseLogText],
-                Vec::new(),
-            ))
-        }
-        Err(error) => {
-            let range = error.range;
-            let message = error.message;
-            Some(editor_close_outcome(
-                item,
-                parent_trimmed,
-                EditorMode::PomodoroClose,
-                None,
-                vec![close_span],
-                Vec::new(),
-                vec![Diagnostic {
-                    severity: Severity::Error,
-                    code: "invalid_pomodoro_close",
-                    message,
-                    range: Some(range),
-                }],
-            ))
-        }
-    }
+    false
 }
 
 /// Build a whole-item close outcome for the live editor: the mode, the
