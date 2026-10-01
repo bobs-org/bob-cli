@@ -312,7 +312,9 @@ for editing and never stamps.
    Alt+Shift+F, do it today with Ctrl+Shift+Enter, release with Alt+N.
    For a returned deferral, "not now" is a priority roll, not Alt+F.
 3. Start the highlight.
-4. Then, or later, do ROTTEN upkeep until 0 or the budget. It is fine
+4. Clear CROWDED to 0 (split, sequence, defer, drop via `bob ready`).
+   This does not depend on how far ROTTEN review got.
+5. Then, or later, do ROTTEN upkeep until 0 or the budget. It is fine
    to stop partway.
 
 **First walk:** release the lanes to their caps.
@@ -427,7 +429,8 @@ an invalid `freshness:` block or a non-Dataview task format.
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
 | `rotten.md` (aliases `Review`, `Freshness review`, `Rotten Tasks`) | dash-gating (landed: live summary plus always-present RETURNED and ROTTEN groups; tasks stay in source notes, rows are click-through views) |
-| `dash.md` | dash-gating (landed: TODAY → NEW → PENDING → NEXT → READY sections; NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; gated READY with whole-lane tooltip) |
+| `dash.md` | dash-gating (landed: TODAY → NEW → PENDING → NEXT → READY sections; NEW/PENDING/NEXT/READY/CROWDED/BLOCKED/ROTTEN/TODAY chips; gated READY with whole-lane tooltip; CROWDED via `noteReady` v1 opening crowded.md) |
+| `crowded.md` + `bob-ready-notes` + heading chips | per-note Ready cap rollout (landed: Crowded Notes page, ranked-bar code block, live `ready n/cap` chips on each note's `## Tasks` heading) |
 | freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
 
 ## 9. Placement conformance examples
@@ -839,6 +842,10 @@ shipped by Mon 2026-10-05, record that the 14-day trial starts the day
 it lands. The rollout phase records the actual dates. Don't change the
 ritual mid-trial. Completion means the trial is ready to run, not that
 an agent waits two weeks or claims its outcome.
+
+- 2026-10-01: per-note CROWDED surfaces (`bob ready`, the dash chip,
+  crowded.md, the heading chips) went live; gesture notices are
+  deferred until after the trial.
 
 Keep a lightweight daily tally on the rotten page: NEW, RETURNED,
 expired ROTTEN, confirmed FRESH, READY, and whether the chip was red.
