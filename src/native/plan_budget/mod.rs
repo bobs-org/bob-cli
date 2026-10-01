@@ -78,6 +78,7 @@ pub(crate) struct PlanCaps {
     pub(crate) max_links: u32,
     pub(crate) max_next: u32,
     pub(crate) max_pending: u32,
+    pub(crate) max_ready: u32,
     pub(crate) strict: bool,
 }
 
@@ -140,6 +141,7 @@ impl PlanReport {
             max_links: config.max_links(),
             max_next: config.max_next(),
             max_pending: config.max_pending(),
+            max_ready: config.max_ready(),
             strict: config.strict(),
         }
     }

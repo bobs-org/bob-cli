@@ -9,6 +9,7 @@ pub(crate) struct PlanConfig {
     pub(crate) max_links: u32,
     pub(crate) max_next: u32,
     pub(crate) max_pending: u32,
+    pub(crate) max_ready: u32,
     pub(crate) strict: bool,
     pub(crate) exempt: Vec<String>,
     pub(crate) inventory_labels: Vec<String>,
@@ -21,6 +22,7 @@ impl Default for PlanConfig {
             max_links: 10,
             max_next: 15,
             max_pending: 10,
+            max_ready: 100,
             strict: false,
             exempt: vec!["GTD".to_string()],
             inventory_labels: vec![
@@ -48,6 +50,10 @@ impl PlanConfig {
 
     pub(crate) fn max_pending(&self) -> u32 {
         self.max_pending
+    }
+
+    pub(crate) fn max_ready(&self) -> u32 {
+        self.max_ready
     }
 
     pub(crate) fn strict(&self) -> bool {
@@ -211,6 +217,7 @@ fn parse_plan_config(
             get("max_pending"),
             defaults.max_pending,
         )?,
+        max_ready: cap("max_ready", get("max_ready"), defaults.max_ready)?,
         strict: strict_value,
         exempt: strings("exempt", get("exempt"))?,
         inventory_labels: strings("inventory_labels", get("inventory_labels"))?,
@@ -245,6 +252,7 @@ mod tests {
         assert_eq!(config.max_links(), 10);
         assert_eq!(config.max_next(), 15);
         assert_eq!(config.max_pending(), 10);
+        assert_eq!(config.max_ready(), 100);
         assert!(!config.strict());
         assert_eq!(config.exempt(), ["GTD"]);
         assert_eq!(
@@ -279,6 +287,7 @@ mod tests {
             \x20 max_links: 12\n\
             \x20 max_next: 20\n\
             \x20 max_pending: 7\n\
+            \x20 max_ready: 42\n\
             \x20 max_now: 99\n\
             \x20 strict: true\n\
             \x20 exempt: [GTD, ADMIN]\n\
@@ -291,6 +300,7 @@ mod tests {
         assert_eq!(config.max_links(), 12);
         assert_eq!(config.max_next(), 20);
         assert_eq!(config.max_pending(), 7);
+        assert_eq!(config.max_ready(), 42);
         assert!(config.strict());
         assert_eq!(config.exempt(), ["GTD", "ADMIN"]);
         assert_eq!(config.inventory_labels(), ["LATER"]);
@@ -303,6 +313,11 @@ mod tests {
             "plan:\n  max_links: -2\n",
             "plan:\n  max_next: 0\n",
             "plan:\n  max_pending: 0\n",
+            "plan:\n  max_ready: 0\n",
+            "plan:\n  max_ready: -1\n",
+            "plan:\n  max_ready: 1.5\n",
+            "plan:\n  max_ready: many\n",
+            "plan:\n  max_ready: 4294967296\n",
             "plan:\n  max_themes: many\n",
             "plan:\n  strict: \"yes\"\n",
             "plan:\n  exempt: GTD\n",

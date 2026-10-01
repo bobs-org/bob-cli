@@ -1205,6 +1205,7 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
             "max_links": 10,
             "max_next": 15,
             "max_pending": 10,
+            "max_ready": 100,
             "strict": false,
         })
     );

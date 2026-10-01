@@ -106,6 +106,7 @@ fn plan_reports_full_budget_as_json() {
             "max_links": 10,
             "max_next": 15,
             "max_pending": 10,
+            "max_ready": 100,
             "strict": false,
         })
     );
@@ -440,6 +441,7 @@ fn plan_loads_a_config_that_still_has_max_now() {
     assert_eq!(value["ok"], Value::Bool(true));
     assert_eq!(value["caps"]["max_next"], Value::from(15));
     assert_eq!(value["caps"]["max_pending"], Value::from(10));
+    assert_eq!(value["caps"]["max_ready"], Value::from(100));
 }
 
 #[test]

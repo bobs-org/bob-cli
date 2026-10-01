@@ -159,15 +159,43 @@ The PENDING query is identical with `status.symbol is /`. This
 matches the dash's own defaults, so the chips, the lane sections
 and `bob plan` always agree.
 
+## READY backlog (dashboard and daily badge)
+
+**READY** is the global backlog the `dash.md` READY chip and the daily
+`bob-plan` READY badge share: every `TODO`-type task (including custom
+TODO symbols) that the dash's READY section shows, regardless of which
+daily file hosts the badge. It excludes completed, cancelled, and
+non-task entries; template and `_conflicts` paths; `dash.md` itself
+(ordinary ready tasks living in a daily note remain eligible);
+`#hide`; dependency-blocked tasks (`isBlocked` against the full Tasks
+list); future-scheduled tasks (unscheduled and scheduled on or before
+the current local day count); and Today tasks (`isToday`). The count is
+the Obsidian dashboard backlog and its feedback is the shared badge;
+this feature adds no native READY count, lint, capture enforcement, or
+tmux meter.
+
+The badge shows `READY n/cap` (for example `READY 87/100`); exactly at
+the cap is fine and only a strict excess turns red (`READY 101/100`).
+There is no intermediate warning color. This is a **soft limit**: it
+communicates backlog pressure without refusing capture, changing task
+statuses, or removing tasks. Clicking the badge opens `dash#READY
+Tasks`. The badge on an older daily file is a **live current backlog**,
+not a historical snapshot: Today exclusion and scheduled-date
+eligibility use the current day even when the PLAN portion describes
+that older file's ledger. `READY –` means Tasks data, required Today
+state, or the count is unavailable; zero is reserved for a successfully
+evaluated empty queue.
+
 ## Config
 
 ```yaml
-# Today's plan budget (bob plan, capture, tmux, Obsidian) and the NEXT/PENDING lane caps.
+# Today's plan budget (bob plan, capture, tmux, Obsidian) and the NEXT/PENDING/READY lane caps.
 plan:
   max_themes: 3 # distinct open Pomodoro names besides the exempt ones
   max_links: 10 # distinct open Task Links outside exempt entries
   max_next: 15 # open Next tasks visible today (see above)
   max_pending: 10 # open In Progress tasks visible today (see above)
+  max_ready: 100 # soft limit for dashboard READY tasks, excluding Today (see above)
   strict: false # refuse #NAME captures that would create a theme past max_themes
   exempt: [GTD] # open entries that never count as themes
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open names that are storage, not themes
@@ -200,7 +228,7 @@ shows all report fields for one open theme and one exempt entry:
 {
   "date": "2026-10-01",
   "daily_file": "2026/20261001.md",
-  "caps": { "max_themes": 3, "max_links": 10, "max_next": 15, "max_pending": 10, "strict": false },
+  "caps": { "max_themes": 3, "max_links": 10, "max_next": 15, "max_pending": 10, "max_ready": 100, "strict": false },
   "status": "ok",
   "themes": { "count": 1, "cap": 3, "over": false },
   "links": { "count": 3, "cap": 10, "over": false },
@@ -284,8 +312,8 @@ report, 1 for an I/O failure, 2 for usage or an invalid plan config.
 | Surface | What it shows |
 | --- | --- |
 | `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
-| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v2: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`) renders PLAN, TODAY, and lane chips, a theme line, and any lints. The affected chip shows a dash when the daily note, Pomodoros section, or Tasks plugin data is unavailable. |
-| `dash.md` | Its TODAY, PENDING, NEXT, READY, BLOCKED, and PLAN chips and mutually exclusive TODAY / PENDING / NEXT / READY sections use the Bob Ledger Tools api v2. |
+| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `readyBudget`, `renderReadyBadge`) renders PLAN, TODAY, PENDING, NEXT, and READY chips, a theme line, and any lints. The affected chip shows a dash when the daily note, Pomodoros section, or Tasks plugin data is unavailable; READY is a live current backlog (`READY n/100`) that opens `dash#READY Tasks` and never changes the PLAN status. |
+| `dash.md` | Its TODAY, PENDING, NEXT, READY, BLOCKED, and PLAN chips and mutually exclusive TODAY / PENDING / NEXT / READY sections use the Bob Ledger Tools api v3 (`readyBudget`/`renderReadyBadge` for READY, with an inline fallback when the plugin is older or unloaded). |
 | `bob tmux-pomodoro` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |
 | `bob task-status-hooks` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
 | `bob capture` | When a capture changes today's Pomodoros section, a before/after theme and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap theme. |
