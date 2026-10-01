@@ -4,7 +4,8 @@
 use chrono::NaiveDate;
 
 use super::{
-    counts, evaluate, queue, Counts, FreshState, FreshnessRow, IntervalSource,
+    bucket_for_state, counts, evaluate, queue, Counts, FreshState,
+    FreshnessRow, IntervalSource,
 };
 use crate::native::config::freshness::FreshnessConfig;
 
@@ -321,6 +322,64 @@ fn stamped_row(
         raw_line: format!("- [{status}] #task Counted [fresh:: {fresh}]"),
         note_refresh_raw: None,
     }
+}
+
+/// Bucket conformance (`docs/freshness.md` §4): S1 maps to `new`;
+/// S3, S4, and S11 map to `rotten`; S2, S5, S7, and S12 map to no
+/// bucket; every S13 row maps to no bucket.
+#[test]
+fn bucket_partition_vectors() {
+    let config = default_config();
+    let bucketed = |input: &FreshnessRow| {
+        let evaluated = evaluate(input, today(), &config);
+        bucket_for_state(evaluated.state)
+    };
+
+    // S1 new.
+    assert_eq!(bucketed(&row("- [ ] #task Do it")), Some("new"));
+
+    // S3 boundary, S4 overdue, S11 resurfaced: rotten.
+    assert_eq!(bucketed(&row(&fresh_line("2026-10-01"))), Some("rotten"));
+    assert_eq!(bucketed(&row(&fresh_line("2026-09-20"))), Some("rotten"));
+    let mut resurfaced = row(&fresh_line("2026-10-05"));
+    resurfaced.scheduled = Some(date(2026, 10, 7));
+    assert_eq!(bucketed(&resurfaced), Some("rotten"));
+
+    // S2 fresh, S5 task interval, S7 config interval, S12 equal
+    // schedule: no bucket.
+    assert_eq!(bucketed(&row(&fresh_line("2026-10-02"))), None);
+    let mut task_interval =
+        row("- [ ] #task Do it [fresh:: 2026-10-01] [refresh:: 14]");
+    task_interval.note_refresh_raw = Some("3".to_string());
+    assert_eq!(bucketed(&task_interval), None);
+    // S7's date is stale under the default interval (see S3 above);
+    // the null case needs the config interval.
+    let s7 = evaluate(
+        &row(&fresh_line("2026-10-01")),
+        today(),
+        &config_with_interval(10),
+    );
+    assert_eq!(s7.state, Some(FreshState::Fresh));
+    assert_eq!(bucket_for_state(s7.state), None);
+    let mut equal_schedule = row(&fresh_line("2026-10-07"));
+    equal_schedule.scheduled = Some(date(2026, 10, 7));
+    assert_eq!(bucketed(&equal_schedule), None);
+
+    // Every S13 out-of-scope row: no bucket, and a null bucket alone
+    // never proves Ready.
+    let mut hidden = row(&fresh_line("2026-10-02"));
+    hidden.lane_visible = false;
+    let mut today_member = row(&fresh_line("2026-10-02"));
+    today_member.is_today = true;
+    let mut recurring = row(&fresh_line("2026-10-02"));
+    recurring.recurring = true;
+    for candidate in [&hidden, &today_member, &recurring] {
+        let evaluated = evaluate(candidate, today(), &config);
+        assert_eq!(evaluated.state, None);
+        assert_eq!(bucket_for_state(evaluated.state), None);
+    }
+    assert_eq!(bucket_for_state(None), None);
+    assert_eq!(FreshState::Fresh.bucket(), None);
 }
 
 #[test]

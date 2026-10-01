@@ -11,9 +11,9 @@ arrivals" glances instead of the whole pool.
 This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
-JavaScript mirror is `api.freshness` in bob-ledger-tools (api v3). The
-bob-ledger-tools JavaScript tests use the conformance vectors below
-verbatim.
+JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
+api v3, freshness namespace v2). The bob-ledger-tools JavaScript
+tests use the conformance vectors below verbatim.
 
 ## 1. Definition
 
@@ -151,6 +151,36 @@ due as soon as it returns. The tickler makes a short deferral (for
 example a P1 roll of 2–7 days) due as soon as it returns, without any
 hooks write.
 
+**Buckets.** The stable read-time bucket contract for dashboard
+gating:
+
+```text
+bucket(t)     = new     if state(t) = NEW
+              | rotten  if state(t) = RESURFACED or STALE
+              | null    if state(t) = FRESH or null (out of scope)
+```
+
+READY applies the visible TODO Ready pool plus `bucket !== "new"
+&& bucket !== "rotten"` — never `state === "fresh"`, which would
+lose freshness-exempt tasks. A null bucket alone never proves a task
+is Ready. With the supported plugin and a ready cache, the visible
+pool partitions as `B = NEW ∪ RETURNED ∪ ROTTEN ∪ READY`, pairwise
+disjoint (RETURNED is bucket rotten with state resurfaced).
+
+Bucket conformance: S1 maps to `new`; S3, S4, and S11 map to
+`rotten`; S2, S5, S7, and S12 map to null; every S13 row maps to
+null.
+
+**Temporary state-name compatibility.** Human output, help, and docs
+say `rotten`; the machine contract keeps `stale` until the
+vocab-rotten migration publishes JSON schema 2: `state: "stale"`,
+`counts.stale`, and `freshness.stale_daily_budget` are unchanged, and
+each JSON queue row carries the additive `bucket` field (`"new"`,
+`"rotten"`, or null) under schema 1. Likewise bob-ledger-tools keeps
+the `"stale"` state string and bumps only the freshness namespace to
+v2 (`api.freshness.version === 2`, additive `bucket(task)` and
+`reviewModel()`; top-level api stays v3).
+
 Line numbers are 1-based in JSON and docs. Tasks' `lineNumber` is
 0-based, so convert it.
 
@@ -229,12 +259,12 @@ vault). Human output is colored only on a TTY:
 ```text
 bob freshness · Thu 2026-10-08 · every 7d
 
-  REVIEW 23 due · 3 new · 2 resurfaced · 18 stale · ✓ 12 today
+  REVIEW 23 due · 3 new · 2 resurfaced · 18 rotten · ✓ 12 today
 
   NEW
     gkeep_inbox.md:14   Pick up our daughter          created 2026-09-30
   DUE
-    a.md:2              Rename queue input            stale 3d · fresh 2026-09-28 · every 7d (note)
+    a.md:2              Rename queue input            rotten 3d · fresh 2026-09-28 · every 7d (note)
     b.md:40             Week habits                   resurfaced · scheduled 2026-10-07
 ```
 
@@ -243,10 +273,11 @@ With a budget the meter reads `✓ 12/15 today`. Lints go last.
 The JSON contract is `schema_version: 1` with `ok`, `date`,
 `config` (`interval`, `stale_daily_budget`), `counts` (`due`,
 `new`, `resurfaced`, `stale`, `fresh`, `refreshed_today`, `budget`,
-`budget_met`), `queue` (each with `rank`, `tier`, `state`, `path`,
-`line`, `block_id`, `status_symbol`, `text`, `created`, `fresh`,
-`interval`, `interval_source`, `due_on`, `days_overdue`), and
-`warnings` (`code`, `path`, `line`, `message`).
+`budget_met`), `queue` (each with `rank`, `tier`, `state`, `bucket`
+(`"new"`, `"rotten"`, or null), `path`, `line`, `block_id`,
+`status_symbol`, `text`, `created`, `fresh`, `interval`,
+`interval_source`, `due_on`, `days_overdue`), and `warnings`
+(`code`, `path`, `line`, `message`).
 
 `seed` options: `-d/--dry-run`, `-F/--force`, `-f/--format
 human|json`. Ready tasks without a valid `fresh` are grouped by note

@@ -23,7 +23,10 @@ use super::{
         Warning,
     },
     seed::{run_seed, SeedError, SeedReport},
-    state::{counts, evaluate, queue, Counts, Evaluated, FreshState},
+    state::{
+        bucket_for_state, counts, evaluate, queue, Counts, Evaluated,
+        FreshState,
+    },
 };
 
 const COMMAND_NAME: &str = "bob freshness";
@@ -98,7 +101,7 @@ fn build_cli() -> ClapCommand {
         .about("Review Ready tasks for freshness and seed the cutover")
         .long_about(
             "Review Ready tasks for freshness: list the tasks due for \
-            review (never confirmed, resurfaced, or stale) and stamp the \
+            review (never confirmed, resurfaced, or rotten) and stamp the \
             one-time cutover seed.\n\n\
             The list subcommand is read-only: it evaluates every visible, \
             non-recurring Ready task at read time — never stored — and \
@@ -131,7 +134,7 @@ fn list_command_inner() -> ClapCommand {
         .about("List the tasks due for freshness review")
         .long_about(
             "List the tasks due for freshness review: every in-scope \
-            Ready task in state NEW, RESURFACED, or STALE, ordered NEW by \
+            Ready task in state NEW, RESURFACED, or ROTTEN, ordered NEW by \
             (path, line) then DUE by (due_on, path, line), with whole-vault \
             counts. The command is read-only. Counts always cover the \
             whole vault; --limit truncates the queue rows only. See \
@@ -258,6 +261,10 @@ struct ListedRow {
     rank: u32,
     tier: &'static str,
     state: FreshState,
+    /// Stable read-time bucket (`new`, `rotten`, or null); schema 1
+    /// keeps the machine `state`/`counts` names, so this additive
+    /// field is how dashboards gate without a schema bump.
+    bucket: Option<&'static str>,
     path: String,
     line: u32,
     block_id: Option<String>,
@@ -328,6 +335,7 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
                 rank: entry.rank,
                 tier: entry.tier,
                 state: entry.state,
+                bucket: bucket_for_state(Some(entry.state)),
                 path: entry.path.clone(),
                 line: entry.line,
                 block_id: ctx.task.block_id.clone(),
@@ -430,7 +438,7 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
     output.push('\n');
     let _ = writeln!(
         output,
-        "  REVIEW {due} due {sep} {new} new {sep} {resurfaced} resurfaced {sep} {stale} stale {sep} {today}",
+        "  REVIEW {due} due {sep} {new} new {sep} {resurfaced} resurfaced {sep} {stale} rotten {sep} {today}",
         due = report.counts.due,
         sep = styler.separator(),
         new = report.counts.new,
@@ -488,8 +496,8 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
         ),
         FreshState::Stale => match row.days_overdue {
             Some(0) => "due today".to_string(),
-            Some(days) => format!("stale {days}d"),
-            None => "stale".to_string(),
+            Some(days) => format!("rotten {days}d"),
+            None => "rotten".to_string(),
         },
         FreshState::Fresh => "fresh".to_string(),
     };
@@ -540,6 +548,7 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "rank": row.rank,
             "tier": row.tier,
             "state": row.state.as_str(),
+            "bucket": row.bucket,
             "path": row.path,
             "line": row.line,
             "block_id": row.block_id,

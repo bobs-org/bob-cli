@@ -27,6 +27,28 @@ impl FreshState {
             Self::Fresh => "fresh",
         }
     }
+
+    /// Stable read-time bucket for dashboard gating (`docs/freshness.md`
+    /// §4): `new` tasks surface in NEW, `resurfaced` and `stale` tasks
+    /// surface in ROTTEN review, and `fresh` tasks stay in READY.
+    /// Machine `state` names are unchanged; only this bucket mapping
+    /// uses the `rotten` vocabulary until the vocab-rotten migration.
+    pub(crate) fn bucket(self) -> Option<&'static str> {
+        match self {
+            Self::New => Some("new"),
+            Self::Resurfaced | Self::Stale => Some("rotten"),
+            Self::Fresh => None,
+        }
+    }
+}
+
+/// Stable bucket for an evaluated state: out-of-scope (`None`) and
+/// `Fresh` map to no bucket, so a null bucket alone never proves a
+/// task is Ready — callers must also apply the Ready predicate.
+pub(crate) fn bucket_for_state(
+    state: Option<FreshState>,
+) -> Option<&'static str> {
+    state.and_then(FreshState::bucket)
 }
 
 /// Where the effective interval came from.

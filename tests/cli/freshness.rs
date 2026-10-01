@@ -114,6 +114,22 @@ fn list_json_reports_queue_counts_and_contract() {
         states,
         vec!["new", "new", "new", "stale", "resurfaced", "stale"]
     );
+    // Schema 1 keeps the machine `state` names; the additive `bucket`
+    // carries the stable gating vocabulary: new → new, stale and
+    // resurfaced → rotten.
+    let buckets: Vec<Option<&str>> =
+        queue.iter().map(|entry| entry["bucket"].as_str()).collect();
+    assert_eq!(
+        buckets,
+        vec![
+            Some("new"),
+            Some("new"),
+            Some("new"),
+            Some("rotten"),
+            Some("rotten"),
+            Some("rotten"),
+        ]
+    );
     let first = &queue[0];
     assert_eq!(first["rank"], 1);
     assert_eq!(first["tier"], "new");
@@ -190,7 +206,7 @@ fn list_human_has_sections_and_no_ansi() {
             && human.contains("REVIEW 6 due")
             && human.contains("3 new")
             && human.contains("1 resurfaced")
-            && human.contains("2 stale")
+            && human.contains("2 rotten")
             && human.contains("✓ 2 today"),
         "expected a REVIEW summary:\n{human}"
     );
