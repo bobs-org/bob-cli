@@ -104,6 +104,78 @@ pub const SUPPORT_ASSETS: &[EmbeddedAsset] = &[
         contents: include_bytes!("../scripts/web_clip/vendor/README.md"),
         executable: false,
     },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/template/reader.css",
+        install_path: "web_clip/template/reader.css",
+        contents: include_bytes!("../scripts/web_clip/template/reader.css"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/source-serif-4-latin-wght-normal.woff2",
+        install_path: "web_clip/fonts/source-serif-4-latin-wght-normal.woff2",
+        contents: include_bytes!("../scripts/web_clip/fonts/source-serif-4-latin-wght-normal.woff2"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/source-serif-4-latin-wght-italic.woff2",
+        install_path: "web_clip/fonts/source-serif-4-latin-wght-italic.woff2",
+        contents: include_bytes!("../scripts/web_clip/fonts/source-serif-4-latin-wght-italic.woff2"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/source-serif-4-latin-ext-wght-normal.woff2",
+        install_path: "web_clip/fonts/source-serif-4-latin-ext-wght-normal.woff2",
+        contents: include_bytes!("../scripts/web_clip/fonts/source-serif-4-latin-ext-wght-normal.woff2"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/source-serif-4-latin-ext-wght-italic.woff2",
+        install_path: "web_clip/fonts/source-serif-4-latin-ext-wght-italic.woff2",
+        contents: include_bytes!("../scripts/web_clip/fonts/source-serif-4-latin-ext-wght-italic.woff2"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/inter-latin-wght-normal.woff2",
+        install_path: "web_clip/fonts/inter-latin-wght-normal.woff2",
+        contents: include_bytes!("../scripts/web_clip/fonts/inter-latin-wght-normal.woff2"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/inter-latin-wght-italic.woff2",
+        install_path: "web_clip/fonts/inter-latin-wght-italic.woff2",
+        contents: include_bytes!("../scripts/web_clip/fonts/inter-latin-wght-italic.woff2"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/inter-latin-ext-wght-normal.woff2",
+        install_path: "web_clip/fonts/inter-latin-ext-wght-normal.woff2",
+        contents: include_bytes!("../scripts/web_clip/fonts/inter-latin-ext-wght-normal.woff2"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/inter-latin-ext-wght-italic.woff2",
+        install_path: "web_clip/fonts/inter-latin-ext-wght-italic.woff2",
+        contents: include_bytes!("../scripts/web_clip/fonts/inter-latin-ext-wght-italic.woff2"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/jetbrains-mono-latin-wght-normal.woff2",
+        install_path: "web_clip/fonts/jetbrains-mono-latin-wght-normal.woff2",
+        contents: include_bytes!("../scripts/web_clip/fonts/jetbrains-mono-latin-wght-normal.woff2"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/OFL.txt",
+        install_path: "web_clip/fonts/OFL.txt",
+        contents: include_bytes!("../scripts/web_clip/fonts/OFL.txt"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/README.md",
+        install_path: "web_clip/fonts/README.md",
+        contents: include_bytes!("../scripts/web_clip/fonts/README.md"),
+        executable: false,
+    },
 ];
 
 pub fn script_names() -> impl Iterator<Item = &'static str> {

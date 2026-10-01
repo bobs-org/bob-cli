@@ -14,13 +14,13 @@ Ops:
 - ``capture``: launch Chrome (headless, with a headed Xvfb fallback on bot
   challenges), snapshot a stable DOM, run vendored Defuddle in isolation,
   layer metadata, check fidelity, sanitize with ``nh3``, localize images,
-  and print a reader PDF via the placeholder renderer.
+  and print a reader PDF via the bundled template renderer.
 
 Siblings loaded at runtime (same directory, on ``sys.path``):
 
 - ``snapshot.js``: in-page probe and snapshot code (``window.__bobClip``).
-- ``web_clip_render.py``: placeholder renderer; ``reader-template`` swaps
-  in the real one under the same ``render()`` signature.
+- ``web_clip_render.py``: reader renderer (Pillow image normalization,
+  ``template/reader.css`` print template, bundled ``fonts/``).
 - ``vendor/defuddle.full.js``: pinned Defuddle UMD bundle.
 
 Run ``python3 -m py_compile`` plus ``--self-test`` via
@@ -1574,6 +1574,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                     "description": extracted.get("description"),
                     "html": sanitized,
                     "source_url": final_url,
+                    "captured": request.get("captured"),
                     "fidelity": {"status": status, **page_counts},
                     "images": images,
                     "metadata_sources": sources,
@@ -1586,9 +1587,22 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                     sys.path.insert(0, WEB_CLIP_DIR)
                 import web_clip_render
 
-                pdf_bytes = web_clip_render.render(
-                    article_json, out_pdf,
-                    _RendererLauncher(pw, browser_info))["pdf_bytes"]
+                try:
+                    rendered = web_clip_render.render(
+                        article_json, out_pdf,
+                        _RendererLauncher(pw, browser_info))
+                except web_clip_render.RenderError as exc:
+                    raise AdapterFail(
+                        "render", str(exc),
+                        "retry with --html from a browser-saved page") from exc
+                pdf_bytes = rendered["pdf_bytes"]
+                images = rendered.get("images") or images
+                warnings.extend(rendered.get("warnings") or [])
+                # The fidelity verdict above ran on the localized markup;
+                # normalization may drop a few more, so report the PDF's
+                # own image count.
+                kept_counts = dict(kept_counts,
+                                   large_media=images["kept"])
                 if pdf_bytes > PDF_MAX_BYTES:
                     raise AdapterFail(
                         "render", "the printed PDF is larger than 95 MiB",
@@ -1652,7 +1666,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
 
 
 class _RendererLauncher:
-    """Headless-only browser factory for the placeholder renderer."""
+    """Headless-only browser factory for the reader renderer."""
 
     def __init__(self, pw, browser_info: dict) -> None:
         self._pw = pw
@@ -1980,6 +1994,156 @@ def self_test() -> int:
     check("vendor readme present",
           os.path.isfile(os.path.join(WEB_CLIP_DIR, "vendor", "README.md")))
 
+    # -- Reader renderer: fonts, template, and pure assembly ----------------
+    if WEB_CLIP_DIR not in sys.path:
+        sys.path.insert(0, WEB_CLIP_DIR)
+    import web_clip_render as _render
+
+    expected_fonts = (
+        "source-serif-4-latin-wght-normal.woff2",
+        "source-serif-4-latin-wght-italic.woff2",
+        "source-serif-4-latin-ext-wght-normal.woff2",
+        "source-serif-4-latin-ext-wght-italic.woff2",
+        "inter-latin-wght-normal.woff2",
+        "inter-latin-wght-italic.woff2",
+        "inter-latin-ext-wght-normal.woff2",
+        "inter-latin-ext-wght-italic.woff2",
+        "jetbrains-mono-latin-wght-normal.woff2",
+    )
+    fonts_dir = os.path.join(WEB_CLIP_DIR, "fonts")
+    font_sizes = []
+    for name in expected_fonts:
+        path = os.path.join(fonts_dir, name)
+        check(f"reader font present {name}", os.path.isfile(path))
+        try:
+            font_sizes.append(os.path.getsize(path))
+        except OSError:
+            pass
+    check("reader font payload under 1 MiB", sum(font_sizes) < 1024 * 1024)
+    check("reader OFL present",
+          os.path.isfile(os.path.join(fonts_dir, "OFL.txt")))
+    check("reader fonts readme present",
+          os.path.isfile(os.path.join(fonts_dir, "README.md")))
+    check("ping reports bundled fonts",
+          available_fonts() == ["Source Serif 4", "Inter", "JetBrains Mono"])
+    css_path = os.path.join(WEB_CLIP_DIR, "template", "reader.css")
+    check("reader css present", os.path.isfile(css_path))
+    try:
+        with open(css_path, encoding="utf-8") as handle:
+            css = handle.read()
+    except OSError:
+        css = ""
+    for needle in ("@page", "size: Letter", "counter(page)",
+                   "counter(pages)", "hyphens: manual",
+                   "font-variant-ligatures: none", "@font-face",
+                   "Source Serif 4", "Inter", "JetBrains Mono",
+                   "/fonts/", "#2b4c7e"):
+        check(f"reader css has {needle!r}", needle in css)
+
+    check("long date formats",
+          _render.format_long_date("2026-04-27") == "April 27, 2026")
+    check("long date empty",
+          _render.format_long_date(None) is None
+          and _render.format_long_date("not a date") is None)
+    check("footer title short unchanged",
+          _render.short_footer_title("A short title") == "A short title")
+    long_title = ("An open-source spec for Codex orchestration: "
+                    "Symphony and its fleet of agents today")
+    check("footer title truncated",
+          len(_render.short_footer_title(long_title)) <= 61
+          and _render.short_footer_title(long_title).endswith("…"))
+    check("css string escaped",
+          _render.css_escape_string('a"b\\c') == 'a\\"b\\\\c')
+    check("headings shift to h2",
+          "<h2>" in _render.shift_headings("<h1>T</h1><h2>U</h2>")
+          and "<h1>" not in _render.shift_headings("<h1>T</h1>"))
+    check("headings cap at h6",
+          "<h7" not in _render.shift_headings("<h6>Deep</h6><h5>D</h5>"))
+    check("headings untouched without shift",
+          _render.shift_headings("<h2>T</h2>") == "<h2>T</h2>")
+    check("dek dropped when repeating lead",
+          _render.show_dek("Hello world", "<p>Hello world, today.</p>") is None)
+    check("dek kept when distinct",
+          _render.show_dek("A standalone dek", "<p>Other text.</p>")
+          == "A standalone dek")
+
+    assembled = _render.assemble({
+        "title": 'Symphony <b>& "friends"',
+        "author": "Alex <i>X</i>",
+        "published": "2026-04-27",
+        "captured": "2026-10-01",
+        "site": "Example",
+        "description": "A standalone dek.",
+        "html": "<h1>Head</h1><p>Body.</p>",
+        "source_url": "https://example.com/x?a=1&b=2",
+        "word_count": 42,
+    })
+    check("assemble escapes title",
+          '<h1 class="masthead-title">Symphony &lt;b&gt;&amp; '
+          '&quot;friends&quot;</h1>' in assembled)
+    check("assemble shifts body heading",
+          "<h1>Head</h1>" not in assembled and "<h2>Head</h2>" in assembled)
+    check("assemble masthead",
+          'class="masthead-title"' in assembled
+          and "April 27, 2026" in assembled
+          and "October 1, 2026" in assembled
+          and "42 words" in assembled
+          and "A standalone dek." in assembled)
+    check("assemble csp and title",
+          "Content-Security-Policy" in assembled
+          and "bob-clip.invalid" in assembled
+          and "<title>Symphony" in assembled
+          and "/template/reader.css" in assembled)
+    check("assemble footer string",
+          "@bottom-left" in assembled and "content:" in assembled)
+    check("assemble drops first-page footer title",
+          "@page :first" in assembled and "content: none" in assembled)
+
+    import tempfile as _offline_tf
+
+    offline_dir = _offline_tf.mkdtemp(prefix="bob-clip-render-test-")
+    offline_assets = os.path.join(offline_dir, "assets")
+    os.makedirs(offline_assets, exist_ok=True)
+    try:
+        from PIL import Image as _Image
+
+        big = _Image.new("RGB", (2000, 100), (200, 30, 30))
+        big.save(os.path.join(offline_assets, "big.png"))
+        small = _Image.new("RGB", (10, 10), (30, 200, 30))
+        small.save(os.path.join(offline_assets, "small.png"))
+    except Exception as exc:  # noqa: BLE001 - pillow is a hard dep here
+        check(f"render test images written ({exc})", False)
+    with open(os.path.join(offline_assets, "pic.svg"), "w",
+              encoding="utf-8") as handle:
+        handle.write('<svg data-bob-svg="1" onload="evil()">'
+                     "<script>alert(1)</script><circle r=\"3\"/></svg>")
+    markup = ('<p><img src="assets/big.png" alt="big">'
+              '<img src="assets/small.png" alt="tiny">'
+              '<img src="assets/pic.svg" alt="vec">'
+              '<img src="assets/missing.png" alt="gone"></p>')
+    render_assets = os.path.join(offline_dir, "render", "assets")
+    normalized, manifest = _render.normalize_images(
+        markup, offline_assets, render_assets, [])
+    check("normalize keeps big raster as jpeg",
+          manifest["kept"] == 2 and 'src="assets/big.jpg"' in normalized)
+    check("normalize skips small and missing",
+          manifest["skipped_small"] == 1 and manifest["failed"] == 1
+          and "small.png" not in normalized
+          and "missing.png" not in normalized)
+    try:
+        from PIL import Image as _Image2
+
+        with _Image2.open(os.path.join(render_assets, "big.jpg")) as view:
+            check("normalize downscales to 1600",
+                  max(view.width, view.height) <= 1600)
+    except Exception:  # noqa: BLE001 - absence is already a failure above
+        check("normalize downscales to 1600", False)
+    with open(os.path.join(render_assets, "pic.svg"),
+              encoding="utf-8") as handle:
+        cleaned_svg = handle.read()
+    check("normalize cleans svg",
+          "<script" not in cleaned_svg and "onload" not in cleaned_svg)
+
     # -- Browser-backed fixture checks (offline via routing) -----------------
     try:
         browser = discover_browser()
@@ -2006,7 +2170,7 @@ def self_test() -> int:
             response, debug = run_capture(req, route_hook=hook)
             return response, debug, workdir
 
-        # Full article pipeline, including the placeholder render.
+        # Full article pipeline, including the reader render.
         response, debug, workdir = _capture("article_basic.html")
         check("article ok", response.get("ok") is True)
         check("article kind", response.get("kind") == "article")
@@ -2040,10 +2204,76 @@ def self_test() -> int:
         check("extraction dropped nav junk",
               "Cookie preferences" not in sanitized_out)
         pdf_bytes = response.get("pdf_bytes") or 0
-        check("placeholder pdf written", pdf_bytes > 1000)
-        with open(os.path.join(workdir, "render.pdf"), "rb") as handle:
+        check("reader pdf written", pdf_bytes > 1000)
+        reader_pdf = os.path.join(workdir, "render.pdf")
+        with open(reader_pdf, "rb") as handle:
             head = handle.read(5)
-        check("placeholder pdf header", head == b"%PDF-")
+        check("reader pdf header", head == b"%PDF-")
+
+        # Reader typography: the title lands on page 1, and the text
+        # layer carries no soft hyphens, joiners, ligatures, or
+        # auto-hyphenation.
+        if shutil.which("mutool") is None:
+            print("self-test: skipped reader text checks (no mutool)")
+        else:
+            import tempfile as _txt_tf
+
+            txt_dir = _txt_tf.mkdtemp(prefix="bob-clip-txt-test-")
+            page1_txt = os.path.join(txt_dir, "page1.txt")
+            full_txt = os.path.join(txt_dir, "full.txt")
+            try:
+                subprocess.run(
+                    ["mutool", "draw", "-F", "txt", "-o", page1_txt,
+                     reader_pdf, "1"],
+                    check=True, capture_output=True, timeout=120)
+                subprocess.run(
+                    ["mutool", "draw", "-F", "txt", "-o", full_txt,
+                     reader_pdf],
+                    check=True, capture_output=True, timeout=120)
+                with open(page1_txt, encoding="utf-8",
+                          errors="replace") as handle:
+                    page1 = handle.read()
+                with open(full_txt, encoding="utf-8",
+                          errors="replace") as handle:
+                    full = handle.read()
+                mutool_ok = True
+            except (subprocess.SubprocessError, OSError) as exc:
+                log(f"mutool text extraction failed: {exc}")
+                mutool_ok = False
+            check("mutool extraction ran", mutool_ok)
+            if mutool_ok:
+                check("reader title on page 1",
+                      "orchestration: Symphony" in page1)
+                check("reader text has no soft hyphens", "\u00ad" not in full)
+                check("reader text has no word joiners", "\u2060" not in full)
+                check("reader text has no zero-width spaces",
+                      "\u200b" not in full)
+                check("reader text has no ligatures",
+                      not re.search("[\ufb00-\ufb06]", full))
+                source_words = {
+                    word.lower()
+                    for word in strip_tags(
+                        debug.get("sanitized_html", "")).split()
+                }
+                hyphenated = False
+                for line in full.splitlines():
+                    stripped = line.rstrip()
+                    if not stripped.endswith("-"):
+                        continue
+                    prefix = stripped[:-1].rsplit(None, 1)
+                    if not prefix:
+                        continue
+                    head_word = prefix[-1].lower()
+                    idx = full.find(stripped)
+                    tail = full[idx + len(stripped):].lstrip().split(None, 1)
+                    tail_word = tail[0].lower() if tail else ""
+                    joined = (head_word + tail_word).strip("-")
+                    kept = head_word + "-" + tail_word
+                    if joined not in source_words and kept not in source_words:
+                        hyphenated = True
+                        break
+                check("reader text has no auto-hyphenation",
+                      hyphenated is False)
 
         # Challenge and login fixtures fail closed with headed disabled.
         import tempfile as _tf
