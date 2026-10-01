@@ -96,6 +96,7 @@ one applies:
 | `subheading_in_pomodoros` | a `###`–`######` heading sits inside the section; it splits the heading's time total |
 | `next_cap_exceeded` | NEXT is over the cap; never changes `status`, nothing is refused |
 | `pending_cap_exceeded` | PENDING is over the cap; never changes `status`, nothing is refused |
+| `ready_cap_exceeded` | READY is over the cap; Obsidian `bob-plan` block only (`bob plan` has no READY count); never changes `status`, nothing is refused |
 | `today_link_unresolved` | a ledger link resolves to no countable task (missing or ambiguous note, unreadable file, or no open task behind the block ID) |
 
 ## Today
@@ -174,8 +175,10 @@ daily note remain eligible); `#hide`; dependency-blocked tasks
 Today tasks (`isToday`); and any task whose read-time bucket is `new`
 or `rotten`. A null bucket alone never proves a task is Ready. The
 count is the Obsidian dashboard backlog and its feedback is the shared
-badge; this feature adds no native READY count, lint, capture
-enforcement, or tmux meter.
+badge; this feature adds no native READY count, `bob plan` lint, capture
+enforcement, or tmux meter. The daily `bob-plan` block shows a
+`ready_cap_exceeded` lint line beneath its chips when READY is strictly
+over the cap. A cap exactly met raises no lint.
 
 The badge shows `READY n/cap` (for example `READY 87/100`); exactly at
 the cap is fine and only a strict excess turns red (`READY 101/100`).
