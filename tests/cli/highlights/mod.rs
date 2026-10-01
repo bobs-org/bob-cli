@@ -1,5 +1,6 @@
 //! Highlights reference tests.
 
+mod clip;
 mod create;
 mod marker;
 mod scan;

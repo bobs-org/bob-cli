@@ -74,6 +74,7 @@ install-smoke:
     "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" randomize --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null
+    "${root}/bin/bob" highlights clip --help >/dev/null
     "${root}/bin/bob" highlights create --help >/dev/null
     "${root}/bin/bob" task-status-hooks --help >/dev/null
     "${root}/bin/bob" move-done-tasks --help >/dev/null

@@ -22,6 +22,7 @@ pub(super) fn build_cli() -> ClapCommand {
         .subcommand_required(true)
         .arg_required_else_help(true)
         .arg(no_hooks_arg())
+        .subcommand(clip::command())
         .subcommand(create::command())
         .subcommand(
             ClapCommand::new("doctor")

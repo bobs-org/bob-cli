@@ -638,6 +638,7 @@ fn highlights_ref_help_lists_subcommands_alphabetically() {
     assert_text_order(
         &help,
         &[
+            "\n  clip ",
             "\n  create ",
             "\n  doctor ",
             "\n  marker ",
@@ -687,6 +688,50 @@ fn highlights_create_help_lists_options_alphabetically() {
         help.contains("Complete path for the generated PDF")
             && help.contains("`--output` cannot be combined with `--ref-type`"),
         "expected --output contract in help:\n{help}"
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn highlights_clip_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("highlights")
+        .arg("clip")
+        .arg("--help")
+        .output()
+        .expect("run bob highlights clip --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Arguments:") && help.contains("<URL>"),
+        "expected URL positional argument in Arguments section:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-A, --author",
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --force",
+            "-H, --html",
+            "-l, --lib-dir",
+            "-N, --name",
+            "-o, --output",
+            "-P, --parent",
+            "-p, --published",
+            "-r, --ref-dir",
+            "-s, --status",
+            "-T, --title",
+            "-t, --ref-type",
+            "-x, --xlib-dir",
+        ],
+    );
+    assert!(
+        help.contains("`--output` cannot be combined with")
+            && help.contains("BOB_WEB_CLIP_ADAPTER")
+            && help.contains("bob highlights scan"),
+        "expected output-conflict, env, and scan notes in help:\n{help}"
     );
     assert_stdout_has_no_ansi(&output);
 }

@@ -31,6 +31,9 @@ mod create;
 
 mod annotation_tasks;
 mod cli;
+mod clip;
+mod clip_adapter;
+mod clip_url;
 mod doctor;
 mod frontmatter;
 mod guard;
@@ -51,6 +54,7 @@ mod text;
 
 use annotation_tasks::*;
 use cli::*;
+use clip::*;
 use doctor::*;
 use frontmatter::*;
 use guard::*;
@@ -173,6 +177,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
 
     match matches.subcommand() {
+        Some(("clip", sub_matches)) => clip::run(sub_matches),
         Some(("create", sub_matches)) => create::run(sub_matches),
         Some(("scan", sub_matches)) => {
             run_scan(sub_matches, no_hooks_flag(&matches, sub_matches))

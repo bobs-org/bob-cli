@@ -578,6 +578,7 @@ The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
 ## Highlights
 
 ```bash
+bob highlights clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
@@ -588,6 +589,14 @@ bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH]
 Turns Markdown into Highlights-ready PDFs and turns Highlights annotations into
 Obsidian reference notes.
 
+- `clip <URL>` captures a web article in reader mode through the pinned
+  web-clip adapter into `xlib/blogs/<slug>.pdf` (override the subdirectory
+  with `--ref-type`), stamping the page-1 marker with `source_url`,
+  `author`, `published`, and `captured` provenance. Already-captured URLs
+  are refused, even with `--force`; bot-protected sites retry headed and
+  otherwise fail closed with a hint. `-H, --html` replays a page saved from
+  a real browser. Needs `uv`, Google Chrome (or `BOB_CHROME`), and Xvfb for
+  bot-protected sites on Linux.
 - `create <md-file>` renders through pandoc and xelatex into
   `xlib/chat/<basename>.pdf` (override the subdirectory with `--ref-type`) and
   embeds the page-1 marker `scan` needs. `-o, --output` writes the complete PDF
@@ -607,9 +616,10 @@ Obsidian reference notes.
   of the concise report.
 - `sync <pdf>` updates one reference note from the page-1 marker and sidecar.
 - `marker <pdf>` inspects that marker without writing.
-- `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, and
-  optional `ob` without writing. Pass `-n, --no-hooks` to skip the pre-scan
-  hook check.
+- `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, the
+  web-clip chain (`uv`, adapter, browser, headed fallback), and optional
+  `ob` without writing. Pass `-n, --no-hooks` to skip the pre-scan hook
+  check.
 
 Generated notes live under `ref/`. Nested library PDFs such as
 `lib/books/foo.pdf` write `ref/books/foo.md` with `type: "[[ref]]"` and
@@ -618,7 +628,8 @@ Marker `status` values are `ready`, `next`, `wip`, `read`, `abandoned`, and
 `legacy`.
 
 The full contract and MacBook setup guide live in
-[`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md).
+[`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md); the web-capture
+contract lives in [`docs/highlights-clip.md`](docs/highlights-clip.md).
 
 ## Nightly maintenance
 
