@@ -10,6 +10,12 @@ use super::ConfigError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FreshnessConfig {
     pub(crate) interval: u16,
+    /// Daily review cadence for the `[/]` lane. `None` means the
+    /// lane is not walked (`pending_interval: false`).
+    pub(crate) pending_interval: Option<u16>,
+    /// Daily review cadence for the `[*]` lane. `None` means the
+    /// lane is not walked (`next_interval: false`).
+    pub(crate) next_interval: Option<u16>,
     pub(crate) rotten_daily_budget: Option<u32>,
     pub(crate) interval_from_config: bool,
     /// The removed `stale_daily_budget` key supplied the budget, so
@@ -22,6 +28,8 @@ impl Default for FreshnessConfig {
     fn default() -> Self {
         Self {
             interval: 7,
+            pending_interval: Some(1),
+            next_interval: Some(1),
             rotten_daily_budget: None,
             interval_from_config: false,
             stale_budget_deprecated: false,
@@ -105,6 +113,23 @@ fn parse_freshness_config(
         interval_from_config = true;
     }
 
+    let mut pending_interval = defaults.pending_interval;
+    if let Some(value) = get("pending_interval") {
+        pending_interval = parse_lane_interval(
+            &value,
+            "freshness.pending_interval",
+            &path_display.to_string(),
+        )?;
+    }
+    let mut next_interval = defaults.next_interval;
+    if let Some(value) = get("next_interval") {
+        next_interval = parse_lane_interval(
+            &value,
+            "freshness.next_interval",
+            &path_display.to_string(),
+        )?;
+    }
+
     // The canonical `rotten_daily_budget` wins by presence,
     // including an explicit null (budget off). The removed
     // `stale_daily_budget` still supplies the budget for one release
@@ -138,6 +163,8 @@ fn parse_freshness_config(
     // Unknown keys are ignored, like every other config block.
     Ok(FreshnessConfig {
         interval,
+        pending_interval,
+        next_interval,
         rotten_daily_budget: budget,
         interval_from_config,
         stale_budget_deprecated,
@@ -175,6 +202,55 @@ fn parse_interval(
         )));
     }
     Ok(number as u16)
+}
+
+/// Parse a lane interval: absent or null means the default 1,
+/// `false` turns that lane's walk off, and an integer 1–365 sets it.
+/// Anything else (including `true`, 0, 366, strings, floats) is a
+/// config error shaped like `interval`'s.
+fn parse_lane_interval(
+    value: &serde_yaml::Value,
+    key: &str,
+    path_display: &str,
+) -> Result<Option<u16>, ConfigError> {
+    if value.is_null() {
+        return Ok(Some(1));
+    }
+    if let serde_yaml::Value::Bool(flag) = value {
+        if !flag {
+            return Ok(None);
+        }
+        return Err(ConfigError::Invalid(format!(
+            "{key} in {path_display} must be an integer 1-365 or false; got {flag}"
+        )));
+    }
+    let number = match value {
+        serde_yaml::Value::Number(number) => {
+            if let Some(int) = number.as_i64() {
+                int
+            } else if let Some(uint) = number.as_u64()
+                && let Ok(int) = i64::try_from(uint)
+            {
+                int
+            } else {
+                return Err(ConfigError::Invalid(format!(
+                    "{key} in {path_display} must be an integer 1-365 or false; got {value:?}"
+                )));
+            }
+        }
+        _ => {
+            return Err(ConfigError::Invalid(format!(
+                "{key} in {path_display} must be an integer 1-365 or false; got {}",
+                render_scalar(value)
+            )));
+        }
+    };
+    if !(1..=365).contains(&number) {
+        return Err(ConfigError::Invalid(format!(
+            "{key} in {path_display} must be an integer 1-365 or false; got {number}"
+        )));
+    }
+    Ok(Some(number as u16))
 }
 
 fn parse_budget(
@@ -290,6 +366,49 @@ mod tests {
     }
 
     #[test]
+    fn lane_intervals_default_absent_and_null() {
+        for text in [
+            "freshness:\n  interval: 7\n",
+            "freshness:\n  pending_interval:\n  next_interval:\n",
+        ] {
+            let config = parse_freshness_config(text, Path::new("/config.yml"))
+                .expect("absent or null lanes give defaults");
+            assert_eq!(config.pending_interval, Some(1));
+            assert_eq!(config.next_interval, Some(1));
+        }
+    }
+
+    #[test]
+    fn lane_intervals_parse_false_and_integers() {
+        let config = parse_freshness_config(
+            "freshness:\n  pending_interval: false\n  next_interval: 3\n",
+            Path::new("/config.yml"),
+        )
+        .expect("false and integer lanes");
+        assert_eq!(config.pending_interval, None);
+        assert_eq!(config.next_interval, Some(3));
+    }
+
+    #[test]
+    fn rejects_invalid_lane_intervals() {
+        for text in [
+            "freshness:\n  pending_interval: true\n",
+            "freshness:\n  next_interval: true\n",
+            "freshness:\n  pending_interval: 0\n",
+            "freshness:\n  next_interval: 366\n",
+            "freshness:\n  pending_interval: soon\n",
+            "freshness:\n  next_interval: 7.5\n",
+        ] {
+            let error = parse_freshness_config(text, Path::new("/config.yml"))
+                .expect_err("invalid lane interval must fail");
+            assert!(
+                matches!(error, ConfigError::Invalid(_)),
+                "expected invalid config for {text:?}, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn legacy_budget_key_supplies_budget_with_deprecation_flag() {
         let config = parse_freshness_config(
             "freshness:\n  stale_daily_budget: 15\n",
@@ -372,6 +491,10 @@ mod tests {
             "freshness:\n  rotten_daily_budget: soon\n",
             "freshness:\n  stale_daily_budget: 0\n",
             "freshness:\n  stale_daily_budget: soon\n",
+            "freshness:\n  pending_interval: true\n",
+            "freshness:\n  next_interval: 0\n",
+            "freshness:\n  pending_interval: 366\n",
+            "freshness:\n  next_interval: soon\n",
             "freshness: [1, 2]\n",
         ] {
             let error = parse_freshness_config(text, Path::new("/config.yml"))
@@ -388,6 +511,8 @@ mod tests {
         for text in [
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nfreshness:\n  interval: soon\n",
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nfreshness:\n  rotten_daily_budget: soon\n",
+            "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nfreshness:\n  pending_interval: soon\n",
+            "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nfreshness:\n  next_interval: soon\n",
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nfreshness: [1, 2]\n",
         ] {
             let path = Path::new("/config.yml");

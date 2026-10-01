@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 
 use super::{
     bucket_for_state, counts, evaluate, queue, Counts, FreshState,
-    FreshnessRow, IntervalSource,
+    FreshnessRow, IntervalSource, Lane, Tier,
 };
 use crate::native::config::freshness::FreshnessConfig;
 
@@ -24,6 +24,8 @@ fn default_config() -> FreshnessConfig {
 fn config_with_interval(days: u16) -> FreshnessConfig {
     FreshnessConfig {
         interval: days,
+        pending_interval: Some(1),
+        next_interval: Some(1),
         rotten_daily_budget: None,
         interval_from_config: true,
         stale_budget_deprecated: false,
@@ -33,7 +35,23 @@ fn config_with_interval(days: u16) -> FreshnessConfig {
 fn config_with_budget(budget: u32) -> FreshnessConfig {
     FreshnessConfig {
         interval: 7,
+        pending_interval: Some(1),
+        next_interval: Some(1),
         rotten_daily_budget: Some(budget),
+        interval_from_config: false,
+        stale_budget_deprecated: false,
+    }
+}
+
+fn config_with_lanes(
+    pending: Option<u16>,
+    next: Option<u16>,
+) -> FreshnessConfig {
+    FreshnessConfig {
+        interval: 7,
+        pending_interval: pending,
+        next_interval: next,
+        rotten_daily_budget: None,
         interval_from_config: false,
         stale_budget_deprecated: false,
     }
@@ -288,9 +306,9 @@ fn s14_queue_order_new_then_due() {
         vec![
             ("a.md".to_string(), 9),
             ("b.md".to_string(), 3),
+            ("a.md".to_string(), 4),
             ("c.md".to_string(), 2),
             ("a.md".to_string(), 2),
-            ("a.md".to_string(), 4),
         ]
     );
     assert_eq!(
@@ -298,8 +316,11 @@ fn s14_queue_order_new_then_due() {
         vec![1, 2, 3, 4, 5]
     );
     assert_eq!(
-        ordered.iter().map(|entry| entry.tier).collect::<Vec<_>>(),
-        vec!["new", "new", "due", "due", "due"]
+        ordered
+            .iter()
+            .map(|entry| entry.tier.as_str())
+            .collect::<Vec<_>>(),
+        vec!["new", "new", "returned", "rotten", "rotten"]
     );
 }
 
@@ -386,11 +407,12 @@ fn bucket_partition_vectors() {
 
 #[test]
 fn s15_counts_and_budget_meter() {
-    // 13 in-scope Ready tasks stamped today plus one [*] and one [x]
-    // stamped today: refreshed_today counts all 15. A Ready task
-    // stamped yesterday does not count.
+    // 14 in-scope Ready tasks stamped today plus one [*] and one [x]
+    // stamped today: refreshed_today counts all 16, upkeep_today
+    // counts the 14 Ready plus the [x] but not the [*]. A Ready task
+    // stamped yesterday counts for neither.
     let mut rows = Vec::new();
-    for index in 0..13 {
+    for index in 0..14 {
         rows.push(stamped_row("a.md", index + 1, ' ', true, "2026-10-08"));
     }
     rows.push(stamped_row("b.md", 1, '*', false, "2026-10-08"));
@@ -398,16 +420,321 @@ fn s15_counts_and_budget_meter() {
     rows.push(stamped_row("a.md", 20, ' ', true, "2026-10-07"));
 
     let met: Counts = counts(&rows, today(), &config_with_budget(15));
-    assert_eq!(met.refreshed_today, 15);
+    assert_eq!(met.refreshed_today, 16);
+    assert_eq!(met.upkeep_today, 15);
     assert_eq!(met.new, 0);
     assert_eq!(met.budget, Some(15));
     assert!(met.budget_met);
 
-    // One NEW capture unmeets the budget even at 15 refreshed.
+    // One NEW capture unmeets the budget even at 15 upkeep.
     let mut with_new = rows.clone();
     with_new.push(row("- [ ] #task Fresh capture"));
     let unmet: Counts = counts(&with_new, today(), &config_with_budget(15));
-    assert_eq!(unmet.refreshed_today, 15);
+    assert_eq!(unmet.refreshed_today, 16);
+    assert_eq!(unmet.upkeep_today, 15);
     assert_eq!(unmet.new, 1);
     assert!(!unmet.budget_met);
+}
+
+/// Build a lane row: `status` is the Tasks symbol (`/`, `*`, ` `,
+/// `?`, `x`), `fresh` the stamp day or `None` for never stamped.
+fn lane_row(
+    path: &str,
+    line: u32,
+    status: char,
+    fresh: Option<&str>,
+    created: Option<NaiveDate>,
+) -> FreshnessRow {
+    let is_todo = status == ' ';
+    let raw_line = match fresh {
+        Some(day) => format!("- [{status}] #task Walk [fresh:: {day}]"),
+        None => format!("- [{status}] #task Walk"),
+    };
+    FreshnessRow {
+        path: path.to_string(),
+        line,
+        status,
+        is_todo,
+        recurring: false,
+        lane_visible: true,
+        is_daily_note: false,
+        is_today: false,
+        scheduled: None,
+        created,
+        raw_line,
+        note_refresh_raw: None,
+    }
+}
+
+fn ready_row(
+    path: &str,
+    line: u32,
+    fresh: Option<&str>,
+    created: Option<NaiveDate>,
+) -> FreshnessRow {
+    lane_row(path, line, ' ', fresh, created)
+}
+
+fn queue_keys(entries: &[super::QueueEntry]) -> Vec<(String, u32)> {
+    entries
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.line))
+        .collect()
+}
+
+fn queue_tiers(entries: &[super::QueueEntry]) -> Vec<&'static str> {
+    entries.iter().map(|entry| entry.tier.as_str()).collect()
+}
+
+#[test]
+fn q1_bryan_example_orders_adjc() {
+    // All four tasks are ROTTEN (today 2026-10-08, interval 7
+    // unless the task refresh says otherwise).
+    let config = default_config();
+    let mut d =
+        ready_row("d.md", 1, Some("2026-10-07"), Some(date(2026, 9, 1)));
+    d.raw_line = "- [ ] #task A [fresh:: 2026-10-07] [refresh:: 1]".to_string();
+    let c = ready_row("c.md", 1, Some("2026-09-28"), Some(date(2026, 9, 4)));
+    let b = ready_row("b.md", 1, Some("2026-09-28"), Some(date(2026, 9, 1)));
+    let a = ready_row("a.md", 1, Some("2026-09-30"), Some(date(2026, 9, 1)));
+    let ordered = queue(&[d, c, b, a], today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![
+            ("d.md".to_string(), 1),
+            ("c.md".to_string(), 1),
+            ("b.md".to_string(), 1),
+            ("a.md".to_string(), 1),
+        ]
+    );
+    assert_eq!(queue_tiers(&ordered), vec!["rotten"; 4]);
+    // d.md:1 runs on its 1-day task interval.
+    assert_eq!(ordered[0].interval_days, 1);
+    assert_eq!(ordered[0].due_on, Some(date(2026, 10, 8)));
+}
+
+#[test]
+fn q2_tier_order_beats_path_order() {
+    let config = default_config();
+    let new = ready_row("e.md", 1, None, None);
+    let pending = lane_row("d.md", 1, '/', Some("2026-10-07"), None);
+    let next = lane_row("c.md", 1, '*', Some("2026-10-07"), None);
+    let mut returned = ready_row("b.md", 1, Some("2026-10-05"), None);
+    returned.scheduled = Some(date(2026, 10, 7));
+    let rotten = ready_row("a.md", 1, Some("2026-09-20"), None);
+    let ordered =
+        queue(&[rotten, returned, next, pending, new], today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![
+            ("e.md".to_string(), 1),
+            ("d.md".to_string(), 1),
+            ("c.md".to_string(), 1),
+            ("b.md".to_string(), 1),
+            ("a.md".to_string(), 1),
+        ]
+    );
+    assert_eq!(
+        queue_tiers(&ordered),
+        vec!["new", "pending", "next", "returned", "rotten"]
+    );
+}
+
+#[test]
+fn l1_lane_due_and_stamped_today() {
+    let config = default_config();
+    // Stamped today: in no tier.
+    let today_row = lane_row("a.md", 1, '*', Some("2026-10-08"), None);
+    let evaluated = evaluate(&today_row, today(), &config);
+    assert_eq!(evaluated.state, None);
+    assert_eq!(evaluated.tier, None);
+    assert_eq!(evaluated.lane, Some(Lane::Next));
+    // Stamped yesterday: tier next, due today.
+    let due = lane_row("a.md", 2, '*', Some("2026-10-07"), None);
+    let evaluated = evaluate(&due, today(), &config);
+    assert_eq!(evaluated.state, None);
+    assert_eq!(bucket_for_state(evaluated.state), None);
+    assert_eq!(evaluated.tier, Some(Tier::Next));
+    assert_eq!(evaluated.lane, Some(Lane::Next));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+    assert_eq!(evaluated.days_overdue, Some(0));
+    assert_eq!(evaluated.interval_days, 1);
+    assert_eq!(evaluated.interval_source, IntervalSource::Next);
+}
+
+#[test]
+fn l2_lane_overrides_refresh() {
+    let config = default_config();
+    let mut input = lane_row("a.md", 1, '/', Some("2026-10-07"), None);
+    input.raw_line =
+        "- [/] #task Lane [fresh:: 2026-10-07] [refresh:: 30]".to_string();
+    let evaluated = evaluate(&input, today(), &config);
+    assert_eq!(evaluated.tier, Some(Tier::Pending));
+    assert_eq!(evaluated.interval_days, 1);
+    assert_eq!(evaluated.interval_source, IntervalSource::Pending);
+}
+
+#[test]
+fn l3_lane_exclusions_have_no_tier() {
+    let config = default_config();
+    let fresh = Some("2026-10-07");
+    let mut recurring = lane_row("a.md", 1, '*', fresh, None);
+    recurring.recurring = true;
+    let mut today_member = lane_row("a.md", 2, '*', fresh, None);
+    today_member.is_today = true;
+    let mut daily = lane_row("2026/20261008.md", 1, '*', fresh, None);
+    daily.is_daily_note = true;
+    let mut hidden = lane_row("a.md", 3, '*', fresh, None);
+    hidden.lane_visible = false;
+    for (name, candidate) in [
+        ("recurring", recurring),
+        ("today", today_member),
+        ("daily", daily),
+        ("hidden", hidden),
+    ] {
+        let evaluated = evaluate(&candidate, today(), &config);
+        assert_eq!(evaluated.tier, None, "{name} must be in no tier");
+        assert_eq!(evaluated.state, None, "{name} keeps a null state");
+    }
+}
+
+#[test]
+fn l4_lane_off_switch_and_null_default() {
+    // With next_interval: false, a never-stamped [*] is in no tier
+    // and its interval falls back to the Ready chain (7, default).
+    let off = config_with_lanes(Some(1), None);
+    let never = lane_row("a.md", 1, '*', None, None);
+    let evaluated = evaluate(&never, today(), &off);
+    assert_eq!(evaluated.tier, None);
+    assert_eq!(evaluated.interval_days, 7);
+    assert_eq!(evaluated.interval_source, IntervalSource::Default);
+    // An explicit null means the default 1.
+    let null_case = config_with_lanes(Some(1), Some(1));
+    let evaluated = evaluate(&never, today(), &null_case);
+    assert_eq!(evaluated.tier, Some(Tier::Next));
+    assert_eq!(evaluated.interval_days, 1);
+}
+
+#[test]
+fn l5_lane_order_never_stamped_first() {
+    let config = default_config();
+    let z = lane_row("z.md", 9, '/', None, Some(date(2026, 9, 1)));
+    let b =
+        lane_row("b.md", 1, '/', Some("2026-10-01"), Some(date(2026, 9, 15)));
+    let a5 =
+        lane_row("a.md", 5, '/', Some("2026-10-07"), Some(date(2026, 9, 10)));
+    let a2 =
+        lane_row("a.md", 2, '/', Some("2026-10-07"), Some(date(2026, 9, 20)));
+    let a1 = lane_row("a.md", 1, '/', Some("2026-10-07"), None);
+    let ordered = queue(&[a1, a2, a5, b, z], today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![
+            ("z.md".to_string(), 9),
+            ("b.md".to_string(), 1),
+            ("a.md".to_string(), 5),
+            ("a.md".to_string(), 2),
+            ("a.md".to_string(), 1),
+        ]
+    );
+    assert_eq!(queue_tiers(&ordered), vec!["pending"; 5]);
+}
+
+#[test]
+fn r1_returned_beats_older_rotten() {
+    let config = default_config();
+    let mut returned = ready_row("b.md", 1, Some("2026-10-05"), None);
+    returned.scheduled = Some(date(2026, 10, 7));
+    let rotten = ready_row("a.md", 1, Some("2026-09-20"), None);
+    let ordered = queue(&[rotten, returned], today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![("b.md".to_string(), 1), ("a.md".to_string(), 1)]
+    );
+    assert_eq!(queue_tiers(&ordered), vec!["returned", "rotten"]);
+}
+
+#[test]
+fn r2_returned_orders_by_schedule_then_newest_created() {
+    let config = default_config();
+    let mut x =
+        ready_row("x.md", 1, Some("2026-10-05"), Some(date(2026, 9, 1)));
+    x.scheduled = Some(date(2026, 10, 6));
+    let mut w =
+        ready_row("w.md", 1, Some("2026-10-05"), Some(date(2026, 9, 5)));
+    w.scheduled = Some(date(2026, 10, 7));
+    let mut y =
+        ready_row("y.md", 1, Some("2026-10-05"), Some(date(2026, 9, 1)));
+    y.scheduled = Some(date(2026, 10, 7));
+    let ordered = queue(&[y, w, x], today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![
+            ("x.md".to_string(), 1),
+            ("w.md".to_string(), 1),
+            ("y.md".to_string(), 1),
+        ]
+    );
+}
+
+#[test]
+fn missing_created_sorts_after_dated_peers() {
+    let config = default_config();
+    // Ascending (pending): dated first, missing last.
+    let dated =
+        lane_row("a.md", 1, '/', Some("2026-10-07"), Some(date(2026, 9, 1)));
+    let missing = lane_row("a.md", 2, '/', Some("2026-10-07"), None);
+    let ordered = queue(&[missing, dated], today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![("a.md".to_string(), 1), ("a.md".to_string(), 2)]
+    );
+    // Descending (rotten): dated first (newest), missing last.
+    let old = ready_row("a.md", 3, Some("2026-09-28"), Some(date(2026, 9, 1)));
+    let new = ready_row("a.md", 4, Some("2026-09-28"), Some(date(2026, 9, 4)));
+    let missing = ready_row("a.md", 5, Some("2026-09-28"), None);
+    let ordered = queue(&[missing, old, new], today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![
+            ("a.md".to_string(), 4),
+            ("a.md".to_string(), 3),
+            ("a.md".to_string(), 5),
+        ]
+    );
+}
+
+#[test]
+fn b1_upkeep_counts_outside_the_lanes() {
+    // 20 lane stamps plus 5 Ready stamps today, budget 15:
+    // upkeep 5, refreshed 25, budget not met.
+    let mut rows = Vec::new();
+    for index in 0..10 {
+        rows.push(stamped_row("lane.md", index + 1, '/', false, "2026-10-08"));
+    }
+    for index in 0..10 {
+        rows.push(stamped_row("lane.md", index + 11, '*', false, "2026-10-08"));
+    }
+    for index in 0..5 {
+        rows.push(stamped_row("a.md", index + 1, ' ', true, "2026-10-08"));
+    }
+    let budget = FreshnessConfig {
+        interval: 7,
+        pending_interval: Some(1),
+        next_interval: Some(1),
+        rotten_daily_budget: Some(15),
+        interval_from_config: false,
+        stale_budget_deprecated: false,
+    };
+    let report: Counts = counts(&rows, today(), &budget);
+    assert_eq!(report.refreshed_today, 25);
+    assert_eq!(report.upkeep_today, 5);
+    assert!(!report.budget_met);
+    // A Blocked [?] and an [x] stamped today are upkeep too.
+    let mut more = rows.clone();
+    more.push(stamped_row("b.md", 1, '?', false, "2026-10-08"));
+    more.push(stamped_row("c.md", 1, 'x', false, "2026-10-08"));
+    let report: Counts = counts(&more, today(), &budget);
+    assert_eq!(report.refreshed_today, 27);
+    assert_eq!(report.upkeep_today, 7);
 }

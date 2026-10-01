@@ -699,6 +699,8 @@ mod tests {
             weekday: "Thu".to_string(),
             config: FreshnessConfig::default(),
             ready: Vec::new(),
+            pending: Vec::new(),
+            next: Vec::new(),
             open: Vec::new(),
             all: Vec::new(),
             today_warnings: Vec::new(),

@@ -82,9 +82,16 @@ pub(crate) struct Snapshot {
     /// Rows matching [`dataview::READY_QUERY`]; the engine already
     /// applied the lane predicate.
     pub(crate) ready: Vec<RowCtx>,
+    /// Rows matching [`dataview::PENDING_QUERY`]: the `[/]` lane,
+    /// lane-visible by construction.
+    pub(crate) pending: Vec<RowCtx>,
+    /// Rows matching [`dataview::NEXT_QUERY`]: the `[*]` lane,
+    /// lane-visible by construction.
+    pub(crate) next: Vec<RowCtx>,
     /// Rows matching [`dataview::OPEN_QUERY`]: the seed universe.
     pub(crate) open: Vec<RowCtx>,
-    /// Every task of any status: `refreshed_today` and warnings.
+    /// Every task of any status: `refreshed_today`, `upkeep_today`,
+    /// and warnings.
     pub(crate) all: Vec<RowCtx>,
     /// `today_link_unresolved` passthrough from the Today engine.
     pub(crate) today_warnings: Vec<Warning>,
@@ -139,6 +146,12 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
     let ready_tasks =
         dataview::query_rich_tasks(bob_dir, dataview::READY_QUERY, now)
             .map_err(|error| ScanError::Io(dataview_message(&error)))?;
+    let pending_tasks =
+        dataview::query_rich_tasks(bob_dir, dataview::PENDING_QUERY, now)
+            .map_err(|error| ScanError::Io(dataview_message(&error)))?;
+    let next_tasks =
+        dataview::query_rich_tasks(bob_dir, dataview::NEXT_QUERY, now)
+            .map_err(|error| ScanError::Io(dataview_message(&error)))?;
     let open_tasks =
         dataview::query_rich_tasks(bob_dir, dataview::OPEN_QUERY, now)
             .map_err(|error| ScanError::Io(dataview_message(&error)))?;
@@ -184,6 +197,14 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
     for task in &ready_tasks {
         ready.push(context(task)?);
     }
+    let mut pending = Vec::with_capacity(pending_tasks.len());
+    for task in &pending_tasks {
+        pending.push(context(task)?);
+    }
+    let mut next = Vec::with_capacity(next_tasks.len());
+    for task in &next_tasks {
+        next.push(context(task)?);
+    }
     let mut open = Vec::with_capacity(open_tasks.len());
     for task in &open_tasks {
         open.push(context(task)?);
@@ -201,6 +222,8 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
         weekday,
         config,
         ready,
+        pending,
+        next,
         open,
         all,
         today_warnings,
@@ -214,7 +237,7 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
 pub(crate) fn refreshed_today(rows: &[RowCtx], today: NaiveDate) -> u32 {
     let mut count = 0;
     for row in rows {
-        if is_excluded_count_path(&row.task.path) {
+        if super::state::is_excluded_count_path(&row.task.path) {
             continue;
         }
         if read_freshness(&row.task.original_markdown, today).fresh
@@ -222,6 +245,29 @@ pub(crate) fn refreshed_today(rows: &[RowCtx], today: NaiveDate) -> u32 {
         {
             count += 1;
         }
+    }
+    count
+}
+
+/// Count `upkeep_today` over every task: `refreshed_today` tasks
+/// whose status symbol is neither `/` nor `*`. Lane stamps are daily
+/// review progress, not upkeep.
+pub(crate) fn upkeep_today(rows: &[RowCtx], today: NaiveDate) -> u32 {
+    let mut count = 0;
+    for row in rows {
+        if super::state::is_excluded_count_path(&row.task.path) {
+            continue;
+        }
+        if read_freshness(&row.task.original_markdown, today).fresh
+            != Some(today)
+        {
+            continue;
+        }
+        let symbol = row.task.status_symbol.chars().next().unwrap_or(' ');
+        if symbol == '/' || symbol == '*' {
+            continue;
+        }
+        count += 1;
     }
     count
 }
@@ -297,13 +343,6 @@ pub(crate) fn lint_message(code: &str) -> String {
         }
         other => format!("{other}: see docs/freshness.md"),
     }
-}
-
-/// Paths under `_templates` or `_conflicts` never count toward
-/// `refreshed_today` (mirrors `state::counts`).
-fn is_excluded_count_path(path: &str) -> bool {
-    path.split('/')
-        .any(|segment| segment == "_templates" || segment == "_conflicts")
 }
 
 /// A task is Today's when its block ID matches a ledger link, or —

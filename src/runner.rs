@@ -99,7 +99,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
         name: "freshness",
         script_command: None,
-        about: "Review Ready tasks for freshness and seed the cutover",
+        about: "Walk the tiered freshness review queue and seed the cutover",
         native_command: NativeCommand::Freshness,
     },
     Subcommand {
@@ -367,7 +367,7 @@ Examples:
   bob query --source '#project'
                                  Print matching note paths
   bob freshness list -f json
-                                 List the tasks due for freshness review
+                                 List the tiered freshness review queue
   bob gkeep
                                  Show the Keep inbox and gkeep_inbox.md side by side
   bob gkeep pull --dry-run

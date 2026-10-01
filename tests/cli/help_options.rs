@@ -252,7 +252,7 @@ fn freshness_help_lists_subcommands_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("Review Ready tasks for freshness")
+        help.contains("Walk the tiered freshness review queue")
             && help.contains("bob freshness seed --dry-run"),
         "expected freshness long help:\n{help}"
     );
@@ -272,7 +272,7 @@ fn freshness_list_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("List the tasks due for freshness review")
+        help.contains("List the tiered freshness review queue")
             && help.contains("--limit"),
         "expected freshness list long help:\n{help}"
     );

@@ -19,8 +19,8 @@ use super::super::{
 };
 use super::{
     scan::{
-        collect_warnings, lint_message, refreshed_today, scan, RowCtx,
-        ScanError, Snapshot, Warning,
+        collect_warnings, lint_message, refreshed_today, scan, upkeep_today,
+        RowCtx, ScanError, Snapshot, Warning,
     },
     seed::{run_seed, SeedError, SeedReport},
     state::{
@@ -33,7 +33,7 @@ const COMMAND_NAME: &str = "bob freshness";
 
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -98,18 +98,20 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Review Ready tasks for freshness and seed the cutover")
+        .about("Walk the tiered freshness review queue and seed the cutover")
         .long_about(
-            "Review Ready tasks for freshness: list the tasks due for \
-            review (never confirmed, resurfaced, or rotten) and stamp the \
-            one-time cutover seed.\n\n\
+            "Walk the tiered freshness review queue: list the tasks due \
+            for review in tier order NEW → PENDING → NEXT → RETURNED → \
+            ROTTEN and stamp the one-time cutover seed.\n\n\
             The list subcommand is read-only: it evaluates every visible, \
-            non-recurring Ready task at read time — never stored — and \
-            shows the NEW → DUE queue with counts. The seed subcommand \
-            stamps every unstamped open task once: Ready tasks staggered \
-            across the last 7 days by note, everything else today. The \
-            seed refuses a second run, aborts on any parse change, and \
-            refuses when a file changed since the scan. See \
+            non-recurring Ready, Pending, and Next task at read time — \
+            never stored — and shows the tiered walk queue with counts. \
+            Pending and Next tasks come due for a daily review set by \
+            freshness.pending_interval / next_interval. The seed \
+            subcommand stamps every unstamped open task once: Ready tasks \
+            staggered across the last 7 days by note, everything else \
+            today. The seed refuses a second run, aborts on any parse \
+            change, and refuses when a file changed since the scan. See \
             docs/freshness.md for the full definition.",
         )
         .after_help(
@@ -124,21 +126,21 @@ fn build_cli() -> ClapCommand {
 
 fn list_command() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("List the tasks due for freshness review")
+        .about("List the tiered freshness review queue")
         .subcommand_required(true)
         .subcommand(list_command_inner())
 }
 
 fn list_command_inner() -> ClapCommand {
     ClapCommand::new("list")
-        .about("List the tasks due for freshness review")
+        .about("List the tiered freshness review queue")
         .long_about(
-            "List the tasks due for freshness review: every in-scope \
-            Ready task in state NEW, RESURFACED, or ROTTEN, ordered NEW by \
-            (path, line) then DUE by (due_on, path, line), with whole-vault \
-            counts. The command is read-only. Counts always cover the \
-            whole vault; --limit truncates the queue rows only. See \
-            docs/freshness.md for the full definition.",
+            "List the tiered freshness review queue: every task with a \
+            walk tier, ordered NEW → PENDING → NEXT → RETURNED → ROTTEN \
+            with each tier's comparator, with whole-vault counts. The \
+            command is read-only. Counts always cover the whole vault; \
+            --limit truncates the queue rows only. See docs/freshness.md \
+            for the full definition.",
         )
         .after_help(
             "Examples:\n  bob freshness list\n  bob freshness list -f json\n  bob freshness list -b ~/bob --limit 10\n\nEnvironment:\n  BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n  BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  BOB_DIR                   Bob vault root when --bob-dir is omitted\n  BOB_NOW                   Local datetime override for review date selection\n  NO_COLOR                  Disable colored output",
@@ -259,10 +261,11 @@ fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
 /// One evaluated queue row with everything both outputs need.
 struct ListedRow {
     rank: u32,
-    tier: &'static str,
-    state: FreshState,
+    tier: String,
+    lane: String,
+    state: Option<FreshState>,
     /// Stable read-time bucket (`new`, `rotten`, or null) for
-    /// dashboard gating.
+    /// dashboard gating. Lane rows carry null.
     bucket: Option<&'static str>,
     path: String,
     line: u32,
@@ -282,6 +285,8 @@ struct ListReport {
     date: String,
     weekday: String,
     interval: u16,
+    pending_interval: Option<u16>,
+    next_interval: Option<u16>,
     budget: Option<u32>,
     counts: Counts,
     rows: Vec<ListedRow>,
@@ -291,39 +296,43 @@ struct ListReport {
 fn collect_list(snapshot: &Snapshot) -> ListReport {
     let today = snapshot.today;
     let config = &snapshot.config;
-    // The engine applied `is not blocked` to every READY row; the
-    // field stays on RichTask for the seed's contract.
+    // The engine applied `is not blocked` to every lane query row;
+    // the field stays on RichTask for the seed's contract.
     debug_assert!(
         snapshot.ready.iter().all(|row| !row.task.is_blocked),
         "READY_QUERY rows must never be blocked"
     );
-    let ready_rows: Vec<_> = snapshot
+    let combined: Vec<(&RowCtx, super::state::FreshnessRow)> = snapshot
         .ready
         .iter()
+        .chain(snapshot.pending.iter())
+        .chain(snapshot.next.iter())
         .map(|row| (row, row.freshness_row(true)))
         .collect();
 
     let queue_entries = queue(
-        &ready_rows
+        &combined
             .iter()
             .map(|(_, row)| row.clone())
             .collect::<Vec<_>>(),
         today,
         config,
     );
-    let evaluated: std::collections::HashMap<
+    // Look rows up by (path, line): the same task cannot appear in
+    // two lane queries (status symbols are disjoint), so the first
+    // write wins.
+    let mut evaluated: std::collections::HashMap<
         (String, u32),
         (RowCtx, Evaluated),
-    > = ready_rows
-        .into_iter()
-        .map(|(ctx, row)| {
-            let evaluated = evaluate(&row, today, config);
-            (
-                (ctx.task.path.clone(), ctx.task.line),
-                (ctx.clone(), evaluated),
-            )
-        })
-        .collect();
+    > = std::collections::HashMap::new();
+    for (ctx, row) in &combined {
+        let key = (ctx.task.path.clone(), ctx.task.line);
+        if evaluated.contains_key(&key) {
+            continue;
+        }
+        let result = evaluate(row, today, config);
+        evaluated.insert(key, ((*ctx).clone(), result));
+    }
 
     let mut rows = Vec::with_capacity(queue_entries.len());
     for entry in &queue_entries {
@@ -332,9 +341,10 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         {
             rows.push(ListedRow {
                 rank: entry.rank,
-                tier: entry.tier,
+                tier: entry.tier.as_str().to_string(),
+                lane: entry.lane.as_str().to_string(),
                 state: entry.state,
-                bucket: bucket_for_state(Some(entry.state)),
+                bucket: bucket_for_state(entry.state),
                 path: entry.path.clone(),
                 line: entry.line,
                 block_id: ctx.task.block_id.clone(),
@@ -361,18 +371,21 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         }
     }
 
-    let ready_eval_rows: Vec<_> = snapshot
+    let combined_eval_rows: Vec<_> = snapshot
         .ready
         .iter()
+        .chain(snapshot.pending.iter())
+        .chain(snapshot.next.iter())
         .map(|row| row.freshness_row(true))
         .collect();
-    let mut counts = counts(&ready_eval_rows, today, config);
-    // `counts` over Ready rows cannot see Next, Pending, or done
-    // tasks; refreshed_today needs every status (S15).
+    let mut counts = counts(&combined_eval_rows, today, config);
+    // Tier counts need ready ∪ pending ∪ next rows; the meters need
+    // every status (S15, B1).
     counts.refreshed_today = refreshed_today(&snapshot.all, today);
+    counts.upkeep_today = upkeep_today(&snapshot.all, today);
     counts.budget_met = config
         .rotten_daily_budget
-        .is_some_and(|goal| counts.refreshed_today >= goal && counts.new == 0);
+        .is_some_and(|goal| counts.upkeep_today >= goal && counts.new == 0);
 
     let mut warnings = collect_warnings(&snapshot.all, today, config);
     // One deprecation diagnostic per loaded config — never one per
@@ -392,6 +405,8 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         date: today.format("%Y-%m-%d").to_string(),
         weekday: snapshot.weekday.clone(),
         interval: config.interval,
+        pending_interval: config.pending_interval,
+        next_interval: config.next_interval,
         budget: config.rotten_daily_budget,
         counts,
         rows,
@@ -429,9 +444,16 @@ fn run_list(matches: &ArgMatches) -> i32 {
 fn today_meter(report: &ListReport) -> String {
     match report.budget {
         Some(goal) => {
-            format!("✓ {}/{} today", report.counts.refreshed_today, goal)
+            format!("✓ {}/{} today", report.counts.upkeep_today, goal)
         }
-        None => format!("✓ {} today", report.counts.refreshed_today),
+        None => format!("✓ {} today", report.counts.upkeep_today),
+    }
+}
+
+fn lane_meter(interval: Option<u16>) -> String {
+    match interval {
+        Some(days) => format!("{days}d"),
+        None => "off".to_string(),
     }
 }
 
@@ -439,40 +461,67 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
-        "bob freshness {sep} {weekday} {date} {sep} every {interval}d",
+        "bob freshness {sep} {weekday} {date} {sep} every {interval}d {sep} pending {pending} {sep} next {next}",
         sep = styler.separator(),
         weekday = report.weekday,
         date = report.date,
         interval = report.interval,
+        pending = lane_meter(report.pending_interval),
+        next = lane_meter(report.next_interval),
     );
     output.push('\n');
     let _ = writeln!(
         output,
-        "  REVIEW {due} due {sep} {new} new {sep} {resurfaced} resurfaced {sep} {rotten} rotten {sep} {today}",
-        due = report.counts.due,
+        "  REVIEW {walk} due {sep} {new} new {sep} {pending} pending {sep} {next} next {sep} {returned} returned {sep} {rotten} rotten {sep} {today}",
+        walk = report.counts.walk,
         sep = styler.separator(),
         new = report.counts.new,
-        resurfaced = report.counts.resurfaced,
+        pending = report.counts.pending_due,
+        next = report.counts.next_due,
+        returned = report.counts.resurfaced,
         rotten = report.counts.rotten,
         today = today_meter(report),
     );
 
-    let new_rows: Vec<&ListedRow> =
-        report.rows.iter().filter(|row| row.tier == "new").collect();
-    let due_rows: Vec<&ListedRow> =
-        report.rows.iter().filter(|row| row.tier != "new").collect();
-    if !new_rows.is_empty() {
-        output.push_str(&format!("\n  {}\n", styler.yellow("NEW")));
-        for row in new_rows {
+    let tiers: [(&str, &str); 5] = [
+        ("new", "NEW"),
+        ("pending", "PENDING"),
+        ("next", "NEXT"),
+        ("returned", "RETURNED"),
+        ("rotten", "ROTTEN"),
+    ];
+    let mut commitment_rows = 0;
+    let mut rotten_rows = 0;
+    for (tier, heading) in &tiers {
+        let tier_rows: Vec<&ListedRow> =
+            report.rows.iter().filter(|row| row.tier == *tier).collect();
+        if tier_rows.is_empty() {
+            continue;
+        }
+        // The divider splits commitments from upkeep: it sits
+        // between the last commitment tier and the ROTTEN heading,
+        // only when rows exist on both sides.
+        if *tier == "rotten" && commitment_rows > 0 {
+            output.push_str(&format!(
+                "\n  {}\n",
+                styler.dim("── commitments done above · upkeep below ──"),
+            ));
+        }
+        if *tier == "rotten" {
+            rotten_rows = tier_rows.len();
+        } else {
+            commitment_rows += tier_rows.len();
+        }
+        output.push_str(&format!(
+            "\n  {} {}\n",
+            styler.yellow(heading),
+            tier_rows.len()
+        ));
+        for row in tier_rows {
             output.push_str(&human_row(row, styler));
         }
     }
-    if !due_rows.is_empty() {
-        output.push_str(&format!("\n  {}\n", styler.yellow("DUE")));
-        for row in due_rows {
-            output.push_str(&human_row(row, styler));
-        }
-    }
+    let _ = (commitment_rows, rotten_rows);
     if !report.warnings.is_empty() {
         output.push_str(&format!("\n  {}\n", styler.yellow("LINTS")));
         for warning in &report.warnings {
@@ -494,45 +543,66 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
 
 fn human_row(row: &ListedRow, styler: &Styler) -> String {
     let reference = format!("{}:{}", row.path, row.line);
-    let mut detail = match row.state {
-        FreshState::New => match &row.created {
+    let sep = styler.separator();
+    let every = format!(
+        "{sep} every {interval}d ({source})",
+        interval = row.interval,
+        source = row.interval_source,
+    );
+    let detail = match row.tier.as_str() {
+        "new" => match &row.created {
             Some(created) => format!("created {created}"),
             None => "never confirmed".to_string(),
         },
-        FreshState::Resurfaced => format!(
-            "resurfaced {sep} scheduled {}",
-            row.scheduled.as_deref().unwrap_or("?"),
-            sep = styler.separator(),
-        ),
-        FreshState::Rotten => match row.days_overdue {
-            Some(0) => "due today".to_string(),
-            Some(days) => format!("rotten {days}d"),
-            None => "rotten".to_string(),
+        "pending" | "next" => match &row.fresh {
+            None => match &row.created {
+                Some(created) => {
+                    format!("never confirmed {sep} created {created}")
+                }
+                None => "never confirmed".to_string(),
+            },
+            Some(fresh) => {
+                let lead = match row.days_overdue {
+                    Some(0) => "due today".to_string(),
+                    Some(days) => format!("{days}d overdue"),
+                    None => match &row.due_on {
+                        Some(due) => format!("due {due}"),
+                        None => "due".to_string(),
+                    },
+                };
+                format!("{lead} {sep} fresh {fresh}{every}")
+            }
         },
-        FreshState::Fresh => "fresh".to_string(),
+        "returned" => format!(
+            "returned {sep} scheduled {scheduled} {sep} fresh {fresh}",
+            scheduled = row.scheduled.as_deref().unwrap_or("?"),
+            fresh = row.fresh.as_deref().unwrap_or("?"),
+        ),
+        _ => {
+            let lead = match row.days_overdue {
+                Some(0) => "due today".to_string(),
+                Some(days) => format!("rotten {days}d"),
+                None => "rotten".to_string(),
+            };
+            match &row.fresh {
+                Some(fresh) => format!("{lead} {sep} fresh {fresh}{every}"),
+                None => lead,
+            }
+        }
     };
-    if row.state != FreshState::New
-        && let Some(fresh) = &row.fresh
-    {
-        detail.push_str(&format!(
-            " {sep} fresh {fresh}",
-            sep = styler.separator()
-        ));
-    }
-    if row.state == FreshState::Rotten || row.state == FreshState::Fresh {
-        detail.push_str(&format!(
-            " {sep} every {interval}d ({source})",
-            sep = styler.separator(),
-            interval = row.interval,
-            source = row.interval_source,
-        ));
-    }
     format!(
         "    {}  {}  {}\n",
         styler.cyan(&pad_right(&reference, 30)),
         pad_right(&row.text, 40),
         styler.dim(&detail),
     )
+}
+
+fn lane_json(interval: Option<u16>) -> serde_json::Value {
+    match interval {
+        Some(days) => json!(days),
+        None => json!(false),
+    }
 }
 
 fn json_list(report: &ListReport) -> serde_json::Value {
@@ -542,6 +612,8 @@ fn json_list(report: &ListReport) -> serde_json::Value {
         "date": report.date,
         "config": {
             "interval": report.interval,
+            "pending_interval": lane_json(report.pending_interval),
+            "next_interval": lane_json(report.next_interval),
             "rotten_daily_budget": report.budget,
         },
         "counts": {
@@ -550,14 +622,19 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "resurfaced": report.counts.resurfaced,
             "rotten": report.counts.rotten,
             "fresh": report.counts.fresh,
+            "pending_due": report.counts.pending_due,
+            "next_due": report.counts.next_due,
+            "walk": report.counts.walk,
             "refreshed_today": report.counts.refreshed_today,
+            "upkeep_today": report.counts.upkeep_today,
             "budget": report.counts.budget,
             "budget_met": report.counts.budget_met,
         },
         "queue": report.rows.iter().map(|row| json!({
             "rank": row.rank,
             "tier": row.tier,
-            "state": row.state.as_str(),
+            "lane": row.lane,
+            "state": row.state.map(|state| state.as_str()),
             "bucket": row.bucket,
             "path": row.path,
             "line": row.line,
@@ -570,6 +647,7 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "interval_source": row.interval_source,
             "due_on": row.due_on,
             "days_overdue": row.days_overdue,
+            "scheduled": row.scheduled,
         })).collect::<Vec<_>>(),
         "warnings": report.warnings.iter().map(|warning| json!({
             "code": warning.code,

@@ -8,11 +8,17 @@ or was confirmed longer ago than its refresh interval, is due for
 review. The morning review then costs roughly "pool ÷ interval +
 arrivals" glances instead of the whole pool.
 
+The daily lane review reuses the same `[fresh::]` stamp for Pending
+(`[/]`) and Next (`[*]`) tasks: each lane has a review cadence
+(`freshness.pending_interval` / `freshness.next_interval`, default 1
+day), and the morning walk visits NEW → PENDING → NEXT → RETURNED →
+ROTTEN in explicit tiers.
+
 This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
 JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
-api v3, freshness namespace v3). The bob-ledger-tools JavaScript
+api v3, freshness namespace v4). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
 ## 1. Definition
@@ -40,12 +46,20 @@ as NEW until a human confirms it.
 | `[refresh:: N]`                | task line, immediately after `fresh`           | optional integer days, 1–365             |
 | `task_refresh: N`              | frontmatter of the note containing the task    | optional integer days, 1–365             |
 | `freshness.interval`           | `~/.config/bob/config.yml`                     | integer days, 1–365, default 7           |
+| `freshness.pending_interval`   | `~/.config/bob/config.yml`                     | integer days, 1–365, or `false`; default 1 |
+| `freshness.next_interval`      | `~/.config/bob/config.yml`                     | integer days, 1–365, or `false`; default 1 |
 | `freshness.rotten_daily_budget` | `~/.config/bob/config.yml`                    | optional integer ≥ 1, default off        |
 
-**Interval precedence.** `interval(t)` is the task's `refresh`, then
-the containing note's `task_refresh`, then `freshness.interval`, then
-7. The note override applies by residence (the note that contains the
-task), not through `parent` links.
+**Interval precedence.** `interval(t)` for a lane task in a walked
+lane is that lane's interval (`pending_interval` for `[/]` with source
+`pending`, `next_interval` for `[*]` with source `next`), overriding
+the whole Ready chain below. Otherwise `interval(t)` is the task's
+`refresh`, then the containing note's `task_refresh`, then
+`freshness.interval`, then 7. The note override applies by residence
+(the note that contains the task), not through `parent` links.
+`pending_interval: false` / `next_interval: false` turns that lane's
+walk off; an absent or null value means the default 1, matching how
+`interval:` already treats null.
 
 **Invalid values.**
 
@@ -62,8 +76,10 @@ Example:
 
 ```yaml
 freshness:
-  interval: 7 # days before a confirmed Ready task is due for review (docs/freshness.md)
-  # rotten_daily_budget: 15 # optional daily goal meter; never hides tasks
+  interval: 7 # Ready backlog review cadence
+  pending_interval: 1 # [/] lane daily review; false = not walked
+  next_interval: 1 # [*] lane daily review; false = not walked
+  # rotten_daily_budget: 15 # counts upkeep outside the lanes; never hides tasks
 ```
 
 **Mobile config caveat.** On mobile, when the config file is
@@ -142,20 +158,63 @@ state(t)      = NEW         if no fresh(t)
               | RESURFACED  if scheduled(t) exists ∧ fresh(t) < scheduled(t) ≤ today
               | ROTTEN      if today ≥ fresh(t) + interval(t)   (stamped Mon at 7 ⇒ due next Mon)
               | FRESH       otherwise
-due_on(t)     = RESURFACED: scheduled(t); ROTTEN/FRESH: fresh(t) + interval(t); NEW: none
+                (Ready only; lane rows keep a null state)
+lane(t)       = pending  if status symbol "/"
+              | next     if status symbol "*"
+              | ready    if status type TODO ("[ ]")
+              | none     otherwise (Blocked, closed, custom non-TODO)
+walk_scope(t) = lane(t) ≠ none ∧ lane-visible ∧ ¬recurring ∧ ¬canonical daily note ∧ ¬Today(t)
+                (lane-visible is the existing NEXT/PENDING predicate, unchanged)
+lane_interval = freshness.pending_interval (pending) | freshness.next_interval (next);
+                default 1; false = that lane is not walked
+interval(t)   = lane task with a walked lane: lane_interval, source "pending" | "next"
+                otherwise unchanged: task refresh → note task_refresh → freshness.interval → 7
+lane_due(t)   = walked lane ∧ (no fresh(t) ∨ today ≥ fresh(t) + lane_interval)
+due_on(t)     = lane row: fresh(t) + lane_interval, or none when never stamped
+                RESURFACED: scheduled(t); ROTTEN/FRESH: fresh(t) + interval(t); NEW: none
 due(t)        = in_scope(t) ∧ state(t) ≠ FRESH
-tier(t)       = NEW | DUE (RESURFACED and ROTTEN together)
-queue order   = NEW by (path, line); then DUE by (due_on, path, line)
-counts        = due, new, resurfaced, rotten, fresh (in-scope FRESH),
-                refreshed_today (tasks of any status, outside _templates/_conflicts,
-                whose fresh(t) == today), budget, budget_met
-                (budget set ∧ refreshed_today ≥ budget ∧ new == 0)
+tier(t)       = new       if lane ready ∧ state NEW
+              | pending   if lane pending ∧ walk_scope ∧ lane_due
+              | next      if lane next ∧ walk_scope ∧ lane_due
+              | returned  if state RESURFACED
+              | rotten    if state ROTTEN
+              | none      otherwise
 ```
+
+The queue holds every row with a tier, in tier order. Within each
+tier the order is:
+
+| Tier     | Order within the tier                                    |
+| -------- | -------------------------------------------------------- |
+| new      | path ↑, line ↑ (unchanged)                               |
+| pending  | never-stamped first, due_on ↑, created ↑, path ↑, line ↑ |
+| next     | same as pending                                          |
+| returned | due_on (= scheduled) ↑, created ↓, path ↑, line ↑        |
+| rotten   | interval ↑, due_on ↑, created ↓, path ↑, line ↑          |
+
+A missing `created` always sorts after dated peers within its tier,
+in both ascending and descending keys. The commitment tiers are new,
+pending, next, and returned. Rotten is upkeep.
+
+Counts:
+
+- `due`, `new`, `resurfaced`, `rotten`, `fresh`, and
+  `refreshed_today` keep their meaning. `due` stays Ready-only.
+- New counts: `pending_due`, `next_due`, and `walk` (the full queue
+  length, before any `--limit`).
+- New count `upkeep_today`: tasks of any status outside `_templates`
+  / `_conflicts` whose `fresh` equals today and whose status symbol is
+  neither `/` nor `*`.
+- `budget_met = budget set ∧ upkeep_today ≥ budget ∧ new == 0`.
+
+Every `✓` meter displays `upkeep_today`: `✓ N today`, or `✓ N/B
+today` with a budget.
 
 RESURFACED beats ROTTEN when both hold: a deferral that returned is
 due as soon as it returns. The tickler makes a short deferral (for
 example a P1 roll of 2–7 days) due as soon as it returns, without any
-hooks write.
+hooks write. Tiers never feed buckets or chips: `state`/`bucket` and
+the partition text below are unchanged.
 
 **Buckets.** The stable read-time bucket contract for dashboard
 gating:
@@ -244,20 +303,22 @@ for editing and never stamps.
 
 ## 6. Review ritual
 
-**Morning (≈10 min; replaces reading READY):**
+**Morning, about 10 minutes once the lanes are at their caps:**
 
 1. Run `bob gkeep pull`.
-2. Clear `[[dash#NEW Tasks|NEW]]` to 0 first (`]s` / Alt+Shift+F until
-   the status bar shows **0 new**). This step is never capped and
-   never skipped.
-3. Then clear `[[rotten|ROTTEN]]` until 0 or the budget meter is met
-   (`✓ N today` / `✓ N/B today`): RETURNED first, then age-expired
-   ROTTEN.
-4. Then PENDING → NEXT: link today's work and release the rest.
+2. Use `]s` / Alt+Shift+F through NEW → PENDING → NEXT → RETURNED
+   until the notice says **Commitments done**. NEW is never capped or
+   skipped. In the lanes, ask "still in this lane?": keep with
+   Alt+Shift+F, do it today with Ctrl+Shift+Enter, release with Alt+N.
+   For a returned deferral, "not now" is a priority roll, not Alt+F.
+3. Start the highlight.
+4. Then, or later, do ROTTEN upkeep until 0 or the budget. It is fine
+   to stop partway.
 
-**Weekly:** one more line in the existing Weekly prune chore. Clear
-any leftover `[[rotten|ROTTEN]]`, or lengthen that note's
-`task_refresh`, and look for projects with no Next or Ready task.
+**First walk:** release the lanes to their caps.
+
+**Weekly:** if more than about 90% of NEXT reviews end in keep,
+lengthen `next_interval` to 2–3 and leave Pending at 1.
 
 Review outcomes, one key each (every row except "edit" stamps by
 itself): still right (Alt+Shift+F or Alt+F); see it less often
@@ -279,19 +340,38 @@ Running `bob freshness` with no subcommand runs `list`.
 vault). Human output is colored only on a TTY:
 
 ```text
-bob freshness · Thu 2026-10-08 · every 7d
+bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d
 
-  REVIEW 23 due · 3 new · 2 resurfaced · 18 rotten · ✓ 12 today
+  REVIEW 66 due · 1 new · 10 pending · 15 next · 14 returned · 26 rotten · ✓ 12 today
 
-  NEW
-    gkeep_inbox.md:14   Pick up our daughter          created 2026-09-30
-  DUE
-    a.md:2              Rename queue input            rotten 3d · fresh 2026-09-28 · every 7d (note)
-    b.md:40             Week habits                   resurfaced · scheduled 2026-10-07
+  NEW 1
+    gkeep_inbox.md:14   Pick up our daughter    created 2026-09-30
+  PENDING 10
+    sase.md:40          Land the epic           never confirmed · created 2026-09-20
+    work.md:12          Ship the report         due today · fresh 2026-10-07 · every 1d (pending)
+  NEXT 15
+    …
+  RETURNED 14
+    b.md:40             Week habits             returned · scheduled 2026-10-07 · fresh 2026-10-05
+  ── commitments done above · upkeep below ──
+  ROTTEN 26
+    d.md:1              Water the herbs         due today · fresh 2026-10-07 · every 1d (task)
+    a.md:2              Rename queue input      rotten 3d · fresh 2026-09-28 · every 7d (note)
 ```
 
-With a budget the meter reads `✓ 12/15 today`. Lints go last.
+- The `REVIEW N due` total is `walk`.
+- Human vocabulary says "returned"; the machine `state` stays
+  `resurfaced`.
+- A disabled lane shows `pending off` in the header.
+- Each tier heading carries its count and is omitted when empty.
+- The dim divider appears only when rows exist on both sides.
+- Lane rows overdue by `n ≥ 1` days read `{n}d overdue`.
+- With a budget, the meter reads `✓ 12/15 today`.
+- `--limit` truncates rows, never counts.
+- Lints go last, unchanged.
+
 `text` is the clean description; queue `line` numbers are 1-based.
+The seed was a one-time cutover and must not be re-run.
 
 **Fallback.** With a missing, old, or throwing freshness API, dash
 keeps legacy READY visibility and counts, NEW and both rotten groups
@@ -300,14 +380,17 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The JSON contract is `schema_version: 2` with `ok`, `date`,
-`config` (`interval`, `rotten_daily_budget`), `counts` (`due`,
-`new`, `resurfaced`, `rotten`, `fresh`, `refreshed_today`, `budget`,
-`budget_met`), `queue` (each with `rank`, `tier`, `state`, `bucket`
-(`"new"`, `"rotten"`, or null), `path`, `line`, `block_id`,
-`status_symbol`, `text`, `created`, `fresh`, `interval`,
-`interval_source`, `due_on`, `days_overdue`), and `warnings`
-(`code`, `path`, `line`, `message`).
+The JSON contract is `schema_version: 3` with `ok`, `date`,
+`config` (`interval`, `pending_interval` / `next_interval` as a number
+or `false`, `rotten_daily_budget`), `counts` (`due`, `new`,
+`resurfaced`, `rotten`, `fresh`, `pending_due`, `next_due`, `walk`,
+`refreshed_today`, `upkeep_today`, `budget`, `budget_met`), `queue`
+(each with `rank`, `tier` (`new` | `pending` | `next` | `returned` |
+`rotten`), `lane` (`ready` | `pending` | `next`), `state`, `bucket`
+(`"new"`, `"rotten"`, or null — lane rows carry `state: null` and
+`bucket: null`), `path`, `line`, `block_id`, `status_symbol`, `text`,
+`created`, `fresh`, `interval`, `interval_source`, `due_on`,
+`days_overdue`), and `warnings` (`code`, `path`, `line`, `message`).
 
 `seed` options: `-d/--dry-run`, `-F/--force`, `-f/--format
 human|json`. Ready tasks without a valid `fresh` are grouped by note
@@ -327,7 +410,8 @@ A same-day rerun finds nothing to stamp and reports zeros. The JSON
 contract is `schema_version: 2` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
-`out_of_scope`), `files`, and `warnings`.
+`out_of_scope`), `files`, and `warnings`. The shared constant also
+moves the `seed` envelope to 3, with seed content unchanged.
 
 Exit codes: 0 on success; 1 for I/O errors and seed refusals; 2 for
 an invalid `freshness:` block or a non-Dataview task format.
@@ -336,7 +420,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 
 | Surface | Phase |
 | ------- | ----- |
-| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`) |
+| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 3: `list` walks NEW → PENDING → NEXT → RETURNED → ROTTEN with lane intervals) |
 | `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`) |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0) |
@@ -409,9 +493,9 @@ D = `2026-10-08`. Each gives the input line, the expected line, and
 
 ## 10. State conformance examples
 
-Today `2026-10-08`, config interval 7, and a Ready, visible,
-non-recurring task in `a.md` unless noted. The bob-ledger-tools
-JavaScript tests use these verbatim.
+Today `2026-10-08`, the default config (interval 7, both lanes
+1), and a Ready, visible, non-recurring task in `a.md` unless noted.
+The bob-ledger-tools JavaScript tests use these verbatim.
 
 - **S1 new:** no `fresh` → `new`
 - **S2 fresh:** `fresh 2026-10-02` → `fresh`, `due_on 2026-10-09`
@@ -437,15 +521,54 @@ JavaScript tests use these verbatim.
 - **S13 out of scope** (state `null`): a recurring task; a `[?]`
   with a future `scheduled`; `[*]`; `[/]`; `#hide`; `_templates/x.md`;
   daily note `2026/20261008.md`; a Ready task linked under today's
-  open Pomodoro; a `[ ]` whose `dependsOn` names an open task
-- **S14 queue order.** Given NEW `b.md:3` and NEW `a.md:9`; ROTTEN due
-  2026-10-01 at `c.md:2`; RESURFACED due 2026-10-07 at `a.md:4`; ROTTEN
-  due 2026-10-07 at `a.md:2`. The order is `a.md:9`, `b.md:3`,
-  `c.md:2`, `a.md:2`, `a.md:4`.
-- **S15 counts:** `refreshed_today` counts a `[*]` and an `[x]`
-  stamped 2026-10-08, but not a Ready task stamped 2026-10-07. With
-  budget 15, 15 refreshed and 0 new → `budget_met: true`; with 1 new
-  → `false`.
+  open Pomodoro; a `[ ]` whose `dependsOn` names an open task.
+  Note that `[*]` and `[/]` keep a null `state` and `bucket` but are
+  in tier scope (see L1).
+- **S14 queue order (rewritten).** Given NEW `b.md:3` and NEW `a.md:9`;
+  ROTTEN due 2026-10-01 at `c.md:2`; RESURFACED due 2026-10-07 at
+  `a.md:4`; ROTTEN due 2026-10-07 at `a.md:2`. The order is `a.md:9`,
+  `b.md:3`, `a.md:4` (returned), `c.md:2`, `a.md:2`.
+- **S15 counts (updated):** `refreshed_today` counts a `[*]` and an
+  `[x]` stamped 2026-10-08, but not a Ready task stamped 2026-10-07;
+  `upkeep_today` counts the `[x]` but not the `[*]`. With budget 15,
+  15 upkeep and 0 new → `budget_met: true`; with 1 new → `false`.
+- **Q1 (Bryan's example).** All four tasks are ROTTEN:
+  - `d.md:1` `[refresh:: 1]`, fresh 10-07, created 09-01;
+  - `c.md:1` fresh 09-28, created 09-04;
+  - `b.md:1` fresh 09-28, created 09-01;
+  - `a.md:1` fresh 09-30, created 09-01.
+  Order: `d.md:1` (A), `c.md:1` (D), `b.md:1` (C), `a.md:1` (B).
+- **Q2 (tier order beats path order).** NEW `e.md:1`; `[/]` `d.md:1`
+  fresh 10-07; `[*]` `c.md:1` fresh 10-07; RETURNED `b.md:1` fresh
+  10-05 scheduled 10-07; ROTTEN `a.md:1` fresh 09-20. Order: e, d, c,
+  b, a, with tiers new, pending, next, returned, rotten.
+- **L1.** A `[*]` stamped 10-08 is in no tier. A `[*]` stamped 10-07
+  has tier `next`, `due_on` 10-08, `days_overdue` 0, interval 1 from
+  source `next`, and null `state`/`bucket`.
+- **L2 (lane overrides refresh).** A `[/]` with `[refresh:: 30]`
+  stamped 10-07 has tier `pending` and interval 1 from source
+  `pending`.
+- **L3.** A recurring `[*]`, a Today-linked `[*]`, a `[*]` in
+  `2026/20261008.md`, and a `#hide` `[*]` are each in no tier.
+- **L4.** With `next_interval: false`, a never-stamped `[*]` is in no
+  tier, and its interval falls back to the Ready chain (7, default).
+  `next_interval:` null means 1.
+- **L5 (lane order).** Five `[/]` tasks:
+  - `z.md:9` never stamped, created 09-01;
+  - `b.md:1` fresh 10-01, created 09-15;
+  - `a.md:5` fresh 10-07, created 09-10;
+  - `a.md:2` fresh 10-07, created 09-20;
+  - `a.md:1` fresh 10-07, no created.
+  Order: z.md:9, b.md:1, a.md:5, a.md:2, a.md:1.
+- **R1 (RETURNED beats older ROTTEN).** RETURNED `b.md:1` (fresh 10-05,
+  scheduled 10-07) comes before ROTTEN `a.md:1` (fresh 09-20, due
+  09-27).
+- **R2 (returned order).** `x.md:1` scheduled 10-06 created 09-01,
+  `w.md:1` scheduled 10-07 created 09-05, `y.md:1` scheduled 10-07
+  created 09-01. Order: x, w, y.
+- **B1.** 20 lane stamps plus 5 Ready stamps today, budget 15 →
+  `upkeep_today` 5, `refreshed_today` 25, `budget_met: false`. Adding a
+  Blocked `[?]` and an `[x]` stamped today → `upkeep_today` 7.
 
 ## 11. Display: the freshness mark
 
@@ -486,16 +609,18 @@ capsule, so the marks stay readable for color-blind users.
 **Label, ring, and interval.** `ageDays = days(fresh → today)`, never
 negative because future stamps get no mark. The label is `today` at
 age 0, otherwise `{N}d` (`1d`, `7d`, `282d`); days are always the
-unit, matching `bob freshness`. The interval follows the existing
-precedence: task `refresh`, then the note's `task_refresh`, then
-`freshness.interval`, then 7. `remaining =
+unit, matching `bob freshness`. The interval is lane-aware per §4: a
+lane task in a walked lane uses its lane interval, otherwise the
+existing precedence (task `refresh`, then the note's `task_refresh`,
+then `freshness.interval`, then 7). `remaining =
 clamp((interval − ageDays) / interval, 0, 1)`, rounded to 4 decimals:
-full on the day of confirmation, empty exactly when ROTTEN (at 0 only
+full on the day of confirmation, empty exactly when due (at 0 only
 the faint track is drawn). The ring starts at 12 o'clock, drawn
 clockwise for `remaining`. The interval suffix `/{N}d` appears only
-when this task's own `[refresh:: N]` is folded into the mark, and
-never on the `today` tone; note and config intervals stay
-tooltip-only.
+when the effective interval source is `task`, and never on the `today`
+tone; note, config, default, and lane intervals stay tooltip-only.
+`freshnessMarkEveryPhrase` renders the `pending`/`next` sources as
+` (pending lane)` / ` (next lane)`.
 
 **Tooltip.** An `aria-label` with `data-tooltip-position="top"`,
 lines joined with `\n`, never containing `::`. Dates use fixed English
@@ -503,16 +628,23 @@ names independent of locale (`Thu, Oct 1`; the year is appended only
 when it differs from today's year: `Tue, Dec 30, 2025`). Relative
 age: `today`, `yesterday`, or `N days ago`. `every …` reads `every N
 days` (or `every 1 day`), plus ` (this task)`, ` (this note)`, or
-` (config)` for those sources and nothing for the default. Line 1:
+` (config)` for those sources and nothing for the default, plus
+` (pending lane)` / ` (next lane)` for the lane sources. Line 1:
 `Confirmed today` at age 0, otherwise `Confirmed {date} ·
 {relative}`. Line 2 is picked by resolution rather than tone: closed
-or out of scope → `Not in the review queue: {reason}`; ROTTEN → `Due
-for review since {dueOn} · every …`; RESURFACED → `Resurfaced
-{scheduled}: scheduled after it was confirmed`; FRESH or unresolved
-with the lease running → `Next review {fresh+interval} · every …`;
-unresolved with the lease over → `Review lease ended
-{fresh+interval} · every …`. Line 3, `due` tone only: `Alt+F to
-confirm`. Reasons by status symbol: `*` Next, `/` In Progress, `?`
+or out of scope → `Not in the review queue: {reason}`; a due lane
+row → `Daily {PENDING|NEXT} review due since {dueOn} · every …`; a
+lane row stamped today → `Next review {fresh+interval} · every …
+({pending|next} lane)`; ROTTEN → `Due for review since {dueOn} ·
+every …`; RESURFACED → `Resurfaced {scheduled}: scheduled after it
+was confirmed`; FRESH or unresolved with the lease running → `Next
+review {fresh+interval} · every …`; unresolved with the lease over →
+`Review lease ended {fresh+interval} · every …`. Line 3, `due` tone
+only: `Alt+F to confirm` (lane rows add the lane keep/release/today
+keys per M9). Lane rows with a tier get the `due` tone and lane rows
+stamped today get the `today` tone. Lane tasks outside the walk
+(Today, daily note, disabled lane, recurring) keep `resting` with the
+existing reasons. Reasons by status symbol: `*` Next, `/` In Progress, `?`
 Blocked, `x`/`X` Done, `-` Cancelled, any other non-space symbol
 `status [s]`; for `[ ]`, the first that applies: `linked today`, `in
 a daily note`, `recurring`, `in _templates or _conflicts`,
@@ -639,13 +771,14 @@ these vectors verbatim.
   Tooltip:
   `Confirmed Mon, Oct 5 · 3 days ago ⏎ Resurfaced Wed, Oct 7:
   scheduled after it was confirmed ⏎ Alt+F to confirm`.
-- **M9 resting Next:** `- [*] #task Ship it [fresh:: 2026-09-20]` →
-  tone `resting`, glyph `ring`, label `18d`, remaining 0. Tooltip:
-  `Confirmed Sun, Sep 20 · 18 days ago ⏎ Not in the review queue:
-  Next`.
-- **M10 Next stamped today:**
-  `- [*] #task Ship it [fresh:: 2026-10-08]` → tone `today`.
-  Tooltip: `Confirmed today ⏎ Not in the review queue: Next`.
+- **M9 (changed).** `- [*] #task Ship it [fresh:: 2026-09-20]`
+  gives tone `due`, glyph `refresh`, label `18d`, remaining 0.
+  Tooltip: `Confirmed Sun, Sep 20 · 18 days ago ⏎ Daily NEXT review
+  due since Mon, Sep 21 · every 1 day (next lane) ⏎ Alt+F keep · Alt+N
+  release · Ctrl+Shift+Enter today`.
+- **M10 (changed).** `- [*] #task Ship it [fresh:: 2026-10-08]` gives
+  tone `today`. Tooltip: `Confirmed today ⏎ Next review Fri, Oct 9 ·
+  every 1 day (next lane)`.
 - **M11 closed:**
   `- [x] #task Old [fresh:: 2026-10-08] [completion:: 2026-10-08]` →
   tone `resting`, glyph `ring`, label `today`. Tooltip:
@@ -674,6 +807,13 @@ these vectors verbatim.
   `- [ ] #task X [refresh:: 14] [fresh:: 2026-10-05]` → text
   `[fresh:: 2026-10-05]`, interval 14 `(this task)`, intervalLabel
   null.
+- **M19.** M9's line with `next_interval: false` gives tone `resting`,
+  line 2 `Not in the review queue: Next`.
+- **M20.** `- [/] #task Land it [fresh:: 2026-10-07] [refresh:: 30]`
+  folds the refresh into the mark but shows no `/30d` suffix, because
+  the effective source is `pending`. Tone `due`, label `1d`. Line 2:
+  `Daily PENDING review due since Thu, Oct 8 · every 1 day (pending
+  lane)`.
 - **N1–N6, no mark (source null):**
   - N1 malformed `[fresh:: 2026-13-01]`;
   - N2 future `[fresh:: 2026-10-09]`;
@@ -694,8 +834,11 @@ these vectors verbatim.
 
 The accepted trial runs 2026-10-05 through 2026-10-18 (if rollout
 misses the start, record the actual dates for a full 14-day trial).
-Completion means the trial is ready to run, not that an agent waits
-two weeks or claims its outcome.
+The walk changes the ritual the trial measures. If the walk has not
+shipped by Mon 2026-10-05, record that the 14-day trial starts the day
+it lands. The rollout phase records the actual dates. Don't change the
+ritual mid-trial. Completion means the trial is ready to run, not that
+an agent waits two weeks or claims its outcome.
 
 Keep a lightweight daily tally on the rotten page: NEW, RETURNED,
 expired ROTTEN, confirmed FRESH, READY, and whether the chip was red.

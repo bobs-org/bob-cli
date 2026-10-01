@@ -139,6 +139,9 @@ task-line field, or a file-path filter.
 
 ## Lanes (NEXT and PENDING)
 
+The daily lane review in [`docs/freshness.md`](freshness.md) §4 walks
+Pending and Next tasks once a day on their lane interval.
+
 **NEXT** is every `[*]` task and **PENDING** every `[/]` task that
 the dash's defaults show: not done, not dependency-blocked, not
 `#hide` (case-insensitive substring, so `#hide/x` and `#Hide` are out),

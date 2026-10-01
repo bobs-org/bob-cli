@@ -49,6 +49,46 @@ pub(crate) fn bucket_for_state(
     state.and_then(FreshState::bucket)
 }
 
+/// Which lane a task walks in (`docs/freshness.md` §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lane {
+    Ready,
+    Pending,
+    Next,
+}
+
+impl Lane {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Pending => "pending",
+            Self::Next => "next",
+        }
+    }
+}
+
+/// Walk tier, in walk order (`docs/freshness.md` §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Tier {
+    New,
+    Pending,
+    Next,
+    Returned,
+    Rotten,
+}
+
+impl Tier {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Pending => "pending",
+            Self::Next => "next",
+            Self::Returned => "returned",
+            Self::Rotten => "rotten",
+        }
+    }
+}
+
 /// Where the effective interval came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IntervalSource {
@@ -56,6 +96,8 @@ pub(crate) enum IntervalSource {
     Note,
     Config,
     Default,
+    Pending,
+    Next,
 }
 
 impl IntervalSource {
@@ -65,7 +107,20 @@ impl IntervalSource {
             Self::Note => "note",
             Self::Config => "config",
             Self::Default => "default",
+            Self::Pending => "pending",
+            Self::Next => "next",
         }
+    }
+}
+
+/// Lane for one row: pending for `/`, next for `*`, ready for the
+/// Tasks status type TODO, none otherwise.
+pub(crate) fn lane_for_row(status: char, is_todo: bool) -> Option<Lane> {
+    match status {
+        '/' => Some(Lane::Pending),
+        '*' => Some(Lane::Next),
+        _ if is_todo => Some(Lane::Ready),
+        _ => None,
     }
 }
 
@@ -82,8 +137,6 @@ pub(crate) struct FreshnessRow {
     pub(crate) path: String,
     /// 1-based line number, as in JSON and docs.
     pub(crate) line: u32,
-    // Contract field: written by the scanner for the vectors, not read yet.
-    #[allow(dead_code)]
     pub(crate) status: char,
     pub(crate) is_todo: bool,
     pub(crate) recurring: bool,
@@ -91,8 +144,6 @@ pub(crate) struct FreshnessRow {
     pub(crate) is_daily_note: bool,
     pub(crate) is_today: bool,
     pub(crate) scheduled: Option<NaiveDate>,
-    // Contract field: written by the scanner for the vectors, not read yet.
-    #[allow(dead_code)]
     pub(crate) created: Option<NaiveDate>,
     pub(crate) raw_line: String,
     /// The note's raw `task_refresh` frontmatter value, if present.
@@ -102,8 +153,13 @@ pub(crate) struct FreshnessRow {
 /// The evaluated result for one row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Evaluated {
-    /// `None` when out of scope (see S13).
+    /// `None` when out of scope (see S13). Lane rows keep a null
+    /// state and bucket but can still carry a walk tier.
     pub(crate) state: Option<FreshState>,
+    /// Walk tier (`None` when in no tier). Lane `pending`/`next`
+    /// rows carry a tier with a null state.
+    pub(crate) tier: Option<Tier>,
+    pub(crate) lane: Option<Lane>,
     pub(crate) fresh: Option<NaiveDate>,
     pub(crate) interval_days: u16,
     pub(crate) interval_source: IntervalSource,
@@ -127,8 +183,55 @@ pub(crate) fn evaluate(
         push_lint(&mut lints, &lint);
     }
 
-    let (interval_days, interval_source) =
-        interval_for(read.refresh, note_interval, config);
+    let lane = lane_for_row(row.status, row.is_todo);
+    let lane_days: Option<u16> = match lane {
+        Some(Lane::Pending) => config.pending_interval,
+        Some(Lane::Next) => config.next_interval,
+        _ => None,
+    };
+    let (interval_days, interval_source) = match (lane, lane_days) {
+        (Some(Lane::Pending), Some(days)) => (days, IntervalSource::Pending),
+        (Some(Lane::Next), Some(days)) => (days, IntervalSource::Next),
+        _ => interval_for(read.refresh, note_interval, config),
+    };
+
+    let walk_scope = lane.is_some()
+        && row.lane_visible
+        && !row.recurring
+        && !row.is_daily_note
+        && !row.is_today;
+
+    // Lane due date for walked lanes: fresh + lane interval, or none
+    // when never stamped.
+    let lane_due_on: Option<NaiveDate> = match (lane, lane_days, read.fresh) {
+        (Some(Lane::Pending) | Some(Lane::Next), Some(days), Some(fresh)) => {
+            fresh
+                .checked_add_days(chrono::Days::new(u64::from(days)))
+                .or(Some(fresh))
+        }
+        _ => None,
+    };
+    let lane_due = match (lane, lane_days) {
+        (Some(Lane::Pending) | Some(Lane::Next), Some(days)) => {
+            match read.fresh {
+                None => true,
+                Some(fresh) => {
+                    let due = fresh
+                        .checked_add_days(chrono::Days::new(u64::from(days)))
+                        .unwrap_or(fresh);
+                    today >= due
+                }
+            }
+        }
+        _ => false,
+    };
+    let lane_days_overdue: Option<i64> = match lane_due_on {
+        Some(due) if today >= due => {
+            Some(today.signed_duration_since(due).num_days())
+        }
+        Some(_) => None,
+        None => None,
+    };
 
     let in_scope = row.is_todo
         && row.lane_visible
@@ -136,72 +239,152 @@ pub(crate) fn evaluate(
         && !row.is_daily_note
         && !row.is_today;
 
-    if !in_scope {
+    // Ready state is unchanged: lane rows keep a null state.
+    let state: Option<FreshState> = if !in_scope {
+        None
+    } else if read.fresh.is_none() {
+        Some(FreshState::New)
+    } else {
+        let fresh = read.fresh.expect("checked fresh");
+        if let Some(scheduled) = row.scheduled
+            && fresh < scheduled
+            && scheduled <= today
+        {
+            Some(FreshState::Resurfaced)
+        } else {
+            let due = fresh
+                .checked_add_days(chrono::Days::new(u64::from(interval_days)))
+                .unwrap_or(fresh);
+            if today >= due {
+                Some(FreshState::Rotten)
+            } else {
+                Some(FreshState::Fresh)
+            }
+        }
+    };
+
+    // Tier: NEW is Ready NEW; PENDING/NEXT are due walked lanes;
+    // RETURNED/ROTTEN are the Ready resurfaced/rotten states.
+    let tier: Option<Tier> =
+        if lane == Some(Lane::Ready) && state == Some(FreshState::New) {
+            Some(Tier::New)
+        } else if lane == Some(Lane::Pending) && walk_scope && lane_due {
+            Some(Tier::Pending)
+        } else if lane == Some(Lane::Next) && walk_scope && lane_due {
+            Some(Tier::Next)
+        } else if state == Some(FreshState::Resurfaced) {
+            Some(Tier::Returned)
+        } else if state == Some(FreshState::Rotten) {
+            Some(Tier::Rotten)
+        } else {
+            None
+        };
+
+    // Per-row dates: lane rows use the lane due date; Ready rows use
+    // the state due date.
+    if matches!(lane, Some(Lane::Pending) | Some(Lane::Next)) {
+        let due_on = match read.fresh {
+            Some(_) => lane_due_on,
+            None => None,
+        };
+        let days_overdue = match read.fresh {
+            Some(_) => lane_days_overdue,
+            None => None,
+        };
+        // An unwalked lane falls back to the Ready chain interval
+        // with no due date (L4).
+        let (due_on, days_overdue) = match lane_days {
+            Some(_) => (due_on, days_overdue),
+            None => (None, None),
+        };
         return Evaluated {
             state: None,
+            tier,
+            lane,
+            fresh: read.fresh,
+            interval_days,
+            interval_source,
+            due_on,
+            days_overdue,
+            lints,
+        };
+    }
+
+    match state {
+        None => Evaluated {
+            state: None,
+            tier: None,
+            lane,
             fresh: read.fresh,
             interval_days,
             interval_source,
             due_on: None,
             days_overdue: None,
             lints,
-        };
-    }
-
-    let Some(fresh) = read.fresh else {
-        return Evaluated {
-            state: Some(FreshState::New),
+        },
+        Some(FreshState::New) => Evaluated {
+            state,
+            tier,
+            lane,
             fresh: None,
             interval_days,
             interval_source,
             due_on: None,
             days_overdue: None,
             lints,
-        };
-    };
-
-    // RESURFACED beats ROTTEN: a deferral that returned is due as soon
-    // as it returns, however old the stamp is.
-    if let Some(scheduled) = row.scheduled
-        && fresh < scheduled
-        && scheduled <= today
-    {
-        let days_overdue = today.signed_duration_since(scheduled).num_days();
-        return Evaluated {
-            state: Some(FreshState::Resurfaced),
-            fresh: Some(fresh),
-            interval_days,
-            interval_source,
-            due_on: Some(scheduled),
-            days_overdue: Some(days_overdue),
-            lints,
-        };
-    }
-
-    let due_on = fresh
-        .checked_add_days(chrono::Days::new(u64::from(interval_days)))
-        .unwrap_or(fresh);
-    if today >= due_on {
-        let days_overdue = today.signed_duration_since(due_on).num_days();
-        return Evaluated {
-            state: Some(FreshState::Rotten),
-            fresh: Some(fresh),
-            interval_days,
-            interval_source,
-            due_on: Some(due_on),
-            days_overdue: Some(days_overdue),
-            lints,
-        };
-    }
-
-    Evaluated {
-        state: Some(FreshState::Fresh),
-        fresh: Some(fresh),
-        interval_days,
-        interval_source,
-        due_on: Some(due_on),
-        days_overdue: None,
-        lints,
+        },
+        Some(FreshState::Resurfaced) => {
+            let fresh = read.fresh.expect("resurfaced has fresh");
+            let scheduled = row.scheduled.expect("resurfaced has schedule");
+            let days_overdue =
+                today.signed_duration_since(scheduled).num_days();
+            Evaluated {
+                state,
+                tier,
+                lane,
+                fresh: Some(fresh),
+                interval_days,
+                interval_source,
+                due_on: Some(scheduled),
+                days_overdue: Some(days_overdue),
+                lints,
+            }
+        }
+        Some(FreshState::Rotten) => {
+            let fresh = read.fresh.expect("rotten has fresh");
+            let due = fresh
+                .checked_add_days(chrono::Days::new(u64::from(interval_days)))
+                .unwrap_or(fresh);
+            let days_overdue = today.signed_duration_since(due).num_days();
+            Evaluated {
+                state,
+                tier,
+                lane,
+                fresh: Some(fresh),
+                interval_days,
+                interval_source,
+                due_on: Some(due),
+                days_overdue: Some(days_overdue),
+                lints,
+            }
+        }
+        Some(FreshState::Fresh) => {
+            let fresh = read.fresh.expect("fresh has fresh");
+            let due = fresh
+                .checked_add_days(chrono::Days::new(u64::from(interval_days)))
+                .unwrap_or(fresh);
+            Evaluated {
+                state,
+                tier,
+                lane,
+                fresh: Some(fresh),
+                interval_days,
+                interval_source,
+                due_on: Some(due),
+                days_overdue: None,
+                lints,
+            }
+        }
     }
 }
 
@@ -251,87 +434,133 @@ fn parse_note_refresh(raw: Option<&str>) -> (Option<u16>, Option<String>) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QueueEntry {
     pub(crate) rank: u32,
-    /// `new` or `due` (resurfaced and rotten together).
-    pub(crate) tier: &'static str,
-    pub(crate) state: FreshState,
+    pub(crate) tier: Tier,
+    pub(crate) lane: Lane,
+    /// `None` for lane `pending`/`next` rows (S13).
+    pub(crate) state: Option<FreshState>,
     pub(crate) path: String,
     pub(crate) line: u32,
     pub(crate) due_on: Option<NaiveDate>,
     pub(crate) days_overdue: Option<i64>,
+    pub(crate) interval_days: u16,
+    pub(crate) created: Option<NaiveDate>,
 }
 
-/// The review queue: NEW by (path, line), then DUE by
-/// (due_on, path, line).
+/// Compare `created` with missing dates always last, in both
+/// ascending and descending keys.
+fn compare_created(
+    a: Option<NaiveDate>,
+    b: Option<NaiveDate>,
+    descending: bool,
+) -> std::cmp::Ordering {
+    match (a, b) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (Some(x), Some(y)) if descending => y.cmp(&x),
+        (Some(x), Some(y)) => x.cmp(&y),
+    }
+}
+
+/// The review queue in tier order NEW → PENDING → NEXT → RETURNED →
+/// ROTTEN, with each tier's comparator from `docs/freshness.md` §4.
 pub(crate) fn queue(
     rows: &[FreshnessRow],
     today: NaiveDate,
     config: &FreshnessConfig,
 ) -> Vec<QueueEntry> {
-    let mut new_entries: Vec<QueueEntry> = Vec::new();
-    let mut due_entries: Vec<QueueEntry> = Vec::new();
+    let mut entries: Vec<QueueEntry> = Vec::new();
 
     for row in rows {
         let evaluated = evaluate(row, today, config);
-        let Some(state) = evaluated.state else {
+        let Some(tier) = evaluated.tier else {
             continue;
         };
-        if state == FreshState::Fresh {
+        let Some(lane) = evaluated.lane else {
             continue;
-        }
-        let entry = QueueEntry {
+        };
+        entries.push(QueueEntry {
             rank: 0,
-            tier: if state == FreshState::New {
-                "new"
-            } else {
-                "due"
-            },
-            state,
+            tier,
+            lane,
+            state: evaluated.state,
             path: row.path.clone(),
             line: row.line,
             due_on: evaluated.due_on,
             days_overdue: evaluated.days_overdue,
-        };
-        if state == FreshState::New {
-            new_entries.push(entry);
-        } else {
-            due_entries.push(entry);
-        }
+            interval_days: evaluated.interval_days,
+            created: row.created,
+        });
     }
 
-    new_entries.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
-    due_entries.sort_by(|a, b| {
-        a.due_on
-            .cmp(&b.due_on)
-            .then(a.path.cmp(&b.path))
-            .then(a.line.cmp(&b.line))
+    entries.sort_by(|a, b| {
+        let tier_order = a.tier.cmp(&b.tier);
+        if tier_order != std::cmp::Ordering::Equal {
+            return tier_order;
+        }
+        match a.tier {
+            Tier::New => a.path.cmp(&b.path).then(a.line.cmp(&b.line)),
+            Tier::Pending | Tier::Next => {
+                // Never-stamped (`due_on` none) first, then due_on,
+                // created, path, line.
+                a.due_on
+                    .cmp(&b.due_on)
+                    .then(compare_created(a.created, b.created, false))
+                    .then(a.path.cmp(&b.path))
+                    .then(a.line.cmp(&b.line))
+            }
+            Tier::Returned => a
+                .due_on
+                .cmp(&b.due_on)
+                .then(compare_created(a.created, b.created, true))
+                .then(a.path.cmp(&b.path))
+                .then(a.line.cmp(&b.line)),
+            Tier::Rotten => a
+                .interval_days
+                .cmp(&b.interval_days)
+                .then(a.due_on.cmp(&b.due_on))
+                .then(compare_created(a.created, b.created, true))
+                .then(a.path.cmp(&b.path))
+                .then(a.line.cmp(&b.line)),
+        }
     });
 
-    let mut ordered = Vec::with_capacity(new_entries.len() + due_entries.len());
-    ordered.extend(new_entries);
-    ordered.extend(due_entries);
-    for (index, entry) in ordered.iter_mut().enumerate() {
+    for (index, entry) in entries.iter_mut().enumerate() {
         entry.rank = index as u32 + 1;
     }
-    ordered
+    entries
 }
 
 /// Whole-vault counts for the review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Counts {
+    /// Ready-only due (NEW + RESURFACED + ROTTEN).
     pub(crate) due: u32,
     pub(crate) new: u32,
     pub(crate) resurfaced: u32,
     pub(crate) rotten: u32,
     /// In-scope FRESH tasks.
     pub(crate) fresh: u32,
+    /// Due `[/]` lane tasks.
+    pub(crate) pending_due: u32,
+    /// Due `[*]` lane tasks.
+    pub(crate) next_due: u32,
+    /// Full queue length, before any `--limit`.
+    pub(crate) walk: u32,
     /// Tasks of any status outside `_templates` / `_conflicts` whose
     /// `fresh` equals today.
     pub(crate) refreshed_today: u32,
+    /// Stamps today outside the lanes: `fresh` today whose status
+    /// symbol is neither `/` nor `*`.
+    pub(crate) upkeep_today: u32,
     pub(crate) budget: Option<u32>,
     pub(crate) budget_met: bool,
 }
 
-/// Count the review states over `rows`.
+/// Count the review states over `rows`. Callers pass the combined
+/// ready ∪ pending ∪ next rows for the tier counts; `refreshed_today`
+/// and `upkeep_today` are computed over the same slice here and
+/// overwritten from the all-status rows by the CLI.
 pub(crate) fn counts(
     rows: &[FreshnessRow],
     today: NaiveDate,
@@ -342,39 +571,56 @@ pub(crate) fn counts(
     let mut resurfaced = 0;
     let mut rotten = 0;
     let mut fresh = 0;
+    let mut pending_due = 0;
+    let mut next_due = 0;
+    let mut walk = 0;
     let mut refreshed_today = 0;
+    let mut upkeep_today = 0;
 
     for row in rows {
         let evaluated = evaluate(row, today, config);
         if !is_excluded_count_path(&row.path) && evaluated.fresh == Some(today)
         {
             refreshed_today += 1;
+            if row.status != '/' && row.status != '*' {
+                upkeep_today += 1;
+            }
         }
-        let Some(state) = evaluated.state else {
-            continue;
-        };
-        match state {
-            FreshState::New => {
+        match evaluated.tier {
+            Some(Tier::New) => {
                 new += 1;
                 due += 1;
+                walk += 1;
             }
-            FreshState::Resurfaced => {
+            Some(Tier::Pending) => {
+                pending_due += 1;
+                walk += 1;
+            }
+            Some(Tier::Next) => {
+                next_due += 1;
+                walk += 1;
+            }
+            Some(Tier::Returned) => {
                 resurfaced += 1;
                 due += 1;
+                walk += 1;
             }
-            FreshState::Rotten => {
+            Some(Tier::Rotten) => {
                 rotten += 1;
                 due += 1;
+                walk += 1;
             }
-            FreshState::Fresh => {
-                fresh += 1;
+            None => {
+                if evaluated.state == Some(FreshState::Fresh) {
+                    fresh += 1;
+                }
             }
         }
     }
 
     let budget = config.rotten_daily_budget;
     let budget_met =
-        budget.is_some_and(|goal| refreshed_today >= goal && new == 0);
+        budget.is_some_and(|goal| upkeep_today >= goal && new == 0);
 
     Counts {
         due,
@@ -382,15 +628,20 @@ pub(crate) fn counts(
         resurfaced,
         rotten,
         fresh,
+        pending_due,
+        next_due,
+        walk,
         refreshed_today,
+        upkeep_today,
         budget,
         budget_met,
     }
 }
 
 /// Paths under `_templates` or `_conflicts` never count toward
-/// `refreshed_today`.
-fn is_excluded_count_path(path: &str) -> bool {
+/// `refreshed_today` or `upkeep_today`. Shared with `scan` so there
+/// is one excluded-path helper.
+pub(crate) fn is_excluded_count_path(path: &str) -> bool {
     path.split('/')
         .any(|segment| segment == "_templates" || segment == "_conflicts")
 }

@@ -80,43 +80,76 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["schema_version"], 3);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
+    assert_eq!(value["config"]["pending_interval"], 1);
+    assert_eq!(value["config"]["next_interval"], 1);
     assert!(value["config"]["rotten_daily_budget"].is_null());
 
     let counts = &value["counts"];
-    // NEW: New capture, Bad date, Future stamp. DUE: Stale bread,
-    // Deferred pie (resurfaced), Quick note task (note interval 3),
-    // plus Slow note task is FRESH (task interval 14).
+    // NEW: New capture, Bad date, Future stamp. NEXT: the
+    // never-stamped [*] Next thing. RETURNED: Deferred pie.
+    // ROTTEN: Stale bread, Quick note task (note interval 3); Slow
+    // note task is FRESH (task interval 14).
     assert_eq!(counts["new"], 3);
+    assert_eq!(counts["pending_due"], 0);
+    assert_eq!(counts["next_due"], 1);
     assert_eq!(counts["resurfaced"], 1);
     assert_eq!(counts["rotten"], 2);
     assert_eq!(counts["due"], 6);
+    assert_eq!(counts["walk"], 7);
     // FRESH: Fresh eggs, Slow note task, Root.
     assert_eq!(counts["fresh"], 3);
     // Refreshed today: the [*] and [x] stamped 2026-10-08.
+    // Upkeep excludes the [*] lane stamp.
     assert_eq!(counts["refreshed_today"], 2);
+    assert_eq!(counts["upkeep_today"], 1);
     assert_eq!(counts["budget_met"], false);
 
     let queue = value["queue"].as_array().expect("queue array");
-    assert_eq!(queue.len(), 6);
-    // NEW by (path, line), then DUE by (due_on, path, line):
-    // Stale bread due 2026-09-27, Quick note task due 2026-10-08,
-    // Deferred pie resurfaced due 2026-10-07... wait: resurfaced due
-    // 10-07 sorts before stale due 09-27? No: DUE sorts by due_on:
-    // 09-27, then 10-07, then 10-08.
-    let states: Vec<&str> = queue
+    assert_eq!(queue.len(), 7);
+    // Tier order NEW → PENDING → NEXT → RETURNED → ROTTEN: the
+    // never-stamped [*] walks in NEXT between NEW and RETURNED.
+    let tiers: Vec<&str> = queue
         .iter()
-        .map(|entry| entry["state"].as_str().unwrap())
+        .map(|entry| entry["tier"].as_str().unwrap())
         .collect();
     assert_eq!(
-        states,
-        vec!["new", "new", "new", "rotten", "resurfaced", "rotten"]
+        tiers,
+        vec!["new", "new", "new", "next", "returned", "rotten", "rotten"]
     );
-    // Schema 2 uses the rotten vocabulary for machine `state` names;
+    // Lane rows carry a null state and bucket; Ready rows keep them.
+    let lane_row = &queue[3];
+    assert!(
+        lane_row["text"] == "Next thing"
+            || lane_row["text"] == "Next thing ^next-one",
+        "lane text:\n{value}"
+    );
+    assert_eq!(lane_row["tier"], "next");
+    assert_eq!(lane_row["lane"], "next");
+    assert!(lane_row["state"].is_null());
+    assert!(lane_row["bucket"].is_null());
+    assert_eq!(lane_row["interval"], 1);
+    assert_eq!(lane_row["interval_source"], "next");
+    assert_eq!(lane_row["due_on"], serde_json::Value::Null);
+    let states: Vec<Option<&str>> =
+        queue.iter().map(|entry| entry["state"].as_str()).collect();
+    assert_eq!(
+        states,
+        vec![
+            Some("new"),
+            Some("new"),
+            Some("new"),
+            None,
+            Some("resurfaced"),
+            Some("rotten"),
+            Some("rotten"),
+        ]
+    );
+    // Schema 3 uses the rotten vocabulary for machine `state` names;
     // the `bucket` still carries the stable gating vocabulary: new →
-    // new, rotten and resurfaced → rotten.
+    // new, rotten and resurfaced → rotten, lane rows → null.
     let buckets: Vec<Option<&str>> =
         queue.iter().map(|entry| entry["bucket"].as_str()).collect();
     assert_eq!(
@@ -125,6 +158,7 @@ fn list_json_reports_queue_counts_and_contract() {
             Some("new"),
             Some("new"),
             Some("new"),
+            None,
             Some("rotten"),
             Some("rotten"),
             Some("rotten"),
@@ -133,6 +167,7 @@ fn list_json_reports_queue_counts_and_contract() {
     let first = &queue[0];
     assert_eq!(first["rank"], 1);
     assert_eq!(first["tier"], "new");
+    assert_eq!(first["lane"], "ready");
     assert_eq!(first["path"], "a.md");
     assert_eq!(first["line"], 1);
     assert_eq!(first["text"], "New capture");
@@ -142,35 +177,40 @@ fn list_json_reports_queue_counts_and_contract() {
     assert_eq!(first["interval_source"], "default");
     assert!(first["due_on"].is_null());
 
-    let rotten = &queue[3];
+    // ROTTEN sorts by interval, then due date: the note-interval
+    // task (3d) comes before the default-interval task (7d).
+    let note_task = &queue[5];
+    assert_eq!(note_task["path"], "b.md");
+    assert_eq!(note_task["tier"], "rotten");
+    assert_eq!(note_task["interval"], 3);
+    assert_eq!(note_task["interval_source"], "note");
+
+    let rotten = &queue[6];
     assert_eq!(rotten["path"], "a.md");
     assert_eq!(rotten["line"], 2);
+    assert_eq!(rotten["tier"], "rotten");
     assert_eq!(rotten["fresh"], "2026-09-20");
     assert_eq!(rotten["due_on"], "2026-09-27");
     assert_eq!(rotten["days_overdue"], 11);
 
     let resurfaced = &queue[4];
+    assert_eq!(resurfaced["tier"], "returned");
     assert_eq!(resurfaced["state"], "resurfaced");
     assert_eq!(resurfaced["bucket"], "rotten");
     assert_eq!(resurfaced["due_on"], "2026-10-07");
     assert_eq!(resurfaced["days_overdue"], 1);
-
-    let note_task = &queue[5];
-    assert_eq!(note_task["path"], "b.md");
-    assert_eq!(note_task["interval"], 3);
-    assert_eq!(note_task["interval_source"], "note");
 
     // Slow note task (task interval 14) is FRESH, so absent.
     assert!(
         !queue.iter().any(|entry| entry["text"] == "Slow note task"),
         "task interval must beat the note interval:\n{value}"
     );
-    // Out-of-scope tasks never queue.
+    // Out-of-scope tasks never queue. ("Next thing" now walks in
+    // NEXT, so it is asserted present above.)
     for missing in [
         "Hidden chore",
         "Water plants",
         "Waiting",
-        "Next thing",
         "Fresh eggs",
         "Templated",
     ] {
@@ -204,16 +244,28 @@ fn list_human_has_sections_and_no_ansi() {
     let human = stdout(&output);
     assert!(
         human.contains("bob freshness")
-            && human.contains("REVIEW 6 due")
+            && human.contains("every 7d")
+            && human.contains("pending 1d")
+            && human.contains("next 1d")
+            && human.contains("REVIEW 7 due")
             && human.contains("3 new")
-            && human.contains("1 resurfaced")
+            && human.contains("1 next")
+            && human.contains("1 returned")
             && human.contains("2 rotten")
-            && human.contains("✓ 2 today"),
+            && human.contains("✓ 1 today"),
         "expected a REVIEW summary:\n{human}"
     );
     assert!(
-        human.contains("NEW") && human.contains("DUE"),
-        "expected NEW and DUE sections:\n{human}"
+        human.contains("NEW 3")
+            && human.contains("NEXT 1")
+            && human.contains("RETURNED 1")
+            && human.contains("ROTTEN 2")
+            && human.contains("commitments done above"),
+        "expected tiered sections and divider:\n{human}"
+    );
+    assert!(
+        !human.contains("PENDING"),
+        "empty PENDING tier is omitted:\n{human}"
     );
     assert!(
         human.contains("LINTS")
@@ -221,7 +273,18 @@ fn list_human_has_sections_and_no_ansi() {
             && human.contains("fresh_future"),
         "expected lints last:\n{human}"
     );
-    assert_text_order(&human, &["REVIEW", "NEW", "DUE", "LINTS"]);
+    assert_text_order(
+        &human,
+        &[
+            "REVIEW",
+            "NEW",
+            "NEXT",
+            "RETURNED",
+            "commitments done",
+            "ROTTEN",
+            "LINTS",
+        ],
+    );
     assert_stdout_has_no_ansi(&output);
 
     // Bare `bob freshness` is `list`.
@@ -244,6 +307,7 @@ fn list_limit_truncates_rows_not_counts() {
     assert_eq!(queue[0]["rank"], 1);
     assert_eq!(queue[1]["rank"], 2);
     assert_eq!(value["counts"]["due"], 6);
+    assert_eq!(value["counts"]["walk"], 7);
 }
 
 #[test]
@@ -320,7 +384,7 @@ fn list_legacy_budget_key_warns_once_and_still_counts() {
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
-    // The legacy key still supplies the budget under schema 2.
+    // The legacy key still supplies the budget under schema 3.
     assert_eq!(value["config"]["rotten_daily_budget"], 15);
     assert_eq!(value["counts"]["budget"], 15);
     // Exactly one deprecation diagnostic, not one per task.
@@ -484,7 +548,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["schema_version"], 3);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -574,6 +638,189 @@ fn seed_dry_run_lists_files_without_writing() {
     assert_eq!(files.len(), 2);
     let a_contents = fs::read_to_string(vault_dir(&temp).join("a.md")).unwrap();
     assert!(!a_contents.contains("[fresh::"));
+}
+
+#[test]
+fn list_lane_rows_cover_pending_and_next() {
+    let temp = TempDir::new("bob-cli-freshness-lanes");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("a.md"),
+        "- [/] #task Pending chore [fresh:: 2026-10-07]\n\
+        - [*] #task Next chore [fresh:: 2026-10-07]\n\
+        - [*] #task Fresh next [fresh:: 2026-10-08]\n",
+    );
+    let (_, value) = list_json(&temp, &[]);
+    assert_eq!(value["schema_version"], 3);
+    let counts = &value["counts"];
+    assert_eq!(counts["pending_due"], 1);
+    assert_eq!(counts["next_due"], 1);
+    assert_eq!(counts["walk"], 2);
+    let queue = value["queue"].as_array().expect("queue array");
+    assert_eq!(queue.len(), 2);
+    assert_eq!(queue[0]["tier"], "pending");
+    assert_eq!(queue[0]["lane"], "pending");
+    assert!(queue[0]["state"].is_null());
+    assert!(queue[0]["bucket"].is_null());
+    assert_eq!(queue[0]["interval_source"], "pending");
+    assert_eq!(queue[0]["due_on"], "2026-10-08");
+    assert_eq!(queue[0]["days_overdue"], 0);
+    assert_eq!(queue[1]["tier"], "next");
+    assert_eq!(queue[1]["lane"], "next");
+    assert!(queue[1]["state"].is_null());
+    // Stamped-today lane tasks never queue.
+    assert!(
+        !queue.iter().any(|entry| entry["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Fresh next"))),
+        "stamped-today lane task queued:\n{value}"
+    );
+}
+
+#[test]
+fn list_excludes_today_and_daily_lane_tasks() {
+    let temp = TempDir::new("bob-cli-freshness-lane-scope");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("a.md"),
+        "- [*] #task Lane today ^lane-today\n\
+        - [*] #task Lane plain [fresh:: 2026-10-07]\n",
+    );
+    write_file(
+        &vault.join("2026/20261008.md"),
+        "- [*] #task Lane daily [fresh:: 2026-10-07]\n\
+        \n\
+        ## Pomodoros\n\
+        \n\
+        - [ ] (0900-0930) — REVIEW\n\
+        \x20  - [[a#^lane-today]]\n",
+    );
+    let (_, value) = list_json(&temp, &[]);
+    let queue = value["queue"].as_array().expect("queue array");
+    let has = |needle: &str| {
+        queue.iter().any(|entry| {
+            entry["text"]
+                .as_str()
+                .is_some_and(|text| text.contains(needle))
+        })
+    };
+    assert!(
+        !has("Lane today"),
+        "Today-linked lane task queued:\n{value}"
+    );
+    assert!(!has("Lane daily"), "daily-note lane task queued:\n{value}");
+    assert!(has("Lane plain"), "plain lane task missing:\n{value}");
+}
+
+#[test]
+fn list_lane_intervals_false_null_and_invalid() {
+    // false turns the lane off: the never-stamped [*] leaves the walk.
+    let temp = freshness_vault("bob-cli-freshness-lane-off");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "freshness:\n  next_interval: false\n");
+    let mut command = bob_command();
+    command
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .arg("-f")
+        .arg("json");
+    let output = command.output().expect("run with lane off");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("list JSON");
+    assert_eq!(value["config"]["next_interval"], false);
+    assert_eq!(value["counts"]["next_due"], 0);
+    assert!(
+        !value["queue"]
+            .as_array()
+            .expect("queue")
+            .iter()
+            .any(|entry| {
+                entry["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Next thing"))
+            }),
+        "disabled lane still queued:\n{value}"
+    );
+    let human = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run lane-off human");
+    assert_success(&human);
+    assert!(
+        stdout(&human).contains("next off"),
+        "disabled lane header:\n{}",
+        stdout(&human)
+    );
+
+    // null means the default 1: the lane still walks.
+    write_file(&config, "freshness:\n  next_interval:\n");
+    let (_, value) = {
+        let mut command = bob_command();
+        command
+            .arg("freshness")
+            .arg("list")
+            .env("BOB_DIR", vault_dir(&temp))
+            .env("BOB_CONFIG_FILE", &config)
+            .env("BOB_NOW", NOW)
+            .arg("-f")
+            .arg("json");
+        let output = command.output().expect("run with null lane");
+        assert_success(&output);
+        let value: Value =
+            serde_json::from_str(stdout(&output).trim()).expect("list JSON");
+        (output, value)
+    };
+    assert_eq!(value["config"]["next_interval"], 1);
+    assert_eq!(value["counts"]["next_due"], 1);
+
+    // anything else (including true) exits 2.
+    for body in [
+        "freshness:\n  next_interval: true\n",
+        "freshness:\n  pending_interval: 0\n",
+        "freshness:\n  next_interval: soon\n",
+    ] {
+        write_file(&config, body);
+        let output = bob_command()
+            .arg("freshness")
+            .arg("list")
+            .env("BOB_DIR", vault_dir(&temp))
+            .env("BOB_CONFIG_FILE", &config)
+            .env("BOB_NOW", NOW)
+            .arg("-f")
+            .arg("json")
+            .output()
+            .expect("run with invalid lane");
+        assert_eq!(output.status.code(), Some(2), "body:\n{body}");
+    }
+}
+
+#[test]
+fn list_budget_meter_uses_upkeep() {
+    let temp = freshness_vault("bob-cli-freshness-upkeep-meter");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "freshness:\n  rotten_daily_budget: 15\n");
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run with budget");
+    assert_success(&output);
+    let human = stdout(&output);
+    // Upkeep is 1 (the [x] stamp); the [*] stamp does not count.
+    assert!(human.contains("✓ 1/15 today"), "upkeep meter:\n{human}");
 }
 
 #[test]

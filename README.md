@@ -477,10 +477,12 @@ bob freshness list [-b|--bob-dir DIR] [-f|--format human|json] [-l|--limit N]
 bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format human|json]
 ```
 
-Running `bob freshness` with no subcommand runs `list`: the tasks due
-for review (never confirmed, resurfaced, or rotten), with whole-vault
-counts and an additive `bucket` (`new`/`rotten`/null) per queue row.
-On the dashboard, NEW holds unconfirmed tasks, READY holds only
+Running `bob freshness` with no subcommand runs `list`: the tiered
+walk queue in order NEW → PENDING → NEXT → RETURNED → ROTTEN (schema
+3), with whole-vault counts and an additive `bucket`
+(`new`/`rotten`/null) per queue row. Pending and Next tasks come due
+for a daily review set by `pending_interval` / `next_interval`. On the
+dashboard, NEW holds unconfirmed tasks, READY holds only
 confirmed/exempt tasks, and `rotten.md` holds RETURNED plus expired
 ROTTEN. `seed` stamps the one-time cutover: Ready tasks staggered
 across the last 7 days by note, every other open task today. The seed
