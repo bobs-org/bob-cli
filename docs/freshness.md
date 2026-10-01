@@ -275,13 +275,13 @@ an invalid `freshness:` block or a non-Dataview task format.
 | Surface | Phase |
 | ------- | ----- |
 | `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`) |
-| `bob capture` | capture-stamps |
+| `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`) |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0) |
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
-| `freshness.md` | vault-review |
-| `dash.md` | vault-review |
+| `freshness.md` | vault-review (landed: review note grouping NEW → DUE) |
+| `dash.md` | vault-review (landed: REVIEW chip) |
 
 ## 9. Placement conformance examples
 

@@ -146,7 +146,8 @@ depend on. Pass every term you need in one command — one batched read costs fa
 tokens than one read per term, because terms shared between definitions are printed
 once. Terms are separated by semicolons; aliases follow in parentheses.
 
-**GLOSSARY TERMS:** Pomodoro; Schedule Log; Task Link (task block link); Work Log
+**GLOSSARY TERMS:** Pomodoro; Schedule Log; Task Freshness (freshness); Task Link (task
+block link); Work Log
 
 ### 3.3 Task Bead Types (task_types)
 

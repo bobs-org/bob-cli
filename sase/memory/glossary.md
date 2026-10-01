@@ -12,6 +12,7 @@ Run `sase memory read glossary:<term> [<term> ...] -r "<why>"` before relying on
 
 <!-- sase:strands -->
 
-**GLOSSARY TERMS:** Pomodoro; Schedule Log; Task Link (task block link); Work Log
+**GLOSSARY TERMS:** Pomodoro; Schedule Log; Task Freshness (freshness); Task Link (task
+block link); Work Log
 
 <!-- /sase:strands -->
