@@ -1092,6 +1092,13 @@ pub(super) fn parse_editor_close_item<'a>(
                         kind: SpanKind::PomodoroCloseInProgress,
                     });
                 }
+                if let Some((start, end)) = lex.park_range {
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::PomodoroClosePark,
+                    });
+                }
                 if let Some((start, end)) = lex.complete_range {
                     spans.push(Span {
                         start,
@@ -1123,6 +1130,13 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseInProgress,
+                    });
+                }
+                if let Some((start, end)) = incomplete.park_range {
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::PomodoroClosePark,
                     });
                 }
                 if let Some((start, end)) = incomplete.complete_range {
@@ -1186,9 +1200,11 @@ pub(super) fn parse_editor_close_item<'a>(
     let editor_selection = match selection_after_x {
         None => EditorSelection::Plain(CloseSelectionLex {
             in_progress: None,
+            park: Vec::new(),
             complete: Vec::new(),
             drop: Vec::new(),
             in_progress_range: None,
+            park_range: None,
             complete_range: None,
             drop_range: None,
         }),
@@ -1205,6 +1221,13 @@ pub(super) fn parse_editor_close_item<'a>(
                             start,
                             end,
                             kind: SpanKind::PomodoroCloseInProgress,
+                        });
+                    }
+                    if let Some((start, end)) = incomplete.park_range {
+                        spans.push(Span {
+                            start,
+                            end,
+                            kind: SpanKind::PomodoroClosePark,
                         });
                     }
                     if let Some((start, end)) = incomplete.complete_range {
@@ -1241,6 +1264,13 @@ pub(super) fn parse_editor_close_item<'a>(
                 start,
                 end,
                 kind: SpanKind::PomodoroCloseInProgress,
+            });
+        }
+        if let Some((start, end)) = lex.park_range {
+            spans.push(Span {
+                start,
+                end,
+                kind: SpanKind::PomodoroClosePark,
             });
         }
         if let Some((start, end)) = lex.complete_range {
@@ -1300,6 +1330,7 @@ pub(super) fn parse_editor_close_item<'a>(
             &item.lines[1..],
             first,
             lexed_selection.in_progress.as_deref(),
+            &lexed_selection.park,
             &lexed_selection.complete,
             &lexed_selection.drop,
         ) {

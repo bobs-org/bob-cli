@@ -83,6 +83,7 @@ fn sel_detail_log(
 ) -> CloseSelection {
     CloseSelection {
         in_progress: None,
+        park: BTreeSet::new(),
         complete: BTreeSet::new(),
         drop: BTreeSet::new(),
         log: log
@@ -99,6 +100,24 @@ fn sel_detail_log(
     }
 }
 
+fn sel_park(
+    in_progress: Option<Vec<u32>>,
+    park: Vec<u32>,
+    complete: Vec<u32>,
+    raw: &str,
+) -> CloseSelection {
+    use std::collections::BTreeSet as Set;
+    CloseSelection {
+        in_progress: in_progress
+            .map(|list| list.into_iter().collect::<Set<u32>>()),
+        park: park.into_iter().collect::<Set<u32>>(),
+        complete: complete.into_iter().collect::<Set<u32>>(),
+        drop: Set::new(),
+        log: Vec::new(),
+        raw: raw.to_string(),
+    }
+}
+
 fn sel_drop_log(
     in_progress: Option<Vec<u32>>,
     complete: Vec<u32>,
@@ -109,6 +128,7 @@ fn sel_drop_log(
     CloseSelection {
         in_progress: in_progress
             .map(|list| list.into_iter().collect::<BTreeSet<u32>>()),
+        park: BTreeSet::new(),
         complete: complete.into_iter().collect::<BTreeSet<u32>>(),
         drop: drop.into_iter().collect::<BTreeSet<u32>>(),
         log: log
@@ -383,6 +403,125 @@ fn drop_removes_from_closed_session_without_carry() {
         error.to_string(),
         "`=x~9` names task 9, but CAPTURE has 3 numbered Task Links (1–3)"
     );
+}
+
+#[test]
+fn parked_links_record_work_but_are_not_carried() {
+    use super::plan_ledger_close_with_parked;
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+        "\t- [[a#^three]]",
+        "\t- [[a#^four]]",
+        "\t- [[a#^five]]",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_park(Some(vec![1]), vec![2, 3], vec![4, 5], "=x1*2,3!4,5"),
+    )
+    .expect("apply five-link park");
+    assert_eq!(
+        applied
+            .lineup
+            .iter()
+            .map(|l| (l.index, l.outcome, l.source))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, TaskLinkOutcome::InProgress, TaskLinkSource::Listed),
+            (2, TaskLinkOutcome::Parked, TaskLinkSource::Listed),
+            (3, TaskLinkOutcome::Parked, TaskLinkSource::Listed),
+            (4, TaskLinkOutcome::Complete, TaskLinkSource::Listed),
+            (5, TaskLinkOutcome::Complete, TaskLinkSource::Listed),
+        ]
+    );
+    // Parked lines rewrite to plain links like InProgress for history.
+    assert!(applied.contents.contains("[[a#^two]]"));
+    assert!(applied.contents.contains("\t- [[a#^two]]"));
+    let parked_lines: std::collections::BTreeSet<usize> = applied
+        .lineup
+        .iter()
+        .filter(|l| l.outcome == TaskLinkOutcome::Parked)
+        .map(|l| l.line)
+        .collect();
+    assert_eq!(parked_lines.len(), 2);
+    let plan = plan_ledger_close_with_parked(
+        &applied.contents,
+        &running,
+        at(9, 37),
+        &parked_lines,
+    );
+    // Only link 1 is carried; parked 2 and 3 stay in history but leave no
+    // carried copy. Completed 4 and 5 retire as usual.
+    assert_eq!(plan.carried_lines.len(), 1);
+    assert!(
+        plan.carried_lines[0].contains("one"),
+        "{:?}",
+        plan.carried_lines
+    );
+    assert!(
+        plan.classified_links
+            .iter()
+            .filter(|l| l.block_id == "two" || l.block_id == "three")
+            .all(|l| !l.carried),
+        "{:?}",
+        plan.classified_links
+    );
+    assert!(
+        plan.classified_links
+            .iter()
+            .find(|l| l.block_id == "one")
+            .is_some_and(|l| l.carried),
+        "{:?}",
+        plan.classified_links
+    );
+    // Star-only selection defers unlisted plain links like ordinary closes.
+    let star_only = apply_close_selection(
+        &contents,
+        &running,
+        &sel_park(None, vec![2], vec![], "=x*2"),
+    )
+    .expect("star-only apply");
+    assert_eq!(
+        star_only
+            .lineup
+            .iter()
+            .find(|l| l.index == 1)
+            .map(|l| l.outcome),
+        Some(TaskLinkOutcome::Deferred)
+    );
+    assert_eq!(
+        star_only
+            .lineup
+            .iter()
+            .find(|l| l.index == 2)
+            .map(|l| l.outcome),
+        Some(TaskLinkOutcome::Parked)
+    );
+    // Ordinary worked and parked for the same target conflict.
+    let dup_contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[bob#^a]]",
+        "\t- [[bob#^b]]",
+        "\t- [[bob#^a]]",
+    ]);
+    let dup_running = running_of(&dup_contents);
+    let err = apply_close_selection(
+        &dup_contents,
+        &dup_running,
+        &sel_park(Some(vec![1]), vec![3], vec![], "=x1*3"),
+    )
+    .expect_err("parked vs continuing conflict");
+    match err {
+        CloseSelectionError::ConflictingDuplicate { indices, .. } => {
+            assert_eq!(indices, vec![1, 3]);
+        }
+        other => panic!("expected conflicting duplicate, got {other:?}"),
+    }
 }
 
 #[test]

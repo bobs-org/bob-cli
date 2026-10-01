@@ -1094,15 +1094,15 @@ fn capture_pomodoro_close_selection_diagnostics() {
         ),
         (
             vec!["=x0,2"],
-            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`",
+            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`",
         ),
         (
             vec!["=x0,"],
-            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`",
+            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`",
         ),
         (
             vec!["=x00"],
-            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`",
+            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`",
         ),
         (vec!["=x!0"], "task numbers start at 1"),
         (vec!["=x~0"], "task numbers start at 1"),
@@ -1127,7 +1127,7 @@ fn capture_pomodoro_close_selection_diagnostics() {
         (vec!["=x99999999999"], "task number 99999999999 is too large"),
         (
             vec!["=x 1,3"],
-            "write the task numbers right after `=x`, with no spaces (for example `=x1,3!2~4`)",
+            "write the task numbers right after `=x`, with no spaces (for example `=x1*2!3~4`)",
         ),
         (
             vec!["=x1 more"],
@@ -1492,4 +1492,115 @@ fn capture_pomodoro_close_selection_drop_only_forms() {
     assert_eq!(close["task_links"][0]["source"], "unlisted");
     assert_eq!(close["task_links"][1]["outcome"], "dropped");
     assert_eq!(close["task_links"][2]["outcome"], "deferred");
+}
+
+#[test]
+fn capture_pomodoro_close_selection_park() {
+    // `=x1*2,3!4,5`: task 1 continues, tasks 2-3 park (worked but not
+    // carried), tasks 4-5 complete. Only link 1 is carried.
+    use crate::support::TempDir;
+    let temp = TempDir::new("bob-cli-close-sel-park");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    crate::support::write_toggle_task_settings(&vault);
+    crate::support::write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "\n",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+            "\t- [[tasks#^t1]]\n",
+            "\t- [[tasks#^t2]]\n",
+            "\t- [[tasks#^t3]]\n",
+            "\t- [[tasks#^t4]]\n",
+            "\t- [[tasks#^t5]]\n",
+        ),
+    );
+    crate::support::write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "## Tasks\n",
+            "\n",
+            "- [*] #task T1 [created::2026-09-20] ^t1\n",
+            "- [*] #task T2 [created::2026-09-20] ^t2\n",
+            "- [*] #task T3 [created::2026-09-20] ^t3\n",
+            "- [*] #task T4 [created::2026-09-20] ^t4\n",
+            "- [*] #task T5 [created::2026-09-20] ^t5\n",
+        ),
+    );
+    let json = run_close_json(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x1*2,3!4,5"],
+    );
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["raw"], "=x1*2,3!4,5");
+    assert_eq!(close["in_progress"], serde_json::json!([1]));
+    assert_eq!(close["park"], serde_json::json!([2, 3]));
+    assert_eq!(close["complete"], serde_json::json!([4, 5]));
+    let outcomes: Vec<(u32, &str, &str)> = close["task_links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|link| {
+            (
+                link["index"].as_u64().unwrap() as u32,
+                link["outcome"].as_str().unwrap(),
+                link["source"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        vec![
+            (1, "in_progress", "listed"),
+            (2, "parked", "listed"),
+            (3, "parked", "listed"),
+            (4, "complete", "listed"),
+            (5, "complete", "listed"),
+        ]
+    );
+    // Parked rows stay worked with real transitions and no carry.
+    for block in ["t1", "t2", "t3"] {
+        let row = close["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["block_id"] == block)
+            .expect("parked/continued row");
+        assert_eq!(row["role"], "worked");
+        assert_eq!(row["status_symbol"], "/");
+        assert_eq!(row["status_changed"], true);
+    }
+    assert_eq!(close["tasks"][1]["carried"], false);
+    assert_eq!(close["tasks"][2]["carried"], false);
+    assert_eq!(close["tasks"][0]["carried"], true);
+    assert_eq!(
+        close["carried"],
+        serde_json::json!([{"kind": "worked", "text": "[[tasks#^t1]]"}])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(day_after.contains("\t- 🍅 [[tasks#^t1]]"), "{day_after}");
+    assert!(day_after.contains("\t- 🍅 [[tasks#^t2]]"), "{day_after}");
+    assert!(day_after.contains("\t- 🍅 [[tasks#^t3]]"), "{day_after}");
+    assert!(
+        day_after.contains("- [ ] () — CAPTURE\n\t- [[tasks#^t1]]\n"),
+        "{day_after}"
+    );
+    assert!(
+        !day_after.contains("[[tasks#^t2]]\n\t- [[tasks#^t2]]"),
+        "{day_after}"
+    );
+    // Star-only defers unlisted plain links like ordinary closes.
+    let (_temp, vault, day_file) =
+        drop_worked_vault("bob-cli-close-sel-park-star-only");
+    let json =
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x*2"]);
+    let close = &json["pomodoro_close"];
+    assert!(close["in_progress"].is_null());
+    assert_eq!(close["park"], serde_json::json!([2]));
+    assert_eq!(close["task_links"][0]["outcome"], "deferred");
+    assert_eq!(close["task_links"][0]["source"], "unlisted");
+    assert_eq!(close["task_links"][1]["outcome"], "parked");
 }

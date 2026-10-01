@@ -95,6 +95,10 @@ pub(super) struct PomodoroCloseNextJson {
 pub(super) struct PomodoroCloseSummaryJson {
     pub(super) raw: String,
     pub(super) in_progress: Option<Vec<u32>>,
+    /// Parked `*<P>` list, omitted when empty. Parked links get normal
+    /// In Progress work effects but are not carried forward.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) park: Vec<u32>,
     pub(super) complete: Vec<u32>,
     /// Dropped `~<K>` list, omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -748,8 +752,9 @@ pub(super) fn print_human_pomodoro_close_success(
         let text = index.to_string();
         if source == "unlisted" {
             styler.dim(&text)
-        } else if outcome == "in_progress" {
-            // Same paint as `style_task_status_marker`'s `/` color.
+        } else if outcome == "in_progress" || outcome == "parked" {
+            // Parked gets normal In Progress work effects, so it shares the
+            // `/` marker color; the caption carries the not-carried signal.
             styler.blue(&text)
         } else {
             // Complete uses the `x` marker color (dim); deferred is dim.
@@ -838,6 +843,14 @@ pub(super) fn print_human_pomodoro_close_success(
         } else {
             format!("{transition} {text} {locator}")
         };
+        // Parked rows keep their real transition and log counts with a
+        // concise caption; color is never the only signal.
+        if let Some(index) = task.index {
+            let (outcome, source) = outcome_of(index);
+            if outcome == "parked" && source == "listed" {
+                line.push_str(" · Parked · not carried");
+            }
+        }
         if task.work_log_created {
             let count = task.work_log.len();
             if count > 0 {
@@ -865,6 +878,22 @@ pub(super) fn print_human_pomodoro_close_success(
         for entry in others.iter().take(2) {
             println!("{log_indent}{}", styler.dim(entry));
         }
+    }
+    let mut parked: Vec<u32> = close
+        .task_links
+        .iter()
+        .filter(|link| link.outcome == "parked" && link.source == "listed")
+        .map(|link| link.index)
+        .collect();
+    parked.sort_unstable();
+    parked.dedup();
+    if !parked.is_empty() {
+        let numbers = parked
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  {}", styler.dim(&format!("Parked {numbers}")));
     }
     let mut dropped: Vec<u32> = close
         .task_links

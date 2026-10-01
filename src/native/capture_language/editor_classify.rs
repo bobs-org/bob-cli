@@ -13,12 +13,14 @@ use super::tokens::*;
 enum EditorCloseSuffix {
     Valid {
         in_progress: Option<(usize, usize)>,
+        park: Option<(usize, usize)>,
         complete: Option<(usize, usize)>,
         drop: Option<(usize, usize)>,
     },
     Incomplete {
         spec: PomodoroCloseSpec,
         in_progress: Option<(usize, usize)>,
+        park: Option<(usize, usize)>,
         complete: Option<(usize, usize)>,
         drop: Option<(usize, usize)>,
         separator: (usize, usize),
@@ -612,6 +614,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                 Ok(CloseSelectionOutcome::Valid(lex)) => {
                     close_suffix = Some(EditorCloseSuffix::Valid {
                         in_progress: lex.in_progress_range,
+                        park: lex.park_range,
                         complete: lex.complete_range,
                         drop: lex.drop_range,
                     });
@@ -621,6 +624,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     close_suffix = Some(EditorCloseSuffix::Incomplete {
                         spec: close_spec_from_incomplete(display, &incomplete),
                         in_progress: incomplete.in_progress_range,
+                        park: incomplete.park_range,
                         complete: incomplete.complete_range,
                         drop: incomplete.drop_range,
                         separator: incomplete.separator_range,
@@ -712,6 +716,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
     match close_suffix {
         Some(EditorCloseSuffix::Valid {
             in_progress,
+            park,
             complete,
             drop,
         }) => {
@@ -739,6 +744,13 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     kind: SpanKind::PomodoroCloseInProgress,
                 });
             }
+            if let Some((start, end)) = park {
+                marker_parse.spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::PomodoroClosePark,
+                });
+            }
             if let Some((start, end)) = complete {
                 marker_parse.spans.push(Span {
                     start,
@@ -758,6 +770,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         Some(EditorCloseSuffix::Incomplete {
             spec,
             in_progress,
+            park,
             complete,
             drop,
             separator,
@@ -783,6 +796,13 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     start,
                     end,
                     kind: SpanKind::PomodoroCloseInProgress,
+                });
+            }
+            if let Some((start, end)) = park {
+                marker_parse.spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::PomodoroClosePark,
                 });
             }
             if let Some((start, end)) = complete {

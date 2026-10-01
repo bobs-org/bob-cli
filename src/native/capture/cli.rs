@@ -224,29 +224,30 @@ destination/task/section/clipboard options are rejected on them. Later items \
 see earlier staged edits, dry-run reports without writing, and any failure \
 rolls the whole batch back, so `=x`, blank line, `=` switches sessions \
 atomically.\n\n\
-Capture a whole item `=x[<N>][!<M>][~<K>]` (case-insensitive `=X`, with \
-`!` and `~` in either order) to close today's running timed Pomodoro the \
+Capture a whole item `=x[<N>][*<P>][!<M>][~<K>]` (case-insensitive `=X`, with \
+`*`, `!`, and `~` in any order) to close today's running timed Pomodoro the \
 way Obsidian's Ctrl+Enter completion does, plus an auto-decrement that \
 shortens an early-stopped session to the earliest five-minute step at or \
 after now (never extended; an overrun is reported). A bare `=x` keeps \
 today's behavior; `=x<N>` keeps only the numbered Task Links in `<N>` in \
-progress and defers the rest, `=x!<M>` completes the links in `<M>`, \
+progress and defers the rest, `=x*<P>` parks the links in `<P>` (normal In \
+Progress work without carrying them forward), `=x!<M>` completes the links in `<M>`, \
 `=x~<K>` drops the links in `<K>` (removed from the closed session, not \
 carried and not started; a dropped task keeps its lane), and combined \
 forms do each part at \
-once. `<N>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
+once. `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
 `--dry-run`, and as JSON `task_links`); a lone `0` means no \
 task stays in progress, as in `=x0`. Log work as child bullets below \
 the close: `- <n> <text>` logs `<text>` to worked task `<n>`, and a \
 two-space `  - <detail>` nests an undated detail under its entry in the \
-task's Work Log. With `<N>` typed (including `=x0`) only the numbers in \
-`<N>` or `!<M>` take entries, otherwise every number starting at 1 takes \
+task's Work Log. With `<N>` typed (including `=x0`) or `*<P>` present only the numbers in \
+`<N>`, `*<P>`, or `!<M>` take entries, otherwise every number starting at 1 takes \
 one except `~<K>`; only the bullet's first token is an index, so `- 1 \
 fixed 3 bugs` logs `fixed 3 bugs` and every backslash stays literal. The \
 outcome is exactly the sub-bullets the user would type by hand under that \
 Task Link, followed by the unchanged close. A close's child lines are Work \
-Log bullets; a token ending in `,`, `!`, or `~` (`=x1,`) is incomplete and \
+Log bullets; a token ending in `,`, `!`, `~`, or `*` (`=x1,`, `=x*`) is incomplete and \
 fails, a dangling bullet (`- 1`) is incomplete and fails, whitespace is \
 never allowed inside the lists, and `=xx`/`=xa`/`Plan =x` stay ordinary \
 prose. Bullet text is literal (`@route`, `@@route`, `s:<N>`, `p:<N>`, `%`, \
@@ -264,15 +265,15 @@ rolls the whole batch back, so \
 `printf -- '-2\\n\\n=x\\n' | bob capture` adjusts then closes atomically. \
 JSON reports a distinct `pomodoro_close` kind (link and task forms keep \
 their kind with an additive `pomodoro_close` object) carrying the typed \
-`raw`, the `in_progress`/`complete`/`drop` lists, the `log` entries \
+`raw`, the `in_progress`/`park`/`complete`/`drop` lists, the `log` entries \
 (`index`, `text`, `details`) in typed order, the numbered `task_links` \
-lineup (with a `dropped` outcome), each task row's `index` and `role` \
-(with a `dropped` role) plus its `typed_work_log` subset and the aligned \
+lineup (with `parked` and `dropped` outcomes), each task row's `index` and `role` \
+(with a `dropped` role; parked rows stay `worked` with `carried: false`) plus its `typed_work_log` subset and the aligned \
 `typed_work_log_details`; \
 human output names the session, the range change, the file, and the line, \
 prefixing numbered rows with their index, printing typed entries first \
 uncapped and not dimmed, listing dropped rows (with a \
-`stays <status>` lane caption), and summarizing `Dropped <K>`. \
+`stays <status>` lane caption), marking parked rows `Parked · not carried`, and summarizing `Parked <P>` and `Dropped <K>`. \
 Single-quote the argument: zsh expands a leading `=word` and `!` \
 history expansion applies.\n\n\
 Use '@<route>^<block-id>' in the same leading or trailing position to create \

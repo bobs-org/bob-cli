@@ -21,12 +21,13 @@ use super::ledger::target_from_token;
 use super::links::{apply_edits, pomodoro_marker_prefix};
 use super::selection::{
     apply_close_selection, number_task_links, CloseSelection,
-    CloseSelectionError, NumberedTaskLink, TaskLinkSource,
+    CloseSelectionError, NumberedTaskLink, TaskLinkOutcome, TaskLinkSource,
 };
 use super::{
     close_task_text, find_running_pomodoro, plan_ledger_close,
-    sub_bullet_range, wikilink_tokens, BlockLinkTarget, FindRunningError,
-    LedgerClosePlan, LedgerLinkRole, RunningPomodoro, WorkLogNode,
+    plan_ledger_close_with_parked, sub_bullet_range, wikilink_tokens,
+    BlockLinkTarget, FindRunningError, LedgerClosePlan, LedgerLinkRole,
+    RunningPomodoro, WorkLogNode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -480,6 +481,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
     fn apply_startable(
         &mut self,
         target: &BlockLinkTarget,
+        carried: bool,
     ) -> Result<(), PomodoroClosePlanError> {
         let link = &target.wikilink;
         let Some(key) = self.register_reference(
@@ -490,7 +492,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                 role: CloseTaskRole::Worked,
                 block_link: link,
                 ledger_line: target.line,
-                carried: true,
+                carried,
             },
             false,
         )?
@@ -871,7 +873,25 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
         .collect();
     let log_entries: Vec<CloseLogEntry> =
         selection.map(|sel| sel.log.clone()).unwrap_or_default();
-    let mut ledger = plan_ledger_close(&working_contents, &running, now);
+    // Parked source lines after Work Log insertion: explicit carry metadata.
+    // Only selected parked lines are suppressed; other independently carried
+    // references keep their effects.
+    let parked_lines: BTreeSet<usize> = task_links
+        .iter()
+        .filter(|link| link.outcome == TaskLinkOutcome::Parked)
+        .map(|link| link.line)
+        .collect();
+    check_resolved_park_conflicts(vault, day_path, &task_links)?;
+    let mut ledger = if parked_lines.is_empty() {
+        plan_ledger_close(&working_contents, &running, now)
+    } else {
+        plan_ledger_close_with_parked(
+            &working_contents,
+            &running,
+            now,
+            &parked_lines,
+        )
+    };
     let mut planner =
         ClosePlanner::new(vault, day_path, day_contents, &ledger, now);
 
@@ -891,7 +911,8 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
         )?;
     }
     for target in &ledger.startable_targets {
-        planner.apply_startable(target)?;
+        let carried = !parked_lines.contains(&target.line);
+        planner.apply_startable(target, carried)?;
     }
     for target in &ledger.embedded_targets {
         planner.apply_embedded_tree(
@@ -1054,6 +1075,7 @@ fn emit_listed_status_warnings<V: CloseVault>(
         };
         match first.outcome {
             super::selection::TaskLinkOutcome::InProgress
+            | super::selection::TaskLinkOutcome::Parked
                 if note_task.status_type != TaskStatusType::InProgress =>
             {
                 planner.row_warning(
@@ -1079,6 +1101,54 @@ fn emit_listed_status_warnings<V: CloseVault>(
             _ => {}
         }
     }
+}
+
+/// Resolved-identity duplicate guard for parking: two numbered links that
+/// resolve to the same vault task must agree on the entire outcome including
+/// carry. Ordinary worked and parked conflict; two parked occurrences are
+/// allowed. Only runs when parking is involved, so unrelated existing
+/// selections keep their historical merging behavior.
+fn check_resolved_park_conflicts<V: CloseVault>(
+    vault: &V,
+    day_path: &Path,
+    task_links: &[NumberedTaskLink],
+) -> Result<(), PomodoroClosePlanError> {
+    if !task_links
+        .iter()
+        .any(|link| link.outcome == TaskLinkOutcome::Parked)
+    {
+        return Ok(());
+    }
+    let mut by_key: BTreeMap<TaskKey, Vec<&NumberedTaskLink>> = BTreeMap::new();
+    for link in task_links {
+        let LinkResolution::Found(path) =
+            vault.resolve_target(day_path, &link.path_part)
+        else {
+            continue;
+        };
+        by_key
+            .entry((path, link.block_id.clone()))
+            .or_default()
+            .push(link);
+    }
+    for links in by_key.values() {
+        if links.len() < 2 {
+            continue;
+        }
+        let first_outcome = links[0].outcome;
+        if links.iter().any(|link| link.outcome != first_outcome) {
+            let mut indices: Vec<u32> =
+                links.iter().map(|link| link.index).collect();
+            indices.sort_unstable();
+            return Err(PomodoroClosePlanError::Selection(
+                CloseSelectionError::ConflictingDuplicate {
+                    indices,
+                    block_link: links[0].block_link.clone(),
+                },
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn close_role(role: LedgerLinkRole) -> CloseTaskRole {

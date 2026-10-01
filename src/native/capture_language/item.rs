@@ -935,8 +935,8 @@ fn close_after_x_offset(
 /// prose: a bare sign run followed by prose stays prose while a counted
 /// token claims its item.
 ///
-/// A selection-shaped first token (`=x`/`=X` followed by a digit, `,`, or
-/// `!`) claims the item the same way: an exact single-line item lexes its
+/// A selection-shaped first token (`=x`/`=X` followed by a digit, `,`, `*`,
+/// `!`, or `~`) claims the item the same way: an exact single-line item lexes its
 /// lists (a dangling separator is an incomplete error here), while anything
 /// else reports the list's own diagnostic, the no-spaces hint when the
 /// spaceless join forms a selection, or the close shape error.
@@ -1021,9 +1021,11 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 let lexed_selection = match selection_after_x {
                     None => CloseSelectionLex {
                         in_progress: None,
+                        park: Vec::new(),
                         complete: Vec::new(),
                         drop: Vec::new(),
                         in_progress_range: None,
+                        park_range: None,
                         complete_range: None,
                         drop_range: None,
                     },
@@ -1048,6 +1050,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     &item.lines[1..],
                     first,
                     lexed_selection.in_progress.as_deref(),
+                    &lexed_selection.park,
                     &lexed_selection.complete,
                     &lexed_selection.drop,
                 ) {

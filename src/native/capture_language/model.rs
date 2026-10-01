@@ -134,27 +134,34 @@ pub(crate) enum SessionOperator {
 /// Typed `@<route>:<block-id>=x` close specification. `x` is
 /// case-insensitive; `raw` preserves what was typed.
 ///
-/// A selection (`=x<N>`, `=x!<M>`, `=x~<K>`, in any `!`/`~` order) names
-/// numbered Task Links: `in_progress` is `None` when no `<N>` list was typed
-/// (unlisted links keep their ledger outcome) and `Some` (possibly empty for
-/// `=x0`) when one was; `complete` holds the `!<M>` list and `drop` the
-/// `~<K>` list, each empty when none was typed. All lists are sorted
-/// ascending. Plain `=x` reports `in_progress: None` and empty
-/// `complete`/`drop`, so version-tolerant readers see only additive fields.
+/// A selection (`=x[<N>][*<P>][!<M>][~<K>]`, with `*`/`!`/`~` in any order)
+/// names numbered Task Links: `in_progress` is `None` when no `<N>` list was
+/// typed (unlisted links keep their ledger outcome unless `*<P>` is present,
+/// which activates selection mode like `<N>`) and `Some` (possibly empty for
+/// `=x0`) when one was; `park` holds the `*<P>` list, `complete` the `!<M>`
+/// list, and `drop` the `~<K>` list, each empty when none was typed. All
+/// lists are sorted ascending. Plain `=x` reports `in_progress: None` and
+/// empty `park`/`complete`/`drop`, so version-tolerant readers see only
+/// additive fields.
 ///
-/// Work Log bullets (`- <n> <text>` child lines under `=x[<N>][!<M>]`)
+/// Work Log bullets (`- <n> <text>` child lines under `=x[<N>][*<P>]`)
 /// append `log` entries: each names a numbered Task Link plus the literal
 /// entry text and its nested details, in typed order. The text is final; the
 /// grammar phase fills it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
     /// Raw close token exactly as typed: the `=`-prefixed token
-    /// (`=x1,3!2~4`) for a whole-item close, or the `=`-prefixed suffix for
+    /// (`=x1*2!3~4`) for a whole-item close, or the `=`-prefixed suffix for
     /// a link close.
     pub(crate) raw: String,
     /// Numbered links that stay in progress, or `None` when no `<N>` list
     /// was typed. `Some(vec![])` is an explicit `=x0` ("none").
     pub(crate) in_progress: Option<Vec<u32>>,
+    /// Numbered links to park (record work without carrying), empty when no
+    /// `*<P>` list was typed. Parked links get normal In Progress work
+    /// effects but are not carried to the next placeholder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) park: Vec<u32>,
     /// Numbered links to complete, empty when no `!<M>` list was typed.
     pub(crate) complete: Vec<u32>,
     /// Numbered links to drop, empty when no `~<K>` list was typed.
@@ -187,6 +194,7 @@ impl PomodoroCloseSpec {
         Self {
             raw,
             in_progress: None,
+            park: Vec::new(),
             complete: Vec::new(),
             drop: Vec::new(),
             log: Vec::new(),
@@ -196,6 +204,7 @@ impl PomodoroCloseSpec {
     /// `true` when the spec names at least one numbered Task Link.
     pub(crate) fn has_selection(&self) -> bool {
         self.in_progress.is_some()
+            || !self.park.is_empty()
             || !self.complete.is_empty()
             || !self.drop.is_empty()
     }

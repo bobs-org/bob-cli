@@ -61,26 +61,42 @@ pub(crate) struct CloseLogError {
 }
 
 /// `true` when `index` can start a Work Log entry under these lists.
+/// Selection mode is active when `<N>` was typed (including `=x0`) or a
+/// nonempty `*<P>` group is present: only `<N>`, `*<P>`, and `!<M>` start
+/// entries. Otherwise every number starts one except those in `~<K>`.
 fn is_loggable(
     index: u32,
     in_progress: Option<&[u32]>,
+    park: &[u32],
     complete: &[u32],
     drop: &[u32],
 ) -> bool {
-    if let Some(list) = in_progress {
-        list.contains(&index) || complete.contains(&index)
+    if in_progress.is_some() || !park.is_empty() {
+        in_progress.is_some_and(|list| list.contains(&index))
+            || park.contains(&index)
+            || complete.contains(&index)
     } else {
         !drop.contains(&index)
     }
 }
 
-/// The smallest loggable task number: the smallest of `<N>` union `!<M>`
-/// when `<N>` is typed and the union is non-empty, otherwise `1`. Used to
-/// build the missing-number example from the bullet's own text.
-fn smallest_loggable(in_progress: Option<&[u32]>, complete: &[u32]) -> u32 {
-    if let Some(list) = in_progress {
+/// The smallest loggable task number: the smallest of `<N>` union `*<P>`
+/// union `!<M>` when selection mode is active and the union is non-empty,
+/// otherwise `1`. Used to build the missing-number example from the bullet's
+/// own text.
+fn smallest_loggable(
+    in_progress: Option<&[u32]>,
+    park: &[u32],
+    complete: &[u32],
+) -> u32 {
+    if in_progress.is_some() || !park.is_empty() {
         let mut smallest: Option<u32> = None;
-        for number in list.iter().chain(complete.iter()) {
+        for number in in_progress
+            .iter()
+            .flat_map(|list| list.iter())
+            .chain(park.iter())
+            .chain(complete.iter())
+        {
             smallest = Some(match smallest {
                 Some(current) => current.min(*number),
                 None => *number,
@@ -96,6 +112,7 @@ fn smallest_loggable(in_progress: Option<&[u32]>, complete: &[u32]) -> u32 {
 fn not_worked_suggestions(
     index: u32,
     in_progress: Option<&[u32]>,
+    park: &[u32],
     complete: &[u32],
     drop: &[u32],
 ) -> (String, String) {
@@ -123,6 +140,19 @@ fn not_worked_suggestions(
             )
         }
     };
+    let park_suffix = |list: &[u32]| {
+        if list.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "*{}",
+                list.iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+    };
     match in_progress {
         Some(list) if list.is_empty() => {
             let mut with_complete: Vec<u32> = complete.to_vec();
@@ -130,10 +160,43 @@ fn not_worked_suggestions(
                 with_complete.push(index);
                 with_complete.sort_unstable();
             }
-            (
-                format!("=x{index}{}", complete_suffix(complete)),
-                format!("=x0{}{drop_suffix}", complete_suffix(&with_complete)),
-            )
+            // With `=x0`, "list it" parks when a park selection exists,
+            // otherwise it continues as `<N>`.
+            if park.is_empty() {
+                (
+                    format!(
+                        "=x{index}{}{}",
+                        park_suffix(park),
+                        complete_suffix(complete)
+                    ),
+                    format!(
+                        "=x0{}{}{}",
+                        park_suffix(park),
+                        drop_suffix,
+                        complete_suffix(&with_complete)
+                    ),
+                )
+            } else {
+                let mut parked: Vec<u32> = park.to_vec();
+                if !parked.contains(&index) {
+                    parked.push(index);
+                    parked.sort_unstable();
+                }
+                (
+                    format!(
+                        "=x0{}{}{}",
+                        park_suffix(&parked),
+                        drop_suffix,
+                        complete_suffix(complete)
+                    ),
+                    format!(
+                        "=x0{}{}{}",
+                        park_suffix(park),
+                        drop_suffix,
+                        complete_suffix(&with_complete)
+                    ),
+                )
+            }
         }
         Some(list) => {
             let mut listed: Vec<u32> = list.to_vec();
@@ -153,11 +216,37 @@ fn not_worked_suggestions(
             }
             (
                 format!(
-                    "=x{listed_text}{}{drop_suffix}",
+                    "=x{listed_text}{}{}{drop_suffix}",
+                    park_suffix(park),
                     complete_suffix(complete)
                 ),
                 format!(
-                    "=x{listed_text}{}{drop_suffix}",
+                    "=x{listed_text}{}{}{drop_suffix}",
+                    park_suffix(park),
+                    complete_suffix(&completed)
+                ),
+            )
+        }
+        None if !park.is_empty() => {
+            let mut parked: Vec<u32> = park.to_vec();
+            if !parked.contains(&index) {
+                parked.push(index);
+                parked.sort_unstable();
+            }
+            let mut completed: Vec<u32> = complete.to_vec();
+            if !completed.contains(&index) {
+                completed.push(index);
+                completed.sort_unstable();
+            }
+            (
+                format!(
+                    "=x{}{}{drop_suffix}",
+                    park_suffix(&parked),
+                    complete_suffix(complete)
+                ),
+                format!(
+                    "=x{}{}{drop_suffix}",
+                    park_suffix(park),
                     complete_suffix(&completed)
                 ),
             )
@@ -251,10 +340,11 @@ fn check_index_loggable(
     index_range: (usize, usize),
     close_token: &str,
     in_progress: Option<&[u32]>,
+    park: &[u32],
     complete: &[u32],
     drop: &[u32],
 ) -> Result<(), CloseLogError> {
-    if is_loggable(index, in_progress, complete, drop) {
+    if is_loggable(index, in_progress, park, complete, drop) {
         return Ok(());
     }
     if drop.contains(&index) {
@@ -271,7 +361,7 @@ fn check_index_loggable(
         });
     }
     let (listed, completed) =
-        not_worked_suggestions(index, in_progress, complete, drop);
+        not_worked_suggestions(index, in_progress, park, complete, drop);
     Err(CloseLogError {
         message: close_log_not_worked_error(
             index,
@@ -284,9 +374,9 @@ fn check_index_loggable(
 }
 
 /// Lex a close's Work Log bullets: the close item's child `ItemLine`s.
-/// `close_token` is the display token (`=x`, `=x2`, `=x1!2`) interpolated
-/// into not-worked diagnostics; `in_progress`/`complete`/`drop` are the
-/// lexed selection lists.
+/// `close_token` is the display token (`=x`, `=x2`, `=x1*2!3`) interpolated
+/// into not-worked diagnostics; `in_progress`/`park`/`complete`/`drop` are
+/// the lexed selection lists.
 ///
 /// Placeholder rows are skipped. Invalid and orphaned lines report the
 /// existing authored-bullet messages. Bullets are checked top to bottom and
@@ -295,6 +385,7 @@ pub(crate) fn lex_close_log_bullets(
     child_lines: &[ItemLine<'_>],
     close_token: &str,
     in_progress: Option<&[u32]>,
+    park: &[u32],
     complete: &[u32],
     drop: &[u32],
 ) -> Result<CloseLogLexed, CloseLogError> {
@@ -367,7 +458,7 @@ pub(crate) fn lex_close_log_bullets(
             || !first.text.bytes().all(|byte| byte.is_ascii_digit())
         {
             let normalized = normalize_task_text(authored.body);
-            let smallest = smallest_loggable(in_progress, complete);
+            let smallest = smallest_loggable(in_progress, park, complete);
             let example = if normalized.is_empty() {
                 format!("- {smallest}")
             } else {
@@ -384,6 +475,7 @@ pub(crate) fn lex_close_log_bullets(
             (first.start, first.end),
             close_token,
             in_progress,
+            park,
             complete,
             drop,
         )?;
@@ -459,14 +551,16 @@ mod tests {
     use super::super::close_selection::*;
     use super::*;
 
-    fn selection_lists(close: &str) -> (Option<Vec<u32>>, Vec<u32>, Vec<u32>) {
+    fn selection_lists(
+        close: &str,
+    ) -> (Option<Vec<u32>>, Vec<u32>, Vec<u32>, Vec<u32>) {
         let after_x = whole_item_close_after_x(close).unwrap_or("");
         let base = close.len() - after_x.len();
         match lex_close_selection(after_x, base, close)
             .expect("valid selection")
         {
             CloseSelectionOutcome::Valid(lex) => {
-                (lex.in_progress, lex.complete, lex.drop)
+                (lex.in_progress, lex.park, lex.complete, lex.drop)
             }
             CloseSelectionOutcome::Incomplete(_) => {
                 panic!("{close}: expected valid selection")
@@ -487,11 +581,12 @@ mod tests {
                 line_number: index + 1,
             })
             .collect();
-        let (in_progress, complete, drop) = selection_lists(close);
+        let (in_progress, park, complete, drop) = selection_lists(close);
         lex_close_log_bullets(
             &item_lines[1..],
             close,
             in_progress.as_deref(),
+            &park,
             &complete,
             &drop,
         )

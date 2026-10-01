@@ -927,6 +927,7 @@ pub(super) fn parse_editor_item<'a>(
                 name_range,
                 start_offset,
                 close_in_progress,
+                close_park,
                 close_complete,
                 close_drop,
                 conflict,
@@ -975,6 +976,13 @@ pub(super) fn parse_editor_item<'a>(
                                 start: token_start + start,
                                 end: token_start + end,
                                 kind: SpanKind::PomodoroCloseInProgress,
+                            });
+                        }
+                        if let Some((start, end)) = close_park {
+                            spans.push(Span {
+                                start: token_start + start,
+                                end: token_start + end,
+                                kind: SpanKind::PomodoroClosePark,
                             });
                         }
                         if let Some((start, end)) = close_complete {
@@ -1027,6 +1035,7 @@ pub(super) fn parse_editor_item<'a>(
                 link_end,
                 suffix_offset,
                 close_in_progress,
+                close_park,
                 close_complete,
                 close_drop,
                 separator_range,
@@ -1070,6 +1079,13 @@ pub(super) fn parse_editor_item<'a>(
                         start: token_start + start,
                         end: token_start + end,
                         kind: SpanKind::PomodoroCloseInProgress,
+                    });
+                }
+                if let Some((start, end)) = close_park {
+                    spans.push(Span {
+                        start: token_start + start,
+                        end: token_start + end,
+                        kind: SpanKind::PomodoroClosePark,
                     });
                 }
                 if let Some((start, end)) = close_complete {

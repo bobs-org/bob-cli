@@ -430,6 +430,7 @@ pub(super) fn build_close_summary_json(
     let summary = PomodoroCloseSummaryJson {
         raw: spec.raw.clone(),
         in_progress: spec.in_progress.clone(),
+        park: spec.park.clone(),
         complete: spec.complete.clone(),
         drop: spec.drop.clone(),
         log: spec
@@ -532,10 +533,12 @@ pub(super) fn final_task_line_for(
     }
 }
 
-/// Convert a parsed `=x[<N>][!<M>][~<K>]` spec into the planner's
+/// Convert a parsed `=x[<N>][*<P>][!<M>][~<K>]` spec into the planner's
 /// selection. Plain `=x` yields `None`, so the close runs exactly as before
 /// while still reporting the numbered lineup. A spec with lists or typed
-/// Work Log entries yields a selection.
+/// Work Log entries yields a selection. `in_progress` stays `None` when no
+/// `<N>` was typed, even for `=x*2`; parked numbers are never unioned into
+/// it.
 fn selection_from_spec(
     spec: &PomodoroCloseSpec,
 ) -> Option<capture_pomodoro_close::CloseSelection> {
@@ -547,6 +550,7 @@ fn selection_from_spec(
             spec.in_progress
                 .clone()
                 .map(|numbers| numbers.into_iter().collect()),
+            spec.park.iter().copied().collect(),
             spec.complete.iter().copied().collect(),
             spec.drop.iter().copied().collect(),
             spec.raw.clone(),

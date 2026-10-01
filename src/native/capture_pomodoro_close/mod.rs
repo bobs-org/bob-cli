@@ -27,9 +27,9 @@ mod selection_tests;
 mod tests;
 
 pub(crate) use ledger::{
-    find_running_pomodoro, plan_ledger_close, sub_bullet_range,
-    BlockLinkTarget, FindRunningError, LedgerClosePlan, LedgerLinkRole,
-    RunningPomodoro, WorkLogNode,
+    find_running_pomodoro, plan_ledger_close, plan_ledger_close_with_parked,
+    sub_bullet_range, BlockLinkTarget, FindRunningError, LedgerClosePlan,
+    LedgerLinkRole, RunningPomodoro, WorkLogNode,
 };
 pub(crate) use linked_tasks::{
     lookup_task, plan_pomodoro_close, CloseVault, PomodoroClosePlan,

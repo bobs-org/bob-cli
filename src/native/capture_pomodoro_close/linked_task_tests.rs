@@ -366,6 +366,7 @@ fn selection(
     super::selection::CloseSelection {
         in_progress: in_progress
             .map(|list| list.into_iter().collect::<BTreeSet<u32>>()),
+        park: BTreeSet::new(),
         complete: complete.into_iter().collect::<BTreeSet<u32>>(),
         drop: BTreeSet::new(),
         log: Vec::new(),

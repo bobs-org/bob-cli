@@ -23,6 +23,7 @@ use super::links::{
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CloseSelection {
     pub in_progress: Option<BTreeSet<u32>>,
+    pub park: BTreeSet<u32>,
     pub complete: BTreeSet<u32>,
     pub drop: BTreeSet<u32>,
     pub log: Vec<CloseLogEntry>,
@@ -32,17 +33,26 @@ pub(crate) struct CloseSelection {
 impl CloseSelection {
     pub(crate) fn new(
         in_progress: Option<BTreeSet<u32>>,
+        park: BTreeSet<u32>,
         complete: BTreeSet<u32>,
         drop: BTreeSet<u32>,
         raw: impl Into<String>,
     ) -> Self {
         Self {
             in_progress,
+            park,
             complete,
             drop,
             log: Vec::new(),
             raw: raw.into(),
         }
+    }
+
+    /// Selection mode is active when `<N>` was typed (including `=x0`) or a
+    /// nonempty `*<P>` group is present. Star-only closes defer unlisted
+    /// plain links exactly like ordinary closes.
+    pub(crate) fn has_work_selection(&self) -> bool {
+        self.in_progress.is_some() || !self.park.is_empty()
     }
 
     pub(crate) fn with_log(mut self, log: Vec<CloseLogEntry>) -> Self {
@@ -89,6 +99,7 @@ impl TaskLinkMarker {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskLinkOutcome {
     InProgress,
+    Parked,
     Deferred,
     Complete,
     Dropped,
@@ -98,6 +109,7 @@ impl TaskLinkOutcome {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::InProgress => "in_progress",
+            Self::Parked => "parked",
             Self::Deferred => "deferred",
             Self::Complete => "complete",
             Self::Dropped => "dropped",
@@ -433,6 +445,9 @@ fn outcome_for(
     marker: TaskLinkMarker,
     selection: &CloseSelection,
 ) -> (TaskLinkOutcome, TaskLinkSource) {
+    if selection.park.contains(&index) {
+        return (TaskLinkOutcome::Parked, TaskLinkSource::Listed);
+    }
     if selection.complete.contains(&index) {
         return (TaskLinkOutcome::Complete, TaskLinkSource::Listed);
     }
@@ -443,6 +458,12 @@ fn outcome_for(
         if in_progress.contains(&index) {
             return (TaskLinkOutcome::InProgress, TaskLinkSource::Listed);
         }
+        if marker == TaskLinkMarker::Embedded {
+            return (TaskLinkOutcome::Complete, TaskLinkSource::Unlisted);
+        }
+        return (TaskLinkOutcome::Deferred, TaskLinkSource::Unlisted);
+    }
+    if !selection.park.is_empty() {
         if marker == TaskLinkMarker::Embedded {
             return (TaskLinkOutcome::Complete, TaskLinkSource::Unlisted);
         }
@@ -475,6 +496,11 @@ pub(crate) fn apply_close_selection(
             if *number < 1 || (*number as usize) > total {
                 bad.insert(*number);
             }
+        }
+    }
+    for number in &selection.park {
+        if *number < 1 || (*number as usize) > total {
+            bad.insert(*number);
         }
     }
     for number in &selection.complete {
@@ -554,7 +580,9 @@ pub(crate) fn apply_close_selection(
             continue;
         };
         let body = match link.outcome {
-            TaskLinkOutcome::InProgress => link.block_link.clone(),
+            TaskLinkOutcome::InProgress | TaskLinkOutcome::Parked => {
+                link.block_link.clone()
+            }
             TaskLinkOutcome::Deferred => format!("{}#", link.block_link),
             TaskLinkOutcome::Complete => format!("!{}", link.block_link),
             // A dropped link is rewritten with a `~` prefix the ledger
@@ -632,7 +660,9 @@ fn validate_close_log_entries(
             });
         };
         match link.outcome {
-            TaskLinkOutcome::InProgress | TaskLinkOutcome::Complete => {}
+            TaskLinkOutcome::InProgress
+            | TaskLinkOutcome::Parked
+            | TaskLinkOutcome::Complete => {}
             TaskLinkOutcome::Deferred => {
                 return Err(CloseSelectionError::LogDeferred {
                     index: entry.index,
@@ -770,7 +800,9 @@ fn child_indent_unit(parent_indent: &str) -> String {
 
 fn marker_for_outcome(outcome: TaskLinkOutcome) -> TaskLinkMarker {
     match outcome {
-        TaskLinkOutcome::InProgress => TaskLinkMarker::Plain,
+        TaskLinkOutcome::InProgress | TaskLinkOutcome::Parked => {
+            TaskLinkMarker::Plain
+        }
         TaskLinkOutcome::Deferred => TaskLinkMarker::Deferred,
         TaskLinkOutcome::Complete | TaskLinkOutcome::Dropped => {
             TaskLinkMarker::Embedded

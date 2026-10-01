@@ -75,7 +75,7 @@ anything is written, and any failure rolls the whole batch back.
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
 | `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name ("again"), otherwise a new named session is created and started; the item must contain only the start token |
 | `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`, `=3#bugs~1,3`); `~` drops, the drop part always comes last, and the item must contain only the start token |
-| `=x[<N>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, with `!` and `~` in either order); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; its child lines are Work Log bullets |
+| `=x[<N>][*<P>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, with `*`, `!`, and `~` in any order); `<N>` keeps only those numbered Task Links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; its child lines are Work Log bullets |
 | `=x` + `- <n> <text>` (+ `  - <detail>`) | Log while closing: each first-level bullet logs its text to worked task `<n>`, and a two-space bullet nests an undated detail under its entry |
 | `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; `=x =~2` closes then starts without link 2 of the next lineup, while `=x~2 =` drops link 2 of the running session and then starts |
 | `=x =` + `- 1 wired the lexer` | Close with a Work Log bullet in a chain: the child lines attach to the line's `=x`, so this logs the entry then starts the next session |
@@ -1326,10 +1326,11 @@ session it names — in the batch-level `pomodoro_blocks` array; see
 Field notes:
 
 - `pomodoro_close.raw` is the typed token including `=` and any selection
-  (`=x`, `=X` or `=x1,3!2~4` when typed that way), on every form.
+  (`=x`, `=X` or `=x1*2!3~4` when typed that way), on every form.
 - `pomodoro_close.in_progress` is the typed `<N>` list sorted ascending,
-  `null` when no `<N>` was typed (`=x0` reports `[]`),
-  `pomodoro_close.complete` is the typed `!<M>` list (possibly empty), and
+  `null` when no `<N>` was typed (`=x0` reports `[]`, and `=x*2` keeps `null`),
+  `pomodoro_close.park` is the typed `*<P>` list (possibly empty, omitted when
+  empty), `pomodoro_close.complete` is the typed `!<M>` list (possibly empty), and
   `pomodoro_close.drop` is the typed `~<K>` list, omitted when empty.
 - `pomodoro_close.log` is the typed Work Log bullets in typed order
   (`[{ "index": 2, "text": "wired the lexer" }]`), omitted when empty.
@@ -1349,7 +1350,7 @@ Field notes:
   `ledger_line` (the close's pre-image, after any link step), `block_link`
   (never including the `!`), `block_id`, `marker` (`plain`, `deferred`, or
   `embedded`: the line's marker before the selection), `outcome`
-  (`in_progress`, `deferred`, `complete`, or `dropped`), and `source`
+  (`in_progress`, `parked`, `deferred`, `complete`, or `dropped`), and `source`
   (`ledger` when
   the outcome comes from the line's own marker, `listed` when its number
   was typed, `unlisted` when `<N>` was typed without it).
@@ -1358,12 +1359,16 @@ Field notes:
   Work-Log-only); when one task is numbered on several lines, its single
   row carries the lowest number. `tasks[].role` keeps its current meaning:
   it is the role after the selection, so a completed row is `embedded`, a
-  deferred row is `deferred`, and a dropped row is `dropped`.
+  deferred row is `deferred`, and a dropped row is `dropped`. A parked row
+  stays `worked` (or its existing unresolved role): parking never changes task
+  resolution or status semantics, only carry.
   A client joins `tasks[].index` to `task_links[index-1]` for
   `outcome`/`source`.
 - `tasks[].carried` is true only when that target's line was actually
   carried into the new placeholder, and agrees with the top-level
-  `carried` list.
+  `carried` list, the next-session count, rendered blocks, and plan budget.
+  Parked rows report `carried: false` with no other independently carried
+  reference to that target.
 - Link forms (`pomodoro_link`, `pomodoro_task`) keep the placement their
   non-close counterpart reports; only whole-item `=x` uses
   `placement: "closed"`.
@@ -1462,31 +1467,47 @@ close… next up is CAPTURE at line 13"; `=x more` is an
 
 #### Choosing each Task Link's outcome
 
-Close the running session with `=x[<N>][!<M>][~<K>]` (case-insensitive
-`=X`, with `!` and `~` in either order) to decide, by number, which of its
+Close the running session with `=x[<N>][*<P>][!<M>][~<K>]` (case-insensitive
+`=X`, with `*`, `!`, and `~` in any order) to decide, by number, which of its
 Task Links stay in progress, which are deferred, which are completed and
 struck, and which are dropped — in one capture instead of editing the
 `[[…]]#` / `![[…]]` markers by hand before Ctrl+Enter:
 
 ```bash
 bob capture '=x2'
+bob capture '=x*2,3'
 bob capture '=x!1'
-bob capture '=x1!2'
+bob capture '=x1*2,3!4,5'
 bob capture '=x0'
 bob capture '=x~4,5'
-bob capture '=x1!2~3'
-bob capture '=x0~2'
+bob capture '=x1*2!3~4'
+bob capture '=x0*2'
 ```
 
-`<N>`, `<M>`, and `<K>` are comma-separated task numbers with no
-whitespace. `<N>` omitted leaves unlisted links at their ledger outcome;
+Parking records normal In Progress work without carrying those links into
+the next Pomodoro (`=x*2` works on and parks 2; `=x1*2,3!4,5` continues 1,
+parks 2 and 3, completes 4 and 5). The five-link acceptance close
+`'=x1*2,3!4,5'` keeps normal `🍅` history for 1, 2, and 3, gives 1, 2, and 3
+exactly the normal In Progress and Work Log effects, retires 4 and 5 as usual,
+and carries only link 1 into the new placeholder. Parked rows read
+`Parked · not carried` and preserve their actual status transition.
+
+`<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers with no
+whitespace. `<N>` omitted leaves unlisted links at their ledger outcome
+unless `*<P>` is present, which activates selection mode like `<N>`;
 `<N>` present, even as a lone `0`, turns every unlisted link that would
-have been in progress into deferred. Order inside a list does not matter,
-and `!<M>` and `~<K>` may each appear at most once, in either order. A
-selection is nothing but the marker edits the user would make by hand,
-applied to the numbered lines, followed by the unchanged close — so plain
-`=x` works byte for byte as it always has, and every selection produces
-exactly the files the matching hand edits followed by `=x` produce.
+have been in progress into deferred, and `=x*2` defers unlisted plain links
+exactly like `=x2`. `=x0*2` is valid (no ordinary continuing selections,
+task 2 parked, other eligible unlisted links deferred); `*0`, `!0`, and `~0`
+are invalid. Order inside a list does not matter, and `*<P>`, `!<M>`, and
+`~<K>` may each appear at most once, in any order after an optional initial
+`<N>`. `*` starts a list; it is neither a postfix modifier nor a wildcard. A
+selection is the marker edits the user would make by hand, applied to the
+numbered lines, plus explicit carry metadata for `*<P>` (parked worked lines
+are recorded like In Progress but skipped while collecting carry), followed
+by the unchanged close — so plain
+`=x` works byte for byte as it always has, and every non-parked selection
+produces exactly the files the matching hand edits followed by `=x` produce.
 
 **Numbering.** Every line of the running session's sub-bullet range whose
 list-item body, after stripping 🍅 markers, is exactly one block link is
@@ -1512,11 +1533,12 @@ wins:
 
 | Condition | Outcome | Source |
 | --------- | ------- | ------ |
+| _i_ ∈ `<P>` | parked | listed |
 | _i_ ∈ `<M>` | complete | listed |
 | _i_ ∈ `<K>` | dropped | listed |
 | _i_ ∈ `<N>` | in progress | listed |
-| `<N>` typed and _m_ = embedded | complete (a hand transclusion is kept) | unlisted |
-| `<N>` typed | deferred | unlisted |
+| `<N>` typed or `*<P>` present and _m_ = embedded | complete (a hand transclusion is kept) | unlisted |
+| `<N>` typed or `*<P>` present | deferred | unlisted |
 | otherwise | the ledger outcome of _m_ | ledger |
 
 A number in two lists fails lexically, as does an out-of-range number.
@@ -1532,9 +1554,17 @@ stay byte-identical.
 | Outcome | 🍅 in the closed entry | Carried to the next placeholder | Task effect |
 | ------- | ---------------------- | ------------------------------- | ----------- |
 | in progress (`N`, or the ledger default) | yes | yes | started `[/]` |
+| parked (`*P`) | yes (same normal work history and child notes) | no | started `[/]` (same normal In Progress and Work Log effects) |
 | deferred | no (removed) | yes | none |
 | complete (`!M`) | embedded | no | closed |
 | **dropped (`~K`)** | **no (removed)** | **no** | **none** — the task keeps its lane |
+
+Parking is a close outcome, not a new task status: `[/]` keeps its In
+Progress name, and the existing sticky-lane PENDING behavior provides the
+waiting place. Carry suppression is explicit planner metadata, not a durable
+Markdown marker. Unlisted plain links with `<N>` or `*<P>` present defer;
+unlisted embedded links complete. `=x!2~3` without `<N>` or `*<P>` keeps
+ledger outcomes for unlisted links.
 
 An omitted `<N>` keeps the ledger default for unlisted links. A typed
 `<N>` defers the unlisted ones, exactly as today. Dropped links count as
@@ -1627,21 +1657,24 @@ Pomodoro"); several bad numbers are listed together. Conflicting duplicates:
 ``tasks 1 and 3 both link `[[bob#^a]]` but get different outcomes; give them
 the same one`` (same-outcome duplicates are fine). Malformed lists fail
 lexically: ``task 1 is listed twice in `=x1,1` ``,
+``task 1 cannot both stay in progress and park in `=x1*1` ``,
 ``task 1 cannot both stay in progress and complete in `=x1!1` ``,
 ``task 1 cannot both stay in progress and drop in `=x1~1` ``,
+``task 1 cannot both park and complete in `=x*1!1` ``,
+``task 1 cannot both park and drop in `=x*1~1` ``,
 ``task 2 cannot both complete and drop in `=x!2~2` ``,
-`` `0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2` ``
-(for `=x0,2`, `=x0,`, and `=x00`), `task numbers start at 1` (for `=x!0`
-and `=x~0`), `` expected a task
-number before `,` ``, `` expected a task number after `,` `` (for `=x1,!2`), `` use one `!` list: `=x1!2,3` ``,
+`` `0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2` ``
+(for `=x0,2`, `=x0,`, and `=x00`), `task numbers start at 1` (for `*0`, `!0`,
+and `~0`), `` expected a task
+number before `,` ``, `` expected a task number after `,` `` (for `=x1,!2`), `` use one `*` list: `=x1*2,3` ``, `` use one `!` list: `=x1!2,3` ``,
 `` use one `~` list: `=x1~2,3` ``,
 ``` `=x1a` is not a task list: write `=x`, then comma-separated task numbers,
-then optionally `!` and the numbers to complete and `~` and the numbers to
-drop (for example `=x1,3!2~4`) ```,
+then optionally `*` and the numbers to park, `!` and the numbers to complete,
+and `~` and the numbers to drop (for example `=x1*2!3~4`) ```,
 `task number 99999999999 is too large`, and
 ``write the task numbers right after `=x`, with no spaces (for example
-`=x1,3!2~4`)``. A token ending in a dangling separator (`=x1,`, `=x!`,
-`=x~`, `=x1!`, `=x!2,`) is an editing state: `bob capture` rejects it
+`=x1*2!3~4`)``. A token ending in a dangling separator (`=x1,`, `=x*`, `=x!`,
+`=x~`, `=x1*`, `=x*2,`, `=x1!`, `=x!2,`) is an editing state: `bob capture` rejects it
 (`` `=x1,` is incomplete: type a task number after `,` ``) while
 `capture-parse` reports mode `incomplete` needing `pomodoro_close_task`.
 **Warnings** (shown on the row and top-level, never blocking): a listed
@@ -2667,13 +2700,14 @@ characters (ranged on the name), an oversized suffix (ranged on `=<X>`), or
 extra text, markers, or child lines on a well-formed token (ranged on the
 extra text or the child line, with the join-with-`-` hint when the extra
 text is all name characters). A `@@` declaration never applies to named
-starts either. A whole-item `=x[<N>][!<M>][~<K>]` close
-(case-insensitive `=X`, with `!` and `~` in either order) parses as
+starts either. A whole-item `=x[<N>][*<P>][!<M>][~<K>]` close
+(case-insensitive `=X`, with `*`, `!`, and `~` in any order) parses as
 `pomodoro_close` with a `pomodoro_close` object (`raw` plus the additive
-`in_progress` list, `null` when no `<N>` was typed, the `complete` list,
-the `drop` list, and the `log` entries (`index`, `text`, `details`) in
+`in_progress` list, `null` when no `<N>` was typed, the `park` list,
+the `complete` list, the `drop` list, and the `log` entries (`index`, `text`, `details`) in
 typed order) and spans covering the `=x` token (`pomodoro_close`), the `<N>`
-list including its commas (`pomodoro_close_in_progress`), the `!<M>` list
+list including its commas (`pomodoro_close_in_progress`), the `*<P>` list
+including the `*` (`pomodoro_close_park`), the `!<M>` list
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including the
 `~` (`pomodoro_close_drop`), and each entry index
 (`pomodoro_close_log_index`; entry and detail text render as neutral prose
@@ -2882,7 +2916,7 @@ close items never inherit a `@@` declaration.
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
-`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `sub_bullet_route`,
+`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_park`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,

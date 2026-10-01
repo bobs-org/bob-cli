@@ -157,19 +157,20 @@ bytes only (the `#` is in no span), `=<X>#` with no name reports mode \
 span over `#` and the partial `pomodoro_start` spec, and `=x#name` reports \
 mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
 `#name`. A whole-item \
-`=x[<N>][!<M>][~<K>]` close (case-insensitive `=X`, with `!` and `~` in \
-either order) reports mode 'pomodoro_close' with a `pomodoro_close` object \
+`=x[<N>][*<P>][!<M>][~<K>]` close (case-insensitive `=X`, with `*`, `!`, and `~` in \
+any order) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` plus the additive `in_progress` list, null when no `<N>` was typed, \
-the `complete` list, the `drop` list, and the `log` entries (`index`, \
+the `park` list, the `complete` list, the `drop` list, and the `log` entries (`index`, \
 `text`, `details`) in typed order) \
 and spans covering the `=x` token (`pomodoro_close`), the `<N>` list \
-including its commas (`pomodoro_close_in_progress`), the `!<M>` list \
+including its commas (`pomodoro_close_in_progress`), the `*<P>` list \
+including the `*` (`pomodoro_close_park`), the `!<M>` list \
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including \
 the `~` (`pomodoro_close_drop`), and each entry index \
 (`pomodoro_close_log_index`; entry text renders as neutral prose but keeps \
 its wikilink spans); the human `close` line reads \
-`=x1,3!2~4 (in progress 1, 3 · complete 2 · drop 4 · defer the rest)`, with \
-`in progress none` for `=x0`, a bare `=x` for a plain close, and \
+`=x1*2!3~4 (in progress 1 · parked 2 · complete 3 · drop 4 · defer the rest)`, with \
+`in progress none` for `=x0`, `parked 2 · defer the rest` for `=x*2`, a bare `=x` for a plain close, and \
 `log 2 'wired the lexer' (+1 detail)` for typed entries with details. \
 Work Log entries are child bullets below the close (`- <n> <text>`, with \
 two-space `  - <detail>` details nesting under their entry); only the \
@@ -796,7 +797,12 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
             .join(", ");
         Some(format!("log {entries}"))
     };
-    let Some(in_progress) = close.in_progress.as_ref() else {
+    // Star-only closes (`=x*2`) activate selection mode like `<N>`: unlisted
+    // plain links defer. `in_progress` stays null when no `<N>` was typed;
+    // parked numbers are never unioned into it.
+    let has_work_selection =
+        close.in_progress.is_some() || !close.park.is_empty();
+    if !has_work_selection {
         let mut parts = Vec::new();
         if !close.complete.is_empty() {
             parts.push(format!("complete {}", join_numbers(&close.complete)));
@@ -812,11 +818,21 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
         }
         return format!("{base} ({})", parts.join(" · "));
     };
-    let mut parts = if in_progress.is_empty() {
-        vec!["in progress none".to_string()]
-    } else {
-        vec![format!("in progress {}", join_numbers(in_progress))]
-    };
+    let mut parts = Vec::new();
+    if let Some(in_progress) = close.in_progress.as_ref() {
+        if in_progress.is_empty() {
+            // `=x0*2` records work via parking: do not claim
+            // `in progress none` while a parked task is being worked.
+            if close.park.is_empty() {
+                parts.push("in progress none".to_string());
+            }
+        } else {
+            parts.push(format!("in progress {}", join_numbers(in_progress)));
+        }
+    }
+    if !close.park.is_empty() {
+        parts.push(format!("parked {}", join_numbers(&close.park)));
+    }
     if !close.complete.is_empty() {
         parts.push(format!("complete {}", join_numbers(&close.complete)));
     }
@@ -1469,6 +1485,7 @@ mod tests {
         let close = PomodoroCloseSpec {
             raw: "=x1,2".to_string(),
             in_progress: Some(vec![1, 2]),
+            park: Vec::new(),
             complete: Vec::new(),
             drop: Vec::new(),
             log: vec![

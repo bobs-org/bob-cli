@@ -246,6 +246,20 @@ pub(crate) fn plan_ledger_close(
     entry: &RunningPomodoro,
     now: NaiveDateTime,
 ) -> LedgerClosePlan {
+    plan_ledger_close_with_parked(contents, entry, now, &BTreeSet::new())
+}
+
+/// Ledger close with explicit parked-line suppression. `parked_lines` holds
+/// 1-based day-note lines in `contents` (the post-selection working copy)
+/// whose worked lines must be recorded but not carried. Parked lines stay in
+/// history, startable targets, and Work Log groups; only carry is
+/// suppressed. Preserves relative order of remaining carried lines.
+pub(crate) fn plan_ledger_close_with_parked(
+    contents: &str,
+    entry: &RunningPomodoro,
+    now: NaiveDateTime,
+    parked_lines: &BTreeSet<usize>,
+) -> LedgerClosePlan {
     let spans = line_spans(contents);
     let line_text = spans.iter().map(|line| line.text).collect::<Vec<_>>();
     let entry_index = entry.line.saturating_sub(1);
@@ -287,12 +301,22 @@ pub(crate) fn plan_ledger_close(
             &mut embedded_targets,
         );
     }
+    // Explicit carry metadata: parked worked lines report `carried: false`.
+    for link in classified_links.iter_mut() {
+        if parked_lines.contains(&link.line) {
+            link.carried = false;
+        }
+    }
 
     let mut carried_lines = Vec::new();
     for bullet in classified
         .iter()
         .filter(|bullet| bullet.kind == BulletKind::WorkedOn)
     {
+        // Parked worked lines are recorded in history but never carried.
+        if parked_lines.contains(&(bullet.line + 1)) {
+            continue;
+        }
         carried_lines.push(bullet.stripped.clone());
     }
     let mut deferred_lines = BTreeSet::new();

@@ -470,7 +470,7 @@ pub(crate) const POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro close 
 pub(crate) const POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `p:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
 
 // ---------------------------------------------------------------------------
-// `=x[<N>][!<M>]` selection diagnostics
+// `=x[<N>][*<P>][!<M>][~<K>]` selection diagnostics
 // ---------------------------------------------------------------------------
 
 /// One shared source for every selection-list diagnostic, used by both the
@@ -505,8 +505,29 @@ pub(super) fn close_selection_overlap_complete_drop_error(
     format!("task {number} cannot both complete and drop in `{token}`")
 }
 
+pub(super) fn close_selection_overlap_in_progress_park_error(
+    number: u32,
+    token: &str,
+) -> String {
+    format!("task {number} cannot both stay in progress and park in `{token}`")
+}
+
+pub(super) fn close_selection_overlap_park_complete_error(
+    number: u32,
+    token: &str,
+) -> String {
+    format!("task {number} cannot both park and complete in `{token}`")
+}
+
+pub(super) fn close_selection_overlap_park_drop_error(
+    number: u32,
+    token: &str,
+) -> String {
+    format!("task {number} cannot both park and drop in `{token}`")
+}
+
 pub(super) fn close_selection_zero_alone_error() -> String {
-    "`0` means no task stays in progress; use it alone, as `=x0`, `=x0!2`, or `=x0~2`"
+    "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`"
         .to_string()
 }
 
@@ -530,9 +551,13 @@ pub(super) fn close_selection_one_tilde_error() -> String {
     "use one `~` list: `=x1~2,3`".to_string()
 }
 
+pub(super) fn close_selection_one_star_error() -> String {
+    "use one `*` list: `=x1*2,3`".to_string()
+}
+
 pub(super) fn close_selection_bad_list_error(token: &str) -> String {
     format!(
-        "`{token}` is not a task list: write `=x`, then comma-separated task numbers, then optionally `!` and the numbers to complete and `~` and the numbers to drop (for example `=x1,3!2~4`)"
+        "`{token}` is not a task list: write `=x`, then comma-separated task numbers, then optionally `*` and the numbers to park, `!` and the numbers to complete, and `~` and the numbers to drop (for example `=x1*2!3~4`)"
     )
 }
 
@@ -541,11 +566,11 @@ pub(super) fn close_selection_too_large_error(number_text: &str) -> String {
 }
 
 pub(super) fn close_selection_no_spaces_error() -> String {
-    "write the task numbers right after `=x`, with no spaces (for example `=x1,3!2~4`)".to_string()
+    "write the task numbers right after `=x`, with no spaces (for example `=x1*2!3~4`)".to_string()
 }
 
-/// Execution rejection for a dangling separator: `separator` is the `,` or
-/// `!` the user still has to follow with a task number.
+/// Execution rejection for a dangling separator: `separator` is the `,`,
+/// `!`, `~`, or `*` the user still has to follow with a task number.
 pub(super) fn close_selection_incomplete_error(
     token: &str,
     separator: char,
