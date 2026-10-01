@@ -22,7 +22,7 @@ tests use the conformance vectors below verbatim.
   It is stored as `[fresh:: YYYY-MM-DD]`.
 - **Stamp / refresh:** write today's date into `fresh`.
 - **Due for review:** an in-scope task in state NEW, RESURFACED, or
-  STALE (see §4).
+  ROTTEN (human word for machine `STALE` until schema 2; see §4).
 - **Refreshed today:** a task whose `fresh` equals today.
 
 A missing stamp — not `created` — means new. `bob gkeep pull` sets
@@ -65,6 +65,12 @@ freshness:
   interval: 7 # days before a confirmed Ready task is due for review (docs/freshness.md)
   # stale_daily_budget: 15 # optional daily goal meter; never hides tasks
 ```
+
+**Mobile config caveat.** On mobile, when the config file is
+unavailable, ledger-tools uses the defaults above and marks them
+`invalid` rather than failing; a config edit on desktop is visible
+within the existing 60-second tick. `bob freshness` on desktop still
+exits 2 for an invalid `freshness:` block.
 
 ## 3. Placement rule
 
@@ -228,14 +234,17 @@ for editing and never stamps.
 **Morning (≈10 min; replaces reading READY):**
 
 1. Run `bob gkeep pull`.
-2. Walk `]s` / Alt+Shift+F until the status bar shows **0 new**. This
-   step is never capped and never skipped.
-3. Continue through DUE until 0 due, or until the budget meter is met.
+2. Clear `[[dash#NEW Tasks|NEW]]` to 0 first (`]s` / Alt+Shift+F until
+   the status bar shows **0 new**). This step is never capped and
+   never skipped.
+3. Then clear `[[rotten|ROTTEN]]` until 0 or the budget meter is met
+   (`✓ N today` / `✓ N/B today`): RETURNED first, then age-expired
+   ROTTEN.
 4. Then PENDING → NEXT: link today's work and release the rest.
 
 **Weekly:** one more line in the existing Weekly prune chore. Clear
-any leftover DUE, or lengthen that note's `task_refresh`, and look for
-projects with no Next or Ready task.
+any leftover `[[rotten|ROTTEN]]`, or lengthen that note's
+`task_refresh`, and look for projects with no Next or Ready task.
 
 Review outcomes, one key each (every row except "edit" stamps by
 itself): still right (Alt+Shift+F or Alt+F); see it less often
@@ -270,6 +279,14 @@ bob freshness · Thu 2026-10-08 · every 7d
 
 With a budget the meter reads `✓ 12/15 today`. Lints go last.
 `text` is the clean description; queue `line` numbers are 1-based.
+
+**Fallback.** With a missing, old, or throwing freshness API, dash
+keeps legacy READY visibility and counts, NEW and both rotten groups
+render empty, and NEW/ROTTEN badges show `–` (never zero). Native
+`bob query` has no Obsidian `app.plugins`, so NEW/ROTTEN are empty
+and READY is ungated there; `bob freshness list` is the headless
+review interface.
+
 The JSON contract is `schema_version: 1` with `ok`, `date`,
 `config` (`interval`, `stale_daily_budget`), `counts` (`due`,
 `new`, `resurfaced`, `stale`, `fresh`, `refreshed_today`, `budget`,
@@ -312,8 +329,8 @@ an invalid `freshness:` block or a non-Dataview task format.
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0) |
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
-| `freshness.md` | vault-review (landed: review note grouping NEW → DUE) |
-| `dash.md` | vault-review (landed: REVIEW chip) |
+| `rotten.md` (aliases `Review`, `Freshness review`, `Rotten Tasks`) | dash-gating (landed: live summary plus always-present RETURNED and ROTTEN groups; tasks stay in source notes, rows are click-through views) |
+| `dash.md` | dash-gating (landed: TODAY → NEW → PENDING → NEXT → READY sections; NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; gated READY with whole-lane tooltip) |
 | freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
 
 ## 9. Placement conformance examples
@@ -659,3 +676,19 @@ these vectors verbatim.
   - C2: the same pair, but one row is Next → null, so the mark is
     unresolved.
   - C3: no candidate rows → null.
+
+## 13. Two-week trial (2026-10-05 through 2026-10-18)
+
+The accepted trial runs 2026-10-05 through 2026-10-18 (if rollout
+misses the start, record the actual dates for a full 14-day trial).
+Completion means the trial is ready to run, not that an agent waits
+two weeks or claims its outcome.
+
+Keep a lightweight daily tally on the rotten page: NEW, RETURNED,
+expired ROTTEN, confirmed FRESH, READY, and whether the chip was red.
+Track confirmed FRESH separately from exempt READY for the rule below.
+
+Keep if red on no more than 3 mornings, at least about 30 confirmed
+tasks on most mornings, and no lost-needed-task case. If it fails,
+Bryan can first adjust intervals or budget, then reconsider
+dim-not-hide; never adopt a stored rotten tag.

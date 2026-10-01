@@ -161,30 +161,38 @@ and `bob plan` always agree.
 
 ## READY backlog (dashboard and daily badge)
 
-**READY** is the global backlog the `dash.md` READY chip and the daily
-`bob-plan` READY badge share: every `TODO`-type task (including custom
-TODO symbols) that the dash's READY section shows, regardless of which
-daily file hosts the badge. It excludes completed, cancelled, and
-non-task entries; template and `_conflicts` paths; `dash.md` itself
-(ordinary ready tasks living in a daily note remain eligible);
-`#hide`; dependency-blocked tasks (`isBlocked` against the full Tasks
-list); future-scheduled tasks (unscheduled and scheduled on or before
-the current local day count); and Today tasks (`isToday`). The count is
-the Obsidian dashboard backlog and its feedback is the shared badge;
-this feature adds no native READY count, lint, capture enforcement, or
-tmux meter.
+**READY** is the freshness-gated global backlog the `dash.md` READY
+chip and the daily `bob-plan` READY badge share: the visible TODO pool
+(see `docs/freshness.md` §4) minus the NEW and ROTTEN review buckets,
+regardless of which daily file hosts the badge. It holds recently
+human-confirmed tasks plus the preexisting freshness-exempt Ready tasks.
+It excludes completed, cancelled, and non-task entries; template and
+`_conflicts` paths; `dash.md` itself (ordinary ready tasks living in a
+daily note remain eligible); `#hide`; dependency-blocked tasks
+(`isBlocked` against the full Tasks list); future-scheduled tasks
+(unscheduled and scheduled on or before the current local day count);
+Today tasks (`isToday`); and any task whose read-time bucket is `new`
+or `rotten`. A null bucket alone never proves a task is Ready. The
+count is the Obsidian dashboard backlog and its feedback is the shared
+badge; this feature adds no native READY count, lint, capture
+enforcement, or tmux meter.
 
 The badge shows `READY n/cap` (for example `READY 87/100`); exactly at
 the cap is fine and only a strict excess turns red (`READY 101/100`).
 There is no intermediate warning color. This is a **soft limit**: it
 communicates backlog pressure without refusing capture, changing task
-statuses, or removing tasks. Clicking the badge opens `dash#READY
-Tasks`. The badge on an older daily file is a **live current backlog**,
-not a historical snapshot: Today exclusion and scheduled-date
-eligibility use the current day even when the PLAN portion describes
-that older file's ledger. `READY –` means Tasks data, required Today
-state, or the count is unavailable; zero is reserved for a successfully
-evaluated empty queue.
+statuses, or removing tasks. The cap now bounds only the
+confirmed/exempt pullable backlog: skipping review can lower READY
+without lowering total lane pressure (`NEW + ROTTEN + READY`). The
+tooltip carries the whole lane, for example
+`READY 120/100 · lane 210 = 3 new + 87 rotten + 120 ready`. ROTTEN is
+the counterweight: `ROTTEN 31 · ✓ 12` (or `✓ 12/15` with a budget).
+Clicking the badge opens `dash#READY Tasks`. The badge on an older
+daily file is a **live current backlog**, not a historical snapshot:
+Today exclusion and scheduled-date eligibility use the current day even
+when the PLAN portion describes that older file's ledger. `READY –`
+means Tasks data, required Today state, or the count is unavailable;
+zero is reserved for a successfully evaluated empty queue.
 
 ## Config
 
@@ -312,8 +320,8 @@ report, 1 for an I/O failure, 2 for usage or an invalid plan config.
 | Surface | What it shows |
 | --- | --- |
 | `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
-| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `readyBudget`, `renderReadyBadge`) renders TODAY, PENDING, NEXT, and READY chips, a theme line, and any lints. TODAY is the theme/link budget (`TODAY 3/3 · 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY still show a dash when their data is unavailable; READY is unchanged: a live current backlog (`READY n/100`) that opens `dash#READY Tasks` and never changes the PLAN status. |
-| `dash.md` | Its PENDING, NEXT, READY, BLOCKED, REVIEW, and TODAY chips and mutually exclusive TODAY / PENDING / NEXT / READY sections use the Bob Ledger Tools api v3 (`readyBudget`/`renderReadyBadge` for READY, with an inline fallback when the plugin is older or unloaded). TODAY is that same theme/link budget and opens today's daily note. |
+| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v2: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, NEW, PENDING, NEXT, READY, ROTTEN chips, a theme line, and any lints. TODAY is the theme/link budget (`TODAY 3/3 · 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, READY, NEW, and ROTTEN show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. |
+| `dash.md` | Its NEW, PENDING, NEXT, READY, BLOCKED, ROTTEN, and TODAY chips in that order and mutually exclusive TODAY / NEW / PENDING / NEXT / READY sections (section order TODAY → NEW → PENDING → NEXT → READY) use the Bob Ledger Tools api v3 with freshness namespace v2 (`readyBudget`/`renderReadyBadge` for gated READY plus `renderReviewChip`/`reviewModel` for NEW/ROTTEN, with a guarded inline fallback when the plugin is older or unloaded). TODAY is that same theme/link budget and opens today's daily note. |
 | `bob tmux-pomodoro` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |
 | `bob task-status-hooks` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
 | `bob capture` | When a capture changes today's Pomodoros section, a before/after theme and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap theme. |

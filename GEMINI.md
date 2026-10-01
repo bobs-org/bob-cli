@@ -133,10 +133,16 @@ edited in place.
    (`task-lanes-are-sticky`) - Linking raises Ready to Next and an =x close sets In
    Progress (PENDING); no unlink, hooks run, or capture drop lowers them; only Alt+N
    release returns a task to Ready; Blocked stays derived.
-5. **Today Is Read From The Ledger, Never Written To Tasks**
-   (`today-is-read-from-the-ledger`) - Today is the open tasks with a dedicated Task
-   Link under today's open Pomodoros, computed at read time by bob plan and
-   bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is retired.
+5. **READY Is Freshness-Gated With NEW and ROTTEN Review**
+   (`ready-is-freshness-gated`) - READY is the freshness-gated confirmed/exempt backlog
+   (visible TODO pool minus NEW and ROTTEN buckets) with TODAY → NEW → PENDING → NEXT →
+   READY sections and NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; review clears
+   NEW then ROTTEN; no tags, fields, or status changes store review state.
+6. **Today Is Read From The Ledger, Never Written To Tasks**
+   (`today-is-read-from-the-ledger`) - _[partly superseded by `ready-is-freshness-gated`
+   ]_ Today is the open tasks with a dedicated Task Link under today's open Pomodoros,
+   computed at read time by bob plan and bob-ledger-tools; never a tag, task-line field,
+   or file-path filter; #now is retired.
 
 ### 3.2 Glossary Terms (glossary)
 

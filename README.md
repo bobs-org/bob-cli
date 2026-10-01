@@ -477,8 +477,11 @@ bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format h
 ```
 
 Running `bob freshness` with no subcommand runs `list`: the tasks due
-for review (never confirmed, resurfaced, or stale), with whole-vault
-counts. `seed` stamps the one-time cutover: Ready tasks staggered
+for review (never confirmed, resurfaced, or rotten), with whole-vault
+counts and an additive `bucket` (`new`/`rotten`/null) per queue row.
+On the dashboard, NEW holds unconfirmed tasks, READY holds only
+confirmed/exempt tasks, and `rotten.md` holds RETURNED plus expired
+ROTTEN. `seed` stamps the one-time cutover: Ready tasks staggered
 across the last 7 days by note, every other open task today. The seed
 refuses a second run, aborts on any parse change, and `--dry-run`
 previews without writing.

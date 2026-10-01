@@ -10,8 +10,9 @@ summary:
   Pomodoros, computed at read time by bob plan and bob-ledger-tools; never a
   tag, task-line field, or file-path filter; #now is retired."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-09-30
+  superseded_by: decisions/ready-is-freshness-gated
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault, dash.
@@ -47,3 +48,7 @@ no longer mark "this week" on new text.
 
 **Reopens when.** Tasks removes the event or `app` access, or the refresh
 proves unreliable.
+
+Superseded in part by [[decisions/ready-is-freshness-gated]] for the dash
+section list only (TODAY → NEW → PENDING → NEXT → READY); the ledger-only
+Today claim above is unchanged.
