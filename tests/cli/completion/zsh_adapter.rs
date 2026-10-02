@@ -520,7 +520,13 @@ fn real_zsh_first_tab_completes() {
         output.status.success(),
         "zpty driver failed, stdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    for marker in ["SETUP OK", "FIRST-TAB OK", "DASH-TAB OK", "FORMAT-TAB OK"] {
+    for marker in [
+        "SETUP OK",
+        "FIRST-TAB OK",
+        "DASH-TAB OK",
+        "FORMAT-TAB OK",
+        "FORMAT-HEADER OK",
+    ] {
         assert!(
             stdout.contains(marker),
             "missing {marker:?}, stdout:\n{stdout}\nstderr:\n{stderr}"
@@ -561,5 +567,9 @@ zpty -w -n pb $'\x03'
 sleep 0.5
 zpty -w -n pb $'bob capture --format \t'
 if zpty -r pb tab3 '*human*' 2>/dev/null; then print -r -- "FORMAT-TAB OK"; else print -r -- "FORMAT-TAB MISS"; fi
+zpty -w -n pb $'\x03'
+sleep 0.5
+zpty -w -n pb $'bob capture --format \t'
+if zpty -r pb tab4 '*format*' 2>/dev/null; then print -r -- "FORMAT-HEADER OK"; else print -r -- "FORMAT-HEADER MISS"; fi
 zpty -d pb
 "#;

@@ -4,8 +4,10 @@
 //! without `--force`, verifies registration with a real-shell probe unless
 //! told not to, and records everything in the manifest. Status never writes.
 //! Exit codes: 0 for success or an explicit no-op, 1 for a failed install
-//! or uninstall (verification problems are notes on install but fail
-//! `status -v`, whose job is liveness), 2 for usage errors.
+//! or uninstall, for an install whose live verification is not registered
+//! (`not registered`, `shadowed by …`, `bob is bound to …`), or for
+//! `status -v` liveness failures (an unverified probe is a warning and
+//! stays 0), 2 for usage errors.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -379,7 +381,7 @@ fn classify(shell: Shell, path: &Path, manifest: &Manifest) -> Classification {
             } else if bytes == wanted.as_bytes() {
                 State::ExternallyManaged
             } else {
-                State::Outdated
+                State::OutdatedExternallyManaged
             };
             Classification {
                 state,
@@ -398,6 +400,32 @@ fn is_symlink(path: &Path) -> bool {
 
 // --- shell selection ------------------------------------------------------
 
+/// Shells named on the command line, deduped, possibly empty.
+fn explicit_shells(matches: &clap::ArgMatches) -> Vec<Shell> {
+    let explicit: Vec<Shell> = matches
+        .try_get_many::<String>("shell")
+        .ok()
+        .flatten()
+        .map(|values| values.filter_map(|raw| Shell::parse(raw)).collect())
+        .unwrap_or_default();
+    let mut seen = Vec::new();
+    for shell in explicit {
+        if !seen.contains(&shell) {
+            seen.push(shell);
+        }
+    }
+    seen
+}
+
+fn shell_from_env() -> Option<Shell> {
+    std::env::var_os("SHELL")
+        .and_then(|value| {
+            PathBuf::from(value).file_name().map(|name| name.to_owned())
+        })
+        .and_then(|name| name.to_str().map(str::to_string))
+        .and_then(|name| Shell::parse(&name))
+}
+
 fn select_for_install(
     explicit: Vec<Shell>,
     manifest: &Manifest,
@@ -405,14 +433,9 @@ fn select_for_install(
     if !explicit.is_empty() {
         return Ok(explicit);
     }
+    // No SHELL arguments: $SHELL plus every owned shell.
     let mut shells = Vec::new();
-    if let Some(shell) = std::env::var_os("SHELL")
-        .and_then(|value| {
-            PathBuf::from(value).file_name().map(|name| name.to_owned())
-        })
-        .and_then(|name| name.to_str().map(str::to_string))
-        .and_then(|name| Shell::parse(&name))
-    {
+    if let Some(shell) = shell_from_env() {
         shells.push(shell);
     }
     for owned in manifest.owned_shells() {
@@ -433,15 +456,30 @@ fn select_for_install(
 
 fn run_install(matches: &clap::ArgMatches) -> i32 {
     let manifest = Manifest::load();
-    let explicit = selected_or_all(matches, StatusDefault::Owned(&manifest));
-    let shells = match select_for_install(explicit, &manifest) {
-        Ok(shells) => shells,
-        Err(message) => {
-            eprintln!("bob completion install: {message}");
-            return 1;
+    let explicit = explicit_shells(matches);
+    let target_arg = matches.get_one::<String>("target").map(String::as_str);
+    // With -t and no SHELL arguments, install only $SHELL's shell, so a
+    // second owned adapter does not turn a single-target install into a
+    // two-shell usage error.
+    let shells = if target_arg.is_some() && explicit.is_empty() {
+        match shell_from_env() {
+            Some(shell) => vec![shell],
+            None => {
+                eprintln!(
+                    "bob completion install: pass a shell: `bob completion install bash` or `bob completion install zsh`"
+                );
+                return 1;
+            }
+        }
+    } else {
+        match select_for_install(explicit, &manifest) {
+            Ok(shells) => shells,
+            Err(message) => {
+                eprintln!("bob completion install: {message}");
+                return 1;
+            }
         }
     };
-    let target_arg = matches.get_one::<String>("target").map(String::as_str);
     if target_arg.is_some() && shells.len() > 1 {
         eprintln!(
             "bob completion install: --target DIR takes a single shell, got {}",
@@ -502,29 +540,37 @@ fn run_install(matches: &clap::ArgMatches) -> i32 {
     if let Some(warning) = verify::path_shadow_warning() {
         report.warnings.push(warning);
     }
-    if changed {
-        let only_bash = report.rows.iter().all(|row| row.shell == Shell::Bash);
-        let only_zsh = report.rows.iter().all(|row| row.shell == Shell::Zsh);
-        if only_bash {
-            report.closers.push(
-                "Open a new shell (or run `exec bash`) to start using it."
-                    .to_string(),
-            );
-        } else if only_zsh {
-            report.closers.push(
-                "Open a new shell (or run `exec zsh`) to start using it."
-                    .to_string(),
-            );
-        } else {
-            report
-                .closers
-                .push("Open a new shell to start using it.".to_string());
+    // A dry run never prints a closer. "Completion is live" prints only
+    // when every row is unchanged and registered; when nothing changed but
+    // a row is unhealthy, the row notes carry the remedy and no closer
+    // prints.
+    if !dry_run {
+        if changed {
+            let only_bash =
+                report.rows.iter().all(|row| row.shell == Shell::Bash);
+            let only_zsh =
+                report.rows.iter().all(|row| row.shell == Shell::Zsh);
+            if only_bash {
+                report.closers.push(
+                    "Open a new shell (or run `exec bash`) to start using it."
+                        .to_string(),
+                );
+            } else if only_zsh {
+                report.closers.push(
+                    "Open a new shell (or run `exec zsh`) to start using it."
+                        .to_string(),
+                );
+            } else {
+                report
+                    .closers
+                    .push("Open a new shell to start using it.".to_string());
+            }
+        } else if !failed && rows_all_registered(&report.rows) {
+            report.closers.push(format!(
+                "Completion is live: every <TAB> asks {}, so new commands work now.",
+                tilde_current_exe()
+            ));
         }
-    } else if !failed {
-        report.closers.push(format!(
-            "Completion is live: every <TAB> asks {}, so new commands work now.",
-            tilde_current_exe()
-        ));
     }
     emit(&report, false, quiet, failed)
 }
@@ -537,6 +583,16 @@ struct InstallOptions {
 
 fn manifest_changed(rows: &[ShellRow]) -> bool {
     rows.iter().any(|row| row.entry["manifest_write"] == true)
+}
+
+/// True when every row's recorded-or-live registration is healthy.
+fn rows_all_registered(rows: &[ShellRow]) -> bool {
+    !rows.is_empty()
+        && rows.iter().all(|row| {
+            row.entry["registration"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("registered as"))
+        })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -609,7 +665,10 @@ fn install_one(
     }
 
     if (symlink
-        || matches!(classification.state, State::Edited | State::Foreign))
+        || matches!(
+            classification.state,
+            State::Edited | State::Foreign | State::OutdatedExternallyManaged
+        ))
         && !options.force
     {
         let remedy = format!("bob completion install {} -f", shell.name());
@@ -644,10 +703,16 @@ fn install_one(
     } else {
         match classification.state {
             State::NotInstalled | State::Missing => "installed",
-            State::Outdated | State::Edited | State::Foreign => "updated",
+            State::Outdated
+            | State::Edited
+            | State::Foreign
+            | State::OutdatedExternallyManaged => "updated",
             State::Current | State::ExternallyManaged => "unchanged",
         }
     };
+    // A -t move leaves a bob-owned adapter behind: remember the recorded
+    // path before overwriting the manifest entry.
+    let previous_entry = manifest.entry(shell).cloned();
     if let Err(message) = manifest::atomic_write(path, wanted.as_bytes()) {
         return (
             fail_row(shell, Some(path), &message, Some(target.reason)),
@@ -656,18 +721,34 @@ fn install_one(
     }
     remove_zwc(shell, path);
     let digest = manifest::adapter_sha256(shell);
-    let registration = if options.verify_live {
-        verify::probe_registration(shell, path)
+    // Glyphs and exit codes match registration: not registered, shadowed,
+    // and bound render ✗ and fail; an unverified probe renders ⚠ and
+    // stays 0; -n never probes and renders · with a status -v pointer.
+    let live_registration: Option<Registration> = if options.verify_live {
+        Some(verify::probe_registration(shell, path))
     } else {
-        Registration::Unverified("skipped (--no-verify)".to_string())
+        None
     };
-    let (registration_text, checked) =
-        live_or_recorded_text(shell, &registration);
+    let (registration_text, checked, level, failed) = match live_registration
+        .as_ref()
+    {
+        Some(registration) => {
+            let (text, checked) = live_or_recorded_text(shell, registration);
+            let (level, failed) = install_verdict(registration);
+            (text, checked.to_string(), level, failed)
+        }
+        None => (
+            "registration not checked → bob completion status -v".to_string(),
+            "skipped".to_string(),
+            Level::Info,
+            false,
+        ),
+    };
     let verification = VerificationRecord {
         registration: registration_text.clone(),
         digest: digest.clone(),
         path: path.display().to_string(),
-        checked: checked.to_string(),
+        checked: checked.clone(),
     };
     manifest.set(
         shell,
@@ -681,30 +762,40 @@ fn install_one(
             verification: Some(verification),
         },
     );
+    let checked_static: &'static str = if options.verify_live {
+        "now"
+    } else {
+        "skipped"
+    };
     let mut entry = report::json_entry(
         shell,
         State::Current,
         Some(path),
         true,
         &registration_text,
-        Some(checked),
+        Some(checked_static),
         Some(target.reason),
         None,
     );
     entry["manifest_write"] = serde_json::Value::Bool(true);
-    let mut notes = registration_notes(shell, path, &registration);
+    let mut notes = match live_registration.as_ref() {
+        Some(registration) => registration_notes(shell, path, registration),
+        None => Vec::new(),
+    };
+    notes.extend(home_default_fpath_notes(shell, target, &notes));
     notes.push(format!("({})", target.reason.text()));
+    notes.extend(move_cleanup_notes(shell, previous_entry.as_ref(), path));
     (
         ShellRow {
             shell,
-            level: Level::Ok,
+            level,
             summary: format!(
                 "{action} · protocol {PROTOCOL} · {registration_text}"
             ),
             path: Some(row_path),
             notes,
             entry,
-            failed: false,
+            failed,
         },
         true,
     )
@@ -724,8 +815,10 @@ fn dry_run_row(
         Disk::Absent => true,
     };
     let refused = symlink
-        || (matches!(classification.state, State::Edited | State::Foreign)
-            && needs_write);
+        || (matches!(
+            classification.state,
+            State::Edited | State::Foreign | State::OutdatedExternallyManaged
+        ) && needs_write);
     let summary = if !needs_write {
         format!("{} · protocol {PROTOCOL}", classification.state.text())
     } else if refused {
@@ -733,7 +826,8 @@ fn dry_run_row(
     } else {
         format!("would install · protocol {PROTOCOL}")
     };
-    let mut notes = vec![format!("({})", target.reason.text())];
+    let mut notes = home_default_fpath_notes(shell, target, &[]);
+    notes.push(format!("({})", target.reason.text()));
     if refused {
         notes.push(format!("→ bob completion install {} -f", shell.name()));
     }
@@ -784,11 +878,13 @@ fn unchanged_row(
     }
     let _ = manifest;
     let mut notes = registration.notes;
+    notes.extend(home_default_fpath_notes(shell, target, &notes));
     notes.push(format!("({})", target.reason.text()));
+    let (level, failed) = unchanged_verdict(&registration.text);
     (
         ShellRow {
             shell,
-            level: Level::Ok,
+            level,
             summary: format!(
                 "unchanged · protocol {PROTOCOL} · {}",
                 registration.text
@@ -796,10 +892,24 @@ fn unchanged_row(
             path: Some(row_path),
             notes,
             entry,
-            failed: false,
+            failed,
         },
         false,
     )
+}
+
+/// Glyph and exit-code verdict for the unchanged install path, from the
+/// display text (live probe or `-n` pointer).
+fn unchanged_verdict(text: &str) -> (Level, bool) {
+    if text.starts_with("registered as") {
+        (Level::Ok, false)
+    } else if text.starts_with("registration not checked") {
+        (Level::Info, false)
+    } else if text.starts_with("unverified") {
+        (Level::Warn, false)
+    } else {
+        (Level::Fail, true)
+    }
 }
 
 struct LiveRegistration {
@@ -821,8 +931,12 @@ fn verify_and_record(
 ) -> LiveRegistration {
     if !verify_live {
         return LiveRegistration {
-            text: recorded_text(shell, path, digest, manifest)
-                .unwrap_or_else(|| "registration not checked".to_string()),
+            text: recorded_text(shell, path, digest, manifest).unwrap_or_else(
+                || {
+                    "registration not checked → bob completion status -v"
+                        .to_string()
+                },
+            ),
             checked: None,
             recorded: false,
             notes: Vec::new(),
@@ -923,6 +1037,82 @@ fn registration_notes(
     }
 }
 
+/// Glyph and exit-code verdict for a live install probe.
+fn install_verdict(registration: &Registration) -> (Level, bool) {
+    match registration {
+        Registration::Registered => (Level::Ok, false),
+        Registration::NotRegistered { .. }
+        | Registration::ShadowedBy(_)
+        | Registration::BoundTo(_) => (Level::Fail, true),
+        Registration::Unverified(_) => (Level::Warn, false),
+    }
+}
+
+/// The `fpath=…` setup line for the `~/.zfunc` home default.
+///
+/// The home default is never on `fpath` by itself, so installs that land
+/// there always print the line — including `-n` and dry runs, which never
+/// probe. Skipped when the notes already carry it (a live not-registered
+/// probe prints the same remedy).
+fn home_default_fpath_notes(
+    shell: Shell,
+    target: &Target,
+    notes: &[String],
+) -> Vec<String> {
+    if shell != Shell::Zsh || target.reason != TargetReason::HomeDefault {
+        return Vec::new();
+    }
+    if notes.iter().any(|note| note.contains("fpath=(")) {
+        return Vec::new();
+    }
+    let Some(dir) = target.path.parent() else {
+        return Vec::new();
+    };
+    vec![
+        "not on your fpath. Add this line to ~/.zshrc before compinit:"
+            .to_string(),
+        report::fpath_line(dir),
+    ]
+}
+
+/// After a `-t` move, clean up the previously recorded adapter.
+///
+/// When the old file still matches the previously recorded digest it is
+/// removed (plus any `.zwc` next to it) and the removal is reported.
+/// When it was edited the file is left behind with the exact `rm` command.
+fn move_cleanup_notes(
+    shell: Shell,
+    previous: Option<&super::manifest::ShellEntry>,
+    new_path: &Path,
+) -> Vec<String> {
+    let Some(previous) = previous else {
+        return Vec::new();
+    };
+    let old_path = PathBuf::from(&previous.path);
+    if old_path == new_path {
+        return Vec::new();
+    }
+    match read_disk(&old_path) {
+        Disk::Absent => Vec::new(),
+        Disk::Present { bytes, .. } => {
+            if manifest::sha256_hex(&bytes) == previous.sha256 {
+                let _ = std::fs::remove_file(&old_path);
+                remove_zwc(shell, &old_path);
+                vec![format!(
+                    "removed previous adapter at {}",
+                    report::tilde(&old_path)
+                )]
+            } else {
+                let rm = format!("rm {:?}", old_path.display().to_string());
+                vec![format!(
+                    "previous adapter left at {} (edited since install): run {rm}",
+                    report::tilde(&old_path)
+                )]
+            }
+        }
+    }
+}
+
 fn remove_zwc(shell: Shell, path: &Path) {
     if shell != Shell::Zsh {
         return;
@@ -979,13 +1169,23 @@ fn run_status(json: bool, live: bool, shells: Vec<Shell>) -> i32 {
     let mut rows = Vec::new();
     let mut failed = false;
     for shell in shells {
-        let target = resolve_target(shell, None, &manifest).unwrap_or(Target {
-            path: default_target(shell),
-            reason: match shell {
-                Shell::Bash => TargetReason::BashDefault,
-                Shell::Zsh => TargetReason::HomeDefault,
+        // Status never spawns a shell for target discovery: the target is
+        // the manifest record or the probe-free default, never an fpath
+        // probe. Only a live verify probe spawns a shell, and only for a
+        // shell with a file or a manifest record.
+        let target = match manifest.entry(shell) {
+            Some(entry) => Target {
+                path: PathBuf::from(&entry.path),
+                reason: TargetReason::PreviousInstall,
             },
-        });
+            None => Target {
+                path: default_target(shell),
+                reason: match shell {
+                    Shell::Bash => TargetReason::BashDefault,
+                    Shell::Zsh => TargetReason::HomeDefault,
+                },
+            },
+        };
         rows.push(status_one(shell, &target, &manifest, live, &mut failed));
     }
     let mut report = Report {
@@ -1013,31 +1213,11 @@ fn status_one(
     let state = classification.state;
     let remedy = status_remedy(shell, state);
 
-    if matches!(state, State::NotInstalled | State::Missing) {
-        if live {
-            let registration = verify::probe_registration(shell, &target.path);
-            let (text, checked) = live_or_recorded_text(shell, &registration);
-            *failed |= !registration.healthy();
-            let notes = registration_notes(shell, &target.path, &registration);
-            return ShellRow {
-                shell,
-                level: Level::Fail,
-                summary: format!("{} · {text}", state.text()),
-                path: Some(row_path),
-                notes,
-                entry: report::json_entry(
-                    shell,
-                    state,
-                    Some(&target.path),
-                    classification.owned,
-                    &text,
-                    Some(checked),
-                    Some(target.reason),
-                    remedy,
-                ),
-                failed: !registration.healthy(),
-            };
-        }
+    // A shell with no file and no manifest entry is simply not installed:
+    // no probe in any mode, and it never counts toward exit 1. A missing
+    // file (the manifest records an install but the file is gone) stays a
+    // failure.
+    if state == State::NotInstalled {
         return ShellRow {
             shell,
             level: Level::Info,
@@ -1065,8 +1245,24 @@ fn status_one(
     if live {
         let registration = verify::probe_registration(shell, &target.path);
         let (text, checked) = live_or_recorded_text(shell, &registration);
-        let healthy = registration.healthy();
-        *failed |= !healthy;
+        // Unverified probes (timeout, shell not found, probe failure) are
+        // warnings, never failures; only a definitive unhealthy
+        // registration fails.
+        let (level, row_failed) = match &registration {
+            Registration::Registered => {
+                if state == State::Current || state == State::ExternallyManaged
+                {
+                    (Level::Ok, false)
+                } else {
+                    (Level::Warn, false)
+                }
+            }
+            Registration::Unverified(_) => (Level::Warn, false),
+            Registration::NotRegistered { .. }
+            | Registration::ShadowedBy(_)
+            | Registration::BoundTo(_) => (Level::Fail, true),
+        };
+        *failed |= row_failed;
         let mut notes = registration_notes(shell, &target.path, &registration);
         if state != State::Current
             && state != State::ExternallyManaged
@@ -1076,16 +1272,7 @@ fn status_one(
         }
         return ShellRow {
             shell,
-            level: if healthy {
-                if state == State::Current || state == State::ExternallyManaged
-                {
-                    Level::Ok
-                } else {
-                    Level::Warn
-                }
-            } else {
-                Level::Fail
-            },
+            level,
             summary: format!("{} · protocol {PROTOCOL} · {text}", state.text()),
             path: Some(row_path),
             notes,
@@ -1099,19 +1286,29 @@ fn status_one(
                 Some(target.reason),
                 remedy,
             ),
-            failed: !healthy,
+            failed: row_failed,
         };
     }
 
     let digest = classification.digest.as_deref().unwrap_or_default();
     let recorded = recorded_text(shell, &target.path, digest, manifest);
-    let text = recorded.unwrap_or_else(|| {
+    let text = recorded.clone().unwrap_or_else(|| {
         "registration not checked → bob completion status -v".to_string()
     });
+    // A recorded unhealthy verification renders ⚠, never ✓. The exit
+    // code stays 0 without -v.
+    let recorded_unhealthy = recorded.as_deref().is_some_and(|record| {
+        record.starts_with("not registered")
+            || record.starts_with("shadowed")
+            || record.starts_with("bob is bound")
+            || record.starts_with("unverified")
+    });
     let level = match state {
-        State::Current | State::ExternallyManaged => Level::Ok,
-        State::Outdated | State::Edited | State::Foreign => Level::Warn,
+        State::Current | State::ExternallyManaged if !recorded_unhealthy => {
+            Level::Ok
+        }
         State::NotInstalled | State::Missing => Level::Info,
+        _ => Level::Warn,
     };
     let mut notes = Vec::new();
     if let Some(remedy) = remedy.clone()
@@ -1157,7 +1354,7 @@ fn status_remedy(shell: Shell, state: State) -> Option<String> {
         State::NotInstalled | State::Missing | State::Outdated => {
             Some(format!("bob completion install {}", shell.name()))
         }
-        State::Edited | State::Foreign => {
+        State::Edited | State::Foreign | State::OutdatedExternallyManaged => {
             Some(format!("bob completion install {} -f", shell.name()))
         }
         State::Current | State::ExternallyManaged => None,

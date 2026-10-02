@@ -218,13 +218,23 @@ bob completion install           # $SHELL, plus every bob-owned adapter
 bob completion install zsh -d    # show the plan without writing anything
 ```
 
+With no `SHELL` arguments bob installs for `$SHELL` plus every bob-owned
+adapter; with `-t/--target` and no `SHELL` arguments it installs only
+`$SHELL`'s shell, so a second owned adapter never turns a single-target
+install into a usage error.
+
 For zsh the target directory is the first match: `--target DIR`, the
 previous install location from the manifest, the first writable fpath
 entry under `$HOME`, oh-my-zsh completions, then `~/.zfunc` (created as
-needed, with the exact `fpath` line to add). For bash it is
+needed). Installs that land on the `~/.zfunc` home default always print
+the exact `fpath=(~/.zfunc $fpath)` line to add before compinit —
+including `-n` and dry runs, which never probe. For bash it is
 `${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-~/.local/share}/bash-completion}/completions/bob`.
 Files bob did not write are refused without `--force`, and every write is
-atomic. Verification probes a real shell unless `--no-verify` is given;
+atomic. Moving an owned install with `-t` removes the previous adapter
+when it still matches the manifest (plus any `.zwc` next to it) and says
+so; an edited previous file is left behind with the exact `rm` command.
+Verification probes a real shell unless `--no-verify` is given;
 `--quiet` prints only warnings and errors. Combining `--target` with more
 than one shell is a usage error.
 
@@ -246,12 +256,17 @@ than one shell is a usage error.
   FILE yourself (unrecorded: status reports it as externally managed).
 
 Exit codes are 0 for success or an explicit no-op, 1 when an install or
-uninstall failed or `status -v` found a broken install, and 2 for usage
-errors.
+uninstall failed, when a live install verification is `not registered`,
+`shadowed by …`, or `bob is bound to …`, or when `status -v` found a
+broken install (an `unverified` probe is a warning and stays 0), and 2
+for usage errors. A dry run never prints a closer; `Completion is live`
+prints only when every row is unchanged and registered.
 
 ## Status states
 
-- `not installed`: nothing there. Hint: `bob completion install bash` or `bob completion install zsh`.
+- `not installed`: nothing there and nothing recorded. Renders
+  `· bash not installed → bob completion install bash`, never probes in
+  any mode, and never fails the exit code.
 - `current`: bob-owned, and the bytes equal what this binary writes.
 - `outdated`: bob-owned, but the bytes differ. Hint:
   `bob completion install`.
@@ -260,7 +275,14 @@ errors.
 - `foreign`: no bob stamp. Hint: reinstall with `-f`.
 - `current (externally managed)`: an unrecorded file whose bytes equal
   this adapter. Bob reports it and never adopts it.
-- `missing`: the manifest records an install, but the file is gone.
+- `outdated (externally managed)`: an unrecorded stamped file whose bytes
+  differ. Refused without `-f`, like a foreign file, and never adopted.
+- `missing`: the manifest records an install, but the file is gone. Stays
+  a failure.
+
+Without `-v`, status never spawns a shell: the target is the manifest
+record or the probe-free default. A recorded unhealthy verification
+renders `⚠`, never `✓`, and the exit code stays 0.
 
 ## Troubleshooting
 
@@ -268,9 +290,14 @@ errors.
   `registered as _bob`, `not registered` (zsh: an `fpath` line or a
   stale-compdump `rm` plus `exec zsh`; bash: the exact `source <path>`
   line for `~/.bashrc`), `shadowed by <file>`, `bob is bound to <fn>`,
-  or `unverified (<reason>)`. Without `-v`, status shows the verification
+  or `unverified (<reason>)`. The probe initializes compinit only when
+  the rc did not (`(( ${+_comps} )) || compinit -D`), so a stale compdump
+  from the rc stays visible and the `rm …​/.zcompdump* && exec zsh`
+  remedy (`rm -f "${ZDOTDIR:-$HOME}"/.zcompdump* && exec zsh`) can fire. Without `-v`, status shows the verification
   recorded at install time, but only when its digest and path still match
-  the file.
+  the file. With `-n`, install reports
+  `registration not checked → bob completion status -v` instead of
+  probing.
 - `BOB_COMPLETE_DEBUG=<file>` appends each request, response, elapsed
   milliseconds, and any error or timeout.
 - A stale compinit dump looks installed but never loads: remove it with

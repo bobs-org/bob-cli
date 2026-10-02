@@ -1,13 +1,17 @@
 //! Real-shell verification for `bob completion`.
 //!
 //! Install and `status -v` classify registration with one bounded shell
-//! probe each (`zsh -ic` or `bash -ic`). The probe runs in its own process
-//! group with stdin closed and `BOB_COMPLETION_PROBE=1`, and is killed at
+//! probe each (`zsh -ic` or `bash -ic`). The probe runs in its own session
+//! with no controlling terminal (so an interactive shell can never stop on
+//! `SIGTTIN`/`SIGTTOU` under a terminal), with stdin closed and
+//! `BOB_COMPLETION_PROBE=1`, and its whole process group is killed at
 //! the deadline (8 s, or the hidden `BOB_COMPLETION_PROBE_TIMEOUT_MS`
-//! override for tests). Probe scripts carry `# bob-completion-*` markers
-//! so tests can fake the shell by branching on the script text; real rc
-//! noise is ignored by parsing only the lines between `bob-*-start` and
-//! `bob-*-end`.
+//! override for tests). Stdout is drained on a reader thread while
+//! waiting, so more than 64 KiB of rc output cannot block the probe and a
+//! background job inheriting the pipe cannot hang bob. Probe scripts carry
+//! `# bob-completion-*` markers so tests can fake the shell by branching on
+//! the script text; real rc noise is ignored by parsing only the lines
+//! between `bob-*-start` and `bob-*-end`.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -23,6 +27,25 @@ enum ProbeOutcome {
     Output(String),
     TimedOut,
     NotFound(String),
+}
+
+/// Kill the whole probe process group at the deadline, not just the child.
+#[cfg(unix)]
+fn kill_process_group(child: &mut std::process::Child) {
+    // The child called setsid, so its pid is its pgid: a negative pid
+    // addresses the group.
+    let pid = child.id() as i32;
+    // Best effort; fall back to killing just the child.
+    unsafe {
+        if libc::kill(-pid, libc::SIGKILL) != 0 {
+            let _ = child.kill();
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 pub(crate) fn probe_timeout_ms() -> u64 {
@@ -48,7 +71,15 @@ fn run_bounded_shell(
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        command.process_group(0);
+        // New session, no controlling terminal: an interactive shell
+        // started under a terminal can otherwise stop on SIGTTIN/SIGTTOU
+        // when it opens /dev/tty from a background process group.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -58,13 +89,26 @@ fn run_bounded_shell(
             ));
         }
     };
+    // Drain stdout concurrently so a chatty rc (> 64 KiB) cannot block the
+    // shell, and a background job inheriting the pipe cannot hang bob after
+    // the shell exits.
+    let stdout_rx = child.stdout.take().map(|pipe| {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let mut stdout = String::new();
+            let mut reader = std::io::BufReader::new(pipe);
+            let _ = Read::read_to_string(&mut reader, &mut stdout);
+            let _ = tx.send(stdout);
+        });
+        rx
+    });
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
+                    kill_process_group(&mut child);
                     let _ = child.wait();
                     return ProbeOutcome::TimedOut;
                 }
@@ -73,11 +117,10 @@ fn run_bounded_shell(
             Err(_) => break,
         }
     }
-    let mut stdout = String::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        let _ = pipe.read_to_string(&mut stdout);
-    }
     let _ = child.wait();
+    let stdout = stdout_rx
+        .and_then(|rx| rx.recv_timeout(Duration::from_secs(2)).ok())
+        .unwrap_or_default();
     ProbeOutcome::Output(stdout)
 }
 
@@ -137,10 +180,6 @@ impl Registration {
             }
         }
     }
-
-    pub(crate) fn healthy(&self) -> bool {
-        matches!(self, Registration::Registered)
-    }
 }
 
 fn display_path(path: &str) -> String {
@@ -160,8 +199,7 @@ pub(crate) fn probe_registration(
 
 fn probe_zsh(target: &std::path::Path) -> Registration {
     let script = "# bob-completion-verify-probe\n\
-        autoload -Uz compinit 2>/dev/null\n\
-        compinit -D 2>/dev/null\n\
+        (( ${+_comps} )) || { autoload -Uz compinit 2>/dev/null; compinit -D 2>/dev/null; }\n\
         autoload +X _bob 2>/dev/null\n\
         print -r -- bob-verify-start\n\
         for entry in $fpath; do print -r -- \"bob-fpath-entry=$entry\"; done\n\
@@ -254,7 +292,7 @@ fn probe_bash(_target: &std::path::Path) -> Registration {
             continue;
         }
         let function = complete_function(line);
-        match function.as_deref() {
+        match function {
             Some(name) if name == Shell::Bash.function_name() => {
                 return Registration::Registered;
             }

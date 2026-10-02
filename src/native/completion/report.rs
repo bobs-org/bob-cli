@@ -20,6 +20,7 @@ pub(crate) enum State {
     Edited,
     Foreign,
     ExternallyManaged,
+    OutdatedExternallyManaged,
     Missing,
 }
 
@@ -32,6 +33,7 @@ impl State {
             State::Edited => "edited",
             State::Foreign => "foreign",
             State::ExternallyManaged => "current (externally managed)",
+            State::OutdatedExternallyManaged => "outdated (externally managed)",
             State::Missing => "missing",
         }
     }

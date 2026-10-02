@@ -120,6 +120,7 @@ install-smoke:
     smoke_env="env HOME=${smoke_home} XDG_STATE_HOME=${smoke_home}/.local/state XDG_DATA_HOME=${smoke_home}/.local/share ZDOTDIR=${smoke_home}/.zdot SHELL=/bin/zsh"
     ${smoke_env} "${root}/bin/bob" completion install zsh -d -t "${root}/zfunc"
     test ! -e "${root}/zfunc"
+    test ! -e "${smoke_home}/.local/state/bob-cli/completion/manifest.json"
     ${smoke_env} "${root}/bin/bob" completion install zsh -n -t "${root}/zfunc"
     test -f "${root}/zfunc/_bob"
     ${smoke_env} "${root}/bin/bob" completion status -j > /dev/null

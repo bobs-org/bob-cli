@@ -26,9 +26,14 @@ fn write_fake_zsh(dir: &Path) {
     let script = r#"#!/bin/sh
 # Fake zsh for bob completion lifecycle tests. Branches on the probe
 # script's marker comments; $FAKE_FPATH and $FAKE_VERIFY_FPATH are
-# colon-separated entry lists.
+# colon-separated entry lists. When $FAKE_LOG is set, every probe branch
+# appends one line naming the probe kind, so tests can prove a command
+# never spawned a shell.
 for last in "$@"; do :; done
 script="$last"
+log_probe() {
+    [ -n "$FAKE_LOG" ] && printf '%s\n' "$1" >> "$FAKE_LOG"
+}
 split_print() {
     old_ifs="$IFS"
     IFS=':'
@@ -38,36 +43,49 @@ split_print() {
     done
     IFS="$old_ifs"
 }
+print_verify_block() {
+    printf 'bob-verify-start\n'
+    old_ifs="$IFS"
+    IFS=':'
+    # shellcheck disable=SC2086
+    for entry in $FAKE_VERIFY_FPATH; do
+        [ -n "$entry" ] && printf 'bob-fpath-entry=%s\n' "$entry"
+    done
+    IFS="$old_ifs"
+    case "$FAKE_VERIFY" in
+        registered)
+            printf 'bob-comp=_bob\nbob-source=%s\n' "$FAKE_SOURCE" ;;
+        shadowed)
+            printf 'bob-comp=_bob\nbob-source=%s\n' "$FAKE_SOURCE" ;;
+        tty-read)
+            printf 'bob-comp=_bob\nbob-source=%s\n' "$FAKE_SOURCE" ;;
+        bound)
+            printf 'bob-comp=_other\nbob-source=\n' ;;
+        *) printf 'bob-comp=\nbob-source=\n' ;;
+    esac
+    printf 'bob-verify-end\n'
+}
 case "$script" in
     *bob-completion-fpath-probe*)
+        log_probe "fpath-probe"
         printf 'bob-fpath-start\n'
         split_print "$FAKE_FPATH"
         printf 'bob-fpath-end\n'
         ;;
     *bob-completion-verify-probe*)
+        log_probe "verify-probe"
         case "$FAKE_VERIFY" in
             sleep) sleep 5 ;;
             broken) printf 'rc noise without markers\n' ;;
-            *)
-                printf 'bob-verify-start\n'
-                old_ifs="$IFS"
-                IFS=':'
-                # shellcheck disable=SC2086
-                for entry in $FAKE_VERIFY_FPATH; do
-                    [ -n "$entry" ] && printf 'bob-fpath-entry=%s\n' "$entry"
-                done
-                IFS="$old_ifs"
-                case "$FAKE_VERIFY" in
-                    registered)
-                        printf 'bob-comp=_bob\nbob-source=%s\n' "$FAKE_SOURCE" ;;
-                    shadowed)
-                        printf 'bob-comp=_bob\nbob-source=%s\n' "$FAKE_SOURCE" ;;
-                    bound)
-                        printf 'bob-comp=_other\nbob-source=\n' ;;
-                    *) printf 'bob-comp=\nbob-source=\n' ;;
-                esac
-                printf 'bob-verify-end\n'
+            tty-read)
+                # Read from the controlling terminal first: with no
+                # controlling terminal (a setsid probe) this fails
+                # immediately, but from a background process group with a
+                # terminal it stops on SIGTTIN and the probe times out.
+                read -r _ < /dev/tty 2>/dev/null
+                print_verify_block
                 ;;
+            *) print_verify_block ;;
         esac
         ;;
     *) printf 'fake zsh: unknown script\n' ;;
@@ -81,20 +99,30 @@ esac
 
 fn write_fake_bash(dir: &Path) {
     // Fake bash for lifecycle tests. Branches on the verify probe marker;
-    // the fpath probe is zsh-only and never reaches bash.
+    // the fpath probe is zsh-only and never reaches bash. A `registered`
+    // answer requires the adapter file at $FAKE_BASH_ADAPTER to exist, so
+    // a not-installed bash is never reported registered. When $FAKE_LOG
+    // is set, the verify branch logs one line.
     let script = r#"#!/bin/sh
 # Fake bash for bob completion lifecycle tests.
 for last in "$@"; do :; done
 script="$last"
 case "$script" in
     *bob-completion-verify-probe-bash*)
+        [ -n "$FAKE_LOG" ] && printf 'verify-probe\n' >> "$FAKE_LOG"
         case "$FAKE_VERIFY" in
             sleep) sleep 5 ;;
             broken) printf 'rc noise without markers\n' ;;
             *)
                 printf 'bob-verify-start\n'
                 case "$FAKE_VERIFY" in
-                    registered) printf 'complete -F _bob bob\n' ;;
+                    registered)
+                        if [ -z "$FAKE_BASH_ADAPTER" ] || [ -f "$FAKE_BASH_ADAPTER" ]; then
+                            printf 'complete -F _bob bob\n'
+                        else
+                            printf '\n'
+                        fi
+                        ;;
                     shadowed) printf 'complete -F _bob bob\n' ;;
                     bound) printf 'complete -F _other bob\n' ;;
                     *) printf '\n' ;;
@@ -127,6 +155,8 @@ fn completion_command(temp: &TempDir, fake: &Path) -> Command {
         .env_remove("FAKE_SOURCE")
         .env_remove("FAKE_FPATH")
         .env_remove("FAKE_VERIFY_FPATH")
+        .env_remove("FAKE_LOG")
+        .env_remove("FAKE_BASH_ADAPTER")
         .env_remove("BASH_COMPLETION_USER_DIR");
     let path = format!(
         "{}:{}",
@@ -224,8 +254,13 @@ fn first_install_then_idempotent_unchanged() {
         "idempotent:\n{second}"
     );
     assert!(
-        second.contains("Completion is live"),
-        "live closer:\n{second}"
+        second.contains("registration not checked → bob completion status -v"),
+        "no-verify pointer:\n{second}"
+    );
+    // Never probed, so never registered: no live closer.
+    assert!(
+        !second.contains("Completion is live"),
+        "no live closer without registration:\n{second}"
     );
 }
 
@@ -936,4 +971,688 @@ fn zsh_print_matches_installed_bytes() {
     assert_success(&printed);
     assert!(stdout(&printed).starts_with(ADAPTER_HEAD));
     assert_stdout_has_no_ansi(&printed);
+}
+
+/// True when `zsh` runs; prints the skip note otherwise.
+fn have_zsh() -> bool {
+    let ok = Command::new("zsh")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !ok {
+        println!("skipped: zsh not found on PATH");
+    }
+    ok
+}
+
+fn probe_log(temp: &TempDir) -> PathBuf {
+    temp.path().join("probes.log")
+}
+
+fn logged_probes(temp: &TempDir) -> String {
+    fs::read_to_string(probe_log(temp)).unwrap_or_default()
+}
+
+#[test]
+fn not_installed_shell_never_probes_and_never_fails() {
+    let temp = TempDir::new("bob-cli-completion-noprobe");
+    let fake = fakebin(&temp);
+    let log = probe_log(&temp);
+
+    for args in [
+        Vec::<String>::new(),
+        vec!["status".to_string()],
+        vec!["status".to_string(), "-j".to_string()],
+        vec!["status".to_string(), "-v".to_string()],
+    ] {
+        let mut command = completion_command(&temp, &fake);
+        command.args(&args).env("FAKE_LOG", &log);
+        let out = command.output().expect("run completion");
+        assert_success(&out);
+        let text = stdout(&out);
+        assert!(
+            text.contains("not installed"),
+            "not-installed form for {args:?}:\n{}",
+            format_output(&out)
+        );
+        if args.iter().any(|arg| arg == "-j") {
+            assert!(
+                text.contains("\"remedy\":\"bob completion install"),
+                "remedy for {args:?}:\n{}",
+                format_output(&out)
+            );
+        } else {
+            assert!(
+                text.contains("→ bob completion install"),
+                "remedy for {args:?}:\n{}",
+                format_output(&out)
+            );
+        }
+    }
+    assert!(
+        logged_probes(&temp).is_empty(),
+        "no shell was spawned:\n{}",
+        logged_probes(&temp)
+    );
+}
+
+#[test]
+fn install_without_shell_args_honors_shell_plus_owned() {
+    let temp = TempDir::new("bob-cli-completion-shellsel");
+    let fake = fakebin(&temp);
+    let bash_target = temp.path().join("bcomp");
+
+    let bash = completion_command(&temp, &fake)
+        .args(["install", "bash", "-n", "-t"])
+        .arg(&bash_target)
+        .output()
+        .expect("own bash");
+    assert_success(&bash);
+
+    // $SHELL is zsh and bash is owned: both install, no usage error.
+    let both = completion_command(&temp, &fake)
+        .args(["install", "-n", "-d"])
+        .env("SHELL", "/bin/zsh")
+        .output()
+        .expect("install both");
+    assert_success(&both);
+    let text = stdout(&both);
+    assert!(text.contains("zsh"), "zsh selected:\n{text}");
+    assert!(text.contains("bash"), "owned bash kept:\n{text}");
+
+    // With -t and no SHELL arguments only $SHELL installs, so the second
+    // owned adapter never triggers the two-shell usage error.
+    let single = completion_command(&temp, &fake)
+        .args(["install", "-n", "-d", "-t"])
+        .arg(temp.path().join("zonly"))
+        .env("SHELL", "/bin/zsh")
+        .output()
+        .expect("single-target install");
+    assert_success(&single);
+    let text = stdout(&single);
+    assert!(text.contains("zsh"), "only zsh:\n{text}");
+    assert!(!text.contains("bash"), "bash untouched:\n{text}");
+
+    // -t with two explicit shells is still a usage error.
+    let two = completion_command(&temp, &fake)
+        .args(["install", "zsh", "bash", "-n", "-d", "-t"])
+        .arg(temp.path().join("both"))
+        .output()
+        .expect("two-shell target");
+    assert_eq!(
+        two.status.code(),
+        Some(2),
+        "two shells with -t:\n{}",
+        format_output(&two)
+    );
+}
+
+#[test]
+fn install_glyphs_follow_registration() {
+    // Not registered, shadowed, and bound fail with ✗.
+    for (verify, source, needle) in [
+        ("off", "", "not registered"),
+        ("shadowed", "/other/_bob", "shadowed by /other/_bob"),
+        ("bound", "", "bob is bound to _other"),
+    ] {
+        let temp = TempDir::new("bob-cli-completion-glyph");
+        let fake = fakebin(&temp);
+        let target = temp.path().join("zfunc");
+        let mut command = completion_command(&temp, &fake);
+        command
+            .args(["install", "zsh", "-t"])
+            .arg(&target)
+            .env("FAKE_VERIFY", verify);
+        if !source.is_empty() {
+            command.env("FAKE_SOURCE", source);
+        }
+        let out = command.output().expect("run install");
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{verify} exits 1:\n{}",
+            format_output(&out)
+        );
+        let text = stdout(&out);
+        assert!(text.contains("✗"), "fail glyph for {verify}:\n{text}");
+        assert!(text.contains(needle), "registration for {verify}:\n{text}");
+    }
+
+    // A stuck probe warns with ⚠ and stays 0.
+    let temp = TempDir::new("bob-cli-completion-unverified");
+    let fake = fakebin(&temp);
+    let slow = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-t"])
+        .arg(temp.path().join("zfunc"))
+        .env("FAKE_VERIFY", "sleep")
+        .env("BOB_COMPLETION_PROBE_TIMEOUT_MS", "200")
+        .output()
+        .expect("run slow install");
+    assert_success(&slow);
+    let text = stdout(&slow);
+    assert!(
+        text.contains("⚠") && text.contains("unverified (timed out)"),
+        "warn glyph:\n{text}"
+    );
+
+    // -n never probes: · plus the status -v pointer.
+    let temp = TempDir::new("bob-cli-completion-noverify");
+    let fake = fakebin(&temp);
+    let skipped = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(temp.path().join("zfunc"))
+        .output()
+        .expect("run -n install");
+    assert_success(&skipped);
+    let text = stdout(&skipped);
+    assert!(
+        text.contains("registration not checked → bob completion status -v"),
+        "-n pointer:\n{text}"
+    );
+    assert!(
+        !text.contains("unverified (skipped"),
+        "no stale skipped text:\n{text}"
+    );
+}
+
+#[test]
+fn status_without_verify_warns_on_recorded_unhealthy() {
+    let temp = TempDir::new("bob-cli-completion-recorded-bad");
+    let fake = fakebin(&temp);
+    let target = temp.path().join("zfunc");
+
+    // Record an unhealthy verification at install time.
+    let install = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-t"])
+        .arg(&target)
+        .env("FAKE_VERIFY", "off")
+        .output()
+        .expect("run install");
+    assert_eq!(install.status.code(), Some(1));
+
+    // Without -v the recorded failure renders ⚠, never ✓, and exits 0.
+    let status = completion_command(&temp, &fake)
+        .arg("status")
+        .output()
+        .expect("run status");
+    assert_success(&status);
+    let text = stdout(&status);
+    assert!(text.contains("⚠"), "warn glyph:\n{text}");
+    assert!(text.contains("not registered"), "recorded text:\n{text}");
+}
+
+#[test]
+fn closers_tell_the_truth() {
+    // A dry run never prints a closer.
+    let temp = TempDir::new("bob-cli-completion-closer-dry");
+    let fake = fakebin(&temp);
+    let dry = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-d", "-t"])
+        .arg(temp.path().join("zfunc"))
+        .output()
+        .expect("run dry install");
+    assert_success(&dry);
+    let text = stdout(&dry);
+    assert!(
+        !text.contains("Completion is live"),
+        "dry run has no live closer:\n{text}"
+    );
+    assert!(
+        !text.contains("Open a new shell"),
+        "dry run has no reopen closer:\n{text}"
+    );
+
+    // Unchanged but never registered: no closer at all.
+    let again = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(temp.path().join("zfunc"))
+        .output()
+        .expect("run -n install");
+    assert_success(&again);
+    let install_text = stdout(&again);
+    assert!(
+        !install_text.contains("Completion is live"),
+        "unregistered install has no closer"
+    );
+    let repeat = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(temp.path().join("zfunc"))
+        .output()
+        .expect("run repeat install");
+    assert_success(&repeat);
+    let text = stdout(&repeat);
+    assert!(
+        !text.contains("Completion is live")
+            && !text.contains("Open a new shell"),
+        "unhealthy unchanged has no closer:\n{text}"
+    );
+
+    // Unchanged and registered: the live closer prints.
+    let temp = TempDir::new("bob-cli-completion-closer-live");
+    let fake = fakebin(&temp);
+    let target = temp.path().join("zfunc");
+    let adapter = target.join("_bob");
+    let install = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-t"])
+        .arg(&target)
+        .env("FAKE_VERIFY", "registered")
+        .env("FAKE_SOURCE", &adapter)
+        .output()
+        .expect("run live install");
+    assert_success(&install);
+    let repeat = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(&target)
+        .output()
+        .expect("run repeat install");
+    assert_success(&repeat);
+    assert!(
+        stdout(&repeat).contains("Completion is live"),
+        "registered unchanged is live:\n{}",
+        format_output(&repeat)
+    );
+}
+
+#[test]
+fn unrecorded_stamped_file_is_outdated_externally_managed() {
+    let temp = TempDir::new("bob-cli-completion-unrecorded");
+    let fake = fakebin(&temp);
+    // The manifest-less default under $HOME, so status and install find
+    // the hand-written file without any flags.
+    let target = temp.path().join(".zfunc");
+    fs::create_dir_all(&target).expect("create target");
+    let adapter = target.join("_bob");
+
+    // The user wrote the adapter themselves, then bob upgraded: stamped
+    // bytes that differ, with no manifest record.
+    let printed = completion_command(&temp, &fake)
+        .args(["zsh", "-o"])
+        .arg(&adapter)
+        .output()
+        .expect("run zsh -o");
+    assert_success(&printed);
+    let mut aged = fs::read(&adapter).expect("read adapter");
+    aged.extend_from_slice(b"\n# aged\n");
+    fs::write(&adapter, &aged).expect("age adapter");
+
+    let status = completion_command(&temp, &fake)
+        .arg("status")
+        .output()
+        .expect("run status");
+    assert_success(&status);
+    assert!(
+        stdout(&status).contains("outdated (externally managed)"),
+        "state:\n{}",
+        format_output(&status)
+    );
+
+    let refused = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(&target)
+        .output()
+        .expect("run refused install");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "refused without --force:\n{}",
+        format_output(&refused)
+    );
+    assert!(
+        stdout(&refused).contains("refused without --force"),
+        "refusal:\n{}",
+        format_output(&refused)
+    );
+    assert!(
+        manifest_bytes(&temp).is_none(),
+        "never adopted into the manifest"
+    );
+
+    let forced = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-f", "-t"])
+        .arg(&target)
+        .output()
+        .expect("run forced install");
+    assert_success(&forced);
+    assert!(
+        stdout(&forced).contains("updated · protocol 1"),
+        "forced update:\n{}",
+        format_output(&forced)
+    );
+}
+
+#[test]
+fn target_move_removes_previous_adapter() {
+    let temp = TempDir::new("bob-cli-completion-move");
+    let fake = fakebin(&temp);
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+
+    let install = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(&first)
+        .output()
+        .expect("run first install");
+    assert_success(&install);
+    fs::write(first.join("_bob.zwc"), "stale dump").expect("write zwc");
+
+    let moved = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(&second)
+        .output()
+        .expect("run moved install");
+    assert_success(&moved);
+    let text = stdout(&moved);
+    assert!(
+        text.contains("removed previous adapter"),
+        "removal note:\n{text}"
+    );
+    assert!(!first.join("_bob").exists(), "old adapter removed");
+    assert!(!first.join("_bob.zwc").exists(), "old zwc removed");
+    assert!(second.join("_bob").is_file(), "new adapter written");
+
+    // An edited previous file is left behind with the exact rm command.
+    let temp = TempDir::new("bob-cli-completion-move-edited");
+    let fake = fakebin(&temp);
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    let install = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(&first)
+        .output()
+        .expect("run first install");
+    assert_success(&install);
+    let mut bytes = fs::read(first.join("_bob")).expect("read adapter");
+    bytes.extend_from_slice(b"\n# local tweak\n");
+    fs::write(first.join("_bob"), &bytes).expect("tweak adapter");
+
+    let moved = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(&second)
+        .output()
+        .expect("run moved install");
+    assert_success(&moved);
+    let text = stdout(&moved);
+    assert!(
+        text.contains("previous adapter left") && text.contains("rm "),
+        "exact rm command:\n{text}"
+    );
+    assert!(first.join("_bob").is_file(), "edited file kept");
+}
+
+#[test]
+fn home_default_fpath_line_prints_without_probe() {
+    let temp = TempDir::new("bob-cli-completion-fpathline");
+    let fake = fakebin(&temp);
+
+    // Dry run and -n installs on the ~/.zfunc home default print the
+    // fpath line even though nothing probes.
+    let dry = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-d"])
+        .env("SHELL", "/bin/zsh")
+        .output()
+        .expect("run dry install");
+    assert_success(&dry);
+    assert!(
+        stdout(&dry).contains("fpath=(~/.zfunc $fpath)"),
+        "dry fpath line:\n{}",
+        format_output(&dry)
+    );
+
+    let install = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n"])
+        .env("SHELL", "/bin/zsh")
+        .output()
+        .expect("run -n install");
+    assert_success(&install);
+    assert!(
+        stdout(&install).contains("fpath=(~/.zfunc $fpath)"),
+        "-n fpath line:\n{}",
+        format_output(&install)
+    );
+}
+
+#[test]
+fn plain_output_has_no_ansi_when_piped() {
+    let temp = TempDir::new("bob-cli-completion-plain");
+    let fake = fakebin(&temp);
+
+    let bare = completion_command(&temp, &fake)
+        .output()
+        .expect("run bare completion");
+    assert_success(&bare);
+    assert_stdout_has_no_ansi(&bare);
+
+    let status = completion_command(&temp, &fake)
+        .arg("status")
+        .output()
+        .expect("run status");
+    assert_success(&status);
+    assert_stdout_has_no_ansi(&status);
+}
+
+#[test]
+fn zsh_bound_to_function_reports() {
+    let temp = TempDir::new("bob-cli-completion-bound");
+    let fake = fakebin(&temp);
+    let target = temp.path().join("zfunc");
+
+    let install = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(&target)
+        .output()
+        .expect("run install");
+    assert_success(&install);
+
+    let status = completion_command(&temp, &fake)
+        .args(["status", "-v"])
+        .env("FAKE_VERIFY", "bound")
+        .output()
+        .expect("run status -v");
+    assert_eq!(
+        status.status.code(),
+        Some(1),
+        "bound fails -v:\n{}",
+        format_output(&status)
+    );
+    assert!(
+        stdout(&status).contains("bob is bound to _other"),
+        "bound text:\n{}",
+        format_output(&status)
+    );
+}
+
+#[test]
+fn previous_install_target_rule_and_reason() {
+    let temp = TempDir::new("bob-cli-completion-prev");
+    let fake = fakebin(&temp);
+    let explicit = temp.path().join("explicit");
+
+    let install = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(&explicit)
+        .output()
+        .expect("run install");
+    assert_success(&install);
+
+    // The manifest location wins over fpath discovery, with its reason.
+    let elsewhere = temp.path().join("fpathdir");
+    fs::create_dir_all(&elsewhere).expect("create fpath dir");
+    let dry = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-d"])
+        .env("FAKE_FPATH", elsewhere.display().to_string())
+        .output()
+        .expect("run dry install");
+    assert_success(&dry);
+    let text = stdout(&dry);
+    assert!(
+        text.contains("explicit/_bob"),
+        "previous install wins:\n{text}"
+    );
+    assert!(
+        text.contains("previous install"),
+        "recorded reason:\n{text}"
+    );
+}
+
+#[test]
+fn fake_bash_never_reports_registered_when_missing() {
+    let temp = TempDir::new("bob-cli-completion-fakebash");
+    let fake = fakebin(&temp);
+    let target = temp.path().join("bcomp");
+    let adapter = target.join("bob");
+
+    let install = completion_command(&temp, &fake)
+        .args(["install", "bash", "-n", "-t"])
+        .arg(&target)
+        .output()
+        .expect("run install");
+    assert_success(&install);
+
+    // The adapter exists: the fake may report it registered.
+    let status = completion_command(&temp, &fake)
+        .args(["status", "-v"])
+        .env("FAKE_VERIFY", "registered")
+        .env("FAKE_BASH_ADAPTER", &adapter)
+        .output()
+        .expect("run status -v");
+    assert_success(&status);
+    assert!(
+        stdout(&status).contains("registered as _bob"),
+        "registered:\n{}",
+        format_output(&status)
+    );
+
+    // Pointing at a missing file, the same fake never reports registered.
+    let missing = completion_command(&temp, &fake)
+        .args(["status", "-v"])
+        .env("FAKE_VERIFY", "registered")
+        .env("FAKE_BASH_ADAPTER", temp.path().join("nowhere").join("bob"))
+        .output()
+        .expect("run missing status -v");
+    assert!(
+        !stdout(&missing).contains("registered as _bob"),
+        "missing file never registered:\n{}",
+        format_output(&missing)
+    );
+}
+
+#[test]
+fn probe_without_controlling_terminal_via_zpty() {
+    if !have_zsh() {
+        return;
+    }
+    if !Command::new("zsh")
+        .args(["-f", "-c", "zmodload zsh/zpty"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+    {
+        println!("skipped: zsh/zpty not available");
+        return;
+    }
+    let temp = TempDir::new("bob-cli-completion-ctty");
+    let dir = temp.path();
+    let fake = fakebin(&temp);
+    let target = dir.join("zfunc");
+    let adapter = target.join("_bob");
+
+    // Install without probing so the manifest records the target; the
+    // live probe runs next under a controlling terminal.
+    let install = completion_command(&temp, &fake)
+        .args(["install", "zsh", "-n", "-t"])
+        .arg(&target)
+        .output()
+        .expect("run install");
+    assert_success(&install);
+
+    // The pty child must be the real zsh (resolved before the fake
+    // binaries go on PATH); only the probe inside bob may see the fake.
+    let real_zsh = String::from_utf8_lossy(
+        &Command::new("sh")
+            .args(["-c", "command -v zsh"])
+            .output()
+            .expect("locate real zsh")
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    assert!(
+        !real_zsh.is_empty() && Path::new(&real_zsh).is_absolute(),
+        "real zsh found"
+    );
+    let out_file = dir.join("status.out");
+    let q = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+    let mut driver = String::new();
+    // The outer driver runs under the real zsh; only the pty child sees
+    // the fake shell binaries first on PATH.
+    driver.push_str(&format!(
+        "export PATH={}:$PATH\n",
+        q(&fake.display().to_string())
+    ));
+    driver
+        .push_str("zmodload zsh/zpty || { print \"ZPTY-MISSING\"; exit 2 }\n");
+    driver.push_str("zpty -d pb 2>/dev/null\n");
+    driver.push_str(&format!("zpty pb {} -f\n", q(&real_zsh)));
+    driver.push_str("sleep 1\n");
+    driver.push_str(&format!(
+        "zpty -w pb {}",
+        q(&format!(
+            "{} completion status -v > {} 2>&1; echo BOB-DONE-$?",
+            env!("CARGO_BIN_EXE_bob"),
+            out_file.display()
+        ))
+    ));
+    driver.push('\n');
+    driver.push_str(
+        "if zpty -r pb done '*BOB-DONE-[0-9]*' 2>/dev/null; then print \"DRIVER-DONE\"; else print \"DRIVER-READ-FAILED\"; fi\n",
+    );
+    driver.push_str("zpty -d pb\n");
+    let driver_path = dir.join("driver.zsh");
+    fs::write(&driver_path, &driver).expect("write driver");
+
+    let timeout = Command::new("timeout")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    let mut command = if timeout {
+        let mut wrapped = Command::new("timeout");
+        wrapped.arg("60").arg("zsh");
+        wrapped
+    } else {
+        Command::new("zsh")
+    };
+    let output = command
+        .arg("-f")
+        .arg(&driver_path)
+        .env("HOME", dir)
+        .env("XDG_STATE_HOME", dir.join("state"))
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .env("ZDOTDIR", dir.join("zdot"))
+        .env("SHELL", "/bin/zsh")
+        .env("FAKE_VERIFY", "tty-read")
+        .env("FAKE_SOURCE", &adapter)
+        .env("BOB_COMPLETION_PROBE_TIMEOUT_MS", "20000")
+        .output()
+        .expect("run zpty driver");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if stdout.contains("ZPTY-MISSING") {
+        println!("skipped: zsh/zpty not available");
+        return;
+    }
+    assert!(
+        output.status.success() && stdout.contains("DRIVER-DONE"),
+        "zpty driver failed, stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let report = fs::read_to_string(&out_file).unwrap_or_default();
+    assert!(
+        report.contains("registered as _bob"),
+        "probe classifies under a terminal instead of timing out:\n{report}"
+    );
+    assert!(
+        !report.contains("timed out"),
+        "no stall under a terminal:\n{report}"
+    );
 }

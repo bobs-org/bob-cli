@@ -53,8 +53,10 @@ That installs `bob` (and its shims) from source into
 `install.root` config so the recipe refreshes exactly the binary it
 installed — then runs `bob completion install` to install or refresh shell
 completion for your shells. Pass shells explicitly (`just install zsh`)
-to choose. If completion needs attention, the recipe says so and exits 1
-while leaving the installed binary in place. Never pass `--force` to these
+to choose. If completion needs attention — an install that failed, or a
+live verification that is `not registered`, `shadowed by …`, or
+`bob is bound to …` (an `unverified` probe only warns) — the recipe says
+so and exits 1 while leaving the installed binary in place. Never pass `--force` to these
 installs: cargo already replaces the same package from any checkout, and
 `--force` would only let it overwrite a different crate's `bob`.
 
