@@ -2088,6 +2088,10 @@ task:
 	- FUTURE WORK
 ```
 
+Every sub-bullet batch also reports its parent tasks once, in final state,
+in the batch-level `task_blocks` array; see
+[Task blocks](#task-blocks).
+
 ### Task Link toggle
 
 A capture item that is exactly `@route+block-id`, with no body text and no
@@ -2466,6 +2470,8 @@ Sub-bullet results additionally include `parent_line`, `parent_text`,
 task section also includes `parent_section` (the matched original title);
 plain `@route+block-id` captures omit it. They reuse `block_id` for the
 parent's ID, omitting it when a task-ref selected a parent without one.
+The batch-level `task_blocks` array carries the same parents in full; see
+[Task blocks](#task-blocks).
 
 Task-toggle results use kind `"task_toggle"`, `placement: "toggled"`,
 `routed: true`, `text: ""`, and `task_line` set to the resulting task line.
@@ -2556,6 +2562,65 @@ Whole-item adjust, shift, start (including named starts), and close report
 their sessions; link and task forms report theirs through auto-detection
 until they carry explicit refs. Dry-run JSON equals real-run JSON except
 for `dry_run`. Human output does not change.
+
+#### Task blocks
+
+`bob capture -f json` (dry run and real run alike) gains one additive,
+batch-level top-level key next to `pomodoro_blocks`. It never appears per
+item or inside `captures[]`, and it is omitted when empty:
+
+```json
+"task_blocks": [
+  {
+    "relative_target": "sase.md",
+    "route": "sase",
+    "line": 1,
+    "block_id": "capture",
+    "text": "Port capture to PIW sase-core",
+    "status_symbol": "/",
+    "status_name": "In Progress",
+    "created": false,
+    "roles": ["sub_bullet"],
+    "lines": [
+      {"text": "- [/] #task Port capture to PIW sase-core [created:: 2026-09-30] ^capture", "depth": 0, "change": "unchanged"},
+      {"text": "\t- REQUIREMENTS", "depth": 1, "change": "unchanged"},
+      {"text": "\t\t- existing", "depth": 2, "change": "unchanged"},
+      {"text": "\t- Should reuse as much of PIW sase-core code as possible!", "depth": 1, "change": "added"},
+      {"text": "\t- 🗓️ **SCHEDULE LOG**", "depth": 1, "change": "unchanged"},
+      {"text": "\t\t- 2026-10-01 moved", "depth": 2, "change": "unchanged"}
+    ]
+  }
+]
+```
+
+Field rules:
+
+- One entry per distinct parent task that the batch's sub-bullet items
+  wrote under, in first-touch order, in its final state.
+- `relative_target` and `route` name the note. `line` is the 1-based task
+  line in the final staged note. `block_id` is the parent's trailing block
+  ID, omitted when it has none (a picker task-ref parent).
+- `text`, `status_symbol`, and `status_name` describe the parent in the
+  final state, with the same meanings as the per-item `parent_text`,
+  `parent_status_symbol`, and `parent_status_name`.
+- `created` is true only when the parent task did not exist before the
+  batch. This happens when an earlier item in the same draft created it,
+  as in `Task @sase^new` followed by `note @sase+new`. A created block's
+  lines are all `added`.
+- `roles` is informational and deduplicated. Today it is only
+  `"sub_bullet"`; future kinds may add values. Clients must not depend on
+  it.
+- `lines` uses exactly the `pomodoro_blocks` line schema: `text`
+  (verbatim, no terminator), `depth` (relative to the task line, computed
+  by the same helper), `change` (`unchanged` / `added` / `removed` /
+  `changed`), and `before` (old text on `changed` rows only). Removed
+  lines are interleaved where they used to be.
+- The diff is cumulative against the note before the capture. If the same
+  draft also rewrites the parent's task line (for example, a task toggle
+  of the same task), the task line shows as `changed` with its `before`
+  text.
+- Dry-run JSON equals real-run JSON except for `dry_run`. Human output
+  does not change. Per-item `parent_*` fields stay as they are.
 
 ### Interactive editor markers
 

@@ -34,6 +34,7 @@ mod routing;
 mod sections;
 mod sub_bullet;
 mod targets;
+mod task_blocks;
 mod task_id;
 mod task_link;
 mod task_marker;

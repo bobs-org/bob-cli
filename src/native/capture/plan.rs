@@ -8,6 +8,7 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) warnings: Vec<String>,
     pub(super) plan_budget: Option<CapturePlanBudget>,
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
+    pub(super) task_blocks: Vec<TaskBlockJson>,
 }
 
 pub(super) struct PlannedCaptureItem {
@@ -16,6 +17,9 @@ pub(super) struct PlannedCaptureItem {
     /// Pomodoro block touches this item reported. The batch loop feeds
     /// them to the block tracker; this field is never serialized.
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
+    /// Parent-task touches this item reported. The batch loop feeds them
+    /// to the task tracker; this field is never serialized.
+    pub(super) task_block_refs: Vec<TaskBlockRef>,
 }
 
 pub(super) fn plan_capture_batch(
@@ -53,11 +57,14 @@ pub(super) fn plan_capture_batch(
     let day_relative =
         capture_pomodoros::relative_day_file(&day_file, &request.bob_dir);
     let mut block_tracker = PomodoroBlockTracker::new(day_relative);
+    let task_settings = note_tasks::read_settings(&request.bob_dir);
+    let mut task_tracker = TaskBlockTracker::new(task_settings);
 
     for parsed_item in parsed_items {
         let item_number = parsed_item.index + 1;
         let line_start = parsed_item.line_start;
         let pre_day = planner.peek_text(&day_file);
+        let pre_tasks = task_tracker.snapshot_pre(&planner);
         let mut planned = plan_capture_item(
             request,
             parsed_item,
@@ -88,11 +95,14 @@ pub(super) fn plan_capture_batch(
                 );
             }
         }
+        let task_refs = std::mem::take(&mut planned.task_block_refs);
+        task_tracker.track_item(&planner, &pre_tasks, task_refs);
         items.push(planned);
     }
 
     let final_day = planner.peek_text(&day_file);
     let pomodoro_blocks = block_tracker.finish(final_day.as_deref());
+    let task_blocks = task_tracker.finish(&planner);
     Ok(PlannedCaptureBatch {
         items,
         text_files: planner.into_staged_files(),
@@ -100,6 +110,7 @@ pub(super) fn plan_capture_batch(
         warnings,
         plan_budget: None,
         pomodoro_blocks,
+        task_blocks,
     })
 }
 
@@ -256,6 +267,7 @@ pub(super) fn plan_capture_item(
             },
             clip_plan: None,
             pomodoro_refs,
+            task_block_refs: Vec::new(),
         });
     }
     if let CaptureKind::PomodoroLink {
@@ -356,6 +368,7 @@ pub(super) fn plan_capture_item(
             },
             clip_plan: None,
             pomodoro_refs,
+            task_block_refs: Vec::new(),
         });
     }
     if matches!(parsed.kind, CaptureKind::ProjectNote { .. }) {
@@ -633,6 +646,39 @@ pub(super) fn plan_capture_item(
     let special = note_plan.pomodoro.as_ref();
     let sub_bullet = note_plan.sub_bullet.as_ref();
     let pomodoro_note = note_plan.pomodoro_note.as_ref();
+    let task_block_refs = match &parsed.kind {
+        CaptureKind::SubBullet { .. } => {
+            if let Some(details) = note_plan.sub_bullet.as_ref() {
+                let route_str =
+                    parsed.route.as_deref().unwrap_or("").to_string();
+                let parent_index = details.parent_line.saturating_sub(1);
+                if cfg!(debug_assertions)
+                    && let Some(post) = planner.peek_text(&target)
+                {
+                    let settings = note_tasks::read_settings(&request.bob_dir);
+                    let scan = note_tasks::scan(&post, &settings);
+                    debug_assert!(
+                        scan.task_at(parent_index).is_some(),
+                        "sub-bullet parent missing in post-state"
+                    );
+                }
+                vec![TaskBlockRef {
+                    target: target.clone(),
+                    relative_target: relative_target
+                        .to_string_lossy()
+                        .into_owned(),
+                    route: route_str,
+                    line: parent_index,
+                    block_id: details.block_id.clone(),
+                    role: TaskBlockRole::SubBullet,
+                }]
+            } else {
+                debug_assert!(false, "sub-bullet missing details");
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    };
 
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -723,6 +769,7 @@ pub(super) fn plan_capture_item(
         },
         clip_plan,
         pomodoro_refs,
+        task_block_refs,
     })
 }
 

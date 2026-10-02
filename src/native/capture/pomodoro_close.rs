@@ -675,6 +675,7 @@ pub(super) fn plan_pomodoro_close_item(
         },
         clip_plan: None,
         pomodoro_refs,
+        task_block_refs: Vec::new(),
     })
 }
 
@@ -1222,6 +1223,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         },
         clip_plan: None,
         pomodoro_refs,
+        task_block_refs: Vec::new(),
     })
 }
 
@@ -1459,5 +1461,6 @@ pub(super) fn plan_pomodoro_close_task_item(
         },
         clip_plan: None,
         pomodoro_refs,
+        task_block_refs: Vec::new(),
     })
 }

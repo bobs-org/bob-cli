@@ -143,6 +143,10 @@ pub(super) struct CaptureResult {
     /// when the batch touched a Pomodoro. Never per item.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
+    /// Batch-level parent-task blocks in first-touch order, present only
+    /// when the batch wrote a sub-bullet. Never per item.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) task_blocks: Vec<TaskBlockJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -160,6 +164,7 @@ impl CaptureResult {
         warnings: Vec<String>,
         plan_budget: Option<CapturePlanBudget>,
         pomodoro_blocks: Vec<PomodoroBlockJson>,
+        task_blocks: Vec<TaskBlockJson>,
     ) -> Self {
         let item = items
             .first()
@@ -173,6 +178,7 @@ impl CaptureResult {
             warnings,
             plan_budget,
             pomodoro_blocks,
+            task_blocks,
         }
     }
 }

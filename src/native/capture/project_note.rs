@@ -328,5 +328,6 @@ pub(super) fn plan_project_note_item(
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),
+        task_block_refs: Vec::new(),
     })
 }

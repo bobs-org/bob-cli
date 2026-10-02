@@ -46,6 +46,7 @@ const COMMAND_NAME: &str = "bob capture";
 pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
 
 mod batch;
+mod block_diff;
 mod budget;
 mod cli;
 mod commit;
@@ -62,11 +63,13 @@ mod project_note;
 mod sections;
 mod start_output;
 mod sub_bullet;
+mod task_blocks;
 mod task_toggle;
 #[cfg(test)]
 mod tests;
 
 use batch::*;
+use block_diff::*;
 use budget::*;
 use cli::*;
 use commit::*;
@@ -83,6 +86,7 @@ use project_note::*;
 use sections::*;
 use start_output::*;
 use sub_bullet::*;
+use task_blocks::*;
 use task_toggle::*;
 
 pub(crate) use output::Placement;
@@ -139,5 +143,6 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.warnings,
         batch.plan_budget,
         batch.pomodoro_blocks,
+        batch.task_blocks,
     ))
 }

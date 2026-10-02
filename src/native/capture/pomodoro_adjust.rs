@@ -440,6 +440,7 @@ pub(super) fn plan_pomodoro_adjust_item(
             target_line.saturating_sub(1),
             target_line.saturating_sub(1),
         )],
+        task_block_refs: Vec::new(),
     })
 }
 
@@ -603,6 +604,7 @@ pub(super) fn plan_pomodoro_shift_item(
             target_line.saturating_sub(1),
             target_line.saturating_sub(1),
         )],
+        task_block_refs: Vec::new(),
     })
 }
 

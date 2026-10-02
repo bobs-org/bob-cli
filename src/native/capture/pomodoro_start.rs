@@ -747,6 +747,7 @@ pub(super) fn plan_pomodoro_start_item(
             index,
             moved_index,
         )],
+        task_block_refs: Vec::new(),
     })
 }
 
@@ -1170,5 +1171,6 @@ fn plan_named_pomodoro_start_item(
             before: start_before,
             after: Some(moved_index),
         }],
+        task_block_refs: Vec::new(),
     })
 }
