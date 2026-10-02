@@ -686,6 +686,34 @@ fn capture_parse_pomodoro_close_log_protocol() {
     }
 }
 
+fn close_nested_positional_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "\n",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+            "\t- [[a#^one]]\n",
+            "\t- parent note\n",
+            "\t\t- [[a#^two]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("a.md"),
+        concat!(
+            "## Tasks\n",
+            "\n",
+            "- [*] #task Task one [created::2026-09-26] ^one\n",
+            "- [*] #task Task two [created::2026-09-26] ^two\n",
+        ),
+    );
+    (temp, vault, day_file)
+}
+
 fn close_four_link_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
     let temp = TempDir::new(name);
     let vault = temp.path().join("vault");
@@ -898,5 +926,68 @@ fn capture_pomodoro_close_log_positional_parse() {
             .unwrap_or_default()
             .contains("unnumbered Work Log bullets"),
         "{value}"
+    );
+}
+
+#[test]
+fn capture_pomodoro_close_log_positional_nested_wording() {
+    // The actual unnumbered selection-mode draft parses with resolved
+    // indices, then fails at execution with the positional nested-task
+    // wording (not the generic numbered wording).
+    let value = parse_json("=x1,2\n- a\n- b");
+    assert_eq!(value["mode"], "pomodoro_close");
+    assert_eq!(
+        value["pomodoro_close"]["log"],
+        serde_json::json!([
+            { "index": 1, "text": "a" },
+            { "index": 2, "text": "b" },
+        ])
+    );
+    let (_temp, vault, day_file) =
+        close_nested_positional_vault("bob-cli-close-log-pos-nested");
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x1,2\n- a\n- b"],
+    );
+    assert!(
+        error.contains(
+            "Work Log bullet 2 logs to task 2 by its position, but task 2 `[[a#^two]]` is nested under another bullet"
+        ),
+        "{error}"
+    );
+
+    // A genuine multi-item batch rolls back: an earlier `+1` resize plus
+    // the positional runtime failure writes nothing.
+    let (_temp, vault, day_file) =
+        close_nested_positional_vault("bob-cli-close-log-pos-rollback");
+    let before_day = fs::read_to_string(&day_file).expect("read day");
+    let before_tasks = fs::read_to_string(vault.join("a.md")).expect("tasks");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("+1")
+        .arg("=x1,2\n- a\n- b")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("run batch");
+    assert!(!output.status.success(), "{}", format_output(&output));
+    let stderr = stdout(&output);
+    assert!(
+        stderr.contains(
+            "Work Log bullet 2 logs to task 2 by its position, but task 2 `[[a#^two]]` is nested under another bullet"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), before_day);
+    assert_eq!(
+        fs::read_to_string(vault.join("a.md")).expect("tasks"),
+        before_tasks
     );
 }

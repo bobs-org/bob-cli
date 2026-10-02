@@ -1005,8 +1005,11 @@ pub(crate) fn lex_close_log_bullets(
 }
 
 /// Convert lexed entries into the execution/editor model entries.
-/// Numbered entries use [`CloseLogOrigin::Bullet`]; unnumbered entries use
-/// [`CloseLogOrigin::PositionalBullet`] with their 1-based typed position.
+/// Numbered entries (an authored index range exists) use
+/// [`CloseLogOrigin::Bullet`]; unnumbered entries use
+/// [`CloseLogOrigin::PositionalBullet`] with their 1-based typed position,
+/// whether the lexer already resolved an index (selection mode) or left it
+/// `None` for execution to resolve.
 pub(crate) fn log_entries_from_lex(
     entries: &[CloseLogEntryLex],
 ) -> Vec<CloseLogEntry> {
@@ -1014,7 +1017,7 @@ pub(crate) fn log_entries_from_lex(
         .iter()
         .enumerate()
         .map(|(ordinal, entry)| {
-            let origin = match entry.index {
+            let origin = match entry.index_range {
                 Some(_) => CloseLogOrigin::Bullet,
                 None => CloseLogOrigin::PositionalBullet {
                     position: ordinal as u32 + 1,
@@ -1588,11 +1591,37 @@ mod tests {
             entries[1].origin,
             CloseLogOrigin::PositionalBullet { position: 2 }
         );
+        // Selection-mode unnumbered bullets resolve an index lexically but
+        // keep the positional origin with the 1-based typed position.
+        let lexed =
+            lex_bullets("=x1,2", "=x1,2\n- foo\n- bar").expect("valid bullets");
+        assert_eq!(
+            lexed
+                .entries
+                .iter()
+                .map(|entry| (entry.index, entry.index_range))
+                .collect::<Vec<_>>(),
+            vec![(Some(1), None), (Some(2), None)]
+        );
+        let entries = log_entries_from_lex(&lexed.entries);
+        assert_eq!(
+            entries.iter().map(|entry| entry.index).collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+        assert_eq!(
+            entries[0].origin,
+            CloseLogOrigin::PositionalBullet { position: 1 }
+        );
+        assert_eq!(
+            entries[1].origin,
+            CloseLogOrigin::PositionalBullet { position: 2 }
+        );
         // Numbered entries keep the bullet origin.
         let lexed = lex_bullets("=x1,2", "=x1,2\n- 1 foo\n- 2 bar")
             .expect("valid bullets");
         let entries = log_entries_from_lex(&lexed.entries);
         assert_eq!(entries[0].origin, CloseLogOrigin::Bullet);
+        assert_eq!(entries[1].origin, CloseLogOrigin::Bullet);
         assert_eq!(
             entries.iter().map(|entry| entry.index).collect::<Vec<_>>(),
             vec![Some(1), Some(2)]
