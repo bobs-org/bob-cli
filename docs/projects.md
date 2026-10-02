@@ -377,8 +377,11 @@ immediately with its own deterministic reason instead of prompting; see
 
 When the `scheduled` row is selected, `Ctrl+Enter` (`Cmd+Enter` on macOS)
 takes the recommended roll in one keypress, and the date it will write is
-shown on the `scheduled` row. The roll follows a configurable decay ladder
-read from the task's Schedule Log. A level is re-rolled `rolls` times
+shown on the `scheduled` row. On a task with a priority field, that row opens
+first and already selected, so `Ctrl+Shift+P` followed by `Ctrl+Enter` takes
+the previewed recommendation with no navigation. Tasks without priority and
+plain bullets keep the existing menu order. The roll follows a configurable
+decay ladder read from the task's Schedule Log. A level is re-rolled `rolls` times
 (default 1), the next recommended roll moves the task one level down
 (P2 → P3), and past the last level it cancels the task.
 
