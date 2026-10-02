@@ -565,10 +565,6 @@ pub(super) fn close_selection_too_large_error(number_text: &str) -> String {
     format!("task number {number_text} is too large")
 }
 
-pub(super) fn close_selection_no_spaces_error() -> String {
-    "write the task numbers right after `=x`, with no spaces (for example `=x1*2!3~4`)".to_string()
-}
-
 /// Execution rejection for a dangling separator: `separator` is the `,`,
 /// `!`, `~`, or `*` the user still has to follow with a task number.
 pub(super) fn close_selection_incomplete_error(
@@ -581,20 +577,6 @@ pub(super) fn close_selection_incomplete_error(
 // ---------------------------------------------------------------------------
 // `=x` Work Log bullet diagnostics (shared by `bob capture` and `capture-parse`)
 // ---------------------------------------------------------------------------
-
-/// Any token after the close token on its parent line. `bullet` is the
-/// echoed `- <n> <text>` bullet when the tail starts with a positive number
-/// (after an optional stray `-`/`*`/`+` token), or `None` for the generic
-/// hint.
-pub(super) fn close_parent_text_error(bullet: Option<&str>) -> String {
-    match bullet {
-        Some(bullet) => format!(
-            "`=x` takes no text on its line; put each Work Log entry on its own line below it, as a bullet: `{bullet}`"
-        ),
-        None => "`=x` takes no text on its line; log work as bullets below it (for example `- 1 wrote the tests`); to link a task while closing, use `^route:block-id=x`"
-            .to_string(),
-    }
-}
 
 /// A Work Log bullet whose first token is not a task number. `example` is
 /// the `- <n> <text>` fix that echoes the bullet's own text with the
@@ -643,6 +625,100 @@ pub(super) fn close_log_block_link_error(link: &str) -> String {
 /// Bullet text that starts with a code fence.
 pub(super) fn close_log_fence_error() -> String {
     "a Work Log bullet can't start with a code fence".to_string()
+}
+
+/// A block link inside an inline Work Log entry.
+pub(super) fn close_entry_block_link_error(link: &str) -> String {
+    format!("a Work Log entry can't contain the block link `{link}`; the close would treat it as a Task Link")
+}
+
+/// Inline entry text that starts with a code fence.
+pub(super) fn close_entry_fence_error() -> String {
+    "a Work Log entry can't start with a code fence".to_string()
+}
+
+/// An inline entry whose first token is a start or close token: the entry
+/// must sit right after the close, with session operators trailing.
+/// `fixed` is the corrected line (for example `=x wired =`).
+pub(super) fn close_inline_reorder_error(fixed: &str) -> String {
+    format!(
+        "write the Work Log entry right after `=x`, then the session operators: `{fixed}`"
+    )
+}
+
+/// An inline entry with a stray lone marker before it.
+/// `marker` is the stray token (`-`), `fixed` is the corrected line.
+pub(super) fn close_inline_stray_error(marker: &str, fixed: &str) -> String {
+    format!("drop the stray `{marker}` before the Work Log entry: `{fixed}`")
+}
+
+/// The no-spaces hint for an inline entry: the spaceless join `nospace`
+/// (for example `=x!2`) lexes as a selection. `first` is the entry's first
+/// token text; `escape` is the `put the task number first` suggestion, or
+/// `None` when the entry holds no further text.
+pub(super) fn close_inline_no_spaces_error(
+    nospace: &str,
+    first: &str,
+    escape: Option<&str>,
+) -> String {
+    let base = format!(
+        "write the task numbers right after `=x`, with no spaces (`{nospace}`)"
+    );
+    match escape {
+        Some(suggestion) => format!(
+            "{base}; to log text that starts with `{first}`, put the task number first: `{suggestion}`"
+        ),
+        None => base,
+    }
+}
+
+/// An inline entry on a close that works no task (`=x0`, `=x0~2`).
+/// `close_token` is the typed close token; `listed`/`completed` are the
+/// `not_worked_suggestions(1, …)` pair.
+pub(super) fn close_inline_no_default_error(
+    close_token: &str,
+    listed: &str,
+    completed: &str,
+) -> String {
+    format!(
+        "`{close_token}` works no task, so the Work Log entry has none to log to; list one (`{listed}`) or complete one (`{completed}`)"
+    )
+}
+
+/// An inline entry ending with a Task Link form. `link` is the typed link
+/// token (for example `^bob:ready=`).
+pub(super) fn close_inline_task_link_error(link: &str) -> String {
+    format!(
+        "a Work Log entry can't end with the Task Link `{link}`; capture it as its own item after a blank line"
+    )
+}
+
+/// An inline entry plus child bullets. `bullet` is the resolved
+/// `- <n> <text>` bullet for the inline entry.
+pub(super) fn close_inline_mixing_error(bullet: &str) -> String {
+    format!(
+        "an inline Work Log entry can't be combined with Work Log bullets; for several entries, put this one on its own bullet too: `{bullet}`"
+    )
+}
+
+/// A dangling inline number at execution: theclose head (for example
+/// `=x 2`) plus the task index. A plain `=x`/`=X` close appends the `=x2`
+/// spacing hint.
+pub(super) fn close_inline_dangling_error(
+    head: &str,
+    index: u32,
+    plain_close: bool,
+) -> String {
+    let base = format!(
+        "`{head}` is incomplete: type the Work Log text after task {index}"
+    );
+    if plain_close {
+        format!(
+            "{base}, or write `=x{index}` (no space) to keep only task {index} in progress"
+        )
+    } else {
+        base
+    }
 }
 
 // ---------------------------------------------------------------------------

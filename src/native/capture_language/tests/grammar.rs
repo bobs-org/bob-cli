@@ -1025,11 +1025,17 @@ fn execution_parses_equals_family_starts_alongside_close() {
         matches!(close.kind, CaptureKind::PomodoroClose { .. }),
         "=x"
     );
-    let close_shape = execute("=x more").expect_err("close shape");
-    assert!(
-        close_shape.contains("takes no text on its line"),
-        "{close_shape}"
-    );
+    let inline = execute("=x more").expect("inline entry");
+    match inline.kind {
+        CaptureKind::PomodoroClose { spec } => {
+            assert_eq!(spec.raw, "=x", "=x more");
+            assert_eq!(spec.log.len(), 1, "=x more");
+            assert_eq!(spec.log[0].index, 1, "=x more");
+            assert_eq!(spec.log[0].text, "more", "=x more");
+        }
+        other => panic!("=x more: expected close, got {other:?}"),
+    }
+    assert_eq!(inline.body, "=x", "=x more");
     for raw in ["=xx", "=xa"] {
         let parsed =
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
@@ -1720,10 +1726,12 @@ fn execution_rejects_a_trailing_now_tag_like_any_other_tag() {
         assert!(error.contains("bullet section markers"), "{raw}: {error}");
     }
 
-    // Whole-item operators and links with a trailing tag still fail.
-    for raw in ["^sase:fix-it #now", "=x #now", "=3 #now", "+5 #now"] {
+    // Whole-item operators and links with a trailing tag still fail, but
+    // an inline `=x #now` entry is literal text and stays valid.
+    for raw in ["^sase:fix-it #now", "=3 #now", "+5 #now"] {
         execute(raw).expect_err(&format!("{raw} stays rejected"));
     }
+    execute("=x #now").expect("=x #now stays valid");
 }
 
 #[test]

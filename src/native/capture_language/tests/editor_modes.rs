@@ -1134,17 +1134,16 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
     assert_eq!(codes(&duplicate), vec!["invalid_pomodoro_close"], "=x1,1");
     assert_eq!(duplicate.diagnostics[0].range, Some((4, 5)), "=x1,1");
     assert!(duplicate.pomodoro_close.is_none(), "=x1,1");
-    // Near misses and conflicts report `invalid_pomodoro_close`.
+    // An inline entry on the close line is a valid close with its log.
     let shape = editor("=x more");
     assert_eq!(shape.mode, EditorMode::PomodoroClose, "=x more");
-    assert_eq!(codes(&shape), vec!["invalid_pomodoro_close"], "=x more");
-    assert_eq!(shape.diagnostics[0].range, Some((3, 7)), "=x more");
-    assert!(
-        shape.diagnostics[0]
-            .message
-            .starts_with("`=x` takes no text on its line"),
-        "=x more"
-    );
+    assert!(shape.diagnostics.is_empty(), "=x more");
+    assert_eq!(shape.body, "=x", "=x more");
+    let spec = shape.pomodoro_close.expect("=x more spec");
+    assert_eq!(spec.raw, "=x", "=x more");
+    assert_eq!(spec.log.len(), 1, "=x more");
+    assert_eq!(spec.log[0].index, 1, "=x more");
+    assert_eq!(spec.log[0].text, "more", "=x more");
     let child = editor("=x\n- child");
     assert_eq!(child.mode, EditorMode::PomodoroClose, "=x child");
     assert_eq!(codes(&child), vec!["invalid_pomodoro_close"], "=x child");

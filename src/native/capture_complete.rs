@@ -146,7 +146,7 @@ a candidate preserves the typed suffix. The `=x[<N>][*<P>][!<M>][~<K>]` close su
 same way: it is never a completion field, replacements still stop before \
 `#`/`=`, and a cursor anywhere inside the suffix, including the task-number \
 lists and a dangling `,`/`!`/`~` separator, returns an empty success. A whole-item \
-`+[N]`/`-[N]` Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`, or `--` is one unit), `=x[<N>][*<P>][!<M>][~<K>]` close, or a bare `=`/`=<X>` start (a bare `=` starts 25 minutes) is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. A `=<X>#name` named start instead completes the name after `#` as `pomodoro_start_name`, per token inside chains; a cursor on `=<X>` or at the `#` byte itself returns an empty success, the `pomodoro_start_name` replacement range ends before a trailing `~<K>` drop part so accepting a name keeps the typed list, and a cursor anywhere inside the drop part, including a dangling `~`/`,` separator, returns an empty success. Pomodoro block-ID \
+`+[N]`/`-[N]` Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`, or `--` is one unit), `=x[<N>][*<P>][!<M>][~<K>]` close, or a bare `=`/`=<X>` start (a bare `=` starts 25 minutes) is an action and requests no route or task completion candidates: a cursor on such an item returns an empty success. Work Log text completes like a bullet line whether it sits below the close or on it: inline entry text requests no marker, `:`/`^`, or `wikilink_block` candidates, while note and heading wikilinks keep completing. A `=<X>#name` named start instead completes the name after `#` as `pomodoro_start_name`, per token inside chains; a cursor on `=<X>` or at the `#` byte itself returns an empty success, the `pomodoro_start_name` replacement range ends before a trailing `~<K>` drop part so accepting a name keeps the typed list, and a cursor anywhere inside the drop part, including a dangling `~`/`,` separator, returns an empty success. Pomodoro block-ID \
 completion covers '@route:prefix' and parent-task completion covers \
 '@route+prefix', both backed by the same open-task scan as \
 `bob capture-tasks` and, by default, only offer tasks that already carry a \
@@ -502,13 +502,12 @@ struct CaptureCompleteResult {
     warnings: Vec<String>,
 }
 
-/// `true` when `cursor` sits on a Work Log bullet line: any physical line
-/// after the parent line inside a close item's line range. Block-link
-/// completion is suppressed there because bullets reject block links, while
-/// note and heading completion keeps working. Line-based, so a chain close
-/// whose range contains later parent-line tokens still matches.
-fn cursor_on_close_bullet_line(raw_text: &str, cursor: usize) -> bool {
-    capture_language::cursor_on_close_bullet_line(raw_text, cursor)
+/// `true` when `cursor` sits in Work Log text: a bullet line or an inline
+/// entry on the close line. Block-link completion is suppressed there
+/// because entries reject block links, while note and heading completion
+/// keeps working.
+fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
+    capture_language::cursor_in_close_log_text(raw_text, cursor)
 }
 
 impl CaptureCompleteResult {
@@ -544,11 +543,11 @@ fn build_result(
     if let Some(field) =
         capture_links::completion_field_at(raw_text, cursor, current_note_path)
     {
-        // On a close Work Log bullet line, block-link candidates are
-        // suppressed because bullets reject block links; note and heading
-        // completion keeps working.
+        // In Work Log text, block-link candidates are suppressed because
+        // entries reject block links; note and heading completion keeps
+        // working.
         if matches!(field.context, CompletionContext::WikilinkBlock)
-            && cursor_on_close_bullet_line(raw_text, cursor)
+            && cursor_in_close_log_text(raw_text, cursor)
         {
             return Ok(CaptureCompleteResult::empty(cursor));
         }
@@ -2461,22 +2460,33 @@ mod tests {
         let note = result(temp.path(), "=x\n- 1 see [[Design", 17);
         assert_eq!(note.context, Some(CompletionContext::WikilinkNote));
         assert_ne!(note.candidates.len(), 0);
+        // Note completion keeps working inside an inline entry too.
+        let inline_note = result(temp.path(), "=x see [[Design", 15);
+        assert_eq!(inline_note.context, Some(CompletionContext::WikilinkNote));
+        assert_ne!(inline_note.candidates.len(), 0);
         // Block completion is suppressed on a Work Log bullet line, on a
-        // plain close and on a chain close alike.
+        // plain close and on a chain close alike, and inside inline entries.
         for raw in [
             "=x\n- 1 see [[Design notes#^web",
             "=x =\n- 1 see [[Design notes#^web",
+            "=x see [[Design notes#^web",
         ] {
             let block = result(temp.path(), raw, raw.len());
             assert_eq!(block.context, None, "{raw}");
             assert_eq!(block.candidates.len(), 0, "{raw}");
         }
+        // Named-start completion on a trail token keeps working because the
+        // owner's line ends at the entry.
+        let raw = "=x wired it =#bu";
+        let trail = result(temp.path(), raw, raw.len());
+        assert_ne!(trail.context, None, "{raw}");
         // Marker completion (including `@@`) stays suppressed on bullet
-        // lines: bullet text is literal.
-        let raw = "=x\n- 1 @@";
-        let markers = result(temp.path(), raw, raw.len());
-        assert_eq!(markers.context, None, "{raw}");
-        assert_eq!(markers.candidates.len(), 0, "{raw}");
+        // lines and inline entries: entry text is literal.
+        for raw in ["=x\n- 1 @@", "=x @@"] {
+            let markers = result(temp.path(), raw, raw.len());
+            assert_eq!(markers.context, None, "{raw}");
+            assert_eq!(markers.candidates.len(), 0, "{raw}");
+        }
     }
 
     #[test]

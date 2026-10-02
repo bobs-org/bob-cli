@@ -308,52 +308,60 @@ fn capture_pomodoro_close_log_execution_errors() {
         "{error}"
     );
 
-    // When the parent line has extra text and child lines follow, the
-    // parent-line error wins.
+    // An inline entry plus child bullets is the mixing error, echoing the
+    // resolved bullet.
     let error = run_close_expect_error(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
         &["=x more\n- 1 foo"],
     );
-    assert!(error.contains("takes no text on its line"), "{error}");
+    assert!(
+        error.contains("can't be combined with Work Log bullets"),
+        "{error}"
+    );
+    assert!(error.contains("`- 1 more`"), "{error}");
 }
 
 #[test]
 fn capture_pomodoro_close_log_retired_tail() {
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-t");
     let before = fs::read_to_string(&day_file).expect("read");
-    // A tail starting with a number echoes it as the bullet to write.
-    for (args, bullet) in [
-        (vec!["=x2,3 2 foo bar baz"], "- 2 foo bar baz"),
-        // A stray leading marker (positional shell args joined) echoes too.
-        (vec!["=x - 2 foo"], "- 2 foo"),
-    ] {
-        let error = run_close_expect_error(
-            &vault,
-            &day_file,
-            "2026-09-28 09:37:00",
-            &args,
-        );
-        assert!(
-            error.contains(&format!("as a bullet: `{bullet}`")),
-            "{args:?}: {error}"
-        );
+    // The retired tail is now the inline entry: a leading number names the
+    // task and executes like its bullet form.
+    for args in [vec!["=x1,2 2 foo bar baz"], vec!["=x more"]] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("--dry-run")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(&args[0])
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-28 09:37:00")
+            .output()
+            .expect("dry run");
+        assert_success(&output);
     }
-    // Any other tail gets the generic hint.
-    for args in [vec!["=x more"], vec!["=x ^bob:ready="]] {
-        let error = run_close_expect_error(
-            &vault,
-            &day_file,
-            "2026-09-28 09:37:00",
-            &args,
-        );
-        assert!(
-            error.contains("log work as bullets below it"),
-            "{args:?}: {error}"
-        );
-    }
-    // `=x 1` is the no-spaces hint, not a bullet.
+    // A stray leading marker still teaches the fix.
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x - 2 foo"],
+    );
+    assert!(error.contains("drop the stray `-`"), "{error}");
+    // A trailing Task Link is its own item, never entry text.
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x ^bob:ready="],
+    );
+    assert!(error.contains("can't end with the Task Link"), "{error}");
+    // `=x 1` is now the dangling inline number with the `=x1` hint.
     let error = run_close_expect_error(
         &vault,
         &day_file,
@@ -361,10 +369,10 @@ fn capture_pomodoro_close_log_retired_tail() {
         &["=x 1"],
     );
     assert!(
-        error.contains("with no spaces (for example `=x1`)")
-            || error.contains("no spaces"),
+        error.contains("type the Work Log text after task 1"),
         "{error}"
     );
+    assert!(error.contains("`=x1`"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 }
 
@@ -498,23 +506,25 @@ fn capture_pomodoro_close_log_chains() {
     );
     assert_eq!(json["captures"][1]["kind"], "pomodoro_start");
 
-    // The retired one-liners now fail: `-2 =x 1 foo` is the `-2` shape
-    // error, and `=x 1 wired the lexer =` is the bullet hint.
+    // Inline entries chain: `-2 =x 1 foo` shortens then closes with the
+    // entry, and `=x 1 wired the lexer =` closes with the entry then starts.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-ch4");
-    let error = run_close_expect_error(
-        &vault,
-        &day_file,
-        "2026-09-28 09:37:00",
-        &["-2 =x 1 foo"],
-    );
-    assert!(error.contains("remove extra text"), "{error}");
-    let error = run_close_expect_error(
-        &vault,
-        &day_file,
-        "2026-09-28 09:37:00",
-        &["=x 1 wired the lexer ="],
-    );
-    assert!(error.contains("`- 1 wired the lexer =`"), "{error}");
+    for args in ["-2 =x 1 foo", "=x 1 wired the lexer ="] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("--dry-run")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(args)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-28 09:37:00")
+            .output()
+            .expect("dry run");
+        assert_success(&output);
+    }
 }
 
 #[test]
@@ -629,11 +639,18 @@ fn capture_parse_pomodoro_close_log_protocol() {
         serde_json::json!([{ "index": 2, "text": "a" }])
     );
 
+    // A dangling inline number is an editing state with the log-text need.
+    let dangling_inline = parse_json("=x 1");
+    assert_eq!(dangling_inline["mode"], "incomplete");
+    assert_eq!(
+        dangling_inline["needs"],
+        serde_json::json!(["pomodoro_close_log_text"])
+    );
+
     // Invalid drafts report precise diagnostics.
     for (text, phrase) in [
-        ("=x 1", "write the task numbers right after"),
-        ("=x2,3 2 foo bar baz", "`- 2 foo bar baz`"),
-        ("=x more", "takes no text on its line"),
+        ("=x - wired", "drop the stray `-`"),
+        ("=x = wired", "then the session operators"),
         ("=x\n- wired the lexer", "start each Work Log bullet"),
         ("=x1\n- 2 foo", "isn't worked by"),
         (

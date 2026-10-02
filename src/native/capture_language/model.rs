@@ -186,6 +186,29 @@ pub(crate) struct CloseLogEntry {
     /// unescaped, final, whitespace-normalized text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) details: Vec<String>,
+    /// Where the entry was typed: a child bullet or the close line itself.
+    /// Skipped in JSON so `pomodoro_close.log` matches the bullet form.
+    #[serde(skip)]
+    pub(crate) origin: CloseLogOrigin,
+}
+
+/// Where a Work Log entry was typed. Bullets keep the existing messages;
+/// inline entries word execution failures by origin (explicit number versus
+/// default number).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum CloseLogOrigin {
+    /// A `- <n> <text>` child bullet.
+    #[default]
+    Bullet,
+    /// The close line's own text (`=x wired the lexer`). `close_token` is
+    /// the typed close token (`=x`, `=x1,3,4`); `explicit` is true when the
+    /// entry typed its number; `default_index` is the lexical default used
+    /// for escapes.
+    Inline {
+        close_token: String,
+        explicit: bool,
+        default_index: Option<u32>,
+    },
 }
 
 impl PomodoroCloseSpec {

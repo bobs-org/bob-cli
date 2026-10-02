@@ -10,7 +10,7 @@ use super::super::{
         leading_spaces_or_tabs_len, line_spans, list_marker_len,
         nearest_shallower_list_item_parent,
     },
-    capture_language::CloseLogEntry,
+    capture_language::{CloseLogEntry, CloseLogOrigin},
     markdown,
 };
 use super::ledger::{sub_bullet_range, RunningPomodoro};
@@ -162,10 +162,15 @@ pub(crate) enum CloseSelectionError {
         index: u32,
         total: usize,
         running_name: Option<String>,
+        origin: CloseLogOrigin,
+        text: String,
     },
     LogDeferred {
         index: u32,
         block_link: String,
+        origin: CloseLogOrigin,
+        text: String,
+        worked: Option<u32>,
     },
     LogDropped {
         index: u32,
@@ -175,6 +180,9 @@ pub(crate) enum CloseSelectionError {
         index: u32,
         block_link: String,
         running_name: Option<String>,
+        origin: CloseLogOrigin,
+        text: String,
+        worked: Option<u32>,
     },
     LogLineupChanged,
 }
@@ -228,20 +236,91 @@ impl fmt::Display for CloseSelectionError {
                 index,
                 total,
                 running_name,
+                origin,
+                text,
             } => {
                 let owner = owner_name(running_name);
                 let range = range_words(*total);
-                write!(
-                    f,
-                    "`- {index}` logs to task {index}, but {owner} has {range}"
-                )
+                match origin {
+                    CloseLogOrigin::Bullet => {
+                        write!(
+                            f,
+                            "`- {index}` logs to task {index}, but {owner} has {range}"
+                        )
+                    }
+                    CloseLogOrigin::Inline {
+                        close_token,
+                        explicit,
+                        default_index,
+                    } => {
+                        if *explicit {
+                            let head = format!("{close_token} {index}");
+                            match default_index {
+                                Some(default) => {
+                                    let escape = if text.is_empty() {
+                                        format!("{close_token} {default}")
+                                    } else {
+                                        format!(
+                                            "{close_token} {default} {index} {text}"
+                                        )
+                                    };
+                                    write!(
+                                        f,
+                                        "`{head}` logs to task {index}, but {owner} has {range}; to log text that starts with `{index}`, put the task number first: `{escape}`"
+                                    )
+                                }
+                                None => {
+                                    write!(
+                                        f,
+                                        "`{head}` logs to task {index}, but {owner} has {range}"
+                                    )
+                                }
+                            }
+                        } else {
+                            write!(
+                                f,
+                                "the Work Log entry logs to task {index} by default, but {owner} has {range}"
+                            )
+                        }
+                    }
+                }
             }
-            Self::LogDeferred { index, block_link } => {
-                write!(
-                    f,
-                    "task {index} `{block_link}` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
-                )
-            }
+            Self::LogDeferred {
+                index,
+                block_link,
+                origin,
+                text,
+                worked,
+            } => match origin {
+                CloseLogOrigin::Bullet => {
+                    write!(
+                            f,
+                            "task {index} `{block_link}` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
+                        )
+                }
+                CloseLogOrigin::Inline {
+                    close_token,
+                    explicit,
+                    ..
+                } => {
+                    if *explicit {
+                        write!(
+                                f,
+                                "task {index} `{block_link}` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
+                            )
+                    } else if let Some(worked) = worked {
+                        write!(
+                                f,
+                                "the Work Log entry logs to task {index} by default, but task {index} `{block_link}` is deferred; name a worked task: `{close_token} {worked} {text}`"
+                            )
+                    } else {
+                        write!(
+                                f,
+                                "task {index} `{block_link}` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
+                            )
+                    }
+                }
+            },
             Self::LogDropped { index, block_link } => {
                 write!(
                     f,
@@ -252,12 +331,41 @@ impl fmt::Display for CloseSelectionError {
                 index,
                 block_link,
                 running_name,
+                origin,
+                text,
+                worked,
             } => {
                 let owner = owner_name(running_name);
-                write!(
-                    f,
-                    "task {index} `{block_link}` is nested under another bullet, so the close can't write its Work Log; move it to the top level of {owner}"
-                )
+                match origin {
+                    CloseLogOrigin::Bullet => {
+                        write!(
+                            f,
+                            "task {index} `{block_link}` is nested under another bullet, so the close can't write its Work Log; move it to the top level of {owner}"
+                        )
+                    }
+                    CloseLogOrigin::Inline {
+                        close_token,
+                        explicit,
+                        ..
+                    } => {
+                        if *explicit {
+                            write!(
+                                f,
+                                "task {index} `{block_link}` is nested under another bullet, so the close can't write its Work Log; move it to the top level of {owner}"
+                            )
+                        } else if let Some(worked) = worked {
+                            write!(
+                                f,
+                                "the Work Log entry logs to task {index} by default, but task {index} `{block_link}` is nested under another bullet; name a worked task: `{close_token} {worked} {text}`"
+                            )
+                        } else {
+                            write!(
+                                f,
+                                "task {index} `{block_link}` is nested under another bullet, so the close can't write its Work Log; move it to the top level of {owner}"
+                            )
+                        }
+                    }
+                }
             }
             Self::LogLineupChanged => {
                 write!(f, "Work Log entry changed the Task Link lineup")
@@ -641,6 +749,35 @@ enum LineTag {
     InsertedDetail(usize),
 }
 
+/// The first link with a worked outcome that sits at the session's top
+/// level, for default-origin suggestions. Worked means in progress, parked,
+/// or complete; top level means its nearest shallower list parent is the
+/// running Pomodoro.
+fn first_worked_link(
+    lineup: &[NumberedTaskLink],
+    spans: &[super::super::capture::LineSpan<'_>],
+    entry_index: usize,
+) -> Option<u32> {
+    for link in lineup {
+        if !matches!(
+            link.outcome,
+            TaskLinkOutcome::InProgress
+                | TaskLinkOutcome::Parked
+                | TaskLinkOutcome::Complete
+        ) {
+            continue;
+        }
+        let link_zero = link.line.saturating_sub(1);
+        if link_zero < spans.len()
+            && nearest_shallower_list_item_parent(spans, link_zero)
+                == Some(entry_index)
+        {
+            return Some(link.index);
+        }
+    }
+    None
+}
+
 fn validate_close_log_entries(
     contents: &str,
     running: &RunningPomodoro,
@@ -657,6 +794,8 @@ fn validate_close_log_entries(
                 index: entry.index,
                 total: lineup.len(),
                 running_name: running.name.clone(),
+                origin: entry.origin.clone(),
+                text: entry.text.clone(),
             });
         };
         match link.outcome {
@@ -664,9 +803,21 @@ fn validate_close_log_entries(
             | TaskLinkOutcome::Parked
             | TaskLinkOutcome::Complete => {}
             TaskLinkOutcome::Deferred => {
+                let worked = match &entry.origin {
+                    CloseLogOrigin::Bullet => None,
+                    CloseLogOrigin::Inline { explicit, .. } if *explicit => {
+                        None
+                    }
+                    CloseLogOrigin::Inline { .. } => {
+                        first_worked_link(lineup, &spans, entry_index)
+                    }
+                };
                 return Err(CloseSelectionError::LogDeferred {
                     index: entry.index,
                     block_link: link.block_link.clone(),
+                    origin: entry.origin.clone(),
+                    text: entry.text.clone(),
+                    worked,
                 });
             }
             TaskLinkOutcome::Dropped => {
@@ -681,10 +832,20 @@ fn validate_close_log_entries(
             || nearest_shallower_list_item_parent(&spans, link_zero)
                 != Some(entry_index)
         {
+            let worked = match &entry.origin {
+                CloseLogOrigin::Bullet => None,
+                CloseLogOrigin::Inline { explicit, .. } if *explicit => None,
+                CloseLogOrigin::Inline { .. } => {
+                    first_worked_link(lineup, &spans, entry_index)
+                }
+            };
             return Err(CloseSelectionError::LogNested {
                 index: entry.index,
                 block_link: link.block_link.clone(),
                 running_name: running.name.clone(),
+                origin: entry.origin.clone(),
+                text: entry.text.clone(),
+                worked,
             });
         }
     }

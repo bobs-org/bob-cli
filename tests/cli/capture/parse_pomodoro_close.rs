@@ -58,20 +58,16 @@ fn capture_parse_pomodoro_close_protocol() {
     let start = parse("=");
     assert_eq!(start["mode"], "pomodoro_start", "{start}");
 
-    // Extra text is an `invalid_pomodoro_close` diagnostic on the extra
-    // range, never task text.
+    // An inline entry is a valid close with its log, never a diagnostic.
     let more = parse("=x more");
-    assert_eq!(more["mode"], "pomodoro_close");
-    assert!(more.get("pomodoro_close").is_none(), "{more}");
+    assert_eq!(more["mode"], "pomodoro_close", "{more}");
     assert_eq!(
-        more["diagnostics"][0]["code"], "invalid_pomodoro_close",
+        more["pomodoro_close"]["log"],
+        serde_json::json!([{ "index": 1, "text": "more" }]),
         "{more}"
     );
-    assert_eq!(
-        more["diagnostics"][0]["range"],
-        serde_json::json!([3, 7]),
-        "{more}"
-    );
+    assert_eq!(more["diagnostics"], serde_json::json!([]), "{more}");
+    assert_eq!(more["body"], "=x", "{more}");
 
     // Link forms keep their mode with a `pomodoro_close` suffix span and
     // the typed raw.
@@ -246,17 +242,10 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         );
     }
 
-    // Spaced lists get the no-spaces hint on the extra text: the spaceless
-    // join lexes as a selection, so it wins over the bullet hint even when
-    // the tail starts with a bare number (`=x 1` means `=x1`).
-    for (text, range) in [
-        ("=x 1,3", [3, 6]),
-        ("=x1 !2", [4, 6]),
-        ("=x 1", [3, 4]),
-        ("=x1 1", [4, 5]),
-        ("=x1,3 3", [6, 7]),
-        ("=x 2", [3, 4]),
-    ] {
+    // Spaced lists get the no-spaces hint when the first token is not a
+    // plain number (`=x 1,3` means `=x1,3`). A lone number is the dangling
+    // inline entry instead.
+    for (text, range) in [("=x 1,3", [3, 6]), ("=x1 !2", [4, 6])] {
         let value = parse(text);
         assert_eq!(
             value["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -274,6 +263,32 @@ fn capture_parse_pomodoro_close_selection_protocol() {
             value["diagnostics"][0]["range"],
             serde_json::json!(range),
             "{text}"
+        );
+    }
+    for (text, start, end) in [
+        ("=x 1", 3, 4),
+        ("=x1 1", 4, 5),
+        ("=x1,3 3", 6, 7),
+        ("=x 2", 3, 4),
+    ] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "incomplete", "{text}");
+        assert_eq!(
+            value["needs"],
+            serde_json::json!(["pomodoro_close_log_text"]),
+            "{text}"
+        );
+        assert!(
+            value["spans"]
+                .as_array()
+                .expect("spans")
+                .iter()
+                .any(|span| {
+                    span["kind"] == "interactive_placeholder"
+                        && span["start"] == start
+                        && span["end"] == end
+                }),
+            "{text}: {value}"
         );
     }
 
@@ -310,7 +325,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
 
     // Other extra text keeps an `invalid_pomodoro_close` diagnostic on the
     // first tail token.
-    for (text, range) in [("=x1 x1", [4, 6])] {
+    for (text, range) in [("=x - wired", [3, 4])] {
         let value = parse(text);
         assert_eq!(
             value["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -339,26 +354,19 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         "invalid_pomodoro_link"
     );
 
-    // A close with other text reports the bullet hint.
+    // An inline entry is valid with its log and index span.
     let more = parse("=x1 more");
+    assert_eq!(more["mode"], "pomodoro_close", "{more}");
     assert_eq!(
-        more["diagnostics"][0]["code"], "invalid_pomodoro_close",
+        more["pomodoro_close"]["log"],
+        serde_json::json!([{ "index": 1, "text": "more" }]),
         "{more}"
     );
-    assert!(
-        more["diagnostics"][0]["message"]
-            .as_str()
-            .expect("message")
-            .starts_with("`=x` takes no text on its line"),
-        "{more}"
-    );
-    // A tail starting with a number echoes it as the bullet to write.
     let echo = parse("=x2,3 2 foo bar baz");
-    assert!(
-        echo["diagnostics"][0]["message"]
-            .as_str()
-            .expect("message")
-            .contains("`- 2 foo bar baz`"),
+    assert_eq!(echo["mode"], "pomodoro_close", "{echo}");
+    assert_eq!(
+        echo["pomodoro_close"]["log"],
+        serde_json::json!([{ "index": 2, "text": "foo bar baz" }]),
         "{echo}"
     );
     let child = parse_stdin("=x1\n- detail\n");

@@ -400,7 +400,7 @@ fn execution_leaves_non_chains_unchanged() {
     let error = execute_draft("=x 1,3").unwrap_err();
     assert!(error.contains("with no spaces"), "{error}");
     let error = execute_draft("=x ^bob:ready=").unwrap_err();
-    assert!(error.contains("takes no text on its line"), "{error}");
+    assert!(error.contains("can't end with the Task Link"), "{error}");
     for raw in ["Plan +2 =x", "- foo"] {
         let draft = execute_draft(raw).expect("stays a task");
         assert_eq!(draft.items.len(), 1, "{raw}");

@@ -918,9 +918,10 @@ fn close_after_x_offset(
 
 /// Whole-item `=`-family grammar: `=x[<N>][!<M>]` closes, `=`/`=<X>` starts.
 ///
-/// A same-line chain has already been split into single-token items
-/// upstream in `draft.rs`, so this parser only ever sees an exact
-/// single-token item here.
+/// A same-line chain has already been split upstream in `draft.rs`: chain
+/// siblings are exact single-token items, while an inline-close owner
+/// carries exactly `=x… <entry>` on its parent line. Starts still only ever
+/// see exact single-token items here.
 ///
 /// Runs after the `:` task-link query check (before session operators,
 /// caret links, and ordinary parsing). Returns `Ok(None)` when the item is not `=`-shaped and
@@ -936,10 +937,10 @@ fn close_after_x_offset(
 /// token claims its item.
 ///
 /// A selection-shaped first token (`=x`/`=X` followed by a digit, `,`, `*`,
-/// `!`, or `~`) claims the item the same way: an exact single-line item lexes its
-/// lists (a dangling separator is an incomplete error here), while anything
-/// else reports the list's own diagnostic, the no-spaces hint when the
-/// spaceless join forms a selection, or the close shape error.
+/// `!`, or `~`) claims the item the same way: an exact single-token item
+/// lexes its lists (a dangling separator is an incomplete error here),
+/// while trailing text on the parent line lexes as the inline Work Log
+/// entry through the shared inline lexer.
 pub(super) fn parse_pomodoro_equals_item<'a>(
     item: &CaptureItem<'a>,
     parent_line: &ItemLine<'a>,
@@ -1085,27 +1086,40 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     }
                 }
             }
-            // A parent line with extra text after the close token: the
-            // parent-line error wins even when child lines follow. Steps in
-            // order: `=x#name`, a broken selection token, a dangling
-            // separator (incomplete), the no-spaces hint, then the bullet
-            // hint.
+            // A parent line with an inline Work Log entry: the text after
+            // the close token lexes through the shared inline lexer, so
+            // `=x<sel> [<n>] <text>` executes byte for byte like its bullet
+            // form. The draft split already separated any trailing session
+            // chain, so the tail here is exactly the entry.
             if forced_route.is_some() || forced_section.is_some() {
                 return Err(POMODORO_CLOSE_FORCED_ERROR.to_string());
             }
-            if let Some(after_x) = selection_after_x {
-                let offset = close_after_x_offset(parent_line, first, after_x);
-                match lex_close_selection(after_x, offset, first) {
-                    Ok(CloseSelectionOutcome::Valid(_)) => {}
-                    Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
-                        return Err(close_selection_incomplete_error(
-                            first,
-                            incomplete.separator,
-                        ));
+            let lexed_selection = match selection_after_x {
+                None => CloseSelectionLex {
+                    in_progress: None,
+                    park: Vec::new(),
+                    complete: Vec::new(),
+                    drop: Vec::new(),
+                    in_progress_range: None,
+                    park_range: None,
+                    complete_range: None,
+                    drop_range: None,
+                },
+                Some(after_x) => {
+                    let offset =
+                        close_after_x_offset(parent_line, first, after_x);
+                    match lex_close_selection(after_x, offset, first) {
+                        Ok(CloseSelectionOutcome::Valid(lex)) => lex,
+                        Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+                            return Err(close_selection_incomplete_error(
+                                first,
+                                incomplete.separator,
+                            ));
+                        }
+                        Err(error) => return Err(error.message),
                     }
-                    Err(error) => return Err(error.message),
                 }
-            }
+            };
             let line_tokens = tokenize_line_with_spans(&parent_line.raw);
             let tail_tokens: Vec<Token<'_>> =
                 if line_tokens.first().is_some_and(|token| token.text == first)
@@ -1127,16 +1141,75 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     }
                     tail
                 };
-            // The no-spaces hint wins when the spaceless join of the line
-            // lexes as a selection (`=x 1,3`, `=x1 !2`, `=x 1`).
-            let nospace: String = parent_trimmed.split_whitespace().collect();
-            if whole_item_close_after_x(&nospace).is_some_and(|after_x| {
-                lex_close_selection(after_x, 0, &nospace).is_ok()
-            }) {
-                return Err(close_selection_no_spaces_error());
+            let default_index = default_log_index(
+                lexed_selection.in_progress.as_deref(),
+                &lexed_selection.park,
+                &lexed_selection.complete,
+                &lexed_selection.drop,
+            );
+            let has_bullet_child = item.lines[1..].iter().any(|line| {
+                !matches!(
+                    classify_authored_line(line.raw),
+                    AuthoredLineClass::EmptyOrPlaceholder
+                )
+            });
+            match lex_close_inline_entry(
+                &tail_tokens,
+                first,
+                lexed_selection.in_progress.as_deref(),
+                &lexed_selection.park,
+                &lexed_selection.complete,
+                &lexed_selection.drop,
+            ) {
+                Err(error) => return Err(error.message),
+                Ok(CloseInlineLex::Dangling { index, .. }) => {
+                    if has_bullet_child {
+                        let bullet = format!("- {index}");
+                        return Err(close_inline_mixing_error(&bullet));
+                    }
+                    let head = format!("{first} {index}");
+                    let plain = first.eq_ignore_ascii_case("=x");
+                    return Err(close_inline_dangling_error(
+                        &head, index, plain,
+                    ));
+                }
+                Ok(entry @ CloseInlineLex::Entry { .. }) => {
+                    let (index, text) = match &entry {
+                        CloseInlineLex::Entry { index, text, .. } => {
+                            (*index, text.clone())
+                        }
+                        CloseInlineLex::Dangling { .. } => unreachable!(),
+                    };
+                    if has_bullet_child {
+                        let bullet = format!("- {index} {text}");
+                        return Err(close_inline_mixing_error(&bullet));
+                    }
+                    let mut spec = close_spec_from_lex(
+                        first.to_string(),
+                        &lexed_selection,
+                    );
+                    spec.log = vec![log_entry_from_inline(
+                        &entry,
+                        first,
+                        default_index,
+                    )];
+                    let body = first.to_string();
+                    return Ok(Some(parsed_capture_item_outcome(
+                        item,
+                        ParsedCaptureText {
+                            body,
+                            clip: None,
+                            route: None,
+                            kind: CaptureKind::PomodoroClose { spec },
+                            scheduled_offset: None,
+                            priority_level: None,
+                            sub_bullets: Vec::new(),
+                        },
+                        Vec::new(),
+                        None,
+                    )));
+                }
             }
-            let hint = close_tail_bullet_hint(&tail_tokens);
-            return Err(close_parent_text_error(hint.as_deref()));
         }
         EqualsToken::Start {
             suffix,

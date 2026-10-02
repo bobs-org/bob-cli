@@ -172,19 +172,27 @@ its wikilink spans); the human `close` line reads \
 `=x1*2!3~4 (in progress 1 · parked 2 · complete 3 · drop 4 · defer the rest)`, with \
 `in progress none` for `=x0`, `parked 2 · defer the rest` for `=x*2`, a bare `=x` for a plain close, and \
 `log 2 'wired the lexer' (+1 detail)` for typed entries with details. \
-Work Log entries are child bullets below the close (`- <n> <text>`, with \
+One entry may sit on the close line itself (`bob capture-parse -f json -- \
+'=x wired it'`): it logs to the first task the close works, or to the \
+leading number when one is typed. The item `body` stays the close token \
+(`=x`), the spec `log` carries the entry with its resolved index, an \
+explicit number gets a `pomodoro_close_log_index` span on the close line \
+while the default gets none, and entry text keeps its wikilink spans. A \
+dangling inline number (`bob capture-parse -f json -- '=x 2'`) reports mode \
+'incomplete' needing `pomodoro_close_log_text` with the partial spec and an \
+`interactive_placeholder` span over the number instead of its index span. \
+Several entries still use child bullets below the close (`- <n> <text>`, with \
 two-space `  - <detail>` details nesting under their entry); only the \
-bullet's first token is an index and every backslash stays literal. A \
+first token is an index and every backslash stays literal. A \
 dangling bullet (`- 1`) reports mode 'incomplete' needing \
 `pomodoro_close_log_text` with the partial spec (lists plus every complete \
 entry with its details), the spans typed so far, and one \
 `interactive_placeholder` span over each dangling number instead of its \
 index span. A bullet with no number, a non-loggable index, a bad number, a \
 block link, or a fence reports 'pomodoro_close' plus an \
-`invalid_pomodoro_close` diagnostic on the precise range. Extra text on the \
-close line reports 'pomodoro_close' plus an `invalid_pomodoro_close` \
-diagnostic: the no-spaces hint when the spaceless join lexes as a \
-selection, else the bullet hint echoing the tail as the bullet to write. \
+`invalid_pomodoro_close` diagnostic on the precise range, and so does a bad \
+inline entry (stray marker, misplaced operators, no-spaces join, Task Link \
+ending, block link, fence, or mixing with bullets). \
 Every malformed list (duplicates, overlaps, a misplaced `0`, a second `!` \
 or `~`, a bad character, an oversized number, or a space inside the lists, \
 which gets the no-spaces hint) reports the same. A token ending in a \
@@ -1237,7 +1245,12 @@ mod tests {
 
         let shape = json("=x more");
         assert_eq!(shape["mode"], "pomodoro_close");
-        assert_eq!(shape["diagnostics"][0]["code"], "invalid_pomodoro_close");
+        assert_eq!(
+            shape["pomodoro_close"]["log"],
+            serde_json::json!([{ "index": 1, "text": "more" }])
+        );
+        assert_eq!(shape["body"], "=x");
+        assert!(shape["diagnostics"].as_array().expect("diags").is_empty());
 
         let named = json("@r:id#n=x");
         assert_eq!(named["diagnostics"][0]["code"], "invalid_pomodoro_close");
@@ -1493,16 +1506,19 @@ mod tests {
                     index: 1,
                     text: "wired the lexer".to_string(),
                     details: vec!["chose a hand-rolled lexer".to_string()],
+                    origin: Default::default(),
                 },
                 CloseLogEntry {
                     index: 2,
                     text: "sketched the parser".to_string(),
                     details: vec!["a".to_string(), "b".to_string()],
+                    origin: Default::default(),
                 },
                 CloseLogEntry {
                     index: 1,
                     text: "opened the PR".to_string(),
                     details: Vec::new(),
+                    origin: Default::default(),
                 },
             ],
         };

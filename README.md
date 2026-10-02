@@ -218,8 +218,9 @@ typed on that same item. The whole batch is planned before anything is written.
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes); the item must contain only the start token (quote in zsh) |
 | `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name, otherwise a new named session is created and started; the item must contain only the start token (quote in zsh) |
 | `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`); `~` drops, the drop part always comes last (quote in zsh) |
-| `=x[<N>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, `!`/`~` in either order); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; the item must contain only the token (quote in zsh, since `!` history expansion also applies) |
-| `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items (`=x =~2` closes then starts without link 2) |
+| `=x[<N>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, `!`/`~` in either order); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; one Work Log entry may sit on the close line, several use child bullets (quote in zsh, since `!` history expansion also applies) |
+| `=x [<n>] <entry>` | One Work Log entry on the close line (`=x wired the lexer` logs to task 1, `=x1,3 3 fixed the flake` logs to task 3) |
+| `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items (`=x =~2` closes then starts without link 2; `=x wired the lexer =` closes with the entry then starts) |
 | `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it; numbers refer to the post-link lineup |
 | `<text> @route:id=x…` | Create the new task in the running session, then close it |
 | `@route^id+` | New project note `<route>_<id>.md`; the daily note and the parent note are left unchanged |
@@ -315,6 +316,7 @@ Capture a whole item `=x[<N>][!<M>][~<K>]` to close today's running timed
 Pomodoro the way Obsidian's Ctrl+Enter completion does, plus an
 auto-decrement that shortens an early-stopped session to the earliest
 five-minute step at or after now: `bob capture '=x'` closes the session,
+`bob capture '=x wired the lexer'` logs one entry to task 1,
 `bob capture '=x2'` keeps only task 2 in progress, `bob capture '=x1!2'`
 keeps task 1 in progress and completes task 2, `bob capture '=x0'` defers everything,
 `bob capture '=x1~2'` keeps task 1 in progress and drops task 2,

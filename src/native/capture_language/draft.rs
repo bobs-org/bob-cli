@@ -144,6 +144,75 @@ fn is_chain_close_token(token: &str) -> bool {
     )
 }
 
+/// Whether a token starts a new session: a whole-item start (`=`, `=<X>`,
+/// `=#name`, `=~K` with its drop part) or a whole-item close (`=x…`).
+/// Adjust/shift tokens (`+1`, `-`, `--`) never start a session, so they
+/// stay entry text unless a start or close precedes them in the trail.
+fn is_trail_head_token(token: &str) -> bool {
+    super::item::session_equals_token(token).is_some()
+}
+
+/// One inline-close split: the lead (maximal session-token prefix), its
+/// last whole-item close (the owner), and the trail (maximal
+/// session-token suffix trimmed to begin with a start or close token).
+/// The entry is every token after the owner and before the trail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InlineCloseSplit {
+    pub(crate) lead_len: usize,
+    pub(crate) owner_index: usize,
+    pub(crate) trail_start: usize,
+}
+
+/// Split a parent line's tokens into lead/owner/entry/trail for an inline
+/// Work Log entry. Returns `None` when the line holds no inline entry:
+/// fewer than two tokens, an all-session chain (today's chain path), an
+/// empty lead, or no whole-item close in the lead. Both the execution and
+/// editor paths share this split through [`split_capture_draft`], so they
+/// cannot disagree. The entry is never empty when `Some`: the token after
+/// the lead is not a session token.
+pub(crate) fn split_inline_close_tokens(
+    tokens: &[Token<'_>],
+) -> Option<InlineCloseSplit> {
+    if tokens.len() < 2 {
+        return None;
+    }
+    if tokens
+        .iter()
+        .all(|token| is_session_chain_token(token.text))
+    {
+        return None;
+    }
+    let lead_len = tokens
+        .iter()
+        .take_while(|token| is_session_chain_token(token.text))
+        .count();
+    if lead_len == 0 {
+        return None;
+    }
+    let owner_index = tokens[..lead_len]
+        .iter()
+        .rposition(|token| is_chain_close_token(token.text))?;
+    let suffix_len = tokens
+        .iter()
+        .rev()
+        .take_while(|token| is_session_chain_token(token.text))
+        .count();
+    let mut trail_start = tokens.len() - suffix_len;
+    while trail_start < tokens.len()
+        && !is_trail_head_token(tokens[trail_start].text)
+    {
+        trail_start += 1;
+    }
+    if owner_index + 1 >= trail_start {
+        return None;
+    }
+    Some(InlineCloseSplit {
+        lead_len,
+        owner_index,
+        trail_start,
+    })
+}
+
 /// Push one blank-line-separated item. When the parent line is a session
 /// chain, push one single-token item per operator instead: each synthetic
 /// item holds a single [`ItemLine`] over that token's absolute range on the
@@ -153,10 +222,20 @@ fn is_chain_close_token(token: &str) -> bool {
 /// on the line, children still attach to the last token's item, so the last
 /// token's family parser reports its existing shape error.
 ///
+/// A parent line with an inline Work Log entry (`=x wired the lexer`)
+/// splits into one item per lead token before the owner, then the owner
+/// item carrying the entry, then one item per trail token. The owner item's
+/// single [`ItemLine`] is the contiguous slice from the owner token's start
+/// through the entry's last token, so the close parser sees exactly
+/// `=x… <entry>`. Child lines attach to the owner, so mixing entry and
+/// bullets reports the mixing error. With no siblings the result is one
+/// item over the whole line, as today.
+///
 /// A chain whose `=x` is not last nests its item ranges: the close item's
 /// range runs from its token through its last bullet, so it contains the
-/// ranges of the later tokens on the parent line. Item ranges therefore
-/// nest; they never partially overlap.
+/// ranges of the later tokens on the parent line. An inline owner never
+/// nests siblings: its range ends at the entry (or its last child). Item
+/// ranges therefore nest or stay disjoint; they never partially overlap.
 pub(super) fn push_capture_item<'a>(
     items: &mut Vec<CaptureItem<'a>>,
     current: &mut Vec<ItemLine<'a>>,
@@ -206,6 +285,101 @@ pub(super) fn push_capture_item<'a>(
                     lines: vec![token_line],
                 });
             }
+        }
+        current.clear();
+        return;
+    }
+    let parent_tokens: Vec<Token<'_>> = tokenize_with_spans(first.raw.text)
+        .into_iter()
+        .map(|token| Token {
+            text: token.text,
+            start: token.start + first.raw.start,
+            end: token.end + first.raw.start,
+        })
+        .collect();
+    if let Some(split) = split_inline_close_tokens(&parent_tokens) {
+        let lead_before = &parent_tokens[..split.owner_index];
+        let trail = &parent_tokens[split.trail_start..];
+        // No siblings: one item over the whole line, as today. The close
+        // parser lexes the tail as the inline entry.
+        if lead_before.is_empty() && trail.is_empty() {
+            let last = current.last().copied().expect("nonempty item");
+            items.push(CaptureItem {
+                index: items.len(),
+                start: first.raw.start,
+                end: last.raw.end,
+                line_start: first.line_number,
+                line_end: last.line_number,
+                lines: std::mem::take(current),
+            });
+            return;
+        }
+        let rest: Vec<ItemLine<'a>> = current[1..].to_vec();
+        let last_child = rest.last().copied();
+        for token in lead_before.iter().copied() {
+            let token_line = ItemLine {
+                raw: RawLine {
+                    text: token.text,
+                    start: token.start,
+                    end: token.end,
+                },
+                line_number: first.line_number,
+            };
+            items.push(CaptureItem {
+                index: items.len(),
+                start: token.start,
+                end: token.end,
+                line_start: first.line_number,
+                line_end: first.line_number,
+                lines: vec![token_line],
+            });
+        }
+        let owner = parent_tokens[split.owner_index];
+        let entry_last = parent_tokens[split.trail_start - 1];
+        let owner_rel_start = owner.start - first.raw.start;
+        let entry_rel_end = entry_last.end - first.raw.start;
+        let owner_text = &first.raw.text[owner_rel_start..entry_rel_end];
+        let owner_line = ItemLine {
+            raw: RawLine {
+                text: owner_text,
+                start: owner.start,
+                end: entry_last.end,
+            },
+            line_number: first.line_number,
+        };
+        {
+            let mut lines = vec![owner_line];
+            lines.extend(rest.iter().copied());
+            let (end, line_end) = match last_child {
+                Some(child) => (child.raw.end, child.line_number),
+                None => (entry_last.end, first.line_number),
+            };
+            items.push(CaptureItem {
+                index: items.len(),
+                start: owner.start,
+                end,
+                line_start: first.line_number,
+                line_end,
+                lines,
+            });
+        }
+        for token in trail.iter().copied() {
+            let token_line = ItemLine {
+                raw: RawLine {
+                    text: token.text,
+                    start: token.start,
+                    end: token.end,
+                },
+                line_number: first.line_number,
+            };
+            items.push(CaptureItem {
+                index: items.len(),
+                start: token.start,
+                end: token.end,
+                line_start: first.line_number,
+                line_end: first.line_number,
+                lines: vec![token_line],
+            });
         }
         current.clear();
         return;

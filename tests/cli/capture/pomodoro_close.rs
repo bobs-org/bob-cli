@@ -472,13 +472,21 @@ fn capture_pomodoro_close_diagnostics() {
     // Near misses and conflicts.
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-close-near-miss");
-    let error = run_close_expect_error(
-        &vault,
-        &day_file,
-        "2026-09-28 09:37:00",
-        &["=x more"],
-    );
-    assert!(error.contains("takes no text on its line"), "{error}");
+    // An inline entry is valid: dry-run closes with the entry.
+    let output = bob_command()
+        .arg("capture")
+        .arg("--dry-run")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=x more")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("inline dry run");
+    assert_success(&output);
     // A bullet with no task number reports the missing-number error.
     let error = run_close_expect_error(
         &vault,
@@ -487,6 +495,8 @@ fn capture_pomodoro_close_diagnostics() {
         &["=x\n- detail"],
     );
     assert!(error.contains("start each Work Log bullet"), "{error}");
+    // `s:2` stays literal entry text on the close line, so a real child
+    // line (`=x` newline `s:2`) still fails as an invalid child.
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -494,8 +504,7 @@ fn capture_pomodoro_close_diagnostics() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x")
-        .arg("s:2")
+        .arg("=x\ns:2")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -717,16 +726,24 @@ fn capture_pomodoro_close_diagnostics() {
         json["warnings"]
     );
 
-    // `=x p:1` and strict `=` fail without writing.
+    // `p:1` stays literal entry text, so `=x p:1` closes with the entry.
+    // Strict `=` still fails without writing.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-prio");
     let before = fs::read_to_string(&day_file).expect("read");
-    let error = run_close_expect_error(
-        &vault,
-        &day_file,
-        "2026-09-28 09:37:00",
-        &["=x p:1"],
-    );
-    assert!(error.contains("=x"), "{error}");
+    let output = bob_command()
+        .arg("capture")
+        .arg("--dry-run")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=x p:1")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("inline p:1 dry run");
+    assert_success(&output);
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
     // A bare `=` is a start, not an incomplete close: with CAPTURE
     // running it names the running session and teaches the switch idiom.

@@ -295,10 +295,10 @@ pub(crate) fn completion_field_at(
     raw_text: &str,
     cursor: usize,
 ) -> Option<CompletionField> {
-    // Work Log bullet lines are literal text: no marker completion at all,
+    // Work Log lines are literal text: no marker completion at all,
     // including the global `@@` path below. Note and heading wikilink
     // completion keeps working through the separate wikilink path.
-    if cursor_on_close_bullet_line(raw_text, cursor) {
+    if cursor_in_close_log_text(raw_text, cursor) {
         return None;
     }
     if let Some(line) = split_physical_lines(raw_text)

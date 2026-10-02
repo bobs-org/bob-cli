@@ -238,24 +238,33 @@ forms do each part at \
 once. `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
 `--dry-run`, and as JSON `task_links`); a lone `0` means no \
-task stays in progress, as in `=x0`. Log work as child bullets below \
-the close: `- <n> <text>` logs `<text>` to worked task `<n>`, and a \
+task stays in progress, as in `=x0`. Log one entry on the close line: \
+`=x wired the lexer` logs to the first task the close works (task 1 for a \
+plain `=x`), and `=x1,3 3 fixed the flaky test` logs to task 3. A leading \
+number names the task, so only the entry's first token is an index (`=x 1 \
+3 bugs fixed` logs `3 bugs fixed` to task 1). Write the entry right after \
+the close, then any session operators (`bob capture '=x wired the lexer'`, \
+`bob capture '=x1,3 3 fixed the flaky test'`, `bob capture '=x wired the \
+lexer ='`). For several entries or details, use child bullets below the \
+close instead: `- <n> <text>` logs `<text>` to worked task `<n>`, and a \
 two-space `  - <detail>` nests an undated detail under its entry in the \
 task's Work Log. With `<N>` typed (including `=x0`) or `*<P>` present only the numbers in \
 `<N>`, `*<P>`, or `!<M>` take entries, otherwise every number starting at 1 takes \
-one except `~<K>`; only the bullet's first token is an index, so `- 1 \
+one except `~<K>`; only the first token is an index, so `- 1 \
 fixed 3 bugs` logs `fixed 3 bugs` and every backslash stays literal. The \
 outcome is exactly the sub-bullets the user would type by hand under that \
 Task Link, followed by the unchanged close. A close's child lines are Work \
 Log bullets; a token ending in `,`, `!`, `~`, or `*` (`=x1,`, `=x*`) is incomplete and \
-fails, a dangling bullet (`- 1`) is incomplete and fails, whitespace is \
+fails, a dangling bullet (`- 1`) or dangling inline number (`=x 1`) is incomplete and \
+fails, whitespace is \
 never allowed inside the lists, and `=xx`/`=xa`/`Plan =x` stay ordinary \
-prose. Bullet text is literal (`@route`, `@@route`, `s:<N>`, `p:<N>`, `%`, \
+prose. Entry text is literal (`@route`, `@@route`, `s:<N>`, `p:<N>`, `%`, \
 `#`, and `:query` stay text; plain wikilinks are allowed), while block \
-links, embeds, and code fences are rejected. `=x` takes no text on its \
-line: extra text fails with the bullet to write. A chain line's bullets \
-attach to its `=x` (`=x =` closes with the entries then starts, `-2 =x` \
-shortens then closes). `@route:block-id=x…` and `^route:block-id=x…` \
+links, embeds, and code fences are rejected. An inline entry plus child \
+bullets fails with the bullet to write. A chain line's bullets attach to \
+its `=x`, and an inline entry chains too (`=x wired the lexer =` closes \
+with the entry then starts, `-2 =x wired the lexer` shortens then closes). \
+`@route:block-id=x…` and `^route:block-id=x…` \
 first put that existing task into the running session then close it, and \
 `<text> @route:block-id=x…` creates the new task in the running session \
 then closes it; numbers refer to the post-link lineup, and `#name` with a \

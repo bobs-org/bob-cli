@@ -75,9 +75,10 @@ anything is written, and any failure rolls the whole batch back.
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
 | `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name ("again"), otherwise a new named session is created and started; the item must contain only the start token |
 | `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`, `=3#bugs~1,3`); `~` drops, the drop part always comes last, and the item must contain only the start token |
-| `=x[<N>][*<P>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, with `*`, `!`, and `~` in any order); `<N>` keeps only those numbered Task Links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; its child lines are Work Log bullets |
-| `=x` + `- <n> <text>` (+ `  - <detail>`) | Log while closing: each first-level bullet logs its text to worked task `<n>`, and a two-space bullet nests an undated detail under its entry |
-| `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; `=x =~2` closes then starts without link 2 of the next lineup, while `=x~2 =` drops link 2 of the running session and then starts |
+| `=x[<N>][*<P>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, with `*`, `!`, and `~` in any order); `<N>` keeps only those numbered Task Links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; one Work Log entry may sit on the close line, several use child bullets |
+| `=x [<n>] <entry text…>` | One entry on the close line: with no number it logs to the first task the close works (task 1 for plain `=x`); a leading number names the task, so only the first token is an index (`=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1) |
+| `=x` + `- <n> <text>` (+ `  - <detail>`) | Several entries while closing: each first-level bullet logs its text to worked task `<n>`, and a two-space bullet nests an undated detail under its entry; an inline entry plus bullets fails |
+| `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; an inline entry sits right after its close with operators trailing (`=x wired the lexer =` closes with the entry then starts); `=x =~2` closes then starts without link 2 of the next lineup, while `=x~2 =` drops link 2 of the running session and then starts |
 | `=x =` + `- 1 wired the lexer` | Close with a Work Log bullet in a chain: the child lines attach to the line's `=x`, so this logs the entry then starts the next session |
 | `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it; the same selection may follow the `x` and numbers refer to the post-link lineup |
 | `^route:block-id=x…` with no other text | Identical execution; `^` is the active-task spelling |
@@ -132,9 +133,9 @@ anything is written, and any failure rolls the whole batch back.
 | `=xx` | Ordinary prose; only a selection-shaped `=x…` token closes |
 | `Plan =x` | Ordinary task text; a mid-body `=x` stays prose |
 | `Plan =3` | Ordinary task text; a mid-body `=3` stays prose |
-| `=x more` | Error: `` `=x` takes no text on its line; log work as bullets below it (for example `- 1 wrote the tests`); to link a task while closing, use `^route:block-id=x` `` |
-| `=x2,3 2 foo bar baz` | Error: `` `=x` takes no text on its line; put each Work Log entry on its own line below it, as a bullet: `- 2 foo bar baz` `` |
-| `=x 1` | Error: the no-spaces hint (`=x1`) |
+| `=x more` | Close with the entry `more` on task 1, exactly like `=x` plus `- 1 more` |
+| `=x2,3 2 foo bar baz` | Close with the entry `foo bar baz` on task 2; `=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1 |
+| `=x 1` | Incomplete: `` `=x 1` is incomplete: type the Work Log text after task 1 `` (`capture-parse` needs `pomodoro_close_log_text`); `=x1` keeps only task 1 in progress |
 | `=x` + `- wired the lexer` | Error: start each Work Log bullet with the number of the task it logs to |
 | `=x` + `- ` | Plain `=x`; the placeholder row is ignored |
 | `=x` + `- 1` | Incomplete: `` `- 1` is incomplete: type the Work Log text after task 1 `` (`capture-parse` needs `pomodoro_close_log_text`) |
@@ -1273,11 +1274,11 @@ when `remaining ≥ 5`, `units = floor(remaining / 5)`,
 are untouched; Bob never extends a session, and an overrun is reported
 (`ran 7m over`). Closed at `09:49` or later, `0920-0950` stays unchanged.
 
-The close's child lines are Work Log bullets (or it shares its line only
-with other session operators; see
+The close's child lines are Work Log bullets, and one entry may sit on the
+close line itself (or it shares its line only with other session operators;
+see
 [Chaining session operators on one line](#chaining-session-operators-on-one-line)
 and [Logging work while closing](#logging-work-while-closing));
-extra text on its line fails with an `invalid_pomodoro_close` error, and
 `=xx`/`==` plus mid-body `Plan =x` stay ordinary prose. A bare
 `=` is now a whole-item start, not an incomplete state. When no session is
 running but a future Pomodoro exists, the close diagnostic names it with a
@@ -1332,8 +1333,9 @@ Field notes:
   `pomodoro_close.park` is the typed `*<P>` list (possibly empty, omitted when
   empty), `pomodoro_close.complete` is the typed `!<M>` list (possibly empty), and
   `pomodoro_close.drop` is the typed `~<K>` list, omitted when empty.
-- `pomodoro_close.log` is the typed Work Log bullets in typed order
-  (`[{ "index": 2, "text": "wired the lexer" }]`), omitted when empty.
+- `pomodoro_close.log` is the typed Work Log entries in typed order
+  (bullets or the one inline entry;
+  `[{ "index": 2, "text": "wired the lexer" }]`), omitted when empty.
   Each entry carries `details`, the nested detail lines typed under it
   (`[{ "index": 2, "text": "wired the lexer", "details": ["chose a hand-rolled lexer"] }]`),
   omitted when the entry has none.
@@ -1685,6 +1687,32 @@ rolls the whole batch back.
 
 #### Logging work while closing
 
+##### One entry on the close line
+
+```bash
+bob capture '=x wired the lexer'
+bob capture '=x1,3 3 fixed the flaky test'
+bob capture '=x wired the lexer ='
+```
+
+The text after the close token is one Work Log entry, whitespace-normalized
+like every capture line, executing byte for byte like its bullet form. With
+no number it logs to the first task the close works (task 1 for plain `=x`,
+the smallest listed/completed/parked number otherwise, the smallest number
+outside `~<K>` when nothing is listed). A leading number names the task and
+the rest is the text, so only the first token is an index and
+`=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1. `0` and leading zeros
+report `task numbers start at 1`, overflow reports `task number N is too
+large`, and `=x0` works no task so its entry has none to log to. The entry
+sits right after the close with session operators trailing
+(`=x wired the lexer =` closes with the entry then starts); a trailing `+1`,
+`-`, or `--` with no start or close before it stays text (`=x got a +1`).
+Entry text follows the bullet rules below and never ends with a Task Link.
+A lone number (`=x 2`) is incomplete: `capture-parse` needs
+`pomodoro_close_log_text` and `bob capture` asks for the text (or `=x2`).
+
+##### Several entries on bullets
+
 Log work as child bullets under a whole-item close:
 
 ```text
@@ -1728,12 +1756,12 @@ things are rejected in entry and detail text alike because the close would
 misread them: any block link or embed (`[[path#^id]]`, `![[path#^id]]`) and
 text starting with a code fence (` ``` ` or `~~~`).
 
-The inline tail is retired: any token after the close token on its parent
-line is an error. `=x2,3 2 foo bar baz` fails with the bullet to write
-(`` `=x` takes no text on its line; put each Work Log entry on its own line below it, as a bullet: `- 2 foo bar baz` ``),
-and any other tail gets the generic hint
-(`` `=x` takes no text on its line; log work as bullets below it (for example `- 1 wrote the tests`); to link a task while closing, use `^route:block-id=x` ``).
-Only the whole-item `=x` takes Work Log bullets; link-form closes keep
+The close line holds at most one inline entry, which belongs to the close
+it follows. An inline entry plus any child bullet fails with the bullet to
+write the inline entry on
+(``an inline Work Log entry can't be combined with Work Log bullets; for several entries, put this one on its own bullet too: `- 1 wired the lexer` ``);
+details need bullets too. Only the whole-item `=x` takes an inline entry or
+Work Log bullets; link-form closes keep
 their current behavior (`^route:id=x` and solo `@route:id=x` reject
 children, `<text> @route:id=x` writes them as the new task's sub-bullets).
 
@@ -1781,13 +1809,16 @@ bob capture '=~2 +2'
 Recognition: the line must hold at least two whitespace-separated tokens and
 every token must be a session token — one the whole-item session parsers
 would claim as a standalone one-line item, near misses included. A single
-token is never a chain, so single-token behavior is byte-identical. A line
-with any non-chain token is not a chain: `+2 more`, `=3 more`, and `++3 plan`
-keep their shape errors, `Plan +2 =x` and `- foo` stay prose, `-2 =x 1 foo`
-reports the `-2` shape error, `=x 1 wired the lexer =` reports the bullet
-hint, and `=x 1,3` and `=x1 !2` keep the no-spaces hint because `1,3` and
-`!2` are not chain tokens. `=x ^bob:ready=` and `=x more` report the bullet
-hint.
+token is never a chain, so single-token behavior is byte-identical. Otherwise
+the lead (maximal session-token prefix) splits at its last whole-item close
+(the owner), the trail (maximal session-token suffix trimmed to begin with a
+start or close token) runs after, and the entry is every token after the
+owner before the trail. A line with no close in its lead is one item (`+2
+more`, `=3 more`, and `++3 plan` keep their shape errors, `Plan +2 =x` and
+`- foo` stay prose). `-2 =x wired the lexer` shortens then closes with the
+entry, `=x wired the lexer =` closes with the entry then starts, and `=x got
+a +1` keeps `+1` as text. `=x 1,3` and `=x1 !2` keep the no-spaces hint
+because `1,3` and `!2` are not chain tokens.
 
 Tokens run left to right exactly like blank-line items: `+2 =x` extends then
 closes, `=x =` closes then starts the next future Pomodoro (a session switch
@@ -1805,13 +1836,17 @@ token with per-token ranges sharing the physical line numbers.
 
 Child lines attach to the line's `=x` item — or to the last `=x` when the
 line closes twice — so `=x =` plus `- 1 wired the lexer` logs the entry then
-starts, and `-2 =x` plus bullets shortens then closes. With no `=x` on the
+starts, and `-2 =x` plus bullets shortens then closes. When the line has an
+inline entry, children attach to its owner, so the mixing error fires.
+With no `=x` on the
 line, children still attach to the last token's item and fail that token's
 existing shape rule, so a chain line with children never becomes a prose
 task — including bare-first chains such as `+ =x` with a child bullet. A
 chain whose `=x` is not last nests its item ranges: the close item's range
 runs from its token through its last bullet, so it contains the ranges of
-the later tokens on the parent line. Item ranges therefore nest; they never
+the later tokens on the parent line. An inline owner never nests siblings:
+its range runs from its token through the entry's end (or its last child).
+Item ranges therefore nest or stay disjoint; they never
 partially overlap.
 
 Spacing is significant: `= -2` starts a 25-minute session then shortens it
@@ -2779,16 +2814,19 @@ including the `!` (`pomodoro_close_complete`), the `~<K>` list including the
 but keep wikilink spans); the human `close` line reads
 ``=x1,3!2~4 (in progress 1, 3 · complete 2 · drop 4 · defer the rest)``, with
 `in progress none` for `=x0`, a bare `=x` for a plain close, and
-`log 2 "wired the lexer" (+1 detail)` for typed entries with details. Work
-Log entries are child bullets below the close; a dangling bullet (`- 1`)
+`log 2 "wired the lexer" (+1 detail)` for typed entries with details. One
+entry may sit on the close line (`=x wired it` logs to task 1 with `body`
+`=x` and an explicit number getting a `pomodoro_close_log_index` span while
+the default gets none); a dangling inline number (`=x 2`) reports mode
+`incomplete` needing `pomodoro_close_log_text` with the partial spec and a
+placeholder over the number. Several entries use child bullets below the
+close; a dangling bullet (`- 1`)
 reports mode `incomplete` needing `pomodoro_close_log_text` with the partial
 spec (lists plus every complete entry with its details) and a placeholder
 over each dangling number instead of its index span, while a bad bullet (no
 number, a non-loggable index, a bad number, a block link, a fence) reports
 `pomodoro_close` plus an `invalid_pomodoro_close` diagnostic on the precise
-range. Extra text on the close line reports `pomodoro_close` plus an
-`invalid_pomodoro_close` diagnostic: the no-spaces hint when the spaceless
-join lexes as a selection, else the bullet hint. Every malformed list (a
+range, as does a bad inline entry. Every malformed list (a
 duplicate, an overlap, a misplaced `0`, a second `!` or `~`, a bad
 character, an oversized number, or a space inside the lists, which gets the
 no-spaces hint) reports the same. A token ending
@@ -2811,8 +2849,8 @@ the conflicting component or the precise list range. A `@@` declaration
 never applies to close or `=`/`=<X>` items, and neither is ever rewritten.
 A start token or a close token requests no completion: a cursor on that
 token, including anywhere inside the task-number lists or a dangling
-separator, returns an empty success. On a Work Log bullet line under the
-close, marker and block-link completion are suppressed and note and heading
+separator, returns an empty success. In Work Log text under or on the
+close line, marker and block-link completion are suppressed and note and heading
 completion keep working. The picker's in-progress
 `@^`, `@route^`, `@^id`, `@:`, `@route:`, and `@:id` spellings are unchanged,
 and `@^id+` carries the project-note intent with `needs: ["route"]`. A `:` project-note
@@ -3201,7 +3239,7 @@ dangling `,`/`!`/`~` separator, returns an empty success. A whole-item `+[N]`/`-
 Pomodoro adjustment, `++[N]`/`--[N]` Pomodoro shift (a bare `+`, `-`, `++`,
 or `--` is one unit), `=x[<N>][!<M>][~<K>]` close, or `=`/`=<X>` start (a bare `=` starts
 25 minutes) is an action and requests no route or
-task completion candidates: a cursor on such an item returns an empty success. A
+task completion candidates: a cursor on such an item returns an empty success. Work Log text completes like a bullet line whether it sits below the close or on it. A
 whole-item `=<X>#name` named start instead completes the name after `#` as
 `pomodoro_start_name`, per token inside chains: a cursor inside the name part
 completes it, while a cursor on `=<X>` or at the `#` byte itself returns an

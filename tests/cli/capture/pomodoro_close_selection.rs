@@ -1127,11 +1127,7 @@ fn capture_pomodoro_close_selection_diagnostics() {
         (vec!["=x99999999999"], "task number 99999999999 is too large"),
         (
             vec!["=x 1,3"],
-            "write the task numbers right after `=x`, with no spaces (for example `=x1*2!3~4`)",
-        ),
-        (
-            vec!["=x1 more"],
-            "`=x` takes no text on its line",
+            "with no spaces (`=x1,3`)",
         ),
     ] {
         let error = run_close_expect_error(
@@ -1168,20 +1164,28 @@ fn capture_pomodoro_close_selection_diagnostics() {
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
-    // A spaced selection is the no-spaces hint now that the inline tail is
-    // retired (`=x 1` means `=x1`).
-    for args in ["=x 2", "=x1 1", "=x1,3 3"] {
+    // A lone number on the close line is the dangling inline entry, never
+    // the no-spaces hint (`=x 1` wants text, `=x1` keeps only task 1).
+    for (args, phrase) in [
+        ("=x 2", "type the Work Log text after task 2"),
+        ("=x1 1", "type the Work Log text after task 1"),
+        ("=x1,3 3", "type the Work Log text after task 3"),
+    ] {
         let error = run_close_expect_error(
             &vault,
             &day_file,
             "2026-09-28 09:37:00",
             &[args],
         );
-        assert!(
-            error.contains("write the task numbers right after `=x`"),
-            "{args}: {error}"
-        );
+        assert!(error.contains(phrase), "{args}: {error}");
     }
+    let dangling_plain = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=x 2"],
+    );
+    assert!(dangling_plain.contains("`=x2`"), "{dangling_plain}");
     // A dangling Work Log bullet is an incomplete editing state.
     let error = run_close_expect_error(
         &vault,

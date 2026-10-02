@@ -374,4 +374,22 @@ fn capture_complete_and_rewrite_ignore_starts() {
         serde_json::from_str(stdout(&declared).trim()).expect("rewrite JSON");
     assert_eq!(json["changed"], false, "{json}");
     assert_eq!(json["text"], "@@foo\n=3", "{json}");
+    // A bare `@@` inside a Work Log entry is literal, on bullets and inline:
+    // it is never absorbed and never treated as a declaration.
+    for text in ["=x\n- 1 moved @@inbox", "=x moved @@inbox"] {
+        let rewrite = bob_command()
+            .arg("capture-rewrite")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(text)
+            .output()
+            .expect("rewrite entry");
+        assert_success(&rewrite);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&rewrite).trim())
+                .expect("rewrite JSON");
+        assert_eq!(json["changed"], false, "{text}: {json}");
+        assert_eq!(json["text"], text, "{text}: {json}");
+    }
 }

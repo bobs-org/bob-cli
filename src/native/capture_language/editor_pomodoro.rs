@@ -2,6 +2,7 @@
 
 use super::close_log::*;
 use super::close_selection::*;
+use super::draft::*;
 use super::editor_model::*;
 use super::editor_parse::*;
 use super::item::*;
@@ -1397,11 +1398,11 @@ pub(super) fn parse_editor_close_item<'a>(
             }
         }
     }
-    // A parent line with extra text after the close token: the parent-line
-    // error wins even when child lines follow. Steps in order: `=x#name`
-    // (handled above), a broken selection token, a dangling separator
-    // (incomplete), the no-spaces hint, then the bullet hint.
-    match editor_selection {
+    // A parent line with an inline Work Log entry: the text after the
+    // close token lexes through the shared inline lexer, so the editor
+    // reports the same message and byte range as execution. The draft split
+    // already separated any trailing session chain.
+    let lexed_selection = match editor_selection {
         EditorSelection::Incomplete(incomplete, spans) => {
             return Some(editor_close_outcome(
                 item,
@@ -1432,8 +1433,9 @@ pub(super) fn parse_editor_close_item<'a>(
                 }],
             ));
         }
-        EditorSelection::Plain(_) => {}
-    }
+        EditorSelection::Plain(lex) => lex,
+    };
+    let mut base_spans = selection_spans(&lexed_selection);
     let parent_raw = &parent.raw;
     let line_tokens = super::editor_parse::tokenize_line_with_spans(parent_raw);
     let tail_tokens: Vec<Token<'_>> =
@@ -1453,62 +1455,157 @@ pub(super) fn parse_editor_close_item<'a>(
             }
             tail
         };
-    // The no-spaces hint wins when the spaceless join of the line lexes as
-    // a selection (`=x 1,3`, `=x1 !2`, `=x 1`).
-    let nospace: String = parent_trimmed.split_whitespace().collect();
-    if whole_item_close_after_x(&nospace).is_some_and(|after_x| {
-        lex_close_selection(after_x, 0, &nospace).is_ok()
-    }) {
-        let after_first = &parent_trimmed[first.len()..];
-        let rest = after_first.trim_start();
-        let skipped = after_first.len() - rest.len();
-        let rest_start = token_start + first.len() + skipped;
-        let range = (rest_start, rest_start + rest.len());
-        return Some(editor_close_outcome(
-            item,
-            parent_trimmed,
-            EditorMode::PomodoroClose,
-            None,
-            vec![close_span],
-            Vec::new(),
-            vec![Diagnostic {
-                severity: Severity::Error,
-                code: "invalid_pomodoro_close",
-                message: close_selection_no_spaces_error(),
-                range: Some(range),
-            }],
-        ));
+    let default_index = default_log_index(
+        lexed_selection.in_progress.as_deref(),
+        &lexed_selection.park,
+        &lexed_selection.complete,
+        &lexed_selection.drop,
+    );
+    let has_bullet_child = item.lines[1..].iter().any(|line| {
+        !matches!(
+            classify_authored_line(line.raw),
+            AuthoredLineClass::EmptyOrPlaceholder
+        )
+    });
+    match lex_close_inline_entry(
+        &tail_tokens,
+        first,
+        lexed_selection.in_progress.as_deref(),
+        &lexed_selection.park,
+        &lexed_selection.complete,
+        &lexed_selection.drop,
+    ) {
+        Err(error) => {
+            let spans = selection_spans(&lexed_selection);
+            Some(editor_close_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::PomodoroClose,
+                None,
+                spans,
+                Vec::new(),
+                vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_close",
+                    message: error.message,
+                    range: Some(error.range),
+                }],
+            ))
+        }
+        Ok(CloseInlineLex::Dangling { index, index_range }) => {
+            if has_bullet_child {
+                let bullet = format!("- {index}");
+                let mut spans = selection_spans(&lexed_selection);
+                spans.push(Span {
+                    start: index_range.0,
+                    end: index_range.1,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+                spans.sort_by_key(|span| (span.start, span.end));
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroClose,
+                    None,
+                    spans,
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_close",
+                        message: close_inline_mixing_error(&bullet),
+                        range: Some(index_range),
+                    }],
+                ));
+            }
+            base_spans.push(Span {
+                start: index_range.0,
+                end: index_range.1,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+            base_spans.sort_by_key(|span| (span.start, span.end));
+            let mut spec =
+                close_spec_from_lex(first.to_string(), &lexed_selection);
+            spec.log = Vec::new();
+            Some(editor_close_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::Incomplete,
+                Some(spec),
+                base_spans,
+                vec![Need::PomodoroCloseLogText],
+                Vec::new(),
+            ))
+        }
+        Ok(entry @ CloseInlineLex::Entry { .. }) => {
+            let (index, index_range, text, text_range) = match &entry {
+                CloseInlineLex::Entry {
+                    index,
+                    index_range,
+                    text,
+                    text_range,
+                } => (*index, *index_range, text.clone(), *text_range),
+                CloseInlineLex::Dangling { .. } => unreachable!(),
+            };
+            if has_bullet_child {
+                let bullet = format!("- {index} {text}");
+                let mut spans = selection_spans(&lexed_selection);
+                if let Some((start, end)) = index_range {
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::PomodoroCloseLogIndex,
+                    });
+                }
+                spans.sort_by_key(|span| (span.start, span.end));
+                return Some(editor_close_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroClose,
+                    None,
+                    spans,
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_close",
+                        message: close_inline_mixing_error(&bullet),
+                        range: Some(text_range),
+                    }],
+                ));
+            }
+            if let Some((start, end)) = index_range {
+                base_spans.push(Span {
+                    start,
+                    end,
+                    kind: SpanKind::PomodoroCloseLogIndex,
+                });
+            }
+            base_spans.sort_by_key(|span| (span.start, span.end));
+            let mut spec =
+                close_spec_from_lex(first.to_string(), &lexed_selection);
+            spec.log =
+                vec![log_entry_from_inline(&entry, first, default_index)];
+            Some(editor_close_outcome(
+                item,
+                &first.to_string(),
+                EditorMode::PomodoroClose,
+                Some(spec),
+                base_spans,
+                Vec::new(),
+                Vec::new(),
+            ))
+        }
     }
-    let hint = close_tail_bullet_hint(&tail_tokens);
-    let tail_range = tail_tokens
-        .first()
-        .zip(tail_tokens.last())
-        .map(|(first_token, last_token)| (first_token.start, last_token.end));
-    Some(editor_close_outcome(
-        item,
-        parent_trimmed,
-        EditorMode::PomodoroClose,
-        None,
-        vec![close_span],
-        Vec::new(),
-        vec![Diagnostic {
-            severity: Severity::Error,
-            code: "invalid_pomodoro_close",
-            message: close_parent_text_error(hint.as_deref()),
-            range: tail_range,
-        }],
-    ))
 }
 
-/// `true` when `cursor` sits on a Work Log bullet line: any physical line
-/// after the parent line inside a close item's line range. Line-based, so a
-/// chain close whose range contains later parent-line tokens still matches.
-/// Bullet text is literal: marker and block-link completion stay suppressed
-/// there while note and heading wikilink completion keeps working.
-pub(crate) fn cursor_on_close_bullet_line(
-    raw_text: &str,
-    cursor: usize,
-) -> bool {
+/// `true` when `cursor` sits in Work Log text: a bullet line (any physical
+/// line after the parent line inside a close item) or an inline entry on
+/// the close line itself (from the entry's first byte through the line end).
+/// Line-based, so a chain close whose range contains later parent-line tokens
+/// still matches for bullets. Entry text is literal: marker and block-link
+/// completion stay suppressed there while note and heading wikilink completion
+/// keeps working. Named-start completion on trail tokens keeps working
+/// because the owner's line ends at the entry.
+pub(crate) fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
     let draft = super::draft::split_capture_draft(raw_text);
     for item in &draft.items {
         let Some(line_index) = item.lines.iter().position(|line| {
@@ -1516,10 +1613,80 @@ pub(crate) fn cursor_on_close_bullet_line(
         }) else {
             continue;
         };
-        if line_index == 0 {
-            return false;
+        if line_index > 0 {
+            return parse_editor_close_item(item).is_some();
         }
-        return parse_editor_close_item(item).is_some();
+        // Parent line: suppress only inside an inline entry.
+        let parent = &item.lines[0];
+        let tokens = super::editor_parse::tokenize_line_with_spans(&parent.raw);
+        if tokens.is_empty() {
+            continue;
+        }
+        let trimmed = parent.raw.text.trim();
+        let Some(head) = trimmed.split_whitespace().next() else {
+            continue;
+        };
+        if !matches!(
+            super::item::session_equals_token(head),
+            Some(super::item::EqualsToken::Close)
+        ) {
+            continue;
+        }
+        let after_x = super::close_selection::whole_item_close_after_x(head);
+        let (in_progress, park, complete, drop) = match after_x {
+            None => (None, Vec::new(), Vec::new(), Vec::new()),
+            Some(after) => {
+                let base = parent.raw.start
+                    + (parent.raw.text.len()
+                        - parent.raw.text.trim_start().len())
+                    + (head.len() - after.len());
+                match super::close_selection::lex_close_selection(
+                    after, base, head,
+                ) {
+                    Ok(
+                        super::close_selection::CloseSelectionOutcome::Valid(
+                            lex,
+                        ),
+                    ) => (lex.in_progress, lex.park, lex.complete, lex.drop),
+                    _ => continue,
+                }
+            }
+        };
+        let tail: Vec<Token<'_>> =
+            if tokens.first().is_some_and(|token| token.text == head) {
+                tokens[1..].to_vec()
+            } else {
+                continue;
+            };
+        if tail.is_empty() {
+            continue;
+        }
+        match lex_close_inline_entry(
+            &tail,
+            head,
+            in_progress.as_deref(),
+            &park,
+            &complete,
+            &drop,
+        ) {
+            Ok(CloseInlineLex::Entry {
+                index_range,
+                text_range,
+                ..
+            }) => {
+                let start = index_range.map(|(s, _)| s).unwrap_or(text_range.0);
+                if cursor >= start && cursor <= parent.raw.end {
+                    return true;
+                }
+            }
+            Ok(CloseInlineLex::Dangling { index_range, .. }) => {
+                if cursor >= index_range.0 && cursor <= parent.raw.end {
+                    return true;
+                }
+            }
+            Err(_) => {}
+        }
+        return false;
     }
     false
 }

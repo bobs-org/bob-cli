@@ -93,6 +93,7 @@ fn sel_detail_log(
                     index,
                     text: text.to_string(),
                     details: details.into_iter().map(str::to_string).collect(),
+                    origin: Default::default(),
                 }
             })
             .collect(),
@@ -138,6 +139,7 @@ fn sel_drop_log(
                     index,
                     text: text.to_string(),
                     details: Vec::new(),
+                    origin: Default::default(),
                 }
             })
             .collect(),
