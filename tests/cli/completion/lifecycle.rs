@@ -2,8 +2,9 @@
 //!
 //! Every test runs with a temporary `HOME`, `XDG_STATE_HOME`,
 //! `XDG_DATA_HOME`, `ZDOTDIR`, and `SHELL`, so no test touches Bryan's
-//! real dotfiles. Shell probes stay deterministic through a fake `zsh` on
-//! `PATH` that branches on the probe script's marker comments.
+//! real dotfiles. Shell probes stay deterministic through fake `zsh` and
+//! `bash` binaries on `PATH` that branch on the probe scripts' marker
+//! comments.
 
 use crate::support::*;
 use std::fs;
@@ -17,6 +18,7 @@ fn fakebin(temp: &TempDir) -> PathBuf {
     let dir = temp.path().join("fakebin");
     fs::create_dir_all(&dir).expect("create fakebin");
     write_fake_zsh(&dir);
+    write_fake_bash(&dir);
     dir
 }
 
@@ -77,6 +79,39 @@ esac
         .expect("chmod fake zsh");
 }
 
+fn write_fake_bash(dir: &Path) {
+    // Fake bash for lifecycle tests. Branches on the verify probe marker;
+    // the fpath probe is zsh-only and never reaches bash.
+    let script = r#"#!/bin/sh
+# Fake bash for bob completion lifecycle tests.
+for last in "$@"; do :; done
+script="$last"
+case "$script" in
+    *bob-completion-verify-probe-bash*)
+        case "$FAKE_VERIFY" in
+            sleep) sleep 5 ;;
+            broken) printf 'rc noise without markers\n' ;;
+            *)
+                printf 'bob-verify-start\n'
+                case "$FAKE_VERIFY" in
+                    registered) printf 'complete -F _bob bob\n' ;;
+                    shadowed) printf 'complete -F _bob bob\n' ;;
+                    bound) printf 'complete -F _other bob\n' ;;
+                    *) printf '\n' ;;
+                esac
+                printf 'bob-verify-end\n'
+                ;;
+        esac
+        ;;
+    *) printf 'bob-verify-start\nbob-verify-end\n' ;;
+esac
+"#;
+    let path = dir.join("bash");
+    fs::write(&path, script).expect("write fake bash");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+        .expect("chmod fake bash");
+}
+
 fn completion_command(temp: &TempDir, fake: &Path) -> Command {
     let mut command = Command::new(BOB_BIN);
     command
@@ -91,7 +126,8 @@ fn completion_command(temp: &TempDir, fake: &Path) -> Command {
         .env_remove("FAKE_VERIFY")
         .env_remove("FAKE_SOURCE")
         .env_remove("FAKE_FPATH")
-        .env_remove("FAKE_VERIFY_FPATH");
+        .env_remove("FAKE_VERIFY_FPATH")
+        .env_remove("BASH_COMPLETION_USER_DIR");
     let path = format!(
         "{}:{}",
         fake.display(),
@@ -646,8 +682,11 @@ fn status_json_shape_and_bare_forms() {
     assert_eq!(value["protocol"], 1);
     assert_eq!(value["bob"]["version"], env!("CARGO_PKG_VERSION"));
     let shells = value["shells"].as_array().expect("shells array");
-    assert_eq!(shells.len(), 1);
-    let shell = &shells[0];
+    assert_eq!(shells.len(), 2);
+    let shell = shells
+        .iter()
+        .find(|entry| entry["shell"] == "zsh")
+        .expect("zsh entry present");
     for key in [
         "shell",
         "state",
@@ -778,14 +817,28 @@ fn usage_errors_exit_2_and_shell_selection() {
     let fake = fakebin(&temp);
 
     let bad_shell = completion_command(&temp, &fake)
-        .args(["install", "bash"])
+        .args(["install", "fish"])
         .output()
-        .expect("run install bash");
+        .expect("run install fish");
     assert_eq!(
         bad_shell.status.code(),
         Some(2),
         "unknown shell is usage:\n{}",
         format_output(&bad_shell)
+    );
+
+    // Both supported shells install explicitly.
+    let bash_target = temp.path().join("bcomp");
+    let bash_install = completion_command(&temp, &fake)
+        .args(["install", "bash", "-n", "-t"])
+        .arg(&bash_target)
+        .output()
+        .expect("run install bash");
+    assert_success(&bash_install);
+    assert!(
+        stdout(&bash_install).contains("bash"),
+        "bash installs:\n{}",
+        format_output(&bash_install)
     );
 
     // Repeating the one supported shell still installs once.
@@ -850,7 +903,13 @@ fn missing_manifest_entry_reports_missing() {
     assert_success(&status);
     let value: serde_json::Value =
         serde_json::from_str(stdout(&status).trim()).expect("status JSON");
-    assert_eq!(value["shells"][0]["state"], "missing");
+    let zsh = value["shells"]
+        .as_array()
+        .expect("shells array")
+        .iter()
+        .find(|entry| entry["shell"] == "zsh")
+        .expect("zsh entry present");
+    assert_eq!(zsh["state"], "missing");
 
     let live = completion_command(&temp, &fake)
         .args(["status", "-v"])

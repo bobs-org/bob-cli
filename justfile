@@ -71,8 +71,10 @@ install-smoke:
     "${root}/bin/bob" completion install --help >/dev/null
     "${root}/bin/bob" completion status --help >/dev/null
     "${root}/bin/bob" completion uninstall --help >/dev/null
+    "${root}/bin/bob" completion bash --help >/dev/null
     "${root}/bin/bob" completion zsh --help >/dev/null
     "${root}/bin/bob" __complete zsh --protocol 1 -- bob cap | grep -q '^capture'
+    "${root}/bin/bob" __complete bash --protocol 1 -- bob cap | grep -q '^capture'
     "${root}/bin/bob" capture-complete --help >/dev/null
     "${root}/bin/bob" capture-parse --help >/dev/null
     "${root}/bin/bob" capture-pomodoro-name --help >/dev/null

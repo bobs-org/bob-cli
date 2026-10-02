@@ -42,6 +42,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             selected_or_all(sub, StatusDefault::All),
         ),
         Some(("uninstall", sub)) => run_uninstall(sub),
+        Some(("bash", sub)) => {
+            run_print(Shell::Bash, sub.get_one::<String>("output"))
+        }
         Some(("zsh", sub)) => {
             run_print(Shell::Zsh, sub.get_one::<String>("output"))
         }
@@ -91,6 +94,7 @@ enum StatusDefault<'a> {
 
 fn adapter_text(shell: Shell) -> &'static str {
     match shell {
+        Shell::Bash => super::adapters::bash_adapter(),
         Shell::Zsh => super::adapters::zsh_adapter(),
     }
 }
@@ -102,11 +106,17 @@ fn expected_stamp() -> String {
     )
 }
 
-fn has_stamp(bytes: &[u8]) -> bool {
+fn has_stamp(shell: Shell, bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes);
-    let mut lines = text.lines();
-    lines.next() == Some("#compdef bob")
-        && lines.next() == Some(expected_stamp().as_str())
+    let stamp = expected_stamp();
+    let stamped = text.lines().take(5).any(|line| line == stamp);
+    if !stamped {
+        return false;
+    }
+    match shell {
+        Shell::Zsh => text.lines().next() == Some("#compdef bob"),
+        Shell::Bash => text.contains("complete -F _bob bob"),
+    }
 }
 
 // --- target discovery -----------------------------------------------------
@@ -128,9 +138,11 @@ fn absolutize(path: &Path) -> Result<PathBuf, String> {
 
 /// Resolve where the `shell` adapter should live.
 ///
-/// First match wins: `--target`, the manifest location, the first
-/// under-`$HOME` user-owned writable fpath entry outside plugin-manager,
-/// cache, and oh-my-zsh trees, oh-my-zsh completions, then `~/.zfunc`.
+/// For zsh the first match wins: `--target`, the manifest location, the
+/// first under-`$HOME` user-owned writable fpath entry outside
+/// plugin-manager, cache, and oh-my-zsh trees, oh-my-zsh completions,
+/// then `~/.zfunc`. For bash it is `--target`, the manifest location,
+/// then `${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-~/.local/share}/bash-completion}/completions/bob`.
 fn resolve_target(
     shell: Shell,
     target_arg: Option<&str>,
@@ -150,22 +162,58 @@ fn resolve_target(
             reason: TargetReason::PreviousInstall,
         });
     }
-    if let Some(path) = fpath_target(shell) {
-        return Ok(Target {
-            path,
-            reason: TargetReason::Fpath,
-        });
+    match shell {
+        Shell::Bash => Ok(Target {
+            path: bash_default_target(),
+            reason: TargetReason::BashDefault,
+        }),
+        Shell::Zsh => {
+            if let Some(path) = fpath_target(shell) {
+                return Ok(Target {
+                    path,
+                    reason: TargetReason::Fpath,
+                });
+            }
+            if let Some(path) = oh_my_zsh_target(shell) {
+                return Ok(Target {
+                    path,
+                    reason: TargetReason::OhMyZsh,
+                });
+            }
+            Ok(Target {
+                path: env::home_dir().join(".zfunc").join(shell.file_name()),
+                reason: TargetReason::HomeDefault,
+            })
+        }
     }
-    if let Some(path) = oh_my_zsh_target(shell) {
-        return Ok(Target {
-            path,
-            reason: TargetReason::OhMyZsh,
-        });
+}
+
+/// The bash adapter location:
+/// `${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-~/.local/share}/bash-completion}/completions/bob`.
+fn bash_default_target() -> PathBuf {
+    if let Some(dir) = std::env::var_os("BASH_COMPLETION_USER_DIR")
+        .filter(|value| !value.is_empty())
+    {
+        return env::expand_tilde(Path::new(&dir))
+            .join("completions")
+            .join(Shell::Bash.file_name());
     }
-    Ok(Target {
-        path: env::home_dir().join(".zfunc").join(shell.file_name()),
-        reason: TargetReason::HomeDefault,
-    })
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::home_dir().join(".local/share"));
+    data_home
+        .join("bash-completion")
+        .join("completions")
+        .join(Shell::Bash.file_name())
+}
+
+/// The fallback target for `status` when resolution needs no manifest.
+fn default_target(shell: Shell) -> PathBuf {
+    match shell {
+        Shell::Bash => bash_default_target(),
+        Shell::Zsh => env::home_dir().join(".zfunc").join(shell.file_name()),
+    }
 }
 
 fn oh_my_zsh_root() -> Option<PathBuf> {
@@ -314,7 +362,7 @@ fn classify(shell: Shell, path: &Path, manifest: &Manifest) -> Classification {
         },
         Disk::Present { bytes, .. } => {
             let digest = manifest::sha256_hex(&bytes);
-            let stamped = has_stamp(&bytes);
+            let stamped = has_stamp(shell, &bytes);
             let state = if !stamped {
                 State::Foreign
             } else if recorded_here {
@@ -373,7 +421,10 @@ fn select_for_install(
         }
     }
     if shells.is_empty() {
-        return Err("pass a shell: `bob completion install zsh`".to_string());
+        return Err(
+            "pass a shell: `bob completion install bash` or `bob completion install zsh`"
+                .to_string(),
+        );
     }
     Ok(shells)
 }
@@ -452,10 +503,23 @@ fn run_install(matches: &clap::ArgMatches) -> i32 {
         report.warnings.push(warning);
     }
     if changed {
-        report.closers.push(
-            "Open a new shell (or run `exec zsh`) to start using it."
-                .to_string(),
-        );
+        let only_bash = report.rows.iter().all(|row| row.shell == Shell::Bash);
+        let only_zsh = report.rows.iter().all(|row| row.shell == Shell::Zsh);
+        if only_bash {
+            report.closers.push(
+                "Open a new shell (or run `exec bash`) to start using it."
+                    .to_string(),
+            );
+        } else if only_zsh {
+            report.closers.push(
+                "Open a new shell (or run `exec zsh`) to start using it."
+                    .to_string(),
+            );
+        } else {
+            report
+                .closers
+                .push("Open a new shell to start using it.".to_string());
+        }
     } else if !failed {
         report.closers.push(format!(
             "Completion is live: every <TAB> asks {}, so new commands work now.",
@@ -590,7 +654,7 @@ fn install_one(
             false,
         );
     }
-    remove_zwc(path);
+    remove_zwc(shell, path);
     let digest = manifest::adapter_sha256(shell);
     let registration = if options.verify_live {
         verify::probe_registration(shell, path)
@@ -814,7 +878,7 @@ fn live_or_recorded_text(
 }
 
 fn registration_notes(
-    _shell: Shell,
+    shell: Shell,
     path: &Path,
     registration: &Registration,
 ) -> Vec<String> {
@@ -829,30 +893,40 @@ fn registration_notes(
                 "bob is bound to {function}; unbind it, then reload"
             )]
         }
-        Registration::NotRegistered { on_fpath } => {
-            if *on_fpath {
-                vec![
-                    "on your fpath but not loaded. Your compinit dump is stale:"
-                        .to_string(),
-                    "rm -f \"${ZDOTDIR:-$HOME}\"/.zcompdump* && exec zsh".to_string(),
-                ]
-            } else if let Some(dir) = path.parent() {
-                vec![
-                    "not on your fpath. Add this line to ~/.zshrc before compinit:"
-                        .to_string(),
-                    report::fpath_line(dir),
-                ]
-            } else {
-                vec!["not registered".to_string()]
+        Registration::NotRegistered { on_fpath } => match shell {
+            Shell::Bash => vec![
+                "not loaded. Add this line to ~/.bashrc:".to_string(),
+                format!("source {}", report::tilde(path)),
+            ],
+            Shell::Zsh => {
+                if *on_fpath {
+                    vec![
+                        "on your fpath but not loaded. Your compinit dump is stale:"
+                            .to_string(),
+                        "rm -f \"${ZDOTDIR:-$HOME}\"/.zcompdump* && exec zsh"
+                            .to_string(),
+                    ]
+                } else if let Some(dir) = path.parent() {
+                    vec![
+                        "not on your fpath. Add this line to ~/.zshrc before compinit:"
+                            .to_string(),
+                        report::fpath_line(dir),
+                    ]
+                } else {
+                    vec!["not registered".to_string()]
+                }
             }
-        }
+        },
         Registration::Unverified(reason) => {
             vec![format!("verification {reason}")]
         }
     }
 }
 
-fn remove_zwc(path: &Path) {
+fn remove_zwc(shell: Shell, path: &Path) {
+    if shell != Shell::Zsh {
+        return;
+    }
     let zwc = path.with_extension("zwc");
     if zwc != path {
         let _ = std::fs::remove_file(zwc);
@@ -906,8 +980,11 @@ fn run_status(json: bool, live: bool, shells: Vec<Shell>) -> i32 {
     let mut failed = false;
     for shell in shells {
         let target = resolve_target(shell, None, &manifest).unwrap_or(Target {
-            path: env::home_dir().join(".zfunc").join(shell.file_name()),
-            reason: TargetReason::HomeDefault,
+            path: default_target(shell),
+            reason: match shell {
+                Shell::Bash => TargetReason::BashDefault,
+                Shell::Zsh => TargetReason::HomeDefault,
+            },
         });
         rows.push(status_one(shell, &target, &manifest, live, &mut failed));
     }
@@ -1184,7 +1261,7 @@ fn uninstall_one(
         Disk::Present { bytes, symlink } => {
             let digest = manifest::sha256_hex(&bytes);
             let proven =
-                has_stamp(&bytes) && digest == recorded_sha && !symlink;
+                has_stamp(shell, &bytes) && digest == recorded_sha && !symlink;
             if !proven {
                 return (
                     ShellRow {
@@ -1233,7 +1310,7 @@ fn uninstall_one(
             }
             match std::fs::remove_file(path) {
                 Ok(()) => {
-                    remove_zwc(path);
+                    remove_zwc(shell, path);
                     (
                         ShellRow {
                             shell,

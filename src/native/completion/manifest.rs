@@ -176,6 +176,7 @@ fn nanos_suffix() -> u128 {
 pub(crate) fn adapter_sha256(shell: Shell) -> String {
     use sha2::Digest;
     let bytes: &[u8] = match shell {
+        Shell::Bash => super::adapters::bash_adapter().as_bytes(),
         Shell::Zsh => super::adapters::zsh_adapter().as_bytes(),
     };
     hex::encode(sha2::Sha256::digest(bytes))

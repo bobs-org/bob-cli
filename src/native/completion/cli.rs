@@ -1,9 +1,7 @@
 //! The public `bob completion` command tree.
 //!
-//! Shell selection carries only `zsh` until the bash phase adds `bash`;
-//! the [`Shell`] enum is shaped so that addition is one variant plus its
-//! target and verify arms. Completion's own arguments use clap possible
-//! values and [`clap::ValueHint`]s, so they never need `kinds.rs` entries.
+//! Completion's own arguments use clap possible values and
+//! [`clap::ValueHint`]s, so they never need `kinds.rs` entries.
 
 use clap::{
     builder::{PossibleValue, PossibleValuesParser},
@@ -13,21 +11,21 @@ use clap::{
 const COMMAND_NAME: &str = "bob completion";
 
 /// A shell `bob completion` can install an adapter for.
-///
-/// Only `zsh` until the bash phase adds `bash`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Shell {
+    Bash,
     Zsh,
 }
 
 impl Shell {
     /// Every shell this binary supports, in report order.
     pub(crate) fn all() -> &'static [Shell] {
-        &[Shell::Zsh]
+        &[Shell::Bash, Shell::Zsh]
     }
 
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Shell::Bash => "bash",
             Shell::Zsh => "zsh",
         }
     }
@@ -35,6 +33,7 @@ impl Shell {
     /// The adapter file name inside the target directory.
     pub(crate) fn file_name(self) -> &'static str {
         match self {
+            Shell::Bash => "bob",
             Shell::Zsh => "_bob",
         }
     }
@@ -42,12 +41,14 @@ impl Shell {
     /// The function name the shell should bind `bob` to.
     pub(crate) fn function_name(self) -> &'static str {
         match self {
+            Shell::Bash => "_bob",
             Shell::Zsh => "_bob",
         }
     }
 
     pub(crate) fn parse(raw: &str) -> Option<Shell> {
         match raw {
+            "bash" => Some(Shell::Bash),
             "zsh" => Some(Shell::Zsh),
             _ => None,
         }
@@ -55,8 +56,11 @@ impl Shell {
 
     /// Possible values for the `SHELL` positional, with help text.
     pub(crate) fn possible_values() -> Vec<PossibleValue> {
-        vec![PossibleValue::new("zsh")
-            .help("The Z shell (bash arrives in a later phase)")]
+        vec![
+            PossibleValue::new("bash")
+                .help("The Bourne-again shell (values only)"),
+            PossibleValue::new("zsh").help("The Z shell"),
+        ]
     }
 }
 
@@ -87,6 +91,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(install_command())
         .subcommand(status_command())
         .subcommand(uninstall_command())
+        .subcommand(bash_command())
         .subcommand(zsh_command())
 }
 
@@ -136,9 +141,10 @@ fn install_command() -> ClapCommand {
         .long_about(
             "Install or refresh the completion adapter for your shells.\n\n\
              With no SHELL, bob installs for $SHELL and refreshes every \
-             bob-owned adapter. The target directory is the first match: \
+             bob-owned adapter. For zsh the target is the first match: \
              --target, the previous install location, the first writable \
              fpath entry under $HOME, oh-my-zsh completions, then ~/.zfunc. \
+             For bash it is ${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-~/.local/share}/bash-completion}/completions/bob. \
              Files bob did not write are refused without --force, and your \
              rc files are never edited.",
         )
@@ -212,6 +218,28 @@ fn uninstall_command() -> ClapCommand {
         )
         .arg(shell_positional("Which shells to uninstall (default: owned adapters)"))
         .arg(dry_run_arg())
+}
+
+fn bash_command() -> ClapCommand {
+    ClapCommand::new("bash")
+        .about("Print the bash completion adapter")
+        .long_about(
+            "Print the bash completion adapter.\n\n\
+             Writes the adapter yourself instead of running install; no \
+             manifest entry is recorded, so status reports the file as \
+             externally managed when its bytes match.",
+        )
+        .after_help(
+            "Examples:\n  bob completion bash\n  bob completion bash -o ~/.local/share/bash-completion/completions/bob",
+        )
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .long("output")
+                .help("Write the adapter to FILE instead of stdout")
+                .value_name("FILE")
+                .value_hint(clap::ValueHint::FilePath),
+        )
 }
 
 fn zsh_command() -> ClapCommand {

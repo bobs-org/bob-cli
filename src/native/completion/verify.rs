@@ -1,12 +1,13 @@
 //! Real-shell verification for `bob completion`.
 //!
-//! Install and `status -v` classify registration with one bounded `zsh -ic`
-//! probe each. The probe runs in its own process group with stdin closed
-//! and `BOB_COMPLETION_PROBE=1`, and is killed at the deadline (8 s, or the
-//! hidden `BOB_COMPLETION_PROBE_TIMEOUT_MS` override for tests). Probe
-//! scripts carry `# bob-completion-*` markers so tests can fake `zsh` by
-//! branching on the script text; real rc noise is ignored by parsing only
-//! the lines between `bob-*-start` and `bob-*-end`.
+//! Install and `status -v` classify registration with one bounded shell
+//! probe each (`zsh -ic` or `bash -ic`). The probe runs in its own process
+//! group with stdin closed and `BOB_COMPLETION_PROBE=1`, and is killed at
+//! the deadline (8 s, or the hidden `BOB_COMPLETION_PROBE_TIMEOUT_MS`
+//! override for tests). Probe scripts carry `# bob-completion-*` markers
+//! so tests can fake the shell by branching on the script text; real rc
+//! noise is ignored by parsing only the lines between `bob-*-start` and
+//! `bob-*-end`.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -32,8 +33,12 @@ pub(crate) fn probe_timeout_ms() -> u64 {
         .unwrap_or(DEFAULT_PROBE_TIMEOUT_MS)
 }
 
-fn run_bounded_zsh(script: &str, timeout_ms: u64) -> ProbeOutcome {
-    let mut command = Command::new("zsh");
+fn run_bounded_shell(
+    shell_bin: &str,
+    script: &str,
+    timeout_ms: u64,
+) -> ProbeOutcome {
+    let mut command = Command::new(shell_bin);
     command
         .args(["-i", "-c", script])
         .env("BOB_COMPLETION_PROBE", "1")
@@ -48,7 +53,9 @@ fn run_bounded_zsh(script: &str, timeout_ms: u64) -> ProbeOutcome {
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            return ProbeOutcome::NotFound(format!("zsh not found ({error})"));
+            return ProbeOutcome::NotFound(format!(
+                "{shell_bin} not found ({error})"
+            ));
         }
     };
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
@@ -83,7 +90,7 @@ pub(crate) fn fpath_entries() -> Option<Vec<PathBuf>> {
         print -r -- bob-fpath-start\n\
         print -l -- $fpath\n\
         print -r -- bob-fpath-end";
-    let output = match run_bounded_zsh(script, probe_timeout_ms()) {
+    let output = match run_bounded_shell("zsh", script, probe_timeout_ms()) {
         ProbeOutcome::Output(output) => output,
         ProbeOutcome::TimedOut | ProbeOutcome::NotFound(_) => return None,
     };
@@ -145,6 +152,13 @@ pub(crate) fn probe_registration(
     shell: Shell,
     target: &std::path::Path,
 ) -> Registration {
+    match shell {
+        Shell::Zsh => probe_zsh(target),
+        Shell::Bash => probe_bash(target),
+    }
+}
+
+fn probe_zsh(target: &std::path::Path) -> Registration {
     let script = "# bob-completion-verify-probe\n\
         autoload -Uz compinit 2>/dev/null\n\
         compinit -D 2>/dev/null\n\
@@ -154,7 +168,7 @@ pub(crate) fn probe_registration(
         print -r -- \"bob-comp=${_comps[bob]:-}\"\n\
         print -r -- \"bob-source=${functions_source[_bob]:-}\"\n\
         print -r -- bob-verify-end";
-    let output = match run_bounded_zsh(script, probe_timeout_ms()) {
+    let output = match run_bounded_shell("zsh", script, probe_timeout_ms()) {
         ProbeOutcome::Output(output) => output,
         ProbeOutcome::TimedOut => {
             return Registration::Unverified("timed out".to_string());
@@ -185,7 +199,7 @@ pub(crate) fn probe_registration(
             source = value.to_string();
         }
     }
-    if comp == shell.function_name() {
+    if comp == Shell::Zsh.function_name() {
         if !source.is_empty() && std::path::Path::new(&source) == target {
             return Registration::Registered;
         }
@@ -201,6 +215,67 @@ pub(crate) fn probe_registration(
     let on_fpath =
         dir.is_some_and(|dir| fpath.iter().any(|entry| entry == dir));
     Registration::NotRegistered { on_fpath }
+}
+
+fn probe_bash(_target: &std::path::Path) -> Registration {
+    // Trigger bash-completion's lazy loader when it exists
+    // (_comp_load in bash-completion >= 2.12, else __load_completion),
+    // then report what `bob` is bound to. Without bash-completion the
+    // loader is absent and an unregistered adapter stays unregistered,
+    // with a `source <path>` remedy from the caller.
+    let script = "# bob-completion-verify-probe-bash\n\
+        if declare -F _comp_load >/dev/null 2>&1; then _comp_load bob 2>/dev/null;\n\
+        elif declare -F __load_completion >/dev/null 2>&1; then __load_completion bob 2>/dev/null; fi\n\
+        echo bob-verify-start\n\
+        complete -p bob 2>/dev/null\n\
+        echo bob-verify-end";
+    let output = match run_bounded_shell("bash", script, probe_timeout_ms()) {
+        ProbeOutcome::Output(output) => output,
+        ProbeOutcome::TimedOut => {
+            return Registration::Unverified("timed out".to_string());
+        }
+        ProbeOutcome::NotFound(reason) => {
+            return Registration::Unverified(reason);
+        }
+    };
+    let lines: Vec<&str> = output.lines().collect();
+    let (Some(start), Some(end)) = (
+        lines.iter().position(|line| *line == "bob-verify-start"),
+        lines.iter().position(|line| *line == "bob-verify-end"),
+    ) else {
+        return Registration::Unverified("probe failed".to_string());
+    };
+    if end <= start {
+        return Registration::Unverified("probe failed".to_string());
+    }
+    for line in &lines[start + 1..end] {
+        let line = line.trim();
+        if !line.starts_with("complete ") || !line.ends_with(" bob") {
+            continue;
+        }
+        let function = complete_function(line);
+        match function.as_deref() {
+            Some(name) if name == Shell::Bash.function_name() => {
+                return Registration::Registered;
+            }
+            Some(name) => return Registration::BoundTo(name.to_string()),
+            None => continue,
+        }
+    }
+    Registration::NotRegistered { on_fpath: false }
+}
+
+/// The `-F <function>` word in a `complete -p bob` line, if any.
+fn complete_function(line: &str) -> Option<&str> {
+    let mut words = line.split_whitespace();
+    while let Some(word) = words.next() {
+        if word == "-F"
+            && let Some(function) = words.next()
+        {
+            return Some(function);
+        }
+    }
+    None
 }
 
 /// The resolved `bob` on `PATH`, if any.

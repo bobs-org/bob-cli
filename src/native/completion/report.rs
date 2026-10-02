@@ -45,6 +45,7 @@ pub(crate) enum TargetReason {
     Fpath,
     OhMyZsh,
     HomeDefault,
+    BashDefault,
 }
 
 impl TargetReason {
@@ -55,6 +56,7 @@ impl TargetReason {
             TargetReason::Fpath => "first writable fpath entry",
             TargetReason::OhMyZsh => "oh-my-zsh completions",
             TargetReason::HomeDefault => "~/.zfunc default",
+            TargetReason::BashDefault => "bash-completion user dir",
         }
     }
 }

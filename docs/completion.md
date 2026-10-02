@@ -154,13 +154,15 @@ bob completion install           # $SHELL, plus every bob-owned adapter
 bob completion install zsh -d    # show the plan without writing anything
 ```
 
-The target directory is the first match: `--target DIR`, the previous
-install location from the manifest, the first writable fpath entry under
-`$HOME`, oh-my-zsh completions, then `~/.zfunc` (created as needed, with
-the exact `fpath` line to add). Files bob did not write are refused
-without `--force`, and every write is atomic. Verification probes a real
-shell unless `--no-verify` is given; `--quiet` prints only warnings and
-errors. Combining `--target` with more than one shell is a usage error.
+For zsh the target directory is the first match: `--target DIR`, the
+previous install location from the manifest, the first writable fpath
+entry under `$HOME`, oh-my-zsh completions, then `~/.zfunc` (created as
+needed, with the exact `fpath` line to add). For bash it is
+`${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-~/.local/share}/bash-completion}/completions/bob`.
+Files bob did not write are refused without `--force`, and every write is
+atomic. Verification probes a real shell unless `--no-verify` is given;
+`--quiet` prints only warnings and errors. Combining `--target` with more
+than one shell is a usage error.
 
 ## Commands
 
@@ -174,7 +176,9 @@ errors. Combining `--target` with more than one shell is a usage error.
 - `bob completion uninstall [SHELL]...`: remove only files whose stamp
   and manifest digest prove bob wrote them, plus any stale `_bob.zwc`.
   An edited file is refused with the exact `rm` command instead.
-- `bob completion zsh [-o FILE]`: print the adapter, or write it to
+- `bob completion bash [-o FILE]`: print the bash adapter, or write it
+  to FILE yourself (unrecorded: status reports it as externally managed).
+- `bob completion zsh [-o FILE]`: print the zsh adapter, or write it to
   FILE yourself (unrecorded: status reports it as externally managed).
 
 Exit codes are 0 for success or an explicit no-op, 1 when an install or
@@ -183,7 +187,7 @@ errors.
 
 ## Status states
 
-- `not installed`: nothing there. Hint: `bob completion install zsh`.
+- `not installed`: nothing there. Hint: `bob completion install bash` or `bob completion install zsh`.
 - `current`: bob-owned, and the bytes equal what this binary writes.
 - `outdated`: bob-owned, but the bytes differ. Hint:
   `bob completion install`.
@@ -197,11 +201,12 @@ errors.
 ## Troubleshooting
 
 - `bob completion status -v` probes a real shell now and reports
-  `registered as _bob`, `not registered` (with the fix: an `fpath` line
-  or a stale-compdump `rm` plus `exec zsh`), `shadowed by <file>`,
-  `bob is bound to <fn>`, or `unverified (<reason>)`. Without `-v`,
-  status shows the verification recorded at install time, but only when
-  its digest and path still match the file.
+  `registered as _bob`, `not registered` (zsh: an `fpath` line or a
+  stale-compdump `rm` plus `exec zsh`; bash: the exact `source <path>`
+  line for `~/.bashrc`), `shadowed by <file>`, `bob is bound to <fn>`,
+  or `unverified (<reason>)`. Without `-v`, status shows the verification
+  recorded at install time, but only when its digest and path still match
+  the file.
 - `BOB_COMPLETE_DEBUG=<file>` appends each request, response, elapsed
   milliseconds, and any error or timeout.
 - A stale compinit dump looks installed but never loads: remove it with
@@ -216,9 +221,9 @@ errors.
 ## Why no rc edits and no `eval`
 
 `bob completion install` writes one file and records it in the manifest
-under `$XDG_STATE_HOME/bob-cli/completion/`. It never edits `~/.zshrc`
-or any rc file: it prints the exact line to add instead, so your shell
-startup stays yours. And adapters never `eval` generated code — every
+under `$XDG_STATE_HOME/bob-cli/completion/`. It never edits `~/.zshrc`,
+`~/.bashrc`, or any rc file: it prints the exact line to add instead, so
+your shell startup stays yours. And adapters never `eval` generated code — every
 `<TAB>` runs `bob __complete` against the binary on `PATH` and renders
 what it returns, so completion can never drift from the CLI.
 
@@ -243,6 +248,34 @@ Directives go through the native `_files` and `_message` widgets,
 so your `list-colors`, `menu select`, quoting, and native colors
 keep working. Setting `NO_COLOR` switches bob's default header to
 the plain `── %d ──` form.
+
+## Bash
+
+The bash adapter is values-only: descriptions and groups are ignored, so
+every slot completes plain values through `COMPREPLY`. It registers with
+`complete -F _bob bob` (no `-o default`, so free-text slots never fall
+back to filenames).
+
+- **Word reassembly.** Prior words and the cursor word are rebuilt from
+  `COMP_LINE`/`COMP_POINT`, rejoining tokens that `COMP_WORDBREAKS` split
+  at `:` and `=`. Simple quoting is unquoted, and the text after the
+  cursor is sent as `--suffix`.
+- **`!prefix N`.** The kept prefix is applied first, then the part bash
+  already broke off at a wordbreak is stripped, as
+  `__ltrim_colon_completions` does.
+- **Directives.** `!dirs` completes directories via `compgen -d`;
+  `!files [glob]` completes files via `compgen -f` filtered by the glob;
+  `!files-in` completes paths relative to its root; `!message` answers an
+  empty reply. Unknown `!` directives are ignored.
+- **Spacing.** `compopt -o nospace` is set only when every candidate is
+  `nospace`; file directives set `compopt -o filenames`.
+- **Installing.** The target is
+  `${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-~/.local/share}/bash-completion}/completions/bob`.
+  Verification triggers bash-completion's lazy loader (`_comp_load bob`
+  in bash-completion ≥ 2.12, else `__load_completion bob`), then checks
+  that `complete -p bob` names `_bob`. Without bash-completion the report
+  is `not registered` with the exact `source <path>` line for
+  `~/.bashrc`, since bob never edits rc files.
 
 ## Capture markers
 
