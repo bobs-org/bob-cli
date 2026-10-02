@@ -125,6 +125,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
         tier: CompletionTier::Plumbing,
     },
     Subcommand {
+        name: "completion",
+        script_command: None,
+        about: "Install and inspect shell completion for bob",
+        native_command: NativeCommand::Completion,
+        tier: CompletionTier::Porcelain,
+    },
+    Subcommand {
         name: "freshness",
         script_command: None,
         about: "Walk the tiered freshness review queue and seed the cutover",
@@ -417,6 +424,8 @@ Examples:
                                  List picker sections for one parent task
   bob capture-tasks --route cash --format json
                                  List picker tasks for one capture target
+  bob completion install
+                                 Install or refresh shell completion
   bob query --source '#project'
                                  Print matching note paths
   bob freshness list -f json

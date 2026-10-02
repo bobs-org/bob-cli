@@ -7,13 +7,18 @@
 
 mod adapters;
 mod capture_text;
+pub(crate) mod cli;
 mod context;
 mod engine;
+pub(crate) mod install;
 mod kinds;
+pub(crate) mod manifest;
 mod present;
 mod protocol;
 mod providers;
+pub(crate) mod report;
 mod tree;
+pub(crate) mod verify;
 
 use std::ffi::OsString;
 use std::fs::OpenOptions;
@@ -28,6 +33,11 @@ const COMPLETE_DEADLINE_MS: u64 = 150;
 
 #[allow(unused_imports)]
 pub(crate) use tree::tree;
+
+/// Run the public `bob completion` command.
+pub(crate) fn run(args: Vec<OsString>) -> i32 {
+    install::run(args)
+}
 
 /// Answer a hidden `__complete` request.
 ///

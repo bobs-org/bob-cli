@@ -42,24 +42,44 @@ behavior.
 Installation requires a current stable Rust toolchain with `cargo`. The default
 vault location is `~/bob`; set `BOB_DIR` when the vault lives elsewhere.
 
-For local development from this checkout:
+With `just` installed, install from this checkout:
 
 ```bash
-cargo install --path . --locked --force
+just install
 ```
+
+That installs `bob` (and its shims) from source into
+`${CARGO_INSTALL_ROOT:-${CARGO_HOME:-~/.cargo}}` — overriding cargo's
+`install.root` config so the recipe refreshes exactly the binary it
+installed — then runs `bob completion install` to install or refresh shell
+completion for your shells. Pass shells explicitly (`just install zsh`)
+to choose. If completion needs attention, the recipe says so and exits 1
+while leaving the installed binary in place. Never pass `--force` to these
+installs: cargo already replaces the same package from any checkout, and
+`--force` would only let it overwrite a different crate's `bob`.
 
 For installation from the Git remote:
 
 ```bash
-cargo install --git git@github.com:bobs-org/bob-cli.git --locked --force bob-cli
+cargo install --git git@github.com:bobs-org/bob-cli.git --locked bob-cli && bob completion install
 ```
 
-With `just` installed, smoke-test an install without replacing an existing
+Automation and agents smoke-test an install without replacing an existing
 user install:
 
 ```bash
 just install-smoke
 ```
+
+### Shell completion
+
+Every `<TAB>` after `bob` is answered live by the `bob` on your `PATH`, so
+completion always matches the installed binary: commands, options, and vault
+values such as capture routes, tasks, and open Pomodoros. `just install`
+keeps the small adapter file current with `bob completion install`, which
+never edits your rc files. Inspect the state anytime with `bob completion`
+(same as `bob completion status`), and read
+[`docs/completion.md`](docs/completion.md) for the full contract.
 
 After installation, verify the vault selection with read-only commands before
 running a command that writes or pushes changes:
@@ -159,6 +179,7 @@ Bob's workflow commands are:
 | `capture-task-id` | Assign a user-authored block ID to an open capture task |
 | `capture-task-sections` | List the ALL-CAPS child sections of a capture task |
 | `capture-tasks` | List the open tasks in a routed note |
+| `completion` | Install and inspect shell completion for bob |
 | [`freshness`](#task-freshness) | List the tasks due for freshness review and seed the cutover |
 | [`gkeep`](#gkeep) | Drain the Google Keep inbox into Obsidian tasks |
 | [`highlights`](#highlights) | Synchronize Highlights PDF annotations with reference notes |
@@ -1073,6 +1094,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Topic | Document |
 | --- | --- |
 | Capture grammar, JSON, and picker protocol | [`docs/capture.md`](docs/capture.md) |
+| Shell completion: runtime model, protocol 1, lifecycle, and troubleshooting | [`docs/completion.md`](docs/completion.md) |
 | `bob query` Dataview and Tasks | [`docs/dataview.md`](docs/dataview.md) |
 | Task freshness review lease, placement, evaluation, and display | [`docs/freshness.md`](docs/freshness.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |

@@ -481,6 +481,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
             "bob capture-task-sections",
         ),
         (&["capture-tasks", "--help"], "bob capture-tasks"),
+        (&["completion", "--help"], "bob completion"),
         (&["gkeep", "--help"], "bob gkeep"),
         (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob highlights"),
@@ -597,6 +598,23 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             "bob capture-task-sections --help",
         ),
         (&["capture-tasks", "--help"], "bob capture-tasks --help"),
+        (&["completion", "--help"], "bob completion --help"),
+        (
+            &["completion", "install", "--help"],
+            "bob completion install --help",
+        ),
+        (
+            &["completion", "status", "--help"],
+            "bob completion status --help",
+        ),
+        (
+            &["completion", "uninstall", "--help"],
+            "bob completion uninstall --help",
+        ),
+        (
+            &["completion", "zsh", "--help"],
+            "bob completion zsh --help",
+        ),
         (&["freshness", "--help"], "bob freshness --help"),
         (
             &["freshness", "list", "--help"],

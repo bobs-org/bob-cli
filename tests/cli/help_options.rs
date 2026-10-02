@@ -798,6 +798,48 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
 }
 
 #[test]
+fn completion_help_lists_subcommands_and_options_alphabetically() {
+    let output = bob_command()
+        .arg("completion")
+        .arg("--help")
+        .output()
+        .expect("run bob completion --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert_text_order(
+        &help,
+        &[
+            "install    Install or refresh",
+            "status     Show installed adapters",
+            "uninstall  Remove completion adapters",
+            "zsh        Print the zsh completion adapter",
+        ],
+    );
+    assert_text_order(&help, &["-j, --json", "-v, --verify", "-h, --help"]);
+
+    let install = bob_command()
+        .args(["completion", "install", "--help"])
+        .output()
+        .expect("run bob completion install --help");
+
+    assert_success(&install);
+    assert_text_order(
+        &stdout(&install),
+        &[
+            "-d, --dry-run",
+            "-f, --force",
+            "-n, --no-verify",
+            "-q, --quiet",
+            "-t, --target",
+            "-h, --help",
+        ],
+    );
+    assert_stdout_has_no_ansi(&install);
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn ready_help_lists_options_alphabetically() {
     let output = bob_command()
         .arg("ready")

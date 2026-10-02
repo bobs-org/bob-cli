@@ -46,6 +46,20 @@ check-web-clip-adapter:
 package-list:
     cargo package --list
 
+# Install bob and its shims from this checkout, then install or refresh shell
+# completion. Pass shells to choose explicitly: `just install zsh bash`.
+[positional-arguments]
+install *shells: (_banner "35" "📦" "INSTALL")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}"
+    cargo install --path . --locked --root "$root"
+    if ! "$root/bin/bob" completion install "$@"; then
+        printf '\nbob is installed at %s; shell completion needs attention (see above).\n' \
+            "$root/bin/bob" >&2
+        exit 1
+    fi
+
 install-smoke:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -53,6 +67,12 @@ install-smoke:
     cargo install --path . --locked --root "${root}"
     "${root}/bin/bob" --help >/dev/null
     "${root}/bin/bob" capture --help >/dev/null
+    "${root}/bin/bob" completion --help >/dev/null
+    "${root}/bin/bob" completion install --help >/dev/null
+    "${root}/bin/bob" completion status --help >/dev/null
+    "${root}/bin/bob" completion uninstall --help >/dev/null
+    "${root}/bin/bob" completion zsh --help >/dev/null
+    "${root}/bin/bob" __complete zsh --protocol 1 -- bob cap | grep -q '^capture'
     "${root}/bin/bob" capture-complete --help >/dev/null
     "${root}/bin/bob" capture-parse --help >/dev/null
     "${root}/bin/bob" capture-pomodoro-name --help >/dev/null
@@ -93,3 +113,13 @@ install-smoke:
     "${root}/bin/bob_notify" --help >/dev/null
     "${root}/bin/bob_pomodoro" --help >/dev/null
     "${root}/bin/tmux_bob_pomodoro" --help >/dev/null
+    smoke_home="${root}/home"
+    mkdir -p "${smoke_home}"
+    smoke_env="env HOME=${smoke_home} XDG_STATE_HOME=${smoke_home}/.local/state XDG_DATA_HOME=${smoke_home}/.local/share ZDOTDIR=${smoke_home}/.zdot SHELL=/bin/zsh"
+    ${smoke_env} "${root}/bin/bob" completion install zsh -d -t "${root}/zfunc"
+    test ! -e "${root}/zfunc"
+    ${smoke_env} "${root}/bin/bob" completion install zsh -n -t "${root}/zfunc"
+    test -f "${root}/zfunc/_bob"
+    ${smoke_env} "${root}/bin/bob" completion status -j > /dev/null
+    ${smoke_env} "${root}/bin/bob" completion uninstall zsh
+    test ! -e "${root}/zfunc/_bob"

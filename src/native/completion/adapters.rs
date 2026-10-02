@@ -7,7 +7,6 @@
 //! the `bob completion` command in the lifecycle phase.)
 
 /// The embedded `_bob` zsh adapter.
-#[allow(dead_code)]
 pub(crate) fn zsh_adapter() -> &'static str {
     include_str!("adapters/_bob.zsh")
 }

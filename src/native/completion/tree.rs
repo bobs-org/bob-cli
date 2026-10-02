@@ -50,6 +50,9 @@ impl NativeCommand {
             NativeCommand::CaptureTasks => {
                 crate::native::capture_tasks::build_cli()
             }
+            NativeCommand::Completion => {
+                crate::native::completion::cli::completion_command()
+            }
             NativeCommand::Freshness => {
                 crate::native::freshness::cli::completion_command()
             }

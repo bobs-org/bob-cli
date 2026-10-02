@@ -138,6 +138,90 @@ failure, which yields empty output.
   - `query --tasks-note`, `query --origin`, `ready NOTE`: vault notes
     as `!files-in <bob-dir>\t*.md`.
 
+## Installing
+
+`just install` installs `bob` from this checkout and refreshes shell
+completion in one step. From the Git remote instead:
+
+```bash
+cargo install --git git@github.com:bobs-org/bob-cli.git --locked bob-cli && bob completion install
+```
+
+`bob completion install` targets your shells directly:
+
+```bash
+bob completion install           # $SHELL, plus every bob-owned adapter
+bob completion install zsh -d    # show the plan without writing anything
+```
+
+The target directory is the first match: `--target DIR`, the previous
+install location from the manifest, the first writable fpath entry under
+`$HOME`, oh-my-zsh completions, then `~/.zfunc` (created as needed, with
+the exact `fpath` line to add). Files bob did not write are refused
+without `--force`, and every write is atomic. Verification probes a real
+shell unless `--no-verify` is given; `--quiet` prints only warnings and
+errors. Combining `--target` with more than one shell is a usage error.
+
+## Commands
+
+- `bob completion` (same as `status`, plus the hidden `list` alias):
+  show installed adapters and the `bob` they call.
+- `bob completion install [SHELL]...`: install or refresh adapters.
+  `-d/--dry-run`, `-f/--force`, `-n/--no-verify`, `-q/--quiet`,
+  `-t/--target DIR`.
+- `bob completion status`: `-j/--json` for machine output, `-v/--verify`
+  to probe a real shell now.
+- `bob completion uninstall [SHELL]...`: remove only files whose stamp
+  and manifest digest prove bob wrote them, plus any stale `_bob.zwc`.
+  An edited file is refused with the exact `rm` command instead.
+- `bob completion zsh [-o FILE]`: print the adapter, or write it to
+  FILE yourself (unrecorded: status reports it as externally managed).
+
+Exit codes are 0 for success or an explicit no-op, 1 when an install or
+uninstall failed or `status -v` found a broken install, and 2 for usage
+errors.
+
+## Status states
+
+- `not installed`: nothing there. Hint: `bob completion install zsh`.
+- `current`: bob-owned, and the bytes equal what this binary writes.
+- `outdated`: bob-owned, but the bytes differ. Hint:
+  `bob completion install`.
+- `edited`: the stamp is present, but the digest differs from the
+  manifest. Hint: reinstall with `-f`.
+- `foreign`: no bob stamp. Hint: reinstall with `-f`.
+- `current (externally managed)`: an unrecorded file whose bytes equal
+  this adapter. Bob reports it and never adopts it.
+- `missing`: the manifest records an install, but the file is gone.
+
+## Troubleshooting
+
+- `bob completion status -v` probes a real shell now and reports
+  `registered as _bob`, `not registered` (with the fix: an `fpath` line
+  or a stale-compdump `rm` plus `exec zsh`), `shadowed by <file>`,
+  `bob is bound to <fn>`, or `unverified (<reason>)`. Without `-v`,
+  status shows the verification recorded at install time, but only when
+  its digest and path still match the file.
+- `BOB_COMPLETE_DEBUG=<file>` appends each request, response, elapsed
+  milliseconds, and any error or timeout.
+- A stale compinit dump looks installed but never loads: remove it with
+  `rm -f "${ZDOTDIR:-$HOME}"/.zcompdump*` and restart the shell.
+- PATH shadowing: `<TAB>` asks the `bob` on `PATH`, so when status warns
+  that it differs from the running binary, fix `PATH` or reinstall.
+- Version skew answers: an old adapter hears `bob shell completion is
+  out of date — run: bob completion install`; a newer adapter than the
+  binary hears `this bob is older than its shell completion — reinstall
+  bob (just install)`.
+
+## Why no rc edits and no `eval`
+
+`bob completion install` writes one file and records it in the manifest
+under `$XDG_STATE_HOME/bob-cli/completion/`. It never edits `~/.zshrc`
+or any rc file: it prints the exact line to add instead, so your shell
+startup stays yours. And adapters never `eval` generated code — every
+`<TAB>` runs `bob __complete` against the binary on `PATH` and renders
+what it returns, so completion can never drift from the CLI.
+
 ## Styling
 
 The zsh adapter ships bob-scoped presentation defaults, applied only
