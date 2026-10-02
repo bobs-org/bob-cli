@@ -1179,14 +1179,27 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     ));
                 }
                 Ok(entry @ CloseInlineLex::Entry { .. }) => {
-                    let (index, text) = match &entry {
-                        CloseInlineLex::Entry { index, text, .. } => {
-                            (*index, text.clone())
-                        }
+                    let (index, index_range, text) = match &entry {
+                        CloseInlineLex::Entry {
+                            index,
+                            index_range,
+                            text,
+                            ..
+                        } => (*index, *index_range, text.clone()),
                         CloseInlineLex::Dangling { .. } => unreachable!(),
                     };
                     if has_bullet_child {
-                        let bullet = format!("- {index} {text}");
+                        // A defaulted inline entry beside unnumbered
+                        // bullets suggests the unnumbered form: a numbered
+                        // suggestion would itself fail as mixed numbering.
+                        let bullet = if index_range.is_none()
+                            && close_first_bullet_is_unnumbered(
+                                &item.lines[1..],
+                            ) {
+                            format!("- {text}")
+                        } else {
+                            format!("- {index} {text}")
+                        };
                         return Err(close_inline_mixing_error(&bullet));
                     }
                     let mut spec = close_spec_from_lex(

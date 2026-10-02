@@ -385,7 +385,7 @@ fn selection_log(
     base.log = log
         .into_iter()
         .map(|(index, text)| CloseLogEntry {
-            index,
+            index: Some(index),
             text: text.to_string(),
             details: Vec::new(),
             origin: Default::default(),
@@ -405,7 +405,7 @@ fn selection_detail_log(
     base.log = log
         .into_iter()
         .map(|(index, text, details)| CloseLogEntry {
-            index,
+            index: Some(index),
             text: text.to_string(),
             details: details.into_iter().map(str::to_string).collect(),
             origin: Default::default(),

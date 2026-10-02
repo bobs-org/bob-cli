@@ -327,13 +327,13 @@ fn execution_attaches_chain_child_lines_to_the_close() {
                 .iter()
                 .map(|entry| (entry.index, entry.text.clone()))
                 .collect::<Vec<_>>();
-            assert_eq!(texts, vec![(1, "foo".to_string())]);
+            assert_eq!(texts, vec![(Some(1), "foo".to_string())]);
         }
         other => panic!("expected close, got {other:?}"),
     }
-    // A bullet with no number reports the missing-number error instead of
+    // A mixed bullet list reports the missing-number error instead of
     // the old child-shape error.
-    for raw in ["+2 =x\n- child", "+ =x\n- child"] {
+    for raw in ["+2 =x\n- 1 a\n- child", "+ =x\n- 1 a\n- child"] {
         let error = execute_draft(raw).unwrap_err();
         assert!(
             error.contains("capture item 2 starting on line 1"),
@@ -350,7 +350,7 @@ fn execution_attaches_chain_child_lines_to_the_close() {
     match &draft.items[0].parsed.kind {
         CaptureKind::PomodoroClose { spec } => {
             assert_eq!(spec.log.len(), 1);
-            assert_eq!(spec.log[0].index, 1);
+            assert_eq!(spec.log[0].index, Some(1));
             assert_eq!(spec.log[0].text, "foo");
         }
         other => panic!("expected close, got {other:?}"),

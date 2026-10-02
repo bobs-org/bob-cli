@@ -275,7 +275,7 @@ fn operator_items_have_no_hash_completion() {
 fn work_log_bullet_lines_request_no_marker_completion() {
     // Bullet text is literal: `@`, `@@`, and task pickers stay suppressed
     // on bullet lines, on a plain close and on a chain close alike.
-    for raw in ["=x\n- 1 @", "=x\n- 1 @@", "=x =\n- 1 @"] {
+    for raw in ["=x\n- 1 @", "=x\n- 1 @@", "=x =\n- 1 @", "=x\n- @"] {
         assert_eq!(field(raw, raw.len()), None, "{raw}");
     }
     // The parent close line itself also requests nothing.

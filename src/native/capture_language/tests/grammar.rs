@@ -1030,7 +1030,7 @@ fn execution_parses_equals_family_starts_alongside_close() {
         CaptureKind::PomodoroClose { spec } => {
             assert_eq!(spec.raw, "=x", "=x more");
             assert_eq!(spec.log.len(), 1, "=x more");
-            assert_eq!(spec.log[0].index, 1, "=x more");
+            assert_eq!(spec.log[0].index, Some(1), "=x more");
             assert_eq!(spec.log[0].text, "more", "=x more");
         }
         other => panic!("=x more: expected close, got {other:?}"),

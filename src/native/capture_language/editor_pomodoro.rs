@@ -1342,11 +1342,15 @@ pub(super) fn parse_editor_close_item<'a>(
         ) {
             Ok(lexed) => {
                 for entry in &lexed.entries {
-                    base_spans.push(Span {
-                        start: entry.index_range.0,
-                        end: entry.index_range.1,
-                        kind: SpanKind::PomodoroCloseLogIndex,
-                    });
+                    // Positional entries carry no index range, like a
+                    // defaulted inline entry: no index span.
+                    if let Some((start, end)) = entry.index_range {
+                        base_spans.push(Span {
+                            start,
+                            end,
+                            kind: SpanKind::PomodoroCloseLogIndex,
+                        });
+                    }
                 }
                 if lexed.dangling.is_empty() {
                     base_spans.sort_by_key(|span| (span.start, span.end));
@@ -1552,7 +1556,16 @@ pub(super) fn parse_editor_close_item<'a>(
                 CloseInlineLex::Dangling { .. } => unreachable!(),
             };
             if has_bullet_child {
-                let bullet = format!("- {index} {text}");
+                // A defaulted inline entry beside unnumbered bullets
+                // suggests the unnumbered form: a numbered suggestion
+                // would itself fail as mixed numbering.
+                let bullet = if index_range.is_none()
+                    && close_first_bullet_is_unnumbered(&item.lines[1..])
+                {
+                    format!("- {text}")
+                } else {
+                    format!("- {index} {text}")
+                };
                 let mut spans = selection_spans(&lexed_selection);
                 if let Some((start, end)) = index_range {
                     spans.push(Span {

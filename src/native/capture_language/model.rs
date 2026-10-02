@@ -144,9 +144,11 @@ pub(crate) enum SessionOperator {
 /// empty `park`/`complete`/`drop`, so version-tolerant readers see only
 /// additive fields.
 ///
-/// Work Log bullets (`- <n> <text>` child lines under `=x[<N>][*<P>]`)
-/// append `log` entries: each names a numbered Task Link plus the literal
-/// entry text and its nested details, in typed order. The text is final; the
+/// Work Log bullets (`- [<n>] <text>` child lines under
+/// `=x[<N>][*<P>][!<M>][~<K>]`) append `log` entries: each names a
+/// numbered Task Link plus the literal entry text and its nested details,
+/// in typed order. Bullets are numbered all or none; unnumbered bullets
+/// log in order to the close's worked tasks. The text is final; the
 /// grammar phase fills it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
@@ -178,8 +180,12 @@ pub(crate) struct PomodoroCloseSpec {
 /// plus the literal, unescaped entry text and its nested detail lines.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CloseLogEntry {
-    /// Numbered Task Link the entry is logged under.
-    pub(crate) index: u32,
+    /// Numbered Task Link the entry is logged under. `None` means an
+    /// unnumbered bullet under a close without `<N>`/`*<P>`, which
+    /// `bob capture` resolves against the running session; omitted from
+    /// JSON so `capture-parse` leaves it out until execution fills it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) index: Option<u32>,
     /// Literal entry text, unescaped and final.
     pub(crate) text: String,
     /// Nested detail lines under the entry, in typed order; each is
@@ -200,6 +206,10 @@ pub(crate) enum CloseLogOrigin {
     /// A `- <n> <text>` child bullet.
     #[default]
     Bullet,
+    /// An unnumbered `- <text>` child bullet. `position` is the 1-based
+    /// typed position among the close's entries; the task number comes
+    /// from positional assignment, not from the bullet.
+    PositionalBullet { position: u32 },
     /// The close line's own text (`=x wired the lexer`). `close_token` is
     /// the typed close token (`=x`, `=x1,3,4`); `explicit` is true when the
     /// entry typed its number; `default_index` is the lexical default used

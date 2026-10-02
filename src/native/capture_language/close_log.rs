@@ -8,13 +8,30 @@
 //!
 //! A whole-item close (`=x`/`=X` plus an optional selection, alone on its
 //! parent line) takes Work Log bullets as its child lines, using exactly the
-//! authored-bullet line rules. A first-level bullet is an entry: its first
-//! whitespace-separated token is the task number and everything after it is
-//! the entry text. A two-space nested bullet is a detail of the nearest
-//! preceding entry and its text is entirely literal. Loggability is purely
-//! lexical: with `<N>` typed (including `=x0`) only the numbers in `<N>` or
-//! `!<M>` start entries, otherwise every number `>= 1` starts one except
-//! those in `~<K>`. Every backslash is literal.
+//! authored-bullet line rules. A first-level bullet is numbered when its
+//! first whitespace-separated token is all ASCII digits; a leading number is
+//! always the task number, so `- 2 bugs fixed` names task 2 and text that
+//! starts with a number must number every bullet. Every other first-level
+//! bullet is unnumbered and its whole body is entry text. Bullets are
+//! numbered all or none: the first first-level bullet (placeholder rows
+//! skipped) fixes the list's kind, a later bullet of the other kind fails,
+//! and dangling bullets (`- 1`) only occur in numbered lists.
+//!
+//! Unnumbered bullets log in order to the close's worked tasks `W`: in
+//! selection mode (`<N>` typed, including `=x0`, or a non-empty `*<P>`)
+//! `W` is the lexical `sorted(<N> ∪ *<P> ∪ !<M>)` and positions resolve
+//! here; otherwise positions stay `None` for `bob capture` to resolve
+//! against the running session. The assignment rule
+//! ([`assign_log_positions`]) is: no worked task is an error, one worked
+//! task takes every bullet, otherwise bullet `i` logs to `W[i]`, and more
+//! bullets than worked tasks is an error.
+//!
+//! A two-space nested bullet is a detail of the nearest preceding entry,
+//! numbered or not, and its text is entirely literal. Loggability of
+//! numbered bullets is purely lexical: with `<N>` typed (including `=x0`)
+//! or `*<P>` present only the numbers in `<N>`, `*<P>`, or `!<M>` start
+//! entries, otherwise every number `>= 1` starts one except those in
+//! `~<K>`. Every backslash is literal.
 
 use super::close_selection::*;
 use super::draft::*;
@@ -28,13 +45,15 @@ use crate::native::capture_pomodoro_close::wikilink_tokens;
 /// One lexed Work Log entry: the numbered Task Link plus its literal text,
 /// its nested detail lines, and the absolute byte ranges of the index token,
 /// the entry text (first text token start through last text token end), and
-/// each detail (first token start through last token end).
+/// each detail (first token start through last token end). Unnumbered
+/// bullets report `index: None` (positional, resolved at execution when the
+/// close names no selection) and `index_range: None` (no index span).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CloseLogEntryLex {
-    pub(crate) index: u32,
+    pub(crate) index: Option<u32>,
     pub(crate) text: String,
     pub(crate) details: Vec<String>,
-    pub(crate) index_range: (usize, usize),
+    pub(crate) index_range: Option<(usize, usize)>,
     pub(crate) text_range: (usize, usize),
     pub(crate) detail_ranges: Vec<(usize, usize)>,
 }
@@ -260,6 +279,99 @@ fn not_worked_suggestions(
         }
         None => (format!("=x{index}"), format!("=x!{index}")),
     }
+}
+
+/// Failure to assign unnumbered Work Log bullets to worked tasks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PositionalLogError {
+    /// The close works no task, so no bullet has one to log to.
+    NoWorkedTask,
+    /// More bullets than worked tasks: `worked` is the worked-task count.
+    TooManyBullets { worked: usize },
+}
+
+/// Assign `count` unnumbered Work Log bullets in typed order to `worked`
+/// (ascending task numbers). One worked task takes every bullet; otherwise
+/// bullet `i` logs to `worked[i]`, so a single bullet logs to the first
+/// worked task. Shared by the lexer (lexical `worked`) and the runtime
+/// (session `worked`).
+pub(crate) fn assign_log_positions(
+    worked: &[u32],
+    count: usize,
+) -> Result<Vec<u32>, PositionalLogError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if worked.is_empty() {
+        return Err(PositionalLogError::NoWorkedTask);
+    }
+    if worked.len() == 1 {
+        return Ok(vec![worked[0]; count]);
+    }
+    if count <= worked.len() {
+        return Ok(worked[..count].to_vec());
+    }
+    Err(PositionalLogError::TooManyBullets {
+        worked: worked.len(),
+    })
+}
+
+/// The close's lexical worked tasks `W = sorted(<N> ∪ *<P> ∪ !<M>)` when a
+/// selection is active (`<N>` typed, including `=x0`, or a non-empty
+/// `*<P>`); `None` otherwise, when positions resolve against the running
+/// session at execution.
+pub(crate) fn lexical_worked_tasks(
+    in_progress: Option<&[u32]>,
+    park: &[u32],
+    complete: &[u32],
+) -> Option<Vec<u32>> {
+    if in_progress.is_none() && park.is_empty() {
+        return None;
+    }
+    let mut worked: Vec<u32> = in_progress
+        .iter()
+        .flat_map(|list| list.iter())
+        .chain(park.iter())
+        .chain(complete.iter())
+        .copied()
+        .collect();
+    worked.sort_unstable();
+    worked.dedup();
+    Some(worked)
+}
+
+/// `true` when the bullet's first token is all ASCII digits, making it a
+/// numbered bullet whose leading number is always a task number (`0`,
+/// `007`, and overflow still report the index errors).
+fn is_numbered_bullet_token(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// `true` when the close item's first first-level child bullet is
+/// unnumbered. Placeholder rows are skipped; anything else (no children,
+/// an invalid line, a nested-first list) reports `false`. The
+/// inline-mixing suggestion uses it to avoid proposing a numbered bullet
+/// that would itself fail as mixed numbering.
+pub(crate) fn close_first_bullet_is_unnumbered(
+    child_lines: &[ItemLine<'_>],
+) -> bool {
+    for line in child_lines {
+        match classify_authored_line(line.raw) {
+            AuthoredLineClass::EmptyOrPlaceholder => continue,
+            AuthoredLineClass::Invalid => return false,
+            AuthoredLineClass::Item(authored) => {
+                if authored.depth != AuthoredDepth::First {
+                    return false;
+                }
+                let tokens = body_tokens(authored.body, authored.body_start);
+                let Some(first) = tokens.first() else {
+                    return false;
+                };
+                return !is_numbered_bullet_token(first.text);
+            }
+        }
+    }
+    false
 }
 
 /// Tokenize a bullet body with absolute byte ranges. `body` is the text after
@@ -673,7 +785,8 @@ pub(crate) fn lex_close_inline_entry(
 ///
 /// Placeholder rows are skipped. Invalid and orphaned lines report the
 /// existing authored-bullet messages. Bullets are checked top to bottom and
-/// the first error wins; any error outranks a dangling bullet.
+/// the first error wins, including the two mixed-numbering errors; any
+/// error outranks a dangling bullet.
 pub(crate) fn lex_close_log_bullets(
     child_lines: &[ItemLine<'_>],
     close_token: &str,
@@ -691,6 +804,10 @@ pub(crate) fn lex_close_log_bullets(
     // the spec holds only complete entries.
     let mut seen_first_level = false;
     let mut last_entry: Option<Option<usize>> = None;
+    // All or none: the first first-level bullet fixes the list's kind
+    // (`true` = numbered). Unnumbered bullets never dangle: their whole
+    // body is entry text, even a lone `- foo`.
+    let mut numbered_list: Option<bool> = None;
 
     for line in child_lines {
         let authored = match classify_authored_line(line.raw) {
@@ -744,24 +861,61 @@ pub(crate) fn lex_close_log_bullets(
             }
             continue;
         }
-        // First-level bullet: the first token must be a task number.
+        // First-level bullet: all or none. The first one fixes the kind;
+        // a later bullet of the other kind fails before any index or
+        // loggability check on that bullet.
         seen_first_level = true;
         let first = &tokens[0];
-        if first.text.is_empty()
-            || !first.text.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            let normalized = normalize_task_text(authored.body);
-            let smallest = default_log_index(in_progress, park, complete, drop)
-                .unwrap_or(1);
-            let example = if normalized.is_empty() {
-                format!("- {smallest}")
-            } else {
-                format!("- {smallest} {normalized}")
-            };
-            return Err(CloseLogError {
-                message: close_log_missing_number_error(&example),
-                range: (first.start, first.end),
+        let numbered = is_numbered_bullet_token(first.text);
+        match numbered_list {
+            Some(kind) if kind != numbered => {
+                if kind {
+                    let normalized = normalize_task_text(authored.body);
+                    let smallest =
+                        default_log_index(in_progress, park, complete, drop)
+                            .unwrap_or(1);
+                    let example = if normalized.is_empty() {
+                        format!("- {smallest}")
+                    } else {
+                        format!("- {smallest} {normalized}")
+                    };
+                    return Err(CloseLogError {
+                        message: close_log_missing_number_error(&example),
+                        range: (first.start, first.end),
+                    });
+                }
+                let default =
+                    default_log_index(in_progress, park, complete, drop)
+                        .unwrap_or(1);
+                let body = normalize_task_text(authored.body);
+                let suggestion = format!("- {default} {body}");
+                return Err(CloseLogError {
+                    message: close_log_mixed_number_error(
+                        first.text,
+                        &suggestion,
+                    ),
+                    range: (first.start, first.end),
+                });
+            }
+            _ => {}
+        }
+        numbered_list = Some(numbered);
+        if !numbered {
+            let text = check_bullet_text(&tokens)?;
+            let text_range = (
+                first.start,
+                tokens.last().map(|token| token.end).unwrap_or(first.end),
+            );
+            entries.push(CloseLogEntryLex {
+                index: None,
+                text,
+                details: Vec::new(),
+                index_range: None,
+                text_range,
+                detail_ranges: Vec::new(),
             });
+            last_entry = Some(Some(entries.len() - 1));
+            continue;
         }
         let index = parse_bullet_index(first)?;
         check_index_loggable(
@@ -787,30 +941,91 @@ pub(crate) fn lex_close_log_bullets(
             tokens.last().map(|token| token.end).unwrap_or(first.end),
         );
         entries.push(CloseLogEntryLex {
-            index,
+            index: Some(index),
             text,
             details: Vec::new(),
-            index_range: (first.start, first.end),
+            index_range: Some((first.start, first.end)),
             text_range,
             detail_ranges: Vec::new(),
         });
         last_entry = Some(Some(entries.len() - 1));
     }
 
+    // An unnumbered list resolves positions lexically in selection mode;
+    // otherwise every index stays `None` for execution to resolve against
+    // the running session.
+    if numbered_list == Some(false)
+        && !entries.is_empty()
+        && let Some(worked) = lexical_worked_tasks(in_progress, park, complete)
+    {
+        match assign_log_positions(&worked, entries.len()) {
+            Ok(resolved) => {
+                for (entry, index) in entries.iter_mut().zip(resolved) {
+                    entry.index = Some(index);
+                }
+            }
+            Err(PositionalLogError::NoWorkedTask) => {
+                let (listed, completed) = not_worked_suggestions(
+                    1,
+                    in_progress,
+                    park,
+                    complete,
+                    drop,
+                );
+                let range = entries
+                    .first()
+                    .map(|entry| entry.text_range)
+                    .unwrap_or((0, 0));
+                return Err(CloseLogError {
+                    message: close_log_positional_none_error(
+                        close_token,
+                        &listed,
+                        &completed,
+                    ),
+                    range,
+                });
+            }
+            Err(PositionalLogError::TooManyBullets { .. }) => {
+                let excess = &entries[worked.len()];
+                let suggestion = format!("- {} {}", worked[0], excess.text);
+                return Err(CloseLogError {
+                    message: close_log_positional_too_many_error(
+                        close_token,
+                        &worked,
+                        entries.len(),
+                        &suggestion,
+                    ),
+                    range: excess.text_range,
+                });
+            }
+        }
+    }
+
     Ok(CloseLogLexed { entries, dangling })
 }
 
 /// Convert lexed entries into the execution/editor model entries.
+/// Numbered entries use [`CloseLogOrigin::Bullet`]; unnumbered entries use
+/// [`CloseLogOrigin::PositionalBullet`] with their 1-based typed position.
 pub(crate) fn log_entries_from_lex(
     entries: &[CloseLogEntryLex],
 ) -> Vec<CloseLogEntry> {
     entries
         .iter()
-        .map(|entry| CloseLogEntry {
-            index: entry.index,
-            text: entry.text.clone(),
-            details: entry.details.clone(),
-            origin: CloseLogOrigin::Bullet,
+        .enumerate()
+        .map(|(ordinal, entry)| {
+            let origin = match entry.index {
+                Some(_) => CloseLogOrigin::Bullet,
+                None => CloseLogOrigin::PositionalBullet {
+                    position: ordinal as u32 + 1,
+                },
+            };
+            CloseLogEntry {
+                index: entry.index,
+                text: entry.text.clone(),
+                details: entry.details.clone(),
+                origin,
+            }
         })
         .collect()
 }
@@ -830,7 +1045,7 @@ pub(crate) fn log_entry_from_inline(
             text,
             ..
         } => CloseLogEntry {
-            index: *index,
+            index: Some(*index),
             text: text.clone(),
             details: Vec::new(),
             origin: CloseLogOrigin::Inline {
@@ -893,7 +1108,7 @@ mod tests {
     fn valid_entries(
         close: &str,
         draft: &str,
-    ) -> Vec<(u32, String, Vec<String>)> {
+    ) -> Vec<(Option<u32>, String, Vec<String>)> {
         match lex_bullets(close, draft).expect("valid bullets") {
             CloseLogLexed { entries, dangling } => {
                 assert!(dangling.is_empty(), "unexpected dangling");
@@ -909,47 +1124,53 @@ mod tests {
     fn lexes_entries_and_details() {
         assert_eq!(
             valid_entries("=x", "=x\n- 1 wired the lexer"),
-            vec![(1, "wired the lexer".to_string(), Vec::new())]
+            vec![(Some(1), "wired the lexer".to_string(), Vec::new())]
         );
         assert_eq!(
             valid_entries("=x1,2", "=x1,2\n- 1 wired the lexer\n  - chose a hand-rolled lexer\n- 2 sketched the URL parser"),
             vec![
                 (
-                    1,
+                    Some(1),
                     "wired the lexer".to_string(),
                     vec!["chose a hand-rolled lexer".to_string()]
                 ),
-                (2, "sketched the URL parser".to_string(), Vec::new()),
+                (Some(2), "sketched the URL parser".to_string(), Vec::new()),
             ]
         );
         // Only the first token is an index: later numbers stay text.
         assert_eq!(
             valid_entries("=x1", "=x1\n- 1 fixed 3 bugs"),
-            vec![(1, "fixed 3 bugs".to_string(), Vec::new())]
+            vec![(Some(1), "fixed 3 bugs".to_string(), Vec::new())]
         );
         // Markers stay literal in bullets.
         assert_eq!(
             valid_entries("=x", "=x\n- 1 moved @@inbox s:3"),
-            vec![(1, "moved @@inbox s:3".to_string(), Vec::new())]
+            vec![(Some(1), "moved @@inbox s:3".to_string(), Vec::new())]
         );
         // Backslashes stay literal: no escape.
         assert_eq!(
             valid_entries("=x", "=x\n- 1 fixed \\3 bugs"),
-            vec![(1, "fixed \\3 bugs".to_string(), Vec::new())]
+            vec![(Some(1), "fixed \\3 bugs".to_string(), Vec::new())]
         );
         // Placeholders are skipped.
         assert_eq!(
             valid_entries("=x", "=x\n- 1 wired the lexer\n- "),
-            vec![(1, "wired the lexer".to_string(), Vec::new())]
+            vec![(Some(1), "wired the lexer".to_string(), Vec::new())]
         );
     }
 
     #[test]
     fn rejects_bad_bullets() {
-        let missing = lex_bullets("=x", "=x\n- wired the lexer")
+        // A numbered list rejects a later unnumbered bullet.
+        let missing = lex_bullets("=x", "=x\n- 1 ok\n- wired the lexer")
             .expect_err("missing number");
         assert!(
             missing.message.contains("start each Work Log bullet"),
+            "{}",
+            missing.message
+        );
+        assert!(
+            missing.message.contains("numbered all or none"),
             "{}",
             missing.message
         );
@@ -1064,7 +1285,8 @@ mod tests {
             );
         }
         // The bullet missing-number example now follows drops too.
-        match lex_bullets("=x~1", "=x~1\n- wired").expect_err("missing") {
+        match lex_bullets("=x~1", "=x~1\n- 2 ok\n- wired").expect_err("missing")
+        {
             error => assert!(
                 error.message.contains("- 2 wired"),
                 "{}",
@@ -1193,5 +1415,228 @@ mod tests {
         // Loggability wins over dangling, as for bullets.
         let bad = lex_inline("=x1", "2").expect_err("not worked");
         assert!(bad.message.contains("isn't worked by"), "{}", bad.message);
+    }
+
+    fn positional_entries(close: &str, draft: &str) -> Vec<CloseLogEntryLex> {
+        let CloseLogLexed { entries, dangling } =
+            lex_bullets(close, draft).expect("valid bullets");
+        assert!(dangling.is_empty(), "unexpected dangling");
+        entries
+    }
+
+    #[test]
+    fn unnumbered_bullets_resolve_positionally_in_selection_mode() {
+        // The user's example: identical to the numbered form, with no
+        // index ranges.
+        let entries =
+            positional_entries("=x3,4", "=x3,4\n- foo bar\n- baz bam");
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.index, entry.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(Some(3), "foo bar"), (Some(4), "baz bam"),]
+        );
+        assert!(
+            entries.iter().all(|entry| entry.index_range.is_none()),
+            "no index spans"
+        );
+        // A single worked task takes every bullet.
+        assert_eq!(
+            positional_entries("=x2", "=x2\n- a\n- b")
+                .iter()
+                .map(|entry| entry.index)
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(2)]
+        );
+        // Unions resolve in ascending order.
+        assert_eq!(
+            positional_entries("=x1!3", "=x1!3\n- a\n- b")
+                .iter()
+                .map(|entry| entry.index)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(3)]
+        );
+        assert_eq!(
+            positional_entries("=x1*2", "=x1*2\n- a\n- b")
+                .iter()
+                .map(|entry| entry.index)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+        // A single bullet logs to the first worked task.
+        assert_eq!(
+            positional_entries("=x3,4", "=x3,4\n- a")
+                .iter()
+                .map(|entry| entry.index)
+                .collect::<Vec<_>>(),
+            vec![Some(3)]
+        );
+        // Details attach to positional entries.
+        let entries = positional_entries(
+            "=x1,2",
+            "=x1,2\n- foo\n  - chose a lexer\n- bar",
+        );
+        assert_eq!(entries[0].index, Some(1));
+        assert_eq!(entries[0].details, vec!["chose a lexer".to_string()]);
+        assert_eq!(entries[1].index, Some(2));
+        // A lone leading number is always a task number.
+        let entries = positional_entries("=x", "=x\n- 2 bugs fixed");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].index, Some(2));
+        assert_eq!(entries[0].text, "bugs fixed");
+    }
+
+    #[test]
+    fn unnumbered_bullets_stay_unresolved_without_a_selection() {
+        // Plain `=x`, `=x!2`, and `=x~2` leave positions for execution.
+        for close in ["=x", "=x!2", "=x~2"] {
+            let entries = positional_entries(close, &format!("{close}\n- foo"));
+            assert_eq!(entries.len(), 1, "{close}");
+            assert_eq!(entries[0].index, None, "{close}");
+            assert_eq!(entries[0].index_range, None, "{close}");
+            assert_eq!(entries[0].text, "foo", "{close}");
+        }
+    }
+
+    #[test]
+    fn unnumbered_bullets_report_lexical_failures() {
+        // Too many: the message names the close, the counts, and the fix;
+        // the range covers the first excess bullet's text.
+        let too_many =
+            lex_bullets("=x3,4", "=x3,4\n- a\n- b\n- c").expect_err("too many");
+        assert!(
+            too_many.message.contains(
+                "`=x3,4` works 2 tasks (3 and 4) but has 3 unnumbered Work Log bullets"
+            ),
+            "{}",
+            too_many.message
+        );
+        assert!(too_many.message.contains("`- 3 c`"), "{}", too_many.message);
+        assert_eq!(too_many.range, (16, 17));
+        // None: `=x0` works no task.
+        let none = lex_bullets("=x0", "=x0\n- a").expect_err("no worked task");
+        assert!(
+            none.message.contains(
+                "`=x0` works no task, so its Work Log bullets have none to log to"
+            ),
+            "{}",
+            none.message
+        );
+        assert!(none.message.contains("`=x1`"), "{}", none.message);
+        assert!(none.message.contains("`=x0!1`"), "{}", none.message);
+        assert_eq!(none.range, (6, 7));
+    }
+
+    #[test]
+    fn mixed_numbering_fails_both_orders() {
+        // Numbered list, later unnumbered bullet: the missing-number error
+        // with the all-or-none rule.
+        let missing = lex_bullets("=x", "=x\n- 1 a\n- b").expect_err("missing");
+        assert!(
+            missing.message.contains("start each Work Log bullet"),
+            "{}",
+            missing.message
+        );
+        assert!(
+            missing.message.contains("numbered all or none"),
+            "{}",
+            missing.message
+        );
+        assert_eq!(missing.range, (11, 12));
+        // Unnumbered list, later numbered bullet: the mixed-numbering
+        // error on the index token, before any index or loggability check.
+        let mixed = lex_bullets("=x", "=x\n- a\n- 2 b").expect_err("mixed");
+        assert!(
+            mixed.message.contains("numbered all or none"),
+            "{}",
+            mixed.message
+        );
+        assert!(
+            mixed.message.contains("to log text that starts with `2`"),
+            "{}",
+            mixed.message
+        );
+        assert!(mixed.message.contains("`- 1 2 b`"), "{}", mixed.message);
+        assert_eq!(mixed.range, (9, 10));
+        // The mixed check wins over a bad number on that bullet.
+        let zero = lex_bullets("=x", "=x\n- a\n- 0 b").expect_err("mixed zero");
+        assert!(
+            zero.message.contains("numbered all or none"),
+            "{}",
+            zero.message
+        );
+    }
+
+    #[test]
+    fn positional_entries_carry_their_typed_position() {
+        let lexed =
+            lex_bullets("=x", "=x\n- foo\n- bar").expect("valid bullets");
+        let entries = log_entries_from_lex(&lexed.entries);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.index, entry.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(None, "foo"), (None, "bar")]
+        );
+        assert_eq!(
+            entries[0].origin,
+            CloseLogOrigin::PositionalBullet { position: 1 }
+        );
+        assert_eq!(
+            entries[1].origin,
+            CloseLogOrigin::PositionalBullet { position: 2 }
+        );
+        // Numbered entries keep the bullet origin.
+        let lexed = lex_bullets("=x1,2", "=x1,2\n- 1 foo\n- 2 bar")
+            .expect("valid bullets");
+        let entries = log_entries_from_lex(&lexed.entries);
+        assert_eq!(entries[0].origin, CloseLogOrigin::Bullet);
+        assert_eq!(
+            entries.iter().map(|entry| entry.index).collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn assign_log_positions_follows_the_assignment_rule() {
+        use super::PositionalLogError;
+        assert_eq!(assign_log_positions(&[], 0), Ok(vec![]));
+        assert_eq!(
+            assign_log_positions(&[], 2),
+            Err(PositionalLogError::NoWorkedTask)
+        );
+        assert_eq!(assign_log_positions(&[2], 2), Ok(vec![2, 2]));
+        assert_eq!(assign_log_positions(&[1, 3], 2), Ok(vec![1, 3]));
+        assert_eq!(assign_log_positions(&[1, 2], 1), Ok(vec![1]));
+        assert_eq!(assign_log_positions(&[3, 4], 2), Ok(vec![3, 4]));
+        assert_eq!(
+            assign_log_positions(&[3, 4], 3),
+            Err(PositionalLogError::TooManyBullets { worked: 2 })
+        );
+        assert_eq!(assign_log_positions(&[1, 2, 3], 3), Ok(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn first_bullet_kind_detection_skips_placeholders() {
+        use super::super::draft::split_physical_lines;
+        use super::super::model::ItemLine;
+        fn child_lines(draft: &str) -> Vec<ItemLine<'_>> {
+            split_physical_lines(draft)
+                .into_iter()
+                .enumerate()
+                .map(|(index, raw)| ItemLine {
+                    raw,
+                    line_number: index + 1,
+                })
+                .collect()
+        }
+        let lines = child_lines("=x\n- \n- foo");
+        assert!(close_first_bullet_is_unnumbered(&lines[1..]));
+        let lines = child_lines("=x\n- \n- 1 foo");
+        assert!(!close_first_bullet_is_unnumbered(&lines[1..]));
+        let lines = child_lines("=x");
+        assert!(!close_first_bullet_is_unnumbered(&lines[1..]));
     }
 }

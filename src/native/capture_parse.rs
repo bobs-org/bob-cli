@@ -161,17 +161,21 @@ mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
 any order; `=*`/`=!` omit `x` before an initial `*`/`!`) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` exactly as typed plus the additive `in_progress` list, null when no `<N>` was typed, \
 the `park` list, the `complete` list, the `drop` list, and the `log` entries (`index`, \
-`text`, `details`) in typed order; a present-but-empty `*`/`!` group means task 1) \
+`text`, `details`) in typed order (`index` is omitted for unnumbered bullets under a close \
+without `<N>`/`*<P>`, which `bob capture` resolves against the running session); \
+a present-but-empty `*`/`!` group means task 1) \
 and spans covering the `=`/`=x` token (`pomodoro_close`), the `<N>` list \
 including its commas (`pomodoro_close_in_progress`), the `*<P>` list \
 including the `*` (`pomodoro_close_park`), the `!<M>` list \
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including \
-the `~` (`pomodoro_close_drop`), and each entry index \
-(`pomodoro_close_log_index`; entry text renders as neutral prose but keeps \
+the `~` (`pomodoro_close_drop`), and each numbered entry index \
+(`pomodoro_close_log_index`; positional entries get no index span, and entry text \
+renders as neutral prose but keeps \
 its wikilink spans); the human `close` line reads \
 `=x1*2!3~4 (in progress 1 · parked 2 · complete 3 · drop 4 · defer the rest)`, with \
 `in progress none` for `=x0`, `parked 2 · defer the rest` for `=x*2`, `=* (parked 1 · defer the rest)` and `=! (complete 1)`, a bare `=x` for a plain close, and \
-`log 2 'wired the lexer' (+1 detail)` for typed entries with details. \
+`log 2 'wired the lexer' (+1 detail)` for typed entries with details \
+(`log 'wired the lexer'` with no number for entries resolved at execution). \
 One entry may sit on the close line itself (`bob capture-parse -f json -- \
 '=x wired it'`): it logs to the first task the close works, or to the \
 leading number when one is typed. The item `body` stays the close token \
@@ -181,14 +185,18 @@ while the default gets none, and entry text keeps its wikilink spans. A \
 dangling inline number (`bob capture-parse -f json -- '=x 2'`) reports mode \
 'incomplete' needing `pomodoro_close_log_text` with the partial spec and an \
 `interactive_placeholder` span over the number instead of its index span. \
-Several entries still use child bullets below the close (`- <n> <text>`, with \
-two-space `  - <detail>` details nesting under their entry); only the \
+Several entries still use child bullets below the close (`- [<n>] <text>`, with \
+two-space `  - <detail>` details nesting under their entry): bullets are numbered \
+all or none, and unnumbered bullets log in order to the close's worked tasks \
+(one worked task takes them all, otherwise bullet `i` logs to worked task `i`); \
+a leading number is always a task number, so `- 2 bugs fixed` names task 2. Only the \
 first token is an index and every backslash stays literal. A \
 dangling bullet (`- 1`) reports mode 'incomplete' needing \
 `pomodoro_close_log_text` with the partial spec (lists plus every complete \
 entry with its details), the spans typed so far, and one \
 `interactive_placeholder` span over each dangling number instead of its \
-index span. A bullet with no number, a non-loggable index, a bad number, a \
+index span. A mixed-numbering bullet, too many unnumbered bullets, a close \
+that works no task, a non-loggable index, a bad number, a \
 block link, or a fence reports 'pomodoro_close' plus an \
 `invalid_pomodoro_close` diagnostic on the precise range, and so does a bad \
 inline entry (stray marker, misplaced operators, no-spaces join, Task Link \
@@ -775,7 +783,8 @@ fn unit_noun(units: u64) -> &'static str {
 /// `<N>` list always ends with `defer the rest`, and `=x0` reads
 /// `in progress none`. Typed Work Log entries render as
 /// `log 2 "wired the lexer"`, one per entry in typed order, each followed
-/// by `(+N detail)`/`(+N details)` when it carries details.
+/// by `(+N detail)`/`(+N details)` when it carries details. Entries whose
+/// index resolves at execution render as `log "text"`, with no number.
 fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
     let base = if close.raw.starts_with('=') {
         close.raw.clone()
@@ -789,7 +798,10 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
             .log
             .iter()
             .map(|entry| {
-                let head = format!("{} {:?}", entry.index, entry.text);
+                let head = match entry.index {
+                    Some(index) => format!("{index} {:?}", entry.text),
+                    None => format!("{:?}", entry.text),
+                };
                 if entry.details.is_empty() {
                     head
                 } else {
@@ -1503,19 +1515,19 @@ mod tests {
             drop: Vec::new(),
             log: vec![
                 CloseLogEntry {
-                    index: 1,
+                    index: Some(1),
                     text: "wired the lexer".to_string(),
                     details: vec!["chose a hand-rolled lexer".to_string()],
                     origin: Default::default(),
                 },
                 CloseLogEntry {
-                    index: 2,
+                    index: Some(2),
                     text: "sketched the parser".to_string(),
                     details: vec!["a".to_string(), "b".to_string()],
                     origin: Default::default(),
                 },
                 CloseLogEntry {
-                    index: 1,
+                    index: Some(1),
                     text: "opened the PR".to_string(),
                     details: Vec::new(),
                     origin: Default::default(),

@@ -77,7 +77,7 @@ anything is written, and any failure rolls the whole batch back.
 | `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`, `=3#bugs~1,3`); `~` drops, the drop part always comes last, and the item must contain only the start token |
 | `=x[<N>][*<P>][!<M>][~<K>]` (also `=*…`/`=!…` omitting `x`) | Close today's running timed Pomodoro (case-insensitive `=X`, with `*`, `!`, and `~` in any order); `<N>` keeps only those numbered Task Links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; a present-but-empty `*`/`!` group means task 1 (`=*` parks 1, `=!` completes 1); one Work Log entry may sit on the close line, several use child bullets |
 | `=x [<n>] <entry text…>` | One entry on the close line: with no number it logs to the first task the close works (task 1 for plain `=x`); a leading number names the task, so only the first token is an index (`=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1) |
-| `=x` + `- <n> <text>` (+ `  - <detail>`) | Several entries while closing: each first-level bullet logs its text to worked task `<n>`, and a two-space bullet nests an undated detail under its entry; an inline entry plus bullets fails |
+| `=x` + `- [<n>] <text>` (+ `  - <detail>`) | Several entries while closing: bullets are numbered all or none — a numbered bullet logs its text to worked task `<n>`, while unnumbered bullets log in order to the close's worked tasks (one worked task takes them all, otherwise bullet `i` logs to worked task `i`); a two-space bullet nests an undated detail under its entry; an inline entry plus bullets fails |
 | `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; an inline entry sits right after its close with operators trailing (`=x wired the lexer =` closes with the entry then starts); `=x =~2` closes then starts without link 2 of the next lineup, while `=x~2 =` drops link 2 of the running session and then starts |
 | `=x =` + `- 1 wired the lexer` | Close with a Work Log bullet in a chain: the child lines attach to the line's `=x`, so this logs the entry then starts the next session |
 | `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it; the same selection may follow the `x` and numbers refer to the post-link lineup |
@@ -140,7 +140,10 @@ anything is written, and any failure rolls the whole batch back.
 | `=x more` | Close with the entry `more` on task 1, exactly like `=x` plus `- 1 more` |
 | `=x2,3 2 foo bar baz` | Close with the entry `foo bar baz` on task 2; `=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1 |
 | `=x 1` | Incomplete: `` `=x 1` is incomplete: type the Work Log text after task 1 `` (`capture-parse` needs `pomodoro_close_log_text`); `=x1` keeps only task 1 in progress |
-| `=x` + `- wired the lexer` | Error: start each Work Log bullet with the number of the task it logs to |
+| `=x3,4` + `- foo bar` + `- baz bam` | Close with `foo bar` on task 3 and `baz bam` on task 4, exactly like `- 3 foo bar` plus `- 4 baz bam` |
+| `=x` + `- 1 a` + `- b` | Error: bullets are numbered all or none (``start each Work Log bullet with the number of the task it logs to; bullets are numbered all or none: `- 1 b` ``) |
+| `=x` + `- a` + `- 2 b` | Error: ``Work Log bullets are numbered all or none, and the first one has no task number; to log text that starts with `2`, number every bullet: `- 1 2 b` `` |
+| `=x3,4` + `- a` + `- b` + `- c` | Error: `` `=x3,4` works 2 tasks (3 and 4) but has 3 unnumbered Work Log bullets; start each bullet with the number of the task it logs to: `- 3 c` `` |
 | `=x` + `- ` | Plain `=x`; the placeholder row is ignored |
 | `=x` + `- 1` | Incomplete: `` `- 1` is incomplete: type the Work Log text after task 1 `` (`capture-parse` needs `pomodoro_close_log_text`) |
 | `+2 =x` | Extend by 10 minutes, then close; exactly like `+2`, blank line, `=x` |
@@ -1340,6 +1343,8 @@ Field notes:
 - `pomodoro_close.log` is the typed Work Log entries in typed order
   (bullets or the one inline entry;
   `[{ "index": 2, "text": "wired the lexer" }]`), omitted when empty.
+  In `bob capture` JSON `index` is always the task the entry logged to,
+  including for unnumbered bullets, which execution resolves positionally.
   Each entry carries `details`, the nested detail lines typed under it
   (`[{ "index": 2, "text": "wired the lexer", "details": ["chose a hand-rolled lexer"] }]`),
   omitted when the entry has none.
@@ -1727,10 +1732,10 @@ A lone number (`=x 2`) is incomplete: `capture-parse` needs
 Log work as child bullets under a whole-item close:
 
 ```text
-=x[<N>][!<M>][~<K>]
-- <n> <entry text…>
+=x[<N>][*<P>][!<M>][~<K>]
+- [<n>] <entry text…>
   - <detail text…>
-- <m> <entry text…>
+- [<m>] <entry text…>
 ```
 
 ```bash
@@ -1745,18 +1750,40 @@ child lines, using exactly the authored-bullet rules: a first-level bullet
 sits at column 0, a nested one has exactly two spaces, the marker is `-`,
 `*`, or `+` plus a space or tab, marker-only rows are harmless
 placeholders, and bad indentation or orphaned nested bullets fail with the
-existing messages. A first-level bullet is a Work Log entry: its first
-whitespace-separated token is the task number `<n>`, and everything after it
-is the entry text. With `<N>` typed (including `=x0`) the loggable tasks are
-the numbers in `<N>` or `!<M>`; with no `<N>` every number ≥ 1 is loggable
-except those in `~<K>`. Loggability is lexical with no vault access, so
-`capture-parse` and `bob capture` agree. Only the first token is an index,
-so `- 1 fixed 3 bugs` logs `fixed 3 bugs` with no escape, and every
-backslash is literal. Entries keep typed order, and the same number may
-appear on several bullets, each a separate entry. A two-space nested bullet
-is a detail of the nearest preceding entry: it has no task number, so its
-text is entirely literal, and it becomes an undated sub-bullet under its
-dated entry in the task's Work Log (never counted in `+N Work Log`).
+existing messages. A first-level bullet is numbered when its first
+whitespace-separated token is all ASCII digits: the leading number is always
+the task number `<n>`, and everything after it is the entry text. Every
+other first-level bullet is unnumbered and its whole body is entry text.
+Bullets are numbered all or none: the first first-level bullet fixes the
+list's kind. With `<N>` typed (including `=x0`) or `*<P>` present the
+loggable tasks are the numbers in `<N>`, `*<P>`, or `!<M>`; with no `<N>` or
+`*<P>` every number ≥ 1 is loggable except those in `~<K>`. Numbered bullets
+and selection-mode positions are lexical with no vault access, so
+`capture-parse` and `bob capture` agree on them; positions under a close
+without `<N>`/`*<P>` resolve against the running session at execution.
+Only the first token is an index, so `- 1 fixed 3 bugs` logs `fixed 3 bugs`
+with no escape, and every backslash is literal. Entries keep typed order,
+and the same number may appear on several numbered bullets, each a separate
+entry. A two-space nested bullet is a detail of the nearest preceding
+entry, numbered or not: it has no task number, so its text is entirely
+literal, and it becomes an undated sub-bullet under its dated entry in the
+task's Work Log (never counted in `+N Work Log`).
+
+Unnumbered bullets log in order to the close's worked tasks `W`. In
+selection mode (`<N>` typed, including `=x0`, or a non-empty `*<P>`),
+`W` is the lexical `sorted(<N> ∪ *<P> ∪ !<M>)`; otherwise `W` is the running
+session's numbered Task Links whose outcome after the selection is in
+progress, parked, or complete and that sit at the session's top level
+(`[[T]]#` defers, `![[T]]` completes, nested links never take entries). One
+worked task takes every bullet; otherwise bullet `i` logs to `W[i]`, so a
+single bullet logs to the first worked task, matching the inline default.
+More bullets than worked tasks is an error, as is a close that works no
+task. For example `=x3,4` plus `- foo bar` plus `- baz bam` writes exactly
+what `- 3 foo bar` plus `- 4 baz bam` writes; `=x2` plus two bullets logs
+both to task 2; and plain `=x` plus `- wired the lexer` logs to the first
+worked top-level link. A leading number is always a task number (`- 2 bugs
+fixed` names task 2), so to log text that starts with a number, number every
+bullet (`- 3 2 bugs fixed`).
 
 Entry and detail text are literal and whitespace-normalized like every
 capture line: `@route`, `@@route`, `s:<N>`, `p:<N>`, `%`, `#`, and `:query`
@@ -1789,10 +1816,19 @@ its undated detail. Human output prints typed entries first, all of them,
 not dimmed, each followed by its details indented two more spaces; JSON
 reports `pomodoro_close.log`
 (`[{ "index": 2, "text": "wired the lexer", "details": ["chose a hand-rolled lexer"] }]`,
-`details` omitted when empty) and each row's `typed_work_log` subset plus
+`details` omitted when empty; in `bob capture` JSON `index` is always the
+task the entry logged to, including for unnumbered bullets) and each row's
+`typed_work_log` subset plus
 the aligned `typed_work_log_details`. Diagnostics (all
-`invalid_pomodoro_close`, nothing written): no task number
-(``start each Work Log bullet with the number of the task it logs to: `- 2 wired the lexer` ``),
+`invalid_pomodoro_close`, nothing written): mixed numbering
+(``start each Work Log bullet with the number of the task it logs to; bullets are numbered all or none: `- 1 b` ``
+for a numbered list with a later unnumbered bullet;
+``Work Log bullets are numbered all or none, and the first one has no task number; …``
+for an unnumbered list with a later numbered bullet),
+too many unnumbered bullets
+(`` `=x3,4` works 2 tasks (3 and 4) but has 3 unnumbered Work Log bullets; …`` lexically,
+or `` `=x` works 2 of CAPTURE's tasks (1 and 3) but has 3 unnumbered Work Log bullets; …``
+against the running session) and a close that works no task,
 a non-loggable index
 (``task 3 isn't worked by `=x2`; list it (`=x2,3`) or complete it (`=x2!3`) to log to it``;
 ``task 2 is dropped by `~2`, so it can't take a Work Log entry``;
@@ -2816,26 +2852,32 @@ starts either. A whole-item `=x[<N>][*<P>][!<M>][~<K>]` close
 `pomodoro_close` with a `pomodoro_close` object (`raw` plus the additive
 `in_progress` list, `null` when no `<N>` was typed, the `park` list,
 the `complete` list, the `drop` list, and the `log` entries (`index`, `text`, `details`) in
-typed order) and spans covering the `=x` token (`pomodoro_close`), the `<N>`
+typed order; `index` is omitted for unnumbered bullets under a close without
+`<N>`/`*<P>`, which `bob capture` resolves against the running session) and
+spans covering the `=x` token (`pomodoro_close`), the `<N>`
 list including its commas (`pomodoro_close_in_progress`), the `*<P>` list
 including the `*` (`pomodoro_close_park`), the `!<M>` list
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including the
-`~` (`pomodoro_close_drop`), and each entry index
-(`pomodoro_close_log_index`; entry and detail text render as neutral prose
+`~` (`pomodoro_close_drop`), and each numbered entry index
+(`pomodoro_close_log_index`; positional entries get no index span, and entry
+and detail text render as neutral prose
 but keep wikilink spans); the human `close` line reads
 ``=x1,3!2~4 (in progress 1, 3 · complete 2 · drop 4 · defer the rest)``, with
 `in progress none` for `=x0`, a bare `=x` for a plain close, and
-`log 2 "wired the lexer" (+1 detail)` for typed entries with details. One
-entry may sit on the close line (`=x wired it` logs to task 1 with `body`
+`log 2 "wired the lexer" (+1 detail)` for typed entries with details
+(`log "wired the lexer"` with no number for entries resolved at execution).
+One entry may sit on the close line (`=x wired it` logs to task 1 with `body`
 `=x` and an explicit number getting a `pomodoro_close_log_index` span while
 the default gets none); a dangling inline number (`=x 2`) reports mode
 `incomplete` needing `pomodoro_close_log_text` with the partial spec and a
 placeholder over the number. Several entries use child bullets below the
-close; a dangling bullet (`- 1`)
+close (`- [<n>] <text>`: bullets are numbered all or none, and unnumbered
+bullets log in order to the close's worked tasks); a dangling bullet (`- 1`)
 reports mode `incomplete` needing `pomodoro_close_log_text` with the partial
 spec (lists plus every complete entry with its details) and a placeholder
-over each dangling number instead of its index span, while a bad bullet (no
-number, a non-loggable index, a bad number, a block link, a fence) reports
+over each dangling number instead of its index span, while a bad bullet (mixed
+numbering, too many unnumbered bullets, a close that works no task,
+a non-loggable index, a bad number, a block link, a fence) reports
 `pomodoro_close` plus an `invalid_pomodoro_close` diagnostic on the precise
 range, as does a bad inline entry. Every malformed list (a
 duplicate, an overlap, a misplaced `0`, a second `!` or `~`, a bad

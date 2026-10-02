@@ -433,11 +433,16 @@ pub(super) fn build_close_summary_json(
         park: spec.park.clone(),
         complete: spec.complete.clone(),
         drop: spec.drop.clone(),
-        log: spec
+        log: plan
+            .summary
             .log
             .iter()
             .map(|entry| PomodoroCloseLogEntryJson {
-                index: entry.index,
+                // Entries resolve before the plan summary is built, so
+                // every index is `Some`, including for unnumbered bullets.
+                index: entry
+                    .index
+                    .expect("resolved close log entries carry an index"),
                 text: entry.text.clone(),
                 details: entry.details.clone(),
             })

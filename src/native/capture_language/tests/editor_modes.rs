@@ -1142,17 +1142,17 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
     let spec = shape.pomodoro_close.expect("=x more spec");
     assert_eq!(spec.raw, "=x", "=x more");
     assert_eq!(spec.log.len(), 1, "=x more");
-    assert_eq!(spec.log[0].index, 1, "=x more");
+    assert_eq!(spec.log[0].index, Some(1), "=x more");
     assert_eq!(spec.log[0].text, "more", "=x more");
+    // An unnumbered bullet is a valid close with a positional entry: no
+    // index span and no diagnostics.
     let child = editor("=x\n- child");
     assert_eq!(child.mode, EditorMode::PomodoroClose, "=x child");
-    assert_eq!(codes(&child), vec!["invalid_pomodoro_close"], "=x child");
-    assert!(
-        child.diagnostics[0]
-            .message
-            .starts_with("start each Work Log bullet"),
-        "=x child"
-    );
+    assert!(child.diagnostics.is_empty(), "=x child");
+    let child_spec = child.pomodoro_close.expect("=x child spec");
+    assert_eq!(child_spec.log.len(), 1, "=x child");
+    assert_eq!(child_spec.log[0].index, None, "=x child");
+    assert_eq!(child_spec.log[0].text, "child", "=x child");
     let named = editor("@r:id#n=x");
     assert_eq!(codes(&named), vec!["invalid_pomodoro_close"], "@r:id#n=x");
     assert_eq!(named.diagnostics[0].range, Some((5, 7)), "@r:id#n=x");

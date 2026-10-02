@@ -10,7 +10,9 @@ use super::super::{
         leading_spaces_or_tabs_len, line_spans, list_marker_len,
         nearest_shallower_list_item_parent,
     },
-    capture_language::{CloseLogEntry, CloseLogOrigin},
+    capture_language::{
+        assign_log_positions, CloseLogEntry, CloseLogOrigin, PositionalLogError,
+    },
     markdown,
 };
 use super::ledger::{sub_bullet_range, RunningPomodoro};
@@ -69,6 +71,9 @@ pub(crate) struct AppliedCloseSelection {
     pub contents: String,
     pub lineup: Vec<NumberedTaskLink>,
     pub inserted_lines: Vec<usize>,
+    /// Typed Work Log entries in typed order with every positional index
+    /// resolved, so downstream writers and JSON see real task numbers.
+    pub log: Vec<CloseLogEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +180,8 @@ pub(crate) enum CloseSelectionError {
     LogDropped {
         index: u32,
         block_link: String,
+        origin: CloseLogOrigin,
+        text: String,
     },
     LogNested {
         index: u32,
@@ -183,6 +190,22 @@ pub(crate) enum CloseSelectionError {
         origin: CloseLogOrigin,
         text: String,
         worked: Option<u32>,
+    },
+    /// Unnumbered bullets on a close that works no session task.
+    LogPositionalNone {
+        raw: String,
+        total: usize,
+        running_name: Option<String>,
+    },
+    /// More unnumbered bullets than session worked tasks. `worked` holds
+    /// the worked tasks in ascending order, `bullets` the bullet count,
+    /// and `first_text` the first bullet's text for the suggested fix.
+    LogPositionalTooMany {
+        raw: String,
+        worked: Vec<u32>,
+        bullets: usize,
+        running_name: Option<String>,
+        first_text: String,
     },
     LogLineupChanged,
 }
@@ -248,6 +271,12 @@ impl fmt::Display for CloseSelectionError {
                             "`- {index}` logs to task {index}, but {owner} has {range}"
                         )
                     }
+                    CloseLogOrigin::PositionalBullet { position } => {
+                        write!(
+                            f,
+                            "Work Log bullet {position} logs to task {index} by its position, but {owner} has {range}"
+                        )
+                    }
                     CloseLogOrigin::Inline {
                         close_token,
                         explicit,
@@ -298,6 +327,12 @@ impl fmt::Display for CloseSelectionError {
                             "task {index} `{block_link}` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
                         )
                 }
+                CloseLogOrigin::PositionalBullet { position } => {
+                    write!(
+                            f,
+                            "Work Log bullet {position} logs to task {index} by its position, but task {index} `{block_link}` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
+                        )
+                }
                 CloseLogOrigin::Inline {
                     close_token,
                     explicit,
@@ -321,12 +356,25 @@ impl fmt::Display for CloseSelectionError {
                     }
                 }
             },
-            Self::LogDropped { index, block_link } => {
-                write!(
-                    f,
-                    "task {index} `{block_link}` is dropped, so it can't take a Work Log entry"
-                )
-            }
+            Self::LogDropped {
+                index,
+                block_link,
+                origin,
+                ..
+            } => match origin {
+                CloseLogOrigin::PositionalBullet { position } => {
+                    write!(
+                        f,
+                        "Work Log bullet {position} logs to task {index} by its position, but task {index} `{block_link}` is dropped, so it can't take a Work Log entry"
+                    )
+                }
+                _ => {
+                    write!(
+                        f,
+                        "task {index} `{block_link}` is dropped, so it can't take a Work Log entry"
+                    )
+                }
+            },
             Self::LogNested {
                 index,
                 block_link,
@@ -341,6 +389,12 @@ impl fmt::Display for CloseSelectionError {
                         write!(
                             f,
                             "task {index} `{block_link}` is nested under another bullet, so the close can't write its Work Log; move it to the top level of {owner}"
+                        )
+                    }
+                    CloseLogOrigin::PositionalBullet { position } => {
+                        write!(
+                            f,
+                            "Work Log bullet {position} logs to task {index} by its position, but task {index} `{block_link}` is nested under another bullet, so the close can't write its Work Log; move it to the top level of {owner}"
                         )
                     }
                     CloseLogOrigin::Inline {
@@ -365,6 +419,53 @@ impl fmt::Display for CloseSelectionError {
                             )
                         }
                     }
+                }
+            }
+            Self::LogPositionalNone {
+                raw,
+                total,
+                running_name,
+            } => {
+                let owner = owner_name(running_name);
+                if *total == 0 {
+                    write!(
+                        f,
+                        "`{raw}` has Work Log bullets, but {owner} has no numbered Task Links to log them to"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "`{raw}` works none of {owner}'s top-level Task Links, so its Work Log bullets have none to log to; list one in `<N>` or `!<M>` to log to it"
+                    )
+                }
+            }
+            Self::LogPositionalTooMany {
+                raw,
+                worked,
+                bullets,
+                running_name,
+                first_text,
+            } => {
+                let owner = owner_name(running_name);
+                let first = worked.first().copied().unwrap_or(1);
+                let suggestion = if first_text.is_empty() {
+                    format!("- {first}")
+                } else {
+                    format!("- {first} {first_text}")
+                };
+                if worked.len() == 1 {
+                    write!(
+                        f,
+                        "`{raw}` works 1 of {owner}'s tasks ({}) but has {bullets} unnumbered Work Log bullets; start each bullet with the number of the task it logs to: `{suggestion}`",
+                        worked[0],
+                    )
+                } else {
+                    write!(
+                        f,
+                        "`{raw}` works {} of {owner}'s tasks ({}) but has {bullets} unnumbered Work Log bullets; start each bullet with the number of the task it logs to: `{suggestion}`",
+                        worked.len(),
+                        join_numbers(worked),
+                    )
                 }
             }
             Self::LogLineupChanged => {
@@ -712,12 +813,55 @@ pub(crate) fn apply_close_selection(
             contents: rebuilt,
             lineup,
             inserted_lines: Vec::new(),
+            log: Vec::new(),
         });
     }
-    validate_close_log_entries(contents, running, &lineup, selection)?;
+    // Unnumbered bullets (then all positional) resolve against the session's
+    // top-level worked links before validation and insertion.
+    let resolved_log: Vec<CloseLogEntry> =
+        if selection.log.iter().any(|entry| entry.index.is_none()) {
+            let spans = line_spans(contents);
+            let entry_index = running.line.saturating_sub(1);
+            let worked = top_level_worked_links(&lineup, &spans, entry_index);
+            match assign_log_positions(&worked, selection.log.len()) {
+                Ok(indices) => selection
+                    .log
+                    .iter()
+                    .zip(indices)
+                    .map(|(entry, index)| {
+                        let mut resolved = entry.clone();
+                        resolved.index = Some(index);
+                        resolved
+                    })
+                    .collect(),
+                Err(PositionalLogError::NoWorkedTask) => {
+                    return Err(CloseSelectionError::LogPositionalNone {
+                        raw: selection.raw.clone(),
+                        total: lineup.len(),
+                        running_name: running.name.clone(),
+                    });
+                }
+                Err(PositionalLogError::TooManyBullets { .. }) => {
+                    return Err(CloseSelectionError::LogPositionalTooMany {
+                        raw: selection.raw.clone(),
+                        worked,
+                        bullets: selection.log.len(),
+                        running_name: running.name.clone(),
+                        first_text: selection
+                            .log
+                            .first()
+                            .map(|entry| entry.text.clone())
+                            .unwrap_or_default(),
+                    });
+                }
+            }
+        } else {
+            selection.log.clone()
+        };
+    validate_close_log_entries(contents, running, &lineup, &resolved_log)?;
     let mut tags: Vec<LineTag> =
         (0..lines.len()).map(LineTag::Original).collect();
-    for (ordinal, entry) in selection.log.iter().enumerate() {
+    for (ordinal, entry) in resolved_log.iter().enumerate() {
         insert_close_log_entry(
             &mut lines, &mut tags, running, &lineup, entry, ordinal,
         );
@@ -727,7 +871,7 @@ pub(crate) fn apply_close_selection(
         rebuilt.push_str(ending);
     }
     reline_close_log_lineup(&rebuilt, running, &mut lineup, &tags)?;
-    let mut inserted_lines = vec![0usize; selection.log.len()];
+    let mut inserted_lines = vec![0usize; resolved_log.len()];
     for (position, tag) in tags.iter().enumerate() {
         if let LineTag::Inserted(ordinal) = tag {
             inserted_lines[*ordinal] = position + 1;
@@ -737,6 +881,7 @@ pub(crate) fn apply_close_selection(
         contents: rebuilt,
         lineup,
         inserted_lines,
+        log: resolved_log,
     })
 }
 
@@ -749,15 +894,16 @@ enum LineTag {
     InsertedDetail(usize),
 }
 
-/// The first link with a worked outcome that sits at the session's top
-/// level, for default-origin suggestions. Worked means in progress, parked,
-/// or complete; top level means its nearest shallower list parent is the
-/// running Pomodoro.
-fn first_worked_link(
+/// Every link with a worked outcome that sits at the session's top
+/// level, in ascending number order. Worked means in progress, parked, or
+/// complete; top level means its nearest shallower list parent is the
+/// running Pomodoro. Unnumbered bullets resolve against this list.
+fn top_level_worked_links(
     lineup: &[NumberedTaskLink],
     spans: &[super::super::capture::LineSpan<'_>],
     entry_index: usize,
-) -> Option<u32> {
+) -> Vec<u32> {
+    let mut worked = Vec::new();
     for link in lineup {
         if !matches!(
             link.outcome,
@@ -772,26 +918,42 @@ fn first_worked_link(
             && nearest_shallower_list_item_parent(spans, link_zero)
                 == Some(entry_index)
         {
-            return Some(link.index);
+            worked.push(link.index);
         }
     }
-    None
+    worked
+}
+
+/// The first link with a worked outcome that sits at the session's top
+/// level, for default-origin suggestions.
+fn first_worked_link(
+    lineup: &[NumberedTaskLink],
+    spans: &[super::super::capture::LineSpan<'_>],
+    entry_index: usize,
+) -> Option<u32> {
+    top_level_worked_links(lineup, spans, entry_index)
+        .into_iter()
+        .next()
 }
 
 fn validate_close_log_entries(
     contents: &str,
     running: &RunningPomodoro,
     lineup: &[NumberedTaskLink],
-    selection: &CloseSelection,
+    entries: &[CloseLogEntry],
 ) -> Result<(), CloseSelectionError> {
     let spans = line_spans(contents);
     let entry_index = running.line.saturating_sub(1);
     let by_index: BTreeMap<u32, &NumberedTaskLink> =
         lineup.iter().map(|link| (link.index, link)).collect();
-    for entry in &selection.log {
-        let Some(link) = by_index.get(&entry.index).copied() else {
+    for entry in entries {
+        // Entries resolve before validation, so every index is `Some`.
+        let index = entry
+            .index
+            .expect("resolved close log entries carry an index");
+        let Some(link) = by_index.get(&index).copied() else {
             return Err(CloseSelectionError::LogOutOfRange {
-                index: entry.index,
+                index,
                 total: lineup.len(),
                 running_name: running.name.clone(),
                 origin: entry.origin.clone(),
@@ -804,7 +966,8 @@ fn validate_close_log_entries(
             | TaskLinkOutcome::Complete => {}
             TaskLinkOutcome::Deferred => {
                 let worked = match &entry.origin {
-                    CloseLogOrigin::Bullet => None,
+                    CloseLogOrigin::Bullet
+                    | CloseLogOrigin::PositionalBullet { .. } => None,
                     CloseLogOrigin::Inline { explicit, .. } if *explicit => {
                         None
                     }
@@ -813,7 +976,7 @@ fn validate_close_log_entries(
                     }
                 };
                 return Err(CloseSelectionError::LogDeferred {
-                    index: entry.index,
+                    index,
                     block_link: link.block_link.clone(),
                     origin: entry.origin.clone(),
                     text: entry.text.clone(),
@@ -822,8 +985,10 @@ fn validate_close_log_entries(
             }
             TaskLinkOutcome::Dropped => {
                 return Err(CloseSelectionError::LogDropped {
-                    index: entry.index,
+                    index,
                     block_link: link.block_link.clone(),
+                    origin: entry.origin.clone(),
+                    text: entry.text.clone(),
                 });
             }
         }
@@ -833,14 +998,15 @@ fn validate_close_log_entries(
                 != Some(entry_index)
         {
             let worked = match &entry.origin {
-                CloseLogOrigin::Bullet => None,
+                CloseLogOrigin::Bullet
+                | CloseLogOrigin::PositionalBullet { .. } => None,
                 CloseLogOrigin::Inline { explicit, .. } if *explicit => None,
                 CloseLogOrigin::Inline { .. } => {
                     first_worked_link(lineup, &spans, entry_index)
                 }
             };
             return Err(CloseSelectionError::LogNested {
-                index: entry.index,
+                index,
                 block_link: link.block_link.clone(),
                 running_name: running.name.clone(),
                 origin: entry.origin.clone(),
@@ -862,7 +1028,7 @@ fn insert_close_log_entry(
 ) {
     let original_zero = lineup
         .iter()
-        .find(|link| link.index == entry.index)
+        .find(|link| Some(link.index) == entry.index)
         .map(|link| link.line.saturating_sub(1));
     let Some(original_zero) = original_zero else {
         return;

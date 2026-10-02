@@ -487,12 +487,32 @@ fn capture_pomodoro_close_diagnostics() {
         .output()
         .expect("inline dry run");
     assert_success(&output);
-    // A bullet with no task number reports the missing-number error.
+    // An unnumbered bullet logs to the first worked task (link 1 is
+    // plain, link 2 is deferred): dry-run reports the resolved index.
+    let output = bob_command()
+        .arg("capture")
+        .arg("--dry-run")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=x\n- detail")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("positional dry run");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("close json");
+    assert_eq!(json["pomodoro_close"]["log"][0]["index"], 1);
+    assert_eq!(json["pomodoro_close"]["log"][0]["text"], "detail");
+    // A mixed list still reports the missing-number error.
     let error = run_close_expect_error(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- detail"],
+        &["=x\n- 1 ok\n- detail"],
     );
     assert!(error.contains("start each Work Log bullet"), "{error}");
     // `s:2` stays literal entry text on the close line, so a real child
@@ -758,7 +778,7 @@ fn capture_pomodoro_close_diagnostics() {
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
     // A real `=x` item with a child bullet lexes it as a Work Log entry:
-    // a bullet with no task number fails with the missing-number error.
+    // an unnumbered bullet logs to the first worked task.
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-close-child-line");
     let output = run_with_stdin(
@@ -772,13 +792,36 @@ fn capture_pomodoro_close_diagnostics() {
             .env("BOB_NOW", "2026-09-28 09:37:00"),
         "=x\n- detail\n",
     );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("close json");
+    assert_eq!(json["pomodoro_close"]["log"][0]["index"], 1);
+    assert_eq!(json["pomodoro_close"]["log"][0]["text"], "detail");
+    let after = fs::read_to_string(&day_file).expect("read");
+    assert!(after.contains("- detail"), "{after}");
+    // A mixed list still fails with the missing-number error and writes
+    // nothing.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-child-mixed");
+    let before_mixed = fs::read_to_string(&day_file).expect("read");
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-28 09:37:00"),
+        "=x\n- 1 ok\n- detail\n",
+    );
     assert!(!output.status.success());
     assert!(
         stdout(&output).contains("start each Work Log bullet"),
         "{}",
         format_output(&output)
     );
-    assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before_mixed);
 
     // Forced flags beyond `--route` fail on whole-item closes.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-forced");

@@ -392,18 +392,27 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         serde_json::json!([{ "index": 2, "text": "foo bar baz" }]),
         "{echo}"
     );
+    // An unnumbered bullet under a selection resolves lexically.
     let child = parse_stdin("=x1\n- detail\n");
-    assert_eq!(child["mode"], "pomodoro_close");
+    assert_eq!(child["mode"], "pomodoro_close", "{child}");
     assert_eq!(
-        child["diagnostics"][0]["code"], "invalid_pomodoro_close",
+        child["pomodoro_close"]["log"],
+        serde_json::json!([{ "index": 1, "text": "detail" }]),
         "{child}"
     );
+    // A mixed list still reports the missing-number error.
+    let mixed = parse_stdin("=x1\n- 1 ok\n- detail\n");
+    assert_eq!(mixed["mode"], "pomodoro_close");
+    assert_eq!(
+        mixed["diagnostics"][0]["code"], "invalid_pomodoro_close",
+        "{mixed}"
+    );
     assert!(
-        child["diagnostics"][0]["message"]
+        mixed["diagnostics"][0]["message"]
             .as_str()
             .expect("message")
             .starts_with("start each Work Log bullet"),
-        "{child}"
+        "{mixed}"
     );
 
     // Valid defaults: an omitted `*`/`!` list means task 1 with spans over

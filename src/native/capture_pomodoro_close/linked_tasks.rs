@@ -89,6 +89,10 @@ pub(crate) struct PomodoroCloseSummary {
     pub ledger: LedgerClosePlan,
     pub tasks: Vec<PomodoroCloseTask>,
     pub task_links: Vec<NumberedTaskLink>,
+    /// Typed Work Log entries in typed order with every positional index
+    /// resolved, so `bob capture` JSON reports the task each entry logged
+    /// to.
+    pub log: Vec<CloseLogEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -758,15 +762,18 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             if landed.contains(&ordinal) {
                 continue;
             }
+            // Entries resolve before planning, so every index is `Some`.
+            let Some(index) = entry.index else {
+                continue;
+            };
             let block = by_index
-                .get(&entry.index)
+                .get(&index)
                 .map(|link| link.block_link.as_str())
                 .unwrap_or("?");
             let message = format!(
-                "task {} `{block}` has no task line, so its Work Log entry stays only in the Pomodoro",
-                entry.index
+                "task {index} `{block}` has no task line, so its Work Log entry stays only in the Pomodoro",
             );
-            if let Some(row) = link_rows.get(&entry.index).copied() {
+            if let Some(row) = link_rows.get(&index).copied() {
                 self.row_warning(row, message);
             } else {
                 self.warn(message);
@@ -854,25 +861,32 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
 ) -> Result<PomodoroClosePlan, PomodoroClosePlanError> {
     let running = find_running_pomodoro(day_contents)
         .map_err(PomodoroClosePlanError::FindRunning)?;
-    let (working_contents, task_links, inserted_lines) = match selection {
-        Some(sel) => {
-            let applied = apply_close_selection(day_contents, &running, sel)
-                .map_err(PomodoroClosePlanError::Selection)?;
-            (applied.contents, applied.lineup, applied.inserted_lines)
-        }
-        None => (
-            day_contents.to_string(),
-            number_task_links(day_contents, &running),
-            Vec::new(),
-        ),
-    };
+    let (working_contents, task_links, inserted_lines, resolved_log) =
+        match selection {
+            Some(sel) => {
+                let applied =
+                    apply_close_selection(day_contents, &running, sel)
+                        .map_err(PomodoroClosePlanError::Selection)?;
+                (
+                    applied.contents,
+                    applied.lineup,
+                    applied.inserted_lines,
+                    applied.log,
+                )
+            }
+            None => (
+                day_contents.to_string(),
+                number_task_links(day_contents, &running),
+                Vec::new(),
+                Vec::new(),
+            ),
+        };
     let log_lines: BTreeMap<usize, usize> = inserted_lines
         .iter()
         .enumerate()
         .map(|(ordinal, line)| (*line, ordinal))
         .collect();
-    let log_entries: Vec<CloseLogEntry> =
-        selection.map(|sel| sel.log.clone()).unwrap_or_default();
+    let log_entries: Vec<CloseLogEntry> = resolved_log.clone();
     // Parked source lines after Work Log insertion: explicit carry metadata.
     // Only selected parked lines are suppressed; other independently carried
     // references keep their effects.
@@ -959,6 +973,7 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
             ledger,
             tasks: planner.tasks,
             task_links,
+            log: log_entries,
         },
         warnings: planner.warnings,
     })

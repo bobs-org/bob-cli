@@ -578,12 +578,77 @@ pub(super) fn close_selection_incomplete_error(
 // `=x` Work Log bullet diagnostics (shared by `bob capture` and `capture-parse`)
 // ---------------------------------------------------------------------------
 
-/// A Work Log bullet whose first token is not a task number. `example` is
-/// the `- <n> <text>` fix that echoes the bullet's own text with the
-/// smallest loggable number.
+/// A Work Log bullet whose first token is not a task number, in a
+/// numbered bullet list. `example` is the `- <n> <text>` fix that echoes
+/// the bullet's own text with the smallest loggable number.
 pub(super) fn close_log_missing_number_error(example: &str) -> String {
     format!(
-        "start each Work Log bullet with the number of the task it logs to: `{example}`"
+        "start each Work Log bullet with the number of the task it logs to; bullets are numbered all or none: `{example}`"
+    )
+}
+
+/// A numbered bullet inside an unnumbered bullet list. `number` is the
+/// bullet's own first token; `suggestion` is the `- <default> <body>`
+/// fix that numbers every bullet.
+pub(super) fn close_log_mixed_number_error(
+    number: &str,
+    suggestion: &str,
+) -> String {
+    format!(
+        "Work Log bullets are numbered all or none, and the first one has no task number; to log text that starts with `{number}`, number every bullet: `{suggestion}`"
+    )
+}
+
+/// Join task numbers the way close diagnostics do (`3 and 4`,
+/// `1, 2 and 4`).
+fn join_task_numbers(numbers: &[u32]) -> String {
+    match numbers {
+        [] => String::new(),
+        [single] => single.to_string(),
+        [first, second] => format!("{first} and {second}"),
+        _ => {
+            let (last, rest) = numbers.split_last().expect("non-empty");
+            format!(
+                "{} and {last}",
+                rest.iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    }
+}
+
+/// Too many unnumbered bullets for the close's worked tasks, resolved
+/// lexically. `raw` is the typed close token, `worked` the worked tasks
+/// in ascending order, `bullets` the bullet count, and `suggestion` the
+/// `- <n> <text>` fix for the first excess bullet.
+pub(super) fn close_log_positional_too_many_error(
+    raw: &str,
+    worked: &[u32],
+    bullets: usize,
+    suggestion: &str,
+) -> String {
+    let tasks = if worked.len() == 1 {
+        format!("1 task ({})", worked[0])
+    } else {
+        format!("{} tasks ({})", worked.len(), join_task_numbers(worked))
+    };
+    format!(
+        "`{raw}` works {tasks} but has {bullets} unnumbered Work Log bullets; start each bullet with the number of the task it logs to: `{suggestion}`"
+    )
+}
+
+/// Unnumbered bullets on a close that works no task (`=x0`, `=x0~2`).
+/// `close_token` is the typed close token; `listed`/`completed` are the
+/// `not_worked_suggestions(1, …)` pair.
+pub(super) fn close_log_positional_none_error(
+    close_token: &str,
+    listed: &str,
+    completed: &str,
+) -> String {
+    format!(
+        "`{close_token}` works no task, so its Work Log bullets have none to log to; list one (`{listed}`) or complete one (`{completed}`)"
     )
 }
 

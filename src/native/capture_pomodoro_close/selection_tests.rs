@@ -90,7 +90,7 @@ fn sel_detail_log(
             .into_iter()
             .map(|(index, text, details)| {
                 super::super::capture_language::CloseLogEntry {
-                    index,
+                    index: Some(index),
                     text: text.to_string(),
                     details: details.into_iter().map(str::to_string).collect(),
                     origin: Default::default(),
@@ -136,7 +136,7 @@ fn sel_drop_log(
             .into_iter()
             .map(|(index, text)| {
                 super::super::capture_language::CloseLogEntry {
-                    index,
+                    index: Some(index),
                     text: text.to_string(),
                     details: Vec::new(),
                     origin: Default::default(),
@@ -1407,4 +1407,247 @@ fn log_entry_details_preserve_crlf_and_missing_final_newline() {
     assert!(applied.contents.ends_with("\t\t\t- a detail"));
     assert!(!applied.contents.ends_with('\n'));
     assert_eq!(applied.inserted_lines, vec![4]);
+}
+
+fn sel_positional(texts: Vec<&str>, raw: &str) -> CloseSelection {
+    use super::super::capture_language::{CloseLogEntry, CloseLogOrigin};
+    CloseSelection {
+        in_progress: None,
+        park: BTreeSet::new(),
+        complete: BTreeSet::new(),
+        drop: BTreeSet::new(),
+        log: texts
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, text)| CloseLogEntry {
+                index: None,
+                text: text.to_string(),
+                details: Vec::new(),
+                origin: CloseLogOrigin::PositionalBullet {
+                    position: ordinal as u32 + 1,
+                },
+            })
+            .collect(),
+        raw: raw.to_string(),
+    }
+}
+
+fn positional_indices(
+    applied: &super::selection::AppliedCloseSelection,
+) -> Vec<Option<u32>> {
+    applied.log.iter().map(|entry| entry.index).collect()
+}
+
+#[test]
+fn positional_entries_resolve_against_session_worked_links() {
+    // Plain `=x` on [plain, deferred, plain]: the deferred link is
+    // skipped, so the bullets land on 1 and 3.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]#",
+        "\t- [[a#^three]]",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_positional(vec!["a", "b"], "=x"),
+    )
+    .expect("apply");
+    assert_eq!(positional_indices(&applied), vec![Some(1), Some(3)]);
+    assert_eq!(
+        applied.contents,
+        note(&[
+            "## Pomodoros",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+            "\t- [[a#^one]]",
+            "\t\t- a",
+            "\t- [[a#^two]]#",
+            "\t- [[a#^three]]",
+            "\t\t- b",
+        ])
+    );
+    assert_eq!(applied.inserted_lines, vec![4, 7]);
+}
+
+#[test]
+fn positional_entries_share_a_single_worked_link() {
+    // One worked top-level link absorbs every bullet.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]#",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_positional(vec!["a", "b", "c"], "=x"),
+    )
+    .expect("apply");
+    assert_eq!(
+        positional_indices(&applied),
+        vec![Some(1), Some(1), Some(1)]
+    );
+}
+
+#[test]
+fn positional_entries_follow_drop_and_complete_outcomes() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+        "\t- [[a#^three]]",
+    ]);
+    // `~2` drops link 2, so the bullets land on 1 and 3.
+    let running = running_of(&contents);
+    let mut dropped = sel_positional(vec!["a", "b"], "=x~2");
+    dropped.drop = [2].into_iter().collect();
+    let applied =
+        apply_close_selection(&contents, &running, &dropped).expect("apply");
+    assert_eq!(positional_indices(&applied), vec![Some(1), Some(3)]);
+    // `!2` completes link 2, which stays worked: the bullets land on 1
+    // and 2.
+    let running = running_of(&contents);
+    let mut completed = sel_positional(vec!["a", "b"], "=x!2");
+    completed.complete = [2].into_iter().collect();
+    let applied =
+        apply_close_selection(&contents, &running, &completed).expect("apply");
+    assert_eq!(positional_indices(&applied), vec![Some(1), Some(2)]);
+}
+
+#[test]
+fn positional_entries_skip_nested_links() {
+    // Link 2 sits under another bullet, so only link 1 is worked.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- parent note",
+        "\t\t- [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let applied = apply_close_selection(
+        &contents,
+        &running,
+        &sel_positional(vec!["a"], "=x"),
+    )
+    .expect("apply");
+    assert_eq!(positional_indices(&applied), vec![Some(1)]);
+}
+
+#[test]
+fn positional_resolution_reports_session_failures() {
+    // Too many bullets for two worked tasks.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel_positional(vec!["a", "b", "c"], "=x"),
+    )
+    .expect_err("too many");
+    assert_eq!(
+        error.to_string(),
+        "`=x` works 2 of CAPTURE's tasks (1 and 2) but has 3 unnumbered Work Log bullets; start each bullet with the number of the task it logs to: `- 1 a`"
+    );
+    // No numbered links at all.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- quick note",
+    ]);
+    let running = running_of(&contents);
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel_positional(vec!["a"], "=x"),
+    )
+    .expect_err("no links");
+    assert_eq!(
+        error.to_string(),
+        "`=x` has Work Log bullets, but CAPTURE has no numbered Task Links to log them to"
+    );
+    // Links exist but none are worked at the top level.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]#",
+    ]);
+    let running = running_of(&contents);
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel_positional(vec!["a"], "=x"),
+    )
+    .expect_err("none worked");
+    assert_eq!(
+        error.to_string(),
+        "`=x` works none of CAPTURE's top-level Task Links, so its Work Log bullets have none to log to; list one in `<N>` or `!<M>` to log to it"
+    );
+    // An unnamed session reports "the running Pomodoro".
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m])",
+        "\t- [[a#^one]]#",
+    ]);
+    let running = running_of(&contents);
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel_positional(vec!["a"], "=x"),
+    )
+    .expect_err("unnamed none worked");
+    assert!(
+        error.to_string().contains(
+            "works none of the running Pomodoro's top-level Task Links"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn lexically_resolved_positional_entry_reports_nested_wording() {
+    use super::super::capture_language::{CloseLogEntry, CloseLogOrigin};
+    // A positional entry resolved lexically to a listed task that sits
+    // nested under another bullet: the `PositionalBullet` wording names
+    // the bullet position.
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- parent note",
+        "\t\t- [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let mut selection = sel(Some(vec![1, 2]), Vec::new(), "=x1,2");
+    selection.log = vec![
+        CloseLogEntry {
+            index: Some(1),
+            text: "a".to_string(),
+            details: Vec::new(),
+            origin: CloseLogOrigin::PositionalBullet { position: 1 },
+        },
+        CloseLogEntry {
+            index: Some(2),
+            text: "b".to_string(),
+            details: Vec::new(),
+            origin: CloseLogOrigin::PositionalBullet { position: 2 },
+        },
+    ];
+    let error = apply_close_selection(&contents, &running, &selection)
+        .expect_err("nested");
+    assert_eq!(
+        error.to_string(),
+        "Work Log bullet 2 logs to task 2 by its position, but task 2 `[[a#^two]]` is nested under another bullet, so the close can't write its Work Log; move it to the top level of CAPTURE"
+    );
 }

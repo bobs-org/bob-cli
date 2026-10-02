@@ -246,9 +246,18 @@ number names the task, so only the entry's first token is an index (`=x 1 \
 the close, then any session operators (`bob capture '=x wired the lexer'`, \
 `bob capture '=x1,3 3 fixed the flaky test'`, `bob capture '=x wired the \
 lexer ='`). For several entries or details, use child bullets below the \
-close instead: `- <n> <text>` logs `<text>` to worked task `<n>`, and a \
+close instead: `- [<n>] <text>` logs `<text>` in typed order, and a \
 two-space `  - <detail>` nests an undated detail under its entry in the \
-task's Work Log. With `<N>` typed (including `=x0`) or `*<P>` present only the numbers in \
+task's Work Log. Bullets are numbered all or none: either every first-level \
+bullet starts with its task number (`- 3 foo bar`), or none does and each \
+bullet logs in order to the close's worked tasks — one worked task takes \
+them all, otherwise bullet `i` logs to worked task `i`, so `=x3,4` plus \
+`- foo bar` plus `- baz bam` writes exactly what `- 3 foo bar` plus \
+`- 4 baz bam` writes. A leading number is always a task number, so to log \
+text that starts with a number, number every bullet (`- 3 2 bugs fixed`). \
+With `<N>` typed (including `=x0`) or `*<P>` present positions resolve lexically \
+and `capture-parse` agrees with `bob capture`, otherwise `bob capture` resolves \
+them against the running session. With `<N>` typed (including `=x0`) or `*<P>` present only the numbers in \
 `<N>`, `*<P>`, or `!<M>` take entries, otherwise every number starting at 1 takes \
 one except `~<K>`; only the first token is an index, so `- 1 \
 fixed 3 bugs` logs `fixed 3 bugs` and every backslash stays literal. The \
