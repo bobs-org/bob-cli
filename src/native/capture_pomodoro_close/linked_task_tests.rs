@@ -195,6 +195,41 @@ fn recursively_closes_embedded_tasks_and_retires_closed_ledger_embeds() {
 }
 
 #[test]
+fn closing_a_dependent_leaves_depends_on_prerequisites_open() {
+    // Closing a dependent never closes its prerequisites, even when the
+    // Depends-On line uses an embedded link form
+    // (`docs/task-dependencies.md` §5).
+    let mut vault = MemoryVault::new();
+    vault.insert(
+        "a.md",
+        "- [ ] #task Dependent ^a\n\t- ⛓️ **DEPENDS ON:** ![[b#^b]]\n",
+    );
+    vault.insert("b.md", "- [ ] #task Prerequisite ^b\n");
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+        "\t- ![[a#^a]]\n",
+    );
+    let path = Path::new("2026/20260928.md");
+    let plan = run_close(&vault, path, day);
+
+    assert!(
+        plan.changed_files
+            .get(Path::new("a.md"))
+            .is_some_and(|contents| contents.contains("- [x] #task Dependent")),
+        "dependent closes"
+    );
+    assert!(
+        plan.changed_files.get(Path::new("b.md")).is_none(),
+        "prerequisite stays open"
+    );
+    assert!(
+        !plan.summary.tasks.iter().any(|task| task.block_id == "b"),
+        "no subtask entry for the prerequisite"
+    );
+}
+
+#[test]
 fn embedded_recursion_obeys_depth_and_target_caps() {
     let mut vault = MemoryVault::new();
     for index in 0..27 {

@@ -882,6 +882,16 @@ mod tests {
         assert!(!is_section_title("C++"));
         assert!(!is_section_title("BOB+SASE"));
         assert!(!is_section_title("A+B"));
+        // Depends-On lines are never task sections
+        // (`docs/task-dependencies.md` §2.4).
+        for title in [
+            "⛓️ **DEPENDS ON:** [[#^a]]",
+            "🔗 **DEPENDENCIES:** [[#^a]]",
+            "**DEPENDS ON:** [[#^a]]",
+            "⛓ **DEPENDS ON:**",
+        ] {
+            assert!(!is_section_title(title), "{title}");
+        }
         for invalid in ["+", "+A", "++"] {
             assert!(!is_pomodoro_name(invalid), "{invalid}");
             assert!(!is_section_title(invalid), "{invalid}");

@@ -1,6 +1,6 @@
 # Development
 
-- [ ] #task Promote me ^promote
+- [ ] #task Promote me [dependsOn:: dev__dep-one, dev__done-dep] ^promote
   - ![[#^dep-one]]
   - ![[#^done-dep]]
   - ![[#^ref]]
@@ -8,9 +8,9 @@
   ```md
   - ![[#^fenced-dep]]
   ```
-- [ ] #task Same-file dependency ^dep-one
+- [ ] #task Same-file dependency [id:: dev__dep-one] [dependsOn:: Projects__Alpha__dep-two] ^dep-one
   - ![[Projects/Alpha#^dep-two]]
-- [x] #task Completed dependency stays done ^done-dep
+- [x] #task Completed dependency stays done [id:: dev__done-dep] ^done-dep
 - [ ] #task Plain link is not a dependency ^plain
 - [ ] #task Fenced transclusion is not a dependency ^fenced-dep
 - [*] #task Stale dependency clears ^stale-child

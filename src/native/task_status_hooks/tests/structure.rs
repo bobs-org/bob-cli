@@ -270,19 +270,17 @@ fn parses_and_normalizes_pomodoro_marker_prefixes_per_link() {
 }
 
 #[test]
-fn dependency_reference_requires_a_sole_transcluded_block_link() {
-    assert_eq!(
-        sole_transcluded_block_reference("  - ![[Projects/A#^dep]]"),
-        Some(reference("Projects/A", "dep"))
-    );
+fn dependency_lines_are_not_legacy_children() {
+    // Depends-On lines route through the line parser, never the R8
+    // legacy-child recogniser (`docs/task-dependencies.md` §§2, 4.2).
     for line in [
-        "  - [[#^plain]]",
-        "  - ![[#^dep|alias]]",
-        "  - text ![[#^dep]]",
-        "  - ![[#^dep]] trailing",
-        "  - ![[#heading]]",
+        "  - ⛓️ **DEPENDS ON:** [[#^dep]]",
+        "  - 🔗 **DEPENDENCIES:** ![[#^dep]]",
+        "  - **DEPENDS ON:**",
+        "  - ⛓️ **DEPENDS ON:** [[#^a",
     ] {
-        assert_eq!(sole_transcluded_block_reference(line), None, "{line}");
+        assert_eq!(task_dependencies::legacy_child_reference(line), None);
+        assert!(task_dependencies::is_dependency_line(line));
     }
 }
 

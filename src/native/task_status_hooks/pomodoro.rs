@@ -1,7 +1,7 @@
 //! Pomodoro ledger scan and empty-entry cleanup plans.
 use super::*;
 
-pub(super) fn logical_lines(contents: &str) -> Vec<&str> {
+pub(crate) fn logical_lines(contents: &str) -> Vec<&str> {
     contents.split_inclusive('\n').map(logical_line).collect()
 }
 
@@ -150,16 +150,10 @@ pub(super) fn pomodoro_bullet_indentation(line: &str) -> Option<String> {
 pub(super) fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
     let mut links = Vec::new();
     let struck_spans = strikethrough_spans(line);
-    let mut rest = line;
-    let mut base = 0;
-    while let Some(open) = rest.find("[[") {
-        let absolute_open = base + open;
-        let after_open = &rest[open + 2..];
-        let Some(close) = after_open.find("]]") else {
-            break;
-        };
-        let inside = &after_open[..close];
-        let link_end = absolute_open + 2 + close + 2;
+    for span in task_dependencies::raw_wikilink_spans(line) {
+        let absolute_open = span.open;
+        let inside = &line[span.open + 2..span.end - 2];
+        let link_end = span.end;
         let link_target = inside.split('|').next().unwrap_or("");
         if let Some(fragment) = link_target.find("#^") {
             let target = link_target[..fragment].trim();
@@ -232,8 +226,6 @@ pub(super) fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
                 });
             }
         }
-        base = absolute_open + 2 + close + 2;
-        rest = &after_open[close + 2..];
     }
     links
 }

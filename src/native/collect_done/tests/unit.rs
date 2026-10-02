@@ -409,6 +409,28 @@ fn block_id_deduplication_preserves_crlf_line_endings() {
 }
 
 #[test]
+fn pathless_archive_links_gain_the_source_note_path() {
+    // A pathless [[#^x]] inside an archived block whose target stayed
+    // behind gains the source note path — on Depends-On lines and on
+    // legacy children alike. Fenced code, inline code, moved blocks,
+    // and already-pathed links are untouched.
+    let stayed = BTreeSet::from(["open".to_string(), "held".to_string()]);
+    let repair = repair_pathless_archive_links(
+        "- [x] #task Archived ^moved\n  - ⛓️ **DEPENDS ON:** [[#^open]] • [[#^moved]]\n  - ![[#^held]]\n  - [[other#^open]]\n```\n- [[#^open]]\n```\n`[[#^open]]`\n",
+        "projects/Work",
+        &stayed,
+    );
+    assert_eq!(repair.link_count, 2);
+    assert!(repair.contents.contains(
+        "- ⛓️ **DEPENDS ON:** [[projects/Work#^open]] • [[#^moved]]"
+    ));
+    assert!(repair.contents.contains("- ![[projects/Work#^held]]"));
+    assert!(repair.contents.contains("- [[other#^open]]"));
+    assert!(repair.contents.contains("```\n- [[#^open]]\n```"));
+    assert!(repair.contents.contains("`[[#^open]]`"));
+}
+
+#[test]
 fn link_repair_uses_renamed_unique_moved_block_id() {
     let vault = TempDir::new("bob-cli-collect-done-renamed-link-plan");
     write_file(

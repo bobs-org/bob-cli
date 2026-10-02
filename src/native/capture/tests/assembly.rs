@@ -94,6 +94,11 @@ fn recognizes_plugin_compatible_managed_log_markers() {
         "\t- 🛠️ **SCHEDULE LOG**",
         "\t- 🗓️**SCHEDULE LOG**",
         "- [ ] #task 🗓️ **SCHEDULE LOG**",
+        // Depends-On lines are never managed logs
+        // (`docs/task-dependencies.md` §2.4).
+        "\t- ⛓️ **DEPENDS ON:** [[#^a]]",
+        "\t- **DEPENDS ON:** [[#^a]]",
+        "\t- 🔗 **DEPENDENCIES:** [[#^a]]",
     ] {
         assert_eq!(parse_managed_task_log_marker(line), None, "{line}");
     }
@@ -160,6 +165,35 @@ fn finds_the_earliest_direct_child_managed_log() {
     assert_eq!(
         first_direct_managed_log_start(&lines, 0, lookalike.len()),
         None
+    );
+}
+
+#[test]
+fn sub_bullet_insertion_keeps_dependency_lines_first() {
+    // A Depends-On line is neither a section title nor a managed log, so
+    // capture inserts new sub-bullets after it: the managed-log anchor
+    // skips the line, and without logs the block end is past it
+    // (`docs/task-dependencies.md` §§2.1, 2.4).
+    let with_log = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- ⛓️ **DEPENDS ON:** [[#^dep]]\n",
+        "\t- 🗓️ **SCHEDULE LOG**\n",
+        "\t\t- *2026-08-01* — scheduled\n",
+    );
+    let lines = line_spans(with_log);
+    assert_eq!(
+        first_direct_managed_log_start(&lines, 0, with_log.len()),
+        Some(with_log.find("\t- 🗓️ **SCHEDULE LOG**").expect("log line")),
+    );
+
+    let line_only = concat!(
+        "- [ ] #task Parent ^parent\n",
+        "\t- ⛓️ **DEPENDS ON:** [[#^dep]]\n",
+    );
+    let lines = line_spans(line_only);
+    assert_eq!(
+        first_direct_managed_log_start(&lines, 0, line_only.len()),
+        None,
     );
 }
 

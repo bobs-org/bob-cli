@@ -114,11 +114,15 @@ fn task_status_hooks_resolves_duplicate_fragments_by_explicit_note_path() {
         &daily,
         "# Daily\n\n## Pomodoros\n\n- [ ] Open session (0900-0930)\n  - [[Root#^root]]\n",
     );
+    write_blocked_tasks_settings(&vault);
     write_file(
         &vault.join("Root.md"),
-        "- [ ] #task Root ^root\n  - ![[Alpha#^dep]]\n",
+        "- [ ] #task Root [dependsOn:: Alpha__dep] ^root\n  - ![[Alpha#^dep]]\n",
     );
-    write_file(&vault.join("Alpha.md"), "- [ ] #task Alpha ^dep\n");
+    write_file(
+        &vault.join("Alpha.md"),
+        "- [ ] #task Alpha [id:: Alpha__dep] ^dep\n",
+    );
     write_file(&vault.join("Beta.md"), "- [ ] #task Beta ^dep\n");
 
     let output = bob_command()
@@ -129,12 +133,14 @@ fn task_status_hooks_resolves_duplicate_fragments_by_explicit_note_path() {
         .output()
         .expect("mark next duplicate fragments");
     assert_success(&output);
+    // The explicit note path still selects Alpha over Beta for the edge,
+    // while the field-covered open prerequisite derives Blocked on Root.
     assert!(fs::read_to_string(vault.join("Root.md"))
         .unwrap()
-        .contains("- [*] #task Root ^root"));
+        .contains("- [?] #task Root [dependsOn:: Alpha__dep] ^root"));
     assert!(fs::read_to_string(vault.join("Alpha.md"))
         .unwrap()
-        .contains("- [*] #task Alpha ^dep"));
+        .contains("- [*] #task Alpha [id:: Alpha__dep] ^dep"));
     assert!(fs::read_to_string(vault.join("Beta.md"))
         .unwrap()
         .contains("- [ ] #task Beta ^dep"));
@@ -831,19 +837,13 @@ fn task_status_hooks_keeps_archive_out_of_active_dependency_sync() {
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert_eq!(json["marked_next"][0]["path"], "tasks.md");
     let unresolved = json["unresolved_references"].as_array().unwrap();
+    // Links into done/ are history, never edges and never warned
+    // (`docs/task-dependencies.md` §§4.3, 5).
     assert_eq!(
         unresolved.len(),
-        3,
+        2,
         "unexpected unresolved: {unresolved:#?}"
     );
-    assert!(unresolved.iter().any(|item| {
-        item["target"] == "done/dev_done"
-            && item["block_id"] == "archived-open"
-            && item["reason"]
-                .as_str()
-                .unwrap()
-                .contains("dependency from tasks.md:1 did not resolve uniquely")
-    }));
     assert!(unresolved.iter().any(|item| {
         item["target"] == "done/missing"
             && item["block_id"] == "ghost"

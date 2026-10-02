@@ -136,12 +136,28 @@ pub(super) fn apply_link_repairs_to_plan(
             Some(contents) => contents.clone(),
             None => fs::read_to_string(vault.join(&relative_path))?,
         };
-        let repair = repair_links_in_note(
+        let mut repair = repair_links_in_note(
             &contents,
             &relative_path,
             &note_index,
             &moved_targets,
         );
+        if let Some((source_target, stayed)) = archive_stayed_block_ids(
+            vault,
+            &relative_path,
+            &contents,
+            &note_index,
+            &planned_contents,
+            &moved_targets,
+        )? {
+            let pathless = repair_pathless_archive_links(
+                &repair.contents,
+                &source_target,
+                &stayed,
+            );
+            repair.contents = pathless.contents;
+            repair.link_count += pathless.link_count;
+        }
         if repair.link_count > 0 || repair.dependency_metadata_count > 0 {
             planned_contents.insert(relative_path.clone(), repair.contents);
             link_repair_counts.insert(
@@ -449,6 +465,135 @@ pub(super) fn repair_links_in_note(
         link_count: wiki_repair.link_count + markdown_repair.link_count,
         dependency_metadata_count: metadata_repair.count,
     }
+}
+
+/// Source note and stayed-behind block ids for an archive note.
+///
+/// When a task block is archived, its Depends-On lines and legacy
+/// children move with it, but a pathless `[[#^x]]` whose target stayed
+/// behind would silently re-resolve inside the archive note. Returns the
+/// source link target plus the block ids that stayed when `current_path`
+/// is an archive note whose parent source exists.
+pub(super) fn archive_stayed_block_ids(
+    vault: &Path,
+    current_path: &Path,
+    current_contents: &str,
+    note_index: &NoteIndex,
+    planned_contents: &BTreeMap<PathBuf, String>,
+    moved_targets: &MovedBlockTargets,
+) -> io::Result<Option<(String, BTreeSet<String>)>> {
+    let Some(source_relative_path) =
+        source_relative_path_from_archive(current_path)
+    else {
+        return Ok(None);
+    };
+    if !archive_parent_matches_source(
+        current_contents,
+        current_path,
+        &source_relative_path,
+        note_index,
+    ) {
+        return Ok(None);
+    }
+    let source_contents =
+        note_contents(vault, &source_relative_path, planned_contents)?;
+    let moved: BTreeSet<String> = moved_targets
+        .keys()
+        .filter(|(path, _)| path == &source_relative_path)
+        .map(|(_, block_id)| block_id.clone())
+        .collect();
+    let stayed: BTreeSet<String> = block_ids_in_markdown(&source_contents)
+        .into_iter()
+        .filter(|block_id| !moved.contains(block_id))
+        .collect();
+    if stayed.is_empty() {
+        return Ok(None);
+    }
+    let source_target =
+        vault_relative_link_target(&source_relative_path, "source")?;
+    Ok(Some((source_target, stayed)))
+}
+
+/// Qualify pathless block links that stayed behind.
+///
+/// Rewrites `[[#^x]]` (with optional alias and `!`) to
+/// `[[<source>#^x]]` when `x` stayed in the source note, so archived
+/// Depends-On lines and legacy children keep pointing at the target
+/// that did not move. Fenced code and inline code spans are untouched.
+pub(super) fn repair_pathless_archive_links(
+    contents: &str,
+    source_target: &str,
+    stayed: &BTreeSet<String>,
+) -> LinkRepairResult {
+    let lines = contents.lines().collect::<Vec<_>>();
+    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
+    let mut repaired = String::with_capacity(contents.len());
+    let mut link_count = 0;
+    for (line_index, segment) in contents.split_inclusive('\n').enumerate() {
+        let (line, ending) = split_line_ending(segment);
+        if fenced.contains(&line_index) {
+            repaired.push_str(segment);
+            continue;
+        }
+        let code_spans = inline_code_spans(line);
+        let mut cursor = 0;
+        let mut rewritten = String::with_capacity(line.len());
+        while let Some(relative_start) = line[cursor..].find("[[") {
+            let start = cursor + relative_start;
+            let inner_start = start + 2;
+            let Some(relative_end) = line[inner_start..].find("]]") else {
+                break;
+            };
+            let end = inner_start + relative_end;
+            let candidate = &line[inner_start..end];
+            let replacement = if code_spans
+                .iter()
+                .any(|span| start < span.end && end + 2 > span.start)
+            {
+                None
+            } else {
+                qualify_stayed_link(candidate, source_target, stayed)
+            };
+            if let Some(new_inner) = replacement {
+                rewritten.push_str(&line[cursor..start]);
+                rewritten.push_str("[[");
+                rewritten.push_str(&new_inner);
+                rewritten.push_str("]]");
+                link_count += 1;
+            } else {
+                rewritten.push_str(&line[cursor..end + 2]);
+            }
+            cursor = end + 2;
+        }
+        rewritten.push_str(&line[cursor..]);
+        repaired.push_str(&rewritten);
+        repaired.push_str(ending);
+    }
+    LinkRepairResult {
+        contents: repaired,
+        link_count,
+        dependency_metadata_count: 0,
+    }
+}
+
+fn qualify_stayed_link(
+    inner: &str,
+    source_target: &str,
+    stayed: &BTreeSet<String>,
+) -> Option<String> {
+    let (target_with_fragment, alias) = match inner.find('|') {
+        Some(index) => (&inner[..index], &inner[index..]),
+        None => (inner, ""),
+    };
+    let (note_target, fragment) = split_block_fragment(target_with_fragment)?;
+    if !note_target.trim().is_empty() {
+        return None;
+    }
+    let block_id = fragment.strip_prefix('^')?;
+    if !stayed.contains(block_id) {
+        return None;
+    }
+    Some(format!("{source_target}#^{block_id}{alias}"))
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DependencyMetadataRepair {

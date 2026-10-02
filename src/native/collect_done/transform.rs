@@ -124,7 +124,7 @@ pub(super) fn vault_relative_wiki_link(
         vault_relative_link_target(relative_path, path_kind)?
     ))
 }
-pub(super) fn vault_relative_link_target(
+pub(crate) fn vault_relative_link_target(
     relative_path: &Path,
     path_kind: &str,
 ) -> io::Result<String> {
@@ -155,30 +155,7 @@ pub(super) fn vault_relative_link_target(
 
     Ok(components.join("/"))
 }
-pub(super) fn dependency_id(
-    relative_path: &Path,
-    block_id: &str,
-) -> io::Result<String> {
-    if block_id.is_empty() || !block_id.bytes().all(is_block_id_byte) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid task dependency block id: {block_id}"),
-        ));
-    }
-    let note = vault_relative_link_target(relative_path, "dependency note")?;
-    let value = format!("{}__{block_id}", note.replace('/', "__"));
-    if !value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
-    }) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "dependency id contains unsupported path characters: {value}"
-            ),
-        ));
-    }
-    Ok(value)
-}
+pub(super) use super::super::task_dependencies::dependency_id;
 pub(super) fn transform_markdown(contents: &str) -> Transform {
     let lines: Vec<&str> = contents.split_inclusive('\n').collect();
     let mut source_contents = String::with_capacity(contents.len());

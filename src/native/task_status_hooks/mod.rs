@@ -82,8 +82,9 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Make the current Pomodoro ledger the source of truth for active task statuses and use the latest existing earlier daily note as a read-only recent-activity source.\n\n\
 Tasks block-linked from child bullets of open Pomodoro entries have a minimum \
 desired status of Next [*]; tasks already In Progress [/] keep that stronger \
-status. Dependency tasks are discovered recursively from sole transcluded \
-block-link child bullets and inherit the strongest effective parent status, \
+status. Dependency tasks are discovered recursively from Depends-On line \
+links plus R8 legacy dependency children (see docs/task-dependencies.md) and \
+inherit the strongest effective parent status, \
 promoting Ready [ ] tasks to Next or In Progress and Next tasks to In Progress. \
 Status propagation never lowers a task, and removing a link never changes a \
 lane: unlinked Next [*] and In Progress [/] tasks stay as they are. Only a \
@@ -260,9 +261,15 @@ use settings::*;
 use structure::*;
 use sync::*;
 
+pub(crate) use super::task_dependencies;
 pub(crate) use compose::{grouping_eligible_note, task_group_classification};
 pub(crate) use model::{TaskStatusDefinition, TaskStatusType, TasksSettings};
 pub(crate) use output::SyncError;
-pub(crate) use parse::{markdown_files, task_metadata};
+pub(crate) use parse::{after_list_marker, markdown_files, task_metadata};
+pub(crate) use pomodoro::logical_lines;
+pub(crate) use references::{
+    leading_indentation_width, nearest_parent_list_item,
+};
 pub(crate) use settings::{read_tasks_settings, validate_blocked_status};
+pub(crate) use structure::fenced_lines;
 pub(crate) use sync::{canonical_daily_date, daily_anchor_date};

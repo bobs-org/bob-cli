@@ -11,6 +11,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     let daily = vault.join("2026/20260710.md");
     let dev = vault.join("dev.md");
     let alpha = vault.join("Projects/Alpha.md");
+    write_blocked_tasks_settings(&vault);
     write_file(
         &daily,
         include_str!("../../fixtures/task_status_hooks/2026/20260710.md"),
@@ -59,12 +60,39 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     assert_eq!(json["references"], 4);
     assert_eq!(json["dependency_references"], 3);
     assert_eq!(json["scanned_files"], 3);
-    assert_eq!(json["marked_next"].as_array().unwrap().len(), 3);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert!(json["marked_in_progress"].as_array().unwrap().is_empty());
     assert!(json["cleared"].as_array().unwrap().is_empty());
     assert_eq!(json["cleared_in_progress"].as_array().unwrap().len(), 0);
     assert_eq!(json["kept_next"], 1);
     assert_eq!(json["kept_in_progress"], 1);
+    // The legacy-window fields above derive Blocked for the two open
+    // dependents while the field-covered legacy chain still promotes
+    // (`docs/task-dependencies.md` §§4.2 R8, 5).
+    assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 2);
+    assert!(json["marked_blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| {
+            item["block_id"] == "promote"
+                && item["from"] == " "
+                && item["to"] == "?"
+                && item["open_dependency_ids"]
+                    == serde_json::json!(["dev__dep-one"])
+        }));
+    assert!(json["marked_blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| {
+            item["block_id"] == "dep-one"
+                && item["from"] == " "
+                && item["to"] == "?"
+                && item["open_dependency_ids"]
+                    == serde_json::json!(["Projects__Alpha__dep-two"])
+        }));
+    assert!(json["unblocked"].as_array().unwrap().is_empty());
     assert_eq!(
         json["embedded_completed_references"]
             .as_array()
@@ -117,14 +145,6 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         .contains("dependency from dev.md:3"));
     let marked = json["marked_next"].as_array().unwrap();
     assert!(marked.iter().any(|item| {
-        item["path"] == "dev.md"
-            && item["block_id"] == "promote"
-            && item["dependency"] == false
-    }));
-    assert!(marked.iter().any(|item| {
-        item["block_id"] == "dep-one" && item["dependency"] == true
-    }));
-    assert!(marked.iter().any(|item| {
         item["path"] == "Projects/Alpha.md"
             && item["block_id"] == "dep-two"
             && item["dependency"] == true
@@ -146,16 +166,21 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
             && report.contains("removed duplicate task-link lines")
             && report.contains("(dependency)")
             && report.contains(
-                "Summary: 3 marked next, 0 marked in progress, 0 cleared"
+                "Summary: 1 marked next, 0 marked in progress, 0 cleared"
             ),
         "unexpected task-status-hooks report:\n{}",
         format_output(&applied)
     );
     let dev_contents = fs::read_to_string(&dev).expect("read updated dev");
-    assert!(dev_contents.contains("- [*] #task Promote me ^promote"));
-    assert!(dev_contents.contains("- [*] #task Same-file dependency ^dep-one"));
-    assert!(dev_contents
-        .contains("- [x] #task Completed dependency stays done ^done-dep"));
+    assert!(dev_contents.contains(
+        "- [?] #task Promote me [dependsOn:: dev__dep-one, dev__done-dep] ^promote"
+    ));
+    assert!(dev_contents.contains(
+        "- [?] #task Same-file dependency [id:: dev__dep-one] [dependsOn:: Projects__Alpha__dep-two] ^dep-one"
+    ));
+    assert!(dev_contents.contains(
+        "- [x] #task Completed dependency stays done [id:: dev__done-dep] ^done-dep"
+    ));
     assert!(dev_contents
         .contains("- [ ] #task Plain link is not a dependency ^plain"));
     assert!(dev_contents.contains(
@@ -189,8 +214,9 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     )));
     let alpha_contents =
         fs::read_to_string(&alpha).expect("read updated alpha");
-    assert!(alpha_contents
-        .contains("- [*] #task Cross-file recursive dependency ^dep-two"));
+    assert!(alpha_contents.contains(
+        "- [*] #task Cross-file recursive dependency [id:: Projects__Alpha__dep-two] ^dep-two"
+    ));
 
     let second = bob_command()
         .arg("task-status-hooks")
@@ -253,11 +279,16 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         .expect("clear stale dependency chain");
     assert_success(&stale_chain);
     let dev_contents = fs::read_to_string(&dev).expect("read sticky chain");
-    assert!(dev_contents.contains("- [*] #task Promote me ^promote"));
-    assert!(dev_contents.contains("- [*] #task Same-file dependency ^dep-one"));
+    assert!(dev_contents.contains(
+        "- [?] #task Promote me [dependsOn:: dev__dep-one, dev__done-dep] ^promote"
+    ));
+    assert!(dev_contents.contains(
+        "- [?] #task Same-file dependency [id:: dev__dep-one] [dependsOn:: Projects__Alpha__dep-two] ^dep-one"
+    ));
     let alpha_contents = fs::read_to_string(&alpha).expect("read sticky alpha");
-    assert!(alpha_contents
-        .contains("- [*] #task Cross-file recursive dependency ^dep-two"));
+    assert!(alpha_contents.contains(
+        "- [*] #task Cross-file recursive dependency [id:: Projects__Alpha__dep-two] ^dep-two"
+    ));
 }
 
 #[test]
@@ -896,14 +927,14 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
         "  - [[tasks#^root-working]]\n",
     );
     let tasks_before = concat!(
-        "- [ ] #task Next root ^root-next\n",
+        "- [ ] #task Next root [dependsOn:: next-ready, stronger] ^root-next\n",
         "  - ![[#^next-ready]]\n",
         "  - ![[#^stronger]]\n",
         "- [ ] #task Next child ^next-ready\n",
-        "- [/] #task Stronger intermediate ^stronger\n",
+        "- [/] #task Stronger intermediate [dependsOn:: stronger-child] ^stronger\n",
         "  - ![[#^stronger-child]]\n",
         "- [ ] #task Stronger descendant ^stronger-child\n",
-        "- [/] #task Working root ^root-working\n",
+        "- [/] #task Working root [dependsOn:: working-ready, working-next, done, cancelled, custom] ^root-working\n",
         "  - ![[#^working-ready]]\n",
         "  - ![[#^working-next]]\n",
         "  - ![[#^done]]\n",
@@ -971,11 +1002,11 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     );
     let contents = fs::read_to_string(&tasks).unwrap();
     for expected in [
-        "- [*] #task Next root ^root-next",
+        "- [*] #task Next root [dependsOn:: next-ready, stronger] ^root-next",
         "- [*] #task Next child ^next-ready",
-        "- [/] #task Stronger intermediate ^stronger",
+        "- [/] #task Stronger intermediate [dependsOn:: stronger-child] ^stronger",
         "- [/] #task Stronger descendant ^stronger-child",
-        "- [/] #task Working root ^root-working",
+        "- [/] #task Working root [dependsOn:: working-ready, working-next, done, cancelled, custom] ^root-working",
         "- [/] #task Working ready child ^working-ready",
         "- [/] #task Working next child ^working-next",
         "- [x] #task Done child ^done",
@@ -1012,7 +1043,9 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
         .expect("keep unreachable next while preserving in-progress tasks");
     assert_success(&without_active_path);
     let contents = fs::read_to_string(&tasks).unwrap();
-    assert!(contents.contains("- [*] #task Next root ^root-next"));
+    assert!(contents.contains(
+        "- [*] #task Next root [dependsOn:: next-ready, stronger] ^root-next"
+    ));
     assert!(contents.contains("- [*] #task Next child ^next-ready"));
     assert!(
         contents.contains("- [/] #task Stronger descendant ^stronger-child")

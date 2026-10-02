@@ -15,6 +15,7 @@ use super::super::{
         self, BlockIdLookup, NoteTask, NoteTaskSettings, TaskStatusType,
     },
     pomodoro,
+    task_dependencies::is_dependency_line,
     vault_links::LinkResolution,
 };
 use super::ledger::target_from_token;
@@ -1207,6 +1208,12 @@ fn embedded_children(contents: &str, task: &NoteTask) -> Vec<BlockLinkTarget> {
     for (index, span) in spans.iter().enumerate().skip(task.line_index + 1) {
         if span.end > task.block_end {
             break;
+        }
+        // Closing a dependent never closes its prerequisites: Depends-On
+        // lines are not embedded-tree edges
+        // (`docs/task-dependencies.md` §5).
+        if is_dependency_line(span.text) {
+            continue;
         }
         children.extend(
             wikilink_tokens(span.text)

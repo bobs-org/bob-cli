@@ -248,7 +248,7 @@ pub(super) fn parse_task_date(value: &str) -> Option<NaiveDate> {
         .flatten()
 }
 
-pub(super) fn after_list_marker(line: &str, index: usize) -> Option<usize> {
+pub(crate) fn after_list_marker(line: &str, index: usize) -> Option<usize> {
     let bytes = line.as_bytes();
     if matches!(bytes.get(index), Some(b'-' | b'*' | b'+')) {
         return bytes

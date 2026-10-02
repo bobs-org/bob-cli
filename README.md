@@ -438,7 +438,8 @@ uses the latest existing earlier daily note as a read-only recent-activity
 source.
 
 Direct block links under open Pomodoros promote Ready tasks to Next (`[*]`) and
-leave In Progress (`[/]`) alone. Sole transcluded dependencies inherit the
+leave In Progress (`[/]`) alone. Task dependency links on a dependent's managed
+`⛓️ **DEPENDS ON:**` line plus R8 legacy dependency children inherit the
 strongest parent rank. Lanes are sticky: removing a link never lowers Next or
 In Progress — only a Next task inside a canonical daily note (or the current
 ledger) still clears back to Ready once unlinked and stale. Independently,

@@ -1,7 +1,7 @@
 //! Structural duplicate and list-item plans for Pomodoro bullets.
 use super::*;
 
-pub(super) fn fenced_lines(
+pub(crate) fn fenced_lines(
     lines: &[&str],
     section: Range<usize>,
 ) -> BTreeSet<usize> {

@@ -205,9 +205,8 @@ fn dotted_note_names_keep_the_full_basename() {
 #[test]
 fn fenced_column_zero_content_does_not_end_dependency_scan() {
     let settings = test_settings();
-    let a_contents =
-        "- [ ] #task A ^a\n  ```\nnot a list item\n  ```\n  - ![[B#^b]]\n";
-    let b_contents = "- [ ] #task B ^b\n";
+    let a_contents = "- [ ] #task A [dependsOn:: B__b] ^a\n  ```\nnot a list item\n  ```\n  - ![[B#^b]]\n";
+    let b_contents = "- [ ] #task B [id:: B__b] ^b\n";
     let files = vec![
         FileScan {
             path: PathBuf::from("A.md"),
@@ -620,4 +619,119 @@ fn recovery_rank_defaults_blocked_roots_to_next_and_propagates_in_progress() {
     assert_eq!(recovery[&blocked_root], RankedStatus::Next);
     assert_eq!(recovery[&working_child], RankedStatus::InProgress);
     assert_eq!(recovery[&blocked_leaf], RankedStatus::InProgress);
+}
+
+fn edge_scan(entries: &[(&str, &str)]) -> ScannedEdges {
+    let settings = test_settings();
+    let files = entries
+        .iter()
+        .map(|(path, contents)| FileScan {
+            path: PathBuf::from(path),
+            relative_path: PathBuf::from(path),
+            contents: contents.to_string(),
+            tasks: parse_tasks(contents, &settings),
+        })
+        .collect::<Vec<_>>();
+    let index = NoteIndex::from_paths(
+        files.iter().map(|file| file.relative_path.clone()),
+    );
+    let blocks = task_blocks(&files);
+    let mut unresolved = Vec::new();
+    let edges = dependency_edges(&files, &index, &blocks, &mut unresolved);
+    ScannedEdges { edges, unresolved }
+}
+
+struct ScannedEdges {
+    edges: BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
+    unresolved: Vec<UnresolvedReference>,
+}
+
+fn edge(source: &str, block: &str) -> (PathBuf, String) {
+    (PathBuf::from(source), block.to_string())
+}
+
+// Promotion edges (`docs/task-dependencies.md` §5): resolved Depends-On
+// line links are edges, same-note and cross-note.
+#[test]
+fn dependency_line_links_are_promotion_edges() {
+    let scanned = edge_scan(&[
+        (
+            "a.md",
+            "- [ ] #task Dependent [dependsOn:: a__one, b__two] ^dep\n  - ⛓️ **DEPENDS ON:** [[#^one]] • [[b#^two]]\n- [ ] #task One [id:: a__one] ^one\n",
+        ),
+        ("b.md", "- [ ] #task Two [id:: b__two] ^two\n"),
+    ]);
+    assert!(scanned.unresolved.is_empty());
+    assert_eq!(
+        scanned.edges.get(&edge("a.md", "dep")),
+        Some(&BTreeSet::from([edge("a.md", "one"), edge("b.md", "two"),]))
+    );
+}
+
+// R8 legacy children (`docs/task-dependencies.md` §4.2): plain,
+// embedded, and struck sole block links count when the resolved
+// target's id is in the dependent's field.
+#[test]
+fn legacy_plain_embedded_and_struck_children_are_edges_with_field_coverage() {
+    let scanned = edge_scan(&[
+        (
+            "a.md",
+            "- [ ] #task Dependent [dependsOn:: x__e, x__p, x__s] ^dep\n  - ![[x#^e]]\n  - [[x#^p]]\n  - ~~[[x#^s]]~~\n",
+        ),
+        (
+            "x.md",
+            "- [ ] #task E [id:: x__e] ^e\n- [ ] #task P [id:: x__p] ^p\n- [ ] #task S [id:: x__s] ^s\n",
+        ),
+    ]);
+    assert!(scanned.unresolved.is_empty());
+    assert_eq!(
+        scanned.edges.get(&edge("a.md", "dep")),
+        Some(&BTreeSet::from([
+            edge("x.md", "e"),
+            edge("x.md", "p"),
+            edge("x.md", "s"),
+        ]))
+    );
+}
+
+// R8 field gate: the same shapes without field coverage are content,
+// not edges, and resolve quietly.
+#[test]
+fn legacy_children_without_field_coverage_are_not_edges() {
+    let scanned = edge_scan(&[
+        (
+            "a.md",
+            "- [ ] #task Dependent ^dep\n  - ![[x#^e]]\n  - [[x#^p]]\n  - ~~[[x#^s]]~~\n",
+        ),
+        (
+            "x.md",
+            "- [ ] #task E [id:: x__e] ^e\n- [ ] #task P [id:: x__p] ^p\n- [ ] #task S [id:: x__s] ^s\n",
+        ),
+    ]);
+    assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
+    assert!(scanned.unresolved.is_empty());
+}
+
+// A `#^ref` reading embed is content, not an edge
+// (`docs/task-dependencies.md` §§4.2 R8, 5).
+#[test]
+fn reading_embeds_are_not_promotion_edges() {
+    let scanned = edge_scan(&[(
+        "a.md",
+        "- [ ] #task Dependent ^dep\n  - ![[#^ref]]\n\nReference block only. ^ref\n",
+    )]);
+    assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
+    assert_eq!(scanned.unresolved.len(), 1);
+}
+
+// Archive targets are history, never edges
+// (`docs/task-dependencies.md` §4.3).
+#[test]
+fn archive_targets_are_not_promotion_edges() {
+    let scanned = edge_scan(&[(
+        "a.md",
+        "- [ ] #task Dependent [dependsOn:: done__Archive__old] ^dep\n  - ⛓️ **DEPENDS ON:** [[done/Archive#^old]]\n  - ![[done/Archive#^old]]\n",
+    )]);
+    assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
+    assert!(scanned.unresolved.is_empty());
 }

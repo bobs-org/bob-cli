@@ -17,8 +17,10 @@ In practice it:
   lanes are sticky and only an explicit release returns them to Ready.
   The single exception is a Next task that lives in a canonical daily note
   or the selected current ledger, which still clears once unlinked and stale
-- Follows transcluded dependency bullets (`![[note#^id]]` as the entire child)
-  and promotes those too
+- Follows task dependency links on each task's managed Depends-On line
+  (`⛓️ **DEPENDS ON:**`, see the
+  [task dependency contract](task-dependencies.md)) plus R8 legacy
+  dependency children, and promotes those too
 - Marks a task Blocked (`[?]`) when it has an open Dataview dependency or a
   future `[scheduled:: YYYY-MM-DD]` date
 - Cleans the ledger: de-duplicates links across open Pomodoros, retires
@@ -219,24 +221,30 @@ dependency chain stop contributing desired Next or In-Progress state in that
 same run.
 
 After resolving the surviving direct Pomodoro links, the command reads
-dependency edges from the linked tasks' child blocks. An edge must be a child
-bullet whose entire content is one transcluded block link:
+dependency edges from the linked tasks' Depends-On lines plus their R8
+legacy children, per the
+[task dependency contract](task-dependencies.md). A Depends-On line is the
+single managed first-child line holding a task's plain dependency links:
 
 ```markdown
 - [ ] #task Ship the feature ^ship
-  - ![[#^write-tests]]
-  - ![[Quality/Review#^review]]
+  - ⛓️ **DEPENDS ON:** [[#^write-tests]] • [[Quality/Review#^review]]
 - [ ] #task Write tests ^write-tests
 ```
 
-Same-note and cross-note targets use the same resolver as Pomodoro links. The
-target block must belong to a scanned Tasks task. Plain `[[#^id]]` links,
-aliases, mixed-content bullets, fenced examples, non-task `#^ref` blocks, and
-unresolvable targets are not dependency edges. Unresolvable candidates emit a
-warning naming the referencing task's file and line.
+Same-note and cross-note targets use the same resolver as Pomodoro links.
+Every resolved line link to a scanned Tasks task is an edge. A legacy
+child — a direct child bullet whose only content is one block link
+(plain, `![[…]]`, `~~[[…]]~~`, or `~~![[…]]~~`) — is an edge only when
+its resolved target's id (its `[id::]`, canonical id, or same-note bare
+block id) is in the dependent's `[dependsOn::]` field. Sole embeds that
+are not field-managed (for example `#^ref` reading embeds), links into
+`done/`, fenced examples, and targets without a matching task block are
+never edges; archive targets never warn. Other unresolvable candidates
+emit a warning naming the referencing task's file and line.
 
 Block fragments are file-scoped: `Alpha.md#^review` and `Beta.md#^review` are
-distinct graph nodes, and an explicit transclusion path selects only its named
+distinct graph nodes, and an explicit note path selects only its named
 note. The active-rank graph deliberately traverses these resolved
 path-plus-fragment links. Tasks metadata separately determines whether the
 displayed status is Blocked, using vault-wide IDs such as `Alpha__review`.
@@ -276,11 +284,11 @@ task to Next or In Progress. They feed two read-only consumers: the
 recovery-only rank below, and the grace that keeps a directly referenced
 daily-note Next task (`KeptNext`) while it remains recent.
 
-Recent roots traverse the same eligible transcluded-task dependency graph as
+Recent roots traverse the same eligible dependency graph as
 current promotion roots with the same strongest-rank merge and cycle rules.
 This produces a recovery-only rank for unblocking. A Blocked task reached
 directly defaults to Next because Blocked has no active rank. An
-already-In-Progress task on the transclusion path can strengthen downstream
+already-In-Progress task on the dependency path can strengthen downstream
 recovery to In Progress. A task absent from this graph recovers to Ready. The
 recovery rank does not promote an ordinary Ready task; a directly recent task
 can retain an existing Next so a recovered task remains stable on repeated
@@ -344,7 +352,7 @@ state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`), including
 Pomodoro promotion for a task inherited from a scheduled project. A task
 already `[?]` remains Blocked until every reason is gone. Only then does it
 return to the stronger of the active and recovery-only ranks: Next when
-directly recent, In Progress only when a stronger eligible transclusion path
+directly recent, In Progress only when a stronger eligible dependency path
 requests it, or Ready when unreachable. A directly referenced Blocked task
 does not recover to its status from before blocking because no hidden
 previous-status field is stored. Terminal parents and unknown/custom parent
@@ -419,7 +427,7 @@ The command scans Markdown task lines allowed by the Obsidian Tasks
 | done, canceled, non-task, or unknown/custom | any | unchanged |
 
 Ranked propagation itself is monotonic and never lowers a dependency target.
-Removing a transclusion therefore does not perform a matching rollback. The
+Removing a dependency link therefore does not perform a matching rollback. The
 daily-note cleanup rule resets only a Next task that lives in a canonical
 daily note or the selected current ledger and is no longer reachable from the
 final open-Pomodoro graph (unless directly recent). Every other unlinked Next
