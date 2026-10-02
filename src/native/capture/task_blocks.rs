@@ -198,19 +198,21 @@ impl TaskBlockTracker {
     ) -> Vec<TaskBlockJson> {
         let settings = self.settings.clone();
         let tracked_all = self.tracked;
-        // Group tracked blocks by target so each note scans once.
-        let mut by_target: BTreeMap<PathBuf, Vec<TrackedTaskBlock>> =
+        // Group tracked blocks by target so each note scans once, carrying
+        // the global first-touch ordinal so output restores batch order
+        // rather than path order.
+        let mut by_target: BTreeMap<PathBuf, Vec<(usize, TrackedTaskBlock)>> =
             BTreeMap::new();
-        for tracked in tracked_all {
+        for (ordinal, tracked) in tracked_all.into_iter().enumerate() {
             by_target
                 .entry(tracked.target.clone())
                 .or_default()
-                .push(tracked);
+                .push((ordinal, tracked));
         }
-        let mut blocks = Vec::new();
-        for (target, mut group) in by_target {
-            // Preserve first-touch order within the note.
-            let _ = &mut group;
+        let mut ordered: Vec<(usize, TaskBlockJson)> = Vec::new();
+        for (target, group) in by_target {
+            // `group` preserves first-touch order within the note because it
+            // was built by iterating `tracked` in order.
             let Some((original, final_text)) = planner.loaded_texts(&target)
             else {
                 debug_assert!(false, "tracked task note was never loaded");
@@ -218,11 +220,10 @@ impl TaskBlockTracker {
             };
             let orig_lines: Vec<&str> = original.lines().collect();
             let final_lines: Vec<&str> = final_text.lines().collect();
-            let (old_to_new, new_to_old) = line_maps(&orig_lines, &final_lines);
-            let _ = old_to_new;
+            let (_, new_to_old) = line_maps(&orig_lines, &final_lines);
             let orig_scan = note_tasks::scan(&original, &settings);
             let final_scan = note_tasks::scan(&final_text, &settings);
-            for tracked in group {
+            for (ordinal, tracked) in group {
                 let Some(final_task) =
                     final_scan.task_at(tracked.current).or_else(|| {
                         // The forwarded line should be a task; fall back to
@@ -343,22 +344,25 @@ impl TaskBlockTracker {
                     &final_depths,
                     created,
                 );
-                blocks.push(TaskBlockJson {
-                    relative_target: tracked.relative_target,
-                    route: tracked.route,
-                    line: final_line + 1,
-                    block_id: final_task.block_id.clone(),
-                    text: final_task.description.clone(),
-                    status_symbol: final_task.status_symbol,
-                    status_name: final_task.status_name.clone(),
-                    created,
-                    roles: tracked.roles,
-                    lines,
-                });
-                let _ = before_refs;
+                ordered.push((
+                    ordinal,
+                    TaskBlockJson {
+                        relative_target: tracked.relative_target,
+                        route: tracked.route,
+                        line: final_line + 1,
+                        block_id: final_task.block_id.clone(),
+                        text: final_task.description.clone(),
+                        status_symbol: final_task.status_symbol,
+                        status_name: final_task.status_name.clone(),
+                        created,
+                        roles: tracked.roles,
+                        lines,
+                    },
+                ));
             }
         }
-        blocks
+        ordered.sort_by_key(|(ordinal, _)| *ordinal);
+        ordered.into_iter().map(|(_, block)| block).collect()
     }
 }
 
@@ -935,6 +939,81 @@ mod tests {
             "texts carry no terminators: {:?}",
             block.lines
         );
+    }
+
+    #[test]
+    fn cross_note_first_touch_order_with_revisit_and_second_parent() {
+        // Reverse lexical touch order (zulu before alpha), a revisit of the
+        // first parent, and a first touch of a second parent in the already
+        // touched zulu note. Output must follow first-touch order, not path
+        // order, with cumulative added rows and deduplicated roles.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let vault = write_vault(
+            &dir,
+            &[
+                (
+                    "zulu.md",
+                    concat!(
+                        "- [ ] #task Zulu ^z\n",
+                        "\t- keep z\n",
+                        "- [ ] #task Zulu Two ^z2\n",
+                        "\t- keep z2\n",
+                    ),
+                ),
+                ("alpha.md", "- [ ] #task Alpha ^a\n\t- keep a\n"),
+            ],
+        );
+        let batch = plan(
+            &vault,
+            "first @zulu+z\n\nsecond @alpha+a\n\nthird @zulu+z\n\nfourth @zulu+z2",
+        );
+        assert_eq!(batch.task_blocks.len(), 3);
+        let ids = batch
+            .task_blocks
+            .iter()
+            .map(|block| block.block_id.as_deref().unwrap_or("<none>"))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["z", "a", "z2"]);
+        for block in &batch.task_blocks {
+            assert_eq!(
+                block.roles,
+                vec![TaskBlockRole::SubBullet],
+                "roles deduplicated for {:?}",
+                block.block_id
+            );
+        }
+        // Parents stay at their final headline lines: zulu and alpha open
+        // their notes; the second zulu parent shifts below zulu's additions.
+        assert_eq!(batch.task_blocks[0].line, 1);
+        assert_eq!(batch.task_blocks[1].line, 1);
+        assert!(batch.task_blocks[2].line > 1);
+        let zulu_added = batch.task_blocks[0]
+            .lines
+            .iter()
+            .filter(|row| row.change == BlockLineChange::Added)
+            .map(|row| row.text.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            zulu_added.iter().any(|text| text.contains("first"))
+                && zulu_added.iter().any(|text| text.contains("third")),
+            "zulu block is cumulative: {zulu_added:?}"
+        );
+        let alpha_added = batch.task_blocks[1]
+            .lines
+            .iter()
+            .filter(|row| row.change == BlockLineChange::Added)
+            .map(|row| row.text.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(alpha_added.len(), 1);
+        assert!(alpha_added[0].contains("second"));
+        let zulu_two_added = batch.task_blocks[2]
+            .lines
+            .iter()
+            .filter(|row| row.change == BlockLineChange::Added)
+            .map(|row| row.text.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(zulu_two_added.len(), 1);
+        assert!(zulu_two_added[0].contains("fourth"));
     }
 
     #[test]
