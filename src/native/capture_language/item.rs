@@ -547,6 +547,11 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     {
         return Some(EqualsToken::Close);
     }
+    // Short close aliases `=*`/`=!` claim the token even when their list is
+    // malformed, so `=*abc` reports a close diagnostic, never a task.
+    if rest.starts_with('*') || rest.starts_with('!') {
+        return Some(EqualsToken::Close);
+    }
     let bytes = rest.as_bytes();
     let mut len = 0;
     while len < bytes.len() && bytes[len].is_ascii_digit() {

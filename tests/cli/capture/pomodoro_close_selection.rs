@@ -1201,8 +1201,10 @@ fn capture_pomodoro_close_selection_diagnostics() {
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
-    // A `^` link close ending in `!` is incomplete, not a toggle.
-    for args in ["^r:id=x!", "^r:id=x1!", "^r:id=x0!", "^r:id=x1,3!"] {
+    // A `^` link close ending in `!` defaults complete to task 1, so it
+    // lexes as a close (execution then fails on the fixture block ID, not
+    // on a dangling separator). A trailing `~` stays incomplete.
+    for args in ["^r:id=x~", "^r:id=x1,"] {
         let error = run_close_expect_error(
             &vault,
             &day_file,
@@ -1210,7 +1212,7 @@ fn capture_pomodoro_close_selection_diagnostics() {
             &[args],
         );
         assert!(
-            error.contains("is incomplete: type a task number after `!`"),
+            error.contains("is incomplete: type a task number after"),
             "{args}: {error}"
         );
     }
@@ -1607,4 +1609,199 @@ fn capture_pomodoro_close_selection_park() {
     assert_eq!(close["task_links"][0]["outcome"], "deferred");
     assert_eq!(close["task_links"][0]["source"], "unlisted");
     assert_eq!(close["task_links"][1]["outcome"], "parked");
+}
+
+#[test]
+fn capture_pomodoro_close_short_alias_equivalence() {
+    // Short aliases omit `x` before an initial `*`/`!`; an omitted list
+    // means task 1. Alias and explicit runs on identical vault copies must
+    // match in file bytes and semantic preview fields (raw spellings and
+    // input-dependent ranges compared separately).
+    for (alias, explicit, three_link) in [
+        ("=*", "=x*1", false),
+        ("=*1", "=x*1", false),
+        ("=!", "=x!1", false),
+        ("=!1", "=x!1", false),
+        ("=x*", "=x*1", false),
+        ("=x!", "=x!1", false),
+        ("=*2,3", "=x*2,3", true),
+        ("=!2,3", "=x!2,3", true),
+        ("=*!2", "=x*1!2", false),
+        ("=!2*", "=x!2*1", false),
+        ("=!~2", "=x!1~2", false),
+        ("=x2*", "=x2*1", false),
+        ("=x0!", "=x0!1", false),
+    ] {
+        let (_temp_a, vault_a, day_a) = if three_link {
+            drop_worked_vault("bob-cli-close-alias-a")
+        } else {
+            close_worked_vault("bob-cli-close-alias-a")
+        };
+        let (_temp_b, vault_b, day_b) = if three_link {
+            drop_worked_vault("bob-cli-close-alias-b")
+        } else {
+            close_worked_vault("bob-cli-close-alias-b")
+        };
+        let json_a =
+            run_close_json(&vault_a, &day_a, "2026-09-28 09:37:00", &[alias]);
+        let json_b = run_close_json(
+            &vault_b,
+            &day_b,
+            "2026-09-28 09:37:00",
+            &[explicit],
+        );
+        assert_eq!(json_a["ok"], true, "{alias}");
+        assert_eq!(json_b["ok"], true, "{explicit}");
+        // Raw spellings differ by design; normalized lists must match.
+        assert_eq!(json_a["pomodoro_close"]["raw"], alias, "{alias}");
+        assert_eq!(json_b["pomodoro_close"]["raw"], explicit, "{explicit}");
+        for field in [
+            "in_progress",
+            "park",
+            "complete",
+            "drop",
+            "tasks",
+            "task_links",
+            "carried",
+        ] {
+            assert_eq!(
+                json_a["pomodoro_close"][field],
+                json_b["pomodoro_close"][field],
+                "{alias} vs {explicit}: {field}"
+            );
+        }
+        // Defaulted task 1 is a listed selection.
+        if ["=*", "=!", "=x*", "=x!"].contains(&alias) {
+            assert_eq!(
+                json_a["pomodoro_close"]["task_links"][0]["source"], "listed",
+                "{alias}"
+            );
+        }
+        let day_a_after = fs::read_to_string(&day_a).expect("read day");
+        let day_b_after = fs::read_to_string(&day_b).expect("read day");
+        assert_eq!(day_a_after, day_b_after, "{alias} vs {explicit}: day");
+        for file in ["bob.md", "sase.md"] {
+            assert_eq!(
+                fs::read_to_string(vault_a.join(file)).expect("read"),
+                fs::read_to_string(vault_b.join(file)).expect("read"),
+                "{alias} vs {explicit}: {file}"
+            );
+        }
+    }
+
+    // Conflicting implicit/explicit selections must fail.
+    for args in ["=*!", "=x1*", "=x1!", "=*~1", "=!~1"] {
+        let (_temp, vault, day_file) =
+            close_worked_vault("bob-cli-close-alias-conflict");
+        let before = fs::read_to_string(&day_file).expect("read");
+        let error = run_close_expect_error(
+            &vault,
+            &day_file,
+            "2026-09-28 09:37:00",
+            &[args],
+        );
+        assert!(error.contains("cannot both"), "{args}: {error}");
+        assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+    }
+
+    // Malformed aliases claim close syntax, never task creation.
+    for (args, phrase) in [
+        ("=*abc", "is not a task list"),
+        ("=!0", "task numbers start at 1"),
+        ("=**2", "use one `*` list"),
+        ("=!1,,2", "expected a task number"),
+        ("=*,2", "expected a task number"),
+        ("=!,", "expected a task number"),
+    ] {
+        let (_temp, vault, day_file) =
+            close_worked_vault("bob-cli-close-alias-bad");
+        let before = fs::read_to_string(&day_file).expect("read");
+        let error = run_close_expect_error(
+            &vault,
+            &day_file,
+            "2026-09-28 09:37:00",
+            &[args],
+        );
+        assert!(error.contains(phrase), "{args}: {error}");
+        assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+    }
+
+    // Empty comma elements never default; trailing comma/~ dangle.
+    for args in ["=*1,", "=!2,", "=*~"] {
+        let (_temp, vault, day_file) =
+            close_worked_vault("bob-cli-close-alias-dangle");
+        let error = run_close_expect_error(
+            &vault,
+            &day_file,
+            "2026-09-28 09:37:00",
+            &[args],
+        );
+        assert!(error.contains("is incomplete"), "{args}: {error}");
+    }
+
+    // No numbered links: even the implicit 1 is out of range, quoting the
+    // actual input and suggesting plain `=x`. No running session uses the
+    // existing no-running diagnostic. Both leave every file untouched.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-alias-empty");
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n\t- quick note\n",
+    );
+    let before = fs::read_to_string(&day_file).expect("read");
+    for args in ["=*", "=!"] {
+        let error = run_close_expect_error(
+            &vault,
+            &day_file,
+            "2026-09-28 09:37:00",
+            &[args],
+        );
+        assert!(error.contains(args), "{args}: {error}");
+        assert!(error.contains("=x"), "{args}: {error}");
+        assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+    }
+
+    // A batch whose later shorthand close fails rolls back the earlier edit.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-alias-batch");
+    let before = fs::read_to_string(&day_file).expect("read");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("-2\n\n=*abc")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("batch rollback");
+    assert!(!output.status.success());
+    assert!(stdout(&output).contains("is not a task list"));
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+
+    // Dry-run changes no vault files.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-alias-dry");
+    let before_day = fs::read_to_string(&day_file).expect("read");
+    let before_bob = fs::read_to_string(vault.join("bob.md")).expect("read");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=*")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("dry run");
+    assert_success(&output);
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before_day);
+    assert_eq!(
+        fs::read_to_string(vault.join("bob.md")).expect("read"),
+        before_bob
+    );
 }

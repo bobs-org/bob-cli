@@ -75,7 +75,7 @@ anything is written, and any failure rolls the whole batch back.
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
 | `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name ("again"), otherwise a new named session is created and started; the item must contain only the start token |
 | `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`, `=3#bugs~1,3`); `~` drops, the drop part always comes last, and the item must contain only the start token |
-| `=x[<N>][*<P>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, with `*`, `!`, and `~` in any order); `<N>` keeps only those numbered Task Links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; one Work Log entry may sit on the close line, several use child bullets |
+| `=x[<N>][*<P>][!<M>][~<K>]` (also `=*…`/`=!…` omitting `x`) | Close today's running timed Pomodoro (case-insensitive `=X`, with `*`, `!`, and `~` in any order); `<N>` keeps only those numbered Task Links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; a present-but-empty `*`/`!` group means task 1 (`=*` parks 1, `=!` completes 1); one Work Log entry may sit on the close line, several use child bullets |
 | `=x [<n>] <entry text…>` | One entry on the close line: with no number it logs to the first task the close works (task 1 for plain `=x`); a leading number names the task, so only the first token is an index (`=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1) |
 | `=x` + `- <n> <text>` (+ `  - <detail>`) | Several entries while closing: each first-level bullet logs its text to worked task `<n>`, and a two-space bullet nests an undated detail under its entry; an inline entry plus bullets fails |
 | `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; an inline entry sits right after its close with operators trailing (`=x wired the lexer =` closes with the entry then starts); `=x =~2` closes then starts without link 2 of the next lineup, while `=x~2 =` drops link 2 of the running session and then starts |
@@ -123,7 +123,11 @@ anything is written, and any failure rolls the whole batch back.
 | `=x1~2` | Close keeping task 1 in progress, dropping task 2, deferring the rest |
 | `=x1!2~3` | Close keeping task 1 in progress, completing task 2, dropping task 3 |
 | `=x0` | Close deferring every numbered Task Link |
-| `=x!` | Incomplete: type a task number after `!` (`capture-parse` needs `pomodoro_close_task`) |
+| `=*` | Close parking task 1, deferring the rest (`=x*1`) |
+| `=!` | Close completing task 1 (`=x!1`) |
+| `=x*` | Close parking task 1, deferring the rest |
+| `=x!` | Close completing task 1 |
+| `=*!2` | Close parking task 1 and completing task 2 (`=x*1!2`) |
 | `=x~` | Incomplete: type a task number after `~` (`capture-parse` needs `pomodoro_close_task`) |
 | `=` | Start the next future Pomodoro (25 minutes); a bare `=` is a complete start, not an incomplete state |
 | `=3` | Start the next future Pomodoro for 15 minutes; a counted `=` token is a start, not prose |
@@ -1470,10 +1474,12 @@ close… next up is CAPTURE at line 13"; `=x more` is an
 #### Choosing each Task Link's outcome
 
 Close the running session with `=x[<N>][*<P>][!<M>][~<K>]` (case-insensitive
-`=X`, with `*`, `!`, and `~` in any order) to decide, by number, which of its
+`=X`, with `*`, `!`, and `~` in any order; `=*`/`=!` omit `x` before an
+initial `*`/`!`) to decide, by number, which of its
 Task Links stay in progress, which are deferred, which are completed and
 struck, and which are dropped — in one capture instead of editing the
-`[[…]]#` / `![[…]]` markers by hand before Ctrl+Enter:
+`[[…]]#` / `![[…]]` markers by hand before Ctrl+Enter (single-quote the
+argument: shells glob `*` and expand `!`):
 
 ```bash
 bob capture '=x2'
@@ -1484,6 +1490,8 @@ bob capture '=x0'
 bob capture '=x~4,5'
 bob capture '=x1*2!3~4'
 bob capture '=x0*2'
+bob capture '=*'
+bob capture '=!2'
 ```
 
 Parking records normal In Progress work without carrying those links into
@@ -1499,9 +1507,12 @@ whitespace. `<N>` omitted leaves unlisted links at their ledger outcome
 unless `*<P>` is present, which activates selection mode like `<N>`;
 `<N>` present, even as a lone `0`, turns every unlisted link that would
 have been in progress into deferred, and `=x*2` defers unlisted plain links
-exactly like `=x2`. `=x0*2` is valid (no ordinary continuing selections,
+exactly like `=x2`. A present-but-empty `*`/`!` group means task 1 (`=*` is
+`=x*1`, `=!` is `=x!1`, `=x*` parks 1, `=x!` completes 1); an absent group
+stays absent and `~` never defaults. `=x0*2` is valid (no ordinary continuing selections,
 task 2 parked, other eligible unlisted links deferred); `*0`, `!0`, and `~0`
-are invalid. Order inside a list does not matter, and `*<P>`, `!<M>`, and
+are invalid. Only an entirely omitted `*`/`!` group defaults: empty comma
+elements never do (`=*,2` fails, `=*1,` dangles). Order inside a list does not matter, and `*<P>`, `!<M>`, and
 `~<K>` may each appear at most once, in any order after an optional initial
 `<N>`. `*` starts a list; it is neither a postfix modifier nor a wildcard. A
 selection is the marker edits the user would make by hand, applied to the
@@ -1675,10 +1686,10 @@ then optionally `*` and the numbers to park, `!` and the numbers to complete,
 and `~` and the numbers to drop (for example `=x1*2!3~4`) ```,
 `task number 99999999999 is too large`, and
 ``write the task numbers right after `=x`, with no spaces (for example
-`=x1*2!3~4`)``. A token ending in a dangling separator (`=x1,`, `=x*`, `=x!`,
-`=x~`, `=x1*`, `=x*2,`, `=x1!`, `=x!2,`) is an editing state: `bob capture` rejects it
+`=x1*2!3~4`)``. A present-but-empty `*`/`!` group means task 1 (so `=x!~2`
+completes 1 and drops 2, while `=x*!2` parks 1 and completes 2). A token ending in a dangling separator (`=x1,`, `=*1,`, `=x~`, `=*~`, `=x*2,`, `=x!2,`) is an editing state: `bob capture` rejects it
 (`` `=x1,` is incomplete: type a task number after `,` ``) while
-`capture-parse` reports mode `incomplete` needing `pomodoro_close_task`.
+`capture-parse` reports mode `incomplete` needing `pomodoro_close_task`. A trailing `*`/`!` is valid, never dangling.
 **Warnings** (shown on the row and top-level, never blocking): a listed
 in-progress line whose task did not end In Progress
 (``task 2 `[[bob#^x]]` is Blocked, so it was not started``) and a listed

@@ -1041,11 +1041,19 @@ fn execution_parses_equals_family_starts_alongside_close() {
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
         assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
     }
+    // A present-but-empty `!` defaults to task 1, so `=x!` closes.
+    let defaulted = execute("=x!").expect("defaulted close");
+    match defaulted.kind {
+        CaptureKind::PomodoroClose { spec } => {
+            assert_eq!(spec.complete, vec![1], "=x!");
+        }
+        other => panic!("=x!: expected close, got {other:?}"),
+    }
     // A dangling separator is an editing state: strict execution rejects
     // it instead of guessing.
-    let dangling = execute("=x!").expect_err("dangling close");
+    let dangling = execute("=x~").expect_err("dangling close");
     assert!(
-        dangling.contains("`=x!` is incomplete: type a task number after `!`"),
+        dangling.contains("`=x~` is incomplete: type a task number after `~`"),
         "{dangling}"
     );
 }

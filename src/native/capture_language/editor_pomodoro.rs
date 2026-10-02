@@ -1034,7 +1034,12 @@ pub(super) fn parse_editor_close_item<'a>(
     let first = parent_trimmed.split_whitespace().next()?;
     let leading = parent_text.len() - parent_text.trim_start().len();
     let token_start = parent.raw.start + leading;
-    let token_end = token_start + 2;
+    // The close prefix is `=x`/`=X` (two bytes) for long closes and `=`
+    // (one byte) for `=*`/`=!` aliases; spans cover exactly what was typed.
+    let prefix_len = classify_whole_item_close(first)
+        .map(|(_, prefix)| prefix)
+        .unwrap_or(2);
+    let token_end = token_start + prefix_len;
     let close_span = Span {
         start: token_start,
         end: token_end,

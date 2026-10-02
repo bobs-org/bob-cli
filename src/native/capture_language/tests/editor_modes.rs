@@ -1176,8 +1176,8 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         "Text @r:id=x s:2"
     );
     // Prose lookalikes stay ordinary tasks with no diagnostics.
-    // `=3` is now a whole-item start, not prose, and `=x!` is a dangling
-    // separator (an incomplete close, not prose).
+    // `=3` is now a whole-item start, not prose, and `=x!` is a valid
+    // defaulted close (complete 1), not prose.
     for raw in ["=xx", "=xa", "==", "Plan =x", "= foo", "=- foo"] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Task, "{raw}");
@@ -1185,10 +1185,19 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         assert!(parse.pomodoro_close.is_none(), "{raw}");
         assert!(parse.pomodoro_start.is_none(), "{raw}");
     }
-    let dangling = editor("=x!");
-    assert_eq!(dangling.mode, EditorMode::Incomplete, "=x!");
-    assert_eq!(dangling.needs, vec![Need::PomodoroCloseTask], "=x!");
-    assert!(dangling.diagnostics.is_empty(), "=x!");
+    let defaulted = editor("=x!");
+    assert_eq!(defaulted.mode, EditorMode::PomodoroClose, "=x!");
+    assert!(defaulted.needs.is_empty(), "=x!");
+    assert!(defaulted.diagnostics.is_empty(), "=x!");
+    assert_eq!(
+        defaulted.pomodoro_close.as_ref().expect("spec").complete,
+        vec![1],
+        "=x!"
+    );
+    let dangling = editor("=x~");
+    assert_eq!(dangling.mode, EditorMode::Incomplete, "=x~");
+    assert_eq!(dangling.needs, vec![Need::PomodoroCloseTask], "=x~");
+    assert!(dangling.diagnostics.is_empty(), "=x~");
     // A multi-item draft mixes an adjustment, a close, and a task.
     let mixed = parse_for_editor("+5\n\n=x\n\nCall bank @Cash+");
     assert_eq!(mixed.items.len(), 3, "mixed");

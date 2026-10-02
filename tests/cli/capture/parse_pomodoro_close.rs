@@ -338,8 +338,31 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         );
     }
 
-    // A `^` link close ending in `!` is incomplete, not a toggle.
-    for text in ["^r:id=x!", "^r:id=x1!", "^r:id=x0!", "^r:id=x1,3!"] {
+    // A `^` link close ending in `!` defaults complete to task 1, not a
+    // toggle: `^r:id=x!` and `^r:id=x0!` are valid links, while
+    // `^r:id=x1!` overlaps. A trailing `~` stays incomplete.
+    for text in ["^r:id=x!", "^r:id=x0!"] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_link", "{text}");
+        assert_eq!(
+            value["pomodoro_close"]["complete"],
+            serde_json::json!([1]),
+            "{text}"
+        );
+    }
+    for text in ["^r:id=x1!", "^r:id=x1,3!"] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_link", "{text}");
+        assert!(
+            value["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diag| diag["code"] == "invalid_pomodoro_close"),
+            "{text}: {value}"
+        );
+    }
+    for text in ["^r:id=x~", "^r:id=x1,"] {
         let value = parse(text);
         assert_eq!(value["mode"], "incomplete", "{text}");
         assert_eq!(
@@ -383,7 +406,59 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         "{child}"
     );
 
-    // Dangling separators are editing states, never mistakes.
+    // Valid defaults: an omitted `*`/`!` list means task 1 with spans over
+    // exactly what was typed (never a manufactured `1`).
+    for (text, close, spans) in [
+        (
+            "=*",
+            serde_json::json!({ "raw": "=*", "in_progress": null, "park": [1], "complete": [] }),
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 2, "kind": "pomodoro_close_park" },
+            ]),
+        ),
+        (
+            "=!",
+            serde_json::json!({ "raw": "=!", "in_progress": null, "complete": [1] }),
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 2, "kind": "pomodoro_close_complete" },
+            ]),
+        ),
+        (
+            "=x*",
+            serde_json::json!({ "raw": "=x*", "in_progress": null, "park": [1], "complete": [] }),
+            serde_json::json!([
+                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+                { "start": 2, "end": 3, "kind": "pomodoro_close_park" },
+            ]),
+        ),
+        (
+            "=x!",
+            serde_json::json!({ "raw": "=x!", "in_progress": null, "complete": [1] }),
+            serde_json::json!([
+                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+                { "start": 2, "end": 3, "kind": "pomodoro_close_complete" },
+            ]),
+        ),
+        (
+            "=!2",
+            serde_json::json!({ "raw": "=!2", "in_progress": null, "complete": [2] }),
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 3, "kind": "pomodoro_close_complete" },
+            ]),
+        ),
+    ] {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_close", "{text}");
+        assert_eq!(value["pomodoro_close"], close, "{text}");
+        assert_eq!(value["spans"], spans, "{text}");
+        assert_eq!(value["diagnostics"], serde_json::json!([]), "{text}");
+    }
+
+    // Dangling separators are editing states, never mistakes. A trailing
+    // `*`/`!` now defaults to task 1, so only `,` and `~` dangle.
     for (text, in_progress, complete, spans) in [
         (
             "=x1,",
@@ -396,7 +471,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
             ]),
         ),
         (
-            "=x!",
+            "=x~",
             serde_json::json!(null),
             serde_json::json!([]),
             serde_json::json!([
@@ -405,12 +480,12 @@ fn capture_parse_pomodoro_close_selection_protocol() {
             ]),
         ),
         (
-            "=x1!",
-            serde_json::json!([1]),
+            "=*1,",
+            serde_json::json!(null),
             serde_json::json!([]),
             serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
-                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 3, "kind": "pomodoro_close_park" },
                 { "start": 3, "end": 4, "kind": "interactive_placeholder" },
             ]),
         ),

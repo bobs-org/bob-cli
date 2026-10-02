@@ -158,11 +158,11 @@ span over `#` and the partial `pomodoro_start` spec, and `=x#name` reports \
 mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
 `#name`. A whole-item \
 `=x[<N>][*<P>][!<M>][~<K>]` close (case-insensitive `=X`, with `*`, `!`, and `~` in \
-any order) reports mode 'pomodoro_close' with a `pomodoro_close` object \
-(`raw` plus the additive `in_progress` list, null when no `<N>` was typed, \
+any order; `=*`/`=!` omit `x` before an initial `*`/`!`) reports mode 'pomodoro_close' with a `pomodoro_close` object \
+(`raw` exactly as typed plus the additive `in_progress` list, null when no `<N>` was typed, \
 the `park` list, the `complete` list, the `drop` list, and the `log` entries (`index`, \
-`text`, `details`) in typed order) \
-and spans covering the `=x` token (`pomodoro_close`), the `<N>` list \
+`text`, `details`) in typed order; a present-but-empty `*`/`!` group means task 1) \
+and spans covering the `=`/`=x` token (`pomodoro_close`), the `<N>` list \
 including its commas (`pomodoro_close_in_progress`), the `*<P>` list \
 including the `*` (`pomodoro_close_park`), the `!<M>` list \
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including \
@@ -170,7 +170,7 @@ the `~` (`pomodoro_close_drop`), and each entry index \
 (`pomodoro_close_log_index`; entry text renders as neutral prose but keeps \
 its wikilink spans); the human `close` line reads \
 `=x1*2!3~4 (in progress 1 · parked 2 · complete 3 · drop 4 · defer the rest)`, with \
-`in progress none` for `=x0`, `parked 2 · defer the rest` for `=x*2`, a bare `=x` for a plain close, and \
+`in progress none` for `=x0`, `parked 2 · defer the rest` for `=x*2`, `=* (parked 1 · defer the rest)` and `=! (complete 1)`, a bare `=x` for a plain close, and \
 `log 2 'wired the lexer' (+1 detail)` for typed entries with details. \
 One entry may sit on the close line itself (`bob capture-parse -f json -- \
 '=x wired it'`): it logs to the first task the close works, or to the \
@@ -193,13 +193,13 @@ block link, or a fence reports 'pomodoro_close' plus an \
 `invalid_pomodoro_close` diagnostic on the precise range, and so does a bad \
 inline entry (stray marker, misplaced operators, no-spaces join, Task Link \
 ending, block link, fence, or mixing with bullets). \
-Every malformed list (duplicates, overlaps, a misplaced `0`, a second `!` \
+Every malformed list (duplicates, overlaps including defaulted-1 overlaps like `=x1*` and `=*!`, a misplaced `0`, a second `!` \
 or `~`, a bad character, an oversized number, or a space inside the lists, \
 which gets the no-spaces hint) reports the same. A token ending in a \
-dangling separator (`=x1,`, `=x!`, `=x~`, `=x1!`, `=x!2,`, `=x0!`) reports \
+dangling separator (`=x1,`, `=x~`, `=*1,`, `=x!2,`, `=*~`) reports \
 mode 'incomplete' needing `pomodoro_close_task`, with the partial spec, the \
 spans typed so far, and one `interactive_placeholder` span over the \
-separator. A same-line chain splits into one `items[]` entry per operator, \
+separator. A trailing `*`/`!` defaults to task 1 instead of dangling, so `=*`, `=!`, `=x*`, and `=x!` are valid. A same-line chain splits into one `items[]` entry per operator, \
 with child lines attaching to the line's `=x` (the last `=x` when it closes \
 twice); a chain whose `=x` is not last nests its item ranges, so they never \
 partially overlap. Other `=`-prefixed tokens \

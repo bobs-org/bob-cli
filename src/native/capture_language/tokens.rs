@@ -466,10 +466,15 @@ pub(super) fn parse_colon_link_tail(
                 || link_close_after_x(raw).is_some() =>
         {
             let display = format!("={raw}");
-            let spec = match link_close_after_x(raw) {
+            let spec = match classify_link_close(raw) {
                 None => PomodoroCloseSpec::plain(display.clone()),
-                Some(after_x) => {
-                    match lex_close_selection(after_x, 0, &display) {
+                Some((after_x, x_len)) if after_x.is_empty() => {
+                    debug_assert_eq!(x_len, 1);
+                    PomodoroCloseSpec::plain(display.clone())
+                }
+                Some((after_x, x_len)) => {
+                    let base = 1 + x_len;
+                    match lex_close_selection(after_x, base, &display) {
                         Ok(CloseSelectionOutcome::Valid(lex)) => {
                             close_spec_from_lex(display.clone(), &lex)
                         }
@@ -639,9 +644,9 @@ pub(super) fn parse_pomodoro_start_suffix(
     })
 }
 
-/// Whether a `^route:…` tail carries a close-shaped `=x…` suffix. A trailing
-/// `!` on such a tail is a dangling close separator (an incomplete close),
-/// not an explicit-toggle marker.
+/// Whether a `^route:…` tail carries a close-shaped suffix (`=x…`, `=*…`,
+/// `=!…`). A trailing `!` inside such a suffix is a defaulted complete
+/// group (a valid close), not an explicit-toggle marker.
 fn caret_tail_has_close_suffix(tail: &str) -> bool {
     let Some((_, raw_suffix)) = tail.split_once('=') else {
         return false;
@@ -724,8 +729,9 @@ pub(super) enum CaretTokenShape {
     },
     /// A `^route:block-id=x…` token whose selection ends in a dangling
     /// separator: an editing state, not a mistake. `suffix_offset` starts
-    /// the `=`, `separator_range` covers the dangling `,`/`!`/`~`/`*`, and
-    /// the list ranges cover what was typed so far.
+    /// the `=`, `separator_range` covers the dangling `,`/`~`, and
+    /// the list ranges cover what was typed so far. A trailing `*`/`!`
+    /// defaults to task 1 instead of dangling.
     CloseIncomplete {
         route: String,
         block_id: String,
@@ -786,11 +792,11 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
             POMODORO_LINK_TOGGLE_ERROR.to_string(),
         );
     }
-    // A close-shaped `=` suffix (`x`, `x` plus lists) lexes through the
-    // shared selection lexer with token-relative offsets, so the editor can
-    // span the lists, report precise diagnostics, and surface the dangling
-    // separator as an incomplete state. Every other suffix keeps today's
-    // `=<X>` start handling below.
+    // A close-shaped `=` suffix (`x`, `x` plus lists, `*`/`!` aliases)
+    // lexes through the shared selection lexer with token-relative offsets,
+    // so the editor can span the lists, report precise diagnostics, and
+    // surface the dangling separator as an incomplete state. Every other
+    // suffix keeps today's `=<X>` start handling below.
     if let Some((before_eq, raw_suffix)) = tail.split_once('=')
         && (raw_suffix.eq_ignore_ascii_case("x")
             || link_close_after_x(raw_suffix).is_some())
@@ -902,9 +908,11 @@ fn classify_caret_close_suffix(
         }
     }
     let suffix_offset = link_base + before_eq.len();
-    let after_x_offset = suffix_offset + 2;
+    let (after_x, x_len) = classify_link_close(raw_suffix)
+        .map(|(selection, x_len)| (selection, x_len))
+        .unwrap_or(("", 1));
+    let after_x_offset = suffix_offset + 1 + x_len;
     let display = format!("={raw_suffix}");
-    let after_x = link_close_after_x(raw_suffix).unwrap_or("");
     let link_end = link_base + block_id.len();
     match lex_close_selection(after_x, after_x_offset, &display) {
         Ok(CloseSelectionOutcome::Valid(lex)) => CaretTokenShape::Complete {

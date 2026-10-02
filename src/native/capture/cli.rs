@@ -225,7 +225,7 @@ see earlier staged edits, dry-run reports without writing, and any failure \
 rolls the whole batch back, so `=x`, blank line, `=` switches sessions \
 atomically.\n\n\
 Capture a whole item `=x[<N>][*<P>][!<M>][~<K>]` (case-insensitive `=X`, with \
-`*`, `!`, and `~` in any order) to close today's running timed Pomodoro the \
+`*`, `!`, and `~` in any order; `=*` omits `x` before an initial `*` and `=!` omits it before `!`) to close today's running timed Pomodoro the \
 way Obsidian's Ctrl+Enter completion does, plus an auto-decrement that \
 shortens an early-stopped session to the earliest five-minute step at or \
 after now (never extended; an overrun is reported). A bare `=x` keeps \
@@ -238,7 +238,7 @@ forms do each part at \
 once. `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
 `--dry-run`, and as JSON `task_links`); a lone `0` means no \
-task stays in progress, as in `=x0`. Log one entry on the close line: \
+task stays in progress, as in `=x0`. A present `*`/`!` group with no digits means task 1 (`=*` parks 1, `=!` completes 1, `=x*` parks 1, `=x!` completes 1, `=*!2` parks 1 and completes 2); an absent group stays absent and `~` never defaults. Log one entry on the close line: \
 `=x wired the lexer` logs to the first task the close works (task 1 for a \
 plain `=x`), and `=x1,3 3 fixed the flaky test` logs to task 3. A leading \
 number names the task, so only the entry's first token is an index (`=x 1 \
@@ -254,20 +254,20 @@ one except `~<K>`; only the first token is an index, so `- 1 \
 fixed 3 bugs` logs `fixed 3 bugs` and every backslash stays literal. The \
 outcome is exactly the sub-bullets the user would type by hand under that \
 Task Link, followed by the unchanged close. A close's child lines are Work \
-Log bullets; a token ending in `,`, `!`, `~`, or `*` (`=x1,`, `=x*`) is incomplete and \
+Log bullets; a token ending in `,` or `~` (`=x1,`, `=*1,`, `=*~`) is incomplete and \
 fails, a dangling bullet (`- 1`) or dangling inline number (`=x 1`) is incomplete and \
 fails, whitespace is \
 never allowed inside the lists, and `=xx`/`=xa`/`Plan =x` stay ordinary \
-prose. Entry text is literal (`@route`, `@@route`, `s:<N>`, `p:<N>`, `%`, \
+prose. A trailing `*`/`!` defaults to task 1 instead of dangling, so `=*`, `=!`, `=x*`, and `=x!` are valid. Entry text is literal (`@route`, `@@route`, `s:<N>`, `p:<N>`, `%`, \
 `#`, and `:query` stay text; plain wikilinks are allowed), while block \
 links, embeds, and code fences are rejected. An inline entry plus child \
 bullets fails with the bullet to write. A chain line's bullets attach to \
 its `=x`, and an inline entry chains too (`=x wired the lexer =` closes \
 with the entry then starts, `-2 =x wired the lexer` shortens then closes). \
-`@route:block-id=x…` and `^route:block-id=x…` \
+`@route:block-id=x…`, `@route:block-id=*…`, `@route:block-id=!…` (and the `^` forms) \
 first put that existing task into the running session then close it, and \
 `<text> @route:block-id=x…` creates the new task in the running session \
-then closes it; numbers refer to the post-link lineup, and `#name` with a \
+then closes it; numbers (including a defaulted 1) refer to the post-link lineup, and `#name` with a \
 close fails because only the running session can close. Later items see \
 earlier staged edits, dry-run reports without writing, and any failure \
 rolls the whole batch back, so \

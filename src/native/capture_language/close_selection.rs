@@ -58,44 +58,93 @@ pub(crate) enum CloseSelectionOutcome {
     Incomplete(CloseSelectionIncomplete),
 }
 
-/// Return the text after the `x` when a whole-item token is
-/// selection-shaped: it starts with `=x`/`=X` and the character right after
-/// the `x` is an ASCII digit, `,`, `!`, `~`, or `*`. `None` for plain `=x`,
-/// every other `=` shape (`=xx`, `=xa`, `=x.`), and non-close tokens.
+/// Classify the text after `=` for a close token: the selection body to
+/// lex plus the `x` length (1 for a long `x`/`X` close, 0 for a short
+/// `*`/`!` alias). `None` for non-close shapes. A plain long close (`x`)
+/// reports an empty selection with length 1; a selection-shaped long close
+/// reports the text after `x`; any suffix starting with `*` or `!` is a
+/// short alias (claimed even when its list is malformed, so `=*abc` reports
+/// a close diagnostic, never a task).
+fn close_after_eq_parts(after_eq: &str) -> Option<(&str, usize)> {
+    if after_eq.eq_ignore_ascii_case("x") {
+        return Some(("", 1));
+    }
+    if let Some(after_x) = after_eq
+        .strip_prefix('x')
+        .or_else(|| after_eq.strip_prefix('X'))
+    {
+        if after_x.as_bytes().first().is_some_and(|byte| {
+            byte.is_ascii_digit()
+                || *byte == b','
+                || *byte == b'!'
+                || *byte == b'~'
+                || *byte == b'*'
+        }) {
+            return Some((after_x, 1));
+        }
+        return None;
+    }
+    if after_eq.starts_with('*') || after_eq.starts_with('!') {
+        return Some((after_eq, 0));
+    }
+    None
+}
+
+/// Classify a whole-item `=`-prefixed close token: the selection body to
+/// lex plus the prefix length from the token start (`2` for `=x`/`=X`,
+/// `1` for `=*`/`=!` aliases). `Some` for a plain long close and for every
+/// selection-shaped or alias token (aliases claimed even when malformed);
+/// `None` for every other `=` shape (`=xx`, `=xa`, `=x.`, `==`) and
+/// non-close tokens.
+pub(crate) fn classify_whole_item_close(token: &str) -> Option<(&str, usize)> {
+    let after_eq = token.strip_prefix('=')?;
+    let (selection, x_len) = close_after_eq_parts(after_eq)?;
+    Some((selection, 1 + x_len))
+}
+
+/// Classify a link suffix (the text after `=`): the selection body to lex
+/// plus the `x` length (`1` for `x`/`X`, `0` for `*`/`!` aliases). `Some`
+/// for a selection-shaped long suffix and for every alias suffix (claimed
+/// even when malformed); `None` for a plain `x` suffix and every `=<X>`
+/// start shape.
+pub(crate) fn classify_link_close(suffix: &str) -> Option<(&str, usize)> {
+    close_after_eq_parts(suffix)
+}
+
+/// Return the text after the `x` (or the alias sigil) when a whole-item
+/// token is selection-shaped: a long `=x`/`=X` close followed by a digit,
+/// `,`, `!`, `~`, or `*`, or any `=*`/`=!` alias (claimed even when its
+/// list is malformed). `None` for plain `=x`, every other `=` shape
+/// (`=xx`, `=xa`, `=x.`), and non-close tokens.
 pub(crate) fn whole_item_close_after_x(token: &str) -> Option<&str> {
     let after_eq = token.strip_prefix('=')?;
     link_close_after_x(after_eq)
 }
 
-/// Return the text after the `x` when a link suffix (the text after `=`) is
-/// selection-shaped: it starts with `x`/`X` and the character right after
-/// the `x` is an ASCII digit, `,`, `!`, `~`, or `*`. `None` for a plain `x`
-/// suffix and every `=<X>` start shape.
+/// Return the selection text when a link suffix (the text after `=`) is
+/// close-shaped: a long `x`/`X` close followed by a digit, `,`, `!`, `~`,
+/// or `*`, or any `*`/`!` alias (claimed even when malformed). `None` for
+/// a plain `x` suffix and every `=<X>` start shape.
 pub(crate) fn link_close_after_x(suffix: &str) -> Option<&str> {
-    let after_x = suffix
-        .strip_prefix('x')
-        .or_else(|| suffix.strip_prefix('X'))?;
-    if after_x.as_bytes().first().is_some_and(|byte| {
-        byte.is_ascii_digit()
-            || *byte == b','
-            || *byte == b'!'
-            || *byte == b'~'
-            || *byte == b'*'
-    }) {
-        Some(after_x)
-    } else {
-        None
+    let (selection, x_len) = close_after_eq_parts(suffix)?;
+    if x_len == 1 && selection.is_empty() {
+        return None;
     }
+    Some(selection)
 }
 
-/// Lex the text after a close's `x` (`after_x`), where `base_offset` is the
-/// absolute byte offset of `after_x`'s first byte and `token` is the display
-/// token (`=x...`) interpolated into diagnostics.
+/// Lex the selection body after a close prefix (`after_x`), where
+/// `base_offset` is the absolute byte offset of `after_x`'s first byte and
+/// `token` is the display token (`=x...`, `=*...`, `=!...`) interpolated
+/// into diagnostics. For short aliases `after_x` starts with `*`/`!` (the
+/// `x` is omitted); for long closes it is the text after `x`.
 ///
-/// An empty `after_x` is a plain close. A trailing `,`, `!`, `~`, or `*` is an
-/// [`CloseSelectionOutcome::Incomplete`] editing state, unless a lexical
-/// error elsewhere in the token wins. Anything else malformed is a
-/// [`CloseSelectionError`] with a precise range.
+/// An empty `after_x` is a plain close. A present `*`/`!` group with no
+/// digits defaults to task 1 before validation, so `=*`, `=!`, `=x*`, and
+/// `=x!` are valid and `=x1*`/`=x1!`/`=*!` are overlap errors. A trailing
+/// `,` or `~` is an [`CloseSelectionOutcome::Incomplete`] editing state,
+/// unless a lexical error elsewhere in the token wins. Anything else
+/// malformed is a [`CloseSelectionError`] with a precise range.
 pub(crate) fn lex_close_selection(
     after_x: &str,
     base_offset: usize,
@@ -150,22 +199,22 @@ pub(crate) fn lex_close_selection(
             range: (base_offset + second, base_offset + second + 1),
         });
     }
-    if let Some(body) = after_x.strip_suffix('!') {
-        let parsed = parse_selection_body(body, base_offset, token, token_end)?;
-        return Ok(CloseSelectionOutcome::Incomplete(
-            CloseSelectionIncomplete {
-                separator_range: (token_end - 1, token_end),
-                separator: '!',
-                in_progress: parsed.in_progress,
-                park: parsed.park,
-                complete: Vec::new(),
-                drop: parsed.drop,
-                in_progress_range: parsed.in_progress_range,
-                park_range: parsed.park_range,
-                complete_range: None,
-                drop_range: parsed.drop_range,
-            },
-        ));
+    // A trailing `!` is a present-but-empty complete group, which defaults
+    // to task 1: `=!` and `=x!` are valid, `=x1!` and `=*!` are overlap
+    // errors. Never an incomplete state.
+    if after_x.ends_with('!') {
+        let parsed =
+            parse_selection_body(after_x, base_offset, token, token_end)?;
+        return Ok(CloseSelectionOutcome::Valid(CloseSelectionLex {
+            in_progress: parsed.in_progress,
+            park: parsed.park,
+            complete: parsed.complete,
+            drop: parsed.drop,
+            in_progress_range: parsed.in_progress_range,
+            park_range: parsed.park_range,
+            complete_range: parsed.complete_range,
+            drop_range: parsed.drop_range,
+        }));
     }
     if let Some(body) = after_x.strip_suffix('~') {
         let parsed = parse_selection_body(body, base_offset, token, token_end)?;
@@ -184,22 +233,22 @@ pub(crate) fn lex_close_selection(
             },
         ));
     }
-    if let Some(body) = after_x.strip_suffix('*') {
-        let parsed = parse_selection_body(body, base_offset, token, token_end)?;
-        return Ok(CloseSelectionOutcome::Incomplete(
-            CloseSelectionIncomplete {
-                separator_range: (token_end - 1, token_end),
-                separator: '*',
-                in_progress: parsed.in_progress,
-                park: Vec::new(),
-                complete: parsed.complete,
-                drop: parsed.drop,
-                in_progress_range: parsed.in_progress_range,
-                park_range: None,
-                complete_range: parsed.complete_range,
-                drop_range: parsed.drop_range,
-            },
-        ));
+    // A trailing `*` is a present-but-empty park group, which defaults to
+    // task 1: `=*` and `=x*` are valid, `=x1*` and `=*!` are overlap errors.
+    // Never an incomplete state.
+    if after_x.ends_with('*') {
+        let parsed =
+            parse_selection_body(after_x, base_offset, token, token_end)?;
+        return Ok(CloseSelectionOutcome::Valid(CloseSelectionLex {
+            in_progress: parsed.in_progress,
+            park: parsed.park,
+            complete: parsed.complete,
+            drop: parsed.drop,
+            in_progress_range: parsed.in_progress_range,
+            park_range: parsed.park_range,
+            complete_range: parsed.complete_range,
+            drop_range: parsed.drop_range,
+        }));
     }
     if let Some(head) = after_x.strip_suffix(',') {
         let separator_range = (token_end - 1, token_end);
@@ -294,9 +343,10 @@ struct TrailingList<'a> {
 /// single `*`, the single `!`, and the single `~` (any order), parse every
 /// list, then validate zeros, duplicates, and overlaps. An empty `<N>` with
 /// a trailing group is an omitted list; an empty `<N>` without one is only
-/// reachable for an empty body, which callers handle. An empty `*<P>` group
-/// is never omitted: `=x*!2` fails while `=x!~2` keeps its historical
-/// omitted-`!` reading.
+/// reachable for an empty body, which callers handle. A present `*`/`!`
+/// group with no digits defaults to task 1 (so `=*`, `=x*!2`, and `=x!~2`
+/// work task 1); an empty `~` group stays omitted. Defaulting happens here
+/// before overlap validation, so `=x1*` and `=*!` are overlap errors.
 fn parse_selection_body(
     body: &str,
     base_offset: usize,
@@ -397,14 +447,25 @@ fn parse_selection_body(
     let mut k_parsed: Vec<ParsedNumber> = Vec::new();
     let mut drop_range = None;
     for list in &trailing {
-        // An empty `*<P>` group is never an omitted list: `=x*!2` fails
-        // where `=x!~2` keeps its historical omitted-`!` reading.
-        if list.separator == '*' && list.text.is_empty() {
-            let at = list.base - 1;
-            return Err(CloseSelectionError {
-                message: close_selection_bad_list_error(token),
-                range: (at, token_end),
-            });
+        // A present `*`/`!` group with no digits means task 1, pointed at
+        // the real outcome sigil (never a manufactured span). An empty `~`
+        // group stays omitted.
+        if list.text.is_empty()
+            && (list.separator == '*' || list.separator == '!')
+        {
+            let sigil_range = (list.base - 1, list.base);
+            let range = sigil_range;
+            match list.separator {
+                '*' => {
+                    p_parsed = vec![(1, sigil_range)];
+                    park_range = Some(range);
+                }
+                _ => {
+                    m_parsed = vec![(1, sigil_range)];
+                    complete_range = Some(range);
+                }
+            }
+            continue;
         }
         let parsed = parse_number_list(list.text, list.base, token, token_end)?;
         // The range covers the separator plus the list text.
@@ -992,15 +1053,19 @@ mod tests {
         assert_eq!(trailing_comma.separator_range, (3, 4));
         assert_eq!(trailing_comma.separator, ',');
 
-        let bare_bang = incomplete("=x!");
+        // A present-but-empty `!` defaults to task 1, so `=x!` is valid.
+        let bare_bang = valid("=x!");
         assert_eq!(bare_bang.in_progress, None);
-        assert_eq!(bare_bang.complete, Vec::<u32>::new());
-        assert_eq!(bare_bang.separator_range, (2, 3));
-        assert_eq!(bare_bang.separator, '!');
+        assert_eq!(bare_bang.complete, vec![1]);
+        assert_eq!(bare_bang.complete_range, Some((2, 3)));
 
-        let numbered_bang = incomplete("=x1!");
-        assert_eq!(numbered_bang.in_progress, Some(vec![1]));
-        assert_eq!(numbered_bang.separator, '!');
+        // `=x1!` defaults complete to 1 and overlaps in progress.
+        let numbered_bang = error("=x1!");
+        assert_eq!(
+            numbered_bang.message,
+            "task 1 cannot both stay in progress and complete in `=x1!`"
+        );
+        assert_eq!(numbered_bang.range, (3, 4));
 
         let complete_comma = incomplete("=x!2,");
         assert_eq!(complete_comma.in_progress, None);
@@ -1008,9 +1073,10 @@ mod tests {
         assert_eq!(complete_comma.complete_range, Some((2, 4)));
         assert_eq!(complete_comma.separator, ',');
 
-        let none_bang = incomplete("=x0!");
+        // `=x0!` completes the defaulted task 1 with no in-progress list.
+        let none_bang = valid("=x0!");
         assert_eq!(none_bang.in_progress, Some(Vec::new()));
-        assert_eq!(none_bang.separator, '!');
+        assert_eq!(none_bang.complete, vec![1]);
 
         // A lexical error elsewhere wins over the incomplete state.
         let duplicate = error("=x1,1,");
@@ -1097,25 +1163,36 @@ mod tests {
         assert_eq!(doubled_star.message, "use one `*` list: `=x1*2,3`");
         assert_eq!(doubled_star.range, (4, 5));
 
-        let empty_star = error("=x*!2");
-        assert!(empty_star
-            .message
-            .starts_with("`=x*!2` is not a task list:"));
+        // An empty `*` group defaults to task 1: `=x*!2` parks 1.
+        let defaulted_star = valid("=x*!2");
+        assert_eq!(defaulted_star.in_progress, None);
+        assert_eq!(defaulted_star.park, vec![1]);
+        assert_eq!(defaulted_star.complete, vec![2]);
+        assert_eq!(defaulted_star.park_range, Some((2, 3)));
+        assert_eq!(defaulted_star.complete_range, Some((3, 5)));
+
+        // An empty `!` group defaults the same way: `=x!~2` completes 1.
+        let defaulted_bang = valid("=x!~2");
+        assert_eq!(defaulted_bang.in_progress, None);
+        assert_eq!(defaulted_bang.complete, vec![1]);
+        assert_eq!(defaulted_bang.drop, vec![2]);
 
         let double_comma_park = error("=x*1,,2");
         assert_eq!(double_comma_park.range, (5, 6));
 
-        // Dangling `*` is an editing state, like `!` and `~`.
-        let bare_star = incomplete("=x*");
+        // A bare `*` defaults to task 1, so `=x*` is valid.
+        let bare_star = valid("=x*");
         assert_eq!(bare_star.in_progress, None);
-        assert_eq!(bare_star.park, Vec::<u32>::new());
-        assert_eq!(bare_star.separator_range, (2, 3));
-        assert_eq!(bare_star.separator, '*');
+        assert_eq!(bare_star.park, vec![1]);
+        assert_eq!(bare_star.park_range, Some((2, 3)));
 
-        let numbered_star = incomplete("=x1*");
-        assert_eq!(numbered_star.in_progress, Some(vec![1]));
-        assert_eq!(numbered_star.park, Vec::<u32>::new());
-        assert_eq!(numbered_star.separator, '*');
+        // `=x1*` defaults park to 1 and overlaps in progress.
+        let numbered_star = error("=x1*");
+        assert_eq!(
+            numbered_star.message,
+            "task 1 cannot both stay in progress and park in `=x1*`"
+        );
+        assert_eq!(numbered_star.range, (3, 4));
 
         let park_comma = incomplete("=x*2,");
         assert_eq!(park_comma.in_progress, None);
@@ -1123,11 +1200,13 @@ mod tests {
         assert_eq!(park_comma.park_range, Some((2, 4)));
         assert_eq!(park_comma.separator, ',');
 
-        let trailing_star = incomplete("=x1!2*");
-        assert_eq!(trailing_star.in_progress, Some(vec![1]));
-        assert_eq!(trailing_star.complete, vec![2]);
-        assert_eq!(trailing_star.park, Vec::<u32>::new());
-        assert_eq!(trailing_star.separator, '*');
+        // `=x1!2*` defaults park to 1 and overlaps in progress.
+        let trailing_star = error("=x1!2*");
+        assert_eq!(
+            trailing_star.message,
+            "task 1 cannot both stay in progress and park in `=x1!2*`"
+        );
+        assert_eq!(trailing_star.range, (5, 6));
     }
 
     #[test]
@@ -1145,10 +1224,22 @@ mod tests {
             "=x*2",
             "=x1*2",
             "=x1*2!3~4",
+            "=*",
+            "=!",
+            "=*1",
+            "=!2",
+            "=*2,3",
+            "=*!2",
+            "=!2*",
+            "=*abc",
+            "=!0",
         ] {
             assert!(whole_item_close_after_x(token).is_some(), "{token}");
         }
-        for token in ["=x", "=X", "=xx", "=xa", "=x.", "=3", "Plan =x1"] {
+        for token in [
+            "=x", "=X", "=xx", "=xa", "=x.", "=3", "Plan =x1", "Plan =*2",
+            "a=*2", "==",
+        ] {
             assert!(whole_item_close_after_x(token).is_none(), "{token}");
         }
         assert_eq!(link_close_after_x("x1,3!2"), Some("1,3!2"));
@@ -1156,8 +1247,65 @@ mod tests {
         assert_eq!(link_close_after_x("x*2"), Some("*2"));
         assert_eq!(link_close_after_x("x1*2!3"), Some("1*2!3"));
         assert_eq!(link_close_after_x("X1"), Some("1"));
+        assert_eq!(link_close_after_x("*"), Some("*"));
+        assert_eq!(link_close_after_x("!2"), Some("!2"));
+        assert_eq!(link_close_after_x("*abc"), Some("*abc"));
         assert_eq!(link_close_after_x("x"), None);
         assert_eq!(link_close_after_x("xa"), None);
         assert_eq!(link_close_after_x("3"), None);
+    }
+
+    #[test]
+    fn lex_reports_short_alias_defaults() {
+        // `=*`/`=!` omit `x`; an omitted list still means task 1.
+        let park = valid("=*");
+        assert_eq!(park.in_progress, None);
+        assert_eq!(park.park, vec![1]);
+        assert_eq!(park.complete, Vec::<u32>::new());
+        assert_eq!(park.park_range, Some((1, 2)));
+
+        let complete = valid("=!");
+        assert_eq!(complete.in_progress, None);
+        assert_eq!(complete.complete, vec![1]);
+        assert_eq!(complete.complete_range, Some((1, 2)));
+
+        let park_two = valid("=*2");
+        assert_eq!(park_two.park, vec![2]);
+        assert_eq!(park_two.park_range, Some((1, 3)));
+
+        let complete_two = valid("=!2");
+        assert_eq!(complete_two.complete, vec![2]);
+
+        let mixed_park = valid("=*!2");
+        assert_eq!(mixed_park.park, vec![1]);
+        assert_eq!(mixed_park.complete, vec![2]);
+        assert_eq!(mixed_park.park_range, Some((1, 2)));
+        assert_eq!(mixed_park.complete_range, Some((2, 4)));
+
+        let mixed_complete = valid("=!2*");
+        assert_eq!(mixed_complete.complete, vec![2]);
+        assert_eq!(mixed_complete.park, vec![1]);
+
+        let upper_park = valid("=X*");
+        assert_eq!(upper_park.park, vec![1]);
+        let explicit_upper = valid("=X!");
+        assert_eq!(explicit_upper.complete, vec![1]);
+
+        // Implicit/explicit overlaps fail on the real outcome sigil.
+        let conflict = error("=x1*");
+        assert_eq!(conflict.range, (3, 4));
+        let alias_conflict = error("=*~1");
+        assert_eq!(
+            alias_conflict.message,
+            "task 1 cannot both park and drop in `=*~1`"
+        );
+
+        // Malformed aliases claim close syntax, never task creation.
+        let bad = error("=*abc");
+        assert!(bad.message.starts_with("`=*abc` is not a task list:"));
+        let zero = error("=!0");
+        assert_eq!(zero.message, "task numbers start at 1");
+        let doubled = error("=**2");
+        assert_eq!(doubled.message, "use one `*` list: `=x1*2,3`");
     }
 }
