@@ -29,6 +29,7 @@ that task instead of asking users to edit machine-facing metadata directly.
 - [Priority property and scheduled rolls](#priority-property-and-scheduled-rolls)
 - [Recommended roll and priority decay](#recommended-roll-and-priority-decay)
 - [Schedule-log reason prompt](#schedule-log-reason-prompt)
+- [Scheduling Work Log prompt](#scheduling-work-log-prompt)
 - [Deferring a task prunes it from today's open Pomodoros](#deferring-a-task-prunes-it-from-todays-open-pomodoros)
 - [Cancelling a task](#cancelling-a-task)
 - [Warnings](#warnings)
@@ -577,6 +578,48 @@ priority. A counted session's skipped-prompt fallback is likewise applied per
 task: only the counted tasks that already keep a log get an unexplained entry,
 and a task without one is left untouched exactly as it would be outside a
 counted session.
+
+### Scheduling Work Log prompt
+
+Scheduling a Pending (`[/]`) or Next (`[*]`) task offers one optional Work
+Log summary before anything is written. The prompt appears after the
+Schedule Log reason stage for an explicit `scheduled` date, and directly for
+a priority pick, a pinned roll, or a recommended roll/decay. It applies to
+every scheduling gesture — typed dates, presets, priority rolls, pinned
+rolls, and recommended rolls/decays — whether the resulting date is future,
+today, past, or unchanged. Ready, Blocked, closed, and non-task bullets keep
+the existing flow with no prompt, as do cancel, lane, refresh, `dependsOn`,
+and property-deletion rows.
+
+The stage is titled `Schedule task` (`Schedule N tasks` for a batch). It
+shows a `Work summary` input with the placeholder
+`What did you get done? (optional · ↵ to skip)`, a preview of the dated
+entry, where it will be saved, the frozen scheduling result, and a
+`nothing written yet` note. Pressing `↵` with text commits the schedule plus
+one `*YYYY-MM-DD* — <summary>` entry per qualifying task; pressing `↵` empty
+commits the schedule with zero Work Log writes. A skipped prompt never
+creates a marker and never writes a `🤷` fallback. Pressing `Esc` cancels the
+entire gesture, including the chosen date, the Schedule Log reason, and any
+Pomodoro cleanup, so nothing is written.
+
+Only explicit targets qualify: the task under the cursor, the counted tasks,
+or the linked tasks. A directly selected Pending/Next `^prj` task prompts
+and logs on that lifecycle task; tasks that only receive a propagated project
+schedule never get an entry. In a batch the prompt is asked once; the shared
+summary goes only to the qualifying Pending/Next targets, and the preview
+names the qualifying count. In a mixed recommendation batch only the eligible
+roll/decay targets receive entries; cancel and skip targets never do.
+
+```markdown
+- [/] #task Ship the thing [scheduled:: 2026-10-05] ^ship
+  - 🛠️ **WORK LOG**
+    - *2026-10-02* — Finished the API review
+```
+
+The entry uses the same shape as lane-release Work Logs, newest first under
+the task's direct `🛠️ **WORK LOG**` child. Whitespace is normalized with
+Markdown preserved; `::` warns as an inline field. The notice adds a
+`1 Work Log` chip when entries are written.
 
 ### Deferring a task prunes it from today's open Pomodoros
 
