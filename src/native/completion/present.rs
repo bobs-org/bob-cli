@@ -72,6 +72,9 @@ struct Walk<'a> {
     text_start: Option<usize>,
     /// Before-words consumed by subcommand descent.
     path_words: usize,
+    /// Plain words after the subcommand path consumed as positional
+    /// fills (option values, flags, and TEXT never count).
+    positional_words: usize,
 }
 
 impl<'a> Walk<'a> {
@@ -86,6 +89,7 @@ impl<'a> Walk<'a> {
             text_seen: false,
             text_start: None,
             path_words: 0,
+            positional_words: 0,
         }
     }
 
@@ -107,6 +111,8 @@ impl<'a> Walk<'a> {
         if self.escaped {
             if has_trailing_text(self.node) {
                 self.mark_text_started(index);
+            } else {
+                self.positional_words += 1;
             }
             return;
         }
@@ -159,10 +165,13 @@ impl<'a> Walk<'a> {
             self.node = next;
             self.path.push(next.get_name().to_string());
             self.path_words = index + 1;
+            self.positional_words = 0;
             return;
         }
         if has_trailing_text(self.node) {
             self.mark_text_started(index);
+        } else {
+            self.positional_words += 1;
         }
     }
 
@@ -316,6 +325,23 @@ impl<'a> Walk<'a> {
         lines
     }
 
+    /// Next unfilled positional of the current node, if any. Words
+    /// consumed as option values never count; a trailing var-arg TEXT
+    /// is returned as-is so the caller can keep its current behavior.
+    fn next_positional(&self) -> Option<Arg> {
+        let mut remaining = self.positional_words;
+        for arg in self.node.get_positionals() {
+            if arg.is_trailing_var_arg_set() {
+                return Some(arg.clone());
+            }
+            if remaining == 0 {
+                return Some(arg.clone());
+            }
+            remaining -= 1;
+        }
+        None
+    }
+
     /// Subcommands and positional values for a plain cursor word (rule
     /// 1); options only when nothing else applies.
     fn commands_or_value_lines(&self) -> Vec<String> {
@@ -346,6 +372,19 @@ impl<'a> Walk<'a> {
             }
         }
         if subs.is_empty() && values.is_empty() {
+            // Rule 1 for positional value slots: an empty cursor word at
+            // a positional with a directive or value decision offers that
+            // slot through the same `value_lines` path. Free-text
+            // positionals and capture TEXT keep the options fallback.
+            if let Some(positional) = self.next_positional()
+                && !positional.is_trailing_var_arg_set()
+            {
+                let path: Vec<&str> =
+                    self.path.iter().map(String::as_str).collect();
+                if has_value_decision(&path, &positional) {
+                    return self.value_lines(&positional, None);
+                }
+            }
             return self.option_lines(self.node, false);
         }
         let mut lines = Vec::new();
@@ -425,24 +464,52 @@ impl<'a> Walk<'a> {
 
     /// The value slot for one option: engine choices or kinds lines.
     /// `attached` carries the `--opt=` prefix for `!prefix` replies.
+    ///
+    /// Order of precedence: a path-specific kinds entry beats a
+    /// `ValueHint`; a `ValueHint` other than `Unknown` / `Other` beats
+    /// a generic kinds entry and the free-text fallback.
     fn value_lines(&self, arg: &Arg, attached: Option<&str>) -> Vec<String> {
         let id = arg.get_id().to_string();
         let path: Vec<&str> = self.path.iter().map(String::as_str).collect();
         if !arg.get_possible_values().is_empty() {
             return self.choice_lines(arg, attached);
         }
-        match kinds::lookup(&path, &id) {
-            Some(Kind::Choices) => self.choice_lines(arg, attached),
-            Some(
-                kind @ (Kind::Route
-                | Kind::Section
-                | Kind::Task
-                | Kind::TaskSection
-                | Kind::PomodoroRef
-                | Kind::Plugin
-                | Kind::Level
-                | Kind::VaultNote),
-            ) => {
+        if let Some(kind) = kinds::lookup_exact(&path, &id) {
+            return self.kind_lines(kind, arg, attached);
+        }
+        if let Some(line) = hint_line(arg) {
+            return self.directive_lines(attached, &[line]);
+        }
+        match kinds::lookup_generic(&id) {
+            Some(kind) => self.kind_lines(kind, arg, attached),
+            None => {
+                let message = free_text_message(arg);
+                self.directive_lines(
+                    attached,
+                    &[protocol::message_line(&message)],
+                )
+            }
+        }
+    }
+
+    /// One kinds decision as response lines: engine choices, vault
+    /// slots, path directives, or the free-text message.
+    fn kind_lines(
+        &self,
+        kind: Kind,
+        arg: &Arg,
+        attached: Option<&str>,
+    ) -> Vec<String> {
+        match kind {
+            Kind::Choices => self.choice_lines(arg, attached),
+            Kind::Route
+            | Kind::Section
+            | Kind::Task
+            | Kind::TaskSection
+            | Kind::PomodoroRef
+            | Kind::Plugin
+            | Kind::Level
+            | Kind::VaultNote => {
                 // Vault slots read the words before the cursor for
                 // `--bob-dir`, `--route`, `--task`, and `--repo`, so
                 // short clusters and `--opt=value` behave as at
@@ -457,15 +524,13 @@ impl<'a> Walk<'a> {
                     None => Vec::new(),
                 }
             }
-            Some(Kind::Dirs) => {
+            Kind::Dirs => {
                 self.directive_lines(attached, &[protocol::dirs_line()])
             }
-            Some(Kind::Files(glob)) => {
+            Kind::Files(glob) => {
                 self.directive_lines(attached, &[protocol::files_line(glob)])
             }
-            Some(Kind::VaultSoon(message)) => self
-                .directive_lines(attached, &[protocol::message_line(message)]),
-            Some(Kind::FreeText) | None => {
+            Kind::FreeText => {
                 let message = free_text_message(arg);
                 self.directive_lines(
                     attached,
@@ -633,6 +698,37 @@ fn value_group(arg: &Arg) -> String {
         .and_then(|names| names.first())
         .map(|name| name.to_string().to_lowercase())
         .unwrap_or_else(|| "values".to_string())
+}
+
+/// A non-trivial `ValueHint` as one native directive line, if any.
+fn hint_line(arg: &Arg) -> Option<String> {
+    match arg.get_value_hint() {
+        clap::ValueHint::DirPath => Some(protocol::dirs_line()),
+        clap::ValueHint::FilePath
+        | clap::ValueHint::AnyPath
+        | clap::ValueHint::ExecutablePath => Some(protocol::files_line(None)),
+        _ => None,
+    }
+}
+
+/// Whether one value slot offers directives or value rows (files,
+/// dirs, vault notes, choices, or a `ValueHint`) rather than a
+/// free-text message, under the same precedence `value_lines` uses.
+fn has_value_decision(path: &[&str], arg: &Arg) -> bool {
+    if !arg.get_possible_values().is_empty() {
+        return true;
+    }
+    let id = arg.get_id().to_string();
+    if let Some(kind) = kinds::lookup_exact(path, &id) {
+        return !matches!(kind, Kind::FreeText);
+    }
+    if hint_line(arg).is_some() {
+        return true;
+    }
+    matches!(
+        kinds::lookup_generic(&id),
+        Some(kind) if !matches!(kind, Kind::FreeText)
+    )
 }
 
 /// `!message <VALUE_NAME> — <arg help>` for free-text slots.

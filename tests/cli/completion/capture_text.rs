@@ -169,13 +169,86 @@ fn partial_route_returns_full_set_for_shell_filtering() {
 }
 
 #[test]
-fn tasks_complete_after_route_colon() {
+fn solo_route_colon_lists_existing_tasks() {
     let fixture = fixture();
-    let output = complete(&fixture, &["bob", "capture", "fix", "it", "@dev:"]);
+    let output = complete(&fixture, &["bob", "capture", "@dev:"]);
     assert_success(&output);
     let values = values(&output);
     assert!(values.contains(&"@dev:ship-it".to_string()), "{values:?}");
     assert!(groups(&output).contains(&"tasks in dev".to_string()));
+}
+
+#[test]
+fn body_bearing_route_colon_suggests_new_id() {
+    let fixture = fixture();
+    let output = complete(&fixture, &["bob", "capture", "fix", "it", "@dev:"]);
+    assert_success(&output);
+    let values = values(&output);
+    assert!(values.contains(&"@dev:fix".to_string()), "{values:?}");
+    assert!(!values.contains(&"@dev:ship-it".to_string()), "{values:?}");
+    assert!(groups(&output).contains(&"new task ID".to_string()));
+    assert!(
+        !groups(&output).contains(&"tasks in dev".to_string()),
+        "{:?}",
+        lines(&output)
+    );
+}
+
+#[test]
+fn body_bearing_text_agrees_with_capture_complete_intent() {
+    let fixture = fixture();
+    let draft = "fix it @dev:";
+    let output = complete(&fixture, &["bob", "capture", "fix", "it", "@dev:"]);
+    assert_success(&output);
+    // `capture-complete -f json` on the same text reports `new` intent
+    // with suggestions and used IDs.
+    let mut command = bob_command();
+    command
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&fixture.vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_NOW", BOB_NOW);
+    let completed = command.output().expect("run capture-complete");
+    assert_success(&completed);
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout(&completed).trim()).expect("complete JSON");
+    assert_eq!(parsed["block_id"]["intent"], "new");
+    let used: Vec<String> = parsed["block_id"]["used"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|entry| entry["id"].as_str().map(str::to_string))
+        .collect();
+    assert!(used.contains(&"ship-it".to_string()), "{parsed}");
+    // Shell completion offers the suggestions, never a used ID.
+    let values = values(&output);
+    let suggestions: Vec<String> = parsed["block_id"]["suggestions"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|entry| entry.as_str().map(str::to_string))
+        .collect();
+    assert!(!suggestions.is_empty(), "{parsed}");
+    for suggestion in &suggestions {
+        assert!(
+            values.contains(&format!("@dev:{suggestion}")),
+            "{values:?} vs {parsed}"
+        );
+    }
+    for id in &used {
+        assert!(
+            !values.iter().any(|value| value == &format!("@dev:{id}")),
+            "{values:?} lists used {id}"
+        );
+    }
 }
 
 #[test]
@@ -238,7 +311,9 @@ fn quoted_word_keeps_prefix_with_prefix_directive() {
     let output = complete(&fixture, &["bob", "capture", "fix it @dev:"]);
     assert_success(&output);
     assert_eq!(directives(&output), vec!["!prefix 7".to_string()]);
-    assert!(values(&output).contains(&"@dev:ship-it".to_string()));
+    // Body-bearing text suggests a new ID, never the existing task.
+    assert!(values(&output).contains(&"@dev:fix".to_string()));
+    assert!(!values(&output).contains(&"@dev:ship-it".to_string()));
 }
 
 #[test]
@@ -248,6 +323,7 @@ fn unicode_prefix_counts_chars_not_bytes() {
     assert_success(&output);
     // `café ` is five Unicode scalar values (é is one), six bytes.
     assert_eq!(directives(&output), vec!["!prefix 5".to_string()]);
+    assert!(values(&output).contains(&"@dev:caf".to_string()));
 }
 
 #[test]
@@ -319,9 +395,36 @@ fn capture_parse_and_rewrite_share_the_text_slot() {
             complete(&fixture, &["bob", command, "fix", "it", "@dev:"]);
         assert_success(&output);
         assert!(
-            values(&output).contains(&"@dev:ship-it".to_string()),
+            values(&output).contains(&"@dev:fix".to_string()),
             "{command}: {:?}",
             lines(&output)
         );
     }
+}
+
+#[test]
+fn close_shorthands_offer_nothing() {
+    let fixture = fixture();
+    // Action items offer nothing, exactly as in `capture-complete`:
+    // closes (`=x…`, `=*`, `=!`), starts (`=`, `=<X>`), adjustments,
+    // shifts, and Work Log text on or below the `=x` line.
+    for words in [
+        vec!["bob", "capture", "=x done @"],
+        vec!["bob", "capture", "=*"],
+        vec!["bob", "capture", "=!"],
+    ] {
+        let output = complete(&fixture, &words);
+        assert_success(&output);
+        assert!(lines(&output).is_empty(), "{words:?}: {:?}", lines(&output));
+    }
+}
+
+#[test]
+fn named_start_after_inline_close_keeps_prefix() {
+    let fixture = fixture();
+    let output = complete(&fixture, &["bob", "capture", "=x wired it =#"]);
+    assert_success(&output);
+    assert_eq!(directives(&output), vec!["!prefix 12".to_string()]);
+    assert!(values(&output).contains(&"=#deep-work".to_string()));
+    assert!(groups(&output).contains(&"open Pomodoros".to_string()));
 }

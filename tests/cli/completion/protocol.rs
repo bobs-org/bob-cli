@@ -205,6 +205,53 @@ fn attached_option_value_uses_prefix() {
 }
 
 #[test]
+fn value_hints_beat_generic_kinds_entries() {
+    // `install -t` carries a `DirPath` hint: directories, not a message.
+    let output = complete(&["bob", "completion", "install", "-t", ""]);
+    assert_success(&output);
+    assert_eq!(directives(&output), vec!["!dirs".to_string()]);
+
+    // `completion zsh -o` carries a `FilePath` hint: plain files, never
+    // the highlights PDF glob.
+    let output = complete(&["bob", "completion", "zsh", "-o", ""]);
+    assert_success(&output);
+    assert_eq!(directives(&output), vec!["!files".to_string()]);
+
+    let output = complete(&["bob", "completion", "bash", "--output", ""]);
+    assert_success(&output);
+    assert_eq!(directives(&output), vec!["!files".to_string()]);
+
+    // The highlights PDF `--output` keeps its glob through the
+    // path-specific entries.
+    for command in ["clip", "create"] {
+        let output = complete(&["bob", "highlights", command, "--output", ""]);
+        assert_success(&output);
+        assert_eq!(directives(&output), vec!["!files *.pdf".to_string()]);
+    }
+}
+
+#[test]
+fn empty_cursor_at_positional_slot_offers_values_first() {
+    // `highlights create` waits on a Markdown file first, not options.
+    let output = complete(&["bob", "highlights", "create", ""]);
+    assert_success(&output);
+    assert_eq!(directives(&output), vec!["!files *.md".to_string()]);
+    assert!(rows(&output).is_empty());
+
+    // Slots without a value decision keep the options fallback.
+    let output = complete(&["bob", "capture-sections", ""]);
+    assert_success(&output);
+    let names = values(&output);
+    assert!(names.contains(&"--route".to_string()), "{names:?}");
+
+    let output = complete(&["bob", "notify", ""]);
+    assert_success(&output);
+    let names = values(&output);
+    assert!(names.contains(&"--verbose".to_string()), "{names:?}");
+    assert!(names.contains(&"--help".to_string()), "{names:?}");
+}
+
+#[test]
 fn text_started_slot_offers_no_options() {
     // Since the capture-text phase, `TEXT` on the capture trio goes through
     // the live marker extraction: a dash word with no marker offers nothing

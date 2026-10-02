@@ -169,14 +169,15 @@ fn bash_reassembles_colon_split_marker() {
     }
     let temp = TempDir::new("bob-bash-colon");
     let vault = fixture_vault(&temp);
-    let line = "bob capture fix @dev:";
-    // Bash splits `@dev:` at `:`; the adapter rebuilds from COMP_LINE.
+    // A solo `@dev:` links existing tasks; bash splits it at `:` and
+    // the adapter rebuilds from COMP_LINE.
+    let line = "bob capture @dev:";
     let reply = run_bash_case(
         &vault,
         line,
         line.chars().count(),
-        &["bob", "capture", "fix", "@dev", ":"],
-        4,
+        &["bob", "capture", "@dev", ":"],
+        3,
     );
     assert!(
         reply.contains(&"ship-it".to_string()),
@@ -199,7 +200,9 @@ fn bash_unquotes_single_quoted_word() {
     }
     let temp = TempDir::new("bob-bash-quoted");
     let vault = fixture_vault(&temp);
-    // One quoted shell word carrying its own `fix it ` prefix (!prefix 7).
+    // One open-quoted shell word carrying its own `fix it ` prefix
+    // (!prefix 7); body-bearing text suggests a new ID. Readline
+    // replaces the whole quoted text, so the reply keeps the prefix.
     let line = "bob capture 'fix it @dev:";
     let reply = run_bash_case(
         &vault,
@@ -208,9 +211,31 @@ fn bash_unquotes_single_quoted_word() {
         &["bob", "capture", "fix it @dev:"],
         2,
     );
+    assert_eq!(
+        reply,
+        vec!["fix it @dev:fix".to_string()],
+        "open quote keeps prefix plus new ID: {reply:?}"
+    );
+}
+
+#[test]
+fn bash_open_quote_completes_route() {
+    if !have_bash() {
+        return;
+    }
+    let temp = TempDir::new("bob-bash-open-route");
+    let vault = fixture_vault(&temp);
+    let line = "bob capture 'fix it @ca";
+    let reply = run_bash_case(
+        &vault,
+        line,
+        line.chars().count(),
+        &["bob", "capture", "fix it @ca"],
+        2,
+    );
     assert!(
-        reply.contains(&"ship-it".to_string()),
-        "quoted word offers ship-it: {reply:?}"
+        reply.contains(&"fix it @cash".to_string()),
+        "open quote keeps prefix plus route: {reply:?}"
     );
 }
 
@@ -222,17 +247,97 @@ fn bash_counts_unicode_prefix_in_chars() {
     let temp = TempDir::new("bob-bash-unicode");
     let vault = fixture_vault(&temp);
     // `café ` is 5 characters (é is one scalar); bob answers !prefix 5.
-    let line = "bob capture café @dev:";
+    let line = "bob capture 'café @dev:";
     let reply = run_bash_case(
         &vault,
         line,
         line.chars().count(),
-        &["bob", "capture", "café", "@dev", ":"],
-        4,
+        &["bob", "capture", "café @dev:"],
+        2,
     );
     assert!(
-        reply.contains(&"ship-it".to_string()),
-        "unicode prefix offers ship-it: {reply:?}"
+        reply.contains(&"café @dev:caf".to_string()),
+        "unicode prefix keeps chars plus new ID: {reply:?}"
+    );
+}
+
+#[test]
+fn bash_strips_every_wordbreak_not_just_colon() {
+    if !have_bash() {
+        return;
+    }
+    let temp = TempDir::new("bob-bash-wordbreak");
+    let vault = e2e_vault(&temp);
+    // Bash splits `=#` at `=`; readline replaces only `#`, so the reply
+    // strips the `=` instead of doubling it.
+    let line = "bob capture =#";
+    let reply = run_bash_case(
+        &vault,
+        line,
+        line.chars().count(),
+        &["bob", "capture", "=", "#"],
+        3,
+    );
+    assert!(
+        reply.iter().any(|value| value.ends_with("#deep-work")),
+        "equals wordbreak strips like colon does: {reply:?}"
+    );
+    assert!(
+        !reply.iter().any(|value| value.contains("=#")),
+        "no doubled marker: {reply:?}"
+    );
+}
+
+#[test]
+fn bash_keeps_spaces_in_one_argument() {
+    if !have_bash() {
+        return;
+    }
+    let temp = TempDir::new("bob-bash-spaces");
+    let vault = e2e_vault(&temp);
+    let line = "bob capture --route cash --task fix-sink --task-section F";
+    let reply = run_bash_case(
+        &vault,
+        line,
+        line.chars().count(),
+        &[
+            "bob",
+            "capture",
+            "--route",
+            "cash",
+            "--task",
+            "fix-sink",
+            "--task-section",
+            "F",
+        ],
+        7,
+    );
+    assert!(
+        reply.iter().any(|value| value.contains("FIRST\\ STEPS")),
+        "task section stays one escaped argument: {reply:?}"
+    );
+}
+
+#[test]
+fn bash_completes_attached_files_in_value() {
+    if !have_bash() {
+        return;
+    }
+    let temp = TempDir::new("bob-bash-files-in");
+    let vault = e2e_vault(&temp);
+    // Bash splits `--tasks-note=cash` at `=`; the note filter reads the
+    // text after the kept prefix, not the whole prefix.
+    let line = "bob query --tasks-note=cash";
+    let reply = run_bash_case(
+        &vault,
+        line,
+        line.chars().count(),
+        &["bob", "query", "--tasks-note=", "cash"],
+        3,
+    );
+    assert!(
+        reply.contains(&"cash.md".to_string()),
+        "attached files-in value completes: {reply:?}"
     );
 }
 
@@ -307,6 +412,252 @@ fn bash_maps_dirs_directive() {
         "dirs offer beta: {reply:?}"
     );
 }
+
+/// Vault for the wordbreak/space/files-in cases and the readline
+/// end-to-end test: an area with one sectioned task, a project with one
+/// task (so solo `@dev:` is unambiguous), and a daily note with open
+/// Pomodoros.
+fn e2e_vault(temp: &TempDir) -> PathBuf {
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\n",
+            "type: \"[[area]]\"\n",
+            "---\n",
+            "# Cash\n",
+            "\n",
+            "## Shopping\n",
+            "\n",
+            "- [ ] #task Buy oat milk ^buy-milk\n",
+            "- [ ] #task Fix the sink ^fix-sink\n",
+            "  - FIRST STEPS\n",
+            "    - gather parts\n",
+        ),
+    );
+    write_file(
+        &vault.join("dev.md"),
+        concat!(
+            "---\n",
+            "type: [[project]]\n",
+            "status: active\n",
+            "---\n",
+            "# Dev\n",
+            "\n",
+            "- [ ] #task Ship the release ^ship-it\n",
+        ),
+    );
+    write_file(
+        &vault.join("2026/20260601.md"),
+        concat!(
+            "# 2026-06-01\n",
+            "\n",
+            "## Pomodoros\n",
+            "\n",
+            "- [ ] (0900-0930) Morning pages\n",
+            "- [ ] () — DEEP WORK\n",
+        ),
+    );
+    vault
+}
+
+fn have_zsh() -> bool {
+    let ok = Command::new("zsh")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !ok {
+        println!("skipped: zsh not found on PATH");
+    }
+    ok
+}
+
+/// Real interactive bash through zsh's `zpty` module: TAB inserts exactly
+/// what bob returned, and `printf '<%s>'` proves the resulting shell
+/// words. Each row types the line, sends TAB, then moves to column zero
+/// and prefixes `printf '<%s>\n'` before Enter.
+#[test]
+fn bash_readline_inserts_what_bob_returned() {
+    if !have_zsh() || !have_bash() {
+        return;
+    }
+    let temp = TempDir::new("bob-bash-readline");
+    let vault = e2e_vault(&temp);
+    let dir = temp.path();
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin).expect("create bin");
+    std::os::unix::fs::symlink(BOB_BIN, bin.join("bob")).expect("link bob");
+    write_file(&dir.join("driver.zsh"), READLINE_DRIVER);
+    let timeout = Command::new("timeout")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    let mut command = if timeout {
+        let mut with_timeout = Command::new("timeout");
+        with_timeout.arg("180").arg("zsh");
+        with_timeout
+    } else {
+        Command::new("zsh")
+    };
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = command
+        .arg("-f")
+        .arg(dir.join("driver.zsh"))
+        .arg(dir)
+        .arg(adapter_path())
+        .env("PATH", &path)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", BOB_NOW)
+        .env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE)
+        .env("BOB_WEB_CLIP_ADAPTER", TEST_MISSING_WEB_CLIP_ADAPTER)
+        .env("INPUTRC", "/dev/null")
+        .env("TERM", "dumb")
+        .output()
+        .expect("run readline driver");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        output.status.success(),
+        "readline driver failed, stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    for marker in [
+        "SETUP OK",
+        "EQUALS OK",
+        "QUOTE OK",
+        "SPACES OK",
+        "FILESIN OK",
+        "FORMAT OK",
+        "LINK OK",
+        "ROUTE OK",
+    ] {
+        assert!(
+            stdout.contains(marker),
+            "missing {marker:?}, stdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+    }
+}
+
+/// One pty session covering every readline insertion row. The driver
+/// inherits the fixture env from the test process; `set +H` keeps `=`
+/// words literal and `shopt -u interactive_comments` keeps `#` words
+/// literal, so the assertions see completion, not shell parsing.
+const READLINE_DRIVER: &str = r#"
+zmodload zsh/zpty || { print "ZPTY-MISSING"; exit 2 }
+TMP=$1
+ADAPTER=$2
+shift 2
+zpty -d pb 2>/dev/null
+zpty pb bash --norc --noprofile -i
+sleep 1
+zpty -w pb "PS1='PB> '"
+sleep 0.3
+zpty -w pb "set +H; shopt -u interactive_comments; source \"$ADAPTER\""
+sleep 0.3
+zpty -r pb setup '*PB>*' || { print -r -- "SETUP-READ-FAILED"; zpty -d pb; exit 1 }
+print -r -- "SETUP OK"
+# `bob capture =#` inserts the named start without doubling `=`.
+zpty -w -n pb $'bob capture =#\t'
+sleep 1
+zpty -w -n pb $'\x01'
+sleep 0.3
+zpty -w -n pb "printf '<%s>\\n' "
+sleep 0.3
+zpty -w -n pb $'\r'
+sleep 0.5
+zpty -w -n pb $'\x03'
+sleep 0.3
+if zpty -r pb equals '*<=#deep-work>*' 2>/dev/null; then print -r -- "EQUALS OK"; else print -r -- "EQUALS MISS"; fi
+zpty -w -n pb $'\x03'
+sleep 0.5
+# An open quote completes inside the quotes; readline closes them.
+zpty -w -n pb $'bob capture \'fix it @ca\t'
+sleep 1
+zpty -w -n pb $'\x01'
+sleep 0.3
+zpty -w -n pb "printf '<%s>\\n' "
+sleep 0.3
+zpty -w -n pb $'\r'
+sleep 0.5
+zpty -w -n pb $'\x03'
+sleep 0.3
+if zpty -r pb quote '*<fix it @cash>*' 2>/dev/null; then print -r -- "QUOTE OK"; else print -r -- "QUOTE MISS"; fi
+zpty -w -n pb $'\x03'
+sleep 0.5
+# A value with a space stays one argument.
+zpty -w -n pb $'bob capture --route cash --task fix-sink --task-section F\t'
+sleep 1
+zpty -w -n pb $'\x01'
+sleep 0.3
+zpty -w -n pb "printf '<%s>\\n' "
+sleep 0.3
+zpty -w -n pb $'\r'
+sleep 0.5
+zpty -w -n pb $'\x03'
+sleep 0.3
+if zpty -r pb spaces '*<FIRST STEPS>*' 2>/dev/null; then print -r -- "SPACES OK"; else print -r -- "SPACES MISS"; fi
+zpty -w -n pb $'\x03'
+sleep 0.5
+# An attached `!files-in` value completes the note name.
+zpty -w -n pb $'bob query --tasks-note=c\t'
+sleep 1
+zpty -w -n pb $'\x01'
+sleep 0.3
+zpty -w -n pb "printf '<%s>\\n' "
+sleep 0.3
+zpty -w -n pb $'\r'
+sleep 0.5
+zpty -w -n pb $'\x03'
+sleep 0.3
+if zpty -r pb filesin '*<--tasks-note=cash.md>*' 2>/dev/null; then print -r -- "FILESIN OK"; else print -r -- "FILESIN MISS"; fi
+zpty -w -n pb $'\x03'
+sleep 0.5
+# Attached option values keep working, as does the solo link form.
+zpty -w -n pb $'bob capture --format=j\t'
+sleep 1
+zpty -w -n pb $'\x01'
+sleep 0.3
+zpty -w -n pb "printf '<%s>\\n' "
+sleep 0.3
+zpty -w -n pb $'\r'
+sleep 0.5
+zpty -w -n pb $'\x03'
+sleep 0.3
+if zpty -r pb format '*<--format=json>*' 2>/dev/null; then print -r -- "FORMAT OK"; else print -r -- "FORMAT MISS"; fi
+zpty -w -n pb $'\x03'
+sleep 0.5
+zpty -w -n pb $'bob capture @dev:\t'
+sleep 1
+zpty -w -n pb $'\x01'
+sleep 0.3
+zpty -w -n pb "printf '<%s>\\n' "
+sleep 0.3
+zpty -w -n pb $'\r'
+sleep 0.5
+zpty -w -n pb $'\x03'
+sleep 0.3
+if zpty -r pb link '*<@dev:ship-it>*' 2>/dev/null; then print -r -- "LINK OK"; else print -r -- "LINK MISS"; fi
+zpty -w -n pb $'\x03'
+sleep 0.5
+zpty -w -n pb $'bob capture --route ca\t'
+sleep 1
+zpty -w -n pb $'\x01'
+sleep 0.3
+zpty -w -n pb "printf '<%s>\\n' "
+sleep 0.3
+zpty -w -n pb $'\r'
+sleep 0.5
+zpty -w -n pb $'\x03'
+sleep 0.3
+if zpty -r pb route1 '*<--route>*' 2>/dev/null && zpty -r pb route2 '*<cash>*' 2>/dev/null; then print -r -- "ROUTE OK"; else print -r -- "ROUTE MISS"; fi
+zpty -d pb
+"#;
 
 // --- lifecycle -----------------------------------------------------------
 

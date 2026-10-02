@@ -63,21 +63,48 @@ _bob() {
     for val in "${all[@]}"; do [[ -z "$files_glob" || "$val" == $files_glob ]] && kept+=("$val"); done
     COMPREPLY=("${kept[@]}"); compopt -o filenames 2>/dev/null; return 0
   fi
+  # The cursor-word text readline will replace: everything up to and
+  # including the last wordbreak character, whatever it is (`=`, `:`,
+  # …). An open quote replaces the whole quoted text instead, so there
+  # is no stripping there.
+  local kept="${prefix:0:keep}"
+  local rest="${prefix:keep}"
+  local strip=""
+  if (( ! in_single && ! in_double )); then
+    local after_last="${prefix##*["$COMP_WORDBREAKS"]}"
+    if [[ "$after_last" != "$prefix" ]]; then
+      strip="${prefix%"$after_last"}"
+    fi
+  fi
   if ((has_files == 2)); then
-    local -a all=() kept=()
-    while IFS= read -r -d '' val; do val="${val#"$filesin_root/"}"; [[ "$val" == "$prefix"* ]] && kept+=("$val"); done < <(find "$filesin_root" -type f -name "$filesin_glob" -print0 2>/dev/null)
+    local -a kept=()
+    local name
+    while IFS= read -r -d '' val; do
+      name="${val#"$filesin_root/"}"
+      [[ "$name" == "$rest"* ]] || continue
+      kept+=("${name#"$strip"}")
+    done < <(find "$filesin_root" -type f -name "$filesin_glob" -print0 2>/dev/null)
     COMPREPLY=("${kept[@]}"); compopt -o filenames 2>/dev/null; return 0
   fi
-  local rest="${prefix:keep}"
   local -a filtered=() filtered_nos=()
+  local reply quoted
   for i in "${!vals[@]}"; do
     [[ "${vals[i]}" == "$rest"* ]] || continue
-    filtered+=("${vals[i]}"); filtered_nos+=("${is_nospace[i]}")
+    reply="$kept${vals[i]}"
+    if (( in_single || in_double )); then
+      # Open quote: readline replaces the whole quoted text, so reply
+      # with the kept text plus the value unescaped; readline adds the
+      # closing quote itself.
+      filtered+=("$reply")
+    else
+      # Unquoted: readline replaces only its own current word, and each
+      # value must stay one argument.
+      reply="${reply#"$strip"}"
+      printf -v quoted %q "$reply"
+      filtered+=("$quoted")
+    fi
+    filtered_nos+=("${is_nospace[i]}")
   done
-  if [[ "$rest" == *:* ]]; then
-    local strip="${rest%:*}:"
-    for i in "${!filtered[@]}"; do filtered[i]="${filtered[i]#"$strip"}"; done
-  fi
   COMPREPLY=("${filtered[@]}")
   if ((${#filtered[@]})); then
     local all_nos=1

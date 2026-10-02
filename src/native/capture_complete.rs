@@ -811,11 +811,8 @@ pub(crate) fn shell_completion(
             }
         }
         CompletionContext::PomodoroBlockId => {
-            // Shell completion always offers linkable tasks for `@route:`,
-            // even when the whole item would parse as a new `pomodoro_task`:
-            // the user completing a block ID wants existing tasks, and all
-            // rows are safe (identified, linkable). A `+` after a `:` block
-            // ID is the retired project-note form, which offers nothing.
+            // A `+` after a `:` block ID is the retired project-note
+            // form, which offers nothing.
             if raw_text
                 .get(field.replacement.1..)
                 .is_some_and(|rest| rest.starts_with('+'))
@@ -825,6 +822,43 @@ pub(crate) fn shell_completion(
             let Some(route) = field.route.as_deref() else {
                 return Ok(None);
             };
+            // Follow capture-complete's new-ID intent exactly as
+            // `build_result` does: link intent (a solo `@route:` item)
+            // offers existing linkable tasks, while new or project-note
+            // intent offers the field's suggestions as new block IDs.
+            let block_field = capture_block_ids::build_block_id_field(
+                bob_dir,
+                raw_text,
+                cursor,
+                &capture_block_ids::BlockIdRequest {
+                    route,
+                    replacement: field.replacement,
+                    context: field.context,
+                },
+            );
+            if !matches!(
+                block_field.intent,
+                capture_block_ids::BlockIdIntent::Link
+            ) {
+                for suggestion in &block_field.suggestions {
+                    if suggestion.is_empty() {
+                        continue;
+                    }
+                    // Built like the link rows below: the kept marker
+                    // prefix already carries `@<route>:`.
+                    let full = format!("{marker_prefix}{suggestion}");
+                    if full.is_empty() {
+                        continue;
+                    }
+                    rows.push(ShellRow {
+                        nospace: ends_in_continuation(&full),
+                        full,
+                        description: "new block ID".to_string(),
+                        group: "new task ID".to_string(),
+                    });
+                }
+                return Ok(Some(ShellCompletion { marker_start, rows }));
+            }
             let (candidates, _) = link_candidates(bob_dir, route, "")
                 .map_err(|error| error.message.clone())?;
             let Candidates::Task(items) = candidates else {

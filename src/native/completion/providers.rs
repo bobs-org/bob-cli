@@ -39,11 +39,7 @@ pub(crate) fn vault_lines(
         Kind::Plugin => Some(plugins(context)),
         Kind::Level => Some(levels()),
         Kind::VaultNote => Some(vault_notes(context)),
-        Kind::Choices
-        | Kind::Dirs
-        | Kind::Files(_)
-        | Kind::FreeText
-        | Kind::VaultSoon(_) => None,
+        Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
     }
 }
 

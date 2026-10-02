@@ -102,7 +102,10 @@ failure, which yields empty output.
   `--lib-dir`, `--ref-dir`, `--xlib-dir`, `query --vault`) answer
   `!dirs`. File options (`--query-file`, `--tasks-file`, highlights
   markdown inputs, PDF arguments, clip `--html`) answer `!files` with
-  a glob where one applies.
+  a glob where one applies. A slot the builder annotates with a clap
+  `ValueHint` (for example `completion install -t`, `completion zsh -o`)
+  answers the same way with no table entry; a path-specific table entry
+  (the highlights PDF `--output`) beats the hint.
 - **Free text.** Everything else answers a `!message` hint naming the
   slot, for example `MESSAGE — Override the generated Git commit
   message`. Stale-safe refs (`--task-ref`) and the bare note name of
@@ -164,8 +167,14 @@ dev<TAB>project · active<TAB>projects<TAB>space
 ```
 
 ```text
-$ bob __complete zsh --protocol 1 -- bob capture fix it "@dev:"
+$ bob __complete zsh --protocol 1 -- bob capture "@dev:"
 @dev:ship-it<TAB>Ship the release<TAB>tasks in dev<TAB>space
+```
+
+```text
+$ bob __complete zsh --protocol 1 -- bob capture fix it "@dev:"
+!prefix 7
+@dev:fix<TAB>new block ID<TAB>new task ID<TAB>space
 ```
 
 ```text
@@ -351,13 +360,19 @@ back to filenames).
   `COMP_LINE`/`COMP_POINT`, rejoining tokens that `COMP_WORDBREAKS` split
   at `:` and `=`. Simple quoting is unquoted, and the text after the
   cursor is sent as `--suffix`.
-- **`!prefix N`.** The kept prefix is applied first, then the part bash
-  already broke off at a wordbreak is stripped, as
-  `__ltrim_colon_completions` does.
+- **`!prefix N`.** Each reply is the kept text plus the value, minus the
+  cursor-word text up to and including its last wordbreak character,
+  whatever it is (`=`, `:`, …) — the part readline already broke off
+  and will replace. A word whose quote is still open at the cursor
+  skips the stripping and the escaping: readline replaces the whole
+  quoted text and adds the closing quote itself. Other unquoted values
+  with spaces or shell metacharacters are `%q`-escaped so each stays
+  one argument.
 - **Directives.** `!dirs` completes directories via `compgen -d`;
   `!files [glob]` completes files via `compgen -f` filtered by the glob;
-  `!files-in` completes paths relative to its root; `!message` answers an
-  empty reply. Unknown `!` directives are ignored.
+  `!files-in` completes paths relative to its root, filtered by the text
+  after the kept prefix; `!message` answers an empty reply. Unknown `!`
+  directives are ignored.
 - **Spacing.** `compopt -o nospace` is set only when every candidate is
   `nospace`; file directives set `compopt -o filenames`.
 - **Installing.** The target is
@@ -390,11 +405,21 @@ another thin client of that service (see `docs/capture.md`
   `capture-task-id`, `capture-pomodoro-name`, writes, or dry runs);
   wikilinks (`[[…`) are deferred before the note index read and offer
   nothing.
+- **Block IDs follow `capture-complete`.** A solo `@route:` links
+  existing tasks, grouped `tasks in <route>`. Body-bearing text mints a
+  new task with that ID, so shell completion offers the field's
+  suggestions instead (for example `@dev:fix`, grouped `new task ID`)
+  and never an ID `capture-complete` lists as used.
+- **Action items offer nothing**, exactly as in `capture-complete`:
+  closes (`=x…`, `=*`, `=!`), starts (`=`, `=<X>`), `+N` / `-N`
+  adjustments and `++N` / `--N` shifts, and Work Log text on or below
+  the `=x` line.
 - **Presentation.** Values are full marker texts such as
   `@dev:remote-power`. Descriptions come from the row: task text, route
-  kind, or Pomodoro time and name. Groups are human words: `inbox` /
-  `areas` / `projects`, `sections in dev`, `tasks in dev`,
-  `task sections`, `open Pomodoros`, `active tasks`. A value ending in
-  `:` `+` `#` `=` `^` is `nospace`; a complete marker gets a space. A
-  quoted word carrying its own prefix (for example `fix it @dev:`) is
-  served with `!prefix 7`, counted in Unicode scalar values.
+  kind, `new block ID`, or Pomodoro time and name. Groups are human
+  words: `inbox` / `areas` / `projects`, `sections in dev`,
+  `tasks in dev`, `new task ID`, `task sections`, `open Pomodoros`,
+  `active tasks`. A value ending in `:` `+` `#` `=` `^` is `nospace`;
+  a complete marker gets a space. A quoted word carrying its own prefix
+  (for example `fix it @dev:`) is served with `!prefix 7`, counted in
+  Unicode scalar values.
