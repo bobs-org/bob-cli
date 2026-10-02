@@ -6,6 +6,7 @@
 //! for the protocol and the runtime model.
 
 mod adapters;
+mod capture_text;
 mod context;
 mod engine;
 mod kinds;

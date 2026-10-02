@@ -3189,7 +3189,9 @@ Returns cursor-aware completion candidates for in-progress capture `TEXT`. It
 shares the phase-grammar tokenizer and `@token` classification with
 `bob capture-parse`, so a completion can never disagree with the marker
 highlighting derived from that command; it never independently reparses marker
-prefixes. `--cursor`/`-c` is required and must be a UTF-8 byte offset on a
+prefixes. Shell completion is another thin client of this service: `TEXT` on
+`capture`, `capture-parse`, and `capture-rewrite` completes markers through
+the same extraction (see `docs/completion.md` Capture markers). `--cursor`/`-c` is required and must be a UTF-8 byte offset on a
 character boundary within `TEXT`. It is not the same flag as `bob capture -c` /
 `--clip`. A missing `TEXT` defaults to an empty draft rather than an error,
 since cursor `0` against an empty draft is an ordinary interactive state, not a

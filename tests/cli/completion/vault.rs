@@ -470,6 +470,14 @@ fn completion_is_read_only() {
         vec!["bob", "query", "--origin", ""],
         vec!["bob", "capture", "--route=cash", "--task", ""],
         vec!["bob", "capture", "fix", ""],
+        vec!["bob", "capture", "fix", "it", "@"],
+        vec!["bob", "capture", "fix", "it", "@dev:"],
+        vec!["bob", "capture", "fix", "it", "@cash#"],
+        vec!["bob", "capture", "@cash+fix-sink#"],
+        vec!["bob", "capture", "^"],
+        vec!["bob", "capture", "=#"],
+        vec!["bob", "capture-parse", "fix", "it", "@dev:"],
+        vec!["bob", "capture-rewrite", "fix", "it", "@dev:"],
     ]
     .into_iter()
     .map(|words| words.iter().map(|word| word.to_string()).collect())

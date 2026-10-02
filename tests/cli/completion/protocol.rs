@@ -205,13 +205,15 @@ fn attached_option_value_uses_prefix() {
 }
 
 #[test]
-fn text_started_slot_gets_only_a_message() {
+fn text_started_slot_offers_no_options() {
+    // Since the capture-text phase, `TEXT` on the capture trio goes through
+    // the live marker extraction: a dash word with no marker offers nothing
+    // (no options per rule 7, no interim message).
     let output = complete(&["bob", "capture", "fix", "-"]);
     assert_success(&output);
     let lines: Vec<String> =
         stdout(&output).lines().map(str::to_string).collect();
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].starts_with("!message "));
+    assert!(lines.is_empty(), "{lines:?}");
 }
 
 #[test]

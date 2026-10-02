@@ -3,6 +3,7 @@
 //! Each case runs the built binary, so the goldens cover request
 //! parsing, the engine, the kinds table, and the presenter together.
 
+mod capture_text;
 mod protocol;
 mod vault;
 mod zsh_adapter;

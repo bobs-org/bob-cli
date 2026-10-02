@@ -50,7 +50,7 @@ pub(crate) fn complete_request(request: &Request) -> Vec<String> {
     for (index, word) in before.iter().enumerate() {
         walk.step(word, index);
     }
-    walk.finish(cursor)
+    walk.finish(cursor, request.suffix.as_ref())
 }
 
 /// Partial-parse context: the subcommand path, the options seen, and
@@ -68,6 +68,8 @@ struct Walk<'a> {
     escaped: bool,
     /// A trailing var-arg positional has started.
     text_seen: bool,
+    /// Index in `before` where TEXT began, for `raw_text` reconstruction.
+    text_start: Option<usize>,
     /// Before-words consumed by subcommand descent.
     path_words: usize,
 }
@@ -82,6 +84,7 @@ impl<'a> Walk<'a> {
             pending: None,
             escaped: false,
             text_seen: false,
+            text_start: None,
             path_words: 0,
         }
     }
@@ -92,11 +95,18 @@ impl<'a> Walk<'a> {
         }
     }
 
+    fn mark_text_started(&mut self, index: usize) {
+        self.text_seen = true;
+        if self.text_start.is_none() {
+            self.text_start = Some(index);
+        }
+    }
+
     fn step(&mut self, word: &OsString, index: usize) {
         let text = word.to_string_lossy();
         if self.escaped {
             if has_trailing_text(self.node) {
-                self.text_seen = true;
+                self.mark_text_started(index);
             }
             return;
         }
@@ -152,11 +162,34 @@ impl<'a> Walk<'a> {
             return;
         }
         if has_trailing_text(self.node) {
-            self.text_seen = true;
+            self.mark_text_started(index);
         }
     }
 
-    fn finish(&self, cursor: &OsStr) -> Vec<String> {
+    fn is_capture_text_command(&self) -> bool {
+        matches!(
+            self.path.first().map(String::as_str),
+            Some("capture" | "capture-parse" | "capture-rewrite")
+        )
+    }
+
+    /// TEXT slot for the capture trio through the in-process
+    /// `capture_complete` extraction. Returns `None` when no marker applies
+    /// so the caller can fall back (empty cursor) or show nothing.
+    fn capture_text_opt(
+        &self,
+        cursor: &OsStr,
+        suffix: Option<&OsString>,
+    ) -> Option<Vec<String>> {
+        super::capture_text::capture_text_lines(
+            self.before,
+            self.text_start,
+            cursor,
+            suffix,
+        )
+    }
+
+    fn finish(&self, cursor: &OsStr, suffix: Option<&OsString>) -> Vec<String> {
         let cursor_text = cursor.to_string_lossy();
         // Attached `--opt=value`: the option is resolved, the value part
         // is normalized away, and candidates replace only the rest.
@@ -171,6 +204,13 @@ impl<'a> Walk<'a> {
         }
         if cursor_text.starts_with('-') {
             if self.escaped || self.text_seen {
+                if self.is_capture_text_command() {
+                    // TEXT has started: never fall back to options, even
+                    // when the word holds no marker (`bob capture fix --r`).
+                    return self
+                        .capture_text_opt(cursor, suffix)
+                        .unwrap_or_default();
+                }
                 return self.text_lines();
             }
             return self.option_lines(self.node, cursor_text.starts_with("--"));
@@ -181,7 +221,24 @@ impl<'a> Walk<'a> {
             return self.value_lines(arg, None);
         }
         if self.escaped || self.text_seen {
+            if self.is_capture_text_command() {
+                return self
+                    .capture_text_opt(cursor, suffix)
+                    .unwrap_or_default();
+            }
             return self.text_lines();
+        }
+        // The cursor word is TEXT when it sits at the TEXT position and does
+        // not start with `-` (the `-` case returned above).
+        if self.is_capture_text_command() && has_trailing_text(self.node) {
+            match self.capture_text_opt(cursor, suffix) {
+                Some(lines) => return lines,
+                None if cursor_text.is_empty() => {}
+                // A non-empty first TEXT word with no marker (`bob capture
+                // fix<TAB> as one word): TEXT has started with the cursor,
+                // so no options.
+                None => return Vec::new(),
+            }
         }
         self.commands_or_value_lines()
     }
@@ -695,11 +752,12 @@ mod tests {
     }
 
     #[test]
-    fn text_started_slot_gets_only_a_message() {
+    fn text_started_slot_offers_no_options() {
+        // Since the capture-text phase, the capture trio's TEXT goes through
+        // the live marker extraction: a dash word with no marker offers
+        // nothing (no options per rule 7, no interim message).
         let output = lines(&["bob", "capture", "fix", "-"]);
-        assert_eq!(output.len(), 1);
-        assert!(output[0].starts_with("!message "));
-        assert!(!groups_of(&output).contains(&"options"));
+        assert!(output.is_empty(), "{output:?}");
     }
 
     #[test]

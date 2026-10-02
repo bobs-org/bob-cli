@@ -107,8 +107,11 @@ failure, which yields empty output.
   slot, for example `MESSAGE — Override the generated Git commit
   message`. Stale-safe refs (`--task-ref`) and the bare note name of
   `highlights --parent` stay free text: they name one thing, not a
-  set. Capture `TEXT` carries an interim hint until marker completion
-  lands in a later phase.
+  set.
+- **Capture markers.** `TEXT` on `capture`, `capture-parse`, and
+  `capture-rewrite` completes the marker at the end of the active word
+  through the in-process `capture_complete` extraction (see below).
+  Wikilinks (`[[…`) are deferred and offer nothing.
 - **Vault values.** These slots read the live vault through the same
   in-process scans as the commands they complete, so short clusters
   (`-rcash`), `--route=cash`, and `BOB_DIR` defaults behave exactly as
@@ -156,3 +159,34 @@ Directives go through the native `_files` and `_message` widgets,
 so your `list-colors`, `menu select`, quoting, and native colors
 keep working. Setting `NO_COLOR` switches bob's default header to
 the plain `── %d ──` form.
+
+## Capture markers
+
+`TEXT` on `capture`, `capture-parse`, and `capture-rewrite` completes the
+capture marker at the end of the active word through an in-process
+`capture_complete` extraction, so shell completion can never disagree with
+the marker highlighting `bob capture-parse` derives. Shell completion is
+another thin client of that service (see `docs/capture.md`
+`bob capture-complete`).
+
+- **Slots.** The cursor word is `TEXT` when the trailing `TEXT` has
+  already received a word, when `--` precedes it, or when it sits at the
+  `TEXT` position and does not start with `-`. `raw_text` joins the
+  `TEXT` words before the cursor with single spaces plus the cursor
+  prefix, with `cursor = raw_text.len()`.
+- **Release gates.** Safe rows only (no `requires_block_id` or
+  `requires_name`; create-Pomodoro rows stay as `new Pomodoro`); end of
+  the active word only (a non-empty `--suffix` offers nothing, the
+  replacement must end at the cursor and start inside the cursor word, a
+  newline in the word offers nothing); nothing beyond completion (no
+  `capture-task-id`, `capture-pomodoro-name`, writes, or dry runs);
+  wikilinks (`[[…`) are deferred before the note index read and offer
+  nothing.
+- **Presentation.** Values are full marker texts such as
+  `@dev:remote-power`. Descriptions come from the row: task text, route
+  kind, or Pomodoro time and name. Groups are human words: `inbox` /
+  `areas` / `projects`, `sections in dev`, `tasks in dev`,
+  `task sections`, `open Pomodoros`, `active tasks`. A value ending in
+  `:` `+` `#` `=` `^` is `nospace`; a complete marker gets a space. A
+  quoted word carrying its own prefix (for example `fix it @dev:`) is
+  served with `!prefix 7`, counted in Unicode scalar values.
