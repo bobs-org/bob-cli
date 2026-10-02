@@ -198,5 +198,4 @@ pub(crate) use model::{Frontmatter, ProjectStatus};
 pub(crate) use scan::{
     frontmatter_is_area, frontmatter_is_project, frontmatter_value,
     is_markdown_file, parse_frontmatter, trim_yaml_scalar, walk_typed_notes,
-    TypedNote,
 };

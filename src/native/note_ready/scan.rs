@@ -9,10 +9,8 @@ use chrono::NaiveDate;
 use super::{evaluate, CapSource, LaneRow, NoteInput, Report};
 use crate::native::{
     config::{self, ConfigError},
-    dataview::{self, DataviewError},
-    env as bob_env,
-    freshness::scan::{row_bucket, scan},
-    projects::{walk_typed_notes, ProjectStatus},
+    freshness::scan::{row_bucket, scan, RowCtx},
+    projects::walk_typed_notes,
 };
 
 /// Scan failures: I/O-like errors exit 1, usage errors (invalid
@@ -58,8 +56,9 @@ pub(crate) struct ScanReport {
     pub(crate) default_source: CapSource,
     /// Counted Ready-lane rows with worklist detail.
     pub(crate) ready_details: Vec<ReadyDetail>,
-    /// Whole-vault NEXT/PENDING lane rows per note path, for the
-    /// worklist `also here` line (same engine queries as `bob plan`).
+    /// NEXT/PENDING lane rows per note path, for the worklist `also
+    /// here` line (the snapshot's `NEXT_QUERY`/`PENDING_QUERY` rows,
+    /// the same engine queries as `bob plan`).
     pub(crate) next_counts: HashMap<String, u32>,
     pub(crate) pending_counts: HashMap<String, u32>,
     /// Open blocked tasks per note path, for the worklist
@@ -78,9 +77,9 @@ pub(crate) fn scan_note_ready_with_preview(
     scan_inner(bob_dir, preview, true)
 }
 
-/// Scan the vault for the overview only: no worklist row details
-/// and no NEXT/PENDING lane passes, so the overview costs one
-/// freshness scan plus the typed-note walk.
+/// Scan the vault for the overview only: no worklist row details or
+/// lane counts. Both views cost one freshness scan plus the
+/// typed-note walk.
 pub(crate) fn scan_note_ready_overview(
     bob_dir: &Path,
     preview: Option<u32>,
@@ -158,25 +157,18 @@ fn scan_inner(
     }
 
     let report = evaluate(&notes, &rows, default_cap, default_source, true);
-    let _ = ProjectStatus::Wip;
 
-    // NEXT/PENDING lane rows per note for the worklist `also here`
-    // line. Blocked rows come from the snapshot's open pass so no
-    // extra vault read is needed for them. The overview skips all
-    // three so it costs no extra vault passes.
+    // NEXT/PENDING/blocked rows per note for the worklist `also here`
+    // line, all from the one freshness snapshot (no extra vault
+    // passes). The overview skips them.
     let (next_counts, pending_counts, blocked_counts) = if details {
-        let now = bob_env::current_datetime();
-        let next_counts =
-            count_lane_by_path(bob_dir, dataview::NEXT_QUERY, now, &report)?;
-        let pending_counts =
-            count_lane_by_path(bob_dir, dataview::PENDING_QUERY, now, &report)?;
-        let mut blocked_counts: HashMap<String, u32> = HashMap::new();
-        for row in &snapshot.open {
-            if row.task.is_blocked {
-                *blocked_counts.entry(row.task.path.clone()).or_default() += 1;
-            }
-        }
-        (next_counts, pending_counts, blocked_counts)
+        (
+            count_by_path(&snapshot.next),
+            count_by_path(&snapshot.pending),
+            count_by_path(
+                snapshot.open.iter().filter(|row| row.task.is_blocked),
+            ),
+        )
     } else {
         (HashMap::new(), HashMap::new(), HashMap::new())
     };
@@ -193,46 +185,15 @@ fn scan_inner(
     })
 }
 
-/// Count one engine lane query per note path. Only notes present in
-/// the per-note report keep a count; lane rows elsewhere (daily
-/// notes, untyped notes) never reach the worklist.
-fn count_lane_by_path(
-    bob_dir: &Path,
-    query: &str,
-    now: chrono::NaiveDateTime,
-    report: &Report,
-) -> Result<HashMap<String, u32>, ScanError> {
-    use std::collections::HashSet;
-    let known: HashSet<&str> =
-        report.notes.iter().map(|note| note.path.as_str()).collect();
-    let tasks = dataview::query_rich_tasks(bob_dir, query, now)
-        .map_err(|error| ScanError::Io(dataview_message(&error)))?;
+/// Count snapshot rows per note path.
+fn count_by_path<'a>(
+    rows: impl IntoIterator<Item = &'a RowCtx>,
+) -> HashMap<String, u32> {
     let mut counts: HashMap<String, u32> = HashMap::new();
-    for task in &tasks {
-        if known.contains(task.path.as_str()) {
-            *counts.entry(task.path.clone()).or_default() += 1;
-        }
+    for row in rows {
+        *counts.entry(row.task.path.clone()).or_default() += 1;
     }
-    Ok(counts)
-}
-
-fn dataview_message(error: &DataviewError) -> String {
-    match error {
-        DataviewError::TasksQuery { message }
-        | DataviewError::NativeQuery { message }
-        | DataviewError::DataviewQuery { message }
-        | DataviewError::DataviewMissing { message } => message.clone(),
-        DataviewError::NativeVaultRead { path, error } => {
-            format!("read {}: {error}", path.display())
-        }
-        DataviewError::TasksSettingsRead { path, error } => {
-            format!("read Tasks settings {}: {error}", path.display())
-        }
-        DataviewError::TasksSettingsParse { path, error } => {
-            format!("parse Tasks settings {}: {error}", path.display())
-        }
-        other => format!("{other:?}"),
-    }
+    counts
 }
 
 /// Where the default per-note cap came from: an explicit
