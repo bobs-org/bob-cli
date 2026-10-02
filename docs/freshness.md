@@ -846,9 +846,13 @@ an agent waits two weeks or claims its outcome.
 - 2026-10-01: per-note CROWDED surfaces (`bob ready`, the dash chip,
   crowded.md, the heading chips) went live; gesture notices are
   deferred until after the trial.
+- 2026-10-01: the tiered morning review walk went live (schema 3, lane
+  intervals, tier notices, walk anchor). The trial window
+  2026-10-05 through 2026-10-18 stands.
 
 Keep a lightweight daily tally on the rotten page: NEW, RETURNED,
-expired ROTTEN, confirmed FRESH, READY, and whether the chip was red.
+expired ROTTEN, confirmed FRESH, READY, lanes kept/released, minutes to
+Commitments done, and whether the chip was red.
 Track confirmed FRESH separately from exempt READY for the rule below.
 
 Keep if red on no more than 3 mornings, at least about 30 confirmed

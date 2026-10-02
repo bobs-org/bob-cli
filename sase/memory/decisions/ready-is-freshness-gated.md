@@ -13,7 +13,9 @@ summary:
 metadata:
   status: superseded-in-part
   decided: 2026-10-01
-  superseded_by: decisions/note-ready-cap-counts-the-lane
+  superseded_by:
+    - decisions/note-ready-cap-counts-the-lane
+    - decisions/review-walk-is-tiered
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault, dash.
@@ -64,3 +66,5 @@ Supersedes in part [[decisions/today-is-read-from-the-ledger]] for the dash
 section list only.
 
 Superseded in part: chip list only — see [[decisions/note-ready-cap-counts-the-lane]].
+
+Superseded in part: review ritual order only — see [[decisions/review-walk-is-tiered]].

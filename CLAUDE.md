@@ -138,11 +138,18 @@ edited in place.
    area/project note's whole Ready lane by residence, whatever its freshness.
 6. **READY Is Freshness-Gated With NEW and ROTTEN Review**
    (`ready-is-freshness-gated`) - _[partly superseded by
-   `note-ready-cap-counts-the-lane`]_ READY is the freshness-gated confirmed/exempt
-   backlog (visible TODO pool minus NEW and ROTTEN buckets) with TODAY → NEW → PENDING →
-   NEXT → READY sections and NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; review
-   clears NEW then ROTTEN; no tags, fields, or status changes store review state.
-7. **Today Is Read From The Ledger, Never Written To Tasks**
+   `note-ready-cap-counts-the-lane`, `review-walk-is-tiered`]_ READY is the
+   freshness-gated confirmed/exempt backlog (visible TODO pool minus NEW and ROTTEN
+   buckets) with TODAY → NEW → PENDING → NEXT → READY sections and
+   NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; review clears NEW then ROTTEN; no
+   tags, fields, or status changes store review state.
+7. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`) - The ]s
+   walk visits one shared queue in explicit tiers NEW → PENDING → NEXT → RETURNED →
+   ROTTEN; Pending and Next tasks come due for daily review under pending_interval /
+   next_interval (default 1, false walks that lane off); tiers never feed buckets or
+   chips; upkeep outside the lanes counts the budget; stamps stay and the seed never
+   re-runs.
+8. **Today Is Read From The Ledger, Never Written To Tasks**
    (`today-is-read-from-the-ledger`) - _[partly superseded by `ready-is-freshness-gated`
    ]_ Today is the open tasks with a dedicated Task Link under today's open Pomodoros,
    computed at read time by bob plan and bob-ledger-tools; never a tag, task-line field,
