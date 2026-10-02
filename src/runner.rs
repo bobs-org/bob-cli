@@ -24,6 +24,19 @@ pub(crate) struct Subcommand {
     pub(crate) script_command: Option<&'static str>,
     pub(crate) about: &'static str,
     pub(crate) native_command: NativeCommand,
+    pub(crate) tier: CompletionTier,
+}
+
+/// Shell-completion grouping for a top-level subcommand.
+///
+/// Porcelain commands render under the `commands` group; the ten
+/// `capture-*` frontend endpoints render last under `capture protocol`.
+/// The metadata lives here, with the table, so grouping can never drift
+/// from the command list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompletionTier {
+    Porcelain,
+    Plumbing,
 }
 
 pub(crate) fn subcommands() -> &'static [Subcommand] {
@@ -39,162 +52,189 @@ const SUBCOMMANDS: &[Subcommand] = &[
         script_command: None,
         about: "Capture a task or bullet into the Bob vault",
         native_command: NativeCommand::Capture,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "capture-complete",
         script_command: None,
         about: "Complete the capture marker at the cursor",
         native_command: NativeCommand::CaptureComplete,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "capture-parse",
         script_command: None,
         about: "Explain what in-progress capture text currently means",
         native_command: NativeCommand::CaptureParse,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "capture-pomodoro-name",
         script_command: None,
         about: "Assign a name to an open unnamed Pomodoro",
         native_command: NativeCommand::CapturePomodoroName,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "capture-pomodoros",
         script_command: None,
         about: "List today's Pomodoro ledger entries",
         native_command: NativeCommand::CapturePomodoros,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "capture-rewrite",
         script_command: None,
         about: "Apply the capture grammar's automatic draft rewrites",
         native_command: NativeCommand::CaptureRewrite,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "capture-sections",
         script_command: None,
         about: "List the non-Tasks sections of a capture note",
         native_command: NativeCommand::CaptureSections,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "capture-targets",
         script_command: None,
         about: "List capture routes for inbox, area, and active project notes",
         native_command: NativeCommand::CaptureTargets,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "capture-task-id",
         script_command: None,
         about: "Assign a block ID to an open capture task",
         native_command: NativeCommand::CaptureTaskId,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "capture-task-sections",
         script_command: None,
         about: "List the ALL-CAPS child sections of a capture task",
         native_command: NativeCommand::CaptureTaskSections,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "capture-tasks",
         script_command: None,
         about: "List the open tasks of a capture note",
         native_command: NativeCommand::CaptureTasks,
+        tier: CompletionTier::Plumbing,
     },
     Subcommand {
         name: "freshness",
         script_command: None,
         about: "Walk the tiered freshness review queue and seed the cutover",
         native_command: NativeCommand::Freshness,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "gkeep",
         script_command: None,
         about: "Drain the Google Keep inbox into Obsidian tasks",
         native_command: NativeCommand::Gkeep,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "highlights",
         script_command: None,
         about: "Sync Highlights PDF annotations into reference notes",
         native_command: NativeCommand::Highlights,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "move-done-tasks",
         script_command: None,
         about: "Move done and canceled tasks and maintain done links",
         native_command: NativeCommand::MoveDoneTasks,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "nightly",
         script_command: None,
         about: "Run the nightly Obsidian sync and maintenance steps",
         native_command: NativeCommand::Nightly,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "notify",
         script_command: Some("bob_notify"),
         about: "Notify when the current Pomodoro is complete",
         native_command: NativeCommand::Notify,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "plan",
         script_command: None,
         about: "Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes",
         native_command: NativeCommand::Plan,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "plugins",
         script_command: None,
         about: "Manage Bob Obsidian plugins (list and sync to the vault)",
         native_command: NativeCommand::Plugins,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "pomodoro",
         script_command: Some("bob_pomodoro"),
         about: "Show the current Pomodoro status",
         native_command: NativeCommand::Pomodoro,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "projects",
         script_command: None,
         about: "Manage project notes via their ^prj tasks",
         native_command: NativeCommand::Projects,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "query",
         script_command: None,
         about: "Run Dataview queries against the Bob vault",
         native_command: NativeCommand::Query,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "randomize",
         script_command: None,
         about: "Re-roll due prioritized tasks within their priority windows",
         native_command: NativeCommand::Randomize,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "ready",
         script_command: None,
         about: "Show ready tasks per area/project note against the per-note cap",
         native_command: NativeCommand::NoteReady,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "task-status-hooks",
         script_command: None,
         about: "Sync active task dependencies and Pomodoro links",
         native_command: NativeCommand::TaskStatusHooks,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "tmux-pomodoro",
         script_command: Some("tmux_bob_pomodoro"),
         about: "Print Pomodoro status for tmux",
         native_command: NativeCommand::TmuxPomodoro,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "vault-sync",
         script_command: None,
         about: "Reconcile the Bob vault through Git",
         native_command: NativeCommand::VaultSync,
+        tier: CompletionTier::Porcelain,
     },
 ];
 
@@ -204,12 +244,14 @@ const HIDDEN_SUBCOMMAND_ALIASES: &[Subcommand] = &[
         script_command: None,
         about: "Compatibility alias for task-status-hooks",
         native_command: NativeCommand::TaskStatusHooks,
+        tier: CompletionTier::Porcelain,
     },
     Subcommand {
         name: "task-status-setter",
         script_command: None,
         about: "Compatibility alias for task-status-hooks",
         native_command: NativeCommand::TaskStatusHooks,
+        tier: CompletionTier::Porcelain,
     },
 ];
 
@@ -235,7 +277,14 @@ impl fmt::Display for RunnerError {
 impl Error for RunnerError {}
 
 pub fn run_bob() -> i32 {
-    let matches = match build_cli().try_get_matches_from(env::args_os()) {
+    let argv: Vec<OsString> = env::args_os().collect();
+    // Hidden shell-completion endpoint. It intercepts before the root
+    // clap parse and before the script fallback, and it never appears in
+    // help output or the completion tree.
+    if argv.get(1).is_some_and(|first| first == "__complete") {
+        return crate::native::completion::run_complete(&argv[2..]);
+    }
+    let matches = match build_cli().try_get_matches_from(argv) {
         Ok(matches) => matches,
         Err(error) => {
             let exit_code = error.exit_code();

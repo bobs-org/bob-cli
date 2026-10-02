@@ -7,6 +7,7 @@ index, and environment variables.
 | Guide | What it covers |
 | --- | --- |
 | [capture.md](capture.md) | Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery) |
+| [completion.md](completion.md) | Shell completion: the runtime model, protocol 1, and what completes |
 | [dataview.md](dataview.md) | `bob query` Dataview and Tasks |
 | [freshness.md](freshness.md) | Task freshness: review lease, placement, evaluation, and conformance vectors |
 | [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into Obsidian tasks |
