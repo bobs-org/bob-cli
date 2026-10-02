@@ -78,7 +78,7 @@ fn default_run_args(args: Vec<OsString>) -> Vec<OsString> {
     args
 }
 
-fn build_cli() -> ClapCommand {
+pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Reconcile the Bob vault through Git")
         .long_about(
@@ -100,28 +100,9 @@ Legacy BOB_BULK_GIT_COMMIT_* and BOB_SYNC_* environment variables are no longer 
 fn run_command() -> ClapCommand {
     ClapCommand::new("run")
         .about("Run one reconcile cycle")
-        .arg(
-            Arg::new("dry-run")
-                .long("dry-run")
-                .short('n')
-                .action(ArgAction::SetTrue)
-                .help("Report the cycle without staging, committing, merging, or pushing"),
-        )
-        .arg(
-            Arg::new("message")
-                .long("message")
-                .short('m')
-                .value_name("MESSAGE")
-                .value_parser(NonEmptyStringValueParser::new())
-                .help("Override the generated Git commit message"),
-        )
-        .arg(
-            Arg::new("quiet")
-                .long("quiet")
-                .short('q')
-                .action(ArgAction::SetTrue)
-                .help("Suppress per-step logging; errors and conflicts still print"),
-        )
+        .arg(dry_run_arg())
+        .arg(message_arg())
+        .arg(quiet_arg())
 }
 
 fn status_command() -> ClapCommand {
@@ -134,6 +115,44 @@ fn status_command() -> ClapCommand {
                 .action(ArgAction::SetTrue)
                 .help("Print the machine-readable status record"),
         )
+}
+
+fn dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('n')
+        .action(ArgAction::SetTrue)
+        .help(
+            "Report the cycle without staging, committing, merging, or pushing",
+        )
+}
+
+fn message_arg() -> Arg {
+    Arg::new("message")
+        .long("message")
+        .short('m')
+        .value_name("MESSAGE")
+        .value_parser(NonEmptyStringValueParser::new())
+        .help("Override the generated Git commit message")
+}
+
+fn quiet_arg() -> Arg {
+    Arg::new("quiet")
+        .long("quiet")
+        .short('q')
+        .action(ArgAction::SetTrue)
+        .help("Suppress per-step logging; errors and conflicts still print")
+}
+
+/// Completion-only entry: the runtime `build_cli()` plus the default
+/// `run` options mounted on the parent so bare
+/// `bob vault-sync [run options]` parses for completion.
+pub(crate) fn completion_command() -> ClapCommand {
+    build_cli()
+        .arg(dry_run_arg())
+        .arg(message_arg())
+        .arg(quiet_arg())
+        .args_conflicts_with_subcommands(true)
 }
 
 #[derive(Debug, Clone)]

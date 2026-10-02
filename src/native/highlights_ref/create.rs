@@ -92,7 +92,7 @@ impl CreatePlan {
     }
 }
 
-pub(super) fn command() -> ClapCommand {
+pub(crate) fn command() -> ClapCommand {
     ClapCommand::new("create")
         .about("Render Markdown as a Highlights-ready PDF")
         .arg(

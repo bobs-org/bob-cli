@@ -6,6 +6,8 @@ use std::{
     time::Duration,
 };
 
+use clap::{Arg, ArgAction, Command as ClapCommand};
+
 use super::{env as bob_env, pomodoro_status};
 
 const SCRIPT_NAME: &str = "bob_notify";
@@ -124,8 +126,46 @@ enum ParseResult {
     Error(String),
 }
 
-fn print_help() {
-    println!(
+pub(crate) fn completion_descriptor() -> ClapCommand {
+    ClapCommand::new("bob notify")
+        .about("Notify when the current Pomodoro is complete")
+        .disable_help_flag(true)
+        .arg(
+            Arg::new("verbose")
+                .long("verbose")
+                .short('v')
+                .action(ArgAction::Count)
+                .help(
+                    "Enable verbose output. This option can be specified multiple times (e.g. -v, -vv, ...).",
+                ),
+        )
+        .arg(
+            Arg::new("PRE_CHECK_SLEEP")
+                .value_name("PRE_CHECK_SLEEP")
+                .required(true)
+                .help(
+                    "The number of seconds to wait between calls to bob_pomodoro.",
+                ),
+        )
+        .arg(
+            Arg::new("POST_NOTIFY_SLEEP")
+                .value_name("POST_NOTIFY_SLEEP")
+                .required(true)
+                .help(
+                    "The number of seconds to wait after a notification.",
+                ),
+        )
+        .arg(
+            Arg::new("help")
+                .long("help")
+                .short('h')
+                .action(ArgAction::Help)
+                .help("View this help message."),
+        )
+}
+
+pub(crate) fn help_text() -> String {
+    format!(
         "\
 {usage}
 
@@ -147,7 +187,11 @@ Optional Arguments
 -v | --verbose
     Enable verbose output. This option can be specified multiple times (e.g. -v, -vv, ...).",
         usage = usage()
-    );
+    )
+}
+
+fn print_help() {
+    println!("{}", help_text());
 }
 
 fn usage() -> String {

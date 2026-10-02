@@ -16,7 +16,7 @@ pub(super) fn print_config_report(operation: &str, config: &Config) {
     );
 }
 
-pub(super) fn build_cli() -> ClapCommand {
+pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Sync Highlights PDF annotations into Bob reference notes")
         .subcommand_required(true)

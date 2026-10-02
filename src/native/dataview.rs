@@ -2,7 +2,7 @@ use std::{ffi::OsString, iter};
 
 use super::env as bob_env;
 
-mod cli;
+pub(crate) mod cli;
 mod error;
 mod eval;
 mod functions;

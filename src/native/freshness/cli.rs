@@ -96,7 +96,7 @@ fn print_clap_error(error: clap::Error) -> i32 {
     exit_code
 }
 
-fn build_cli() -> ClapCommand {
+pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Walk the tiered freshness review queue and seed the cutover")
         .long_about(
@@ -229,6 +229,18 @@ fn help_arg() -> Arg {
         .short('h')
         .action(ArgAction::Help)
         .help("Show help")
+}
+
+/// Completion-only entry: the runtime `build_cli()` plus the default
+/// `list` options mounted on the parent so bare
+/// `bob freshness [list options]` parses for completion.
+pub(crate) fn completion_command() -> ClapCommand {
+    build_cli()
+        .disable_help_flag(true)
+        .arg(format_arg())
+        .arg(limit_arg())
+        .arg(help_arg())
+        .args_conflicts_with_subcommands(true)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -19,11 +19,15 @@ use crate::native::{self, NativeCommand};
 use crate::scripts::{embedded_assets, script_by_command, EmbeddedAsset};
 
 #[derive(Debug, Clone, Copy)]
-struct Subcommand {
-    name: &'static str,
-    script_command: Option<&'static str>,
-    about: &'static str,
-    native_command: NativeCommand,
+pub(crate) struct Subcommand {
+    pub(crate) name: &'static str,
+    pub(crate) script_command: Option<&'static str>,
+    pub(crate) about: &'static str,
+    pub(crate) native_command: NativeCommand,
+}
+
+pub(crate) fn subcommands() -> &'static [Subcommand] {
+    SUBCOMMANDS
 }
 
 // Keep this table sorted alphabetically by command name; the top-level help

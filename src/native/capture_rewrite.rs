@@ -68,7 +68,7 @@ fn print_clap_error(error: clap::Error) -> i32 {
     exit_code
 }
 
-fn build_cli() -> ClapCommand {
+pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Apply the capture grammar's automatic draft rewrites")
         .long_about(

@@ -68,7 +68,7 @@ impl From<AdapterFailure> for ClipError {
     }
 }
 
-pub(super) fn command() -> ClapCommand {
+pub(crate) fn command() -> ClapCommand {
     ClapCommand::new("clip")
         .about("Capture a web article as a Highlights-ready PDF")
         .arg(

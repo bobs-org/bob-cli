@@ -64,7 +64,7 @@ pub(super) struct VaultConfig {
     pub(super) obsidian_vault: Option<String>,
 }
 
-pub(super) fn build_cli() -> ClapCommand {
+pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Run Dataview or Obsidian Tasks queries against the Bob vault")
         .long_about(

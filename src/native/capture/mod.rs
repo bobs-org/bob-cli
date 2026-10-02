@@ -48,7 +48,7 @@ pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
 mod batch;
 mod block_diff;
 mod budget;
-mod cli;
+pub(crate) mod cli;
 mod commit;
 mod ensure_next;
 mod output;

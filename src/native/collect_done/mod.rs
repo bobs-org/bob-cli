@@ -6,6 +6,8 @@ use std::{
     process::{self, Command, Output, Stdio},
 };
 
+use clap::{Arg, ArgAction, Command as ClapCommand};
+
 use super::{
     env as bob_env,
     ob::{self, ChildEnv},
@@ -325,8 +327,29 @@ fn parse_threshold_text(value: &str) -> Result<usize, String> {
 
     Ok(threshold)
 }
-fn print_help() {
-    println!(
+pub(crate) fn completion_descriptor() -> ClapCommand {
+    ClapCommand::new(COMMAND_NAME)
+        .about("Move done and canceled tasks and maintain done links")
+        .disable_help_flag(true)
+        .arg(
+            Arg::new("threshold")
+                .long("threshold")
+                .short('t')
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .help("Minimum completed/canceled task count per source note"),
+        )
+        .arg(
+            Arg::new("help")
+                .long("help")
+                .short('h')
+                .action(ArgAction::Help)
+                .help("Show this help message and exit"),
+        )
+}
+
+pub(crate) fn help_text() -> String {
+    format!(
         "\
 usage: {COMMAND_NAME} [-t|--threshold N]
 
@@ -338,5 +361,9 @@ options:
   -t, --threshold N
                    minimum completed/canceled task count per source note \
 (default: {DEFAULT_THRESHOLD})"
-    );
+    )
+}
+
+fn print_help() {
+    println!("{}", help_text());
 }

@@ -4,7 +4,7 @@
 //! subcommand modules start as stubs that later phases implement.
 
 mod adapter;
-mod cli;
+pub(crate) mod cli;
 mod config;
 mod doctor;
 mod ledger;

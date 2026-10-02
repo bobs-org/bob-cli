@@ -11,6 +11,7 @@ use std::{
 };
 
 use chrono::Local;
+use clap::{Arg, ArgAction, Command as ClapCommand};
 
 use super::{
     collect_done, env as bob_env,
@@ -113,9 +114,21 @@ enum ParseResult {
     Error(String),
 }
 
-fn print_help() {
-    println!(
-        "\
+pub(crate) fn completion_descriptor() -> ClapCommand {
+    ClapCommand::new("bob nightly")
+        .about("Run the nightly Obsidian sync and maintenance steps")
+        .disable_help_flag(true)
+        .arg(
+            Arg::new("help")
+                .long("help")
+                .short('h')
+                .action(ArgAction::Help)
+                .help("Show this help message and exit"),
+        )
+}
+
+pub(crate) fn help_text() -> String {
+    "\
 usage: bob nightly
 
 Run the nightly Bob maintenance path. The command acquires the shared lock,
@@ -140,7 +153,11 @@ options:
   -h, --help                     show this help message and exit
 
 No other options are accepted."
-    );
+        .to_string()
+}
+
+fn print_help() {
+    println!("{}", help_text());
 }
 
 fn run_collect_done_step(child_env: &ChildEnv) -> i32 {

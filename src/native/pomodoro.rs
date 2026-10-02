@@ -7,6 +7,7 @@ use std::{
 };
 
 use chrono::{NaiveDate, NaiveDateTime, Timelike};
+use clap::{Arg, ArgAction, Command as ClapCommand};
 
 use super::{config, env as bob_env, plan_budget};
 
@@ -552,9 +553,55 @@ fn print_tmux_error(error: &Error) {
     eprintln!("Try 'bob tmux-pomodoro --help' for more information.");
 }
 
-fn print_help() {
-    println!(
-        "\
+pub(crate) fn completion_descriptor() -> ClapCommand {
+    ClapCommand::new("bob pomodoro")
+        .about("Show the current Pomodoro status")
+        .disable_help_flag(true)
+        .arg(
+            Arg::new("debug")
+                .long("debug")
+                .short('d')
+                .action(ArgAction::SetTrue)
+                .help("Enable debug tracing"),
+        )
+        .arg(
+            Arg::new("verbose")
+                .long("verbose")
+                .short('v')
+                .action(ArgAction::SetTrue)
+                .help("Enable verbose debug output"),
+        )
+        .arg(
+            Arg::new("show-stale")
+                .long("show-stale")
+                .short('s')
+                .action(ArgAction::SetTrue)
+                .help("Show open Pomodoros after the stale cutoff"),
+        )
+        .arg(
+            Arg::new("help")
+                .long("help")
+                .short('h')
+                .action(ArgAction::Help)
+                .help("Show this help message and exit"),
+        )
+}
+
+pub(crate) fn tmux_completion_descriptor() -> ClapCommand {
+    ClapCommand::new("bob tmux-pomodoro")
+        .about("Print Pomodoro status for tmux")
+        .disable_help_flag(true)
+        .arg(
+            Arg::new("help")
+                .long("help")
+                .short('h')
+                .action(ArgAction::Help)
+                .help("Show this help message and exit"),
+        )
+}
+
+pub(crate) fn help_text() -> String {
+    "\
 usage: bob pomodoro [-d|--debug] [-s|--show-stale] [-v|--verbose]
        bob pomodoro -h
 
@@ -576,12 +623,11 @@ options:
   -h, --help        show this help message and exit
   -s, --show-stale  show open Pomodoros after the stale cutoff
   -v, --verbose     enable verbose debug output"
-    );
+        .to_string()
 }
 
-fn print_tmux_help() {
-    println!(
-        "\
+pub(crate) fn tmux_help_text() -> String {
+    "\
 usage: bob tmux-pomodoro
        bob tmux-pomodoro -h
 
@@ -602,7 +648,15 @@ environment:
 
 options:
   -h, --help     show this help message and exit"
-    );
+        .to_string()
+}
+
+fn print_help() {
+    println!("{}", help_text());
+}
+
+fn print_tmux_help() {
+    println!("{}", tmux_help_text());
 }
 
 #[cfg(test)]

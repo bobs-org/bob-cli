@@ -75,7 +75,7 @@ fn print_clap_error(error: clap::Error) -> i32 {
     exit_code
 }
 
-fn build_cli() -> ClapCommand {
+pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Sync active and derived-Blocked task statuses")
         .long_about(

@@ -27,11 +27,11 @@ use super::{
     style::{display_width, pad_right, Styler},
 };
 
-mod create;
+pub(crate) mod create;
 
 mod annotation_tasks;
-mod cli;
-mod clip;
+pub(crate) mod cli;
+pub(crate) mod clip;
 mod clip_adapter;
 mod clip_url;
 mod doctor;
