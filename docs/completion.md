@@ -138,6 +138,70 @@ failure, which yields empty output.
   - `query --tasks-note`, `query --origin`, `ready NOTE`: vault notes
     as `!files-in <bob-dir>\t*.md`.
 
+## Live transcripts (fixture vault)
+
+The menus below are real `bob __complete` transcripts captured in a
+sandboxed session against the completion test fixture (one area `cash`,
+one project `dev`, one open task `^ship-it` in `dev`), so no private
+vault content lands in docs. Each candidate line is
+`value<TAB>description<TAB>group<TAB>space|nospace`.
+
+```text
+$ bob __complete zsh --protocol 1 -- bob ""
+capture<TAB>Capture a task or bullet into the Bob vault<TAB>commands<TAB>space
+completion<TAB>Install and inspect shell completion for bob<TAB>commands<TAB>space
+freshness<TAB>Walk the tiered freshness review queue and seed the cutover<TAB>commands<TAB>space
+… (every subcommand, in help order)
+capture-complete<TAB>Complete the capture marker at the cursor<TAB>capture protocol<TAB>space
+… (all ten capture-* endpoints, grouped last)
+```
+
+```text
+$ bob __complete zsh --protocol 1 -- bob capture-sections --route ""
+mac_inbox<TAB>inbox · default capture target<TAB>inbox<TAB>space
+cash<TAB>area<TAB>areas<TAB>space
+dev<TAB>project · active<TAB>projects<TAB>space
+```
+
+```text
+$ bob __complete zsh --protocol 1 -- bob capture fix it "@dev:"
+@dev:ship-it<TAB>Ship the release<TAB>tasks in dev<TAB>space
+```
+
+```text
+$ bob __complete zsh --protocol 1 -- bob capture --format ""
+human<TAB>Colored text for people<TAB>format<TAB>space
+json<TAB>Machine-readable JSON<TAB>format<TAB>space
+```
+
+```text
+$ bob __complete zsh --protocol 1 -- bob completion ""
+bash<TAB>Print the bash completion adapter<TAB>commands<TAB>space
+install<TAB>Install or refresh the completion adapter for your shells<TAB>commands<TAB>space
+status<TAB>Show installed adapters and the bob they call<TAB>commands<TAB>space
+uninstall<TAB>Remove completion adapters that bob installed<TAB>commands<TAB>space
+zsh<TAB>Print the zsh completion adapter<TAB>commands<TAB>space
+```
+
+## Performance
+
+Measured 2026-10-02 on `apollo` (debug build) against the real vault
+(`BOB_DIR=~/bob`), 20 samples after one warmup. `__complete` never
+writes, so measuring on the real vault is safe.
+
+| Slot | p50 | p95 |
+| ---- | --- | --- |
+| `bob <TAB>` (structural) | 10.9 ms | 13.8 ms |
+| `capture-sections --route <TAB>` (vault) | 27.6 ms | 33.0 ms |
+| `capture --route dev --task <TAB>` (vault) | 13.5 ms | 16.3 ms |
+| `capture fix it @dev:<TAB>` (capture text) | 14.5 ms | 17.4 ms |
+| `capture-pomodoro-name --pomodoro-ref <TAB>` (vault) | 11.5 ms | 15.9 ms |
+
+Structural p95 is under 20 ms and vault p95 is under 75 ms, so no
+fix was needed. If a slot regresses past those budgets, the latency
+checks in `tests/cli/completion/` warn first; a real regression gets a
+task bead.
+
 ## Installing
 
 `just install` installs `bob` from this checkout and refreshes shell

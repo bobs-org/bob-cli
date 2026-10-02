@@ -88,10 +88,10 @@ pub(crate) fn build_cli() -> ClapCommand {
         .arg(json_arg())
         .arg(verify_arg())
         .args_conflicts_with_subcommands(true)
+        .subcommand(bash_command())
         .subcommand(install_command())
         .subcommand(status_command())
         .subcommand(uninstall_command())
-        .subcommand(bash_command())
         .subcommand(zsh_command())
 }
 
