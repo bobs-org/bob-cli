@@ -29,6 +29,7 @@ use super::engine;
 use super::kinds::{self, Kind};
 use super::protocol::{self, Request};
 use super::tree;
+use super::{context, providers};
 use crate::runner::{subcommands, CompletionTier};
 
 /// Answer one parsed request with protocol 1 response lines.
@@ -375,6 +376,30 @@ impl<'a> Walk<'a> {
         }
         match kinds::lookup(&path, &id) {
             Some(Kind::Choices) => self.choice_lines(arg, attached),
+            Some(
+                kind @ (Kind::Route
+                | Kind::Section
+                | Kind::Task
+                | Kind::TaskSection
+                | Kind::PomodoroRef
+                | Kind::Plugin
+                | Kind::Level
+                | Kind::VaultNote),
+            ) => {
+                // Vault slots read the words before the cursor for
+                // `--bob-dir`, `--route`, `--task`, and `--repo`, so
+                // short clusters and `--opt=value` behave as at
+                // runtime.
+                let slot = context::Context::parse(self.before);
+                debug_assert_eq!(
+                    slot.path, self.path,
+                    "completion context disagrees with presenter walk"
+                );
+                match providers::vault_lines(kind, &slot) {
+                    Some(lines) => self.directive_lines(attached, &lines),
+                    None => Vec::new(),
+                }
+            }
             Some(Kind::Dirs) => {
                 self.directive_lines(attached, &[protocol::dirs_line()])
             }

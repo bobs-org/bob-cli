@@ -3,9 +3,11 @@
 //! Every value-taking argument in [`tree`](super::tree) has a decision:
 //! clap possible values ([`Kind::Choices`], served live by the engine),
 //! a path directive ([`Kind::Dirs`] / [`Kind::Files`]), free text
-//! ([`Kind::FreeText`], served as a `!message` hint), or a vault slot
-//! whose live providers land in a later phase ([`Kind::VaultSoon`], also
-//! a `!message` hint until then).
+//! ([`Kind::FreeText`], served as a `!message` hint), a vault slot with
+//! a live read-only provider ([`Kind::Route`] and friends, served by
+//! [`providers`](super::providers)), or a vault slot whose live
+//! provider lands in a later phase ([`Kind::VaultSoon`], a `!message`
+//! hint until then).
 //!
 //! The key needs the command path because one arg id can mean two
 //! things: `--block-id` is a _new_ ID in `capture-task-id` but an
@@ -26,7 +28,23 @@ pub(crate) enum Kind {
     Files(Option<&'static str>),
     /// Free text; the presenter shows a `!message` hint.
     FreeText,
-    /// A vault-aware slot whose live providers land in a later phase;
+    /// A vault route from the capture-targets scan.
+    Route,
+    /// A section of the routed note.
+    Section,
+    /// An open task of the routed note, by block ID.
+    Task,
+    /// An ALL-CAPS child section of the `--task` parent.
+    TaskSection,
+    /// An open Pomodoro, by stale-safe ref.
+    PomodoroRef,
+    /// A plugin ID from the repo checkout.
+    Plugin,
+    /// A configured `randomize` priority label.
+    Level,
+    /// A vault note, completed as a path relative to the vault root.
+    VaultNote,
+    /// A vault-aware slot whose live provider lands in a later phase;
     /// until then a `!message` hint carrying this text.
     VaultSoon(&'static str),
 }
@@ -51,7 +69,7 @@ const TABLE: &[Entry] = &[
     Entry {
         path: &["capture-task-sections"],
         arg: "block-id",
-        kind: Kind::VaultSoon("ID \u{2014} vault task block IDs land in a later phase"),
+        kind: Kind::Task,
     },
     // A choice here ...
     Entry {
@@ -86,76 +104,22 @@ const TABLE: &[Entry] = &[
     Entry { path: &[], arg: "engine", kind: Kind::Choices },
     Entry { path: &[], arg: "prefer", kind: Kind::Choices },
     Entry { path: &[], arg: "status", kind: Kind::Choices },
-    // Vault slots: informative hints until the vault-kinds phase
-    // upgrades them to live providers.
-    Entry {
-        path: &[],
-        arg: "route",
-        kind: Kind::VaultSoon("NAME \u{2014} vault route names land in a later phase"),
-    },
-    Entry {
-        path: &[],
-        arg: "section",
-        kind: Kind::VaultSoon("TITLE \u{2014} vault sections land in a later phase"),
-    },
-    Entry {
-        path: &[],
-        arg: "task",
-        kind: Kind::VaultSoon("BLOCK-ID \u{2014} open vault tasks land in a later phase"),
-    },
-    Entry {
-        path: &[],
-        arg: "task-ref",
-        kind: Kind::VaultSoon("REF \u{2014} vault task refs land in a later phase"),
-    },
-    Entry {
-        path: &[],
-        arg: "task-section",
-        kind: Kind::VaultSoon(
-            "TITLE \u{2014} vault task sections land in a later phase",
-        ),
-    },
-    Entry {
-        path: &[],
-        arg: "pomodoro-ref",
-        kind: Kind::VaultSoon("REF \u{2014} open Pomodoros land in a later phase"),
-    },
-    Entry {
-        path: &[],
-        arg: "plugin",
-        kind: Kind::VaultSoon("ID \u{2014} vault plugin IDs land in a later phase"),
-    },
-    Entry {
-        path: &[],
-        arg: "level",
-        kind: Kind::VaultSoon(
-            "LABEL \u{2014} configured priority labels land in a later phase",
-        ),
-    },
-    Entry {
-        path: &[],
-        arg: "tasks-note",
-        kind: Kind::VaultSoon(
-            "VAULT_RELATIVE_PATH \u{2014} vault notes land in a later phase",
-        ),
-    },
-    Entry {
-        path: &[],
-        arg: "origin",
-        kind: Kind::VaultSoon(
-            "VAULT_RELATIVE_PATH \u{2014} vault notes land in a later phase",
-        ),
-    },
-    Entry {
-        path: &[],
-        arg: "note",
-        kind: Kind::VaultSoon("NOTE \u{2014} vault notes land in a later phase"),
-    },
-    Entry {
-        path: &[],
-        arg: "parent",
-        kind: Kind::VaultSoon("NOTE \u{2014} vault notes land in a later phase"),
-    },
+    // Vault slots with live read-only providers. Stale-safe refs
+    // (`--task-ref`) stay free text: they name one task, not a set.
+    // `highlights --parent` is a bare note name, also free text.
+    Entry { path: &[], arg: "route", kind: Kind::Route },
+    Entry { path: &[], arg: "section", kind: Kind::Section },
+    Entry { path: &[], arg: "task", kind: Kind::Task },
+    Entry { path: &[], arg: "task-ref", kind: Kind::FreeText },
+    Entry { path: &[], arg: "task-section", kind: Kind::TaskSection },
+    Entry { path: &[], arg: "pomodoro-ref", kind: Kind::PomodoroRef },
+    Entry { path: &[], arg: "plugin", kind: Kind::Plugin },
+    Entry { path: &[], arg: "level", kind: Kind::Level },
+    Entry { path: &[], arg: "tasks-note", kind: Kind::VaultNote },
+    Entry { path: &[], arg: "origin", kind: Kind::VaultNote },
+    Entry { path: &[], arg: "note", kind: Kind::VaultNote },
+    Entry { path: &[], arg: "parent", kind: Kind::FreeText },
+    // Capture TEXT markers land in the capture-text phase.
     Entry {
         path: &[],
         arg: "text",
@@ -375,10 +339,14 @@ mod tests {
             lookup(&["capture-task-id"], "block-id"),
             Some(Kind::FreeText)
         );
-        assert!(matches!(
+        // `capture-task-sections --block-id` names an existing
+        // task, so the vault-kinds phase gives it the live task
+        // provider; `capture-task-id --block-id` stays free text
+        // because it mints a new ID.
+        assert_eq!(
             lookup(&["capture-task-sections"], "block-id"),
-            Some(Kind::VaultSoon(_))
-        ));
+            Some(Kind::Task)
+        );
         assert_eq!(lookup(&["gkeep", "list"], "source"), Some(Kind::Choices));
         assert_eq!(lookup(&["query"], "tasks"), Some(Kind::FreeText));
         assert_eq!(lookup(&["query"], "source"), Some(Kind::FreeText));

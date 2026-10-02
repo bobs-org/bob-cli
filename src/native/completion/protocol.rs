@@ -186,6 +186,13 @@ pub(crate) fn message_line(text: &str) -> String {
     format!("!message {}", sanitize_field(text))
 }
 
+/// The `!files-in <root>\t<glob>` directive: complete paths relative
+/// to `root` (vault notes). The separator is a TAB, so roots may
+/// contain spaces.
+pub(crate) fn files_in_line(root: &str, glob: &str) -> String {
+    format!("!files-in {root}\t{glob}")
+}
+
 /// Encode one candidate line. Returns `None` for values that cannot be
 /// encoded (empty, containing TAB/LF/CR, or starting with `!`, which
 /// would parse as a directive); bob drops such candidates.

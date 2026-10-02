@@ -4,3 +4,4 @@
 //! parsing, the engine, the kinds table, and the presenter together.
 
 mod protocol;
+mod vault;

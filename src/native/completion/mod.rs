@@ -5,16 +5,24 @@
 //! completion can never drift from the CLI. See `docs/completion.md`
 //! for the protocol and the runtime model.
 
+mod context;
 mod engine;
 mod kinds;
 mod present;
 mod protocol;
+mod providers;
 mod tree;
 
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::time::Instant;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+/// Vault scans run behind this deadline so a slow vault can never
+/// delay the prompt. The hidden `BOB_COMPLETE_DEADLINE_MS` override
+/// exists for tests.
+const COMPLETE_DEADLINE_MS: u64 = 150;
 
 #[allow(unused_imports)]
 pub(crate) use tree::tree;
@@ -57,7 +65,32 @@ fn run_complete_inner(argv: &[OsString]) -> i32 {
             debug_suffix = request.suffix.clone();
             match protocol::skew_message(request.protocol) {
                 Some(skew) => (vec![skew], 0),
-                None => (present::complete_request(&request), 0),
+                None => {
+                    let deadline = deadline_ms();
+                    let (sender, receiver) = mpsc::channel();
+                    // The worker owns the request; the main thread
+                    // only waits. On timeout the main thread prints
+                    // nothing and exits, so a straggling worker can
+                    // never delay the prompt.
+                    std::thread::spawn(move || {
+                        let lines = std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(|| {
+                                present::complete_request(&request)
+                            }),
+                        )
+                        .unwrap_or_default();
+                        let _ = sender.send(lines);
+                    });
+                    match receiver.recv_timeout(Duration::from_millis(deadline))
+                    {
+                        Ok(lines) => (lines, 0),
+                        Err(_) => {
+                            let message = format!("timeout after {deadline}ms");
+                            debug_error = Some(message);
+                            (Vec::new(), 0)
+                        }
+                    }
+                }
             }
         }
     };
@@ -73,6 +106,16 @@ fn run_complete_inner(argv: &[OsString]) -> i32 {
         println!("{}", lines.join("\n"));
     }
     exit_code
+}
+
+/// Read the completion deadline: 150 ms, unless the hidden
+/// `BOB_COMPLETE_DEADLINE_MS` test override sets a positive value.
+fn deadline_ms() -> u64 {
+    std::env::var("BOB_COMPLETE_DEADLINE_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(COMPLETE_DEADLINE_MS)
 }
 
 /// Append the request, the response, the elapsed milliseconds, and any
@@ -109,5 +152,67 @@ fn write_debug_log(
         OpenOptions::new().create(true).append(true).open(path)
     {
         let _ = file.write_all(entry.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Restores the deadline override when the guard drops, so the
+    /// mutation cannot leak into other tests.
+    struct DeadlineGuard {
+        previous: Option<String>,
+    }
+
+    impl DeadlineGuard {
+        fn set(value: Option<&str>) -> Self {
+            let previous = std::env::var("BOB_COMPLETE_DEADLINE_MS").ok();
+            // `unsafe` because another thread could read the var
+            // concurrently; no other test reads this var, and the
+            // guard restores it on drop.
+            unsafe {
+                match value {
+                    Some(value) => {
+                        std::env::set_var("BOB_COMPLETE_DEADLINE_MS", value);
+                    }
+                    None => {
+                        std::env::remove_var("BOB_COMPLETE_DEADLINE_MS");
+                    }
+                }
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for DeadlineGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(previous) => {
+                        std::env::set_var("BOB_COMPLETE_DEADLINE_MS", previous);
+                    }
+                    None => {
+                        std::env::remove_var("BOB_COMPLETE_DEADLINE_MS");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deadline_defaults_and_falls_back() {
+        let _unset = DeadlineGuard::set(None);
+        assert_eq!(deadline_ms(), COMPLETE_DEADLINE_MS);
+
+        let _override = DeadlineGuard::set(Some("5000"));
+        assert_eq!(deadline_ms(), 5000);
+
+        // Empty, zero, and non-numeric overrides fall back instead
+        // of disabling the deadline.
+        for raw in ["", "0", "abc"] {
+            let _guard = DeadlineGuard::set(Some(raw));
+            assert_eq!(deadline_ms(), COMPLETE_DEADLINE_MS, "raw: {raw}");
+        }
     }
 }

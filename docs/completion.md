@@ -59,6 +59,8 @@ failure, which yields empty output.
   - `!dirs`: complete directories natively.
   - `!files` / `!files <glob>`: complete files natively, optionally
     filtered.
+  - `!files-in <root>\t<glob>`: complete paths relative to `root`
+    (vault notes). The separator is a TAB, so roots may contain spaces.
   - `!message <text>`: show a hint and offer no candidates (free-text
     slots, version skew).
 - **Candidate lines:** `value<TAB>description<TAB>group<TAB>space|nospace`.
@@ -103,7 +105,32 @@ failure, which yields empty output.
   a glob where one applies.
 - **Free text.** Everything else answers a `!message` hint naming the
   slot, for example `MESSAGE — Override the generated Git commit
-  message`. Vault slots (`--route`, `--section`, `--task`,
-  `--task-section`, `--pomodoro-ref`, `--plugin`, `--level`, vault
-  notes) and capture `TEXT` carry an interim hint until their live
-  providers land in a later phase.
+  message`. Stale-safe refs (`--task-ref`) and the bare note name of
+  `highlights --parent` stay free text: they name one thing, not a
+  set. Capture `TEXT` carries an interim hint until marker completion
+  lands in a later phase.
+- **Vault values.** These slots read the live vault through the same
+  in-process scans as the commands they complete, so short clusters
+  (`-rcash`), `--route=cash`, and `BOB_DIR` defaults behave exactly as
+  at runtime. A slot whose prerequisite is missing answers
+  `!message pass --route first` (or `pass --task first`) instead of
+  guessing. Vault scans run behind a 150 ms deadline so a slow vault
+  can never delay the prompt; on timeout bob answers nothing.
+  - `--route` (on `capture`, `capture-sections`, `capture-tasks`,
+    `capture-task-id`, `capture-task-sections`): routes in
+    capture-targets scan order, grouped `inbox` / `areas` / `projects`.
+  - `capture --section`: non-Tasks sections of the routed note, grouped
+    `sections in <route>`.
+  - `capture --task` and `capture-task-sections --block-id`: open tasks
+    of the routed note by block ID, grouped `tasks in <route>`.
+  - `capture --task-section`: ALL-CAPS child sections of the `--task`
+    parent by exact title, grouped `task sections`.
+  - `capture-pomodoro-name --pomodoro-ref`: open Pomodoros by
+    stale-safe ref, grouped `open Pomodoros`.
+  - `plugins sync --plugin`: directory names under
+    `<--repo or BOB_PLUGINS_DIR>/plugins/*/`, grouped `plugins`. Never
+    git.
+  - `randomize --level`: configured priority labels in config order;
+    the description is the roll window (for example `2–7 days`).
+  - `query --tasks-note`, `query --origin`, `ready NOTE`: vault notes
+    as `!files-in <bob-dir>\t*.md`.
