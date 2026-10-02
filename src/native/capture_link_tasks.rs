@@ -932,6 +932,103 @@ mod tests {
         assert_eq!(ranked, vec!["apple banana", "an apple and a banana"]);
     }
 
+    #[test]
+    fn ranker_passes_the_dependency_contract_dk_vectors() {
+        // DK vectors from docs/task-dependencies.md §11.4: the Depends
+        // on stage ports `rank`, so the contract pins them here.
+        fn candidate(
+            text: &str,
+            route: &str,
+            block_id: Option<&str>,
+            section: Option<&str>,
+        ) -> LinkTask {
+            LinkTask {
+                route: route.to_string(),
+                note_kind: CaptureTargetKind::Project,
+                block_id: block_id.map(str::to_string),
+                block_id_suggestions: Vec::new(),
+                status_symbol: ' ',
+                status_name: "Todo".to_string(),
+                status_type: "TODO",
+                text: text.to_string(),
+                section: section.map(str::to_string),
+                depth: 0,
+                line: 1,
+                task_ref: "1:deadbeef".to_string(),
+                scheduled: None,
+                pulls_forward: false,
+                pomodoro: None,
+                group: LinkTaskGroup::Note,
+            }
+        }
+        let tasks = vec![
+            candidate(
+                "File for unemployment",
+                "cash",
+                Some("unemployment"),
+                Some("Money"),
+            ),
+            candidate("Call unemployment office", "cash", None, Some("Money")),
+            candidate("Dispute North Face jacket", "cash", None, None),
+            candidate(
+                "Launch swarm to find hospital",
+                "body",
+                Some("hospital-swarm"),
+                Some("Health"),
+            ),
+            candidate(
+                "Run e2e on sase-8v",
+                "sase_bug_bash",
+                Some("e2e-sase-8v"),
+                Some("Bugs"),
+            ),
+        ];
+        let ranked = |query: &str| {
+            rank(&tasks, query)
+                .iter()
+                .map(|task| task.text.clone())
+                .collect::<Vec<_>>()
+        };
+        // DK1: a field prefix (3) outranks a word prefix (2).
+        assert_eq!(
+            ranked("unemp"),
+            vec!["File for unemployment", "Call unemployment office",]
+        );
+        // DK2: `route:blockId` field prefix.
+        assert_eq!(ranked("cash:un"), vec!["File for unemployment"]);
+        // DK3: word prefix.
+        assert_eq!(ranked("face"), vec!["Dispute North Face jacket"]);
+        // DK4: substring inside `hospital`.
+        assert_eq!(ranked("pit"), vec!["Launch swarm to find hospital"]);
+        // DK5: in-order subsequence only; ties keep canonical order.
+        assert_eq!(
+            ranked("uof"),
+            vec![
+                "Call unemployment office",
+                "Dispute North Face jacket",
+                "Launch swarm to find hospital",
+            ]
+        );
+        // DK6: block-id field prefix.
+        assert_eq!(ranked("e2e"), vec!["Run e2e on sase-8v"]);
+        // DK7: AND across terms; 3 + 3 outranks 3 + 2.
+        assert_eq!(
+            ranked("cash unemp"),
+            vec!["File for unemployment", "Call unemployment office",]
+        );
+        // DK8: an empty query keeps canonical order.
+        assert_eq!(
+            ranked(""),
+            vec![
+                "File for unemployment",
+                "Call unemployment office",
+                "Dispute North Face jacket",
+                "Launch swarm to find hospital",
+                "Run e2e on sase-8v",
+            ]
+        );
+    }
+
     struct TempDir {
         path: PathBuf,
     }

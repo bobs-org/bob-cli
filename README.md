@@ -1108,3 +1108,4 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Bulk re-roll of due prioritized tasks | [`docs/randomize.md`](docs/randomize.md) |
 | Google Keep inbox drain into Obsidian tasks | [`docs/gkeep.md`](docs/gkeep.md) |
 | Pomodoro-driven task status sync | [`docs/task-status-hooks.md`](docs/task-status-hooks.md) |
+| Task dependency links: Depends-On line contract and conformance vectors | [`docs/task-dependencies.md`](docs/task-dependencies.md) |

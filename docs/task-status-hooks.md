@@ -295,6 +295,10 @@ Next. Note kind, directory names, and tags play no role in lane decisions.
 
 ## Derived Blocked Status
 
+Task dependency links live on one managed Depends-On line per the
+[task dependency contract](task-dependencies.md); the hooks reconcile
+that line into the fields below before deriving Blocked.
+
 After the full vault scan and the final post-rewrite Pomodoro graph are known,
 the command indexes Dataview task identities from both square-bracket and
 parenthesized fields:
