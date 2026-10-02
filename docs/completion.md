@@ -134,3 +134,25 @@ failure, which yields empty output.
     the description is the roll window (for example `2–7 days`).
   - `query --tasks-note`, `query --origin`, `ready NOTE`: vault notes
     as `!files-in <bob-dir>\t*.md`.
+
+## Styling
+
+The zsh adapter ships bob-scoped presentation defaults, applied only
+where you have set no style of your own:
+
+- Group headers render as bold green `── <group> ──`, matching
+  `bob --help`.
+- Candidates stay grouped (`group-name` is set to the empty style),
+  so each slot keeps its own header instead of merging into one list.
+
+Both are scoped to `bob`, so other commands are unaffected. To use
+your own look, set the same styles yourself — yours win:
+
+```zsh
+zstyle ':completion:*:*:bob:*:descriptions' format '── %d ──'
+```
+
+Directives go through the native `_files` and `_message` widgets,
+so your `list-colors`, `menu select`, quoting, and native colors
+keep working. Setting `NO_COLOR` switches bob's default header to
+the plain `── %d ──` form.

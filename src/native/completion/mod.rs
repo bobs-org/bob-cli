@@ -5,6 +5,7 @@
 //! completion can never drift from the CLI. See `docs/completion.md`
 //! for the protocol and the runtime model.
 
+mod adapters;
 mod context;
 mod engine;
 mod kinds;

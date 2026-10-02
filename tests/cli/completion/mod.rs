@@ -5,3 +5,4 @@
 
 mod protocol;
 mod vault;
+mod zsh_adapter;
