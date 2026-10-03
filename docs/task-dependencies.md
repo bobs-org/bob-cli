@@ -360,6 +360,11 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
 
 - Both members return Promises resolving to `{ ok, reason? }` and
   never throw.
+- `ref.line` and `parentRef.line` are 0-based line indexes into the
+  note's lines (the same indexing the editor and `findOwningTaskLine`
+  use): the Depends-On line itself, or any line of the owning task
+  block. Non-integer or out-of-range lines refuse with `invalid-ref` /
+  `line-out-of-range`.
 - `removeDependency` re-reads the dependent and refuses with a notice
   when it is stale, and refuses with `not-on-line` (never a silent `ok`)
   when the target is not on the dependent's line.
@@ -415,6 +420,12 @@ its own; `context` names what surrounds it. `verdict` is one of
 | DP21 | `⛓️ **DEPENDS ON:** [[#^a]]` | third direct child, after two prose children | accept(1) |
 | DP22 | `⛓️ **DEPENDS ON:** [[#^a\\|swarm]]` | aliased link | accept(1), canonicalise |
 | DP23 | `⛓️ **DEPENDS ON:** [[note]]` | bare note link, no block id | malformed |
+| DP24 | `🔗️ **DEPENDS ON:** [[#^a]]` | link emoji with VS16 | not-a-line |
+| DP25 | `⛓️ **DEPENDS ON:** [[note#Heading]]` | heading link, no block id | malformed |
+| DP26 | `⛓️ **DEPENDS ON:** • ,` | label followed only by separators | malformed |
+| DP27 | `⛓️ **depends on:** [[#^a]]` | lowercase label | not-a-line |
+| DP28 | `⛓️ **DEPENDS ON:** [[#^a]]` | no list marker | not-a-line |
+| DP29 | `> - ⛓️ **DEPENDS ON:** [[#^a]]` | blockquoted line (recognisers reject; nav's writer still round-trips quoted lines it manages, pinned by its counted-writer test) | not-a-line |
 
 ### 11.2 DW — write vectors
 
