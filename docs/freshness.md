@@ -546,8 +546,17 @@ carry `references` entries; top-level api stays v3).
 Dashboard `freshness.reviewModel()` NEW/ROTTEN chips project the
 same memoized evaluated states onto the existing visible Ready
 pool — hidden review-only rows never feed a badge for a section
-that excludes them — while the status bar, `]s`, and the CLI use
-the full review counts.
+that excludes them — while the status bar footer, `]s`, and the CLI
+use the full review counts. The desktop footer shows only nonempty
+walk groups in NEW → PROJECTS → PENDING → NEXT → RETURNED →
+REFERENCES → ROTTEN order, splitting RETURNED from ROTTEN so the
+commitment/upkeep boundary is visible; dashboard ROTTEN chips still
+fold RETURNED plus ROTTEN. It appears only while a trustworthy
+nonempty queue remains and hides entirely when the queue is empty,
+including a met upkeep budget or a nonzero today count. `Review r/N`
+and `TIER i/M` are positions in the current queue; they never mean
+how many tasks were completed in a review session. Compact cursor
+context reuses the same presentation as the `]s` notice.
 
 **One-release legacy budget key.** A config that still sets
 `freshness.stale_daily_budget` keeps working for one release: when
@@ -637,6 +646,10 @@ task stays due and Alt+Shift+F does not advance.
    This does not depend on how far ROTTEN review got.
 5. Then, or later, do ROTTEN upkeep until 0 or the budget. It is fine
    to stop partway.
+
+The Obsidian footer keeps a condensed version of that `]s` notice
+visible while the cursor is on a review task, and the `]s next` hint
+otherwise. Wrap and boundary preambles stay transient in the notice.
 
 **First walk:** release the lanes to their caps.
 
@@ -745,7 +758,9 @@ vault regardless of `--limit`), `queue` (each with `rank`, `tier`
 to execute an action. No new CLI subcommands or options. Human
 section counts, the REVIEW summary, status-bar walk totals, per-tier
 ranks, and commitment-boundary logic use tier counts, not state
-counts; a NEW project counts once in PROJECTS, and `--limit` only
+counts. The Obsidian footer omits zero-count groups and hides when
+the walk is empty; CLI human output is unchanged. A NEW project
+counts once in PROJECTS, and `--limit` only
 truncates rows. A NEW-state Ready reference walks in REFERENCES, not
 NEW, on the reference cadence in any lane.
 
@@ -780,8 +795,8 @@ an invalid `freshness:` block or a non-Dataview task format.
 | ------- | ----- |
 | `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 7: `list` walks NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN with lane intervals for ordinary tasks and tracker cadences for `^prj`/`^ref`) |
 | `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; capture never stamps trackers) |
-| bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v5 with the `trackerReview` capability) |
-| bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS/REFERENCES tier walk with `trackerReview`/`referenceReview` capabilities and legacy v3/v4 fallback) |
+| bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v5 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView`) |
+| bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS/REFERENCES tier walk with `trackerReview`/`referenceReview` capabilities and legacy v3/v4 fallback; notices feature-detect `reviewEntryView`) |
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
 | `rotten.md` (aliases `Review`, `Freshness review`, `Rotten Tasks`) | dash-gating (landed: live summary plus always-present RETURNED and ROTTEN groups; tasks stay in source notes, rows are click-through views) |
