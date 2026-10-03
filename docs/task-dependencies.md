@@ -361,7 +361,8 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
 - Both members return Promises resolving to `{ ok, reason? }` and
   never throw.
 - `removeDependency` re-reads the dependent and refuses with a notice
-  when it is stale.
+  when it is stale, and refuses with `not-on-line` (never a silent `ok`)
+  when the target is not on the dependent's line.
 - Plugins never import each other's `main.js`. bob-ledger-tools
   feature-detects `api?.version >= 1`.
 
