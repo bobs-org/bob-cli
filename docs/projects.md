@@ -517,9 +517,11 @@ exactly once from an injected random source, the model is frozen, and approval
 persists the preview without re-rolling. The planner never writes; the card
 interaction and guarded commit landed with the decision-card phase
 (`FreshnessDecayCardModal` in bob-navigation-hotkeys 1.69.0, covered by
-`scripts/test-navigation-decision-card.cjs`). The press opens the card and
-writes nothing; every approval revalidates the task line, local day, decay
-config, and trigger eligibility, then reuses the previewed plan/date through
+`scripts/test-navigation-decision-card.cjs` plus the real-handler suite
+`scripts/test-navigation-decision-card-handlers.cjs` in 1.70.0). The press
+opens the card and writes nothing; every approval revalidates the task line,
+local day, decay config, trigger eligibility, the child Schedule Log, and the
+priority ladder config, then reuses the previewed plan/date through
 the existing transactional writers (one undo step). Esc writes nothing and
 retains the anchor; stale inputs rebuild for a fresh choice.
 

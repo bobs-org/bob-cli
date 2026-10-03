@@ -138,15 +138,33 @@ prefixes, CRLF, and final-newline state follow the existing writer
 rules. No metadata leaks into clean task descriptions or capture
 previews.
 
-**Counting, clearing, and storage.** The full event table (which
-gestures increment, which preserve, which clear; pre-write
-eligibility with `entry.path === path`, `entry.line`, the raw line,
-`lane === 'ready'`, and `tier in {'rotten','returned'}`; the sole
-increment helper `api.freshness.keepLine(line, dateText, { counted })`
-with its valid-prior-`fresh < today` guard; Rust reads/clears/reports
-with no increment path; the seed preserve-mode exception) is owned by
-the plan and the parity vectors until the gesture phases land it in
-the JavaScript consumers. What Rust guarantees today:
+**Counting, clearing, and storage.** Exact eligibility authorizes counting
+only for an exact due-Ready ROTTEN/RETURNED row: the pre-write queue holds
+exactly one row with `entry.path === path`, `entry.line === editorLine + 1`,
+`entry.originalMarkdown === rawLine`, `lane === 'ready'`, and
+`tier in {'rotten','returned'}`. The sole increment helper is
+`api.freshness.keepLine(line, dateText, { counted })` with its valid-prior-
+`fresh < today` guard; Rust reads/clears/reports with no increment path
+(the seed preserve-mode exception aside). A v5 provider with a missing or
+throwing `keepLine` fails without writing, while pre-v5 falls back to the
+uncounted old stamper. The event table:
+
+- Alt+F / Alt+Shift+F on an exact due Ready target in `rotten`/`returned`
+  stamps and increments once in the same write, unless an active decision
+  is required.
+- NEW, FRESH/early, Pending, Next, Blocked, Today-linked, PROJECTS-tier
+  trackers, other excluded targets, and unresolved cache matches stamp
+  through `keepLine` uncounted and preserve the streak.
+- A repeated same-day keep preserves the streak and is byte-identical.
+- Every other supported human stamp clears the streak, even same-day.
+- Close/cancel preserves the streak on the closed line.
+- Automation, hooks, randomize, and seed neither increment nor reset.
+- Recurring and closed targets are refused.
+- `^prj` trackers in the PROJECTS tier never `decide` and their explicit
+  keeps are uncounted. Dependency capture (`bob capture` `&`) is a generic
+  stamp that clears `keeps`.
+
+What Rust guarantees today:
 
 - every generic human stamp (`stamp_fresh`, `set_refresh`,
   including same-day stamps) clears `keeps`;
@@ -523,7 +541,7 @@ today on a canonical line is a no-op.
 
 | Surface                | Stamps | Never stamps |
 | ---------------------- | ------ | ------------ |
-| bob-navigation-hotkeys | Alt+F and Alt+Shift+F (their only change); Alt+N commit and release; the Ctrl+Shift+P priority, scheduled, Depends on, delete-property (Ctrl+D), lane and new refresh rows in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
+| bob-navigation-hotkeys | Alt+F and Alt+Shift+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P priority, scheduled, Depends on, delete-property (Ctrl+D), lane and new refresh rows in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
 | task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task | closing (done or cancelled), Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
 | `bob capture`          | `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close) and the `=x` rows that set `[/]` | new tasks on any route, `=x` complete, unlink, start rows, sub-bullets |
@@ -538,7 +556,8 @@ returns through the hooks never stamp.
 Placement is the exception to the copy-small-helpers rule: nav,
 task-status-cycler, and block-id-prompt call
 `api?.freshness?.stampLine?.(line, dateText) ?? line` on
-bob-ledger-tools (api `version >= 3`), with a source comment at each
+bob-ledger-tools (api `version >= 3`), and nav calls
+`api.freshness.keepLine` (v5) for explicit keeps, with a source comment at each
 call site. A missing stamp only means Bryan sees the task once more;
 a misplaced stamp hides Tasks fields — so the risky part lives in one
 place, and when ledger-tools is absent or old the gesture simply
@@ -577,6 +596,11 @@ itself): still right (Alt+Shift+F or Alt+F); see it less often
 priority rolls a P-level `scheduled`); do today (Ctrl+Shift+Enter /
 Alt+N); route to a project (Ctrl+Shift+M); drop (Ctrl+Shift+P
 cancel); wording wrong (edit, then Alt+F).
+
+From 2026-10-19, a due at-limit task's Alt+F opens the decision card
+(Not now / Less often / Reword / Drop / Keep). Counted and Task Link
+sessions skip such tasks with `N needs a decision`. See
+`docs/projects.md` "Approved-decay decision planner".
 
 ## 7. `bob freshness`
 
@@ -850,8 +874,8 @@ D = `2026-10-08`. The machine-readable form of every vector below —
 plus the `C` config, `D` decide, and `B` boundary vectors — is
 `tests/fixtures/freshness_keeps/vectors.json`, which both languages
 cite. Rust runs the read/reset/placement cases and has no production
-increment API; the increment cases run on the JavaScript side once
-`api.freshness.keepLine` lands.
+increment API; the JS side runs the increment vectors through
+`api.freshness.keepLine`.
 
 - **K1 absent:** no `keeps` → `keeps 0`, no lints.
 - **K2 first valid:** `[fresh:: 2026-10-01] [keeps:: 2]` preserved
@@ -896,8 +920,8 @@ shape). Decide vectors D1–D8 pin `decide`: pre-activation silence,
 at-limit and below-limit Ready rows, RETURNED coverage, NEW never,
 `keeps: 0` asking on every due Ready re-confirmation, `decay: false`
 never asking, and lane rows never deciding. Boundary vectors B1–B3
-pin the 2026-10-19 activation day from both sides. Schema 4 rows
-carry `keeps` and `decide`; counts carry `decide`; `config.decay`
+pin the 2026-10-19 activation day from both sides. Rows have carried
+`keeps`/`decide` since schema 4, and the current schema is 5; counts carry `decide`; `config.decay`
 reports normalized `enabled`, `keeps`, `enter`, and read-only
 `active_from` / `active`. CLI human rows show `kept N×` and
 `· decide` where true; the header explains the threshold, the off
@@ -1038,6 +1062,30 @@ opacity with a dashed orange border. Session toggle: the "Toggle task
 freshness marks" command (default on) flips the marks and the body
 class, refreshes every editor, and shows a Notice.
 
+**Folded keep display (shipped ledger-tools 1.23.0/1.24.0).** From
+`freshnessMarkModel`, the keep-pip and leaf rendering, and the tooltip
+builder near the `Alt+F to decide` string (tests
+`scripts/test-ledger-tools-freshness-keeps.cjs`,
+`scripts/test-ledger-tools-freshness-decision-card.cjs`):
+
+- Faint filled dots after the label: `--text-faint`, or subdued orange
+  inside a due capsule, never green or red.
+- Dot cap: 3 by default; the threshold itself for thresholds 1–2;
+  overflow `+N`; the exact count in the accessible text.
+- The leaf replaces `⟳` with `data-decide="true"` only when the nav card
+  capability is present, the rollout is active, and decay is on.
+- Folding: exactly one valid square-bracket `[keeps:: N]` one space after
+  the folded fresh/refresh run is folded. Noncanonical fields keep the
+  dashed repair pill.
+- Selection or click reveals the whole raw span and never writes.
+- Ambiguous consensus stays neutral, and closed or out-of-scope tasks show
+  dots quietly without a leaf.
+- Tooltip wording: `Kept N reviews in a row · Bob asks at L`, the
+  `Alt+F to decide` hint, and counting-only/off wording otherwise
+  (`Kept N reviews in a row` alone before activation or without the card
+  capability, `· decay off` with decay off, `· Bob asks every review`
+  for a zero threshold).
+
 **Live verification (Bryan, in Obsidian).**
 
 - Task lines in Live Preview show `✓ today`, the ring with `Nd`,
@@ -1170,6 +1218,22 @@ these vectors verbatim.
   - C2: the same pair, but one row is Next → null, so the mark is
     unresolved.
   - C3: no candidate rows → null.
+- **MK1 no count:** `[fresh:: 2026-10-05]` with no `keeps` → `keeps 0`,
+  dots null, tooltip as M2 with no keeps line.
+- **MK2 aging with 2:** `[fresh:: 2026-10-05] [keeps:: 2]` (FRESH) →
+  dots `••`, tone `aging`; on 2026-10-08 (pre-activation) the keeps line
+  is counting-only (`Kept 2 reviews in a row`).
+- **MK3 due below threshold:** ROTTEN `[fresh:: 2026-09-30] [keeps:: 2]`
+  → dots `••`, glyph `refresh` (not a leaf), line 3 `Alt+F to confirm`.
+- **MK4 at-limit leaf:** ROTTEN `[fresh:: 2026-09-30] [keeps:: 3]` with
+  `decide`, the nav card capability, active rollout, and decay on →
+  glyph `leaf`, `data-decide="true"`, dots `•••`, keeps line
+  `Kept 3 reviews in a row · Bob asks at 3`, line 3 `Alt+F to decide`.
+- **MK5 overflow:** `keeps 4` at limit 3 → dots `•••`, overflow `+1`
+  (rendered `•••+1`), keeps line `Kept 4 reviews in a row · Bob asks at 3`.
+- **MK6 repair:** duplicate `[keeps:: 2] [keeps:: 3]` or paren
+  `(keeps:: 2)` never folds (`keeps` null); the fields stay visible
+  Dataview pills with the dashed repair styling.
 
 ## 13. Two-week trial (2026-10-05 through 2026-10-18)
 
