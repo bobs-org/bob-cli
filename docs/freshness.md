@@ -18,7 +18,7 @@ This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
 JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
-api v3, freshness namespace v4). The bob-ledger-tools JavaScript
+api v3, freshness namespace v5). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
 The keep-streak contract (`keeps`, `decay`, schema 4) is specified
@@ -27,9 +27,10 @@ machine-readable parity vectors live in
 `tests/fixtures/freshness_keeps/vectors.json`, which both languages
 cite: Rust runs the read/reset/placement cases (it has no production
 increment API); the sole increment helper is JavaScript
-`api.freshness.keepLine`, which lands with the ledger-marks phase
-alongside the freshness namespace v5, folded pips, tooltips, and the
-decision card.
+`api.freshness.keepLine`, which landed with the ledger-marks phase
+alongside the freshness namespace v5, folded pips, and count-truthful
+tooltips. The decision card lands in its own phase; until then marks
+show pips with counting-only wording and no leaf.
 
 ## 1. Definition
 
@@ -194,13 +195,13 @@ means a choice is due, not permission to execute an action.
 
 ## 3. Placement rule
 
-The Rust helper is `stamp_fresh` / `set_refresh`; the JavaScript one
-is `api.freshness.stampLine` / `setRefreshLine` in bob-ledger-tools
-(`keepLine` is the sole increment helper and lands with the
-ledger-marks phase). One helper per language, pinned by the shared
-vectors below. Rust reads, clears, and reports `keeps`; the seed's
-private preserve-mode primitive is the only Rust path that keeps a
-streak while stamping.
+The Rust helper is `stamp_fresh` / `set_refresh`; the JavaScript
+ones are `api.freshness.stampLine` / `setRefreshLine` / `keepLine` in
+bob-ledger-tools (`keepLine` is the sole increment helper and landed
+with the ledger-marks phase). One helper per language, pinned by the
+shared vectors below. Rust reads, clears, and reports `keeps`; the
+seed's private preserve-mode primitive is the only Rust path that
+keeps a streak while stamping.
 
 1. **Scope.** The helpers handle Tasks' Dataview format only, which is
    the vault's format. `bob freshness` refuses to run when the vault's
