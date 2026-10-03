@@ -96,7 +96,9 @@ nor a section title, nor a managed log (`🗓️ SCHEDULE LOG`,
   2. `[[basename#^id]]` when the basename is unique in the vault
      (case-insensitive);
   3. otherwise `[[dir/note#^id]]`, the full vault-relative path
-     without `.md`.
+     without `.md`. Links into `done/` always keep this explicit path
+     form even when the basename is unique: basename links do not
+     search `done/`, so the short form would stop resolving.
 - **Field placement.** `[dependsOn:: a, b]` (comma-space) and `[id:: x]`
   go inside the Tasks suffix:
   - to the right of any `[fresh::]`, because the hooks'
@@ -145,7 +147,9 @@ block id).
   other separators, `!`, `~~`, and aliases.
 - **Archive targets.** A link that resolves into `done/` through the
   existing archive catalog is a resolved, _closed_ prerequisite. Its id
-  is kept, it is never warned about, and it never blocks.
+  is kept, it is never warned about, and it never blocks. Archive links
+  keep the explicit `done/` path form from contract §3; it is the only
+  form the hooks re-resolve, and it binds the JS canonicalisers too.
 - **Removals.** Never infer a removal from a _missing_ line (R2 adopts
   instead). Do infer removals from a _present_ line.
 - **No moves.** The hooks never move or reorder lines.
@@ -310,7 +314,10 @@ writes.
 | Not a task | `⚠ not a task` |
 
 **Summary:** `waiting on N` or `✓ all clear`. It is never written to
-Markdown.
+Markdown. `N` counts open prerequisites only: a broken link (DC7) or a
+non-task block (DC8) never blocks per R4/R5 and never counts toward `N`,
+so a Ready task with only such links reads `✓ all clear` beside its ⚠
+chips. The ⚠ chip is the signal for those; the summary tracks blocking.
 
 ### 7.3 Interaction
 
@@ -527,8 +534,8 @@ is `↗ note` for a cross-note target, else absent. Text cuts at about
 | DC4 | Blocked | `?` coloured Blocked | `waiting on 1` |
 | DC5 | Done | `✓`, dimmed, struck text | `✓ all clear` (with DC1 also present: `waiting on 1`) |
 | DC6 | Cancelled | muted `✕`, visibly different from Done | per remaining open count |
-| DC7 | missing `(path, blockId)` | dashed, `⚠ ^id not found` | counts as waiting |
-| DC8 | resolves to a non-task block | `⚠ not a task` | counts as waiting |
+| DC7 | missing `(path, blockId)` | dashed, `⚠ ^id not found` | never blocks, never counts as waiting |
+| DC8 | resolves to a non-task block | `⚠ not a task` | never blocks, never counts as waiting |
 | DC9 | cross-note target | chip plus `↗ sase_bug_bash` | `waiting on N` |
 | DC10 | four Done targets | `✓×4` collapsed | `✓ all clear` |
 | DC11 | no open targets, one Done | `✓` chip | `✓ all clear` |

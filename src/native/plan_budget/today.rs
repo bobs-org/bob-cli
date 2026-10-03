@@ -102,8 +102,9 @@ pub(crate) fn today_links(contents: &str) -> Vec<TodayLink> {
 /// lines with that block ID count only when their status is open
 /// (done and cancelled tasks drop out silently); rows deduplicate by
 /// `(path, block ID)`, keeping the ledger order of first occurrence.
-/// Transcluded dependencies never inherit Today: only links the
-/// ledger lists directly count.
+/// Dependency targets never inherit Today: only links the
+/// ledger lists directly count; the hooks still promote open
+/// prerequisites to Next.
 ///
 /// `daily_relative` is the daily note's vault-relative path with
 /// `.md` (for example `2026/20261001.md`).

@@ -10,7 +10,7 @@ summary:
   [dependsOn::] / [id::] fields are derived from it."
 metadata:
   status: accepted
-  decided: 2026-10-03
+  decided: 2026-10-02
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -45,6 +45,9 @@ link's status. Rejected alternatives:
   already crowded with fields.
 - **The Tasks modal as the editor.** It cannot be made a real editing surface, so
   its dependency edits to a task that has a line are dropped with a warning.
+- **`!` as the gesture.** The transclusion toggle stays a pure toggle; dependency
+  edits go through Ctrl+Shift+P → Depends on, so the gesture never rewrites the
+  parent task line.
 - **Stored aliases and strikes.** They break the canonical writer form and the
   chip model; reader tolerance plus canonicalisation covers hand variants.
 
@@ -60,4 +63,12 @@ load-bearing.
 
 Evidence: `research:202610/task_dep_link_depends_on_line/task_dep_link_depends_on_line.md`;
 epic `bob-cli-3n` (`plan:202610/task_dep_links.md`); `docs/task-dependencies.md`
-(`f4b0d12`); hooks parser and edges (`2d4d508`); R1–R10 reconciliation (`043d9c5`).
+(`f4b0d12`); hooks parser and edges (`2d4d508`); R1–R10 reconciliation (`043d9c5`);
+bob-plugins `1831db4` (chips), `e7baeb5` (compat), `5194bc8` (nav-model),
+`08d1560` (nav-stage), `82aec34` (nav-gestures), `46ddd1e` (migration script);
+vault migration `66c6d47c`; fix epic `bob-cli-3n.12`
+(`plan:202610/task_dep_links_fixes.md`): bob-cli `8d54b0e` (hooks-correctness),
+`b61727a` (api v1 line refusal), `a069239` (DP24–DP29), `79e39af`
+(hooks-docs-cleanup); bob-plugins `3ffa187` (nav-writer-fix), `330fc58`
+(chips-compat-fix), `f78ffad` (nav-mirror-gestures), `40e2e3a`
+(nav-stage-polish).

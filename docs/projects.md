@@ -275,8 +275,9 @@ decision in the same guarded editor transaction: future-scheduled tasks become
 Blocked, while due tasks recover to a safely proven Ready, Next, or In Progress
 rank. A later task-owned schedule is preserved and remains Blocked. When the
 vault snapshot cannot prove recovery, the property edit proceeds and `[?]` is
-left for `bob task-status-hooks`. Other picker properties, including
-`dependsOn`, remain inline Dataview fields on the task.
+left for `bob task-status-hooks`. Other picker properties remain inline Dataview fields on the task.
+`dependsOn` is not one of them: it is derived from the task's Depends-On
+line (`docs/task-dependencies.md`), never written by hand.
 
 Pressing `Ctrl+D` on the project-backed `scheduled` item removes the YAML
 property, removes inline schedules exactly equal to that project date from
@@ -518,7 +519,7 @@ is written.
 
 ```markdown
 - [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-08-20] ^ship
-  - ![[#^blocked-by-this]]
+  - ⛓️ **DEPENDS ON:** [[#^blocked-by-this]]
   - Some freeform note I wrote by hand
   - 🗓️ **SCHEDULE LOG**
     - _2026-08-13 → 2026-08-20_ — waiting on the API review to land

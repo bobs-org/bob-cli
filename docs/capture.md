@@ -1300,8 +1300,9 @@ and forced flags on a whole-item close. A `@@` declaration never applies to
 close items.
 
 Sub-bullet classification (after stripping 🍅 markers): fenced lines stay
-untouched notes; `![[…#^id]]` embeds are closed recursively and retired to
-`~~[[…]]~~`; a body that is exactly one plain block link plus `#` is
+untouched notes; `![[…#^id]]` embeds are closed recursively — except Depends-On
+lines, which are never tree-closed, so closing a dependent never closes its
+prerequisites — and retired to `~~[[…]]~~`; a body that is exactly one plain block link plus `#` is
 deferred (removed from the session, carried without the `#`, target not
 started); other plain block links are worked-on (kept, given exactly one
 `🍅 `, carried); a worked-on line that is exactly one bare link is
