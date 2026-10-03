@@ -29,7 +29,11 @@ pub(super) fn print_human_result(result: &SyncResult) {
         + result.removed_canceled_references.len()
         + result.removed_duplicate_lines.len()
         + result.removed_empty_pomodoros.len()
-        + result.grouped_task_sections.len();
+        + result.grouped_task_sections.len()
+        + result.dependency_projection_updates.len()
+        + result.adopted_dependency_lines.len()
+        + result.healed_dependency_links.len()
+        + result.canonicalized_dependency_lines.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
     } else {
@@ -135,6 +139,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
     print_canceled_reference_section(result);
     print_duplicate_line_section(result);
     print_empty_pomodoro_section(result);
+    print_dependency_projection_sections(&styler, result);
     print_grouped_task_sections(&styler, result);
     if result.kept_next > 0 || result.kept_in_progress > 0 {
         println!();
@@ -149,6 +154,15 @@ pub(super) fn print_human_result(result: &SyncResult) {
         println!();
         println!("  recovery copies: {recovery}");
     }
+    println!(
+        "Dependencies: {} projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings",
+        result.dependency_projection_updates.len(),
+        result.adopted_dependency_lines.len(),
+        result.healed_dependency_links.len(),
+        result.canonicalized_dependency_lines.len(),
+        result.legacy_dependency_children,
+        result.dependency_warnings.len()
+    );
     println!(
         "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections",
         result.marked_next.len(),
@@ -166,6 +180,75 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.removed_empty_pomodoros.len(),
         result.grouped_task_sections.len()
     );
+}
+
+pub(super) fn print_dependency_projection_sections(
+    styler: &Styler,
+    result: &SyncResult,
+) {
+    for (entries, dry_heading, heading) in [
+        (
+            &result.adopted_dependency_lines,
+            "would adopt dependency lines",
+            "adopted dependency lines",
+        ),
+        (
+            &result.healed_dependency_links,
+            "would heal dependency links",
+            "healed dependency links",
+        ),
+        (
+            &result.canonicalized_dependency_lines,
+            "would canonicalize dependency lines",
+            "canonicalized dependency lines",
+        ),
+    ] {
+        if entries.is_empty() {
+            continue;
+        }
+        println!();
+        println!("  {}", if result.dry_run { dry_heading } else { heading });
+        for entry in entries {
+            println!(
+                "    {}  line {}  {}",
+                styler.cyan(&entry.path),
+                entry.line,
+                entry.detail
+            );
+        }
+    }
+    if !result.dependency_projection_updates.is_empty() {
+        println!();
+        println!(
+            "  {} dependency fields",
+            if result.dry_run {
+                "would project"
+            } else {
+                "projected"
+            }
+        );
+        for entry in &result.dependency_projection_updates {
+            println!(
+                "    {} {}  line {}  {}",
+                styler.cyan(&entry.path),
+                entry.kind,
+                entry.line,
+                entry.detail
+            );
+        }
+    }
+    if result.legacy_dependency_children > 0 {
+        println!();
+        println!(
+            "  {} legacy dependency {} (counted for the legacy-window retirement decision)",
+            result.legacy_dependency_children,
+            if result.legacy_dependency_children == 1 {
+                "child"
+            } else {
+                "children"
+            }
+        );
+    }
 }
 
 pub(super) fn print_grouped_task_sections(
@@ -508,6 +591,16 @@ pub(super) fn print_warnings(result: &SyncResult) {
             warning.target,
             warning.block_id,
             warning.reason
+        );
+    }
+    for warning in &result.dependency_warnings {
+        eprintln!(
+            "{}: {} {}:{} \u{2014} {}",
+            styler.warning_prefix(),
+            warning.kind,
+            warning.path,
+            warning.line,
+            warning.detail
         );
     }
     for warning in &result.grouping_warnings {

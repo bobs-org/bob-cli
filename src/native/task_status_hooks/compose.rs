@@ -5,6 +5,8 @@ pub(super) fn compose_outputs(
     files: &[FileScan],
     changes: &[PlannedChange],
     ctx: ComposeContext<'_>,
+    extra_structural: &BTreeSet<usize>,
+    original_contents: &BTreeMap<usize, String>,
 ) -> ComposeResult {
     let mut by_file: BTreeMap<usize, Vec<&PlannedChange>> = BTreeMap::new();
     for change in changes {
@@ -84,13 +86,27 @@ pub(super) fn compose_outputs(
         }
     }
 
+    // Dependency projection edits count as structural, so notes
+    // modified less than the quiet interval ago defer through the
+    // normal guarded-write path (`contract` §4.1, R10).
+    structural_files.extend(extra_structural.iter().copied());
+    // Projection-only notes have no status change: seed them so their
+    // reconciled contents still reach the guarded write.
+    for index in extra_structural {
+        updated
+            .entry(*index)
+            .or_insert_with(|| files[*index].contents.clone());
+    }
     let mut outputs = updated
         .into_iter()
         .filter_map(|(index, contents)| {
             let original_contents = if Some(index) == daily_file_index {
                 ctx.daily_contents
             } else {
-                &files[index].contents
+                original_contents
+                    .get(&index)
+                    .map(String::as_str)
+                    .unwrap_or(&files[index].contents)
             };
             (contents != original_contents).then(|| ComposedOutput {
                 path: files[index].path.clone(),

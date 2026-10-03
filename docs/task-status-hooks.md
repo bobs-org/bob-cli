@@ -305,7 +305,41 @@ Next. Note kind, directory names, and tags play no role in lane decisions.
 
 Task dependency links live on one managed Depends-On line per the
 [task dependency contract](task-dependencies.md); the hooks reconcile
-that line into the fields below before deriving Blocked.
+that line into the fields below before deriving Blocked. Only open
+dependents (`TODO`, `IN_PROGRESS`, `ON_HOLD`, including `[?]`) are
+reconciled; closed tasks are never touched, and the previous daily
+note snapshot is never written.
+
+Reconciliation (contract §4.2) projects each dependent's line links
+plus its R8 legacy children into `[dependsOn::]` in set order (R1),
+adopting field ids into a new canonical line when no line exists (R2),
+healing a moved link when exactly one scanned task carries its block
+id and an unaccounted field id (R3), and rewriting non-canonical
+lines to the writer form. Targets without `[id::]` gain one; archive
+(`done/`) targets keep their id without a warning and never block, and
+their links keep the explicit `done/` path form (the only form the
+hooks re-resolve, since `done/` notes sit outside the note index).
+Unresolvable links stay verbatim with an `unresolved_dependency_link`
+warning and never block, while their unaccounted field ids stay on as
+heal breadcrumbs (R4). Non-task targets (R5), self links (R6), and
+cycles (R7, every member stays Blocked) warn and are never projected.
+Label-only lines with no legacy children are deleted with the field
+(R9); malformed lines warn and are left alone (R10). A removal is
+never inferred from a missing line — only a present line drops ids —
+and lines are never moved or reordered. Projection-only notes flow
+through the same guarded snapshot, recovery, and retry path as status
+writes and count as structural, so the quiet interval still defers
+notes modified less than 2 s ago.
+
+Every run reports `dependency_projection_updates` (kinds
+`dependent_field`, `target_id`, `line_removed`),
+`adopted_dependency_lines`, `healed_dependency_links`,
+`canonicalized_dependency_lines`, `legacy_dependency_children` (a
+count for the legacy-window retirement decision), and
+`dependency_warnings` (`{kind, path, line, detail}`) in JSON, with
+matching human sections, a `Dependencies:` summary line, and stderr
+warnings. A second run over a reconciled vault reports no dependency
+changes.
 
 After the full vault scan and the final post-rewrite Pomodoro graph are known,
 the command indexes Dataview task identities from both square-bracket and

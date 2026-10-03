@@ -359,17 +359,13 @@ pub(super) fn dependency_edges(
                     {
                         continue;
                     }
+                    // Unresolvable line links are reconciled before
+                    // edges: R4 keeps them verbatim (never blocking)
+                    // and reports a specific `dependency_warnings`
+                    // entry, so they stay silent here.
                     let Some(target_path) = note_index
                         .resolve(Some(&file.relative_path), link.target.trim())
                     else {
-                        push_unresolved(
-                            unresolved,
-                            &file.relative_path,
-                            task.line_index,
-                            link.target.clone(),
-                            link.block_id.clone(),
-                            None,
-                        );
                         continue;
                     };
                     if task_dependencies::is_archive_path(&target_path) {
@@ -377,14 +373,6 @@ pub(super) fn dependency_edges(
                     }
                     let target = (target_path.clone(), link.block_id.clone());
                     if !task_blocks.contains_key(&target) {
-                        push_unresolved(
-                            unresolved,
-                            &file.relative_path,
-                            task.line_index,
-                            link.target.clone(),
-                            link.block_id.clone(),
-                            Some(&target_path),
-                        );
                         continue;
                     }
                     edges.entry(source.clone()).or_default().insert(target);

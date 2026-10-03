@@ -30,6 +30,40 @@ pub(super) struct UnresolvedReference {
     pub(super) reason: String,
 }
 
+/// One dependency projection write (`contract` §4.3): `kind` is
+/// `dependent_field` (R1/R2 field projection), `target_id` (R1 target
+/// `[id::]` stamp), or `line_removed` (R9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DependencyProjectionUpdate {
+    pub(super) kind: String,
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) detail: String,
+}
+
+/// One adopted, healed, or canonicalised Depends-On line: `detail`
+/// carries the inserted line text (`adopted_dependency_lines`,
+/// `canonicalized_dependency_lines`) or the `old -> new` rewrite
+/// (`healed_dependency_links`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DependencyLineReport {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) detail: String,
+}
+
+/// One dependency reconciliation warning (`contract` §4.2 R3–R10):
+/// `kind` names the rule (`unresolved_dependency_link`,
+/// `unadoptable_dependency_id`, `non_task_dependency`,
+/// `self_dependency`, `dependency_cycle`, `malformed_dependency_line`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DependencyWarning {
+    pub(super) kind: String,
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) detail: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct StruckCompletedReference {
     pub(super) target: String,
@@ -145,6 +179,12 @@ pub(super) struct SyncResult {
     pub(super) kept_next: usize,
     pub(super) kept_in_progress: usize,
     pub(super) unresolved_references: Vec<UnresolvedReference>,
+    pub(super) dependency_projection_updates: Vec<DependencyProjectionUpdate>,
+    pub(super) adopted_dependency_lines: Vec<DependencyLineReport>,
+    pub(super) healed_dependency_links: Vec<DependencyLineReport>,
+    pub(super) canonicalized_dependency_lines: Vec<DependencyLineReport>,
+    pub(super) legacy_dependency_children: usize,
+    pub(super) dependency_warnings: Vec<DependencyWarning>,
     pub(super) plan_budget: Option<plan_budget::PlanReport>,
 }
 

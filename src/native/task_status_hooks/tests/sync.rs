@@ -323,7 +323,7 @@ fn task_dependency_index_matches_tasks_duplicate_and_missing_id_semantics() {
         contents: contents.to_string(),
         tasks: parse_tasks(contents, &settings),
     }];
-    let states = task_dependency_states(&files);
+    let states = task_dependency_states(&files, &BTreeSet::new());
     assert_eq!(states[&(0, 5)].open_dependency_ids, ["self"]);
     assert_eq!(states[&(0, 6)].open_dependency_ids, ["duplicate"]);
     assert_eq!(states[&(0, 6)].unresolved_dependency_ids, ["missing"]);

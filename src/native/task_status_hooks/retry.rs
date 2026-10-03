@@ -276,6 +276,12 @@ mod tests {
             kept_next: 0,
             kept_in_progress: 0,
             unresolved_references: Vec::new(),
+            dependency_projection_updates: Vec::new(),
+            adopted_dependency_lines: Vec::new(),
+            healed_dependency_links: Vec::new(),
+            canonicalized_dependency_lines: Vec::new(),
+            legacy_dependency_children: 0,
+            dependency_warnings: Vec::new(),
             plan_budget: None,
         }
     }

@@ -399,6 +399,32 @@ pub(super) fn sync_task_statuses(
     let note_index = NoteIndex::from_paths(
         files.iter().map(|file| file.relative_path.clone()),
     );
+    let pre_reconcile: BTreeMap<usize, String> = files
+        .iter()
+        .enumerate()
+        .map(|(index, file)| (index, file.contents.clone()))
+        .collect();
+    let reconcile = reconcile_dependencies(
+        &request.bob_dir,
+        &mut files,
+        &note_index,
+        &settings,
+        previous_daily_path.as_deref(),
+        &mut inputs,
+    );
+    let pre_reconcile: BTreeMap<usize, String> = reconcile
+        .touched_files
+        .iter()
+        .filter_map(|index| {
+            pre_reconcile
+                .get(index)
+                .map(|contents| (*index, contents.clone()))
+        })
+        .collect();
+    for file_index in &reconcile.touched_files {
+        let file = &mut files[*file_index];
+        file.tasks = parse_tasks(&file.contents, &settings);
+    }
     let task_blocks = task_blocks(&files);
     let mut unresolved = Vec::new();
     let dependency_edges =
@@ -460,7 +486,8 @@ pub(super) fn sync_task_statuses(
         &dependency_edges,
         &task_blocks,
     );
-    let task_dependency_states = task_dependency_states(&files);
+    let task_dependency_states =
+        task_dependency_states(&files, &reconcile.archive_closed_ids);
 
     let mut marked_next = Vec::new();
     let mut marked_in_progress = Vec::new();
@@ -609,6 +636,8 @@ pub(super) fn sync_task_statuses(
             normalized_daily_contents: &normalized_daily,
             settings: &settings,
         },
+        &reconcile.touched_files,
+        &pre_reconcile,
     );
     let apply_report = if request.dry_run {
         ApplyReport::default()
@@ -665,6 +694,12 @@ pub(super) fn sync_task_statuses(
         kept_next,
         kept_in_progress,
         unresolved_references: unresolved,
+        dependency_projection_updates: reconcile.projection_updates,
+        adopted_dependency_lines: reconcile.adopted,
+        healed_dependency_links: reconcile.healed,
+        canonicalized_dependency_lines: reconcile.canonicalized,
+        legacy_dependency_children: reconcile.legacy_children,
+        dependency_warnings: reconcile.warnings,
         plan_budget,
     })
 }
@@ -677,6 +712,7 @@ pub(super) struct TaskDependencyState {
 
 pub(super) fn task_dependency_states(
     files: &[FileScan],
+    archive_closed_ids: &BTreeSet<String>,
 ) -> BTreeMap<(usize, usize), TaskDependencyState> {
     let mut identities = BTreeMap::<String, bool>::new();
     for file in files {
@@ -694,6 +730,11 @@ pub(super) fn task_dependency_states(
         for (task_index, task) in file.tasks.iter().enumerate() {
             let mut state = TaskDependencyState::default();
             for dependency in &task.depends_on {
+                if archive_closed_ids.contains(dependency) {
+                    // Archive prerequisites are closed history: kept,
+                    // never warned about, never blocking.
+                    continue;
+                }
                 match identities.get(dependency) {
                     Some(true) => {
                         state.open_dependency_ids.push(dependency.clone())
