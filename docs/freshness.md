@@ -307,7 +307,8 @@ for editing and never stamps.
 
 1. Run `bob gkeep pull`.
 2. Use `]s` / Alt+Shift+F through NEW → PENDING → NEXT → RETURNED
-   until the notice says **Commitments done**. NEW is never capped or
+   until the notice says **Commitments done**. `[S` / `]S` jump to the
+   first / last queue entries. NEW is never capped or
    skipped. In the lanes, ask "still in this lane?": keep with
    Alt+Shift+F, do it today with Ctrl+Shift+Enter, release with Alt+N.
    For a returned deferral, "not now" is a priority roll, not Alt+F.
