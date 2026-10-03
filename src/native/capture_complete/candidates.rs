@@ -1,0 +1,496 @@
+use std::{fs, io, path::Path};
+
+use super::{
+    model::{
+        ActiveTaskCandidate, ActiveTaskPomodoroCandidate, Candidates,
+        CompleteError, RouteCandidate, SectionCandidate, TaskCandidate,
+        TaskLinkCandidate, TaskSectionCandidate,
+    },
+    support::rank,
+};
+use crate::native::{
+    capture, capture_active_tasks, capture_link_tasks, capture_targets,
+    capture_task_sections, capture_tasks,
+    note_tasks::{self, BlockIdLookup},
+    pomodoro,
+};
+
+pub(super) fn route_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> Result<Candidates, CompleteError> {
+    let report = capture_targets::scan_capture_targets(bob_dir);
+    if !report.issues.is_empty() {
+        return Err(CompleteError::io(report.issue_summary()));
+    }
+
+    let ranked = rank(report.targets, query, |target| target.route.as_str());
+    Ok(Candidates::Route(
+        ranked
+            .into_iter()
+            .map(|target| RouteCandidate {
+                replacement: target.route.clone(),
+                route: target.route,
+                label: target.label,
+                kind: target.kind,
+                status: target.status,
+            })
+            .collect(),
+    ))
+}
+
+pub(super) fn section_candidates(
+    bob_dir: &Path,
+    route: &str,
+    query: &str,
+) -> Result<Candidates, CompleteError> {
+    let contents = read_target(bob_dir, route)?;
+    let sections = capture::non_tasks_section_headings(&contents);
+    let ranked = rank(sections, query, |section| section.title.as_str());
+
+    Ok(Candidates::Section(
+        ranked
+            .into_iter()
+            .map(|section| SectionCandidate {
+                replacement: section.title.clone(),
+                title: section.title,
+                level: section.level,
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TaskSearch {
+    BlockIdOnly,
+    MultiField,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MatchKind {
+    Prefix,
+    Substring,
+}
+
+pub(super) fn task_candidates(
+    bob_dir: &Path,
+    route: &str,
+    query: &str,
+    include_missing: bool,
+    search: TaskSearch,
+) -> Result<Candidates, CompleteError> {
+    let contents = read_target(bob_dir, route)?;
+    let settings = note_tasks::read_settings(bob_dir);
+    let scan = note_tasks::scan(&contents, &settings);
+    let ranked =
+        rank_open_tasks(scan.open_tasks(), query, include_missing, search);
+
+    Ok(Candidates::Task(
+        ranked
+            .into_iter()
+            .map(|task| {
+                let requires_block_id = task.block_id.is_none();
+                TaskCandidate {
+                    replacement: task.block_id.clone().unwrap_or_default(),
+                    task_ref: task.task_ref(),
+                    block_id: task.block_id.clone(),
+                    route: route.to_string(),
+                    requires_block_id,
+                    status_symbol: task.status_symbol,
+                    status_name: task.status_name.clone(),
+                    status_type: capture_tasks::status_type_label(
+                        task.status_type,
+                    ),
+                    text: task.description.clone(),
+                    section: task.section.clone(),
+                    depth: capture_tasks::indentation_depth(&task.indentation),
+                    child_count: task.child_count,
+                    line: task.line_index + 1,
+                    pomodoro: None,
+                }
+            })
+            .collect(),
+    ))
+}
+
+/// Link-only candidates for `pomodoro_block_id` with `link` intent:
+/// identified open tasks the link path accepts (Ready, Blocked, Next, In
+/// Progress via the same predicate the link resolver uses), annotated with
+/// the queued Pomodoro from today's ledger.
+pub(super) fn link_candidates(
+    bob_dir: &Path,
+    route: &str,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let contents = read_target(bob_dir, route)?;
+    let settings = note_tasks::read_settings(bob_dir);
+    let scan = note_tasks::scan(&contents, &settings);
+    let linkable = scan.open_tasks().filter(|task| {
+        task.block_id.is_some()
+            && capture_link_tasks::is_linkable_status(task.status_symbol)
+    });
+    let ranked =
+        rank_task_group(linkable.collect(), query, TaskSearch::BlockIdOnly);
+    let day_file = pomodoro::day_file_for(bob_dir);
+    let mut warnings = Vec::new();
+    let ledger = capture_active_tasks::read_ledger(&day_file, &mut warnings);
+    let candidates = ranked
+        .into_iter()
+        .map(|task| {
+            let block_id =
+                task.block_id.clone().expect("filtered to identified tasks");
+            let pomodoro = ledger
+                .owners
+                .get(&(route.to_string(), block_id.clone()))
+                .map(|entry| ActiveTaskPomodoroCandidate {
+                    line: entry.line,
+                    name: entry.name.clone(),
+                    time_range: entry.time_range.clone(),
+                    is_current: entry.is_current,
+                });
+            TaskCandidate {
+                replacement: block_id.clone(),
+                task_ref: task.task_ref(),
+                block_id: Some(block_id),
+                route: route.to_string(),
+                requires_block_id: false,
+                status_symbol: task.status_symbol,
+                status_name: task.status_name.clone(),
+                status_type: capture_tasks::status_type_label(task.status_type),
+                text: task.description.clone(),
+                section: task.section.clone(),
+                depth: capture_tasks::indentation_depth(&task.indentation),
+                child_count: task.child_count,
+                line: task.line_index + 1,
+                pomodoro,
+            }
+        })
+        .collect();
+    Ok((Candidates::Task(candidates), warnings))
+}
+
+pub(super) fn rank_open_tasks<'a>(
+    tasks: impl Iterator<Item = &'a note_tasks::NoteTask>,
+    query: &str,
+    include_missing: bool,
+    search: TaskSearch,
+) -> Vec<&'a note_tasks::NoteTask> {
+    let mut identified = Vec::new();
+    let mut unidentified = Vec::new();
+    for task in tasks {
+        if task.block_id.is_some() {
+            identified.push(task);
+        } else if include_missing {
+            unidentified.push(task);
+        }
+    }
+
+    let mut ranked = rank_task_group(identified, query, search);
+    ranked.extend(rank_task_group(unidentified, query, search));
+    ranked
+}
+
+pub(super) fn rank_task_group<'a>(
+    tasks: Vec<&'a note_tasks::NoteTask>,
+    query: &str,
+    search: TaskSearch,
+) -> Vec<&'a note_tasks::NoteTask> {
+    if query.is_empty() {
+        return tasks;
+    }
+
+    let query = query.to_lowercase();
+    let mut prefix_matches = Vec::new();
+    let mut substring_matches = Vec::new();
+    for task in tasks {
+        match task_match_kind(task, &query, search) {
+            Some(MatchKind::Prefix) => prefix_matches.push(task),
+            Some(MatchKind::Substring) => substring_matches.push(task),
+            None => {}
+        }
+    }
+    prefix_matches.extend(substring_matches);
+    prefix_matches
+}
+
+pub(super) fn task_match_kind(
+    task: &note_tasks::NoteTask,
+    query: &str,
+    search: TaskSearch,
+) -> Option<MatchKind> {
+    let mut prefix = false;
+    let mut substring = false;
+    for field in task_search_fields(task, search) {
+        let value = field.to_lowercase();
+        if value.starts_with(query) {
+            prefix = true;
+        } else if value.contains(query) {
+            substring = true;
+        }
+    }
+    if prefix {
+        Some(MatchKind::Prefix)
+    } else if substring {
+        Some(MatchKind::Substring)
+    } else {
+        None
+    }
+}
+
+pub(super) fn task_section_candidates(
+    bob_dir: &Path,
+    route: &str,
+    block_id: Option<&str>,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let Some(block_id) = block_id.filter(|id| !id.is_empty()) else {
+        return Ok((Candidates::TaskSection(Vec::new()), Vec::new()));
+    };
+
+    let target = bob_dir.join(capture::route_label(route));
+    let contents = match fs::read_to_string(&target) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok((
+                Candidates::TaskSection(Vec::new()),
+                vec![unresolvable_parent_warning(
+                    route,
+                    block_id,
+                    TaskSectionLookupFailure::MissingNote,
+                )],
+            ));
+        }
+        Err(error) => {
+            return Err(CompleteError::io(format!(
+                "read target {}: {error}",
+                target.display()
+            )));
+        }
+    };
+
+    let settings = note_tasks::read_settings(bob_dir);
+    let scan = note_tasks::scan(&contents, &settings);
+    let parent = match scan.by_block_id(block_id) {
+        BlockIdLookup::Found(task) => task,
+        BlockIdLookup::Missing => {
+            return Ok((
+                Candidates::TaskSection(Vec::new()),
+                vec![unresolvable_parent_warning(
+                    route,
+                    block_id,
+                    TaskSectionLookupFailure::Missing {
+                        suggestion: scan
+                            .suggest_block_id(block_id)
+                            .map(str::to_string),
+                    },
+                )],
+            ));
+        }
+        BlockIdLookup::Duplicate(count) => {
+            return Ok((
+                Candidates::TaskSection(Vec::new()),
+                vec![unresolvable_parent_warning(
+                    route,
+                    block_id,
+                    TaskSectionLookupFailure::Duplicate(count),
+                )],
+            ));
+        }
+        BlockIdLookup::NotATask { .. } => {
+            return Ok((
+                Candidates::TaskSection(Vec::new()),
+                vec![unresolvable_parent_warning(
+                    route,
+                    block_id,
+                    TaskSectionLookupFailure::NotATask,
+                )],
+            ));
+        }
+    };
+
+    let parent_text = parent.description.clone();
+    let parent_block_id = parent.block_id.clone();
+    let ranked = rank(
+        capture_task_sections::task_sections(&contents, parent),
+        query,
+        |section| section.slug.as_str(),
+    );
+
+    Ok((
+        Candidates::TaskSection(
+            ranked
+                .into_iter()
+                .map(|section| TaskSectionCandidate {
+                    replacement: section.slug.clone(),
+                    title: section.title,
+                    slug: section.slug,
+                    route: route.to_string(),
+                    block_id: parent_block_id.clone(),
+                    text: parent_text.clone(),
+                    line: section.line,
+                    child_count: section.child_count,
+                })
+                .collect(),
+        ),
+        Vec::new(),
+    ))
+}
+
+/// Active-task candidates for a solo leading `^` token: In Progress and
+/// Next tasks with block IDs, ordered by today's open-Pomodoro Task Links
+/// and ranked by the query. The `replacement` is the `route:block-id` an
+/// accept inserts; `pomodoro` is the queued entry, or `null` when the task
+/// is not queued.
+pub(super) fn active_task_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_active_tasks::discover(bob_dir);
+    let candidates = capture_active_tasks::rank(&discovered.tasks, query)
+        .into_iter()
+        .map(|task| ActiveTaskCandidate {
+            replacement: task.replacement(),
+            task_ref: task.task_ref.clone(),
+            route: task.route.clone(),
+            block_id: task.block_id.clone(),
+            status_symbol: task.status_symbol,
+            status_name: task.status_name.clone(),
+            status_type: task.status_type,
+            text: task.text.clone(),
+            section: task.section.clone(),
+            pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
+                ActiveTaskPomodoroCandidate {
+                    line: pomodoro.line,
+                    name: pomodoro.name.clone(),
+                    time_range: pomodoro.time_range.clone(),
+                    is_current: pomodoro.is_current,
+                }
+            }),
+        })
+        .collect();
+    (Candidates::ActiveTask(candidates), discovered.warnings)
+}
+
+/// `task_link` candidates for a solo leading `:` token: every linkable
+/// open task (Ready, Blocked, Next, In Progress) in the routable inbox,
+/// area, and non-terminal project notes, in canonical order and ranked by
+/// the query. ID-less tasks are always included; `--all-tasks` does not
+/// affect this context. The `replacement` covers the whole `:` token,
+/// sigil included, because accepting rewrites the query into the canonical
+/// `@route:block-id` marker.
+pub(super) fn task_link_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_link_tasks::discover(bob_dir);
+    let candidates = capture_link_tasks::rank(&discovered.tasks, query)
+        .into_iter()
+        .map(|task| TaskLinkCandidate {
+            replacement: task.replacement(),
+            task_ref: task.task_ref.clone(),
+            route: task.route.clone(),
+            note_kind: task.note_kind,
+            block_id: task.block_id.clone(),
+            requires_block_id: task.block_id.is_none(),
+            block_id_suggestions: task.block_id_suggestions.clone(),
+            status_symbol: task.status_symbol,
+            status_name: task.status_name.clone(),
+            status_type: task.status_type,
+            text: task.text.clone(),
+            section: task.section.clone(),
+            depth: task.depth,
+            line: task.line,
+            group: task.group,
+            scheduled: task.scheduled.clone(),
+            pulls_forward: task.pulls_forward,
+            pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
+                ActiveTaskPomodoroCandidate {
+                    line: pomodoro.line,
+                    name: pomodoro.name.clone(),
+                    time_range: pomodoro.time_range.clone(),
+                    is_current: pomodoro.is_current,
+                }
+            }),
+        })
+        .collect();
+    (Candidates::TaskLink(candidates), discovered.warnings)
+}
+
+pub(super) enum TaskSectionLookupFailure {
+    MissingNote,
+    Missing { suggestion: Option<String> },
+    Duplicate(usize),
+    NotATask,
+}
+
+/// One warning, no draft text, and no task description.
+pub(super) fn unresolvable_parent_warning(
+    route: &str,
+    block_id: &str,
+    failure: TaskSectionLookupFailure,
+) -> String {
+    match failure {
+        TaskSectionLookupFailure::MissingNote => {
+            format!("note does not exist: {route}.md")
+        }
+        TaskSectionLookupFailure::Missing { suggestion } => {
+            match suggestion {
+                Some(suggestion) => format!(
+                    "no task with block ID ^{block_id} in {route}.md; did you mean ^{suggestion}?"
+                ),
+                None => {
+                    format!("no task with block ID ^{block_id} in {route}.md")
+                }
+            }
+        }
+        TaskSectionLookupFailure::Duplicate(count) => {
+            format!(
+                "block ID ^{block_id} appears {count} times in {route}.md"
+            )
+        }
+        TaskSectionLookupFailure::NotATask => {
+            format!("^{block_id} in {route}.md is not a task")
+        }
+    }
+}
+
+pub(super) fn task_search_fields(
+    task: &note_tasks::NoteTask,
+    search: TaskSearch,
+) -> Vec<String> {
+    match search {
+        TaskSearch::BlockIdOnly => task.block_id.iter().cloned().collect(),
+        TaskSearch::MultiField => {
+            let mut fields = Vec::new();
+            if let Some(block_id) = &task.block_id {
+                fields.push(block_id.clone());
+            }
+            fields.push(task.description.clone());
+            if let Some(section) = &task.section {
+                fields.push(section.clone());
+            }
+            fields.push(task.status_name.clone());
+            fields.push(task.status_symbol.to_string());
+            fields
+        }
+    }
+}
+
+/// Read one routed note's contents; a missing note is not an error, exactly
+/// like `capture-sections` and `capture-tasks`.
+pub(super) fn read_target(
+    bob_dir: &Path,
+    route: &str,
+) -> Result<String, CompleteError> {
+    let target = bob_dir.join(capture::route_label(route));
+    match fs::read_to_string(&target) {
+        Ok(contents) => Ok(contents),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(String::new())
+        }
+        Err(error) => Err(CompleteError::io(format!(
+            "read target {}: {error}",
+            target.display()
+        ))),
+    }
+}
