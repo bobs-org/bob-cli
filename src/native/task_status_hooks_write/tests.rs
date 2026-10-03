@@ -1,4 +1,10 @@
 use super::*;
+use super::{
+    model::{QUIET_PERIOD, RETENTION, TOOL},
+    recovery::{
+        prune_completed, sha256_hex, unix_secs, vault_hash, RecoveryManifest,
+    },
+};
 use std::{
     cell::{Cell, RefCell},
     ffi::OsStr,

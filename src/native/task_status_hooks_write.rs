@@ -18,14 +18,8 @@ mod tests;
 pub(crate) use apply::{acquire_maintenance_lock, apply_plan};
 pub(crate) use model::{
     new_run_id, ApplyError, ApplyOutcome, ApplySession, CaptureError,
-    FileIdentity, InputKind, InputSnapshot, InputState, PlannedWrite,
-    ReasonCode, WritePlan, QUIET_PERIOD, RETENTION,
+    InputKind, InputSnapshot, ReasonCode, WritePlan,
 };
 pub(crate) use snapshot::{
     capture_optional, capture_required, planned_write, snapshot_for_path,
-};
-
-use model::TOOL;
-use recovery::{
-    prune_completed, sha256_hex, unix_secs, vault_hash, RecoveryManifest,
 };

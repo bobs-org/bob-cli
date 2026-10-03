@@ -1,4 +1,11 @@
 use super::*;
+use super::{
+    links::LinkInsertionPlan,
+    relocation::LinkRelocationPlan,
+    task_update::{
+        plan_task_next, pull_forward_entry_text, PULL_FORWARD_REASON,
+    },
+};
 use chrono::NaiveDate;
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {

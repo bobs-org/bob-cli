@@ -24,22 +24,16 @@ mod tests;
 mod text;
 
 pub(crate) use ledger::{
-    list_open_entry_links, plan_pomodoro_link_ledger, OpenEntryLinks,
-    PomodoroLinkLedgerAction, PomodoroLinkLedgerPlan,
+    list_open_entry_links, plan_pomodoro_link_ledger, PomodoroLinkLedgerAction,
 };
 pub(crate) use links::{
     find_movable_task_links, plan_link_insertion, plan_link_removal,
-    select_implicit_open_entry, LinkInsertionOutcome, LinkInsertionPlan,
-    LinkPlacement, LinkPlanError, LinkRemovalPlan, MovableLink,
+    LinkInsertionOutcome, LinkPlacement, LinkPlanError,
 };
 pub(crate) use relocation::{
     endpoint_from_entry, insert_named_placeholder, move_subtree_to_entry,
     plan_link_relocation, LinkRelocationAction, LinkRelocationError,
-    LinkRelocationPlan, PomodoroEndpoint,
+    PomodoroEndpoint,
 };
-pub(crate) use task_update::{
-    plan_task_link, plan_task_next, pull_forward_entry_text,
-    set_task_line_status, ScheduledFieldMatch, TaskTogglePlan,
-    PULL_FORWARD_REASON,
-};
+pub(crate) use task_update::{plan_task_link, set_task_line_status};
 pub(crate) use text::child_block_end_line;

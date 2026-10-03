@@ -15,5 +15,3 @@ pub(super) const COMMAND_NAME: &str = "bob capture-complete";
 
 pub(crate) use cli::{build_cli, run};
 pub(crate) use shell::shell_completion;
-#[allow(unused_imports)]
-pub(crate) use shell::{ShellCompletion, ShellRow};
