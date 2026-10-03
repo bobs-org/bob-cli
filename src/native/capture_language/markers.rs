@@ -535,6 +535,12 @@ pub(super) fn close_selection_overlap_park_drop_error(
     format!("task {number} cannot both park and drop in `{token}`")
 }
 
+pub(super) fn close_selection_competing_wildcards_error(token: &str) -> String {
+    format!(
+        "`{token}` has competing park-all and complete-all groups; add task numbers to at least one group"
+    )
+}
+
 pub(super) fn close_selection_zero_alone_error() -> String {
     "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`"
         .to_string()

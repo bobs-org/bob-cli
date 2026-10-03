@@ -21,6 +21,8 @@ pub(crate) struct CloseSelectionLex {
     pub(crate) park: Vec<u32>,
     pub(crate) complete: Vec<u32>,
     pub(crate) drop: Vec<u32>,
+    pub(crate) park_all: bool,
+    pub(crate) complete_all: bool,
     pub(crate) in_progress_range: Option<(usize, usize)>,
     pub(crate) park_range: Option<(usize, usize)>,
     pub(crate) complete_range: Option<(usize, usize)>,
@@ -36,6 +38,8 @@ pub(crate) struct CloseSelectionIncomplete {
     pub(crate) park: Vec<u32>,
     pub(crate) complete: Vec<u32>,
     pub(crate) drop: Vec<u32>,
+    pub(crate) park_all: bool,
+    pub(crate) complete_all: bool,
     pub(crate) in_progress_range: Option<(usize, usize)>,
     pub(crate) park_range: Option<(usize, usize)>,
     pub(crate) complete_range: Option<(usize, usize)>,
@@ -140,8 +144,9 @@ pub(crate) fn link_close_after_x(suffix: &str) -> Option<&str> {
 /// `x` is omitted); for long closes it is the text after `x`.
 ///
 /// An empty `after_x` is a plain close. A present `*`/`!` group with no
-/// digits defaults to task 1 before validation, so `=*`, `=!`, `=x*`, and
-/// `=x!` are valid and `=x1*`/`=x1!`/`=*!` are overlap errors. A trailing
+/// digits records wildcard intent, so `=*`, `=!`, `=x*`, and `=x!` are
+/// valid all/remaining selections. Two empty wildcard groups compete and
+/// are a lexical error. A trailing
 /// `,` or `~` is an [`CloseSelectionOutcome::Incomplete`] editing state,
 /// unless a lexical error elsewhere in the token wins. Anything else
 /// malformed is a [`CloseSelectionError`] with a precise range.
@@ -156,6 +161,8 @@ pub(crate) fn lex_close_selection(
             park: Vec::new(),
             complete: Vec::new(),
             drop: Vec::new(),
+            park_all: false,
+            complete_all: false,
             in_progress_range: None,
             park_range: None,
             complete_range: None,
@@ -199,9 +206,8 @@ pub(crate) fn lex_close_selection(
             range: (base_offset + second, base_offset + second + 1),
         });
     }
-    // A trailing `!` is a present-but-empty complete group, which defaults
-    // to task 1: `=!` and `=x!` are valid, `=x1!` and `=*!` are overlap
-    // errors. Never an incomplete state.
+    // A trailing `!` is a present-but-empty complete group. Never an
+    // incomplete state.
     if after_x.ends_with('!') {
         let parsed =
             parse_selection_body(after_x, base_offset, token, token_end)?;
@@ -210,6 +216,8 @@ pub(crate) fn lex_close_selection(
             park: parsed.park,
             complete: parsed.complete,
             drop: parsed.drop,
+            park_all: parsed.park_all,
+            complete_all: parsed.complete_all,
             in_progress_range: parsed.in_progress_range,
             park_range: parsed.park_range,
             complete_range: parsed.complete_range,
@@ -226,6 +234,8 @@ pub(crate) fn lex_close_selection(
                 park: parsed.park,
                 complete: parsed.complete,
                 drop: Vec::new(),
+                park_all: parsed.park_all,
+                complete_all: parsed.complete_all,
                 in_progress_range: parsed.in_progress_range,
                 park_range: parsed.park_range,
                 complete_range: parsed.complete_range,
@@ -233,9 +243,8 @@ pub(crate) fn lex_close_selection(
             },
         ));
     }
-    // A trailing `*` is a present-but-empty park group, which defaults to
-    // task 1: `=*` and `=x*` are valid, `=x1*` and `=*!` are overlap errors.
-    // Never an incomplete state.
+    // A trailing `*` is a present-but-empty park group. Never an
+    // incomplete state.
     if after_x.ends_with('*') {
         let parsed =
             parse_selection_body(after_x, base_offset, token, token_end)?;
@@ -244,6 +253,8 @@ pub(crate) fn lex_close_selection(
             park: parsed.park,
             complete: parsed.complete,
             drop: parsed.drop,
+            park_all: parsed.park_all,
+            complete_all: parsed.complete_all,
             in_progress_range: parsed.in_progress_range,
             park_range: parsed.park_range,
             complete_range: parsed.complete_range,
@@ -299,6 +310,8 @@ pub(crate) fn lex_close_selection(
                 park: parsed.park,
                 complete: parsed.complete,
                 drop: parsed.drop,
+                park_all: parsed.park_all,
+                complete_all: parsed.complete_all,
                 in_progress_range: parsed.in_progress_range,
                 park_range: parsed.park_range,
                 complete_range: parsed.complete_range,
@@ -312,6 +325,8 @@ pub(crate) fn lex_close_selection(
         park: parsed.park,
         complete: parsed.complete,
         drop: parsed.drop,
+        park_all: parsed.park_all,
+        complete_all: parsed.complete_all,
         in_progress_range: parsed.in_progress_range,
         park_range: parsed.park_range,
         complete_range: parsed.complete_range,
@@ -325,6 +340,8 @@ struct SelectionBody {
     park: Vec<u32>,
     complete: Vec<u32>,
     drop: Vec<u32>,
+    park_all: bool,
+    complete_all: bool,
     in_progress_range: Option<(usize, usize)>,
     park_range: Option<(usize, usize)>,
     complete_range: Option<(usize, usize)>,
@@ -344,9 +361,9 @@ struct TrailingList<'a> {
 /// list, then validate zeros, duplicates, and overlaps. An empty `<N>` with
 /// a trailing group is an omitted list; an empty `<N>` without one is only
 /// reachable for an empty body, which callers handle. A present `*`/`!`
-/// group with no digits defaults to task 1 (so `=*`, `=x*!2`, and `=x!~2`
-/// work task 1); an empty `~` group stays omitted. Defaulting happens here
-/// before overlap validation, so `=x1*` and `=*!` are overlap errors.
+/// group with no digits records wildcard intent; an empty `~` group stays
+/// omitted. Two wildcard groups are rejected because they compete for the
+/// same remaining links.
 fn parse_selection_body(
     body: &str,
     base_offset: usize,
@@ -442,27 +459,28 @@ fn parse_selection_body(
     let n_parsed = parse_number_list(n_text, base_offset, token, token_end)?;
     let mut p_parsed: Vec<ParsedNumber> = Vec::new();
     let mut park_range = None;
+    let mut park_all = false;
     let mut m_parsed: Vec<ParsedNumber> = Vec::new();
     let mut complete_range = None;
+    let mut complete_all = false;
     let mut k_parsed: Vec<ParsedNumber> = Vec::new();
     let mut drop_range = None;
     for list in &trailing {
-        // A present `*`/`!` group with no digits means task 1, pointed at
-        // the real outcome sigil (never a manufactured span). An empty `~`
-        // group stays omitted.
+        // A present `*`/`!` group with no digits records its wildcard at
+        // the real outcome sigil (never a manufactured task number). An
+        // empty `~` group stays omitted.
         if list.text.is_empty()
             && (list.separator == '*' || list.separator == '!')
         {
             let sigil_range = (list.base - 1, list.base);
-            let range = sigil_range;
             match list.separator {
                 '*' => {
-                    p_parsed = vec![(1, sigil_range)];
-                    park_range = Some(range);
+                    park_all = true;
+                    park_range = Some(sigil_range);
                 }
                 _ => {
-                    m_parsed = vec![(1, sigil_range)];
-                    complete_range = Some(range);
+                    complete_all = true;
+                    complete_range = Some(sigil_range);
                 }
             }
             continue;
@@ -492,6 +510,8 @@ fn parse_selection_body(
         p_parsed,
         m_parsed,
         k_parsed,
+        park_all,
+        complete_all,
         base_offset,
         token,
         park_range,
@@ -575,12 +595,28 @@ fn validate_selection(
     p_parsed: Vec<ParsedNumber>,
     m_parsed: Vec<ParsedNumber>,
     k_parsed: Vec<ParsedNumber>,
+    park_all: bool,
+    complete_all: bool,
     base_offset: usize,
     token: &str,
     park_range: Option<(usize, usize)>,
     complete_range: Option<(usize, usize)>,
     drop_range: Option<(usize, usize)>,
 ) -> Result<SelectionBody, CloseSelectionError> {
+    if park_all && complete_all {
+        let park_start = park_range.map(|range| range.0).unwrap_or(base_offset);
+        let complete_start =
+            complete_range.map(|range| range.0).unwrap_or(base_offset);
+        let range = if park_start > complete_start {
+            park_range.expect("park wildcard has a range")
+        } else {
+            complete_range.expect("complete wildcard has a range")
+        };
+        return Err(CloseSelectionError {
+            message: close_selection_competing_wildcards_error(token),
+            range,
+        });
+    }
     // Only a literal `0` means "none": a zero-valued `<n>` with extra digits
     // (`=x00`) gets the `0`-alone message on that number.
     if let Some((_, range)) = n_parsed.iter().find(|(number, range)| {
@@ -744,6 +780,8 @@ fn validate_selection(
         park,
         complete,
         drop,
+        park_all,
+        complete_all,
         in_progress_range,
         park_range,
         complete_range,
@@ -762,6 +800,8 @@ pub(crate) fn close_spec_from_lex(
         park: lex.park.clone(),
         complete: lex.complete.clone(),
         drop: lex.drop.clone(),
+        park_all: lex.park_all,
+        complete_all: lex.complete_all,
         log: Vec::new(),
     }
 }
@@ -779,6 +819,8 @@ pub(crate) fn close_spec_from_incomplete(
         park: incomplete.park.clone(),
         complete: incomplete.complete.clone(),
         drop: incomplete.drop.clone(),
+        park_all: incomplete.park_all,
+        complete_all: incomplete.complete_all,
         log: Vec::new(),
     }
 }
@@ -1046,6 +1088,12 @@ mod tests {
 
     #[test]
     fn lex_reports_dangling_separators_as_incomplete() {
+        let dangling_drop_after_wildcard = incomplete("=*~");
+        assert!(dangling_drop_after_wildcard.park_all);
+        assert_eq!(dangling_drop_after_wildcard.park, Vec::<u32>::new());
+        assert_eq!(dangling_drop_after_wildcard.park_range, Some((1, 2)));
+        assert_eq!(dangling_drop_after_wildcard.separator, '~');
+
         let trailing_comma = incomplete("=x1,");
         assert_eq!(trailing_comma.in_progress, Some(vec![1]));
         assert_eq!(trailing_comma.complete, Vec::<u32>::new());
@@ -1053,19 +1101,17 @@ mod tests {
         assert_eq!(trailing_comma.separator_range, (3, 4));
         assert_eq!(trailing_comma.separator, ',');
 
-        // A present-but-empty `!` defaults to task 1, so `=x!` is valid.
+        // A present-but-empty `!` preserves wildcard intent, so `=x!` is valid.
         let bare_bang = valid("=x!");
         assert_eq!(bare_bang.in_progress, None);
-        assert_eq!(bare_bang.complete, vec![1]);
+        assert_eq!(bare_bang.complete, Vec::<u32>::new());
+        assert!(bare_bang.complete_all);
         assert_eq!(bare_bang.complete_range, Some((2, 3)));
 
-        // `=x1!` defaults complete to 1 and overlaps in progress.
-        let numbered_bang = error("=x1!");
-        assert_eq!(
-            numbered_bang.message,
-            "task 1 cannot both stay in progress and complete in `=x1!`"
-        );
-        assert_eq!(numbered_bang.range, (3, 4));
+        // Explicit task 1 is an exception to the complete-all remainder.
+        let numbered_bang = valid("=x1!");
+        assert_eq!(numbered_bang.in_progress, Some(vec![1]));
+        assert!(numbered_bang.complete_all);
 
         let complete_comma = incomplete("=x!2,");
         assert_eq!(complete_comma.in_progress, None);
@@ -1073,10 +1119,10 @@ mod tests {
         assert_eq!(complete_comma.complete_range, Some((2, 4)));
         assert_eq!(complete_comma.separator, ',');
 
-        // `=x0!` completes the defaulted task 1 with no in-progress list.
+        // `=x0!` completes the remaining tasks with no in-progress list.
         let none_bang = valid("=x0!");
         assert_eq!(none_bang.in_progress, Some(Vec::new()));
-        assert_eq!(none_bang.complete, vec![1]);
+        assert!(none_bang.complete_all);
 
         // A lexical error elsewhere wins over the incomplete state.
         let duplicate = error("=x1,1,");
@@ -1163,36 +1209,36 @@ mod tests {
         assert_eq!(doubled_star.message, "use one `*` list: `=x1*2,3`");
         assert_eq!(doubled_star.range, (4, 5));
 
-        // An empty `*` group defaults to task 1: `=x*!2` parks 1.
+        // An empty `*` group selects the remainder after explicit groups.
         let defaulted_star = valid("=x*!2");
         assert_eq!(defaulted_star.in_progress, None);
-        assert_eq!(defaulted_star.park, vec![1]);
+        assert!(defaulted_star.park_all);
+        assert_eq!(defaulted_star.park, Vec::<u32>::new());
         assert_eq!(defaulted_star.complete, vec![2]);
         assert_eq!(defaulted_star.park_range, Some((2, 3)));
         assert_eq!(defaulted_star.complete_range, Some((3, 5)));
 
-        // An empty `!` group defaults the same way: `=x!~2` completes 1.
+        // `=x!~2` completes every link except the explicitly dropped task 2.
         let defaulted_bang = valid("=x!~2");
         assert_eq!(defaulted_bang.in_progress, None);
-        assert_eq!(defaulted_bang.complete, vec![1]);
+        assert!(defaulted_bang.complete_all);
+        assert_eq!(defaulted_bang.complete, Vec::<u32>::new());
         assert_eq!(defaulted_bang.drop, vec![2]);
 
         let double_comma_park = error("=x*1,,2");
         assert_eq!(double_comma_park.range, (5, 6));
 
-        // A bare `*` defaults to task 1, so `=x*` is valid.
+        // A bare `*` selects all remaining links.
         let bare_star = valid("=x*");
         assert_eq!(bare_star.in_progress, None);
-        assert_eq!(bare_star.park, vec![1]);
+        assert!(bare_star.park_all);
+        assert_eq!(bare_star.park, Vec::<u32>::new());
         assert_eq!(bare_star.park_range, Some((2, 3)));
 
-        // `=x1*` defaults park to 1 and overlaps in progress.
-        let numbered_star = error("=x1*");
-        assert_eq!(
-            numbered_star.message,
-            "task 1 cannot both stay in progress and park in `=x1*`"
-        );
-        assert_eq!(numbered_star.range, (3, 4));
+        // An explicit in-progress list is an exception to park-all.
+        let numbered_star = valid("=x1*");
+        assert_eq!(numbered_star.in_progress, Some(vec![1]));
+        assert!(numbered_star.park_all);
 
         let park_comma = incomplete("=x*2,");
         assert_eq!(park_comma.in_progress, None);
@@ -1200,13 +1246,11 @@ mod tests {
         assert_eq!(park_comma.park_range, Some((2, 4)));
         assert_eq!(park_comma.separator, ',');
 
-        // `=x1!2*` defaults park to 1 and overlaps in progress.
-        let trailing_star = error("=x1!2*");
-        assert_eq!(
-            trailing_star.message,
-            "task 1 cannot both stay in progress and park in `=x1!2*`"
-        );
-        assert_eq!(trailing_star.range, (5, 6));
+        // The explicit complete list is excluded from park-all.
+        let trailing_star = valid("=x1!2*");
+        assert_eq!(trailing_star.in_progress, Some(vec![1]));
+        assert_eq!(trailing_star.complete, vec![2]);
+        assert!(trailing_star.park_all);
     }
 
     #[test]
@@ -1256,17 +1300,19 @@ mod tests {
     }
 
     #[test]
-    fn lex_reports_short_alias_defaults() {
-        // `=*`/`=!` omit `x`; an omitted list still means task 1.
+    fn lex_reports_short_alias_wildcards() {
+        // `=*`/`=!` omit `x`; an omitted list preserves wildcard intent.
         let park = valid("=*");
         assert_eq!(park.in_progress, None);
-        assert_eq!(park.park, vec![1]);
+        assert_eq!(park.park, Vec::<u32>::new());
+        assert!(park.park_all);
         assert_eq!(park.complete, Vec::<u32>::new());
         assert_eq!(park.park_range, Some((1, 2)));
 
         let complete = valid("=!");
         assert_eq!(complete.in_progress, None);
-        assert_eq!(complete.complete, vec![1]);
+        assert_eq!(complete.complete, Vec::<u32>::new());
+        assert!(complete.complete_all);
         assert_eq!(complete.complete_range, Some((1, 2)));
 
         let park_two = valid("=*2");
@@ -1277,28 +1323,35 @@ mod tests {
         assert_eq!(complete_two.complete, vec![2]);
 
         let mixed_park = valid("=*!2");
-        assert_eq!(mixed_park.park, vec![1]);
+        assert!(mixed_park.park_all);
+        assert_eq!(mixed_park.park, Vec::<u32>::new());
         assert_eq!(mixed_park.complete, vec![2]);
         assert_eq!(mixed_park.park_range, Some((1, 2)));
         assert_eq!(mixed_park.complete_range, Some((2, 4)));
 
         let mixed_complete = valid("=!2*");
         assert_eq!(mixed_complete.complete, vec![2]);
-        assert_eq!(mixed_complete.park, vec![1]);
+        assert!(mixed_complete.park_all);
 
         let upper_park = valid("=X*");
-        assert_eq!(upper_park.park, vec![1]);
+        assert!(upper_park.park_all);
         let explicit_upper = valid("=X!");
-        assert_eq!(explicit_upper.complete, vec![1]);
+        assert!(explicit_upper.complete_all);
 
-        // Implicit/explicit overlaps fail on the real outcome sigil.
-        let conflict = error("=x1*");
-        assert_eq!(conflict.range, (3, 4));
-        let alias_conflict = error("=*~1");
+        // An explicit drop is excluded from the park-all remainder.
+        let park_except_drop = valid("=*~1");
+        assert!(park_except_drop.park_all);
+        assert_eq!(park_except_drop.drop, vec![1]);
+
+        // Two empty outcome groups compete, independent of group order.
+        let conflict = error("=*!");
         assert_eq!(
-            alias_conflict.message,
-            "task 1 cannot both park and drop in `=*~1`"
+            conflict.message,
+            "`=*!` has competing park-all and complete-all groups; add task numbers to at least one group"
         );
+        assert_eq!(conflict.range, (2, 3));
+        let reversed = error("=!*");
+        assert_eq!(reversed.range, (2, 3));
 
         // Malformed aliases claim close syntax, never task creation.
         let bad = error("=*abc");

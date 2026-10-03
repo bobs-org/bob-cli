@@ -86,6 +86,8 @@ fn sel_detail_log(
         park: BTreeSet::new(),
         complete: BTreeSet::new(),
         drop: BTreeSet::new(),
+        park_all: false,
+        complete_all: false,
         log: log
             .into_iter()
             .map(|(index, text, details)| {
@@ -114,6 +116,8 @@ fn sel_park(
         park: park.into_iter().collect::<Set<u32>>(),
         complete: complete.into_iter().collect::<Set<u32>>(),
         drop: Set::new(),
+        park_all: false,
+        complete_all: false,
         log: Vec::new(),
         raw: raw.to_string(),
     }
@@ -132,6 +136,8 @@ fn sel_drop_log(
         park: BTreeSet::new(),
         complete: complete.into_iter().collect::<BTreeSet<u32>>(),
         drop: drop.into_iter().collect::<BTreeSet<u32>>(),
+        park_all: false,
+        complete_all: false,
         log: log
             .into_iter()
             .map(|(index, text)| {
@@ -341,6 +347,108 @@ fn outcome_table_covers_every_row() {
             (3, TaskLinkOutcome::Complete, TaskLinkSource::Unlisted),
         ]
     );
+}
+
+#[test]
+fn wildcard_outcomes_cover_remaining_numbered_links_and_keep_exceptions() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t\t- [[a#^nested]]",
+        "\t- [[a#^deferred]]#",
+        "\t- ![[a#^embedded]]",
+        "\t- [[a#^five]]",
+        "\t- incidental prose [[a#^not-a-task]]",
+        "\t```md",
+        "\t- [[a#^fenced]]",
+        "\t```",
+        "\t- ~~[[a#^struck]]~~",
+    ]);
+    let running = running_of(&contents);
+    let mut park_all =
+        sel(Some(vec![1]), vec![4], "=x1*!4~3").with_all(true, false);
+    park_all.drop.insert(3);
+    let applied = apply_close_selection(&contents, &running, &park_all)
+        .expect("park remaining numbered links");
+    assert_eq!(
+        applied
+            .lineup
+            .iter()
+            .map(|link| (
+                link.index,
+                link.block_id.as_str(),
+                link.outcome,
+                link.source
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                1,
+                "one",
+                TaskLinkOutcome::InProgress,
+                TaskLinkSource::Listed
+            ),
+            (2, "nested", TaskLinkOutcome::Parked, TaskLinkSource::Listed),
+            (
+                3,
+                "deferred",
+                TaskLinkOutcome::Dropped,
+                TaskLinkSource::Listed
+            ),
+            (
+                4,
+                "embedded",
+                TaskLinkOutcome::Complete,
+                TaskLinkSource::Listed
+            ),
+            (5, "five", TaskLinkOutcome::Parked, TaskLinkSource::Listed),
+        ]
+    );
+
+    let complete_all =
+        sel(Some(vec![1]), Vec::new(), "=x1!").with_all(false, true);
+    let applied = apply_close_selection(&contents, &running, &complete_all)
+        .expect("complete remainder");
+    assert_eq!(
+        applied
+            .lineup
+            .iter()
+            .map(|link| (link.index, link.outcome, link.source))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, TaskLinkOutcome::InProgress, TaskLinkSource::Listed),
+            (2, TaskLinkOutcome::Complete, TaskLinkSource::Listed),
+            (3, TaskLinkOutcome::Complete, TaskLinkSource::Listed),
+            (4, TaskLinkOutcome::Complete, TaskLinkSource::Listed),
+            (5, TaskLinkOutcome::Complete, TaskLinkSource::Listed),
+        ]
+    );
+}
+
+#[test]
+fn wildcard_accepts_an_empty_lineup_but_explicit_positive_indices_do_not() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- quick note",
+    ]);
+    let running = running_of(&contents);
+    for selection in [
+        sel(None, Vec::new(), "=*").with_all(true, false),
+        sel(None, Vec::new(), "=!").with_all(false, true),
+    ] {
+        let applied = apply_close_selection(&contents, &running, &selection)
+            .expect("empty wildcard selection");
+        assert!(applied.lineup.is_empty());
+    }
+    let error = apply_close_selection(
+        &contents,
+        &running,
+        &sel(Some(vec![1]), Vec::new(), "=x1"),
+    )
+    .expect_err("explicit positive index is out of range");
+    assert!(error.to_string().contains("has no numbered Task Links"));
 }
 
 #[test]
@@ -1416,6 +1524,8 @@ fn sel_positional(texts: Vec<&str>, raw: &str) -> CloseSelection {
         park: BTreeSet::new(),
         complete: BTreeSet::new(),
         drop: BTreeSet::new(),
+        park_all: false,
+        complete_all: false,
         log: texts
             .into_iter()
             .enumerate()
@@ -1538,6 +1648,32 @@ fn positional_entries_skip_nested_links() {
     )
     .expect("apply");
     assert_eq!(positional_indices(&applied), vec![Some(1)]);
+}
+
+#[test]
+fn wildcard_positional_logs_wait_for_and_use_top_level_worked_lineup() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- parent note",
+        "\t\t- [[a#^nested-first]]",
+        "\t- [[a#^second]]#",
+        "\t- [[a#^third]]",
+    ]);
+    let running = running_of(&contents);
+    let selection = sel_positional(vec!["first log", "second log"], "=x*")
+        .with_all(true, false);
+    let applied = apply_close_selection(&contents, &running, &selection)
+        .expect("runtime wildcard positions");
+    assert_eq!(positional_indices(&applied), vec![Some(2), Some(3)]);
+    assert_eq!(
+        applied
+            .log
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first log", "second log"]
+    );
 }
 
 #[test]

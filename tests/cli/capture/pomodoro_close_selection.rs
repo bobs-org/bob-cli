@@ -626,9 +626,9 @@ fn capture_pomodoro_close_selection_human_output() {
 
 #[test]
 fn capture_pomodoro_close_selection_dry_run_matches_real_run() {
-    // `--dry-run` JSON is identical to a real run apart from `dry_run`,
-    // and writes nothing.
-    let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-dr");
+    // A mixed wildcard preview is identical to its real result apart from
+    // `dry_run`, and writes nothing.
+    let (_temp, vault, day_file) = drop_worked_vault("bob-cli-close-sel-dr");
     let before_day = fs::read_to_string(&day_file).expect("read");
     let before_bob = fs::read_to_string(vault.join("bob.md")).expect("read");
     let before_sase = fs::read_to_string(vault.join("sase.md")).expect("read");
@@ -640,7 +640,7 @@ fn capture_pomodoro_close_selection_dry_run_matches_real_run() {
         .arg("json")
         .arg("--dry-run")
         .arg("--")
-        .arg("=x1!2")
+        .arg("=*!2")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -659,7 +659,16 @@ fn capture_pomodoro_close_selection_dry_run_matches_real_run() {
         before_sase
     );
     let mut real_json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1!2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=*!2"]);
+    assert_eq!(real_json["pomodoro_close"]["park_all"], true);
+    assert_eq!(
+        real_json["pomodoro_close"]["park"],
+        serde_json::json!([1, 3])
+    );
+    assert_eq!(
+        real_json["pomodoro_close"]["complete"],
+        serde_json::json!([2])
+    );
     dry_json["dry_run"] = serde_json::json!(false);
     real_json["dry_run"] = serde_json::json!(false);
     assert_eq!(dry_json, real_json);
@@ -1201,7 +1210,7 @@ fn capture_pomodoro_close_selection_diagnostics() {
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
-    // A `^` link close ending in `!` defaults complete to task 1, so it
+    // A `^` link close ending in `!` is a complete-all wildcard, so it
     // lexes as a close (execution then fails on the fixture block ID, not
     // on a dangling separator). A trailing `~` stays incomplete.
     for args in ["^r:id=x~", "^r:id=x1,"] {
@@ -1246,6 +1255,56 @@ fn capture_pomodoro_close_selection_diagnostics() {
         assert!(error.contains(phrase), "{args}: {error}");
     }
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+}
+
+#[test]
+fn capture_pomodoro_close_selection_link_and_new_task_wildcards() {
+    // Existing @ and ^ links are appended to the staged session before the
+    // wildcard expands; the newly linked row is therefore selected too.
+    for link in ["@bob:ready=*", "^bob:ready=*"] {
+        let (_temp, vault, day_file) =
+            close_worked_vault("bob-cli-close-link-wildcard");
+        let json =
+            run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &[link]);
+        assert_eq!(json["kind"], "pomodoro_link", "{link}");
+        let close = &json["pomodoro_close"];
+        assert_eq!(close["park_all"], true, "{link}");
+        assert_eq!(close["park"], serde_json::json!([1, 2, 3]), "{link}");
+        assert_eq!(close["task_links"].as_array().unwrap().len(), 3, "{link}");
+        assert_eq!(close["task_links"][2]["block_id"], "ready", "{link}");
+        assert_eq!(close["task_links"][2]["outcome"], "parked", "{link}");
+        assert_eq!(close["task_links"][2]["source"], "listed", "{link}");
+        assert_eq!(close["tasks"][0]["role"], "worked", "{link}");
+        assert_eq!(close["tasks"][0]["status_symbol"], "/", "{link}");
+        assert_eq!(close["tasks"][0]["carried"], false, "{link}");
+    }
+
+    // A body-bearing capture creates its task in the staged lineup, then
+    // applies the same all-links outcome to both old links and the new row.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-new-task-wildcard");
+    let json = run_close_json(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["Draft docs @bob:draft-docs=x*"],
+    );
+    assert_eq!(json["kind"], "pomodoro_task");
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["park_all"], true);
+    assert_eq!(close["park"], serde_json::json!([1, 2, 3]));
+    assert_eq!(close["task_links"][2]["block_id"], "draft-docs");
+    assert_eq!(close["task_links"][2]["outcome"], "parked");
+    assert_eq!(close["task_links"][2]["source"], "listed");
+    let created = close["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["block_id"] == "draft-docs")
+        .unwrap();
+    assert_eq!(created["role"], "worked");
+    assert_eq!(created["status_symbol"], "/");
+    assert_eq!(created["carried"], false);
 }
 
 #[test]
@@ -1360,6 +1419,15 @@ fn drop_worked_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready",
             "- [ ] #task Plain ready task #now [created::2026-09-20] ^ready",
         ),
+    );
+    (temp, vault, day_file)
+}
+
+fn empty_close_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
+    let (temp, vault, day_file) = close_worked_vault(name);
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n\t- quick note\n",
     );
     (temp, vault, day_file)
 }
@@ -1613,24 +1681,18 @@ fn capture_pomodoro_close_selection_park() {
 
 #[test]
 fn capture_pomodoro_close_short_alias_equivalence() {
-    // Short aliases omit `x` before an initial `*`/`!`; an omitted list
-    // means task 1. Alias and explicit runs on identical vault copies must
-    // match in file bytes and semantic preview fields (raw spellings and
-    // input-dependent ranges compared separately).
-    for (alias, explicit, three_link) in [
-        ("=*", "=x*1", false),
+    // Short aliases omit `x` before an initial `*`/`!`; both spellings
+    // preserve the same wildcard or explicit scope against the same lineup.
+    for (alias, long_form, three_link) in [
+        ("=*", "=x*", true),
         ("=*1", "=x*1", false),
-        ("=!", "=x!1", false),
+        ("=*!2", "=x*!2", true),
+        ("=*!2", "=x!2*", true),
+        ("=!", "=x!", true),
         ("=!1", "=x!1", false),
-        ("=x*", "=x*1", false),
-        ("=x!", "=x!1", false),
+        ("=!~2", "=x!~2", true),
         ("=*2,3", "=x*2,3", true),
         ("=!2,3", "=x!2,3", true),
-        ("=*!2", "=x*1!2", false),
-        ("=!2*", "=x!2*1", false),
-        ("=!~2", "=x!1~2", false),
-        ("=x2*", "=x2*1", false),
-        ("=x0!", "=x0!1", false),
     ] {
         let (_temp_a, vault_a, day_a) = if three_link {
             drop_worked_vault("bob-cli-close-alias-a")
@@ -1648,13 +1710,12 @@ fn capture_pomodoro_close_short_alias_equivalence() {
             &vault_b,
             &day_b,
             "2026-09-28 09:37:00",
-            &[explicit],
+            &[long_form],
         );
         assert_eq!(json_a["ok"], true, "{alias}");
-        assert_eq!(json_b["ok"], true, "{explicit}");
-        // Raw spellings differ by design; normalized lists must match.
+        assert_eq!(json_b["ok"], true, "{long_form}");
         assert_eq!(json_a["pomodoro_close"]["raw"], alias, "{alias}");
-        assert_eq!(json_b["pomodoro_close"]["raw"], explicit, "{explicit}");
+        assert_eq!(json_b["pomodoro_close"]["raw"], long_form, "{long_form}");
         for field in [
             "in_progress",
             "park",
@@ -1667,32 +1728,73 @@ fn capture_pomodoro_close_short_alias_equivalence() {
             assert_eq!(
                 json_a["pomodoro_close"][field],
                 json_b["pomodoro_close"][field],
-                "{alias} vs {explicit}: {field}"
+                "{alias} vs {long_form}: {field}"
             );
         }
-        // Defaulted task 1 is a listed selection.
-        if ["=*", "=!", "=x*", "=x!"].contains(&alias) {
+        for field in ["park_all", "complete_all"] {
             assert_eq!(
-                json_a["pomodoro_close"]["task_links"][0]["source"], "listed",
-                "{alias}"
+                json_a["pomodoro_close"][field].as_bool().unwrap_or(false),
+                json_b["pomodoro_close"][field].as_bool().unwrap_or(false),
+                "{alias} vs {long_form}: {field}"
             );
+        }
+        if alias == "=*" {
+            assert_eq!(
+                json_a["pomodoro_close"]["park"],
+                serde_json::json!([1, 2, 3])
+            );
+            assert_eq!(json_a["pomodoro_close"]["park_all"], true);
+            assert!(json_a["pomodoro_close"]["task_links"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|link| link["outcome"] == "parked"
+                    && link["source"] == "listed"));
+        }
+        if alias == "=!" {
+            assert_eq!(
+                json_a["pomodoro_close"]["complete"],
+                serde_json::json!([1, 2, 3])
+            );
+            assert_eq!(json_a["pomodoro_close"]["complete_all"], true);
+            assert!(json_a["pomodoro_close"]["task_links"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|link| link["outcome"] == "complete"
+                    && link["source"] == "listed"));
         }
         let day_a_after = fs::read_to_string(&day_a).expect("read day");
         let day_b_after = fs::read_to_string(&day_b).expect("read day");
-        assert_eq!(day_a_after, day_b_after, "{alias} vs {explicit}: day");
+        assert_eq!(day_a_after, day_b_after, "{alias} vs {long_form}: day");
         for file in ["bob.md", "sase.md"] {
             assert_eq!(
                 fs::read_to_string(vault_a.join(file)).expect("read"),
                 fs::read_to_string(vault_b.join(file)).expect("read"),
-                "{alias} vs {explicit}: {file}"
+                "{alias} vs {long_form}: {file}"
             );
         }
     }
 
-    // Conflicting implicit/explicit selections must fail.
-    for args in ["=*!", "=x1*", "=x1!", "=*~1", "=!~1"] {
+    // A wildcard fills the remaining lineup after explicit exceptions.
+    let (_temp, vault, day_file) =
+        drop_worked_vault("bob-cli-close-all-exceptions");
+    let mixed =
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1*~2"]);
+    let close = &mixed["pomodoro_close"];
+    assert_eq!(close["in_progress"], serde_json::json!([1]));
+    assert_eq!(close["park"], serde_json::json!([3]));
+    assert_eq!(close["park_all"], true);
+    assert_eq!(close["drop"], serde_json::json!([2]));
+    assert_eq!(close["task_links"][0]["outcome"], "in_progress");
+    assert_eq!(close["task_links"][1]["outcome"], "dropped");
+    assert_eq!(close["task_links"][2]["outcome"], "parked");
+
+    // Explicit overlaps still fail; two empty wildcards have their own
+    // order-independent diagnostic. Neither failure writes the day note.
+    for args in ["=x1*1", "=x1!1", "=*1!1", "=x*1!1", "=x*1~1", "=x!1~1"] {
         let (_temp, vault, day_file) =
-            close_worked_vault("bob-cli-close-alias-conflict");
+            close_worked_vault("bob-cli-close-alias-explicit-overlap");
         let before = fs::read_to_string(&day_file).expect("read");
         let error = run_close_expect_error(
             &vault,
@@ -1701,6 +1803,22 @@ fn capture_pomodoro_close_short_alias_equivalence() {
             &[args],
         );
         assert!(error.contains("cannot both"), "{args}: {error}");
+        assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+    }
+    for args in ["=*!", "=!*", "=x*!", "=x!*"] {
+        let (_temp, vault, day_file) =
+            close_worked_vault("bob-cli-close-competing-wildcards");
+        let before = fs::read_to_string(&day_file).expect("read");
+        let error = run_close_expect_error(
+            &vault,
+            &day_file,
+            "2026-09-28 09:37:00",
+            &[args],
+        );
+        assert!(
+            error.contains("competing park-all and complete-all"),
+            "{args}: {error}"
+        );
         assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
     }
 
@@ -1739,17 +1857,34 @@ fn capture_pomodoro_close_short_alias_equivalence() {
         assert!(error.contains("is incomplete"), "{args}: {error}");
     }
 
-    // No numbered links: even the implicit 1 is out of range, quoting the
-    // actual input and suggesting plain `=x`. No running session uses the
-    // existing no-running diagnostic. Both leave every file untouched.
-    let (_temp, vault, day_file) =
-        close_worked_vault("bob-cli-close-alias-empty");
-    write_file(
-        &day_file,
-        "## Pomodoros\n\n- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n\t- quick note\n",
-    );
-    let before = fs::read_to_string(&day_file).expect("read");
-    for args in ["=*", "=!"] {
+    // Empty sessions accept both wildcard outcomes; a positive explicit
+    // index remains out of range. Wildcard Work Log text still fails atomically.
+    for args in ["=*", "=!", "=x*", "=x!"] {
+        let (_temp, vault, day_file) =
+            empty_close_vault("bob-cli-close-alias-empty");
+        let json =
+            run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &[args]);
+        assert_eq!(json["ok"], true, "{args}: {json}");
+        assert_eq!(json["pomodoro_close"]["task_links"], serde_json::json!([]));
+        assert_eq!(
+            json["pomodoro_close"]["park_all"]
+                .as_bool()
+                .unwrap_or(false),
+            args.contains('*'),
+            "{args}"
+        );
+        assert_eq!(
+            json["pomodoro_close"]["complete_all"]
+                .as_bool()
+                .unwrap_or(false),
+            args.contains('!'),
+            "{args}"
+        );
+    }
+    for args in ["=*1", "=!1"] {
+        let (_temp, vault, day_file) =
+            empty_close_vault("bob-cli-close-alias-empty-explicit");
+        let before = fs::read_to_string(&day_file).expect("read");
         let error = run_close_expect_error(
             &vault,
             &day_file,
@@ -1757,9 +1892,20 @@ fn capture_pomodoro_close_short_alias_equivalence() {
             &[args],
         );
         assert!(error.contains(args), "{args}: {error}");
-        assert!(error.contains("=x"), "{args}: {error}");
+        assert!(error.contains("no numbered Task Links"), "{args}: {error}");
         assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
     }
+    let (_temp, vault, day_file) =
+        empty_close_vault("bob-cli-close-alias-empty-log");
+    let before = fs::read_to_string(&day_file).expect("read");
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=* log it"],
+    );
+    assert!(error.contains("no numbered Task Links"), "{error}");
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
     // A batch whose later shorthand close fails rolls back the earlier edit.
     let (_temp, vault, day_file) =

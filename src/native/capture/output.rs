@@ -100,7 +100,11 @@ pub(super) struct PomodoroCloseSummaryJson {
     /// In Progress work effects but are not carried forward.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) park: Vec<u32>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) park_all: bool,
     pub(super) complete: Vec<u32>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) complete_all: bool,
     /// Dropped `~<K>` list, omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) drop: Vec<u32>,
@@ -124,6 +128,10 @@ pub(super) struct PomodoroCloseSummaryJson {
     pub(super) carried: Vec<PomodoroCloseCarriedJson>,
     pub(super) notes: Vec<String>,
     pub(super) next_pomodoro: Option<PomodoroCloseNextJson>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -160,11 +160,8 @@ mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
 `=x[<N>][*<P>][!<M>][~<K>]` close (case-insensitive `=X`, with `*`, `!`, and `~` in \
 any order; `=*`/`=!` omit `x` before an initial `*`/`!`) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` exactly as typed plus the additive `in_progress` list, null when no `<N>` was typed, \
-the `park` list, the `complete` list, the `drop` list, and the `log` entries (`index`, \
-`text`, `details`) in typed order (`index` is omitted for unnumbered bullets under a close \
-without `<N>`/`*<P>`, which `bob capture` resolves against the running session); \
-a present-but-empty `*`/`!` group means task 1) \
-and spans covering the `=`/`=x` token (`pomodoro_close`), the `<N>` list \
+the `park` list, the `complete` list, the `drop` list, the additive `park_all` and `complete_all` flags, and the `log` entries (`index`, \
+`text`, `details`) in typed order (`index` is omitted for unnumbered bullets under a close without `<N>`/`*<P>` or with wildcard intent, which `bob capture` resolves after staging the running session lineup); and spans covering the `=`/`=x` token (`pomodoro_close`), the `<N>` list \
 including its commas (`pomodoro_close_in_progress`), the `*<P>` list \
 including the `*` (`pomodoro_close_park`), the `!<M>` list \
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including \
@@ -173,13 +170,14 @@ the `~` (`pomodoro_close_drop`), and each numbered entry index \
 renders as neutral prose but keeps \
 its wikilink spans); the human `close` line reads \
 `=x1*2!3~4 (in progress 1 · parked 2 · complete 3 · drop 4 · defer the rest)`, with \
-`in progress none` for `=x0`, `parked 2 · defer the rest` for `=x*2`, `=* (parked 1 · defer the rest)` and `=! (complete 1)`, a bare `=x` for a plain close, and \
+`in progress none` for `=x0`, `park all` for `=*`, `complete all` for `=!`, `park all · complete 2` for `=x*!2`, `in progress 1 · park all` for `=x1*`, and a bare `=x` for a plain close, and \
 `log 2 'wired the lexer' (+1 detail)` for typed entries with details \
 (`log 'wired the lexer'` with no number for entries resolved at execution). \
 One entry may sit on the close line itself (`bob capture-parse -f json -- \
 '=x wired it'`): it logs to the first task the close works, or to the \
-leading number when one is typed. The item `body` stays the close token \
-(`=x`), the spec `log` carries the entry with its resolved index, an \
+leading number when one is typed. Under wildcard intent, the default index is \
+omitted and Bob resolves it to the first eligible top-level worked Task Link. The item `body` stays the close token \
+(`=x`), the spec `log` carries the entry with an index only when lexically resolved, an \
 explicit number gets a `pomodoro_close_log_index` span on the close line \
 while the default gets none, and entry text keeps its wikilink spans. A \
 dangling inline number (`bob capture-parse -f json -- '=x 2'`) reports mode \
@@ -201,13 +199,13 @@ block link, or a fence reports 'pomodoro_close' plus an \
 `invalid_pomodoro_close` diagnostic on the precise range, and so does a bad \
 inline entry (stray marker, misplaced operators, no-spaces join, Task Link \
 ending, block link, fence, or mixing with bullets). \
-Every malformed list (duplicates, overlaps including defaulted-1 overlaps like `=x1*` and `=*!`, a misplaced `0`, a second `!` \
+Every malformed list (duplicates, explicit overlaps, competing empty wildcard groups such as `=*!`, a misplaced `0`, a second `!` \
 or `~`, a bad character, an oversized number, or a space inside the lists, \
 which gets the no-spaces hint) reports the same. A token ending in a \
 dangling separator (`=x1,`, `=x~`, `=*1,`, `=x!2,`, `=*~`) reports \
 mode 'incomplete' needing `pomodoro_close_task`, with the partial spec, the \
 spans typed so far, and one `interactive_placeholder` span over the \
-separator. A trailing `*`/`!` defaults to task 1 instead of dangling, so `=*`, `=!`, `=x*`, and `=x!` are valid. A same-line chain splits into one `items[]` entry per operator, \
+separator. A trailing `*`/`!` is a wildcard instead of dangling, so `=*`, `=!`, `=x*`, and `=x!` are valid. Two empty wildcard groups conflict and require numbers on at least one group. A same-line chain splits into one `items[]` entry per operator, \
 with child lines attaching to the line's `=x` (the last `=x` when it closes \
 twice); a chain whose `=x` is not last nests its item ranges, so they never \
 partially overlap. Other `=`-prefixed tokens \
@@ -885,9 +883,9 @@ fn unit_noun(units: u64) -> &'static str {
     }
 }
 
-/// Render a validated `=x[<N>][!<M>][~<K>]` close for human output: the
+/// Render a validated `=x[<N>][*<P>][!<M>][~<K>]` close for human output: the
 /// typed token plus the outcome summary. Plain `=x` prints alone; a typed
-/// `<N>` list always ends with `defer the rest`, and `=x0` reads
+/// `<N>` list without a wildcard ends with `defer the rest`, and `=x0` reads
 /// `in progress none`. Typed Work Log entries render as
 /// `log 2 "wired the lexer"`, one per entry in typed order, each followed
 /// by `(+N detail)`/`(+N details)` when it carries details. Entries whose
@@ -924,11 +922,13 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
             .join(", ");
         Some(format!("log {entries}"))
     };
-    // Star-only closes (`=x*2`) activate selection mode like `<N>`: unlisted
-    // plain links defer. `in_progress` stays null when no `<N>` was typed;
-    // parked numbers are never unioned into it.
-    let has_work_selection =
-        close.in_progress.is_some() || !close.park.is_empty();
+    // `park_all`/`complete_all` are lexical intent. They select the
+    // remaining links after explicit assignments, so their human summary
+    // must not imply an ordinary deferred remainder.
+    let has_work_selection = close.in_progress.is_some()
+        || !close.park.is_empty()
+        || close.park_all
+        || close.complete_all;
     if !has_work_selection {
         let mut parts = Vec::new();
         if !close.complete.is_empty() {
@@ -950,17 +950,36 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
         if in_progress.is_empty() {
             // `=x0*2` records work via parking: do not claim
             // `in progress none` while a parked task is being worked.
-            if close.park.is_empty() {
+            if close.park.is_empty() && !close.park_all && !close.complete_all {
                 parts.push("in progress none".to_string());
             }
         } else {
             parts.push(format!("in progress {}", join_numbers(in_progress)));
         }
     }
-    if !close.park.is_empty() {
+    let has_explicit_exceptions = close
+        .in_progress
+        .as_ref()
+        .is_some_and(|numbers| !numbers.is_empty())
+        || !close.park.is_empty()
+        || !close.complete.is_empty()
+        || !close.drop.is_empty();
+    if close.park_all {
+        parts.push(if has_explicit_exceptions {
+            "parked the remaining links".to_string()
+        } else {
+            "parked all".to_string()
+        });
+    } else if !close.park.is_empty() {
         parts.push(format!("parked {}", join_numbers(&close.park)));
     }
-    if !close.complete.is_empty() {
+    if close.complete_all {
+        parts.push(if has_explicit_exceptions {
+            "complete the remaining links".to_string()
+        } else {
+            "complete all".to_string()
+        });
+    } else if !close.complete.is_empty() {
         parts.push(format!("complete {}", join_numbers(&close.complete)));
     }
     if !close.drop.is_empty() {
@@ -969,7 +988,9 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
     if let Some(log) = log_part {
         parts.push(log);
     }
-    parts.push("defer the rest".to_string());
+    if !close.park_all && !close.complete_all {
+        parts.push("defer the rest".to_string());
+    }
     format!("{base} ({})", parts.join(" · "))
 }
 
@@ -1618,7 +1639,9 @@ mod tests {
             raw: "=x1,2".to_string(),
             in_progress: Some(vec![1, 2]),
             park: Vec::new(),
+            park_all: false,
             complete: Vec::new(),
+            complete_all: false,
             drop: Vec::new(),
             log: vec![
                 CloseLogEntry {
@@ -1647,6 +1670,63 @@ mod tests {
         );
         let plain = PomodoroCloseSpec::plain("=x".to_string());
         assert_eq!(format_pomodoro_close(&plain), "=x");
+    }
+
+    #[test]
+    fn format_pomodoro_close_describes_wildcard_scope() {
+        let bare_park = PomodoroCloseSpec {
+            raw: "=*".to_string(),
+            in_progress: None,
+            park: Vec::new(),
+            park_all: true,
+            complete: Vec::new(),
+            complete_all: false,
+            drop: Vec::new(),
+            log: Vec::new(),
+        };
+        assert_eq!(format_pomodoro_close(&bare_park), "=* (parked all)");
+
+        let park_except_complete = PomodoroCloseSpec {
+            raw: "=*!2".to_string(),
+            in_progress: None,
+            park: Vec::new(),
+            park_all: true,
+            complete: vec![2],
+            complete_all: false,
+            drop: Vec::new(),
+            log: Vec::new(),
+        };
+        assert_eq!(
+            format_pomodoro_close(&park_except_complete),
+            "=*!2 (parked the remaining links · complete 2)"
+        );
+
+        let progress_exception = PomodoroCloseSpec {
+            raw: "=x1*".to_string(),
+            in_progress: Some(vec![1]),
+            park: Vec::new(),
+            park_all: true,
+            complete: Vec::new(),
+            complete_all: false,
+            drop: Vec::new(),
+            log: Vec::new(),
+        };
+        assert_eq!(
+            format_pomodoro_close(&progress_exception),
+            "=x1* (in progress 1 · parked the remaining links)"
+        );
+
+        let bare_complete = PomodoroCloseSpec {
+            raw: "=!".to_string(),
+            in_progress: None,
+            park: Vec::new(),
+            park_all: false,
+            complete: Vec::new(),
+            complete_all: true,
+            drop: Vec::new(),
+            log: Vec::new(),
+        };
+        assert_eq!(format_pomodoro_close(&bare_complete), "=! (complete all)");
     }
 
     #[test]

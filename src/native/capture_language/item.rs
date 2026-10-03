@@ -1277,6 +1277,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         park: Vec::new(),
                         complete: Vec::new(),
                         drop: Vec::new(),
+                        park_all: false,
+                        complete_all: false,
                         in_progress_range: None,
                         park_range: None,
                         complete_range: None,
@@ -1299,13 +1301,15 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         }
                     }
                 };
-                match lex_close_log_bullets(
+                match lex_close_log_bullets_with_all(
                     &item.lines[1..],
                     first,
                     lexed_selection.in_progress.as_deref(),
                     &lexed_selection.park,
                     &lexed_selection.complete,
                     &lexed_selection.drop,
+                    lexed_selection.park_all,
+                    lexed_selection.complete_all,
                 ) {
                     Err(error) => return Err(error.message),
                     Ok(lexed) => {
@@ -1354,6 +1358,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     park: Vec::new(),
                     complete: Vec::new(),
                     drop: Vec::new(),
+                    park_all: false,
+                    complete_all: false,
                     in_progress_range: None,
                     park_range: None,
                     complete_range: None,
@@ -1395,11 +1401,13 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     }
                     tail
                 };
-            let default_index = default_log_index(
+            let default_index = default_log_index_with_all(
                 lexed_selection.in_progress.as_deref(),
                 &lexed_selection.park,
                 &lexed_selection.complete,
                 &lexed_selection.drop,
+                lexed_selection.park_all,
+                lexed_selection.complete_all,
             );
             let has_bullet_child = item.lines[1..].iter().any(|line| {
                 !matches!(
@@ -1407,13 +1415,15 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     AuthoredLineClass::EmptyOrPlaceholder
                 )
             });
-            match lex_close_inline_entry(
+            match lex_close_inline_entry_with_all(
                 &tail_tokens,
                 first,
                 lexed_selection.in_progress.as_deref(),
                 &lexed_selection.park,
                 &lexed_selection.complete,
                 &lexed_selection.drop,
+                lexed_selection.park_all,
+                lexed_selection.complete_all,
             ) {
                 Err(error) => return Err(error.message),
                 Ok(CloseInlineLex::Dangling { index, .. }) => {
@@ -1447,7 +1457,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             ) {
                             format!("- {text}")
                         } else {
-                            format!("- {index} {text}")
+                            format!("- {} {text}", index.unwrap_or(1))
                         };
                         return Err(close_inline_mixing_error(&bullet));
                     }

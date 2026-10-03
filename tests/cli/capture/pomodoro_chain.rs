@@ -424,3 +424,51 @@ fn chain_capture_complete_returns_no_candidates() {
         );
     }
 }
+
+#[test]
+fn chain_wildcard_close_matches_blank_line_batch() {
+    let (_temp_a, vault_a, day_a) =
+        close_worked_vault("bob-cli-chain-wildcard-a");
+    let (_temp_b, vault_b, day_b) =
+        close_worked_vault("bob-cli-chain-wildcard-b");
+    let now = "2026-09-28 09:37:00";
+
+    let chain = run_capture_json(&vault_a, &day_a, now, &["=x* ="]);
+    let blank_output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault_b)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_b)
+            .env("BOB_NOW", now),
+        "=x*\n\n=\n",
+    );
+    assert_success(&blank_output);
+    let blank: serde_json::Value =
+        serde_json::from_str(stdout(&blank_output).trim()).expect("blank JSON");
+
+    let chain_close = &chain["captures"][0]["pomodoro_close"];
+    let blank_close = &blank["captures"][0]["pomodoro_close"];
+    assert_eq!(chain_close["park_all"], true);
+    assert_eq!(chain_close["park"], serde_json::json!([1, 2]));
+    assert_eq!(
+        chain_close["task_links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|link| link["outcome"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["parked", "parked"]
+    );
+    assert_eq!(chain_close, blank_close);
+    assert_eq!(
+        fs::read_to_string(&day_a).expect("read chain day"),
+        fs::read_to_string(&day_b).expect("read batch day")
+    );
+    assert_eq!(
+        fs::read_to_string(vault_a.join("bob.md")).expect("read chain bob"),
+        fs::read_to_string(vault_b.join("bob.md")).expect("read batch bob")
+    );
+}

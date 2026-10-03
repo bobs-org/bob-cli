@@ -413,7 +413,7 @@ pub(super) fn build_close_summary_json(
                 time_range: next.time_range.clone(),
                 created: next.created,
             });
-    let task_links = plan
+    let task_links: Vec<PomodoroCloseTaskLinkJson> = plan
         .summary
         .task_links
         .iter()
@@ -427,11 +427,34 @@ pub(super) fn build_close_summary_json(
             source: link.source.as_str(),
         })
         .collect();
+    // Wildcard selections are lexical intent until the staged lineup has
+    // been resolved. Report their concrete selected indices in the close
+    // summary while retaining the intent flags for tolerant clients.
+    let resolved_park = if spec.park_all {
+        task_links
+            .iter()
+            .filter(|link| link.outcome == "parked")
+            .map(|link| link.index)
+            .collect()
+    } else {
+        spec.park.clone()
+    };
+    let resolved_complete = if spec.complete_all {
+        task_links
+            .iter()
+            .filter(|link| link.outcome == "complete")
+            .map(|link| link.index)
+            .collect()
+    } else {
+        spec.complete.clone()
+    };
     let summary = PomodoroCloseSummaryJson {
         raw: spec.raw.clone(),
         in_progress: spec.in_progress.clone(),
-        park: spec.park.clone(),
-        complete: spec.complete.clone(),
+        park: resolved_park,
+        park_all: spec.park_all,
+        complete: resolved_complete,
+        complete_all: spec.complete_all,
         drop: spec.drop.clone(),
         log: plan
             .summary
@@ -560,6 +583,7 @@ fn selection_from_spec(
             spec.drop.iter().copied().collect(),
             spec.raw.clone(),
         )
+        .with_all(spec.park_all, spec.complete_all)
         .with_log(spec.log.clone()),
     )
 }

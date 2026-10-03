@@ -1225,6 +1225,8 @@ pub(super) fn parse_editor_close_item<'a>(
             park: Vec::new(),
             complete: Vec::new(),
             drop: Vec::new(),
+            park_all: false,
+            complete_all: false,
             in_progress_range: None,
             park_range: None,
             complete_range: None,
@@ -1348,13 +1350,15 @@ pub(super) fn parse_editor_close_item<'a>(
             }
         };
         let mut base_spans = selection_spans(lexed_selection);
-        match lex_close_log_bullets(
+        match lex_close_log_bullets_with_all(
             &item.lines[1..],
             first,
             lexed_selection.in_progress.as_deref(),
             &lexed_selection.park,
             &lexed_selection.complete,
             &lexed_selection.drop,
+            lexed_selection.park_all,
+            lexed_selection.complete_all,
         ) {
             Ok(lexed) => {
                 for entry in &lexed.entries {
@@ -1480,11 +1484,13 @@ pub(super) fn parse_editor_close_item<'a>(
             }
             tail
         };
-    let default_index = default_log_index(
+    let default_index = default_log_index_with_all(
         lexed_selection.in_progress.as_deref(),
         &lexed_selection.park,
         &lexed_selection.complete,
         &lexed_selection.drop,
+        lexed_selection.park_all,
+        lexed_selection.complete_all,
     );
     let has_bullet_child = item.lines[1..].iter().any(|line| {
         !matches!(
@@ -1492,13 +1498,15 @@ pub(super) fn parse_editor_close_item<'a>(
             AuthoredLineClass::EmptyOrPlaceholder
         )
     });
-    match lex_close_inline_entry(
+    match lex_close_inline_entry_with_all(
         &tail_tokens,
         first,
         lexed_selection.in_progress.as_deref(),
         &lexed_selection.park,
         &lexed_selection.complete,
         &lexed_selection.drop,
+        lexed_selection.park_all,
+        lexed_selection.complete_all,
     ) {
         Err(error) => {
             let spans = selection_spans(&lexed_selection);
@@ -1580,7 +1588,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 {
                     format!("- {text}")
                 } else {
-                    format!("- {index} {text}")
+                    format!("- {} {text}", index.unwrap_or(1))
                 };
                 let mut spans = selection_spans(&lexed_selection);
                 if let Some((start, end)) = index_range {
@@ -1667,25 +1675,35 @@ pub(crate) fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
             continue;
         }
         let after_x = super::close_selection::whole_item_close_after_x(head);
-        let (in_progress, park, complete, drop) = match after_x {
-            None => (None, Vec::new(), Vec::new(), Vec::new()),
-            Some(after) => {
-                let base = parent.raw.start
-                    + (parent.raw.text.len()
-                        - parent.raw.text.trim_start().len())
-                    + (head.len() - after.len());
-                match super::close_selection::lex_close_selection(
+        let (in_progress, park, complete, drop, park_all, complete_all) =
+            match after_x {
+                None => {
+                    (None, Vec::new(), Vec::new(), Vec::new(), false, false)
+                }
+                Some(after) => {
+                    let base = parent.raw.start
+                        + (parent.raw.text.len()
+                            - parent.raw.text.trim_start().len())
+                        + (head.len() - after.len());
+                    match super::close_selection::lex_close_selection(
                     after, base, head,
                 ) {
                     Ok(
                         super::close_selection::CloseSelectionOutcome::Valid(
                             lex,
                         ),
-                    ) => (lex.in_progress, lex.park, lex.complete, lex.drop),
+                    ) => (
+                        lex.in_progress,
+                        lex.park,
+                        lex.complete,
+                        lex.drop,
+                        lex.park_all,
+                        lex.complete_all,
+                    ),
                     _ => continue,
                 }
-            }
-        };
+                }
+            };
         let tail: Vec<Token<'_>> =
             if tokens.first().is_some_and(|token| token.text == head) {
                 tokens[1..].to_vec()
@@ -1695,13 +1713,15 @@ pub(crate) fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
         if tail.is_empty() {
             continue;
         }
-        match lex_close_inline_entry(
+        match lex_close_inline_entry_with_all(
             &tail,
             head,
             in_progress.as_deref(),
             &park,
             &complete,
             &drop,
+            park_all,
+            complete_all,
         ) {
             Ok(CloseInlineLex::Entry {
                 index_range,

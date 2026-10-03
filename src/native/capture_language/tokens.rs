@@ -740,7 +740,7 @@ pub(super) fn parse_pomodoro_start_suffix(
 }
 
 /// Whether a `^route:…` tail carries a close-shaped suffix (`=x…`, `=*…`,
-/// `=!…`). A trailing `!` inside such a suffix is a defaulted complete
+/// `=!…`). A trailing `!` inside such a suffix is a complete-all
 /// group (a valid close), not an explicit-toggle marker.
 fn caret_tail_has_close_suffix(tail: &str) -> bool {
     let Some((_, raw_suffix)) = tail.split_once('=') else {
@@ -826,7 +826,7 @@ pub(super) enum CaretTokenShape {
     /// separator: an editing state, not a mistake. `suffix_offset` starts
     /// the `=`, `separator_range` covers the dangling `,`/`~`, and
     /// the list ranges cover what was typed so far. A trailing `*`/`!`
-    /// defaults to task 1 instead of dangling.
+    /// means all remaining numbered links instead of dangling.
     CloseIncomplete {
         route: String,
         block_id: String,

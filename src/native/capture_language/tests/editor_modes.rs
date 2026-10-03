@@ -1177,7 +1177,7 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
     );
     // Prose lookalikes stay ordinary tasks with no diagnostics.
     // `=3` is now a whole-item start, not prose, and `=x!` is a valid
-    // defaulted close (complete 1), not prose.
+    // wildcard close, not prose.
     for raw in ["=xx", "=xa", "==", "Plan =x", "= foo", "=- foo"] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Task, "{raw}");
@@ -1191,8 +1191,15 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
     assert!(defaulted.diagnostics.is_empty(), "=x!");
     assert_eq!(
         defaulted.pomodoro_close.as_ref().expect("spec").complete,
-        vec![1],
+        Vec::<u32>::new(),
         "=x!"
+    );
+    assert!(
+        defaulted
+            .pomodoro_close
+            .as_ref()
+            .expect("spec")
+            .complete_all
     );
     let dangling = editor("=x~");
     assert_eq!(dangling.mode, EditorMode::Incomplete, "=x~");

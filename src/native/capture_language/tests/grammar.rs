@@ -1041,11 +1041,12 @@ fn execution_parses_equals_family_starts_alongside_close() {
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
         assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
     }
-    // A present-but-empty `!` defaults to task 1, so `=x!` closes.
+    // A present-but-empty `!` keeps wildcard intent, so `=x!` closes all links.
     let defaulted = execute("=x!").expect("defaulted close");
     match defaulted.kind {
         CaptureKind::PomodoroClose { spec } => {
-            assert_eq!(spec.complete, vec![1], "=x!");
+            assert!(spec.complete.is_empty(), "=x!");
+            assert!(spec.complete_all, "=x!");
         }
         other => panic!("=x!: expected close, got {other:?}"),
     }

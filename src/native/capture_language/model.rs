@@ -139,7 +139,9 @@ pub(crate) enum SessionOperator {
 /// typed (unlisted links keep their ledger outcome unless `*<P>` is present,
 /// which activates selection mode like `<N>`) and `Some` (possibly empty for
 /// `=x0`) when one was; `park` holds the `*<P>` list, `complete` the `!<M>`
-/// list, and `drop` the `~<K>` list, each empty when none was typed. All
+/// list, and `drop` the `~<K>` list, each empty when none was typed. `park_all`
+/// and `complete_all` retain a present group with no numbers; execution
+/// expands its outcome over the remaining numbered Task Links. All concrete
 /// lists are sorted ascending. Plain `=x` reports `in_progress: None` and
 /// empty `park`/`complete`/`drop`, so version-tolerant readers see only
 /// additive fields.
@@ -164,8 +166,16 @@ pub(crate) struct PomodoroCloseSpec {
     /// effects but are not carried to the next placeholder.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) park: Vec<u32>,
+    /// `true` when a present `*` group omitted its numbers and selects the
+    /// remaining numbered Task Links at execution time.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) park_all: bool,
     /// Numbered links to complete, empty when no `!<M>` list was typed.
     pub(crate) complete: Vec<u32>,
+    /// `true` when a present `!` group omitted its numbers and selects the
+    /// remaining numbered Task Links at execution time.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) complete_all: bool,
     /// Numbered links to drop, empty when no `~<K>` list was typed.
     /// Dropped links are removed from the closed session: not carried to
     /// the next placeholder and never started.
@@ -174,6 +184,10 @@ pub(crate) struct PomodoroCloseSpec {
     /// Typed Work Log entries in typed order, empty when no tail was typed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) log: Vec<CloseLogEntry>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// One typed Work Log entry on a close: the numbered Task Link it logs to
@@ -228,7 +242,9 @@ impl PomodoroCloseSpec {
             raw,
             in_progress: None,
             park: Vec::new(),
+            park_all: false,
             complete: Vec::new(),
+            complete_all: false,
             drop: Vec::new(),
             log: Vec::new(),
         }
@@ -238,7 +254,9 @@ impl PomodoroCloseSpec {
     pub(crate) fn has_selection(&self) -> bool {
         self.in_progress.is_some()
             || !self.park.is_empty()
+            || self.park_all
             || !self.complete.is_empty()
+            || self.complete_all
             || !self.drop.is_empty()
     }
 

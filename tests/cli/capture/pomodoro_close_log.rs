@@ -872,6 +872,105 @@ fn capture_pomodoro_close_log_positional_runtime() {
 }
 
 #[test]
+fn capture_pomodoro_close_wildcard_logs_resolve_once_against_staged_lineup() {
+    // An unnumbered inline entry logs once to the first eligible top-level
+    // worked link, even when the first numbered link is nested and wildcard
+    // selection makes every link's outcome worked.
+    let (_temp, vault, day_file) =
+        close_four_link_vault("bob-cli-close-log-wildcard-inline");
+    let before = fs::read_to_string(&day_file).expect("read day");
+    write_file(
+        &day_file,
+        &before.replace(
+            "\t- [[bob#^task-one]]\n",
+            "\t- parent note\n\t\t- [[tasks#^task-one]]\n",
+        ),
+    );
+    let inline = run_close_json(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=* wrote it"],
+    );
+    let close = &inline["pomodoro_close"];
+    assert_eq!(close["park_all"], true);
+    assert_eq!(close["park"], serde_json::json!([1, 2, 3, 4]));
+    assert_eq!(
+        close["log"],
+        serde_json::json!([
+            { "index": 2, "text": "wrote it" }
+        ])
+    );
+    let logged = close["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|task| {
+            task["typed_work_log"]
+                .as_array()
+                .is_some_and(|entries| !entries.is_empty())
+        })
+        .map(|task| task["index"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        logged,
+        vec![2],
+        "inline entry must not fan out to all parked tasks"
+    );
+
+    // An unnumbered child list stays unresolved in capture-parse, then assigns
+    // by the wildcard-selected top-level worked links at execution. Details
+    // remain attached to their nearest entry.
+    let (_temp, vault, day_file) =
+        close_four_link_vault("bob-cli-close-log-wildcard-bullets");
+    let bullets = run_close_json(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=*\n- first\n  - detail\n- second"],
+    );
+    assert_eq!(
+        bullets["pomodoro_close"]["log"],
+        serde_json::json!([
+            { "index": 1, "text": "first", "details": ["detail"] },
+            { "index": 2, "text": "second" },
+        ])
+    );
+    let parsed = parse_json("=*\n- first\n- second");
+    assert_eq!(parsed["pomodoro_close"]["park_all"], true);
+    assert_eq!(
+        parsed["pomodoro_close"]["log"],
+        serde_json::json!([
+            { "text": "first" },
+            { "text": "second" },
+        ])
+    );
+
+    // Explicit numbers can target the wildcard's resolved selection, but a
+    // dropped exception is never loggable.
+    let (_temp, vault, day_file) =
+        close_four_link_vault("bob-cli-close-log-wildcard-numbered");
+    let numbered = run_close_json(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=*\n- 3 explicit target"],
+    );
+    assert_eq!(numbered["pomodoro_close"]["log"][0]["index"], 3);
+    let (_temp, vault, day_file) =
+        close_four_link_vault("bob-cli-close-log-wildcard-drop");
+    let before = fs::read_to_string(&day_file).expect("read");
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["=*~2\n- 2 dropped target"],
+    );
+    assert!(error.contains("is dropped by `~2`"), "{error}");
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+}
+
+#[test]
 fn capture_pomodoro_close_log_positional_parse() {
     // `=x3,4` plus unnumbered bullets: indices resolve, with no
     // `pomodoro_close_log_index` spans.

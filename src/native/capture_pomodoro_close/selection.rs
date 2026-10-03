@@ -28,6 +28,8 @@ pub(crate) struct CloseSelection {
     pub park: BTreeSet<u32>,
     pub complete: BTreeSet<u32>,
     pub drop: BTreeSet<u32>,
+    pub park_all: bool,
+    pub complete_all: bool,
     pub log: Vec<CloseLogEntry>,
     pub raw: String,
 }
@@ -45,16 +47,29 @@ impl CloseSelection {
             park,
             complete,
             drop,
+            park_all: false,
+            complete_all: false,
             log: Vec::new(),
             raw: raw.into(),
         }
     }
 
-    /// Selection mode is active when `<N>` was typed (including `=x0`) or a
-    /// nonempty `*<P>` group is present. Star-only closes defer unlisted
-    /// plain links exactly like ordinary closes.
+    pub(crate) fn with_all(
+        mut self,
+        park_all: bool,
+        complete_all: bool,
+    ) -> Self {
+        self.park_all = park_all;
+        self.complete_all = complete_all;
+        self
+    }
+
+    /// Selection mode is active when `<N>` or a `*` group was typed.
     pub(crate) fn has_work_selection(&self) -> bool {
-        self.in_progress.is_some() || !self.park.is_empty()
+        self.in_progress.is_some()
+            || !self.park.is_empty()
+            || self.park_all
+            || self.complete_all
     }
 
     pub(crate) fn with_log(mut self, log: Vec<CloseLogEntry>) -> Self {
@@ -654,6 +669,8 @@ fn outcome_for(
     marker: TaskLinkMarker,
     selection: &CloseSelection,
 ) -> (TaskLinkOutcome, TaskLinkSource) {
+    // Concrete lists are explicit exceptions to a wildcard group. Resolve
+    // them first; the wildcard then owns only the remaining lineup indices.
     if selection.park.contains(&index) {
         return (TaskLinkOutcome::Parked, TaskLinkSource::Listed);
     }
@@ -662,6 +679,19 @@ fn outcome_for(
     }
     if selection.drop.contains(&index) {
         return (TaskLinkOutcome::Dropped, TaskLinkSource::Listed);
+    }
+    let explicitly_assigned = selection
+        .in_progress
+        .as_ref()
+        .is_some_and(|numbers| numbers.contains(&index))
+        || selection.park.contains(&index)
+        || selection.complete.contains(&index)
+        || selection.drop.contains(&index);
+    if !explicitly_assigned && selection.park_all {
+        return (TaskLinkOutcome::Parked, TaskLinkSource::Listed);
+    }
+    if !explicitly_assigned && selection.complete_all {
+        return (TaskLinkOutcome::Complete, TaskLinkSource::Listed);
     }
     if let Some(in_progress) = selection.in_progress.as_ref() {
         if in_progress.contains(&index) {

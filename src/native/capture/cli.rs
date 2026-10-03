@@ -238,9 +238,10 @@ forms do each part at \
 once. `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
 `--dry-run`, and as JSON `task_links`); a lone `0` means no \
-task stays in progress, as in `=x0`. A present `*`/`!` group with no digits means task 1 (`=*` parks 1, `=!` completes 1, `=x*` parks 1, `=x!` completes 1, `=*!2` parks 1 and completes 2); an absent group stays absent and `~` never defaults. Log one entry on the close line: \
+task stays in progress, as in `=x0`. A present `*` or `!` group with no digits selects every numbered link left after explicit assignments (`=*` parks all, `=!` completes all, `=x1*` keeps 1 in progress and parks the rest, `=x*!2` parks the rest and completes 2). Explicit forms such as `=*1`/`=!1` select only task 1; an absent group stays absent and `~` never defaults. Two empty wildcard groups compete, so `=*!` and `=!*` need numbers on at least one group. Log one entry on the close line: \
 `=x wired the lexer` logs to the first task the close works (task 1 for a \
-plain `=x`), and `=x1,3 3 fixed the flaky test` logs to task 3. A leading \
+plain `=x`, the first eligible worked link with wildcard intent), and \
+`=x1,3 3 fixed the flaky test` logs to task 3. A leading \
 number names the task, so only the entry's first token is an index (`=x 1 \
 3 bugs fixed` logs `3 bugs fixed` to task 1). Write the entry right after \
 the close, then any session operators (`bob capture '=x wired the lexer'`, \
@@ -255,19 +256,21 @@ them all, otherwise bullet `i` logs to worked task `i`, so `=x3,4` plus \
 `- foo bar` plus `- baz bam` writes exactly what `- 3 foo bar` plus \
 `- 4 baz bam` writes. A leading number is always a task number, so to log \
 text that starts with a number, number every bullet (`- 3 2 bugs fixed`). \
-With `<N>` typed (including `=x0`) or `*<P>` present positions resolve lexically \
-and `capture-parse` agrees with `bob capture`, otherwise `bob capture` resolves \
-them against the running session. With `<N>` typed (including `=x0`) or `*<P>` present only the numbers in \
-`<N>`, `*<P>`, or `!<M>` take entries, otherwise every number starting at 1 takes \
-one except `~<K>`; only the first token is an index, so `- 1 \
-fixed 3 bugs` logs `fixed 3 bugs` and every backslash stays literal. The \
-outcome is exactly the sub-bullets the user would type by hand under that \
-Task Link, followed by the unchanged close. A close's child lines are Work \
+For explicitly numbered selections without wildcards, positions resolve lexically \
+and `capture-parse` agrees with `bob capture`. With wildcard intent, numbered \
+entries can target resolved worked links except explicit drops; unnumbered \
+bullets wait for the staged top-level worked lineup, and an unnumbered inline \
+entry logs once to its first eligible link. Without wildcard intent, only the \
+explicit numbers in `<N>`, `*<P>`, or `!<M>` take entries; otherwise every \
+number starting at 1 takes one except `~<K>`. Only the first token is an \
+index, so `- 1 fixed 3 bugs` logs `fixed 3 bugs` and every backslash \
+stays literal. The outcome is exactly the sub-bullets the user would type \
+by hand under that Task Link, followed by the unchanged close. A close's child lines are Work \
 Log bullets; a token ending in `,` or `~` (`=x1,`, `=*1,`, `=*~`) is incomplete and \
 fails, a dangling bullet (`- 1`) or dangling inline number (`=x 1`) is incomplete and \
 fails, whitespace is \
 never allowed inside the lists, and `=xx`/`=xa`/`Plan =x` stay ordinary \
-prose. A trailing `*`/`!` defaults to task 1 instead of dangling, so `=*`, `=!`, `=x*`, and `=x!` are valid. Entry text is literal (`@route`, `@@route`, `s:<N>`, `p:<N>`, `%`, \
+prose. A trailing `*`/`!` with no numbers is a valid wildcard group instead of a dangling state, so `=*`, `=!`, `=x*`, and `=x!` are valid. Entry text is literal (`@route`, `@@route`, `s:<N>`, `p:<N>`, `%`, \
 `#`, and `:query` stay text; plain wikilinks are allowed), while block \
 links, embeds, and code fences are rejected. An inline entry plus child \
 bullets fails with the bullet to write. A chain line's bullets attach to \
@@ -276,7 +279,7 @@ with the entry then starts, `-2 =x wired the lexer` shortens then closes). \
 `@route:block-id=x…`, `@route:block-id=*…`, `@route:block-id=!…` (and the `^` forms) \
 first put that existing task into the running session then close it, and \
 `<text> @route:block-id=x…` creates the new task in the running session \
-then closes it; numbers (including a defaulted 1) refer to the post-link lineup, and `#name` with a \
+then closes it; explicit numbers and wildcard expansion refer to the post-link lineup, and `#name` with a \
 close fails because only the running session can close. Later items see \
 earlier staged edits, dry-run reports without writing, and any failure \
 rolls the whole batch back, so \

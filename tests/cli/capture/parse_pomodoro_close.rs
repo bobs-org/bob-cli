@@ -338,30 +338,30 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         );
     }
 
-    // A `^` link close ending in `!` defaults complete to task 1, not a
-    // toggle: `^r:id=x!` and `^r:id=x0!` are valid links, while
-    // `^r:id=x1!` overlaps. A trailing `~` stays incomplete.
+    // A `^` link close ending in `!` keeps complete-all intent, while an
+    // explicit in-progress list is an exception to the remaining links.
     for text in ["^r:id=x!", "^r:id=x0!"] {
         let value = parse(text);
         assert_eq!(value["mode"], "pomodoro_link", "{text}");
-        assert_eq!(
-            value["pomodoro_close"]["complete"],
-            serde_json::json!([1]),
-            "{text}"
-        );
+        assert_eq!(value["pomodoro_close"]["complete"], serde_json::json!([]));
+        assert_eq!(value["pomodoro_close"]["complete_all"], true);
     }
-    for text in ["^r:id=x1!", "^r:id=x1,3!"] {
-        let value = parse(text);
-        assert_eq!(value["mode"], "pomodoro_link", "{text}");
-        assert!(
-            value["diagnostics"]
-                .as_array()
-                .expect("diagnostics")
-                .iter()
-                .any(|diag| diag["code"] == "invalid_pomodoro_close"),
-            "{text}: {value}"
-        );
-    }
+    let mixed = parse("^r:id=x1!");
+    assert_eq!(mixed["mode"], "pomodoro_link");
+    assert_eq!(
+        mixed["pomodoro_close"]["in_progress"],
+        serde_json::json!([1])
+    );
+    assert_eq!(mixed["pomodoro_close"]["complete_all"], true);
+    let overlap = parse("^r:id=x1!1");
+    assert!(
+        overlap["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diag| diag["code"] == "invalid_pomodoro_close"),
+        "{overlap}"
+    );
     for text in ["^r:id=x~", "^r:id=x1,"] {
         let value = parse(text);
         assert_eq!(value["mode"], "incomplete", "{text}");
@@ -415,12 +415,12 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         "{mixed}"
     );
 
-    // Valid defaults: an omitted `*`/`!` list means task 1 with spans over
-    // exactly what was typed (never a manufactured `1`).
+    // A bare outcome marker keeps an empty lexical list plus explicit
+    // wildcard intent. Spans cover exactly the marker the user typed.
     for (text, close, spans) in [
         (
             "=*",
-            serde_json::json!({ "raw": "=*", "in_progress": null, "park": [1], "complete": [] }),
+            serde_json::json!({ "raw": "=*", "in_progress": null, "complete": [], "park_all": true }),
             serde_json::json!([
                 { "start": 0, "end": 1, "kind": "pomodoro_close" },
                 { "start": 1, "end": 2, "kind": "pomodoro_close_park" },
@@ -428,7 +428,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         ),
         (
             "=!",
-            serde_json::json!({ "raw": "=!", "in_progress": null, "complete": [1] }),
+            serde_json::json!({ "raw": "=!", "in_progress": null, "complete": [], "complete_all": true }),
             serde_json::json!([
                 { "start": 0, "end": 1, "kind": "pomodoro_close" },
                 { "start": 1, "end": 2, "kind": "pomodoro_close_complete" },
@@ -436,7 +436,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         ),
         (
             "=x*",
-            serde_json::json!({ "raw": "=x*", "in_progress": null, "park": [1], "complete": [] }),
+            serde_json::json!({ "raw": "=x*", "in_progress": null, "complete": [], "park_all": true }),
             serde_json::json!([
                 { "start": 0, "end": 2, "kind": "pomodoro_close" },
                 { "start": 2, "end": 3, "kind": "pomodoro_close_park" },
@@ -444,10 +444,28 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         ),
         (
             "=x!",
-            serde_json::json!({ "raw": "=x!", "in_progress": null, "complete": [1] }),
+            serde_json::json!({ "raw": "=x!", "in_progress": null, "complete": [], "complete_all": true }),
             serde_json::json!([
                 { "start": 0, "end": 2, "kind": "pomodoro_close" },
                 { "start": 2, "end": 3, "kind": "pomodoro_close_complete" },
+            ]),
+        ),
+        (
+            "=*!2",
+            serde_json::json!({ "raw": "=*!2", "in_progress": null, "complete": [2], "park_all": true }),
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 2, "kind": "pomodoro_close_park" },
+                { "start": 2, "end": 4, "kind": "pomodoro_close_complete" },
+            ]),
+        ),
+        (
+            "=x1*",
+            serde_json::json!({ "raw": "=x1*", "in_progress": [1], "complete": [], "park_all": true }),
+            serde_json::json!([
+                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
+                { "start": 3, "end": 4, "kind": "pomodoro_close_park" },
             ]),
         ),
         (
@@ -466,8 +484,23 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         assert_eq!(value["diagnostics"], serde_json::json!([]), "{text}");
     }
 
-    // Dangling separators are editing states, never mistakes. A trailing
-    // `*`/`!` now defaults to task 1, so only `,` and `~` dangle.
+    let competing = parse("=*!");
+    assert_eq!(competing["mode"], "pomodoro_close");
+    assert_eq!(
+        competing["diagnostics"][0]["code"],
+        "invalid_pomodoro_close"
+    );
+    assert_eq!(
+        competing["diagnostics"][0]["range"],
+        serde_json::json!([2, 3])
+    );
+    assert!(competing["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("competing park-all and complete-all"));
+
+    // Commas and drops still create editing states; `*`/`!` without numbers
+    // are complete wildcard groups, not dangling states.
     for (text, in_progress, complete, spans) in [
         (
             "=x1,",

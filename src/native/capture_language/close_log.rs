@@ -2,7 +2,7 @@
 //!
 //! Both the execution parser (`bob capture`) and the editor parser
 //! (`capture-parse`, completion, rewrite) lex a close's child bullet lines
-//! through [`lex_close_log_bullets`], so a mistyped entry reports the same
+//! through the shared close-log lexer, so a mistyped entry reports the same
 //! message and byte range everywhere. Diagnostic text lives in [`markers`];
 //! this module only decides which diagnostic applies and where it points.
 //!
@@ -17,11 +17,11 @@
 //! skipped) fixes the list's kind, a later bullet of the other kind fails,
 //! and dangling bullets (`- 1`) only occur in numbered lists.
 //!
-//! Unnumbered bullets log in order to the close's worked tasks `W`: in
-//! selection mode (`<N>` typed, including `=x0`, or a non-empty `*<P>`)
-//! `W` is the lexical `sorted(<N> ∪ *<P> ∪ !<M>)` and positions resolve
-//! here; otherwise positions stay `None` for `bob capture` to resolve
-//! against the running session. The assignment rule
+//! Unnumbered bullets log in order to the close's worked tasks `W`: without
+//! wildcard intent, selection mode (`<N>` typed, including `=x0`, or a
+//! non-empty `*<P>`) uses the lexical `sorted(<N> ∪ *<P> ∪ !<M>)`; otherwise
+//! positions stay `None` for `bob capture` to resolve against the running
+//! session. Wildcard positions always wait for that staged lineup. The assignment rule
 //! ([`assign_log_positions`]) is: no worked task is an error, one worked
 //! task takes every bullet, otherwise bullet `i` logs to `W[i]`, and more
 //! bullets than worked tasks is an error.
@@ -83,16 +83,22 @@ pub(crate) struct CloseLogError {
 }
 
 /// `true` when `index` can start a Work Log entry under these lists.
-/// Selection mode is active when `<N>` was typed (including `=x0`) or a
-/// nonempty `*<P>` group is present: only `<N>`, `*<P>`, and `!<M>` start
-/// entries. Otherwise every number starts one except those in `~<K>`.
+/// Without wildcard intent, selection mode is active when `<N>` was typed
+/// (including `=x0`) or a nonempty `*<P>` group is present: only `<N>`,
+/// `*<P>`, and `!<M>` start entries. Otherwise every number starts one
+/// except those in `~<K>`. Wildcard loggability is deferred to the lineup.
 fn is_loggable(
     index: u32,
     in_progress: Option<&[u32]>,
     park: &[u32],
     complete: &[u32],
     drop: &[u32],
+    park_all: bool,
+    complete_all: bool,
 ) -> bool {
+    if park_all || complete_all {
+        return !drop.contains(&index);
+    }
     if in_progress.is_some() || !park.is_empty() {
         in_progress.is_some_and(|list| list.contains(&index))
             || park.contains(&index)
@@ -108,7 +114,8 @@ fn is_loggable(
 /// at or above 1 not in `~<K>`. `None` when the close works no task (for
 /// example `=x0`, `=x0~2`). Whenever task 1 can take an entry, the default
 /// is 1; in every case where a default of 1 would always fail, the default
-/// moves to the first task that can.
+/// moves to the first task that can. Wildcard-aware callers use
+/// [`default_log_index_with_all`] and wait for the staged session lineup.
 pub(crate) fn default_log_index(
     in_progress: Option<&[u32]>,
     park: &[u32],
@@ -131,6 +138,22 @@ pub(crate) fn default_log_index(
             }
             candidate = candidate.checked_add(1)?;
         }
+    }
+}
+
+/// Wildcards need the runtime lineup to identify their first worked task.
+pub(crate) fn default_log_index_with_all(
+    in_progress: Option<&[u32]>,
+    park: &[u32],
+    complete: &[u32],
+    drop: &[u32],
+    park_all: bool,
+    complete_all: bool,
+) -> Option<u32> {
+    if park_all || complete_all {
+        None
+    } else {
+        default_log_index(in_progress, park, complete, drop)
     }
 }
 
@@ -317,9 +340,9 @@ pub(crate) fn assign_log_positions(
 }
 
 /// The close's lexical worked tasks `W = sorted(<N> ∪ *<P> ∪ !<M>)` when a
-/// selection is active (`<N>` typed, including `=x0`, or a non-empty
-/// `*<P>`); `None` otherwise, when positions resolve against the running
-/// session at execution.
+/// non-wildcard selection is active (`<N>` typed, including `=x0`, or a
+/// non-empty `*<P>`); `None` otherwise, including wildcard intent, when
+/// positions resolve against the staged running session at execution.
 pub(crate) fn lexical_worked_tasks(
     in_progress: Option<&[u32]>,
     park: &[u32],
@@ -338,6 +361,19 @@ pub(crate) fn lexical_worked_tasks(
     worked.sort_unstable();
     worked.dedup();
     Some(worked)
+}
+
+pub(crate) fn lexical_worked_tasks_with_all(
+    in_progress: Option<&[u32]>,
+    park: &[u32],
+    complete: &[u32],
+    park_all: bool,
+    complete_all: bool,
+) -> Option<Vec<u32>> {
+    if park_all || complete_all {
+        return None;
+    }
+    lexical_worked_tasks(in_progress, park, complete)
 }
 
 /// `true` when the bullet's first token is all ASCII digits, making it a
@@ -462,8 +498,18 @@ fn check_index_loggable(
     park: &[u32],
     complete: &[u32],
     drop: &[u32],
+    park_all: bool,
+    complete_all: bool,
 ) -> Result<(), CloseLogError> {
-    if is_loggable(index, in_progress, park, complete, drop) {
+    if is_loggable(
+        index,
+        in_progress,
+        park,
+        complete,
+        drop,
+        park_all,
+        complete_all,
+    ) {
         return Ok(());
     }
     if drop.contains(&index) {
@@ -499,7 +545,7 @@ pub(crate) enum CloseInlineLex {
     /// (`None` for the default number, which gets no index span), the
     /// whitespace-normalized text, and the text byte range.
     Entry {
-        index: u32,
+        index: Option<u32>,
         index_range: Option<(usize, usize)>,
         text: String,
         text_range: (usize, usize),
@@ -592,6 +638,7 @@ fn inline_entry_joined(tokens: &[Token<'_>]) -> String {
 /// diagnostics; the lists are the lexed selection. Checks run in the
 /// plan's order; the first failure wins. Loggability is checked before
 /// dangling, as for bullets.
+#[cfg(test)]
 pub(crate) fn lex_close_inline_entry(
     entry_tokens: &[Token<'_>],
     close_token: &str,
@@ -599,6 +646,28 @@ pub(crate) fn lex_close_inline_entry(
     park: &[u32],
     complete: &[u32],
     drop: &[u32],
+) -> Result<CloseInlineLex, CloseLogError> {
+    lex_close_inline_entry_with_all(
+        entry_tokens,
+        close_token,
+        in_progress,
+        park,
+        complete,
+        drop,
+        false,
+        false,
+    )
+}
+
+pub(crate) fn lex_close_inline_entry_with_all(
+    entry_tokens: &[Token<'_>],
+    close_token: &str,
+    in_progress: Option<&[u32]>,
+    park: &[u32],
+    complete: &[u32],
+    drop: &[u32],
+    park_all: bool,
+    complete_all: bool,
 ) -> Result<CloseInlineLex, CloseLogError> {
     let Some(first) = entry_tokens.first() else {
         unreachable!("inline entry tokens are never empty");
@@ -654,14 +723,20 @@ pub(crate) fn lex_close_inline_entry(
             lex_close_selection(after_x, 0, &nospace).is_ok()
         }) {
             let escape = if entry_tokens.len() > 1 {
-                default_log_index(in_progress, park, complete, drop).map(
-                    |default| {
-                        format!(
-                            "{close_token} {default} {}",
-                            inline_entry_joined(entry_tokens)
-                        )
-                    },
+                default_log_index_with_all(
+                    in_progress,
+                    park,
+                    complete,
+                    drop,
+                    park_all,
+                    complete_all,
                 )
+                .map(|default| {
+                    format!(
+                        "{close_token} {default} {}",
+                        inline_entry_joined(entry_tokens)
+                    )
+                })
             } else {
                 None
             };
@@ -690,10 +765,17 @@ pub(crate) fn lex_close_inline_entry(
             park,
             complete,
             drop,
+            park_all,
+            complete_all,
         ) {
-            if let Some(default) =
-                default_log_index(in_progress, park, complete, drop)
-            {
+            if let Some(default) = default_log_index_with_all(
+                in_progress,
+                park,
+                complete,
+                drop,
+                park_all,
+                complete_all,
+            ) {
                 let joined = inline_entry_joined(entry_tokens);
                 error.message.push_str(&format!(
                     "; to log text that starts with `{}`, put the task number first: `{close_token} {default} {joined}`",
@@ -725,15 +807,22 @@ pub(crate) fn lex_close_inline_entry(
             rest.last().map(|token| token.end).unwrap_or(first.end),
         );
         return Ok(CloseInlineLex::Entry {
-            index,
+            index: Some(index),
             index_range: Some((first.start, first.end)),
             text,
             text_range,
         });
     }
     // 8. No default: the close works no task.
-    let Some(default) = default_log_index(in_progress, park, complete, drop)
-    else {
+    let default = default_log_index_with_all(
+        in_progress,
+        park,
+        complete,
+        drop,
+        park_all,
+        complete_all,
+    );
+    if default.is_none() && !park_all && !complete_all {
         let (listed, completed) =
             not_worked_suggestions(1, in_progress, park, complete, drop);
         let range = (
@@ -787,6 +876,7 @@ pub(crate) fn lex_close_inline_entry(
 /// existing authored-bullet messages. Bullets are checked top to bottom and
 /// the first error wins, including the two mixed-numbering errors; any
 /// error outranks a dangling bullet.
+#[cfg(test)]
 pub(crate) fn lex_close_log_bullets(
     child_lines: &[ItemLine<'_>],
     close_token: &str,
@@ -794,6 +884,28 @@ pub(crate) fn lex_close_log_bullets(
     park: &[u32],
     complete: &[u32],
     drop: &[u32],
+) -> Result<CloseLogLexed, CloseLogError> {
+    lex_close_log_bullets_with_all(
+        child_lines,
+        close_token,
+        in_progress,
+        park,
+        complete,
+        drop,
+        false,
+        false,
+    )
+}
+
+pub(crate) fn lex_close_log_bullets_with_all(
+    child_lines: &[ItemLine<'_>],
+    close_token: &str,
+    in_progress: Option<&[u32]>,
+    park: &[u32],
+    complete: &[u32],
+    drop: &[u32],
+    park_all: bool,
+    complete_all: bool,
 ) -> Result<CloseLogLexed, CloseLogError> {
     let mut entries: Vec<CloseLogEntryLex> = Vec::new();
     let mut dangling: Vec<CloseLogDanglingBullet> = Vec::new();
@@ -871,9 +983,15 @@ pub(crate) fn lex_close_log_bullets(
             Some(kind) if kind != numbered => {
                 if kind {
                     let normalized = normalize_task_text(authored.body);
-                    let smallest =
-                        default_log_index(in_progress, park, complete, drop)
-                            .unwrap_or(1);
+                    let smallest = default_log_index_with_all(
+                        in_progress,
+                        park,
+                        complete,
+                        drop,
+                        park_all,
+                        complete_all,
+                    )
+                    .unwrap_or(1);
                     let example = if normalized.is_empty() {
                         format!("- {smallest}")
                     } else {
@@ -884,9 +1002,15 @@ pub(crate) fn lex_close_log_bullets(
                         range: (first.start, first.end),
                     });
                 }
-                let default =
-                    default_log_index(in_progress, park, complete, drop)
-                        .unwrap_or(1);
+                let default = default_log_index_with_all(
+                    in_progress,
+                    park,
+                    complete,
+                    drop,
+                    park_all,
+                    complete_all,
+                )
+                .unwrap_or(1);
                 let body = normalize_task_text(authored.body);
                 let suggestion = format!("- {default} {body}");
                 return Err(CloseLogError {
@@ -926,6 +1050,8 @@ pub(crate) fn lex_close_log_bullets(
             park,
             complete,
             drop,
+            park_all,
+            complete_all,
         )?;
         if tokens.len() == 1 {
             dangling.push(CloseLogDanglingBullet {
@@ -956,7 +1082,13 @@ pub(crate) fn lex_close_log_bullets(
     // the running session.
     if numbered_list == Some(false)
         && !entries.is_empty()
-        && let Some(worked) = lexical_worked_tasks(in_progress, park, complete)
+        && let Some(worked) = lexical_worked_tasks_with_all(
+            in_progress,
+            park,
+            complete,
+            park_all,
+            complete_all,
+        )
     {
         match assign_log_positions(&worked, entries.len()) {
             Ok(resolved) => {
@@ -1048,7 +1180,7 @@ pub(crate) fn log_entry_from_inline(
             text,
             ..
         } => CloseLogEntry {
-            index: Some(*index),
+            index: *index,
             text: text.clone(),
             details: Vec::new(),
             origin: CloseLogOrigin::Inline {
@@ -1254,7 +1386,11 @@ mod tests {
                 index_range,
                 text,
                 ..
-            } => (index, index_range, text),
+            } => (
+                index.expect("explicit non-wildcard test index"),
+                index_range,
+                text,
+            ),
             CloseInlineLex::Dangling { .. } => {
                 panic!("{close} {entry}: dangling")
             }

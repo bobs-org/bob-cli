@@ -81,8 +81,8 @@ anything is written, and any failure rolls the whole batch back.
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
 | `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name ("again"), otherwise a new named session is created and started; the item must contain only the start token |
 | `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`, `=3#bugs~1,3`); `~` drops, the drop part always comes last, and the item must contain only the start token |
-| `=x[<N>][*<P>][!<M>][~<K>]` (also `=*…`/`=!…` omitting `x`) | Close today's running timed Pomodoro (case-insensitive `=X`, with `*`, `!`, and `~` in any order); `<N>` keeps only those numbered Task Links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; a present-but-empty `*`/`!` group means task 1 (`=*` parks 1, `=!` completes 1); one Work Log entry may sit on the close line, several use child bullets |
-| `=x [<n>] <entry text…>` | One entry on the close line: with no number it logs to the first task the close works (task 1 for plain `=x`); a leading number names the task, so only the first token is an index (`=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1) |
+| `=x[<N>][*<P>][!<M>][~<K>]` (also `=*…`/`=!…` omitting `x`) | Close today's running timed Pomodoro (case-insensitive `=X`, with `*`, `!`, and `~` in any order); `<N>` keeps only those numbered Task Links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; a present-but-empty `*` or `!` selects every remaining numbered Task Link after explicit assignments and is represented by `park_all`/`complete_all` with an empty lexical list; explicit forms such as `=*1`/`=!1` narrow the action to task 1; one Work Log entry may sit on the close line, several use child bullets |
+| `=x [<n>] <entry text…>` | One entry on the close line: with no number it logs to the first task the close works (task 1 for plain `=x`, the first eligible worked link for wildcard closes); a leading number names the task, so only the first token is an index (`=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1) |
 | `=x` + `- [<n>] <text>` (+ `  - <detail>`) | Several entries while closing: bullets are numbered all or none — a numbered bullet logs its text to worked task `<n>`, while unnumbered bullets log in order to the close's worked tasks (one worked task takes them all, otherwise bullet `i` logs to worked task `i`); a two-space bullet nests an undated detail under its entry; an inline entry plus bullets fails |
 | `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; an inline entry sits right after its close with operators trailing (`=x wired the lexer =` closes with the entry then starts); `=x =~2` closes then starts without link 2 of the next lineup, while `=x~2 =` drops link 2 of the running session and then starts |
 | `=x =` + `- 1 wired the lexer` | Close with a Work Log bullet in a chain: the child lines attach to the line's `=x`, so this logs the entry then starts the next session |
@@ -129,11 +129,13 @@ anything is written, and any failure rolls the whole batch back.
 | `=x1~2` | Close keeping task 1 in progress, dropping task 2, deferring the rest |
 | `=x1!2~3` | Close keeping task 1 in progress, completing task 2, dropping task 3 |
 | `=x0` | Close deferring every numbered Task Link |
-| `=*` | Close parking task 1, deferring the rest (`=x*1`) |
-| `=!` | Close completing task 1 (`=x!1`) |
-| `=x*` | Close parking task 1, deferring the rest |
-| `=x!` | Close completing task 1 |
-| `=*!2` | Close parking task 1 and completing task 2 (`=x*1!2`) |
+| `=*` | Close parking every numbered Task Link |
+| `=!` | Close completing every numbered Task Link |
+| `=x*` | Close parking every numbered Task Link |
+| `=x!` | Close completing every numbered Task Link |
+| `=*1` / `=!1` | Close parking or completing only task 1 |
+| `=*!2` | Close parking every link except task 2, and completing task 2 |
+| `=x1*` | Keep task 1 in progress and park every remaining link |
 | `=x~` | Incomplete: type a task number after `~` (`capture-parse` needs `pomodoro_close_task`) |
 | `=` | Start the next future Pomodoro (25 minutes); a bare `=` is a complete start, not an incomplete state |
 | `=3` | Start the next future Pomodoro for 15 minutes; a counted `=` token is a start, not prose |
@@ -1693,22 +1695,25 @@ and carries only link 1 into the new placeholder. Parked rows read
 `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers with no
 whitespace. `<N>` omitted leaves unlisted links at their ledger outcome
 unless `*<P>` is present, which activates selection mode like `<N>`;
-`<N>` present, even as a lone `0`, turns every unlisted link that would
-have been in progress into deferred, and `=x*2` defers unlisted plain links
-exactly like `=x2`. A present-but-empty `*`/`!` group means task 1 (`=*` is
-`=x*1`, `=!` is `=x!1`, `=x*` parks 1, `=x!` completes 1); an absent group
-stays absent and `~` never defaults. `=x0*2` is valid (no ordinary continuing selections,
-task 2 parked, other eligible unlisted links deferred); `*0`, `!0`, and `~0`
-are invalid. Only an entirely omitted `*`/`!` group defaults: empty comma
-elements never do (`=*,2` fails, `=*1,` dangles). Order inside a list does not matter, and `*<P>`, `!<M>`, and
-`~<K>` may each appear at most once, in any order after an optional initial
-`<N>`. `*` starts a list; it is neither a postfix modifier nor a wildcard. A
-selection is the marker edits the user would make by hand, applied to the
-numbered lines, plus explicit carry metadata for `*<P>` (parked worked lines
-are recorded like In Progress but skipped while collecting carry), followed
-by the unchanged close — so plain
-`=x` works byte for byte as it always has, and every non-parked selection
-produces exactly the files the matching hand edits followed by `=x` produce.
+`<N>` present, even as a lone `0`, turns every explicitly unassigned link
+that would have been in progress into deferred. A present `*` or `!` group
+without numbers is a wildcard for every numbered link left after explicit
+in-progress, park, complete, and drop assignments. Thus `=*` parks all links,
+`=x1*` keeps task 1 in progress and parks the rest, and `=x*!2` parks the
+rest while completing task 2. Explicit forms such as `=*1` and `=!1` keep
+the old single-task scope. `=x0*` parks all links because `0` assigns none
+to in-progress; an empty lineup still closes successfully. Two empty
+wildcards compete regardless of marker order; add task numbers to at least
+one group. An absent group stays absent and `~` never
+defaults. `*0`, `!0`, and `~0` are invalid. Empty comma elements never
+select all (`=*,2` fails, `=*1,` dangles). Order inside a list does not
+matter, and `*<P>`, `!<M>`, and `~<K>` may each appear at most once, in
+any order after an optional initial `<N>`. `*` and `!` introduce outcome
+groups; only omitting that group's numbers makes it a wildcard. A selection
+is the marker edits the user would make by hand, applied to the numbered
+lines, plus explicit carry metadata for parked links (normal work without
+carrying), followed by the unchanged close — so plain `=x` works byte for
+byte as it always has.
 
 **Numbering.** Every line of the running session's sub-bullet range whose
 list-item body, after stripping 🍅 markers, is exactly one block link is
@@ -1874,8 +1879,12 @@ then optionally `*` and the numbers to park, `!` and the numbers to complete,
 and `~` and the numbers to drop (for example `=x1*2!3~4`) ```,
 `task number 99999999999 is too large`, and
 ``write the task numbers right after `=x`, with no spaces (for example
-`=x1*2!3~4`)``. A present-but-empty `*`/`!` group means task 1 (so `=x!~2`
-completes 1 and drops 2, while `=x*!2` parks 1 and completes 2). A token ending in a dangling separator (`=x1,`, `=*1,`, `=x~`, `=*~`, `=x*2,`, `=x!2,`) is an editing state: `bob capture` rejects it
+`=x1*2!3~4`)``. Competing empty wildcard groups report
+`` `=*!` has competing park-all and complete-all groups; add task numbers to at least one group ``.
+A present-but-empty `*`/`!` group selects the remaining links (so `=x!~2`
+completes every link except dropped task 2, while `=x*!2` parks every link
+except completed task 2). Explicit forms such as `=*1` and `=!1` keep the
+single-task scope. A token ending in a dangling separator (`=x1,`, `=*1,`, `=x~`, `=*~`, `=x*2,`, `=x!2,`) is an editing state: `bob capture` rejects it
 (`` `=x1,` is incomplete: type a task number after `,` ``) while
 `capture-parse` reports mode `incomplete` needing `pomodoro_close_task`. A trailing `*`/`!` is valid, never dangling.
 **Warnings** (shown on the row and top-level, never blocking): a listed
@@ -1897,8 +1906,10 @@ bob capture '=x wired the lexer ='
 The text after the close token is one Work Log entry, whitespace-normalized
 like every capture line, executing byte for byte like its bullet form. With
 no number it logs to the first task the close works (task 1 for plain `=x`,
-the smallest listed/completed/parked number otherwise, the smallest number
-outside `~<K>` when nothing is listed). A leading number names the task and
+the first eligible top-level worked link for wildcard closes). A wildcard's
+first eligible link depends on the resolved session lineup; one inline entry
+creates one Work Log item, even when the wildcard selects several links. A
+leading number names the task and
 the rest is the text, so only the first token is an index and
 `=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1. `0` and leading zeros
 report `task numbers start at 1`, overflow reports `task number N is too
@@ -1938,12 +1949,14 @@ whitespace-separated token is all ASCII digits: the leading number is always
 the task number `<n>`, and everything after it is the entry text. Every
 other first-level bullet is unnumbered and its whole body is entry text.
 Bullets are numbered all or none: the first first-level bullet fixes the
-list's kind. With `<N>` typed (including `=x0`) or `*<P>` present the
+list's kind. Without wildcard intent, with `<N>` typed (including `=x0`) or `*<P>` present,
 loggable tasks are the numbers in `<N>`, `*<P>`, or `!<M>`; with no `<N>` or
 `*<P>` every number ≥ 1 is loggable except those in `~<K>`. Numbered bullets
-and selection-mode positions are lexical with no vault access, so
-`capture-parse` and `bob capture` agree on them; positions under a close
-without `<N>`/`*<P>` resolve against the running session at execution.
+and explicitly numbered selections are lexical with no vault access. Wildcard
+numbered bullets and positional entries resolve after Bob stages the session
+lineup; wildcard inline entries use the first eligible top-level worked Task
+Link. Positions under a close without `<N>`/`*<P>` resolve against the running
+session at execution.
 Only the first token is an index, so `- 1 fixed 3 bugs` logs `fixed 3 bugs`
 with no escape, and every backslash is literal. Entries keep typed order,
 and the same number may appear on several numbered bullets, each a separate
@@ -3044,9 +3057,12 @@ starts either. A whole-item `=x[<N>][*<P>][!<M>][~<K>]` close
 (case-insensitive `=X`, with `*`, `!`, and `~` in any order) parses as
 `pomodoro_close` with a `pomodoro_close` object (`raw` plus the additive
 `in_progress` list, `null` when no `<N>` was typed, the `park` list,
-the `complete` list, the `drop` list, and the `log` entries (`index`, `text`, `details`) in
-typed order; `index` is omitted for unnumbered bullets under a close without
-`<N>`/`*<P>`, which `bob capture` resolves against the running session) and
+the `complete` list, the `drop` list, additive `park_all` and `complete_all` booleans, and the
+`log` entries (`index`, `text`, `details`) in typed order; wildcard groups keep
+their lexical lists empty while the close summary resolves them to concrete
+ascending task indices; `index` is omitted for unnumbered bullets under a close
+without `<N>`/`*<P>` or with wildcard intent, which `bob capture` resolves
+after staging the running session lineup) and
 spans covering the `=x` token (`pomodoro_close`), the `<N>`
 list including its commas (`pomodoro_close_in_progress`), the `*<P>` list
 including the `*` (`pomodoro_close_park`), the `!<M>` list
@@ -3060,8 +3076,9 @@ but keep wikilink spans); the human `close` line reads
 `log 2 "wired the lexer" (+1 detail)` for typed entries with details
 (`log "wired the lexer"` with no number for entries resolved at execution).
 One entry may sit on the close line (`=x wired it` logs to task 1 with `body`
-`=x` and an explicit number getting a `pomodoro_close_log_index` span while
-the default gets none); a dangling inline number (`=x 2`) reports mode
+`=x`, or to the first eligible top-level worked link under wildcard intent; an
+explicit number gets a `pomodoro_close_log_index` span while a runtime-resolved
+default gets none); a dangling inline number (`=x 2`) reports mode
 `incomplete` needing `pomodoro_close_log_text` with the partial spec and a
 placeholder over the number. Several entries use child bullets below the
 close (`- [<n>] <text>`: bullets are numbered all or none, and unnumbered
