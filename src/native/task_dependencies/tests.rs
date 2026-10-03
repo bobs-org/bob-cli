@@ -151,7 +151,10 @@ fn dw_writer_form_vectors() {
         ),
         "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]"
     );
-    // DW3: append keeps line order; the new link lands at the end.
+    // DW3: append keeps line order; the new link lands at the end. The
+    // writer never re-sorts: the given order renders as given, and the
+    // reconcile adoption path pins the engine side
+    // (`reconcile_dw1_inserts_adopted_line_before_schedule_log`).
     assert_eq!(
         format_dependency_line(
             "  ",
@@ -167,7 +170,10 @@ fn dw_writer_form_vectors() {
         ),
         "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^c]]"
     );
-    // DW6: re-add moves to the end; the writer renders the given order.
+    // DW6: re-add moves to the end; the writer renders the given order
+    // verbatim instead of restoring line order, pinned through the
+    // reconcile rewrite path by
+    // `reconcile_dw3_dw6_rewrite_keeps_link_order`.
     assert_eq!(
         format_dependency_line(
             "  ",
@@ -175,14 +181,14 @@ fn dw_writer_form_vectors() {
         ),
         "  - ⛓️ **DEPENDS ON:** [[#^b]] • [[#^a]]"
     );
-    // DW5: removing the last link deletes the line (no placeholder); the
-    // writer emits nothing and removes the field. An empty link list
-    // renders only the label, which the reconcile deletes with the field
-    // (R9) instead of writing a placeholder link.
-    let links: Vec<String> = Vec::new();
-    assert!(links.is_empty());
+    // DW5: removing the last link deletes the line (no placeholder). An
+    // empty link list renders only the label, which the reconcile
+    // deletes with the field (R9) instead of writing a placeholder link;
+    // the full line-plus-field removal is pinned through the engine by
+    // `reconcile_dw5_label_only_line_deletes_line_and_field`.
+    let empty: Vec<String> = Vec::new();
     assert_eq!(
-        format_dependency_line("  ", &links),
+        format_dependency_line("  ", &empty),
         "  - ⛓️ **DEPENDS ON:** "
     );
 }
@@ -191,15 +197,17 @@ fn dw_writer_form_vectors() {
 fn dw_create_and_identity_vectors() {
     // DW1: create as first child (for example before a SCHEDULE LOG child):
     // the new line uses the parent indent plus one tab when the task has
-    // no existing child indent; the full position is pinned by the hooks'
-    // reconcile CLI tests.
+    // no existing child indent; the full slot (insert before the log
+    // child with its indent) is pinned through the engine by
+    // `reconcile_dw1_inserts_adopted_line_before_schedule_log`.
     assert_eq!(child_indent_for_parent("\t", None), "\t\t");
     assert_eq!(
         format_dependency_line("\t\t", &["[[#^a]]".to_string()]),
         "\t\t- ⛓️ **DEPENDS ON:** [[#^a]]"
     );
     // DW2: create after a CANCEL LOG child: the existing child indent is
-    // reused and the line lands second; position is pinned by reconcile.
+    // reused and the line lands second; the slot is pinned through the
+    // engine by `reconcile_dw2_inserts_adopted_line_after_cancel_log`.
     assert_eq!(child_indent_for_parent("\t", Some("  ")), "  ".to_string());
     // DW15: an existing `[id:: custom]` is preferred over the encodable
     // canonical id and never rewritten; the canonical side pins here while

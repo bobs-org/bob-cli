@@ -184,8 +184,9 @@ impl ReconcileWorker<'_> {
     /// Materialise every queued edit into note contents. Child-line
     /// edits apply descending so original indices stay valid;
     /// task-line rewrites merge by line. Returns the report. Only
-    /// touched files are cloned for the caller; the whole vault is
-    /// never copied per run.
+    /// touched files are cloned for the caller; notes without tasks or
+    /// block ids never get line views, so the whole vault is never
+    /// copied per run.
     pub(super) fn apply(mut self, files: &mut [FileScan]) -> ReconcileOutcome {
         for ((file_index, line_index), (new_line, _, _)) in &self.task_rewrites
         {

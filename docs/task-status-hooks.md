@@ -987,7 +987,7 @@ JSON mode prints one object on stdout with these stable fields:
       "kind": "dependent_field",
       "path": "dev.md",
       "line": 30,
-      "detail": "[dependsOn:: dev__review]"
+      "detail": "dependsOn := dev__review"
     }
   ],
   "adopted_dependency_lines": [],
@@ -999,7 +999,7 @@ JSON mode prints one object on stdout with these stable fields:
       "kind": "unresolved_dependency_link",
       "path": "dev.md",
       "line": 30,
-      "detail": "unresolvable link [[missing#^gone]]"
+      "detail": "link [[missing#^gone]] kept verbatim; it never blocks"
     }
   ],
   "applied_files": [],

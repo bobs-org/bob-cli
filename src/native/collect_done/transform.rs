@@ -124,7 +124,7 @@ pub(super) fn vault_relative_wiki_link(
         vault_relative_link_target(relative_path, path_kind)?
     ))
 }
-pub(crate) fn vault_relative_link_target(
+pub(super) fn vault_relative_link_target(
     relative_path: &Path,
     path_kind: &str,
 ) -> io::Result<String> {
