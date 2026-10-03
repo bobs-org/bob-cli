@@ -240,6 +240,12 @@ The stage ports `capture_link_tasks.rs::rank`:
   In Progress, Next, Ready (by path, then line), then `#hide`.
 - Blocked candidates render in their own BLOCKED section beneath
   RESULTS.
+- BLOCKED badges name what blocks the candidate, counted from its own
+  Depends-On line whether or not it carries a `^blockId`: `🔒 waits on N`
+  only when N >= 1 open prerequisites remain (the stage never shows
+  `waits on 0`); with no open prerequisite, a future
+  `[scheduled:: YYYY-MM-DD]` reads `🔒 scheduled YYYY-MM-DD`, and otherwise
+  the row reads `🔒 blocked`.
 - An empty query shows CURRENT, then open tasks in the same note, then
   the In Progress and Next lanes.
 - At most about 60 rows render. Typing reaches the rest.
