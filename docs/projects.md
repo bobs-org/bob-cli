@@ -645,8 +645,10 @@ a priority pick, a pinned roll, or a recommended roll/decay. It applies to
 every scheduling gesture — typed dates, presets, priority rolls, pinned
 rolls, and recommended rolls/decays — whether the resulting date is future,
 today, past, or unchanged. Ready, Blocked, closed, and non-task bullets keep
-the existing flow with no prompt, as do cancel, lane, refresh, `dependsOn`,
-and property-deletion rows.
+the existing flow with no prompt, as do cancel, lane, picker refresh,
+`dependsOn`, and property-deletion rows. The Pending Alt+F / Alt+Shift+F
+refresh prompt is separate from this scheduling Work Log prompt and is
+documented in `docs/freshness.md`.
 
 The stage is titled `Schedule task` (`Schedule N tasks` for a batch). It
 shows a `Work summary` input with the placeholder

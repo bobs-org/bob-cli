@@ -608,6 +608,13 @@ place, and when ledger-tools is absent or old the gesture simply
 doesn't stamp. Clicking a freshness mark only reveals the raw field
 for editing and never stamps.
 
+Before Alt+F or Alt+Shift+F stamps a validated Pending (`[/]`) target,
+it asks once for an optional Work Log summary. In a counted or Task Link
+batch, only the Pending targets receive the shared summary; every other
+accepted target still refreshes. Enter on an empty summary still keeps
+the task and writes no Work Log entry. Escape cancels the refresh, so the
+task stays due and Alt+Shift+F does not advance.
+
 ## 6. Review ritual
 
 **Morning, about 10 minutes once the lanes are at their caps:**
@@ -620,7 +627,9 @@ for editing and never stamps.
    Alt+Shift+F; stamping a project advances to the correct next entry
    with the block ID and `#hide` preserved. In REFERENCES, confirm
    the reference still needs reading. In the lanes, ask "still in this
-   lane?": keep with Alt+Shift+F, do it today with Ctrl+Shift+Enter,
+   lane?": keep with Alt+Shift+F (Pending asks for an optional Work Log
+   summary; blank Enter still keeps, while Escape leaves the task due),
+   do it today with Ctrl+Shift+Enter,
    release with Alt+N. For a returned deferral, "not now" is a
    priority roll, not Alt+F.
 3. Start the highlight.
