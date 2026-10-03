@@ -39,9 +39,17 @@ pub(super) fn compose_outputs(
                 file.path.canonicalize().ok().as_ref() == Some(daily)
             })
     });
+    // `files` already carries the reconciled contents, so a daily
+    // note with no status change still keeps its adoptions and target
+    // stamps; falling back to the pre-reconcile normalized contents
+    // would report those edits but never write them.
     let daily_base = daily_file_index
-        .and_then(|index| updated.get(&index))
-        .map(String::as_str)
+        .and_then(|index| {
+            updated
+                .get(&index)
+                .map(String::as_str)
+                .or(Some(files[index].contents.as_str()))
+        })
         .unwrap_or(ctx.normalized_daily_contents);
     let updated_daily = daily_base.to_string();
     let external_daily = if let Some(index) = daily_file_index {

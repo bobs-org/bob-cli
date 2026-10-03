@@ -52,10 +52,12 @@ pub(super) struct DependencyLineReport {
     pub(super) detail: String,
 }
 
-/// One dependency reconciliation warning (`contract` §4.2 R3–R10):
-/// `kind` names the rule (`unresolved_dependency_link`,
+/// One dependency reconciliation warning (`contract` §4): `kind`
+/// names the rule (`unresolved_dependency_link`,
 /// `unadoptable_dependency_id`, `non_task_dependency`,
-/// `self_dependency`, `dependency_cycle`, `malformed_dependency_line`).
+/// `self_dependency`, `dependency_cycle`, `malformed_dependency_line`,
+/// `previous_daily_target`, `unencodable_dependency_target`,
+/// `dependency_field_ids_dropped`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct DependencyWarning {
     pub(super) kind: String,

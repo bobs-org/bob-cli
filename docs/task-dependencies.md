@@ -87,7 +87,9 @@ nor a section title, nor a managed log (`🗓️ SCHEDULE LOG`,
   has one; it is never rewritten. Otherwise use the canonical
   `dependency_id(path, blockId)` (`note__path__blockid`), which the
   writer adds to the target. A target whose path cannot be encoded
-  (spaces, dots) is refused **only when it has no `[id::]` yet**.
+  (spaces, dots) is refused **only when it has no `[id::]` yet**. Such
+  a link is kept verbatim and warns (`unencodable_dependency_target`);
+  it is never projected.
 - **Link form.** Use the shortest form that is unambiguous under the
   hooks' resolver:
   1. `[[#^id]]` for a target in the same note;
@@ -112,7 +114,10 @@ nor a section title, nor a managed log (`🗓️ SCHEDULE LOG`,
   never touched.
 - The step runs on the whole vault on every run, before edges and
   Blocked derivation, inside the existing guarded write.
-- The previous daily note snapshot is never written.
+- The previous daily note snapshot is never written. A target that
+  lives in the previous daily note and has no `[id::]` keeps its link
+  verbatim and warns (`previous_daily_target`); it is never stamped
+  and never projected.
 
 ### 4.2 The dependency set
 
@@ -122,7 +127,7 @@ block id).
 
 | # | Situation | Resolution |
 | --- | --- | --- |
-| R1 | Well-formed line | `[dependsOn::]` := the ids of the set's resolved task targets, in set order. Targets without `[id::]` get one. Field ids not accounted for are dropped and reported (`dependency_field_ids_dropped`), except breadcrumbs (R4). |
+| R1 | Well-formed line | `[dependsOn::]` := the ids of the set's resolved task targets, in set order. Targets without `[id::]` get one. Field ids not accounted for are dropped, reported in the projection detail, and warned about (`dependency_field_ids_dropped`), except breadcrumbs (R4). |
 | R2 | No line, field present | **Adopt** the field ids not covered by legacy children: write a canonical line linking to the tasks that carry each id and have a `^block-id`. Ids that can't be adopted stay in the field and are warned about (`unadoptable_dependency_id`). |
 | R3 | A link doesn't resolve | **Heal** it when exactly one scanned task has both the link's block id and one of the dependent's unaccounted field ids. Rewrite the link to that task's location in the shortest form, then apply R1. |
 | R4 | A link doesn't resolve and can't be healed | Keep it verbatim and warn (`unresolved_dependency_link`). It never blocks. While any unresolved link remains, keep the dependent's unaccounted field ids as **heal breadcrumbs**, so a task that is cut now and pasted later still heals. |
@@ -153,6 +158,10 @@ block id).
   - `legacy_dependency_children` (a count, for deciding when to retire
     legacy reading);
   - `dependency_warnings`, entries of `{kind, path, line, detail}`.
+    Kinds are `unresolved_dependency_link`, `unadoptable_dependency_id`,
+    `non_task_dependency`, `self_dependency`, `dependency_cycle`,
+    `malformed_dependency_line`, `previous_daily_target`,
+    `unencodable_dependency_target`, and `dependency_field_ids_dropped`.
 
 ## 5. Dependency semantics
 

@@ -93,6 +93,9 @@ struct ReconcileWorker<'a> {
     graph_nodes: BTreeMap<(PathBuf, String), (usize, usize)>,
     /// Pending task-line rewrites: (file, line) to (text, id, depends).
     task_rewrites: BTreeMap<TaskRewriteKey, TaskRewrite>,
+    /// File index of the previous daily snapshot, which is never
+    /// written (`contract` §4.1).
+    previous_daily_file: Option<usize>,
     edits: Vec<PendingEdit>,
     outcome: ReconcileOutcome,
 }
@@ -201,6 +204,8 @@ impl<'a> ReconcileWorker<'a> {
                 }
             })
             .collect();
+        let previous_daily_file = previous_daily_path
+            .and_then(|path| files.iter().position(|file| file.path == *path));
         Self {
             vault,
             note_index,
@@ -214,6 +219,7 @@ impl<'a> ReconcileWorker<'a> {
             graph: BTreeMap::new(),
             graph_nodes: BTreeMap::new(),
             task_rewrites: BTreeMap::new(),
+            previous_daily_file,
             edits: Vec::new(),
             outcome: ReconcileOutcome::empty(),
         }
@@ -513,11 +519,9 @@ impl ReconcileWorker<'_> {
                 else {
                     continue;
                 };
-                if explicit_archive_reference_path(legacy.target.trim())
-                    .is_some()
-                {
-                    continue;
-                }
+                // Explicit `done/` targets resolve through the archive
+                // catalog below and follow §4.3 like any other legacy
+                // child; they are never skipped here.
                 candidates.push((legacy.target, legacy.block_id));
             }
             candidates
@@ -712,33 +716,28 @@ impl ReconcileWorker<'_> {
         let mut seen = BTreeSet::new();
         let mut line_links: Vec<String> = Vec::new();
         for link in &mut planned {
-            let text = match &link.resolved {
-                LinkTarget::Task { .. } | LinkTarget::Archive { .. } => {
-                    let identity = link
-                        .resolved
-                        .block_identity()
-                        .expect("resolved target has an identity");
-                    self.shortest_link(view, &identity)
-                }
-                LinkTarget::NonTask { .. }
-                | LinkTarget::SelfTarget
-                | LinkTarget::Unresolved => link.verbatim.clone(),
-            };
-            link.new_text = text.clone();
-            line_links.push(text);
+            // A resolved target that cannot project (a previous-daily
+            // or unencodable target with no `[id::]`) keeps its link
+            // verbatim, like R4–R6 keeps.
+            let mut keep_verbatim = false;
             match &link.resolved {
                 LinkTarget::Task { id, .. } => {
                     let identity = link
                         .resolved
                         .block_identity()
                         .expect("task target has an identity");
-                    if !seen.insert(identity.clone()) {
-                        continue;
-                    }
-                    if let Some(id) =
-                        self.project_id(view, files, &identity, id.clone())
-                    {
-                        set.push((identity.0, identity.1, id, false));
+                    if seen.insert(identity.clone()) {
+                        match self.project_id(
+                            view,
+                            files,
+                            &identity,
+                            id.clone(),
+                        ) {
+                            Some(id) => {
+                                set.push((identity.0, identity.1, id, false));
+                            }
+                            None => keep_verbatim = true,
+                        }
                     }
                 }
                 LinkTarget::Archive { id, .. } => {
@@ -746,10 +745,9 @@ impl ReconcileWorker<'_> {
                         .resolved
                         .block_identity()
                         .expect("archive target has an identity");
-                    if !seen.insert(identity.clone()) {
-                        continue;
-                    }
-                    if let Some(id) = self.archive_id(&identity, id.clone()) {
+                    if seen.insert(identity.clone())
+                        && let Some(id) = self.archive_id(&identity, id.clone())
+                    {
                         self.outcome.archive_closed_ids.insert(id.clone());
                         set.push((identity.0, identity.1, id, true));
                     }
@@ -758,6 +756,28 @@ impl ReconcileWorker<'_> {
                 | LinkTarget::SelfTarget
                 | LinkTarget::Unresolved => {}
             }
+            let text = match &link.resolved {
+                LinkTarget::Task { .. } if !keep_verbatim => {
+                    let identity = link
+                        .resolved
+                        .block_identity()
+                        .expect("resolved target has an identity");
+                    self.shortest_link(view, &identity)
+                }
+                LinkTarget::Archive { .. } => {
+                    let identity = link
+                        .resolved
+                        .block_identity()
+                        .expect("resolved target has an identity");
+                    self.shortest_link(view, &identity)
+                }
+                LinkTarget::Task { .. }
+                | LinkTarget::NonTask { .. }
+                | LinkTarget::SelfTarget
+                | LinkTarget::Unresolved => link.verbatim.clone(),
+            };
+            link.new_text = text.clone();
+            line_links.push(text);
         }
         for member in legacy {
             let identity = (member.path.clone(), member.block.clone());
@@ -895,7 +915,11 @@ impl ReconcileWorker<'_> {
 
     /// The vault-wide id a resolved scanned target projects: its
     /// existing `[id::]`, never rewritten, or the canonical id —
-    /// stamping the target when it has none (R1 `target_id`).
+    /// stamping the target when it has none (R1 `target_id`). A target
+    /// in the previous daily snapshot is never stamped (`contract`
+    /// §4.1, `previous_daily_target`), and a target whose path cannot
+    /// encode without an `[id::]` warns (`unencodable_dependency_target`,
+    /// `contract` §3); both stay unprojected.
     fn project_id(
         &mut self,
         view: &TaskView<'_>,
@@ -906,18 +930,47 @@ impl ReconcileWorker<'_> {
         if let Some(id) = id {
             return Some(id);
         }
-        let canonical =
-            task_dependencies::dependency_id(&identity.0, &identity.1).ok()?;
         let (file_index, task_index) =
             self.task_lookup.get(identity).copied()?;
+        if self.previous_daily_file == Some(file_index) {
+            self.warn(
+                view,
+                "previous_daily_target",
+                &format!(
+                    "target {}#^{} lives in the previous daily note; kept, never stamped or projected",
+                    display_path(&identity.0),
+                    identity.1
+                ),
+            );
+            return None;
+        }
+        let canonical = match task_dependencies::dependency_id(
+            &identity.0,
+            &identity.1,
+        ) {
+            Ok(canonical) => canonical,
+            Err(_) => {
+                self.warn(
+                        view,
+                        "unencodable_dependency_target",
+                        &format!(
+                            "target {}#^{} has no [id::] and its path cannot encode; kept, never projected",
+                            display_path(&identity.0),
+                            identity.1
+                        ),
+                    );
+                return None;
+            }
+        };
         let target_line_index = files[file_index].tasks[task_index].line_index;
+        let depends = self.pending_or_scanned_depends(
+            file_index,
+            target_line_index,
+            files[file_index].tasks[task_index].depends_on.clone(),
+        );
         let current =
             self.pending_or_snapshot_line(file_index, target_line_index);
-        let stamped = set_task_fields(
-            &current,
-            Some(&canonical),
-            &files[file_index].tasks[task_index].depends_on,
-        );
+        let stamped = set_task_fields(&current, Some(&canonical), &depends);
         if stamped != current {
             self.replace_task_line(
                 view,
@@ -925,7 +978,7 @@ impl ReconcileWorker<'_> {
                 target_line_index,
                 &stamped,
                 Some(canonical.clone()),
-                files[file_index].tasks[task_index].depends_on.clone(),
+                depends,
             );
             self.outcome
                 .projection_updates
@@ -1011,16 +1064,30 @@ impl ReconcileWorker<'_> {
         if next == view.task.depends_on {
             return;
         }
+        if !dropped.is_empty() {
+            self.warn(
+                view,
+                "dependency_field_ids_dropped",
+                &format!(
+                    "dropped unaccounted field ids {}",
+                    dropped.join(", ")
+                ),
+            );
+        }
+        let id = self.pending_or_scanned_id(
+            view.file_index,
+            view.task.line_index,
+            view.task.task_id.clone(),
+        );
         let current = self
             .pending_or_snapshot_line(view.file_index, view.task.line_index);
-        let updated =
-            set_task_fields(&current, view.task.task_id.as_deref(), &next);
+        let updated = set_task_fields(&current, id.as_deref(), &next);
         self.replace_task_line(
             view,
             view.file_index,
             view.task.line_index,
             &updated,
-            view.task.task_id.clone(),
+            id,
             next.clone(),
         );
         let mut detail = format!("dependsOn := {}", next.join(", "));
@@ -1089,21 +1156,22 @@ impl ReconcileWorker<'_> {
                     },
                 );
                 if !view.task.depends_on.is_empty() && legacy.is_empty() {
+                    let id = self.pending_or_scanned_id(
+                        view.file_index,
+                        view.task.line_index,
+                        view.task.task_id.clone(),
+                    );
                     let current = self.pending_or_snapshot_line(
                         view.file_index,
                         view.task.line_index,
                     );
-                    let updated = set_task_fields(
-                        &current,
-                        view.task.task_id.as_deref(),
-                        &[],
-                    );
+                    let updated = set_task_fields(&current, id.as_deref(), &[]);
                     self.replace_task_line(
                         view,
                         view.file_index,
                         view.task.line_index,
                         &updated,
-                        view.task.task_id.clone(),
+                        id,
                         Vec::new(),
                     );
                     self.outcome.projection_updates.push(
@@ -1230,21 +1298,22 @@ impl ReconcileWorker<'_> {
                 );
             }
             if next != view.task.depends_on {
+                let id = self.pending_or_scanned_id(
+                    view.file_index,
+                    view.task.line_index,
+                    view.task.task_id.clone(),
+                );
                 let current = self.pending_or_snapshot_line(
                     view.file_index,
                     view.task.line_index,
                 );
-                let updated = set_task_fields(
-                    &current,
-                    view.task.task_id.as_deref(),
-                    &next,
-                );
+                let updated = set_task_fields(&current, id.as_deref(), &next);
                 self.replace_task_line(
                     view,
                     view.file_index,
                     view.task.line_index,
                     &updated,
-                    view.task.task_id.clone(),
+                    id,
                     next.clone(),
                 );
             }
@@ -1275,18 +1344,22 @@ impl ReconcileWorker<'_> {
             });
         }
         if next != view.task.depends_on {
+            let id = self.pending_or_scanned_id(
+                view.file_index,
+                view.task.line_index,
+                view.task.task_id.clone(),
+            );
             let current = self.pending_or_snapshot_line(
                 view.file_index,
                 view.task.line_index,
             );
-            let updated =
-                set_task_fields(&current, view.task.task_id.as_deref(), &next);
+            let updated = set_task_fields(&current, id.as_deref(), &next);
             self.replace_task_line(
                 view,
                 view.file_index,
                 view.task.line_index,
                 &updated,
-                view.task.task_id.clone(),
+                id,
                 next.clone(),
             );
             self.outcome
@@ -1393,6 +1466,36 @@ impl ReconcileWorker<'_> {
             (new_line.to_string(), id, depends_on),
         );
         self.outcome.touched_files.insert(file_index);
+    }
+
+    /// The pending `[id::]` of a task line: its queued rewrite's id
+    /// when one exists, else the scanned id. Every task-line rewrite
+    /// starts from the pending values so chained edits settle in one
+    /// run instead of overwriting each other.
+    fn pending_or_scanned_id(
+        &self,
+        file_index: usize,
+        line_index: usize,
+        scanned: Option<String>,
+    ) -> Option<String> {
+        match self.task_rewrites.get(&(file_index, line_index)) {
+            Some((_, id, _)) => id.clone(),
+            None => scanned,
+        }
+    }
+
+    /// The pending `[dependsOn::]` of a task line: its queued
+    /// rewrite's ids when one exists, else the scanned ids.
+    fn pending_or_scanned_depends(
+        &self,
+        file_index: usize,
+        line_index: usize,
+        scanned: Vec<String>,
+    ) -> Vec<String> {
+        match self.task_rewrites.get(&(file_index, line_index)) {
+            Some((_, _, depends)) => depends.clone(),
+            None => scanned,
+        }
     }
 
     /// The current text of a task line: its pending rewrite when one
@@ -1537,8 +1640,16 @@ impl ReconcileWorker<'_> {
             by_file.entry(edit.file_index).or_default().push(edit);
         }
         for (file_index, mut edits) in by_file {
-            edits.sort_by_key(|edit| (edit.line_index, edit.kind as u8));
-            edits.reverse();
+            // Descending by line so original indices stay valid. At the
+            // same original index a Replace/Remove applies before an
+            // Insert, so the insert lands before the rewritten original
+            // line instead of being overwritten by it.
+            edits.sort_by(|left, right| {
+                right
+                    .line_index
+                    .cmp(&left.line_index)
+                    .then((left.kind as u8).cmp(&(right.kind as u8)))
+            });
             let snap = &self.snapshots[file_index];
             let mut lines = snap.lines.clone();
             for edit in edits {
@@ -1619,11 +1730,14 @@ impl ReconcileWorker<'_> {
     }
 }
 
-/// Rewrite a task line's `[id::]` / `[dependsOn::]` suffix: existing
-/// trailing Dataview fields are peeled, `id` and `dependsOn` are
-/// dropped, and the survivors are re-emitted with the new values in
-/// Tasks key order (`id` before `dependsOn`), right of any `fresh`
-/// and before the trailing `^block-id`.
+/// Rewrite a task line's `[id::]` / `[dependsOn::]` fields: every
+/// existing `id` and `dependsOn` field is removed wherever it sits in
+/// the Tasks suffix (trailing tags included, both `[]` and `()` forms),
+/// and the new values are inserted in Tasks key order (`id` before
+/// `dependsOn`) right of any `fresh` and before the trailing
+/// `^block-id` (`contract` §3). Shared with `bob projects` through
+/// the `projects::edits` upsert helpers rather than a bespoke peeler,
+/// so a line like `[id:: …] #hide ^prj` never gains a duplicate field.
 fn set_task_fields(
     line: &str,
     task_id: Option<&str>,
@@ -1631,38 +1745,26 @@ fn set_task_fields(
 ) -> String {
     let trimmed = line.trim_end();
     let known_block = trailing_block_id(trimmed);
-    let (mut stem, block) = match known_block {
-        Some(block) => match trimmed
+    let stem = match &known_block {
+        Some(block) => trimmed
             .strip_suffix(&format!("^{block}"))
             .map(str::trim_end)
-        {
-            Some(stem) => (stem, Some(block)),
-            None => (trimmed, None),
-        },
-        None => (trimmed, None),
+            .unwrap_or(trimmed),
+        None => trimmed,
     };
-    let mut kept = Vec::new();
-    while let Some((start, key, _)) = trailing_dataview_field(stem) {
-        let raw = stem[start..].trim_end().to_string();
-        stem = stem[..start].trim_end();
-        if key == "id" || key == "dependsOn" {
-            continue;
-        }
-        kept.push(raw);
-    }
-    kept.reverse();
-    let mut rebuilt = stem.to_string();
-    for field in kept {
-        rebuilt.push(' ');
-        rebuilt.push_str(&field);
-    }
+    let cleaned = projects::edits::remove_all_inline_fields(stem, "id");
+    let cleaned =
+        projects::edits::remove_all_inline_fields(&cleaned, "dependsOn");
+    let insertion = projects::edits::task_metadata_insertion_offset(&cleaned);
+    let (before, _) = cleaned.split_at(insertion.min(cleaned.len()));
+    let mut rebuilt = before.trim_end().to_string();
     if let Some(id) = task_id {
         rebuilt.push_str(&format!(" [id:: {id}]"));
     }
     if !depends_on.is_empty() {
         rebuilt.push_str(&format!(" [dependsOn:: {}]", depends_on.join(", ")));
     }
-    if let Some(block) = block {
+    if let Some(block) = known_block {
         rebuilt.push_str(&format!(" ^{block}"));
     }
     rebuilt
@@ -1769,6 +1871,46 @@ mod tests {
                 &[],
             ),
             "- [ ] #task Bare"
+        );
+    }
+
+    #[test]
+    fn field_writer_replaces_field_before_trailing_tags() {
+        // A `[dependsOn::]` buried before trailing tags is replaced in
+        // place, never duplicated (`contract` §3).
+        assert_eq!(
+            set_task_fields(
+                "- [ ] #task D [dependsOn:: tasks__old] #hide ^d",
+                None,
+                &depends(&["tasks__new"]),
+            ),
+            "- [ ] #task D #hide [dependsOn:: tasks__new] ^d"
+        );
+    }
+
+    #[test]
+    fn field_writer_replaces_fields_between_tags() {
+        assert_eq!(
+            set_task_fields(
+                "- [ ] #task D #hide [dependsOn:: tasks__old] #later ^d",
+                Some("tasks__d"),
+                &depends(&["tasks__new"]),
+            ),
+            "- [ ] #task D #hide #later [id:: tasks__d] [dependsOn:: tasks__new] ^d"
+        );
+    }
+
+    #[test]
+    fn field_writer_stamps_target_past_hide_tag() {
+        // The `[id:: …] #hide ^prj` vault shape: the stamp lands before
+        // the block id without duplicating the field.
+        assert_eq!(
+            set_task_fields(
+                "- [ ] #task Prj [id:: tasks__old] #hide ^prj",
+                Some("tasks__prj"),
+                &[],
+            ),
+            "- [ ] #task Prj #hide [id:: tasks__prj] ^prj"
         );
     }
 

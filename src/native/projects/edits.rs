@@ -204,7 +204,7 @@ pub(super) fn remove_all_task_tags(line: &str, tag: &str) -> String {
     }
 }
 
-pub(super) fn upsert_task_scheduled(
+pub(crate) fn upsert_task_scheduled(
     line: &str,
     scheduled: &str,
     scheduled_date: NaiveDate,
@@ -239,7 +239,7 @@ pub(super) fn upsert_task_scheduled(
     format!("{before} {field_text}{after}")
 }
 
-pub(super) fn remove_all_inline_fields(line: &str, key: &str) -> String {
+pub(crate) fn remove_all_inline_fields(line: &str, key: &str) -> String {
     let spans = inline_field_spans(line, key);
     let raw_spans = spans
         .iter()
@@ -284,7 +284,7 @@ pub(super) fn remove_tag_spans_from_line(
     output
 }
 
-pub(super) fn task_metadata_insertion_offset(line: &str) -> usize {
+pub(crate) fn task_metadata_insertion_offset(line: &str) -> usize {
     let trimmed = line.trim_end();
     let without_block_id = strip_trailing_block_id(trimmed);
     if without_block_id.len() < trimmed.len() {
@@ -597,7 +597,7 @@ pub(super) fn prj_sub_block_layout(
     Err("failed to locate ^prj task".to_string())
 }
 
-pub(super) fn inline_field_removal_range(
+pub(crate) fn inline_field_removal_range(
     line_text: &str,
     field_start: usize,
     field_end: usize,

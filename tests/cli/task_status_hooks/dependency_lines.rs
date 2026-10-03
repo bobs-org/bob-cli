@@ -207,8 +207,9 @@ fn reconcile_projects_line_into_field_and_stamps_target_id() {
 
 #[test]
 fn reconcile_drops_stale_field_id() {
-    // DR3: a field id no link or legacy child accounts for is dropped
-    // and reported.
+    // DR3: a field id no link or legacy child accounts for is dropped,
+    // reported in the projection detail, and warned about
+    // (`dependency_field_ids_dropped`, `docs/task-dependencies.md` §4).
     let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-r1-drop");
     let vault = temp.path().join("vault");
     let daily = write_daily(&vault);
@@ -232,6 +233,12 @@ fn reconcile_drops_stale_field_id() {
                 .unwrap()
                 .contains("dropped tasks__ghost")
     }));
+    assert!(
+        warning_kinds(&json)
+            .contains(&"dependency_field_ids_dropped".to_string()),
+        "dropped ids must warn: {}",
+        json["dependency_warnings"]
+    );
 
     let applied = bob_command()
         .arg("task-status-hooks")
@@ -247,6 +254,7 @@ fn reconcile_drops_stale_field_id() {
 
     let second = dry_run_json(&vault, &daily);
     assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
 }
 
 #[test]
@@ -645,4 +653,652 @@ fn reconcile_keeps_archive_prerequisite_silently() {
     assert_reconciled_clean(&second);
     assert!(warning_kinds(&second).is_empty());
     assert!(second["marked_blocked"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn reconcile_same_index_insert_does_not_clobber_replace() {
+    // Same-index edit ordering: an adopted Depends-On line inserted at
+    // the same original index as a target `[id::]` stamp must land
+    // before the rewritten line, not be overwritten by it. One live run
+    // used to duplicate `^b` and lose A's adopted line.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-order");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task A [dependsOn:: tasks__c] ^a\n",
+            "- [ ] #task B ^b\n",
+            "- [ ] #task C [id:: tasks__c] ^c\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^b]]\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert_eq!(
+        json["adopted_dependency_lines"].as_array().unwrap().len(),
+        1
+    );
+    assert!(warning_kinds(&json).is_empty());
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply same-index reconcile");
+    assert_success(&applied);
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        concat!(
+            "- [?] #task A [dependsOn:: tasks__c] ^a\n",
+            "\t- ⛓️ **DEPENDS ON:** [[#^c]]\n",
+            "- [ ] #task B [id:: tasks__b] ^b\n",
+            "- [?] #task C [id:: tasks__c] [dependsOn:: tasks__b] ^c\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^b]]\n",
+        )
+    );
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
+}
+
+#[test]
+fn reconcile_dependency_chain_settles_in_one_run() {
+    // Task-line rewrite merge: B is stamped with `[id::]` (as C's
+    // prerequisite) and gains its own field (as A's dependent) in the
+    // same run. The stamp used to be lost, leaving A unresolved until a
+    // second run.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-chain");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task A [dependsOn:: tasks__b] ^a\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^b]]\n",
+            "- [ ] #task B ^b\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^c]]\n",
+            "- [ ] #task C [id:: tasks__c] ^c\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert!(warning_kinds(&json).is_empty());
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply chain reconcile");
+    assert_success(&applied);
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        concat!(
+            "- [?] #task A [dependsOn:: tasks__b] ^a\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^b]]\n",
+            "- [?] #task B [id:: tasks__b] [dependsOn:: tasks__c] ^b\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^c]]\n",
+            "- [ ] #task C [id:: tasks__c] ^c\n",
+        )
+    );
+
+    // One run settled the chain: the second run reports no new
+    // Blocked transitions (A and B already are) and no warnings.
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
+    assert!(second["marked_blocked"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn reconcile_daily_note_keeps_adoption_and_stamp() {
+    // Current daily notes with no status change still keep their
+    // reconcile edits: compose must write the reconciled daily
+    // contents, not the pre-reconcile normalized ones.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-daily");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - notes here\n\n",
+            "## Tasks\n\n",
+            "- [?] #task Dep1 [dependsOn:: 2026__20260716__one] ^dep1\n",
+            "- [ ] #task One [id:: 2026__20260716__one] ^one\n",
+            "- [?] #task Dep2 ^dep2\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^pre]]\n",
+            "- [ ] #task Pre ^pre\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert_eq!(
+        json["adopted_dependency_lines"].as_array().unwrap().len(),
+        1
+    );
+    assert!(json["dependency_projection_updates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["kind"] == "target_id"));
+    assert!(warning_kinds(&json).is_empty());
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply daily reconcile");
+    assert_success(&applied);
+    let after = fs::read_to_string(&daily).unwrap();
+    assert!(
+        after.contains("\t- ⛓️ **DEPENDS ON:** [[#^one]]\n"),
+        "{after}"
+    );
+    assert!(
+        after.contains("- [ ] #task Pre [id:: 2026__20260716__pre] ^pre\n"),
+        "{after}"
+    );
+    assert!(
+        after.contains("[dependsOn:: 2026__20260716__pre]"),
+        "{after}"
+    );
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
+}
+
+#[test]
+fn reconcile_never_writes_previous_daily_target() {
+    // `contract` §4.1: the previous daily snapshot is never written. A
+    // target there keeps its link verbatim with a
+    // `previous_daily_target` warning and never projects.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-prev");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let previous = vault.join("2026/20260715.md");
+    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(&previous, "- [ ] #task Old ^t\n");
+    let tasks = vault.join("tasks.md");
+    let before = concat!(
+        "- [ ] #task Dep ^dep\n",
+        "  - ⛓️ **DEPENDS ON:** [[20260715#^t]]\n",
+    );
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert_eq!(warning_kinds(&json), ["previous_daily_target"]);
+    assert!(json["marked_blocked"].as_array().unwrap().is_empty());
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply previous-daily run");
+    assert_success(&applied);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
+    assert_eq!(
+        fs::read_to_string(&previous).unwrap(),
+        "- [ ] #task Old ^t\n"
+    );
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert_eq!(warning_kinds(&second), ["previous_daily_target"]);
+}
+
+#[test]
+fn reconcile_field_writer_handles_trailing_tags() {
+    // A `[dependsOn::]` before trailing tags is replaced in place,
+    // never duplicated: the old trailing-only peeler appended a second
+    // field after `#hide`, so the dependent never blocked and the edit
+    // repeated every run.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-tags");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task D [dependsOn:: tasks__old] #hide ^d\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^e]]\n",
+            "- [ ] #task E [id:: tasks__e] ^e\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert!(
+        warning_kinds(&json)
+            .contains(&"dependency_field_ids_dropped".to_string()),
+        "{}",
+        json["dependency_warnings"]
+    );
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply trailing-tag run");
+    assert_success(&applied);
+    let after = fs::read_to_string(&tasks).unwrap();
+    assert_eq!(
+        after.matches("[dependsOn::").count(),
+        1,
+        "exactly one dependsOn field: {after}"
+    );
+    assert!(
+        after.contains("- [?] #task D #hide [dependsOn:: tasks__e] ^d\n"),
+        "{after}"
+    );
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
+}
+
+#[test]
+fn reconcile_archive_legacy_children_follow_archive_rule() {
+    // Explicit `done/` legacy children follow §4.3 like any other
+    // legacy child: their ids are kept, never warned about, and never
+    // block — both for a line-owning and a field-only dependent.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-archleg");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    let archive = vault.join("done/old.md");
+    write_file(&archive, "- [x] #task Gone [id:: done__old__gone] ^gone\n");
+    let before = concat!(
+        "- [ ] #task Dep [dependsOn:: tasks__pre, done__old__gone] ^dep\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^pre]]\n",
+        "  - ![[done/old#^gone]]\n",
+        "- [ ] #task Pre [id:: tasks__pre] ^pre\n",
+        "- [ ] #task Lone [dependsOn:: done__old__gone] ^lone\n",
+        "  - ![[done/old#^gone]]\n",
+    );
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert_eq!(json["legacy_dependency_children"], 2);
+    assert!(
+        warning_kinds(&json).is_empty(),
+        "{}",
+        json["dependency_warnings"]
+    );
+    assert!(
+        json["marked_blocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| {
+                item["block_id"] == "dep"
+                    && item["open_dependency_ids"]
+                        == serde_json::json!(["tasks__pre"])
+            }),
+        "{}",
+        json["marked_blocked"]
+    );
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply archive-legacy run");
+    assert_success(&applied);
+    let after = fs::read_to_string(&tasks).unwrap();
+    // Only the Blocked checkbox changes; lines, fields, and legacy
+    // children are byte-identical.
+    assert_eq!(
+        after,
+        before.replacen("- [ ] #task Dep", "- [?] #task Dep", 1)
+    );
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
+}
+
+#[test]
+fn reconcile_warns_unencodable_target_without_projecting() {
+    // `contract` §3: a target whose path cannot encode (spaces) and
+    // that has no `[id::]` keeps its link verbatim with an
+    // `unencodable_dependency_target` warning and never projects.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-enc");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let target = vault.join("my notes/target.md");
+    write_file(&target, "- [ ] #task Spaced ^t\n");
+    let tasks = vault.join("tasks.md");
+    let before = concat!(
+        "- [ ] #task Dep ^dep\n",
+        "  - ⛓️ **DEPENDS ON:** [[my notes/target#^t]]\n",
+    );
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert_eq!(warning_kinds(&json), ["unencodable_dependency_target"]);
+    assert!(json["marked_blocked"].as_array().unwrap().is_empty());
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply unencodable run");
+    assert_success(&applied);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "- [ ] #task Spaced ^t\n"
+    );
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert_eq!(warning_kinds(&second), ["unencodable_dependency_target"]);
+}
+
+#[test]
+fn reconcile_unblocks_when_last_open_prerequisite_leaves() {
+    // Removing the last open prerequisite's link unblocks the `[?]`
+    // dependent in the same run: the stale field id drops and the
+    // closed prerequisite never blocks.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-unblock");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &tasks,
+        concat!(
+            "- [?] #task A [dependsOn:: tasks__pre, tasks__done] ^a\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^done]]\n",
+            "- [ ] #task Pre [id:: tasks__pre] ^pre\n",
+            "- [x] #task Done [id:: tasks__done] ^done\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert!(
+        warning_kinds(&json)
+            .contains(&"dependency_field_ids_dropped".to_string()),
+        "{}",
+        json["dependency_warnings"]
+    );
+    assert_eq!(json["unblocked"].as_array().unwrap().len(), 1);
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply unblock run");
+    assert_success(&applied);
+    assert_eq!(
+        fs::read_to_string(&tasks).unwrap(),
+        concat!(
+            "- [ ] #task A [dependsOn:: tasks__done] ^a\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^done]]\n",
+            "- [ ] #task Pre [id:: tasks__pre] ^pre\n",
+            "- [x] #task Done [id:: tasks__done] ^done\n",
+        )
+    );
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
+}
+
+#[test]
+fn reconcile_breadcrumb_heals_when_target_returns() {
+    // DR8/DR9: an unhealable link keeps its unaccounted field ids as
+    // heal breadcrumbs, and the link heals once the target is pasted
+    // back into the vault.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-heal");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    let before = concat!(
+        "- [ ] #task Cut [dependsOn:: tasks__pasted] ^cut\n",
+        "  - ⛓️ **DEPENDS ON:** [[old#^pasted]]\n",
+    );
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert_eq!(warning_kinds(&json), ["unresolved_dependency_link"]);
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply breadcrumb run");
+    assert_success(&applied);
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
+
+    write_file(
+        &vault.join("b.md"),
+        "- [ ] #task Pasted [id:: tasks__pasted] ^pasted\n",
+    );
+    let healed = dry_run_json(&vault, &daily);
+    let links = healed["healed_dependency_links"].as_array().unwrap();
+    assert_eq!(links.len(), 1);
+    assert!(
+        links[0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("[[b#^pasted]]"),
+        "{}",
+        links[0]["detail"]
+    );
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply heal run");
+    assert_success(&applied);
+    let after = fs::read_to_string(&tasks).unwrap();
+    assert!(
+        after.contains("  - ⛓️ **DEPENDS ON:** [[b#^pasted]]\n"),
+        "{after}"
+    );
+    assert!(after.contains("[dependsOn:: tasks__pasted]"), "{after}");
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
+}
+
+#[test]
+fn reconcile_projection_only_write_defers_in_quiet_interval() {
+    // A projection-only write is structural, so a note modified less
+    // than the quiet interval ago defers through the guarded write
+    // instead of racing the editor. A future mtime defers
+    // deterministically; backdating lets the same write apply.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-quiet");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    let before = concat!(
+        "- [ ] #task Dependent ^dep\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^pre]]\n",
+        "- [ ] #task Prerequisite ^pre\n",
+    );
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+    let touch = |spec: &str| {
+        let status = std::process::Command::new("touch")
+            .arg("-d")
+            .arg(spec)
+            .arg(&tasks)
+            .status()
+            .expect("touch tasks.md");
+        assert!(status.success());
+    };
+    touch("+1 hour");
+
+    let output = bob_command()
+        .arg("task-status-hooks")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .arg("-r")
+        .arg("0")
+        .env("BOB_DAY_FILE", &daily)
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .output()
+        .expect("run deferred projection-only write");
+    assert_eq!(output.status.code(), Some(1));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("deferral JSON");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["reason"], "quiet_period");
+    assert!(
+        json["deferred_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str().unwrap().contains("tasks.md")),
+        "{}",
+        json["deferred_files"]
+    );
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
+
+    touch("-1 hour");
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .output()
+        .expect("apply deferred projection");
+    assert_success(&applied);
+    let after = fs::read_to_string(&tasks).unwrap();
+    assert!(after.contains("[dependsOn:: tasks__pre]"), "{after}");
+    assert!(after.contains("[id:: tasks__pre]"), "{after}");
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+}
+
+#[test]
+fn reconcile_stamps_cross_note_target_id() {
+    // A cross-note target without `[id::]` is stamped in its own note
+    // while the dependent's field projects in the same run.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-cross");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let dependent = vault.join("a.md");
+    let target = vault.join("b.md");
+    write_file(
+        &dependent,
+        concat!(
+            "- [ ] #task Dep ^dep\n",
+            "  - ⛓️ **DEPENDS ON:** [[b#^t]]\n",
+        ),
+    );
+    write_file(&target, "- [ ] #task T ^t\n");
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert!(warning_kinds(&json).is_empty());
+    assert!(json["dependency_projection_updates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["kind"] == "target_id" && item["path"] == "b.md"));
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply cross-note run");
+    assert_success(&applied);
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "- [ ] #task T [id:: b__t] ^t\n"
+    );
+    assert!(fs::read_to_string(&dependent)
+        .unwrap()
+        .contains("- [?] #task Dep [dependsOn:: b__t] ^dep\n"));
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
+}
+
+#[test]
+fn reconcile_legacy_window_with_line_and_children() {
+    // The legacy window (R8): a well-formed line plus a plain
+    // (un-embedded) legacy child project the field together. The child
+    // is never rewritten and counts toward the legacy window.
+    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-window");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let tasks = vault.join("tasks.md");
+    let before = concat!(
+        "- [ ] #task Dep [dependsOn:: tasks__one, tasks__two] ^dep\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^one]]\n",
+        "  - [[#^two]]\n",
+        "- [ ] #task One [id:: tasks__one] ^one\n",
+        "- [ ] #task Two [id:: tasks__two] ^two\n",
+    );
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert_eq!(json["legacy_dependency_children"], 1);
+    assert!(warning_kinds(&json).is_empty());
+
+    let applied = bob_command()
+        .arg("task-status-hooks")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply legacy-window run");
+    assert_success(&applied);
+    let after = fs::read_to_string(&tasks).unwrap();
+    assert_eq!(
+        after,
+        before.replacen("- [ ] #task Dep", "- [?] #task Dep", 1)
+    );
+    assert!(after.contains("  - [[#^two]]\n"), "{after}");
+
+    let second = dry_run_json(&vault, &daily);
+    assert_reconciled_clean(&second);
+    assert!(warning_kinds(&second).is_empty());
 }
