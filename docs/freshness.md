@@ -182,6 +182,12 @@ hard-coded P1–P4 table.
 **2026-10-19 in the vault's local calendar**, after the accepted
 trial (October 5–18). Before that day, agents count and show pips
 only: no cards, leaf, decision skip, or "next review asks" promise.
+That counting is the first usable milestone and is trial-neutral
+instrumentation: bob-navigation-hotkeys 1.68.0 routes single, counted,
+and Task Link Alt+F/Alt+Shift+F presses through exact pre-write
+matching into `keepLine` (counting only exact due-Ready
+ROTTEN/RETURNED targets, preserving every other streak), with `kept
+N×` tails on the Fresh notice and no interception or skipping.
 This is one documented activation constant per language (Rust:
 `decay_active_from`), covered by the shared boundary vectors — it is
 rollout policy, not a new editable config knob. After that date a
