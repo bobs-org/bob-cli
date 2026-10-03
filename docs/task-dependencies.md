@@ -214,11 +214,21 @@ Layout reuses the `bob-cnp` modal styling, with `CURRENT`,
 
 - Source: the Tasks plugin cache (`getTasks()` when `getState()` is
   `"Warm"`; Tasks 8.4.0 exposes `id` and `dependsOn` on each task).
+  An authoritative Warm cache with zero tasks still counts as ready;
+  open-buffer tasks participate and no vault fallback runs merely
+  because the task array is empty.
 - Open editor buffers override the cache for their notes, so unsaved
   edits count.
-- If the cache isn't ready, fall back to a one-time vault scan when
-  the stage opens.
-- Never read from disk on a keystroke.
+- If the cache isn't ready, the stage opens immediately from open
+  buffers, then falls back to a vault scan that reads and prepares
+  note snapshots in bounded chunks, yielding to the event loop
+  between batches. The refresh is tied to a request generation:
+  dismissal, leaving the dependency stage, or a newer request
+  abandons obsolete work before painting, preserving the query,
+  valid marks, and the complete parent set. Read failures are
+  skipped without an unhandled rejection.
+- Never read from disk on a keystroke; search and navigation perform
+  no disk reads.
 
 RESULTS rows include open tasks that pass the `#task` global filter,
 including `ref/`, inbox, Blocked, and `#hide` (`#hide` tasks are muted
