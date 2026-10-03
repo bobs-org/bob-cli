@@ -3,9 +3,12 @@
 use super::*;
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashSet},
+    borrow::Cow,
+    collections::{BTreeMap, HashMap, HashSet},
     path::Path,
 };
+
+pub(super) const DEFAULT_FLATTEN_ROW_LIMIT: usize = 100_000;
 
 #[derive(Debug)]
 pub(super) struct NativeVault {
@@ -75,12 +78,23 @@ impl NativeVault {
         }
     }
 
-    pub(super) fn evaluate(&self, query: &NativeQuery) -> NativeOutput {
-        let rows = self.evaluate_rows(query);
-        NativeOutput {
+    pub(super) fn evaluate(
+        &self,
+        query: &NativeQuery,
+    ) -> Result<NativeOutput, DataviewError> {
+        self.evaluate_with_flatten_limit(query, DEFAULT_FLATTEN_ROW_LIMIT)
+    }
+
+    pub(super) fn evaluate_with_flatten_limit(
+        &self,
+        query: &NativeQuery,
+        flatten_row_limit: usize,
+    ) -> Result<NativeOutput, DataviewError> {
+        let rows = self.evaluate_rows_with_limit(query, flatten_row_limit)?;
+        Ok(NativeOutput {
             warnings: self.index.warnings.clone(),
             result: self.result_json(query, &rows),
-        }
+        })
     }
 
     pub(super) fn evaluate_markdown(
@@ -88,7 +102,7 @@ impl NativeVault {
         query: &NativeQuery,
         settings: &NativeMarkdownSettings,
     ) -> Result<EngineOutput, DataviewError> {
-        let rows = self.evaluate_rows(query);
+        let rows = self.evaluate_rows(query)?;
         Ok(EngineOutput {
             response: EngineResponse::Markdown(
                 self.result_markdown(query, &rows, settings)?,
@@ -97,7 +111,18 @@ impl NativeVault {
         })
     }
 
-    pub(super) fn evaluate_rows(&self, query: &NativeQuery) -> Vec<NativeRow> {
+    pub(super) fn evaluate_rows(
+        &self,
+        query: &NativeQuery,
+    ) -> Result<Vec<NativeRow>, DataviewError> {
+        self.evaluate_rows_with_limit(query, DEFAULT_FLATTEN_ROW_LIMIT)
+    }
+
+    pub(super) fn evaluate_rows_with_limit(
+        &self,
+        query: &NativeQuery,
+        flatten_row_limit: usize,
+    ) -> Result<Vec<NativeRow>, DataviewError> {
         let mut rows = self.initial_rows(query);
         for command in &query.commands {
             match command {
@@ -133,12 +158,16 @@ impl NativeVault {
                     rows = self.group_rows(rows, expression, alias.as_deref());
                 }
                 NativeDataCommand::Flatten { expression, alias } => {
-                    rows =
-                        self.flatten_rows(rows, expression, alias.as_deref());
+                    rows = self.flatten_rows(
+                        rows,
+                        expression,
+                        alias.as_deref(),
+                        flatten_row_limit,
+                    )?;
                 }
             }
         }
-        rows
+        Ok(rows)
     }
 
     pub(super) fn initial_rows(&self, query: &NativeQuery) -> Vec<NativeRow> {
@@ -174,10 +203,7 @@ impl NativeVault {
         let tasks = self
             .page_field_value(page_index, "file")
             .as_object_field("tasks")
-            .and_then(|value| match value {
-                DataviewValue::Array(values) => Some(values.clone()),
-                _ => None,
-            })
+            .and_then(|value| value.as_array().map(|values| values.to_vec()))
             .unwrap_or_default();
 
         tasks
@@ -220,15 +246,14 @@ impl NativeVault {
     ) -> Vec<NativeRow> {
         let mut groups: Vec<(String, DataviewValue, Vec<NativeRow>)> =
             Vec::new();
+        let mut by_key: HashMap<String, usize> = HashMap::new();
         for row in rows {
             let key = expression.evaluate(&row.context(self));
             let group_key = value_group_key(&key);
-            if let Some((_, _, rows)) = groups
-                .iter_mut()
-                .find(|(existing, _, _)| existing == &group_key)
-            {
-                rows.push(row);
+            if let Some(&index) = by_key.get(&group_key) {
+                groups[index].2.push(row);
             } else {
+                by_key.insert(group_key.clone(), groups.len());
                 groups.push((group_key, key, vec![row]));
             }
         }
@@ -247,21 +272,44 @@ impl NativeVault {
         rows: Vec<NativeRow>,
         expression: &NativeExpression,
         alias: Option<&str>,
-    ) -> Vec<NativeRow> {
+        limit: usize,
+    ) -> Result<Vec<NativeRow>, DataviewError> {
         let field = alias.unwrap_or(&expression.raw);
         let mut flattened = Vec::new();
         for row in rows {
             let value = expression.evaluate(&row.context(self));
-            let values = match value {
-                DataviewValue::Array(values) => values,
-                DataviewValue::Null => vec![DataviewValue::Null],
-                value => vec![value],
+            let expansion = flatten_expansion_len(&value);
+            let next = checked_flatten_len(flattened.len(), expansion, limit)
+                .map_err(|kind| {
+                flatten_overflow_error(
+                    expression,
+                    alias,
+                    kind,
+                    flattened.len(),
+                    expansion,
+                    limit,
+                )
+            })?;
+            let additional = next - flattened.len();
+            flattened.try_reserve(additional).map_err(|_| {
+                DataviewError::NativeQuery {
+                    message: format!(
+                        "native {} failed to reserve {additional} flattened \
+                         rows",
+                        flatten_command_text(expression, alias)
+                    ),
+                }
+            })?;
+            let values = match value.into_vec() {
+                Ok(values) => values,
+                Err(DataviewValue::Null) => vec![DataviewValue::Null],
+                Err(value) => vec![value],
             };
             for value in values {
                 flattened.push(row.clone().with_field(field, value));
             }
         }
-        flattened
+        Ok(flattened)
     }
 
     pub(super) fn result_json(
@@ -649,7 +697,7 @@ impl NativeVault {
         let Some(page) = self.index.pages.get(page_index) else {
             return DataviewValue::Null;
         };
-        DataviewValue::Object(
+        DataviewValue::object(
             page.fields
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone()))
@@ -676,10 +724,11 @@ impl NativeVault {
         field: &str,
     ) -> DataviewValue {
         match value {
-            DataviewValue::Object(object) => {
-                object.get(field).cloned().unwrap_or(DataviewValue::Null)
-            }
-            DataviewValue::Array(values) => DataviewValue::Array(
+            DataviewValue::Object(_) => value
+                .as_object()
+                .and_then(|object| object.get(field).cloned())
+                .unwrap_or(DataviewValue::Null),
+            DataviewValue::Array(values) => DataviewValue::array(
                 values
                     .iter()
                     .map(|value| self.attr_value(value, field))
@@ -779,8 +828,8 @@ impl NativeRow {
         expression: &NativeExpression,
         alias: Option<&str>,
     ) -> Self {
-        let rows_value = DataviewValue::Array(
-            rows.iter().map(|row| row.value.clone()).collect(),
+        let rows_value = DataviewValue::array(
+            rows.into_iter().map(|row| row.value).collect(),
         );
         let field = alias.unwrap_or(&expression.raw).to_string();
         let mut object = BTreeMap::new();
@@ -796,7 +845,7 @@ impl NativeRow {
         Self {
             page_index,
             source_page_index: None,
-            value: DataviewValue::Object(object),
+            value: DataviewValue::object(object),
             variables,
         }
     }
@@ -809,7 +858,7 @@ impl NativeRow {
             vault,
             page_index: self.page_index,
             row_value: &self.value,
-            variables: self.variables.clone(),
+            variables: Cow::Borrowed(&self.variables),
         }
     }
 
@@ -851,7 +900,7 @@ impl NativeRow {
         value: DataviewValue,
     ) -> Self {
         self.variables.insert(field.to_string(), value.clone());
-        if let DataviewValue::Object(object) = &mut self.value {
+        if let Some(object) = self.value.object_mut() {
             object.insert(field.to_string(), value);
         }
         self
@@ -899,5 +948,66 @@ pub(super) fn calendar_date_text(value: &DataviewValue) -> Option<String> {
             Some(value.clone())
         }
         _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FlattenOverflow {
+    CheckedAdd,
+    Limit { attempted: usize },
+}
+
+pub(super) fn flatten_expansion_len(value: &DataviewValue) -> usize {
+    match value {
+        DataviewValue::Array(values) => values.len(),
+        _ => 1,
+    }
+}
+
+pub(super) fn checked_flatten_len(
+    current: usize,
+    expansion: usize,
+    limit: usize,
+) -> Result<usize, FlattenOverflow> {
+    let next = current
+        .checked_add(expansion)
+        .ok_or(FlattenOverflow::CheckedAdd)?;
+    if next > limit {
+        Err(FlattenOverflow::Limit { attempted: next })
+    } else {
+        Ok(next)
+    }
+}
+
+fn flatten_command_text(
+    expression: &NativeExpression,
+    alias: Option<&str>,
+) -> String {
+    match alias {
+        Some(alias) => format!("FLATTEN {} AS {alias}", expression.raw),
+        None => format!("FLATTEN {}", expression.raw),
+    }
+}
+
+fn flatten_overflow_error(
+    expression: &NativeExpression,
+    alias: Option<&str>,
+    kind: FlattenOverflow,
+    current: usize,
+    expansion: usize,
+    limit: usize,
+) -> DataviewError {
+    let command = flatten_command_text(expression, alias);
+    let attempted = match kind {
+        FlattenOverflow::CheckedAdd => current.saturating_add(expansion),
+        FlattenOverflow::Limit { attempted } => attempted,
+    };
+    DataviewError::NativeQuery {
+        message: format!(
+            "native {command} would exceed the {limit}-row limit \
+             (at least {attempted} rows). Narrow FROM or filter page rows \
+             with WHERE before FLATTEN; for task results, consider a DQL \
+             TASK query."
+        ),
     }
 }

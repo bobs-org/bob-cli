@@ -415,7 +415,7 @@ pub(in crate::native::dataview) fn meta_value(
         "type".to_string(),
         DataviewValue::String(link_type.to_string()),
     );
-    DataviewValue::Object(object)
+    DataviewValue::object(object)
 }
 
 pub(in crate::native::dataview) fn evaluate_extreme_by_call(
@@ -462,11 +462,7 @@ pub(in crate::native::dataview) fn collection_lambda_args<'a>(
 pub(in crate::native::dataview) fn collection_value(
     value: DataviewValue,
 ) -> Vec<DataviewValue> {
-    match value {
-        DataviewValue::Array(values) => values,
-        DataviewValue::Null => Vec::new(),
-        value => vec![value],
-    }
+    value.into_array_items()
 }
 
 pub(in crate::native::dataview) fn aggregate_args(

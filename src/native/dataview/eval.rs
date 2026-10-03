@@ -1,7 +1,7 @@
 //! Native expression evaluation and builtin call dispatch.
 
 use super::*;
-use std::{cmp::Ordering, collections::BTreeMap};
+use std::{borrow::Cow, cmp::Ordering, collections::BTreeMap};
 
 impl NativeExpression {
     pub(super) fn new(tokens: Vec<NativeToken>) -> Result<Self, String> {
@@ -27,7 +27,7 @@ impl NativeExpression {
 impl NativeExpr {
     pub(super) fn evaluate(&self, context: &EvalContext<'_>) -> DataviewValue {
         match self {
-            Self::Array(values) => DataviewValue::Array(
+            Self::Array(values) => DataviewValue::array(
                 values.iter().map(|value| value.evaluate(context)).collect(),
             ),
             Self::Binary { op, left, right } => match op {
@@ -104,7 +104,7 @@ impl NativeExpr {
                     .unwrap_or_else(|| DataviewLink::page(raw)),
             ),
             Self::Literal(value) => value.clone(),
-            Self::Object(fields) => DataviewValue::Object(
+            Self::Object(fields) => DataviewValue::object(
                 fields
                     .iter()
                     .map(|(key, value)| (key.clone(), value.evaluate(context)))
@@ -128,7 +128,7 @@ pub(super) struct EvalContext<'a> {
     pub(super) vault: &'a NativeVault,
     pub(super) page_index: usize,
     pub(super) row_value: &'a DataviewValue,
-    pub(super) variables: BTreeMap<String, DataviewValue>,
+    pub(super) variables: Cow<'a, BTreeMap<String, DataviewValue>>,
 }
 
 impl<'a> EvalContext<'a> {
@@ -141,13 +141,13 @@ impl<'a> EvalContext<'a> {
         name: &str,
         value: DataviewValue,
     ) -> EvalContext<'a> {
-        let mut variables = self.variables.clone();
+        let mut variables = self.variables.clone().into_owned();
         variables.insert(name.to_string(), value);
         EvalContext {
             vault: self.vault,
             page_index: self.page_index,
             row_value: self.row_value,
-            variables,
+            variables: Cow::Owned(variables),
         }
     }
 }
@@ -159,7 +159,7 @@ pub(super) fn evaluate_call(
 ) -> DataviewValue {
     match function.to_ascii_lowercase().as_str() {
         "object" => evaluate_object_call(args, context),
-        "list" | "array" => DataviewValue::Array(evaluated_args(args, context)),
+        "list" | "array" => DataviewValue::array(evaluated_args(args, context)),
         "date" => evaluate_unary_vector_call(args, context, date_value),
         "dur" => evaluate_unary_vector_call(args, context, duration_value),
         "number" => evaluate_unary_vector_call(args, context, number_value),
@@ -273,9 +273,9 @@ pub(super) fn vectorize_unary(
     function: impl Fn(DataviewValue) -> DataviewValue,
 ) -> DataviewValue {
     match value {
-        DataviewValue::Array(values) => {
-            DataviewValue::Array(values.into_iter().map(function).collect())
-        }
+        DataviewValue::Array(values) => DataviewValue::array(
+            unwrap_shared(values).into_iter().map(function).collect(),
+        ),
         value => function(value),
     }
 }
@@ -288,8 +288,9 @@ pub(super) fn vectorize_binary(
     match (left, right) {
         (DataviewValue::Array(left), DataviewValue::Array(right)) => {
             let fallback = DataviewValue::Null;
-            DataviewValue::Array(
-                left.into_iter()
+            DataviewValue::array(
+                unwrap_shared(left)
+                    .into_iter()
                     .enumerate()
                     .map(|(index, value)| {
                         function(
@@ -303,14 +304,14 @@ pub(super) fn vectorize_binary(
                     .collect(),
             )
         }
-        (DataviewValue::Array(values), right) => DataviewValue::Array(
-            values
+        (DataviewValue::Array(values), right) => DataviewValue::array(
+            unwrap_shared(values)
                 .into_iter()
                 .map(|value| function(value, right.clone()))
                 .collect(),
         ),
-        (left, DataviewValue::Array(values)) => DataviewValue::Array(
-            values
+        (left, DataviewValue::Array(values)) => DataviewValue::array(
+            unwrap_shared(values)
                 .into_iter()
                 .map(|value| function(left.clone(), value))
                 .collect(),

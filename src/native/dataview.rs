@@ -121,7 +121,7 @@ fn run_native(request: &Request) -> Result<(), DataviewError> {
                 let output = vault.evaluate_markdown(&query, &settings)?;
                 emit_engine_output(request, output)
             } else {
-                let output = vault.evaluate(&query);
+                let output = vault.evaluate(&query)?;
                 emit_native_output(request, output)
             }
         }

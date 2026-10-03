@@ -3,6 +3,7 @@
 mod capture;
 mod completion;
 mod dataview;
+mod dataview_oom;
 mod freshness;
 mod help;
 mod help_options;

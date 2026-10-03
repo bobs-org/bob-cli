@@ -132,17 +132,20 @@ pub(in crate::native::dataview) fn add_value(
         (DataviewValue::Number(left), DataviewValue::Number(right)) => {
             add_numbers(&left, &right)
         }
-        (DataviewValue::Array(mut left), DataviewValue::Array(right)) => {
-            left.extend(right);
-            DataviewValue::Array(left)
+        (DataviewValue::Array(left), DataviewValue::Array(right)) => {
+            let mut left = unwrap_shared(left);
+            left.extend(unwrap_shared(right));
+            DataviewValue::array(left)
         }
-        (DataviewValue::Array(mut left), right) => {
+        (DataviewValue::Array(left), right) => {
+            let mut left = unwrap_shared(left);
             left.push(right);
-            DataviewValue::Array(left)
+            DataviewValue::array(left)
         }
-        (left, DataviewValue::Array(mut right)) => {
+        (left, DataviewValue::Array(right)) => {
+            let mut right = unwrap_shared(right);
             right.insert(0, left);
-            DataviewValue::Array(right)
+            DataviewValue::array(right)
         }
         (DataviewValue::Null, _) | (_, DataviewValue::Null) => {
             DataviewValue::Null

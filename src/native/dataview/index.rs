@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::Path,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::SystemTime,
 };
 
@@ -301,7 +301,7 @@ impl PageDraft {
         let inlinks = inlinks.cloned().unwrap_or_default();
         let file = self.file_object(&inlinks, starred);
         self.fields
-            .insert("file".to_string(), DataviewValue::Object(file));
+            .insert("file".to_string(), DataviewValue::object(file));
 
         DataviewPage {
             path: self.path,
@@ -343,7 +343,7 @@ impl PageDraft {
         file.insert("mday".to_string(), system_date(self.mtime));
         file.insert(
             "tags".to_string(),
-            DataviewValue::Array(
+            DataviewValue::array(
                 self.tags
                     .iter()
                     .cloned()
@@ -353,7 +353,7 @@ impl PageDraft {
         );
         file.insert(
             "etags".to_string(),
-            DataviewValue::Array(
+            DataviewValue::array(
                 self.explicit_tags
                     .iter()
                     .cloned()
@@ -363,13 +363,13 @@ impl PageDraft {
         );
         file.insert(
             "inlinks".to_string(),
-            DataviewValue::Array(
+            DataviewValue::array(
                 inlinks.iter().cloned().map(DataviewValue::Link).collect(),
             ),
         );
         file.insert(
             "outlinks".to_string(),
-            DataviewValue::Array(
+            DataviewValue::array(
                 self.outlinks
                     .iter()
                     .cloned()
@@ -379,7 +379,7 @@ impl PageDraft {
         );
         file.insert(
             "aliases".to_string(),
-            DataviewValue::Array(
+            DataviewValue::array(
                 self.aliases
                     .iter()
                     .cloned()
@@ -389,15 +389,15 @@ impl PageDraft {
         );
         file.insert(
             "tasks".to_string(),
-            DataviewValue::Array(self.tasks.clone()),
+            DataviewValue::array(self.tasks.clone()),
         );
         file.insert(
             "lists".to_string(),
-            DataviewValue::Array(self.lists.clone()),
+            DataviewValue::array(self.lists.clone()),
         );
         file.insert(
             "frontmatter".to_string(),
-            DataviewValue::Object(self.frontmatter.clone()),
+            DataviewValue::object(self.frontmatter.clone()),
         );
         file.insert("day".to_string(), page_day(&self.path));
         file.insert("starred".to_string(), DataviewValue::Bool(starred));
@@ -533,7 +533,7 @@ fn yaml_value_to_dataview(value: serde_yaml::Value) -> DataviewValue {
         serde_yaml::Value::Bool(value) => DataviewValue::Bool(value),
         serde_yaml::Value::Number(value) => yaml_number_to_dataview(value),
         serde_yaml::Value::String(value) => parse_dataview_scalar(&value),
-        serde_yaml::Value::Sequence(values) => DataviewValue::Array(
+        serde_yaml::Value::Sequence(values) => DataviewValue::array(
             values.into_iter().map(yaml_value_to_dataview).collect(),
         ),
         serde_yaml::Value::Mapping(values) => {
@@ -543,7 +543,7 @@ fn yaml_value_to_dataview(value: serde_yaml::Value) -> DataviewValue {
                     object.insert(key, yaml_value_to_dataview(value));
                 }
             }
-            DataviewValue::Object(object)
+            DataviewValue::object(object)
         }
         serde_yaml::Value::Tagged(value) => yaml_value_to_dataview(value.value),
     }
@@ -701,12 +701,12 @@ fn canonicalize_value_links(
     match value {
         DataviewValue::Link(link) => lookup.canonicalize_link(link, warnings),
         DataviewValue::Array(values) => {
-            for value in values {
+            for value in Arc::make_mut(values) {
                 canonicalize_value_links(value, lookup, warnings);
             }
         }
         DataviewValue::Object(values) => {
-            for value in values.values_mut() {
+            for value in Arc::make_mut(values).values_mut() {
                 canonicalize_value_links(value, lookup, warnings);
             }
         }
@@ -755,15 +755,16 @@ fn insert_field(
         None => {
             fields.insert(key.to_string(), value);
         }
-        Some(DataviewValue::Array(mut values)) => {
-            values.push(value);
-            fields.insert(key.to_string(), DataviewValue::Array(values));
-        }
-        Some(existing) => {
-            fields.insert(
-                key.to_string(),
-                DataviewValue::Array(vec![existing, value]),
-            );
+        Some(mut existing) => {
+            if let Some(values) = existing.array_mut() {
+                values.push(value);
+                fields.insert(key.to_string(), existing);
+            } else {
+                fields.insert(
+                    key.to_string(),
+                    DataviewValue::array(vec![existing, value]),
+                );
+            }
         }
     }
 }
@@ -996,7 +997,7 @@ fn list_object(
     );
     object.insert(
         "tags".to_string(),
-        DataviewValue::Array(
+        DataviewValue::array(
             draft
                 .tags
                 .iter()
@@ -1007,7 +1008,7 @@ fn list_object(
     );
     object.insert(
         "outlinks".to_string(),
-        DataviewValue::Array(
+        DataviewValue::array(
             draft
                 .outlinks
                 .iter()
@@ -1020,7 +1021,7 @@ fn list_object(
         "link".to_string(),
         DataviewValue::Link(task_link(draft, page_path)),
     );
-    object.insert("children".to_string(), DataviewValue::Array(children));
+    object.insert("children".to_string(), DataviewValue::array(children));
     object.insert("task".to_string(), DataviewValue::Bool(task));
     object.insert(
         "annotated".to_string(),
@@ -1042,7 +1043,7 @@ fn list_object(
             .unwrap_or(DataviewValue::Null),
     );
 
-    DataviewValue::Object(object)
+    DataviewValue::object(object)
 }
 
 fn list_fully_completed(index: usize, drafts: &[ListDraft]) -> bool {
@@ -1168,7 +1169,7 @@ fn page_aliases(page: &DataviewPage) -> Vec<String> {
             _ => None,
         })
         .and_then(|value| match value {
-            DataviewValue::Array(values) => Some(values),
+            DataviewValue::Array(values) => Some(values.as_slice()),
             _ => None,
         })
         .into_iter()

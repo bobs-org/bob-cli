@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use serde_json::{Number, Value};
 
@@ -12,8 +12,8 @@ pub(super) enum DataviewValue {
     DateTime(String),
     Duration(String),
     Link(DataviewLink),
-    Array(Vec<DataviewValue>),
-    Object(BTreeMap<String, DataviewValue>),
+    Array(Arc<Vec<DataviewValue>>),
+    Object(Arc<BTreeMap<String, DataviewValue>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +25,57 @@ pub(super) struct DataviewLink {
 }
 
 impl DataviewValue {
+    pub(super) fn array(values: Vec<Self>) -> Self {
+        Self::Array(Arc::new(values))
+    }
+
+    pub(super) fn object(values: BTreeMap<String, Self>) -> Self {
+        Self::Object(Arc::new(values))
+    }
+
+    pub(super) fn into_vec(self) -> Result<Vec<Self>, Self> {
+        match self {
+            Self::Array(values) => Ok(unwrap_shared(values)),
+            value => Err(value),
+        }
+    }
+
+    pub(super) fn into_array_items(self) -> Vec<Self> {
+        match self {
+            Self::Array(values) => unwrap_shared(values),
+            Self::Null => Vec::new(),
+            value => vec![value],
+        }
+    }
+
+    pub(super) fn as_array(&self) -> Option<&[Self]> {
+        match self {
+            Self::Array(values) => Some(values.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn as_object(&self) -> Option<&BTreeMap<String, Self>> {
+        match self {
+            Self::Object(values) => Some(values),
+            _ => None,
+        }
+    }
+
+    pub(super) fn object_mut(&mut self) -> Option<&mut BTreeMap<String, Self>> {
+        match self {
+            Self::Object(values) => Some(Arc::make_mut(values)),
+            _ => None,
+        }
+    }
+
+    pub(super) fn array_mut(&mut self) -> Option<&mut Vec<Self>> {
+        match self {
+            Self::Array(values) => Some(Arc::make_mut(values)),
+            _ => None,
+        }
+    }
+
     pub(super) fn is_truthy(&self) -> bool {
         match self {
             Self::Bool(value) => *value,
@@ -102,4 +153,8 @@ impl DataviewLink {
             "embed": self.embed,
         })
     }
+}
+
+pub(super) fn unwrap_shared<T: Clone>(arc: Arc<T>) -> T {
+    Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone())
 }

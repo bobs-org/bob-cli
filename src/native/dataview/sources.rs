@@ -89,7 +89,7 @@ pub(super) fn page_file_array(
     let Some(DataviewValue::Array(values)) = file.get(field) else {
         return Vec::new();
     };
-    values.clone()
+    values.as_ref().clone()
 }
 
 pub(super) fn source_link_base(path: &str) -> &str {

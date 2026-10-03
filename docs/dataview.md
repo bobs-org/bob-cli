@@ -314,6 +314,37 @@ The native engine supports source expressions, `LIST`, `TABLE`, `TASK`, and
 `CALENDAR` JSON results, common Dataview expressions/functions, and ordered data
 commands such as `FROM`, `WHERE`, `SORT`, `GROUP BY`, `FLATTEN`, and `LIMIT`.
 
+Native evaluation shares container values instead of deep-copying them. `FLATTEN`
+still materializes one output row per expanded value, so command order matters:
+a later `WHERE` or `LIMIT` cannot shrink work that an earlier `FLATTEN` already
+expanded. Narrow `FROM` or a page-level `WHERE` before `FLATTEN`. Each native
+`FLATTEN` stage stops with a query error (exit code 1, no partial stdout) if it
+would exceed 100,000 rows. That cap is an expansion guard, not a process memory
+ceiling: indexing the vault and serializing a huge result can still use
+substantial memory. Run large native queries serially on memory-limited hosts.
+
+For task results, prefer a DQL `TASK` query over flattening `file.tasks`:
+
+```dataview
+TASK
+FROM "Projects"
+WHERE !completed
+```
+
+`--query 'TASK ...'` is Dataview DQL. `--tasks` uses a different Tasks-plugin
+grammar and is not a DQL query.
+
+For a compact status census of tasks on matching pages:
+
+```dataview
+TABLE WITHOUT ID Status, length(rows) AS Count
+FROM "Projects"
+WHERE file.tasks
+FLATTEN file.tasks AS t
+GROUP BY t.status AS Status
+SORT Status ASC
+```
+
 Native `paths` output prints matching source note paths where a DQL result
 retains source identity. Native `json` output emits the stable Bob wrapper.
 Native `markdown` output renders DQL `LIST`, `TABLE`, and `TASK` results and

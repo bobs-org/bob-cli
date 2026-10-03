@@ -989,6 +989,44 @@ fn dataview_native_dql_execution_supports_phase6_result_shapes() {
         ])
     );
 
+    let nested_census = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"
+TABLE WITHOUT ID Status, length(rows) AS Count
+FROM "Tasks/Nested.md"
+FLATTEN file.tasks AS t
+GROUP BY t.status AS Status
+SORT Status ASC
+"#,
+    ]);
+    assert_success(&nested_census);
+    let nested_json = json_stdout(&nested_census);
+    assert_eq!(
+        nested_json["result"]["values"],
+        json!([[" ", 2], ["-", 1], ["x", 1]])
+    );
+
+    let nested_filtered = run_native_fixture(&[
+        "--format",
+        "json",
+        "--query",
+        r#"
+TABLE WITHOUT ID Status, length(rows) AS Count
+FROM "Tasks/Nested.md"
+FLATTEN file.tasks AS t
+WHERE t.blockId = "sibling-task"
+GROUP BY t.status AS Status
+SORT Status ASC
+"#,
+    ]);
+    assert_success(&nested_filtered);
+    assert_eq!(
+        json_stdout(&nested_filtered)["result"]["values"],
+        json!([[" ", 1]])
+    );
+
     let flattened_paths = run_native_fixture(&[
         "--strict-paths",
         "--query",

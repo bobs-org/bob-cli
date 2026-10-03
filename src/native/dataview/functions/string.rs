@@ -93,7 +93,7 @@ pub(in crate::native::dataview) fn evaluate_split_call(
             .map(|value| DataviewValue::String(value.to_string()))
             .take(limit.unwrap_or(usize::MAX))
             .collect();
-        DataviewValue::Array(pieces)
+        DataviewValue::array(pieces)
     })
 }
 

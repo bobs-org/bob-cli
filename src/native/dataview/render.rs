@@ -166,7 +166,11 @@ pub(super) fn markdown_task_value(
     if let Some(DataviewValue::Array(children)) =
         value.as_object_field("children")
     {
-        markdown.push_str(&markdown_task_values(children, settings, depth + 1));
+        markdown.push_str(&markdown_task_values(
+            children.as_slice(),
+            settings,
+            depth + 1,
+        ));
     }
 
     markdown

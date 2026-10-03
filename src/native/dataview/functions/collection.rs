@@ -80,7 +80,7 @@ pub(in crate::native::dataview) fn evaluate_containsword_call(
     let container = container.evaluate(context);
     let needle = value_text(&needle.evaluate(context)).to_ascii_lowercase();
     match container {
-        DataviewValue::Array(values) => DataviewValue::Array(
+        DataviewValue::Array(values) => DataviewValue::array(
             values
                 .iter()
                 .map(|value| {
@@ -122,7 +122,7 @@ pub(in crate::native::dataview) fn evaluate_extract_call(
             extracted.insert(key, value.clone());
         }
     }
-    DataviewValue::Object(extracted)
+    DataviewValue::object(extracted)
 }
 
 pub(in crate::native::dataview) fn evaluate_sort_call(
@@ -134,7 +134,7 @@ pub(in crate::native::dataview) fn evaluate_sort_call(
     };
     let mut values = collection_value(arg.evaluate(context));
     values.sort_by(|left, right| compare_values(context.vault, left, right));
-    DataviewValue::Array(values)
+    DataviewValue::array(values)
 }
 
 pub(in crate::native::dataview) fn evaluate_reverse_call(
@@ -146,7 +146,7 @@ pub(in crate::native::dataview) fn evaluate_reverse_call(
     };
     let mut values = collection_value(arg.evaluate(context));
     values.reverse();
-    DataviewValue::Array(values)
+    DataviewValue::array(values)
 }
 
 pub(in crate::native::dataview) fn length_value(
@@ -167,7 +167,7 @@ pub(in crate::native::dataview) fn evaluate_nonnull_call(
     let [arg] = args else {
         return DataviewValue::Null;
     };
-    DataviewValue::Array(
+    DataviewValue::array(
         collection_value(arg.evaluate(context))
             .into_iter()
             .filter(|value| !matches!(value, DataviewValue::Null))
@@ -203,7 +203,7 @@ pub(in crate::native::dataview) fn evaluate_filter_call(
     else {
         return DataviewValue::Null;
     };
-    DataviewValue::Array(
+    DataviewValue::array(
         values
             .into_iter()
             .filter(|value| {
@@ -222,7 +222,7 @@ pub(in crate::native::dataview) fn evaluate_map_call(
     else {
         return DataviewValue::Null;
     };
-    DataviewValue::Array(
+    DataviewValue::array(
         values
             .into_iter()
             .map(|value| {
@@ -315,7 +315,7 @@ pub(in crate::native::dataview) fn evaluate_unique_call(
             unique.push(value);
         }
     }
-    DataviewValue::Array(unique)
+    DataviewValue::array(unique)
 }
 
 pub(in crate::native::dataview) fn evaluate_flat_call(
@@ -336,7 +336,7 @@ pub(in crate::native::dataview) fn evaluate_flat_call(
         depth,
         &mut output,
     );
-    DataviewValue::Array(output)
+    DataviewValue::array(output)
 }
 
 pub(in crate::native::dataview) fn flatten_values(
@@ -347,7 +347,7 @@ pub(in crate::native::dataview) fn flatten_values(
     for value in values {
         match value {
             DataviewValue::Array(values) if depth > 0 => {
-                flatten_values(values, depth - 1, output);
+                flatten_values(unwrap_shared(values), depth - 1, output);
             }
             value => output.push(value),
         }
@@ -370,7 +370,7 @@ pub(in crate::native::dataview) fn evaluate_slice_call(
         .and_then(|arg| integer_value(&arg.evaluate(context)));
     let values = collection_value(collection.evaluate(context));
     let (start, end) = slice_bounds(values.len(), start, end);
-    DataviewValue::Array(values[start..end].to_vec())
+    DataviewValue::array(values[start..end].to_vec())
 }
 
 pub(in crate::native::dataview) fn slice_bounds(

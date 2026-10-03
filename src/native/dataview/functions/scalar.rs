@@ -36,7 +36,7 @@ pub(in crate::native::dataview) fn evaluate_object_call(
     for pair in values.chunks_exact(2) {
         object.insert(value_text(&pair[0]), pair[1].clone());
     }
-    DataviewValue::Object(object)
+    DataviewValue::object(object)
 }
 
 pub(in crate::native::dataview) fn date_value(
