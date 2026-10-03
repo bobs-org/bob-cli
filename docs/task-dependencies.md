@@ -442,6 +442,7 @@ its own; `context` names what surrounds it. `verdict` is one of
 | DP28 | `⛓️ **DEPENDS ON:** [[#^a]]` | no list marker | not-a-line |
 | DP29 | `> - ⛓️ **DEPENDS ON:** [[#^a]]` | blockquoted line: every recogniser rejects it and no writer round-trips it | not-a-line |
 | DP30 | `⛓️ **DEPENDS ON:** [[#^a]]` | first direct child of a `#task` which is itself nested under a Work Log entry (unlike DP20, the line's owner is a real task) | accept(1) |
+| DP31 | `⛓️ **DEPENDS ON:** needs review` | prose-only line: the label is followed by prose with no link | malformed |
 
 ### 11.2 DW — write vectors
 

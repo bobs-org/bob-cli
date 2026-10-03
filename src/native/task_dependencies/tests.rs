@@ -52,6 +52,7 @@ fn dp_vectors() {
         "- ⛓️ **DEPENDS ON:** [[note]]", // DP23 bare note link
         "- ⛓️ **DEPENDS ON:** [[note#Heading]]", // DP25 heading link, no block id
         "- ⛓️ **DEPENDS ON:** • ,", // DP26 label followed only by separators
+        "- ⛓️ **DEPENDS ON:** needs review", // DP31 prose-only line, no link
     ] {
         assert_eq!(
             super::parse::parse_dependency_line(line),
