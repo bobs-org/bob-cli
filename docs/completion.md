@@ -138,7 +138,8 @@ failure, which yields empty output.
     git.
   - `randomize --level`: configured priority labels in config order;
     the description is the roll window (for example `2–7 days`).
-  - `query --tasks-note`, `query --origin`, `ready NOTE`: vault notes
+  - `query --tasks-note`, `query --origin`, `ready NOTE`,
+    `capture-task-id --note-path`: vault notes
     as `!files-in <bob-dir>\t*.md`.
 
 ## Live transcripts (fixture vault)

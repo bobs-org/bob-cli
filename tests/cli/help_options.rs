@@ -178,11 +178,13 @@ fn capture_task_id_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &[
+            "-a, --allow-closed",
             "-i, --block-id",
             "-b, --bob-dir",
             "-d, --dry-run",
             "-f, --format",
             "-h, --help",
+            "-n, --note-path",
             "-r, --route",
             "-t, --task-ref",
         ],

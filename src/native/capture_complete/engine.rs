@@ -2,9 +2,9 @@ use std::path::Path;
 
 use super::{
     candidates::{
-        active_task_candidates, link_candidates, route_candidates,
-        section_candidates, task_candidates, task_link_candidates,
-        task_section_candidates, TaskSearch,
+        active_task_candidates, dependency_candidates, link_candidates,
+        route_candidates, section_candidates, task_candidates,
+        task_link_candidates, task_section_candidates, TaskSearch,
     },
     model::{
         Candidates, CaptureCompleteResult, CompleteError, Replacement,
@@ -213,11 +213,30 @@ pub(super) fn build_result(
             task_link_candidates(bob_dir, &field.query)
         }
         CompletionContext::TaskDependency => {
-            // Contract phase: the lexical field (context, query, and the
-            // exact sigil-inclusive replacement range) is frozen, but the
-            // vault-wide prerequisite scan lands in the discovery phase,
-            // so every candidate list is empty until then.
-            (Candidates::Dependency(Vec::new()), Vec::new())
+            // Vault-wide prerequisite scan: the lexical owner of the
+            // modifier under the cursor plus every complete `&note:id`
+            // already typed in its item feed the already-added guards,
+            // so picked rows and typed rows agree.
+            let item = capture_language::editor_item_at(raw_text, cursor);
+            let typed: Vec<(String, String)> = item
+                .as_ref()
+                .map(|found| {
+                    found
+                        .dependencies
+                        .iter()
+                        .map(|entry| {
+                            (entry.note.clone(), entry.block_id.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            dependency_candidates(
+                bob_dir,
+                &field.query,
+                item.as_ref()
+                    .and_then(|found| found.dependency_target.as_ref()),
+                &typed,
+            )
         }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading

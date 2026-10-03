@@ -16,6 +16,8 @@ use crate::native::{
     capture_targets::CaptureTargetKind,
 };
 
+use super::candidates::dependency_candidates;
+
 /// One shell-completion row: the full marker text to insert (from the
 /// marker's `@`/`^`/`:`/`=` sigil through the candidate), a description,
 /// a human group, and whether the shell should keep typing (`nospace`)
@@ -275,8 +277,48 @@ pub(crate) fn shell_completion(
             }
         }
         CompletionContext::TaskDependency => {
-            // Contract phase: the vault-wide prerequisite scan lands in
-            // the discovery phase, so the shell offers no rows yet.
+            // Safe rows only: identified, unguarded prerequisites the
+            // shell can insert verbatim. ID-less and guarded rows stay
+            // in the interactive picker, which owns the Add block ID
+            // flow.
+            let item = capture_language::editor_item_at(raw_text, cursor);
+            let typed: Vec<(String, String)> = item
+                .as_ref()
+                .map(|found| {
+                    found
+                        .dependencies
+                        .iter()
+                        .map(|entry| {
+                            (entry.note.clone(), entry.block_id.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let (candidates, _) = dependency_candidates(
+                bob_dir,
+                "",
+                item.as_ref()
+                    .and_then(|found| found.dependency_target.as_ref()),
+                &typed,
+            );
+            let Candidates::Dependency(items) = candidates else {
+                return Ok(None);
+            };
+            for item in items {
+                if item.replacement.is_empty() {
+                    continue;
+                }
+                let full = format!("{}{}", marker_prefix, item.replacement);
+                if full.is_empty() {
+                    continue;
+                }
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&full),
+                    full,
+                    description: item.text.clone(),
+                    group: "prerequisite tasks".to_string(),
+                });
+            }
         }
         CompletionContext::TaskLink => {
             let (candidates, _) = task_link_candidates(bob_dir, "");

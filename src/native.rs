@@ -19,6 +19,7 @@ mod capture_active_tasks;
 mod capture_block_ids;
 mod capture_clip;
 mod capture_complete;
+mod capture_dependency_tasks;
 mod capture_language;
 mod capture_link_tasks;
 mod capture_links;

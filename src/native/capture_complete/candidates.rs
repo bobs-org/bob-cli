@@ -3,14 +3,15 @@ use std::{fs, io, path::Path};
 use super::{
     model::{
         ActiveTaskCandidate, ActiveTaskPomodoroCandidate, Candidates,
-        CompleteError, RouteCandidate, SectionCandidate, TaskCandidate,
-        TaskLinkCandidate, TaskSectionCandidate,
+        CompleteError, DependencyCandidate, RouteCandidate, SectionCandidate,
+        TaskCandidate, TaskLinkCandidate, TaskSectionCandidate,
     },
     support::rank,
 };
 use crate::native::{
-    capture, capture_active_tasks, capture_link_tasks, capture_targets,
-    capture_task_sections, capture_tasks,
+    capture, capture_active_tasks, capture_dependency_tasks,
+    capture_language::{DependencyTarget, DependencyTargetKind},
+    capture_link_tasks, capture_targets, capture_task_sections, capture_tasks,
     note_tasks::{self, BlockIdLookup},
     pomodoro,
 };
@@ -414,6 +415,111 @@ pub(super) fn task_link_candidates(
         })
         .collect();
     (Candidates::TaskLink(candidates), discovered.warnings)
+}
+
+/// `task_dependency` candidates for an `&` token: every task in the
+/// vault-wide catalog in picker order (same-note open tasks, In
+/// Progress, Next, other open tasks grouped by note, then
+/// completed/cancelled history; ranked matches first for a query),
+/// annotated with the exact note identity, display locator, stable
+/// group, and the guards the picker badges.
+///
+/// Known self/already-selected targets and unusable identities stay
+/// visible with an explanatory reason and no insertable replacement;
+/// ID-less rows carry `requires_block_id` and suggestions for the
+/// explicit Add block ID flow instead. Read-only: selecting or
+/// highlighting a row writes nothing. No ledger file is required.
+pub(super) fn dependency_candidates(
+    bob_dir: &Path,
+    query: &str,
+    owner: Option<&DependencyTarget>,
+    typed: &[(String, String)],
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_dependency_tasks::discover(bob_dir);
+    let owner_note = owner
+        .as_ref()
+        .and_then(|target| target.route.as_deref())
+        .map(capture::route_label);
+    let owner_block_id = owner.as_ref().and_then(|target| {
+        if target.kind == DependencyTargetKind::ExistingTask {
+            target.block_id.as_deref()
+        } else {
+            None
+        }
+    });
+    let dependent_note = owner_note.as_deref().map(Path::new);
+    let present = capture_dependency_tasks::already_present_prerequisites(
+        bob_dir,
+        &discovered,
+        dependent_note,
+        owner_block_id,
+        typed,
+    );
+    let ordered = capture_dependency_tasks::order_for_picker(
+        &discovered.tasks,
+        query,
+        owner_note.as_deref(),
+    );
+    let candidates = ordered
+        .into_iter()
+        .map(|task| {
+            let is_self = owner_block_id.is_some_and(|id| {
+                Some(task.note_path.as_str()) == owner_note.as_deref()
+                    && task.block_id.as_deref() == Some(id)
+            });
+            let already = present.contains(&(
+                task.note_path.clone(),
+                task.block_id.clone().unwrap_or_default(),
+            )) && task.block_id.is_some();
+            let disabled_reason = if is_self {
+                Some("the dependent task itself".to_string())
+            } else if task.duplicate_id {
+                Some(format!(
+                    "duplicate block ID ^{} in {}",
+                    task.block_id.as_deref().unwrap_or_default(),
+                    task.note_path
+                ))
+            } else {
+                None
+            };
+            let requires_block_id = task.block_id.is_none();
+            let replacement = if requires_block_id || disabled_reason.is_some()
+            {
+                String::new()
+            } else {
+                capture_dependency_tasks::replacement_for(
+                    &discovered.index,
+                    Path::new(&task.note_path),
+                    task.block_id.as_deref().expect("identified task"),
+                )
+            };
+            DependencyCandidate {
+                replacement,
+                task_ref: task.task_ref.clone(),
+                note_path: task.note_path.clone(),
+                locator: task.locator.clone(),
+                group: capture_dependency_tasks::group_for(
+                    task,
+                    owner_note.as_deref(),
+                )
+                .to_string(),
+                hidden: task.hidden,
+                block_id: task.block_id.clone(),
+                requires_block_id,
+                block_id_suggestions: task.block_id_suggestions.clone(),
+                already_dependency: already,
+                disabled_reason,
+                status_symbol: task.status_symbol,
+                status_name: task.status_name.clone(),
+                status_type: capture_tasks::status_type_label(task.status_type),
+                text: task.text.clone(),
+                section: task.section.clone(),
+                depth: task.depth,
+                line: task.line,
+            }
+        })
+        .collect();
+    (Candidates::Dependency(candidates), discovered.warnings)
 }
 
 pub(super) enum TaskSectionLookupFailure {

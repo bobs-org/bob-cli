@@ -238,6 +238,11 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
+        arg: "note-path",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &[],
         arg: "parent",
         kind: Kind::FreeText,
     },

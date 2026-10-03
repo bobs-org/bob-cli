@@ -257,64 +257,80 @@ pub(crate) fn rank<'a>(
     tasks: &'a [LinkTask],
     query: &str,
 ) -> Vec<&'a LinkTask> {
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .map(|term| term.to_lowercase())
+    let mut scored: Vec<(&'a LinkTask, u32)> = tasks
+        .iter()
+        .filter_map(|task| {
+            match_score(&link_task_search_fields(task), query)
+                .map(|score| (task, score))
+        })
         .collect();
-    if terms.is_empty() {
-        return tasks.iter().collect();
-    }
-    let mut scored = Vec::new();
-    for task in tasks {
-        let mut total = 0u32;
-        let mut matched = true;
-        for term in &terms {
-            match term_tier(task, term) {
-                Some(tier) => total += tier,
-                None => {
-                    matched = false;
-                    break;
-                }
-            }
-        }
-        if matched {
-            scored.push((task, total));
-        }
-    }
+    // The sort is stable, so ties and an empty query keep the canonical
+    // order.
     scored.sort_by_key(|(_, score)| Reverse(*score));
     scored.into_iter().map(|(task, _)| task).collect()
 }
 
-/// A term's best tier over the searchable fields, or `None` when it
-/// matches nothing. Tiers, best first: 3 for a field prefix, 2 for a
-/// word prefix (the preceding character is not alphanumeric), 1 for a
-/// substring, and 0 for an in-order subsequence.
-fn term_tier(task: &LinkTask, term: &str) -> Option<u32> {
+/// Total tier score for raw (unlowercased) searchable fields against a
+/// query, or `None` when any whitespace-separated term matches nothing.
+/// An empty query scores every field set at zero, so callers can rank
+/// matches and canonical order with one comparator. The dependency
+/// (`&`) picker scores its own searchable fields (task text, exact note
+/// locator, block ID, path, and section) through this same matcher, so
+/// both pickers agree on what a tier means.
+pub(crate) fn match_score(raw_fields: &[String], query: &str) -> Option<u32> {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .map(|term| term.to_lowercase())
+        .collect();
+    let mut total = 0u32;
+    for term in &terms {
+        match best_field_tier(raw_fields, term) {
+            Some(tier) => total += tier,
+            None => return None,
+        }
+    }
+    Some(total)
+}
+
+/// A term's best tier over raw (unlowercased) searchable fields, or
+/// `None` when it matches nothing.
+fn best_field_tier(raw_fields: &[String], term: &str) -> Option<u32> {
     let mut best = None;
-    let mut consider = |field: &str| {
+    for field in raw_fields {
         if let Some(tier) = field_tier(&field.to_lowercase(), term)
             && best.is_none_or(|current| tier > current)
         {
             best = Some(tier);
         }
-    };
-    if let Some(block_id) = &task.block_id {
-        consider(&format!("{}:{block_id}", task.route));
-        consider(block_id);
-    }
-    consider(&task.text);
-    consider(&task.route);
-    if let Some(section) = &task.section {
-        consider(section);
-    }
-    if let Some(name) =
-        task.pomodoro.as_ref().and_then(|entry| entry.name.as_ref())
-    {
-        consider(name);
     }
     best
 }
 
+/// Raw searchable fields for a linkable task, in no significant order:
+/// `route:block-id` and block ID (identified tasks only), cleaned
+/// description, route, section, and queued Pomodoro name.
+fn link_task_search_fields(task: &LinkTask) -> Vec<String> {
+    let mut fields = Vec::new();
+    if let Some(block_id) = &task.block_id {
+        fields.push(format!("{}:{block_id}", task.route));
+        fields.push(block_id.clone());
+    }
+    fields.push(task.text.clone());
+    fields.push(task.route.clone());
+    if let Some(section) = &task.section {
+        fields.push(section.clone());
+    }
+    if let Some(name) =
+        task.pomodoro.as_ref().and_then(|entry| entry.name.as_ref())
+    {
+        fields.push(name.clone());
+    }
+    fields
+}
+
+/// Tiers, best first: 3 for a field prefix, 2 for a word prefix (the
+/// preceding character is not alphanumeric), 1 for a substring, and 0
+/// for an in-order subsequence.
 fn field_tier(field: &str, term: &str) -> Option<u32> {
     if field.starts_with(term) {
         return Some(3);

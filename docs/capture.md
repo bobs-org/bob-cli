@@ -947,8 +947,7 @@ v1 examples (schema version 1, additive fields only):
 
 `capture-complete` serves context `task_dependency` with a replacement range
 covering exactly the active modifier (sigil and quoted note included), the
-decoded `query`, the lexical `owner`, and the candidate list (empty until
-the discovery phase populates the vault-wide scan):
+decoded `query`, the lexical `owner`, and the vault-wide candidate list:
 
 ```json
 // bob capture-complete -b VAULT -c 19 -f json -- 'Buy Groceries! &foo'
@@ -962,15 +961,32 @@ the discovery phase populates the vault-wide scan):
 }
 ```
 
-Contract status: parsing, spans, needs, completion ranges, and the
-candidate wire shape are frozen above. `bob capture` recognizes the
-modifiers but refuses them with an explicit unsupported-action error until
-the writer phase executes them — a draft with prerequisites never captures
-without them. Section bullets, project/note constructions, Pomodoro ledger
-links, and session operators reject the modifiers with a targeted
-diagnostic, as do suffixed (`#name`, `=…`) or `!`-toggled dependency-only
-owners. ID-less and guarded candidates, the Add block ID flow, final
-previews, and status effects land in the discovery and writer phases.
+The discovery scan lists every task-bearing vault note — untyped root
+notes, nested folders, ref notes, terminal projects, daily notes, hidden
+tasks, and completed/cancelled/archive history — excluding only
+dot-directories, `_templates`, `_generated`, `_conflicts`, fenced code, and
+non-task block anchors. It never requires today's ledger file. Empty-query
+order is same-note open tasks, In Progress, Next, other open tasks grouped
+by note, then completed/cancelled history, with hidden tasks last within
+their section; queries rank with the same tiered AND-term matcher as the
+`:` picker (task text, exact note locator, block ID, path, section) and
+keep completed history findable behind open matches. Each row carries the
+exact `note_path` (with extension, never a lowercased route), display
+`locator`, stable `group`, `already_dependency`, and optional
+`disabled_reason`; ID-less rows carry `requires_block_id` with suggestions
+and no insertable replacement, and self/already-selected/duplicate-ID rows
+stay visible with their guard reason. Refetching at `replacement.start`
+returns the unfiltered snapshot.
+
+Contract status: parsing, spans, needs, completion ranges, the candidate
+wire shape, and the discovery scan are frozen above. `bob capture`
+recognizes the modifiers but refuses them with an explicit
+unsupported-action error until the writer phase executes them — a draft
+with prerequisites never captures without them. Section bullets,
+project/note constructions, Pomodoro ledger links, and session operators
+reject the modifiers with a targeted diagnostic, as do suffixed (`#name`,
+`=…`) or `!`-toggled dependency-only owners. Final previews and status
+effects land in the writer phase.
 
 ### Plan budget and strict mode
 
@@ -3752,28 +3768,40 @@ array. Each section has `title`, `slug`, `line`, `child_count`, and `depth`
 ## `bob capture-task-id`
 
 ```bash
-bob capture-task-id --route NAME --task-ref REF --block-id ID [-b|--bob-dir DIR] [-f|--format human|json] [-d|--dry-run]
+bob capture-task-id (--route NAME | --note-path PATH) --task-ref REF --block-id ID [-b|--bob-dir DIR] [-f|--format human|json] [-d|--dry-run] [-a|--allow-closed]
 ```
 
-Assigns a user-authored Obsidian block ID to one open task in a routed note.
-This is the only write needed to turn a missing-ID `capture-complete --all-tasks`
-or `task_link` candidate into an identified task. The command validates `--route` and
-`--block-id` with Bob's shared grammar (`A-Z`, `a-z`, `0-9`, and `-` for the
+Assigns a user-authored Obsidian block ID to one open task in a Bob note.
+This is the only write needed to turn a missing-ID `capture-complete --all-tasks`,
+`task_link`, or `task_dependency` candidate into an identified task. The command validates
+`--route` (or `--note-path`) and `--block-id` with Bob's shared grammar (`A-Z`, `a-z`, `0-9`, and `-` for the
 ID; routes also allow `_`), resolves `--task-ref` with the same stale-safe
 `<line>:<digest>` recovery as `bob capture --task-ref`, and then confirms the
 task is still open and still lacks an ID. An ID already used anywhere in the
-routed note — including a non-task `^anchor` — is rejected. Success appends
+target note — including a non-task `^anchor` — is rejected. Success appends
 ` ^<id>` to the resolved physical task line, preserves that line's ending and
 every unrelated byte, and replaces the note with one same-directory temporary
 file rename. The write is observable only after that rename completes.
 `--dry-run` returns the same success shape without writing.
 
+`--route` names a routable root note. `--note-path` names the exact
+vault-relative path of any task-bearing note, so nested, case-sensitive, and
+quoted paths round-trip exactly without the lowercasing route parser; the two
+flags are mutually exclusive. `--allow-closed` additionally permits
+Done/Cancelled tasks — the dependency picker's completed history — without
+reopening them, and never applies to non-task lines. The previous daily
+snapshot stays read-only and fails with a guarded refusal, as do traversal,
+absolute, ambiguous, and symlink-escaping paths.
+
 JSON success is a single versioned object with `ok`, `schema_version` `1`,
-`dry_run`, `route`, `relative_target`, the canonical `block_id`, the updated
-one-based `line`, the updated `ref`, and a `task` object with the same picker
-metadata as `capture-tasks` after the assignment. JSON failure is
-`{"ok": false, "error": "..."}` and is write-free, as are stale, ambiguous,
-terminal, already-identified, duplicate, missing, and unreadable-note errors.
+`dry_run`, `route` (in `--route` mode) or `note_path` (in `--note-path`
+mode), `relative_target`, the backend-formatted `dependency_replacement`
+(`&note:id`, quoted when the locator needs it), the canonical `block_id`,
+the updated one-based `line`, the updated `ref`, and a `task` object with
+the same picker metadata as `capture-tasks` after the assignment. JSON
+failure is `{"ok": false, "error": "..."}` and is write-free, as are stale,
+ambiguous, terminal, already-identified, duplicate, missing, unreadable-note,
+and read-only-snapshot errors.
 
 ## `bob capture-pomodoro-name`
 

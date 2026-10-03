@@ -104,6 +104,9 @@ pub(super) struct DependencyCandidate {
     pub(super) note_path: String,
     pub(super) locator: String,
     pub(super) group: String,
+    /// A `#hide` task: the client renders it subdued. Always present
+    /// so row shape never depends on vault contents.
+    pub(super) hidden: bool,
     pub(super) block_id: Option<String>,
     pub(super) requires_block_id: bool,
     pub(super) block_id_suggestions: Vec<String>,
