@@ -197,7 +197,13 @@ moves to the day after its recorded end consistently before release.
 
 **Read-time decision flag.** `decide = active && enabled && lane
 ready && tier rotten/returned && keeps >= limit`. The annotation
-means a choice is due, not permission to execute an action.
+means a choice is due, not permission to execute an action. The shared
+approved-decay action planner (`planFreshnessDecayCard` in
+bob-navigation-hotkeys) turns that flag into stable previewed decisions —
+P0 entry, a non-cancelling Not now, Less often steps, and dated
+review-decision entries with `· kept N×` tails — as specified in
+`docs/projects.md` ("Approved-decay decision planner"); the card interaction
+itself lands separately.
 
 ## 3. Placement rule
 

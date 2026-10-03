@@ -500,6 +500,46 @@ To keep a task at its level, re-pick its priority level or reschedule it with
 a typed reason — both reset the streak. `bob randomize` entries never count
 for or against it.
 
+### Approved-decay decision planner
+
+The shared approved-decay action planner (`planFreshnessDecayCard` in
+`bob-navigation-hotkeys`, covered by
+`scripts/test-navigation-decay-planner.cjs`) composes the recommendation,
+refresh, and log-insertion planners above into one stable, previewed card
+model for keep-streak decisions. It is pure: every displayed date is rolled
+exactly once from an injected random source, the model is frozen, and approval
+persists the preview without re-rolling. The card interaction and guarded
+commit land separately; the planner never writes.
+
+- **Not now (Enter).** P0 tasks enter at the first configured level in ladder
+  order whose `min_days` exceeds the effective refresh interval (7 → P2,
+  30 → P3 with the default ladder), unless `freshness.decay.enter` names a
+  valid fixed level. Prioritized tasks reuse the recommended roll or decay
+  unchanged. A terminal cancel is never offered: it substitutes a truthful
+  same-level roll for this card only. Unknown priorities, unknown `enter`
+  labels, invalid windows, and dates that would not defer into the future
+  make Not now unavailable with an explanation instead.
+- **Less often (L).** The next refresh preset strictly above the current
+  interval (7 → 14 → 30 → 90); at 90+ the existing custom refresh picker
+  takes over constrained to a longer value ≤ 365, and at 365 the row is
+  unavailable.
+- **Keep (Alt+F)** counts once with saturation at 999 and never resets;
+  **Reword (E)** and **Less often** stamp and clear; **Drop (D)** cancels
+  through the existing guarded cancel writer.
+- **Kept-count tails.** Schedule-changing decisions append `· kept N×` after
+  the existing reason head (`🎲 P0 → P2 decay · in **17** (8–30) days ·
+  kept 3×`), so the classification table above keeps its meaning.
+- **Review-decision entries.** Less often and Reword write dated Schedule Log
+  entries (`🎲 less often · every 7 → 14 days · kept 3×`,
+  `🎲 reword · kept 3×`) with no fabricated scheduled date change; both
+  classify as `other` and deliberately reset the roll streak. Drop writes a
+  dated Cancel Log entry (`🍂 dropped after 3 keeps`) and preserves keeps
+  history on the closed line. Keep and dismissals write no log.
+- **Explicit levels (1–4)** preview one roll per configured level in ladder
+  order, each with reset; absent levels are never invented. An invalid
+  priority config disables every priority-changing action while keeping
+  Keep, Reword, Less often, and Drop.
+
 ### Schedule-log reason prompt
 
 The log records every scheduled change the `Ctrl+Shift+P` picker makes; the
