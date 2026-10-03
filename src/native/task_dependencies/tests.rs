@@ -152,9 +152,10 @@ fn dw_writer_form_vectors() {
         "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]"
     );
     // DW3: append keeps line order; the new link lands at the end. The
-    // writer never re-sorts: the given order renders as given, and the
-    // reconcile adoption path pins the engine side
-    // (`reconcile_dw1_inserts_adopted_line_before_schedule_log`).
+    // Rust side only renders a given order verbatim (never re-sorts);
+    // the append itself is pinned by the nav writer test
+    // `DW3-DW5 append, remove the middle, and delete on the last link`
+    // in bob-plugins `scripts/test-navigation-dependencies.cjs`.
     assert_eq!(
         format_dependency_line(
             "  ",
@@ -171,9 +172,11 @@ fn dw_writer_form_vectors() {
         "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^c]]"
     );
     // DW6: re-add moves to the end; the writer renders the given order
-    // verbatim instead of restoring line order, pinned through the
-    // reconcile rewrite path by
-    // `reconcile_dw3_dw6_rewrite_keeps_link_order`.
+    // verbatim instead of restoring line order. The Rust side only
+    // renders that order (`reconcile_dw3_dw6_rewrite_keeps_link_order`
+    // pins the render); the re-add itself is pinned by the nav writer
+    // test `DW6-DW7 re-add moves to the end and the field mirrors the
+    // line` in bob-plugins `scripts/test-navigation-dependencies.cjs`.
     assert_eq!(
         format_dependency_line(
             "  ",

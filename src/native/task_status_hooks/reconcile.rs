@@ -1108,6 +1108,83 @@ impl ReconcileWorker<'_> {
                 ),
             );
         }
+        let mut detail = format!("dependsOn := {}", next.join(", "));
+        if !dropped.is_empty() {
+            detail.push_str(&format!("; dropped {}", dropped.join(", ")));
+        }
+        if !kept.is_empty() {
+            detail.push_str(&format!("; heal breadcrumbs {}", kept.join(", ")));
+        }
+        self.write_dependent_field(view, next, detail);
+    }
+
+    /// R9: a label-only line is the source of truth — with no legacy
+    /// children behind it the line is deleted and the field goes with
+    /// it, whatever the field holds. Adoptable ids are never
+    /// re-adopted onto the line (DW5/DR16). Legacy children are never
+    /// folded into the line here; they follow R8/R1 through the
+    /// adoption path below, and the vault migration owns that write.
+    fn plan_empty(
+        &mut self,
+        view: &TaskView<'_>,
+        legacy: &[LegacyMember],
+        child_index: usize,
+    ) {
+        if legacy.is_empty() {
+            self.remove_label_only_line(view, child_index);
+            return;
+        }
+        self.plan_adoption(view, legacy, Some(child_index));
+    }
+
+    /// Report a deleted label-only Depends-On line.
+    fn push_line_removed(&mut self, view: &TaskView<'_>, child_index: usize) {
+        self.outcome
+            .projection_updates
+            .push(DependencyProjectionUpdate {
+                kind: "line_removed".to_string(),
+                path: display_path(view.relative_path),
+                line: child_index + 1,
+                detail: "empty Depends-On line removed".to_string(),
+            });
+    }
+
+    /// R9: delete a label-only line and remove the field with it,
+    /// whatever the field holds. The dropped ids warn once as
+    /// `dependency_field_ids_dropped` and report as `line_removed`
+    /// plus `dependsOn removed`; an already-empty field needs no
+    /// rewrite.
+    fn remove_label_only_line(
+        &mut self,
+        view: &TaskView<'_>,
+        child_index: usize,
+    ) {
+        self.remove_line(view.file_index, child_index);
+        self.push_line_removed(view, child_index);
+        if view.task.depends_on.is_empty() {
+            return;
+        }
+        let dropped = view.task.depends_on.clone();
+        self.warn(
+            view,
+            "dependency_field_ids_dropped",
+            &format!("dropped unaccounted field ids {}", dropped.join(", ")),
+        );
+        self.write_dependent_field(
+            view,
+            Vec::new(),
+            "dependsOn removed".to_string(),
+        );
+    }
+
+    /// Rewrite the dependent's `[dependsOn::]` to `next` and report it
+    /// as a `dependent_field` projection update carrying `detail`.
+    fn write_dependent_field(
+        &mut self,
+        view: &TaskView<'_>,
+        next: Vec<String>,
+        detail: String,
+    ) {
         let id = self.pending_or_scanned_id(
             view.file_index,
             view.task.line_index,
@@ -1122,15 +1199,8 @@ impl ReconcileWorker<'_> {
             view.task.line_index,
             &updated,
             id,
-            next.clone(),
+            next,
         );
-        let mut detail = format!("dependsOn := {}", next.join(", "));
-        if !dropped.is_empty() {
-            detail.push_str(&format!("; dropped {}", dropped.join(", ")));
-        }
-        if !kept.is_empty() {
-            detail.push_str(&format!("; heal breadcrumbs {}", kept.join(", ")));
-        }
         self.outcome
             .projection_updates
             .push(DependencyProjectionUpdate {
@@ -1141,18 +1211,33 @@ impl ReconcileWorker<'_> {
             });
     }
 
-    /// A label-only line reuses the R2 adoption path: adoptable ids
-    /// rewrite it in place; with nothing adoptable the line is deleted
-    /// and, with no legacy children, the field goes with it (R9).
-    /// Legacy children are never folded into the line here; the vault
-    /// migration owns that write.
-    fn plan_empty(
+    /// Warn for ids that stay in the field: self-naming ids (R6) are
+    /// never adopted, and ids matching no task with a block id (R2)
+    /// stay until their target appears.
+    fn warn_kept_ids(
         &mut self,
         view: &TaskView<'_>,
-        legacy: &[LegacyMember],
-        child_index: usize,
+        self_named: &[String],
+        unadoptable: &[String],
     ) {
-        self.plan_adoption(view, legacy, Some(child_index));
+        for id in self_named {
+            self.warn(
+                view,
+                "self_dependency",
+                &format!(
+                    "field id {id} names its own task; kept, not projected"
+                ),
+            );
+        }
+        for id in unadoptable {
+            self.warn(
+                view,
+                "unadoptable_dependency_id",
+                &format!(
+                    "field id {id} matches no task with a block id; kept in the field"
+                ),
+            );
+        }
     }
 
     /// R2: without a line, adopt field ids not covered by legacy
@@ -1182,14 +1267,7 @@ impl ReconcileWorker<'_> {
                 // field still covers legacy children and stays; an empty
                 // field needs no rewrite.
                 self.remove_line(view.file_index, child_index);
-                self.outcome.projection_updates.push(
-                    DependencyProjectionUpdate {
-                        kind: "line_removed".to_string(),
-                        path: display_path(view.relative_path),
-                        line: child_index + 1,
-                        detail: "empty Depends-On line removed".to_string(),
-                    },
-                );
+                self.push_line_removed(view, child_index);
             }
             let set: Vec<(PathBuf, String, String, bool)> = legacy
                 .iter()
@@ -1289,93 +1367,19 @@ impl ReconcileWorker<'_> {
                 // the line (DW5/DR16). With no legacy children the field
                 // goes with it, reported like any other unaccounted-field
                 // drop; legacy coverage keeps the field (R2).
-                self.remove_line(view.file_index, child_index);
-                self.outcome.projection_updates.push(
-                    DependencyProjectionUpdate {
-                        kind: "line_removed".to_string(),
-                        path: display_path(view.relative_path),
-                        line: child_index + 1,
-                        detail: "empty Depends-On line removed".to_string(),
-                    },
-                );
-                if !view.task.depends_on.is_empty() && legacy.is_empty() {
-                    let dropped = view.task.depends_on.clone();
-                    self.warn(
-                        view,
-                        "dependency_field_ids_dropped",
-                        &format!(
-                            "dropped unaccounted field ids {}",
-                            dropped.join(", ")
-                        ),
-                    );
-                    let id = self.pending_or_scanned_id(
-                        view.file_index,
-                        view.task.line_index,
-                        view.task.task_id.clone(),
-                    );
-                    let current = self.pending_or_snapshot_line(
-                        view.file_index,
-                        view.task.line_index,
-                    );
-                    let updated = set_task_fields(&current, id.as_deref(), &[]);
-                    self.replace_task_line(
-                        view,
-                        view.file_index,
-                        view.task.line_index,
-                        &updated,
-                        id,
-                        Vec::new(),
-                    );
-                    self.outcome.projection_updates.push(
-                        DependencyProjectionUpdate {
-                            kind: "dependent_field".to_string(),
-                            path: display_path(view.relative_path),
-                            line: view.task.line_index + 1,
-                            detail: "dependsOn removed".to_string(),
-                        },
-                    );
+                if legacy.is_empty() {
+                    self.remove_label_only_line(view, child_index);
                     return;
                 }
+                self.remove_line(view.file_index, child_index);
+                self.push_line_removed(view, child_index);
             }
             // R2 keep path: ids staying in the field warn here, since the
             // R9 drop above reports its own removal instead.
-            for id in &self_named {
-                self.warn(
-                    view,
-                    "self_dependency",
-                    &format!(
-                        "field id {id} names its own task; kept, not projected"
-                    ),
-                );
-            }
-            for id in &unadoptable {
-                self.warn(
-                    view,
-                    "unadoptable_dependency_id",
-                    &format!(
-                        "field id {id} matches no task with a block id; kept in the field"
-                    ),
-                );
-            }
+            self.warn_kept_ids(view, &self_named, &unadoptable);
             if next != view.task.depends_on {
-                let id = self.pending_or_scanned_id(
-                    view.file_index,
-                    view.task.line_index,
-                    view.task.task_id.clone(),
-                );
-                let current = self.pending_or_snapshot_line(
-                    view.file_index,
-                    view.task.line_index,
-                );
-                let updated = set_task_fields(&current, id.as_deref(), &next);
-                self.replace_task_line(
-                    view,
-                    view.file_index,
-                    view.task.line_index,
-                    &updated,
-                    id,
-                    next.clone(),
-                );
+                let detail = format!("dependsOn := {}", next.join(", "));
+                self.write_dependent_field(view, next.clone(), detail);
             }
             return;
         }
@@ -1387,24 +1391,7 @@ impl ReconcileWorker<'_> {
             .collect();
         // Adopted alongside ids that stay in the field (R2): those
         // warn here, since collection above no longer warns inline.
-        for id in &self_named {
-            self.warn(
-                view,
-                "self_dependency",
-                &format!(
-                    "field id {id} names its own task; kept, not projected"
-                ),
-            );
-        }
-        for id in &unadoptable {
-            self.warn(
-                view,
-                "unadoptable_dependency_id",
-                &format!(
-                    "field id {id} matches no task with a block id; kept in the field"
-                ),
-            );
-        }
+        self.warn_kept_ids(view, &self_named, &unadoptable);
         let (position, indent) = self.child_slot(view, empty_line);
         let line =
             task_dependencies::format::format_dependency_line(&indent, &texts);
@@ -1424,32 +1411,8 @@ impl ReconcileWorker<'_> {
             });
         }
         if next != view.task.depends_on {
-            let id = self.pending_or_scanned_id(
-                view.file_index,
-                view.task.line_index,
-                view.task.task_id.clone(),
-            );
-            let current = self.pending_or_snapshot_line(
-                view.file_index,
-                view.task.line_index,
-            );
-            let updated = set_task_fields(&current, id.as_deref(), &next);
-            self.replace_task_line(
-                view,
-                view.file_index,
-                view.task.line_index,
-                &updated,
-                id,
-                next.clone(),
-            );
-            self.outcome
-                .projection_updates
-                .push(DependencyProjectionUpdate {
-                    kind: "dependent_field".to_string(),
-                    path: display_path(view.relative_path),
-                    line: view.task.line_index + 1,
-                    detail: format!("dependsOn := {}", next.join(", ")),
-                });
+            let detail = format!("dependsOn := {}", next.join(", "));
+            self.write_dependent_field(view, next.clone(), detail);
         }
     }
 
