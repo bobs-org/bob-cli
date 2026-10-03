@@ -121,10 +121,10 @@ edited in place.
    it. It never changes task status or feeds Next, and it stays a tag, never an inline
    field.
 2. **Active Task Statuses Are Derived, Not Authored** (`task-status-is-derived`) -
-   _[partly superseded by `task-lanes-are-sticky`]_ Today's Pomodoro ledger drives Next
-   and In Progress; open dependencies and future scheduled dates drive Blocked. bob
-   task-status-hooks reconciles them, so writers change those inputs, never just the
-   checkbox.
+   _[partly superseded by `task-lanes-are-sticky`, `task-deps-are-depends-on-links`]_
+   Today's Pomodoro ledger drives Next and In Progress; open dependencies and future
+   scheduled dates drive Blocked. bob task-status-hooks reconciles them, so writers
+   change those inputs, never just the checkbox.
 3. **Bob Mac Capture Is A Thin Client Of bob** (`mac-capture-is-a-thin-client`) - Bob
    Mac Capture never parses capture grammar, computes previews, or writes the vault; it
    runs bob, renders the spans, candidates, and previews bob returns, and submits each
@@ -149,7 +149,11 @@ edited in place.
    next_interval (default 1, false walks that lane off); tiers never feed buckets or
    chips; upkeep outside the lanes counts the budget; stamps stay and the seed never
    re-runs.
-8. **Today Is Read From The Ledger, Never Written To Tasks**
+8. **Task Dependencies Are Links On One Depends-On Line**
+   (`task-deps-are-depends-on-links`) - A task's prerequisites live as plain task
+   dependency links on one managed Depends-On first-child line; that line is the source
+   of truth and the [dependsOn::] / [id::] fields are derived from it.
+9. **Today Is Read From The Ledger, Never Written To Tasks**
    (`today-is-read-from-the-ledger`) - _[partly superseded by `ready-is-freshness-gated`
    ]_ Today is the open tasks with a dedicated Task Link under today's open Pomodoros,
    computed at read time by bob plan and bob-ledger-tools; never a tag, task-line field,
@@ -163,8 +167,8 @@ depend on. Pass every term you need in one command — one batched read costs fa
 tokens than one read per term, because terms shared between definitions are printed
 once. Terms are separated by semicolons; aliases follow in parentheses.
 
-**GLOSSARY TERMS:** Pomodoro; Schedule Log; Task Freshness (freshness); Task Link (task
-block link); Work Log
+**GLOSSARY TERMS:** Pomodoro; Schedule Log; Task Dependency Link (task dep link, dep
+link); Task Freshness (freshness); Task Link (task block link); Work Log
 
 ### 3.3 Task Bead Types (task_types)
 

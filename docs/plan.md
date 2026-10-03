@@ -134,7 +134,7 @@ task-line field, or a file-path filter.
    done and cancelled tasks drop out. Deduplicate by (path, block
    ID), keeping the ledger order of first occurrence. The key is
    `"<vault path with .md>#<block id>"`.
-6. Transcluded dependencies do **not** inherit Today; the hooks
+6. Dependency targets do **not** inherit Today; the hooks
    still promote them to Next.
 
 ## Lanes (NEXT and PENDING)

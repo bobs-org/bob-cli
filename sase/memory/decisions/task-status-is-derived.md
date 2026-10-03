@@ -11,7 +11,9 @@ summary:
 metadata:
   status: superseded-in-part
   decided: 2026-07-16
-  superseded_by: decisions/task-lanes-are-sticky
+  superseded_by:
+    - decisions/task-lanes-are-sticky
+    - decisions/task-deps-are-depends-on-links
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -53,4 +55,6 @@ express, or reconciliation moves off a periodic whole-vault scan (for example, b
 transactional vault service).
 
 Superseded in part: Next and In Progress are no longer derived — see
-[[decisions/task-lanes-are-sticky]]. Blocked stays derived as stated.
+[[decisions/task-lanes-are-sticky]]. The transcluded-dependency path and the `!`
+removal rationale are retired by [[decisions/task-deps-are-depends-on-links]];
+the Blocked rule stands.
