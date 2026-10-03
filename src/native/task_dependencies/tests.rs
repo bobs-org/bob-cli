@@ -126,6 +126,14 @@ fn dw_writer_form_vectors() {
         ),
         "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]"
     );
+    // DW3: append keeps line order; the new link lands at the end.
+    assert_eq!(
+        format_dependency_line(
+            "  ",
+            &["[[#^a]]".to_string(), "[[#^b]]".to_string()]
+        ),
+        "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]"
+    );
     // DW4/DW7: removal keeps order; the field mirrors the line's order.
     assert_eq!(
         format_dependency_line(
@@ -134,10 +142,50 @@ fn dw_writer_form_vectors() {
         ),
         "  - ⛓️ **DEPENDS ON:** [[#^a]] • [[#^c]]"
     );
+    // DW6: re-add moves to the end; the writer renders the given order.
+    assert_eq!(
+        format_dependency_line(
+            "  ",
+            &["[[#^b]]".to_string(), "[[#^a]]".to_string()]
+        ),
+        "  - ⛓️ **DEPENDS ON:** [[#^b]] • [[#^a]]"
+    );
     // DW5: removing the last link deletes the line (no placeholder); the
-    // writer emits nothing and removes the field.
-    let empty: Vec<String> = Vec::new();
-    assert!(empty.is_empty());
+    // writer emits nothing and removes the field. An empty link list
+    // renders only the label, which the reconcile deletes with the field
+    // (R9) instead of writing a placeholder link.
+    let links: Vec<String> = Vec::new();
+    assert!(links.is_empty());
+    assert_eq!(
+        format_dependency_line("  ", &links),
+        "  - ⛓️ **DEPENDS ON:** "
+    );
+}
+
+#[test]
+fn dw_create_and_identity_vectors() {
+    // DW1: create as first child (for example before a SCHEDULE LOG child):
+    // the new line uses the parent indent plus one tab when the task has
+    // no existing child indent; the full position is pinned by the hooks'
+    // reconcile CLI tests.
+    assert_eq!(child_indent_for_parent("\t", None), "\t\t");
+    assert_eq!(
+        format_dependency_line("\t\t", &["[[#^a]]".to_string()]),
+        "\t\t- ⛓️ **DEPENDS ON:** [[#^a]]"
+    );
+    // DW2: create after a CANCEL LOG child: the existing child indent is
+    // reused and the line lands second; position is pinned by reconcile.
+    assert_eq!(child_indent_for_parent("\t", Some("  ")), "  ".to_string());
+    // DW15: an existing `[id:: custom]` is preferred over the encodable
+    // canonical id and never rewritten; the canonical side pins here while
+    // the preference is pinned by the hooks' reconcile `target_id` tests.
+    assert_eq!(
+        super::dependency_id(&PathBuf::from("body.md"), "x")
+            .expect("encodable"),
+        "body__x"
+    );
+    // DW16: a target path that cannot encode with no `[id::]` is refused.
+    assert!(super::dependency_id(&PathBuf::from("my note.md"), "a").is_err());
 }
 
 #[test]

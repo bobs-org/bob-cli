@@ -128,32 +128,10 @@ pub(crate) fn vault_relative_link_target(
     relative_path: &Path,
     path_kind: &str,
 ) -> io::Result<String> {
-    let mut path_without_extension = relative_path.to_path_buf();
-    path_without_extension.set_extension("");
-
-    let mut components = Vec::new();
-    for component in path_without_extension.components() {
-        let Component::Normal(part) = component else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "{path_kind} path is not vault-relative: {}",
-                    relative_path.display()
-                ),
-            ));
-        };
-        components.push(part.to_str().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "{path_kind} path is not valid UTF-8: {}",
-                    relative_path.display()
-                ),
-            )
-        })?);
-    }
-
-    Ok(components.join("/"))
+    super::super::task_dependencies::vault_relative_link_target_with_kind(
+        relative_path,
+        path_kind,
+    )
 }
 pub(super) use super::super::task_dependencies::dependency_id;
 pub(super) fn transform_markdown(contents: &str) -> Transform {

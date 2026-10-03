@@ -440,7 +440,12 @@ source.
 Direct block links under open Pomodoros promote Ready tasks to Next (`[*]`) and
 leave In Progress (`[/]`) alone. Task dependency links on a dependent's managed
 `⛓️ **DEPENDS ON:**` line plus R8 legacy dependency children inherit the
-strongest parent rank. Lanes are sticky: removing a link never lowers Next or
+strongest parent rank. Before ranking, the command reconciles each
+Depends-On line into `[dependsOn::]` / `[id::]` fields (R1–R10: project,
+adopt, heal, canonicalize, warn; see
+[`docs/task-dependencies.md`](docs/task-dependencies.md) and
+[`docs/task-status-hooks.md`](docs/task-status-hooks.md#dependency-lines)).
+Lanes are sticky: removing a link never lowers Next or
 In Progress — only a Next task inside a canonical daily note (or the current
 ledger) still clears back to Ready once unlinked and stale. Independently,
 open Dataview dependencies and future `[scheduled:: YYYY-MM-DD]` dates mark a
@@ -451,7 +456,9 @@ open Pomodoros, removes list items that only point at canceled tasks, deletes
 childless current-daily Pomodoro entries, and
 groups area/project `Tasks` sections into `Next & In Progress`, `Blocked`, and
 `Done & Canceled` child headings with a linked status-count badge row while
-keeping Ready tasks in the intake.
+keeping Ready tasks in the intake. Human and JSON reports include the
+dependency projection counts (`Dependencies:` plus the trailing `Summary:`
+counts).
 
 ```bash
 bob task-status-hooks --dry-run

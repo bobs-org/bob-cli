@@ -87,6 +87,26 @@ pub(crate) fn raw_wikilink_spans(line: &str) -> Vec<WikilinkSpan> {
     spans
 }
 
+/// Split a raw wikilink `inside` (`[[inside]]`) into its `(target,
+/// block-id)` when it names a `#^block-id` with valid block-id bytes.
+///
+/// Shared by [`block_link_spans`] and the hooks' `block_link_occurrences`
+/// so both agree on what a block link is.
+pub(crate) fn parse_block_link_inside(
+    inside: &str,
+) -> Option<(String, String)> {
+    let link_target = inside.split('|').next().unwrap_or("");
+    let fragment = link_target.find("#^")?;
+    let target = link_target[..fragment].trim().to_string();
+    let block_id = link_target[fragment + 2..].trim().to_string();
+    if block_id.is_empty()
+        || !block_id.bytes().all(super::collect_done::is_block_id_byte)
+    {
+        return None;
+    }
+    Some((target, block_id))
+}
+
 /// Validated block links in a line: aliases, `!`, and `~~` are parsed,
 /// inline code spans are ignored, and only `#^block-id` targets with
 /// valid block-id bytes are returned.
@@ -95,17 +115,9 @@ pub(crate) fn block_link_spans(line: &str) -> Vec<BlockLinkSpan> {
     let mut links = Vec::new();
     for span in raw_wikilink_spans(line) {
         let inside = &line[span.open + 2..span.end - 2];
-        let link_target = inside.split('|').next().unwrap_or("");
-        let Some(fragment) = link_target.find("#^") else {
+        let Some((target, block_id)) = parse_block_link_inside(inside) else {
             continue;
         };
-        let target = link_target[..fragment].trim();
-        let block_id = link_target[fragment + 2..].trim();
-        if block_id.is_empty()
-            || !block_id.bytes().all(super::collect_done::is_block_id_byte)
-        {
-            continue;
-        }
         let embedded = line[..span.open].ends_with('!');
         let token_start = span.open - usize::from(embedded);
         let struck_span = struck_spans.iter().find(|struck| {
@@ -120,8 +132,8 @@ pub(crate) fn block_link_spans(line: &str) -> Vec<BlockLinkSpan> {
                 (struck.start, struck.end)
             });
         links.push(BlockLinkSpan {
-            target: target.to_string(),
-            block_id: block_id.to_string(),
+            target,
+            block_id,
             open: span.open,
             end: span.end,
             token_start,
@@ -222,6 +234,16 @@ pub(crate) fn dependency_id(
 }
 
 fn vault_relative_link_target(relative_path: &Path) -> io::Result<String> {
+    vault_relative_link_target_with_kind(relative_path, "dependency")
+}
+
+/// Shared vault-relative note identity (`note/sub` for `note/sub.md`).
+/// `path_kind` names the caller in I/O errors so the single implementation
+/// serves both dependency ids and archive/source wiki links.
+pub(crate) fn vault_relative_link_target_with_kind(
+    relative_path: &Path,
+    path_kind: &str,
+) -> io::Result<String> {
     let mut path_without_extension = relative_path.to_path_buf();
     path_without_extension.set_extension("");
 
@@ -231,7 +253,7 @@ fn vault_relative_link_target(relative_path: &Path) -> io::Result<String> {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "dependency note path is not vault-relative: {}",
+                    "{path_kind} path is not vault-relative: {}",
                     relative_path.display()
                 ),
             ));
@@ -240,7 +262,7 @@ fn vault_relative_link_target(relative_path: &Path) -> io::Result<String> {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "dependency note path is not valid UTF-8: {}",
+                    "{path_kind} path is not valid UTF-8: {}",
                     relative_path.display()
                 ),
             )

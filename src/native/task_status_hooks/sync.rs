@@ -399,11 +399,6 @@ pub(super) fn sync_task_statuses(
     let note_index = NoteIndex::from_paths(
         files.iter().map(|file| file.relative_path.clone()),
     );
-    let pre_reconcile: BTreeMap<usize, String> = files
-        .iter()
-        .enumerate()
-        .map(|(index, file)| (index, file.contents.clone()))
-        .collect();
     let reconcile = reconcile_dependencies(
         &request.bob_dir,
         &mut files,
@@ -412,15 +407,7 @@ pub(super) fn sync_task_statuses(
         previous_daily_path.as_deref(),
         &mut inputs,
     );
-    let pre_reconcile: BTreeMap<usize, String> = reconcile
-        .touched_files
-        .iter()
-        .filter_map(|index| {
-            pre_reconcile
-                .get(index)
-                .map(|contents| (*index, contents.clone()))
-        })
-        .collect();
+    let pre_reconcile = &reconcile.original_contents;
     for file_index in &reconcile.touched_files {
         let file = &mut files[*file_index];
         file.tasks = parse_tasks(&file.contents, &settings);
@@ -637,7 +624,7 @@ pub(super) fn sync_task_statuses(
             settings: &settings,
         },
         &reconcile.touched_files,
-        &pre_reconcile,
+        pre_reconcile,
     );
     let apply_report = if request.dry_run {
         ApplyReport::default()

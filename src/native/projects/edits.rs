@@ -204,7 +204,7 @@ pub(super) fn remove_all_task_tags(line: &str, tag: &str) -> String {
     }
 }
 
-pub(crate) fn upsert_task_scheduled(
+fn upsert_task_scheduled(
     line: &str,
     scheduled: &str,
     scheduled_date: NaiveDate,
@@ -597,7 +597,7 @@ pub(super) fn prj_sub_block_layout(
     Err("failed to locate ^prj task".to_string())
 }
 
-pub(crate) fn inline_field_removal_range(
+fn inline_field_removal_range(
     line_text: &str,
     field_start: usize,
     field_end: usize,

@@ -164,7 +164,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.dependency_warnings.len()
     );
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -178,7 +178,13 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.removed_canceled_references.len(),
         result.removed_duplicate_lines.len(),
         result.removed_empty_pomodoros.len(),
-        result.grouped_task_sections.len()
+        result.grouped_task_sections.len(),
+        result.dependency_projection_updates.len(),
+        result.adopted_dependency_lines.len(),
+        result.healed_dependency_links.len(),
+        result.canonicalized_dependency_lines.len(),
+        result.legacy_dependency_children,
+        result.dependency_warnings.len()
     );
 }
 

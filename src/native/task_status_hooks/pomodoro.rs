@@ -149,82 +149,71 @@ pub(super) fn pomodoro_bullet_indentation(line: &str) -> Option<String> {
 
 pub(super) fn block_link_occurrences(line: &str) -> Vec<LinkOccurrence> {
     let mut links = Vec::new();
-    let struck_spans = strikethrough_spans(line);
+    let struck_spans = task_dependencies::strikethrough_spans(line);
     for span in task_dependencies::raw_wikilink_spans(line) {
         let absolute_open = span.open;
         let inside = &line[span.open + 2..span.end - 2];
         let link_end = span.end;
-        let link_target = inside.split('|').next().unwrap_or("");
-        if let Some(fragment) = link_target.find("#^") {
-            let target = link_target[..fragment].trim();
-            let block_id = link_target[fragment + 2..].trim();
-            if !block_id.is_empty()
-                && block_id.bytes().all(collect_done::is_block_id_byte)
-            {
-                let embedded = line[..absolute_open].ends_with('!');
-                let token_start = absolute_open - usize::from(embedded);
-                let struck_span = struck_spans.iter().find(|span| {
-                    token_start >= span.start + 2 && link_end <= span.end - 2
-                });
-                let struck = struck_span.is_some();
-                let exact_struck_span = struck_span.filter(|span| {
-                    token_start == span.start + 2 && link_end == span.end - 2
-                });
-                let display_start =
-                    exact_struck_span.map_or(token_start, |span| span.start);
-                let edit_end =
-                    exact_struck_span.map_or(link_end, |span| span.end);
-                let (edit_start, marker_count) =
-                    pomodoro_marker_prefix(line, display_start);
-                let wikilink = &line[absolute_open..link_end];
-                let before = if !struck && line[..token_start].ends_with("~~") {
-                    " "
-                } else {
-                    ""
-                };
-                let after = if !struck && line[link_end..].starts_with("~~") {
-                    " "
-                } else {
-                    ""
-                };
-                let preserved = &line[display_start..edit_end];
-                let (retired_marked_token, retired_unmarked_token) = if struck {
-                    if exact_struck_span.is_some() {
-                        let token = format!("~~{wikilink}~~");
-                        (format!("{POMODORO_MARKER} {token}"), token)
-                    } else {
-                        (
-                            format!("{POMODORO_MARKER} {wikilink}"),
-                            wikilink.to_string(),
-                        )
-                    }
+        if let Some((target, block_id)) =
+            task_dependencies::parse_block_link_inside(inside)
+        {
+            let embedded = line[..absolute_open].ends_with('!');
+            let token_start = absolute_open - usize::from(embedded);
+            let struck_span = struck_spans.iter().find(|span| {
+                token_start >= span.start + 2 && link_end <= span.end - 2
+            });
+            let struck = struck_span.is_some();
+            let exact_struck_span = struck_span.filter(|span| {
+                token_start == span.start + 2 && link_end == span.end - 2
+            });
+            let display_start =
+                exact_struck_span.map_or(token_start, |span| span.start);
+            let edit_end = exact_struck_span.map_or(link_end, |span| span.end);
+            let (edit_start, marker_count) =
+                pomodoro_marker_prefix(line, display_start);
+            let wikilink = &line[absolute_open..link_end];
+            let before = if !struck && line[..token_start].ends_with("~~") {
+                " "
+            } else {
+                ""
+            };
+            let after = if !struck && line[link_end..].starts_with("~~") {
+                " "
+            } else {
+                ""
+            };
+            let preserved = &line[display_start..edit_end];
+            let (retired_marked_token, retired_unmarked_token) = if struck {
+                if exact_struck_span.is_some() {
+                    let token = format!("~~{wikilink}~~");
+                    (format!("{POMODORO_MARKER} {token}"), token)
                 } else {
                     (
-                        format!(
-                            "{before}{POMODORO_MARKER} ~~{wikilink}~~{after}"
-                        ),
-                        format!("{before}~~{wikilink}~~{after}"),
+                        format!("{POMODORO_MARKER} {wikilink}"),
+                        wikilink.to_string(),
                     )
-                };
-                links.push(LinkOccurrence {
-                    reference: RawReference {
-                        target: target.to_string(),
-                        block_id: block_id.to_string(),
-                    },
-                    edit_start,
-                    edit_end,
-                    current_token: line[edit_start..edit_end].to_string(),
-                    preserved_marked_token: format!(
-                        "{POMODORO_MARKER} {preserved}"
-                    ),
-                    preserved_unmarked_token: preserved.to_string(),
-                    retired_marked_token,
-                    retired_unmarked_token,
-                    embedded,
-                    struck,
-                    marker_count,
-                });
-            }
+                }
+            } else {
+                (
+                    format!("{before}{POMODORO_MARKER} ~~{wikilink}~~{after}"),
+                    format!("{before}~~{wikilink}~~{after}"),
+                )
+            };
+            links.push(LinkOccurrence {
+                reference: RawReference { target, block_id },
+                edit_start,
+                edit_end,
+                current_token: line[edit_start..edit_end].to_string(),
+                preserved_marked_token: format!(
+                    "{POMODORO_MARKER} {preserved}"
+                ),
+                preserved_unmarked_token: preserved.to_string(),
+                retired_marked_token,
+                retired_unmarked_token,
+                embedded,
+                struck,
+                marker_count,
+            });
         }
     }
     links
@@ -288,20 +277,6 @@ pub(super) fn marker_expected_for_occurrence(
     link: &LinkOccurrence,
 ) -> bool {
     entry.completed && completed_pomodoro_marker_expected(link)
-}
-
-pub(super) fn strikethrough_spans(line: &str) -> Vec<std::ops::Range<usize>> {
-    let mut delimiters = Vec::new();
-    let mut cursor = 0;
-    while let Some(offset) = line[cursor..].find("~~") {
-        let position = cursor + offset;
-        delimiters.push(position);
-        cursor = position + 2;
-    }
-    delimiters
-        .chunks_exact(2)
-        .map(|pair| pair[0]..pair[1] + 2)
-        .collect()
 }
 
 pub(super) fn plan_empty_pomodoro_removals(

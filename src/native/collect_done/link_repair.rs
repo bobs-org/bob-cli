@@ -535,7 +535,8 @@ pub(super) fn repair_pathless_archive_links(
             repaired.push_str(segment);
             continue;
         }
-        let code_spans = inline_code_spans(line);
+        let code_spans =
+            super::super::task_dependencies::inline_code_spans(line);
         let mut cursor = 0;
         let mut rewritten = String::with_capacity(line.len());
         while let Some(relative_start) = line[cursor..].find("[[") {
@@ -633,7 +634,8 @@ pub(super) fn repair_dependency_metadata(
             next.push_str(line_with_ending);
             continue;
         }
-        let code_spans = inline_code_spans(line);
+        let code_spans =
+            super::super::task_dependencies::inline_code_spans(line);
         let mut cursor = 0;
         for captures in DEPENDENCY_FIELD_RE.captures_iter(line) {
             let whole = captures.get(0).expect("whole dependency field");
@@ -713,42 +715,6 @@ pub(super) fn repair_dependency_metadata(
         contents: next,
         count,
     }
-}
-pub(super) fn inline_code_spans(line: &str) -> Vec<std::ops::Range<usize>> {
-    let bytes = line.as_bytes();
-    let mut spans = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'`' {
-            index += 1;
-            continue;
-        }
-        let start = index;
-        while index < bytes.len() && bytes[index] == b'`' {
-            index += 1;
-        }
-        let width = index - start;
-        let mut search = index;
-        while search < bytes.len() {
-            if bytes[search] != b'`' {
-                search += 1;
-                continue;
-            }
-            let close = search;
-            while search < bytes.len() && bytes[search] == b'`' {
-                search += 1;
-            }
-            if search - close == width {
-                spans.push(start..search);
-                index = search;
-                break;
-            }
-        }
-        if index == start + width {
-            break;
-        }
-    }
-    spans
 }
 pub(super) fn repair_wiki_links(
     contents: &str,

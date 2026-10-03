@@ -12,6 +12,11 @@ use super::*;
 
 use std::collections::BTreeMap;
 
+mod apply;
+mod fields;
+
+pub(super) use fields::{rebuild_child_line, set_task_fields};
+
 /// Outcome of one reconciliation pass: content edits already applied
 /// to `files`, plus the report rows the sync result prints.
 pub(super) struct ReconcileOutcome {
@@ -25,6 +30,9 @@ pub(super) struct ReconcileOutcome {
     /// Vault-wide ids of archive (`done/`) prerequisites: kept in the
     /// field, never warned about, never blocking.
     pub(super) archive_closed_ids: BTreeSet<String>,
+    /// Original note contents for touched files only, so callers clone
+    /// just what reconcile rewrote instead of the whole vault.
+    pub(super) original_contents: BTreeMap<usize, String>,
 }
 
 /// Project every open dependent's Depends-On line into its fields.
@@ -81,6 +89,9 @@ struct ReconcileWorker<'a> {
     task_lookup: BTreeMap<(PathBuf, String), (usize, usize)>,
     /// Vault-wide `[id::]` per scanned task identity.
     id_lookup: BTreeMap<(PathBuf, String), Option<String>>,
+    /// Block id to scanned tasks carrying it, built once per run so R3
+    /// healing does not rescan the whole vault for every dependent.
+    by_block: BTreeMap<String, Vec<(PathBuf, Option<String>)>>,
     /// Every `^block-id` defined on a non-task block, per note.
     non_task_blocks: BTreeMap<PathBuf, BTreeSet<String>>,
     /// Parsed `done/` targets, loaded on demand for archive links.
@@ -127,6 +138,7 @@ impl ReconcileOutcome {
             legacy_children: 0,
             warnings: Vec::new(),
             archive_closed_ids: BTreeSet::new(),
+            original_contents: BTreeMap::new(),
         }
     }
 }
@@ -206,6 +218,14 @@ impl<'a> ReconcileWorker<'a> {
             .collect();
         let previous_daily_file = previous_daily_path
             .and_then(|path| files.iter().position(|file| file.path == *path));
+        let mut by_block: BTreeMap<String, Vec<(PathBuf, Option<String>)>> =
+            BTreeMap::new();
+        for ((path, block), id) in &id_lookup {
+            by_block
+                .entry(block.clone())
+                .or_default()
+                .push((path.clone(), id.clone()));
+        }
         Self {
             vault,
             note_index,
@@ -213,6 +233,7 @@ impl<'a> ReconcileWorker<'a> {
             previous_daily_path,
             task_lookup,
             id_lookup,
+            by_block,
             non_task_blocks,
             archive_tasks: BTreeMap::new(),
             snapshots,
@@ -867,20 +888,12 @@ impl ReconcileWorker<'_> {
             .filter(|id| !resolved_ids.contains(*id))
             .cloned()
             .collect();
-        // Block ids that scanned tasks carry, with their vault-wide ids.
-        let mut by_block: BTreeMap<String, Vec<(PathBuf, Option<String>)>> =
-            BTreeMap::new();
-        for ((path, block), id) in &self.id_lookup {
-            by_block
-                .entry(block.clone())
-                .or_default()
-                .push((path.clone(), id.clone()));
-        }
         for link in planned.iter_mut() {
             if !matches!(link.resolved, LinkTarget::Unresolved) {
                 continue;
             }
-            let candidates = by_block
+            let candidates = self
+                .by_block
                 .get(&link.block)
                 .map(|tasks| {
                     tasks
@@ -1447,482 +1460,5 @@ impl ReconcileWorker<'_> {
             stack.pop();
             in_stack.remove(&target);
         }
-    }
-
-    /// Record a task-line rewrite, merging with any pending stamp
-    /// or projection already queued for the same line.
-    fn replace_task_line(
-        &mut self,
-        view: &TaskView<'_>,
-        file_index: usize,
-        line_index: usize,
-        new_line: &str,
-        id: Option<String>,
-        depends_on: Vec<String>,
-    ) {
-        let _ = view;
-        self.task_rewrites.insert(
-            (file_index, line_index),
-            (new_line.to_string(), id, depends_on),
-        );
-        self.outcome.touched_files.insert(file_index);
-    }
-
-    /// The pending `[id::]` of a task line: its queued rewrite's id
-    /// when one exists, else the scanned id. Every task-line rewrite
-    /// starts from the pending values so chained edits settle in one
-    /// run instead of overwriting each other.
-    fn pending_or_scanned_id(
-        &self,
-        file_index: usize,
-        line_index: usize,
-        scanned: Option<String>,
-    ) -> Option<String> {
-        match self.task_rewrites.get(&(file_index, line_index)) {
-            Some((_, id, _)) => id.clone(),
-            None => scanned,
-        }
-    }
-
-    /// The pending `[dependsOn::]` of a task line: its queued
-    /// rewrite's ids when one exists, else the scanned ids.
-    fn pending_or_scanned_depends(
-        &self,
-        file_index: usize,
-        line_index: usize,
-        scanned: Vec<String>,
-    ) -> Vec<String> {
-        match self.task_rewrites.get(&(file_index, line_index)) {
-            Some((_, _, depends)) => depends.clone(),
-            None => scanned,
-        }
-    }
-
-    /// The current text of a task line: its pending rewrite when one
-    /// is queued, else the snapshot.
-    fn pending_or_snapshot_line(
-        &self,
-        file_index: usize,
-        line_index: usize,
-    ) -> String {
-        self.task_rewrites
-            .get(&(file_index, line_index))
-            .map(|(line, _, _)| line.clone())
-            .unwrap_or_else(|| {
-                self.snapshots[file_index].lines[line_index].clone()
-            })
-    }
-
-    fn replace_line(
-        &mut self,
-        file_index: usize,
-        line_index: usize,
-        new_line: &str,
-    ) {
-        self.edits.push(PendingEdit {
-            file_index,
-            line_index,
-            kind: EditKind::Replace,
-            new_line: new_line.to_string(),
-        });
-        self.outcome.touched_files.insert(file_index);
-    }
-
-    fn remove_line(&mut self, file_index: usize, line_index: usize) {
-        self.edits.push(PendingEdit {
-            file_index,
-            line_index,
-            kind: EditKind::Remove,
-            new_line: String::new(),
-        });
-        self.outcome.touched_files.insert(file_index);
-    }
-
-    fn insert_line(
-        &mut self,
-        file_index: usize,
-        line_index: usize,
-        new_line: &str,
-    ) {
-        self.edits.push(PendingEdit {
-            file_index,
-            line_index,
-            kind: EditKind::Insert,
-            new_line: new_line.to_string(),
-        });
-        self.outcome.touched_files.insert(file_index);
-    }
-
-    /// Insertion slot for an adopted line: before the first direct
-    /// child — or before the second when a `❌ **CANCEL LOG**` child
-    /// holds the first slot — with the existing child indent, else
-    /// the parent indent plus one tab. `reuse` names a label-only
-    /// line whose own indent is reused.
-    fn child_slot(
-        &self,
-        view: &TaskView<'_>,
-        reuse: Option<usize>,
-    ) -> (usize, String) {
-        let snap = &self.snapshots[view.file_index];
-        if let Some(child_index) = reuse {
-            let indent = leading_bytes(snap.lines[child_index].as_str());
-            return (child_index, indent.to_string());
-        }
-        let refs: Vec<&str> = snap.lines.iter().map(String::as_str).collect();
-        let parent_indent = leading_bytes(refs[view.task.line_index]);
-        let parent_width =
-            leading_indentation_width(refs[view.task.line_index]);
-        let mut first_child: Option<(usize, String, bool)> = None;
-        for line_index in view.task.line_index + 1..refs.len() {
-            let line = refs[line_index];
-            if line.trim().is_empty() || snap.fenced.contains(&line_index) {
-                continue;
-            }
-            if leading_indentation_width(line) <= parent_width {
-                break;
-            }
-            if nearest_parent_list_item(&refs, line_index)
-                != Some(view.task.line_index)
-            {
-                continue;
-            }
-            let cancel = is_cancel_log_line(line);
-            if first_child.is_none() {
-                first_child =
-                    Some((line_index, leading_bytes(line).to_string(), cancel));
-                if !cancel {
-                    break;
-                }
-                continue;
-            }
-            // A second direct child after the Cancel Log: insert here.
-            return (line_index, leading_bytes(line).to_string());
-        }
-        // The shared writer indent: the existing child indent when
-        // the task has one, else the parent indent plus one tab.
-        let existing =
-            first_child.as_ref().map(|(_, indent, _)| indent.as_str());
-        let indent = task_dependencies::format::child_indent_for_parent(
-            parent_indent,
-            existing,
-        );
-        match first_child {
-            Some((line_index, _, true)) => (line_index + 1, indent),
-            Some((line_index, _, false)) => (line_index, indent),
-            None => (view.task.line_index + 1, indent),
-        }
-    }
-
-    fn warn(&mut self, view: &TaskView<'_>, kind: &str, detail: &str) {
-        self.outcome.warnings.push(DependencyWarning {
-            kind: kind.to_string(),
-            path: display_path(view.relative_path),
-            line: view.task.line_index + 1,
-            detail: detail.to_string(),
-        });
-    }
-
-    /// Materialise every queued edit into note contents. Child-line
-    /// edits apply descending so original indices stay valid;
-    /// task-line rewrites merge by line. Returns the report.
-    fn apply(mut self, files: &mut [FileScan]) -> ReconcileOutcome {
-        for ((file_index, line_index), (new_line, _, _)) in &self.task_rewrites
-        {
-            self.edits.push(PendingEdit {
-                file_index: *file_index,
-                line_index: *line_index,
-                kind: EditKind::Replace,
-                new_line: new_line.clone(),
-            });
-        }
-        let mut by_file: BTreeMap<usize, Vec<&PendingEdit>> = BTreeMap::new();
-        for edit in &self.edits {
-            by_file.entry(edit.file_index).or_default().push(edit);
-        }
-        for (file_index, mut edits) in by_file {
-            // Descending by line so original indices stay valid. At the
-            // same original index a Replace/Remove applies before an
-            // Insert, so the insert lands before the rewritten original
-            // line instead of being overwritten by it.
-            edits.sort_by(|left, right| {
-                right
-                    .line_index
-                    .cmp(&left.line_index)
-                    .then((left.kind as u8).cmp(&(right.kind as u8)))
-            });
-            let snap = &self.snapshots[file_index];
-            let mut lines = snap.lines.clone();
-            for edit in edits {
-                match edit.kind {
-                    EditKind::Replace => {
-                        lines[edit.line_index] = edit.new_line.clone();
-                    }
-                    EditKind::Remove => {
-                        lines.remove(edit.line_index);
-                    }
-                    EditKind::Insert => {
-                        lines.insert(edit.line_index, edit.new_line.clone());
-                    }
-                }
-            }
-            let joined = lines.join(snap.line_ending);
-            files[file_index].contents = if snap.final_newline {
-                format!("{joined}{}", snap.line_ending)
-            } else {
-                joined
-            };
-        }
-        // Deterministic report order: by note, then line.
-        self.outcome.projection_updates.sort_by(|left, right| {
-            (&left.path, left.line).cmp(&(&right.path, right.line))
-        });
-        self.outcome.adopted.sort_by(|left, right| {
-            (&left.path, left.line).cmp(&(&right.path, right.line))
-        });
-        self.outcome.healed.sort_by(|left, right| {
-            (&left.path, left.line).cmp(&(&right.path, right.line))
-        });
-        self.outcome.canonicalized.sort_by(|left, right| {
-            (&left.path, left.line).cmp(&(&right.path, right.line))
-        });
-        self.outcome.warnings.sort_by(|left, right| {
-            (&left.kind, &left.path, left.line).cmp(&(
-                &right.kind,
-                &right.path,
-                right.line,
-            ))
-        });
-        self.outcome
-    }
-
-    fn warn_cycle(
-        &mut self,
-        files: &[FileScan],
-        start: &(PathBuf, String),
-        stack: &[(PathBuf, String)],
-    ) {
-        // Rotate the discovered walk so the path starts at the
-        // smallest member; the walk already ends back at `start`.
-        let mut ordered = stack.to_vec();
-        ordered.push(start.clone());
-        let first = ordered.iter().min().cloned().unwrap_or(start.clone());
-        let position =
-            ordered.iter().position(|node| *node == first).unwrap_or(0);
-        let mut rotated = ordered[position..].to_vec();
-        rotated.extend_from_slice(&ordered[1..position + 1]);
-        let path = rotated
-            .iter()
-            .map(|(path, block)| format!("{}#^{}", display_path(path), block))
-            .collect::<Vec<_>>()
-            .join(" -> ");
-        let (file_index, line_index) =
-            self.graph_nodes.get(&first).copied().unwrap_or((0, 0));
-        let relative = files
-            .get(file_index)
-            .map(|file| display_path(&file.relative_path))
-            .unwrap_or_default();
-        self.outcome.warnings.push(DependencyWarning {
-            kind: "dependency_cycle".to_string(),
-            path: relative,
-            line: line_index + 1,
-            detail: format!("dependency cycle: {path}"),
-        });
-    }
-}
-
-/// Rewrite a task line's `[id::]` / `[dependsOn::]` fields: every
-/// existing `id` and `dependsOn` field is removed wherever it sits in
-/// the Tasks suffix (trailing tags included, both `[]` and `()` forms),
-/// and the new values are inserted in Tasks key order (`id` before
-/// `dependsOn`) right of any `fresh` and before the trailing
-/// `^block-id` (`contract` §3). Shared with `bob projects` through
-/// the `projects::edits` upsert helpers rather than a bespoke peeler,
-/// so a line like `[id:: …] #hide ^prj` never gains a duplicate field.
-fn set_task_fields(
-    line: &str,
-    task_id: Option<&str>,
-    depends_on: &[String],
-) -> String {
-    let trimmed = line.trim_end();
-    let known_block = trailing_block_id(trimmed);
-    let stem = match &known_block {
-        Some(block) => trimmed
-            .strip_suffix(&format!("^{block}"))
-            .map(str::trim_end)
-            .unwrap_or(trimmed),
-        None => trimmed,
-    };
-    let cleaned = projects::edits::remove_all_inline_fields(stem, "id");
-    let cleaned =
-        projects::edits::remove_all_inline_fields(&cleaned, "dependsOn");
-    let insertion = projects::edits::task_metadata_insertion_offset(&cleaned);
-    let (before, _) = cleaned.split_at(insertion.min(cleaned.len()));
-    let mut rebuilt = before.trim_end().to_string();
-    if let Some(id) = task_id {
-        rebuilt.push_str(&format!(" [id:: {id}]"));
-    }
-    if !depends_on.is_empty() {
-        rebuilt.push_str(&format!(" [dependsOn:: {}]", depends_on.join(", ")));
-    }
-    if let Some(block) = known_block {
-        rebuilt.push_str(&format!(" ^{block}"));
-    }
-    rebuilt
-}
-
-/// Rebuild a Depends-On child line around new link texts, preserving
-/// the original indent and list marker.
-fn rebuild_child_line(original: &str, link_texts: &[String]) -> String {
-    let indent_len = original
-        .bytes()
-        .take_while(|byte| matches!(byte, b' ' | b'\t'))
-        .count();
-    let marker_end =
-        after_list_marker(original, indent_len).unwrap_or(indent_len);
-    format!(
-        "{} {} **DEPENDS ON:**{}",
-        &original[..marker_end],
-        task_dependencies::format::DEPENDS_ON_EMOJI,
-        if link_texts.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " {}",
-                link_texts
-                    .join(task_dependencies::format::DEPENDS_ON_SEPARATOR)
-            )
-        }
-    )
-}
-
-/// Leading whitespace bytes of a line (the indent prefix to reuse).
-fn leading_bytes(line: &str) -> &str {
-    let len = line
-        .bytes()
-        .take_while(|byte| matches!(byte, b' ' | b'\t'))
-        .count();
-    &line[..len]
-}
-
-/// Whether a child bullet is the `❌ **CANCEL LOG**` slot: an adopted
-/// line goes second when it holds the first slot (`contract` §2.1).
-fn is_cancel_log_line(line: &str) -> bool {
-    let indent_len = line
-        .bytes()
-        .take_while(|byte| matches!(byte, b' ' | b'\t'))
-        .count();
-    let rest = match after_list_marker(line, indent_len) {
-        Some(marker_end) => line[marker_end..].trim_start(),
-        None => return false,
-    };
-    rest.starts_with('❌') && rest.contains("CANCEL LOG")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn depends(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| value.to_string()).collect()
-    }
-
-    #[test]
-    fn field_writer_places_id_before_depends_on_before_block_id() {
-        assert_eq!(
-            set_task_fields(
-                "- [ ] #task Ship it ^ship",
-                Some("tasks__ship"),
-                &depends(&["tasks__tests"]),
-            ),
-            "- [ ] #task Ship it [id:: tasks__ship] [dependsOn:: tasks__tests] ^ship"
-        );
-    }
-
-    #[test]
-    fn field_writer_lands_right_of_fresh_and_replaces_stale() {
-        assert_eq!(
-            set_task_fields(
-                "- [ ] #task Ship it [fresh:: 2026-10-02] [dependsOn:: stale] [scheduled:: 2026-10-03] ^ship",
-                Some("tasks__ship"),
-                &depends(&["tasks__tests"]),
-            ),
-            "- [ ] #task Ship it [fresh:: 2026-10-02] [scheduled:: 2026-10-03] [id:: tasks__ship] [dependsOn:: tasks__tests] ^ship"
-        );
-    }
-
-    #[test]
-    fn field_writer_removes_depends_on_when_empty() {
-        assert_eq!(
-            set_task_fields(
-                "- [ ] #task Ship it [id:: tasks__ship] [dependsOn:: tasks__tests] ^ship",
-                Some("tasks__ship"),
-                &[],
-            ),
-            "- [ ] #task Ship it [id:: tasks__ship] ^ship"
-        );
-    }
-
-    #[test]
-    fn field_writer_drops_both_fields_for_r9() {
-        assert_eq!(
-            set_task_fields(
-                "- [ ] #task Bare [id:: tasks__bare] [dependsOn:: tasks__ghost]",
-                None,
-                &[],
-            ),
-            "- [ ] #task Bare"
-        );
-    }
-
-    #[test]
-    fn field_writer_replaces_field_before_trailing_tags() {
-        // A `[dependsOn::]` buried before trailing tags is replaced in
-        // place, never duplicated (`contract` §3).
-        assert_eq!(
-            set_task_fields(
-                "- [ ] #task D [dependsOn:: tasks__old] #hide ^d",
-                None,
-                &depends(&["tasks__new"]),
-            ),
-            "- [ ] #task D #hide [dependsOn:: tasks__new] ^d"
-        );
-    }
-
-    #[test]
-    fn field_writer_replaces_fields_between_tags() {
-        assert_eq!(
-            set_task_fields(
-                "- [ ] #task D #hide [dependsOn:: tasks__old] #later ^d",
-                Some("tasks__d"),
-                &depends(&["tasks__new"]),
-            ),
-            "- [ ] #task D #hide #later [id:: tasks__d] [dependsOn:: tasks__new] ^d"
-        );
-    }
-
-    #[test]
-    fn field_writer_stamps_target_past_hide_tag() {
-        // The `[id:: …] #hide ^prj` vault shape: the stamp lands before
-        // the block id without duplicating the field.
-        assert_eq!(
-            set_task_fields(
-                "- [ ] #task Prj [id:: tasks__old] #hide ^prj",
-                Some("tasks__prj"),
-                &[],
-            ),
-            "- [ ] #task Prj #hide [id:: tasks__prj] ^prj"
-        );
-    }
-
-    #[test]
-    fn field_writer_replaces_parenthesized_metadata() {
-        assert_eq!(
-            set_task_fields(
-                "- [ ] #task Ship it (dependsOn:: tasks__tests) ^ship",
-                None,
-                &depends(&["tasks__other"]),
-            ),
-            "- [ ] #task Ship it [dependsOn:: tasks__other] ^ship"
-        );
     }
 }

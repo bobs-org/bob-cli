@@ -905,6 +905,50 @@ local edit
     );
 }
 
+#[test]
+fn move_done_tasks_rewrites_stayed_pathless_links_in_archive() {
+    // End-to-end for `archive_stayed_block_ids`: a pathless `[[#^stayed]]`
+    // inside an archived block whose target stays behind gains the source
+    // note path, so the archived Depends-On line keeps pointing at the
+    // target that did not move.
+    let temp = TempDir::new("bob-cli-move-done-tasks-stayed-links");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    let source = vault.join("work.md");
+    let archive = vault.join("done/work_done.md");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    write_successful_ob_stub(&stub_bin);
+    write_file(
+        &source,
+        "- [x] #task Archived ^moved\n  - ⛓️ **DEPENDS ON:** [[#^stayed]]\n- [ ] #task Stayed ^stayed\n",
+    );
+
+    let output = bob_command()
+        .arg("move-done-tasks")
+        .arg("-t1")
+        .env("BOB_DIR", &vault)
+        .env("PATH", path_with_prefix(&stub_bin))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob move-done-tasks with stayed pathless link");
+
+    assert_success(&output);
+    let archive_contents = fs::read_to_string(&archive).expect("read archive");
+    assert!(
+        archive_contents.contains("[[work#^stayed]]"),
+        "expected stayed pathless link to gain the source path:\n{archive_contents}"
+    );
+    assert!(
+        !archive_contents.contains("[[#^stayed]]"),
+        "expected no bare stayed link to remain:\n{archive_contents}"
+    );
+    let source_contents = fs::read_to_string(&source).expect("read source");
+    assert!(
+        source_contents.contains("- [ ] #task Stayed ^stayed"),
+        "expected stayed target to remain in the source:\n{source_contents}"
+    );
+}
+
 fn init_git_vault_with_remote(temp: &TempDir) -> (PathBuf, PathBuf) {
     let vault = temp.path().join("vault");
     let remote = temp.path().join("remote.git");

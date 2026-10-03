@@ -86,6 +86,9 @@ status. Dependency tasks are discovered recursively from Depends-On line \
 links plus R8 legacy dependency children (see docs/task-dependencies.md) and \
 inherit the strongest effective parent status, \
 promoting Ready [ ] tasks to Next or In Progress and Next tasks to In Progress. \
+Depends-On lines are reconciled into [dependsOn::] / [id::] fields first \
+(R1-R10: project, adopt, heal, canonicalize, warn), and human and JSON \
+reports include the dependency projection counts. \
 Status propagation never lowers a task, and removing a link never changes a \
 lane: unlinked Next [*] and In Progress [/] tasks stay as they are. Only a \
 daily-note Next task still clears: a [*] that lives in a canonical daily note \

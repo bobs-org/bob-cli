@@ -41,6 +41,7 @@ subtree from an open Pomodoro without changing the canceled task itself.
 
 - [Usage](#usage)
 - [Sync rules](#sync-rules)
+- [Dependency lines](#dependency-lines)
 - [Derived Blocked status](#derived-blocked-status)
 - [Status grouping](#status-grouping)
 - [Pomodoro marker](#pomodoro-marker)
@@ -301,11 +302,11 @@ Progress wherever it lives, however long its links have been gone, and a Next
 task outside canonical daily notes (or the selected current ledger) stays
 Next. Note kind, directory names, and tags play no role in lane decisions.
 
-## Derived Blocked Status
+## Dependency lines
 
 Task dependency links live on one managed Depends-On line per the
-[task dependency contract](task-dependencies.md); the hooks reconcile
-that line into the fields below before deriving Blocked. Only open
+[task dependency contract](task-dependencies.md) §2–§4; this section
+summarises the R1–R10 reconciliation that section specifies. Only open
 dependents (`TODO`, `IN_PROGRESS`, `ON_HOLD`, including `[?]`) are
 reconciled; closed tasks are never touched, and the previous daily
 note snapshot is never written.
@@ -337,9 +338,14 @@ Every run reports `dependency_projection_updates` (kinds
 `canonicalized_dependency_lines`, `legacy_dependency_children` (a
 count for the legacy-window retirement decision), and
 `dependency_warnings` (`{kind, path, line, detail}`) in JSON, with
-matching human sections, a `Dependencies:` summary line, and stderr
-warnings. A second run over a reconciled vault reports no dependency
-changes.
+matching human sections, a `Dependencies:` summary line, dependency
+counts appended to the `Summary:` line, and stderr warnings. A second
+run over a reconciled vault reports no dependency changes.
+
+## Derived Blocked Status
+
+Dependency lines are reconciled as described in
+[Dependency lines](#dependency-lines) before Blocked is derived.
 
 After the full vault scan and the final post-rewrite Pomodoro graph are known,
 the command indexes Dataview task identities from both square-bracket and
@@ -704,10 +710,11 @@ Recovery failure prevents note writes. A later failure after some notes have
 already been replaced reports the applied and remaining paths and does not
 roll earlier notes back. Byte checks and atomic rename reduce lost-update
 risk but cannot provide a true compare-and-swap against an editor that does
-not coordinate with the command. When a note needs structural status grouping,
-the live writer also requires a two-second quiet interval after that note's
-observed modification time; if the timestamp is uncertain, in the future, or
-changes during the bounded wait, the run is deferred with no note writes.
+not coordinate with the command. When a note needs structural status grouping
+or a dependency projection-only write, the live writer also requires a
+two-second quiet interval after that note's observed modification time; if
+the timestamp is uncertain, in the future, or changes during the bounded
+wait, the run is deferred with no note writes.
 `BOB_NOW` does not affect this real filesystem check. An unsaved Obsidian
 buffer is not observable, and a save can still race the final check. Recovery
 copies are the observed originals and intended outputs for compare/merge into
@@ -975,6 +982,26 @@ JSON mode prints one object on stdout with these stable fields:
       "message": "unmarked status-group heading in \"Tasks\" at line 20 contains authored context"
     }
   ],
+  "dependency_projection_updates": [
+    {
+      "kind": "dependent_field",
+      "path": "dev.md",
+      "line": 30,
+      "detail": "[dependsOn:: dev__review]"
+    }
+  ],
+  "adopted_dependency_lines": [],
+  "healed_dependency_links": [],
+  "canonicalized_dependency_lines": [],
+  "legacy_dependency_children": 0,
+  "dependency_warnings": [
+    {
+      "kind": "unresolved_dependency_link",
+      "path": "dev.md",
+      "line": 30,
+      "detail": "unresolvable link [[missing#^gone]]"
+    }
+  ],
   "applied_files": [],
   "deferred_files": [],
   "recovery_directory": null,
@@ -1063,6 +1090,17 @@ blocks emitted into that container's intake after the transform, including
 recovered or structurally ineligible tasks that remain there.
 `grouping_warnings` contains safe-to-report container diagnostics; warnings do
 not by themselves make `ok` false.
+`dependency_projection_updates` lists every reconciled field, target-id, and
+line-removal edit with its `kind`, `path`, one-based `line`, and `detail`;
+`adopted_dependency_lines`, `healed_dependency_links`, and
+`canonicalized_dependency_lines` list the adopted, healed, and canonicalized
+lines in the same shape, `legacy_dependency_children` counts legacy children
+for the legacy-window retirement decision, and `dependency_warnings` lists
+`{kind, path, line, detail}` rows (for example `unresolved_dependency_link`,
+`previous_daily_target`, `unencodable_dependency_target`,
+`dependency_field_ids_dropped`). The human report mirrors these with
+projected-field, adopted, healed, and canonicalized sections plus a
+`Dependencies:` line, and the `Summary:` line appends the same counts.
 `applied_files`, `deferred_files`, and `recovery_directory` describe live
 application. On dry-run and live no-op, `applied_files` and `deferred_files`
 are empty and `recovery_directory` is `null`; on a successful live write,
