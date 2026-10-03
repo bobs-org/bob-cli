@@ -70,8 +70,9 @@ Writers canonicalise all of these:
 2. After removing the block links and the separators between them, the
    line must hold exactly the emoji (or nothing), the label, and
    whitespace. Anything else on the line makes it **malformed**.
-3. Only a direct child of a `#task` line counts. Fenced code and nested
-   lines never count.
+3. Only a direct child of a `#task` line counts. Fenced code, nested
+   lines, and blockquoted lines never count: a blockquoted task cannot
+   own a Depends-On line (DP29; nav refuses dependency gestures there).
 
 ### 2.4 Recognisers that must reject the line
 
@@ -333,7 +334,14 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
 
 - Chips never change line height.
 - Only visible ranges are processed, after a cheap `DEPENDS ON`
-  prefilter.
+  prefilter. Ownership walks ancestors with line lookups; the note is
+  never copied wholesale.
+- Reading rows follow the same owning-line rules as Live Preview: the
+  row's parent list hangs directly off a `#task` item, outside
+  blockquotes and Work Log entries, and the row parses as
+  `accept`/`empty` (never chips on DP16, DP19, DP20, or DP29). Chip
+  actions carry the section-derived 0-based line (contract §9) and stay
+  hidden when it cannot be derived uniquely.
 - Data comes only from the in-memory Tasks memo.
 - `aria-label`s, visible focus, colour never the only signal, and
   reduced-motion support.
@@ -423,7 +431,7 @@ its own; `context` names what surrounds it. `verdict` is one of
 | DP17 | `⛓️ **DEPENDS ON:**` | label only | empty (R9) |
 | DP18 | `⛓️ **DEPENDS ON:** [[#^a]]` | inside fenced code | not-a-line |
 | DP19 | `⛓️ **DEPENDS ON:** [[#^a]]` | grandchild (nested two levels) | not-a-line |
-| DP20 | `⛓️ **DEPENDS ON:** [[#^a]]` | inside a Work Log entry | not-a-line |
+| DP20 | `⛓️ **DEPENDS ON:** [[#^a]]` | the line itself hangs directly off a Work Log entry (its parent is the entry, not a `#task`) | not-a-line |
 | DP21 | `⛓️ **DEPENDS ON:** [[#^a]]` | third direct child, after two prose children | accept(1) |
 | DP22 | `⛓️ **DEPENDS ON:** [[#^a\\|swarm]]` | aliased link | accept(1), canonicalise |
 | DP23 | `⛓️ **DEPENDS ON:** [[note]]` | bare note link, no block id | malformed |
@@ -432,7 +440,8 @@ its own; `context` names what surrounds it. `verdict` is one of
 | DP26 | `⛓️ **DEPENDS ON:** • ,` | label followed only by separators | malformed |
 | DP27 | `⛓️ **depends on:** [[#^a]]` | lowercase label | not-a-line |
 | DP28 | `⛓️ **DEPENDS ON:** [[#^a]]` | no list marker | not-a-line |
-| DP29 | `> - ⛓️ **DEPENDS ON:** [[#^a]]` | blockquoted line (recognisers reject; nav's writer still round-trips quoted lines it manages, pinned by its counted-writer test) | not-a-line |
+| DP29 | `> - ⛓️ **DEPENDS ON:** [[#^a]]` | blockquoted line: every recogniser rejects it and no writer round-trips it | not-a-line |
+| DP30 | `⛓️ **DEPENDS ON:** [[#^a]]` | first direct child of a `#task` which is itself nested under a Work Log entry (unlike DP20, the line's owner is a real task) | accept(1) |
 
 ### 11.2 DW — write vectors
 

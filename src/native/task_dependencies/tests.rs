@@ -50,6 +50,8 @@ fn dp_vectors() {
         "- ⛓️ **DEPENDS ON:** [[#^a", // DP15 half-typed
         "- ⛓️ **DEPENDS ON:** [[#^a]] needs review", // DP16 trailing prose
         "- ⛓️ **DEPENDS ON:** [[note]]", // DP23 bare note link
+        "- ⛓️ **DEPENDS ON:** [[note#Heading]]", // DP25 heading link, no block id
+        "- ⛓️ **DEPENDS ON:** • ,", // DP26 label followed only by separators
     ] {
         assert_eq!(
             super::parse::parse_dependency_line(line),
@@ -65,6 +67,10 @@ fn dp_vectors() {
         "- 🗓️ **SCHEDULE LOG**",
         "- [ ] #task Not a dependency line",
         "## ⛓️ **DEPENDS ON:** [[#^a]]",
+        "- 🔗️ **DEPENDS ON:** [[#^a]]", // DP24 link emoji with VS16
+        "- ⛓️ **depends on:** [[#^a]]", // DP27 lowercase label
+        "⛓️ **DEPENDS ON:** [[#^a]]",   // DP28 no list marker
+        "> - ⛓️ **DEPENDS ON:** [[#^a]]", // DP29 blockquoted line
     ] {
         assert_eq!(
             super::parse::parse_dependency_line(line),
@@ -109,6 +115,25 @@ fn dp_discovery_context_vectors() {
     let lines = logical_lines(&contents);
     let fenced = fenced_lines(&lines, 0..lines.len());
     assert_eq!(dependency_child_of(&lines, &fenced, 0), None);
+
+    // DP29: a blockquoted line never counts, even as a direct child.
+    let contents = format!("{settings_line}  > - ⛓️ **DEPENDS ON:** [[#^a]]\n");
+    let lines = logical_lines(&contents);
+    let fenced = fenced_lines(&lines, 0..lines.len());
+    assert_eq!(dependency_child_of(&lines, &fenced, 0), None);
+
+    // DP30: a Depends-On line that is the first direct child of a `#task`
+    // which is itself nested under a Work Log entry still counts: the
+    // line's owner is a real task, unlike DP20 where the line hangs
+    // directly off the Work Log entry.
+    let contents = format!(
+        "{settings_line}  - 🛠️ **WORK LOG**\n    - [ ] #task Inner ^inner\n      {dep_line}"
+    );
+    let lines = logical_lines(&contents);
+    let fenced = fenced_lines(&lines, 0..lines.len());
+    let found = dependency_child_of(&lines, &fenced, 2).expect("DP30 found");
+    assert_eq!(found.line_index, 3);
+    assert_eq!(accept_count(lines[found.line_index]), Some((1, true)));
 }
 
 // `docs/task-dependencies.md` §11.2 DW — writer vectors covered by this
