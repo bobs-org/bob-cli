@@ -21,7 +21,7 @@ JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
 api v3, freshness namespace v5). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
-The keep-streak contract (`keeps`, `decay`, schema 4) is specified
+The keep-streak contract (`keeps`, `decay`, schema 5) is specified
 here and implemented in Rust in the contract-rust phase. Its
 machine-readable parity vectors live in
 `tests/fixtures/freshness_keeps/vectors.json`, which both languages
@@ -1197,3 +1197,32 @@ Keep if red on no more than 3 mornings, at least about 30 confirmed
 tasks on most mornings, and no lost-needed-task case. If it fails,
 Bryan can first adjust intervals or budget, then reconsider
 dim-not-hide; never adopt a stored rotten tag.
+
+## 14. Keep-streak rollout, rollback, and calibration
+
+Deployed 2026-10-03: bob-navigation-hotkeys 1.69.0 plus bob-ledger-tools
+1.24.0 synced byte-identical from the linked source, and `bob`
+reinstalled from this checkout (schema 5, capture resets). Counting and
+folded pips are live; cards, the leaf, decision skip, and the 'next
+review asks' promise stay gated behind the 2026-10-19 activation date.
+The accepted trial runs 2026-10-05 through 2026-10-18 as recorded in §13
+— the rollout landed before the start, so no date shift was needed.
+
+Rollback is config-only and never touches task lines: set
+`freshness.decay: false` to disable card interception while preserving
+counting and pips; the session mark toggle restores raw pills. This
+rollout changed no global config, note intervals, or inbox residence.
+
+Calibration is a lightweight human tally one month after activation:
+decision count, Keep/Drop outcomes, and RETURNED load for two weeks
+after the first card wave, from counts, decision logs, and git history
+— no telemetry service or automatic tuning. If most cards (>50%) are
+Keep, consider limit 4; if most are Drop, consider limit 2.
+
+Human smoke checklist (no Obsidian UI was available in this headless
+rollout, so visual verification is still open; automated mark-surface
+and modal interaction tests pass): light and dark themes, dense lines,
+narrow widths, Live Preview and reading/Tasks/embeds views, dots and
+leaf, raw reveal on selection and click, card focus order and key hints,
+explicit cancellation, and one undo step — on fixture tasks only, never
+by forcing live task dates or counters.

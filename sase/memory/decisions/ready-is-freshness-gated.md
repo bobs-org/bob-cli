@@ -16,6 +16,7 @@ metadata:
   superseded_by:
     - decisions/note-ready-cap-counts-the-lane
     - decisions/review-walk-is-tiered
+    - decisions/rotten-keeps-use-priority-decay
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault, dash.
@@ -68,3 +69,7 @@ section list only.
 Superseded in part: chip list only — see [[decisions/note-ready-cap-counts-the-lane]].
 
 Superseded in part: review ritual order only — see [[decisions/review-walk-is-tiered]].
+
+Superseded in part: 'stamps remain the only write' only — the approved
+decision card invokes separate existing writers on explicit approval, see
+[[decisions/rotten-keeps-use-priority-decay]].

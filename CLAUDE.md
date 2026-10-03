@@ -138,26 +138,31 @@ edited in place.
    area/project note's whole Ready lane by residence, whatever its freshness.
 6. **READY Is Freshness-Gated With NEW and ROTTEN Review**
    (`ready-is-freshness-gated`) - _[partly superseded by
-   `note-ready-cap-counts-the-lane`, `review-walk-is-tiered`]_ READY is the
-   freshness-gated confirmed/exempt backlog (visible TODO pool minus NEW and ROTTEN
-   buckets) with TODAY → NEW → PENDING → NEXT → READY sections and
-   NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; review clears NEW then ROTTEN; no
-   tags, fields, or status changes store review state.
+   `note-ready-cap-counts-the-lane`, `review-walk-is-tiered`,
+   `rotten-keeps-use-priority-decay`]_ READY is the freshness-gated confirmed/exempt
+   backlog (visible TODO pool minus NEW and ROTTEN buckets) with TODAY → NEW → PENDING →
+   NEXT → READY sections and NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; review
+   clears NEW then ROTTEN; no tags, fields, or status changes store review state.
 7. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`) - The ]s
    walk visits one shared queue in explicit tiers NEW → PENDING → NEXT → RETURNED →
    ROTTEN; Pending and Next tasks come due for daily review under pending_interval /
    next_interval (default 1, false walks that lane off); tiers never feed buckets or
    chips; upkeep outside the lanes counts the budget; stamps stay and the seed never
    re-runs.
-8. **Task Dependencies Are Links On One Depends-On Line**
+8. **Rotten Keeps Decay Through The Priority Ladder**
+   (`rotten-keeps-use-priority-decay`) - Repeated due-Ready keeps earn an explicit
+   approved decision that enters the existing priority ladder; nothing decays silently
+   and freshness itself still never changes priority or schedule.
+9. **Task Dependencies Are Links On One Depends-On Line**
    (`task-deps-are-depends-on-links`) - A task's prerequisites live as plain task
    dependency links on one managed Depends-On first-child line; that line is the source
    of truth and the [dependsOn::] / [id::] fields are derived from it.
-9. **Today Is Read From The Ledger, Never Written To Tasks**
-   (`today-is-read-from-the-ledger`) - _[partly superseded by `ready-is-freshness-gated`
-   ]_ Today is the open tasks with a dedicated Task Link under today's open Pomodoros,
-   computed at read time by bob plan and bob-ledger-tools; never a tag, task-line field,
-   or file-path filter; #now is retired.
+10. **Today Is Read From The Ledger, Never Written To Tasks**
+    (`today-is-read-from-the-ledger`) - _[partly superseded by
+    `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
+    under today's open Pomodoros, computed at read time by bob plan and
+    bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
+    retired.
 
 ### 3.2 Glossary Terms (glossary)
 
@@ -167,8 +172,9 @@ depend on. Pass every term you need in one command — one batched read costs fa
 tokens than one read per term, because terms shared between definitions are printed
 once. Terms are separated by semicolons; aliases follow in parentheses.
 
-**GLOSSARY TERMS:** Pomodoro; Schedule Log; Task Dependency Link (task dep link, dep
-link); Task Freshness (freshness); Task Link (task block link); Work Log
+**GLOSSARY TERMS:** Keep Streak (keeps); Pomodoro; Schedule Log; Task Dependency Link
+(task dep link, dep link); Task Freshness (freshness); Task Link (task block link); Work
+Log
 
 ### 3.3 Task Bead Types (task_types)
 
