@@ -549,7 +549,12 @@ pub(super) fn execute_pdf_sync(
     let refresh_synced_at =
         plan.stable_note_action != "none" && plan.rendered_highlights.is_some();
     let refresh_metadata = plan.marker_write_needed || refresh_synced_at;
-    let rendered_note = if refresh_metadata {
+    // New notes always rerender here with a fresh creation timestamp taken
+    // immediately before the atomic write, so the persisted `created` value
+    // reflects the actual writing invocation (including sidecar-free and
+    // marker-write-free creations) rather than an earlier planning preview.
+    let is_new_note = !plan.note.exists();
+    let rendered_note = if refresh_metadata || is_new_note {
         // `write_pdf_marker` rewrites the PDF in place, so the planning-time
         // hash is stale; rehash the file to record the post-write digest.
         // When no marker write happened the PDF is untouched, so the hash the
@@ -559,7 +564,7 @@ pub(super) fn execute_pdf_sync(
         } else {
             plan.marker.source_pdf_sha256.clone()
         };
-        let metadata = pipeline_metadata(
+        let mut metadata = pipeline_metadata(
             config,
             &plan.pdf,
             &source_pdf_sha256,
@@ -568,6 +573,9 @@ pub(super) fn execute_pdf_sync(
             plan.rendered_highlights.as_ref(),
             refresh_synced_at,
         )?;
+        if is_new_note {
+            metadata.created = Some(new_note_created_timestamp());
+        }
         plan.note.render_with_projection(
             &plan.synced_projection,
             &plan.synced_hash,

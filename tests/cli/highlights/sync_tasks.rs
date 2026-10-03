@@ -1124,6 +1124,98 @@ Manual note without generated markers.
     );
 }
 
+#[test]
+fn highlights_ref_sync_keeps_created_fixed_across_sidecar_updates() {
+    let temp = TempDir::new("bob-cli-highlights-ref-created-sidecar");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/books/created-sidecar.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/books/created-sidecar.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: ready\n- parent: obsidian\n- title: Created Sidecar\n",
+    );
+    write_file(
+        &sidecar,
+        "\
+# Created Sidecar
+
+## Page 1
+
+Note: marker note
+
+---
+
+> First quote.
+",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-03 15:42:18")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("sync sidecar note");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read generated note");
+    assert_eq!(
+        contents.matches("created: ").count(),
+        1,
+        "new sidecar note should carry exactly one created field:\n{contents}"
+    );
+    assert!(
+        contents.contains("created: 2026-10-03T15:42:18-0400\n"),
+        "{contents}"
+    );
+    assert!(contents.contains("highlights_count: 1\n"), "{contents}");
+
+    write_file(
+        &sidecar,
+        "\
+# Created Sidecar
+
+## Page 1
+
+Note: marker note
+
+---
+
+> First quote.
+
+---
+
+> Second quote.
+",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-04 09:00:00")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("resync updated sidecar");
+
+    assert_success(&output);
+    let updated = fs::read_to_string(&note).expect("read updated note");
+    assert!(
+        updated.contains("created: 2026-10-03T15:42:18-0400\n"),
+        "created must stay fixed across sidecar updates:\n{updated}"
+    );
+    assert!(
+        !updated.contains("created: 2026-10-04"),
+        "sidecar update must not refresh the creation timestamp:\n{updated}"
+    );
+    assert!(updated.contains("highlights_count: 2\n"), "{updated}");
+    assert!(updated.contains("> [!quote] Second quote.\n"), "{updated}");
+}
+
 fn legacy_highlight_task_id(
     ref_note_path: &str,
     source_block_id: &str,

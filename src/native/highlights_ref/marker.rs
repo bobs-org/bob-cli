@@ -235,6 +235,11 @@ pub(super) fn parse_marker_with_normalization(
                 "invalid marker item on line {line_number}: '{key}' is command-managed and cannot be synced from the marker"
             )));
         }
+        if key == FIELD_CREATED {
+            return Err(CommandError::new(format!(
+                "invalid marker item on line {line_number}: 'created' records reference-note creation time and cannot be synced from the marker"
+            )));
+        }
         if projection.contains_key(&key) {
             return Err(CommandError::new(format!(
                 "duplicate marker key on line {line_number}: {key}"

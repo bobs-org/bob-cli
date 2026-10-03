@@ -31,6 +31,12 @@ pub(super) fn pipeline_metadata(
         note.frontmatter_value(FIELD_HIGHLIGHTS_SYNCED_AT)
     };
     let ref_type = pdf_path_metadata(config, pdf)?.ref_type;
+    // Preview creation timestamp for new notes only. Existing notes keep
+    // their authored `created` line via frontmatter preservation, so no
+    // fresh value is generated here. The executor finalizes a fresh value
+    // immediately before writing a new note so dry-run previews never
+    // become persisted historical timestamps.
+    let created = (!note.exists()).then(new_note_created_timestamp);
 
     Ok(PipelineMetadata {
         source_pdf: source_pdf_value(config, pdf),
@@ -39,7 +45,16 @@ pub(super) fn pipeline_metadata(
         highlights_sidecar,
         highlights_count,
         highlights_synced_at,
+        created,
     })
+}
+
+/// Format the note-writing invocation's clock as a `created` frontmatter
+/// value (`YYYY-MM-DDTHH:mm:ss±ZZZZ`), honoring the `BOB_NOW` override.
+pub(super) fn new_note_created_timestamp() -> String {
+    super::super::capture_project_note::format_created_timestamp(
+        bob_env::current_datetime(),
+    )
 }
 
 pub(super) fn default_note_body(

@@ -1057,3 +1057,124 @@ fn highlights_ref_scan_round_trips_provenance_marker_fields() {
         "second scan must leave the note unchanged"
     );
 }
+
+#[test]
+fn highlights_ref_scan_stamps_created_on_category_and_intake_notes() {
+    let temp = TempDir::new("bob-cli-highlights-ref-scan-created");
+    let vault = temp.path().join("vault");
+    let first_pdf = vault.join("lib/books/scan-created.pdf");
+    let second_pdf = vault.join("lib/papers/scan-created.pdf");
+    let intake_pdf = vault.join("xlib/chat/scan-intake.pdf");
+    let first_note = vault.join("ref/books/scan-created.md");
+    let second_note = vault.join("ref/papers/scan-created.md");
+    let intake_note = vault.join("ref/chat/scan-intake.md");
+    write_highlights_pdf(
+        &first_pdf,
+        "- status: ready\n- parent: obsidian\n- title: Scan Created One\n",
+    );
+    write_highlights_pdf(
+        &second_pdf,
+        "- status: ready\n- parent: obsidian\n- title: Scan Created Two\n",
+    );
+    write_highlights_pdf(
+        &intake_pdf,
+        "- status: ready\n- parent: obsidian\n- title: Scan Intake\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-03 15:42:18")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("dry-run highlights scan");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("writes: none"),
+        "dry-run scan must stay read-only:\n{}",
+        format_output(&output)
+    );
+    assert!(!first_note.exists(), "dry-run must not create first note");
+    assert!(!second_note.exists(), "dry-run must not create second note");
+    assert!(!intake_note.exists(), "dry-run must not create intake note");
+    assert!(intake_pdf.is_file(), "dry-run must leave PDF in xlib");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-03 15:42:18")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("write highlights scan");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("notes_created: 3"),
+        "scan should create all three notes:\n{}",
+        format_output(&output)
+    );
+    assert!(!intake_pdf.exists(), "scan must move the PDF out of xlib");
+    let first_contents =
+        fs::read_to_string(&first_note).expect("read first note");
+    let second_contents =
+        fs::read_to_string(&second_note).expect("read second note");
+    let intake_contents =
+        fs::read_to_string(&intake_note).expect("read intake note");
+    for contents in [&first_contents, &second_contents, &intake_contents] {
+        assert_eq!(
+            contents.matches("created: ").count(),
+            1,
+            "each new scan note should carry exactly one created field:\n{contents}"
+        );
+        assert!(
+            contents.contains("created: 2026-10-03T15:42:18-0400\n"),
+            "{contents}"
+        );
+    }
+    assert!(
+        first_contents.contains("ref_type: books\n"),
+        "{first_contents}"
+    );
+    assert!(
+        second_contents.contains("ref_type: papers\n"),
+        "{second_contents}"
+    );
+    assert!(
+        intake_contents.contains("ref_type: chat\n"),
+        "{intake_contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-04 09:00:00")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("repeat highlights scan at a later clock");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("notes_created: 0"),
+        "repeat scan must create nothing:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&first_note).expect("read first note after rescan"),
+        first_contents,
+        "repeat scan at a later clock must leave notes unchanged"
+    );
+    assert_eq!(
+        fs::read_to_string(&intake_note)
+            .expect("read intake note after rescan"),
+        intake_contents,
+        "repeat scan at a later clock must leave the intake note unchanged"
+    );
+}

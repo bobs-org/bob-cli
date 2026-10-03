@@ -124,6 +124,7 @@ const REMOVED_HIGHLIGHTS_HEADING: &str = "### Removed highlights";
 const SOURCE_LINK_ALIAS: &str = "🔖";
 const TEXTBUNDLE_TEXT_FILES: &[&str] = &["text.md", "text.markdown"];
 
+const FIELD_CREATED: &str = "created";
 const FIELD_SOURCE_PDF: &str = "source_pdf";
 const FIELD_SOURCE_PDF_SHA256: &str = "source_pdf_sha256";
 const FIELD_HIGHLIGHTS_SIDECAR: &str = "highlights_sidecar";

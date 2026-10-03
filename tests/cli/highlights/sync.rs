@@ -452,6 +452,224 @@ fn highlights_ref_sync_allows_dirty_tracked_frontmatter_writeback() {
     assert!(contents.contains("status: read\n"), "{contents}");
 }
 
+#[test]
+fn highlights_ref_sync_sets_created_timestamp_on_new_sidecar_free_note() {
+    let temp = TempDir::new("bob-cli-highlights-ref-created-stamp");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/systems-created.pdf");
+    let note = vault.join("ref/systems-created.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: ready\n- parent: obsidian\n- title: Systems Created\n",
+    );
+    let pdf_before = sha256_file(&pdf);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-03 15:42:18")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("run bob highlights sync");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read generated ref note");
+    assert_eq!(
+        contents.matches("created: ").count(),
+        1,
+        "new note should carry exactly one created field:\n{contents}"
+    );
+    assert!(
+        contents.contains("created: 2026-10-03T15:42:18-0400\n"),
+        "{contents}"
+    );
+    assert!(
+        contents.contains(
+            "- [ ] #task #ref [[lib/systems-created.pdf]] #hide ^ref\n"
+        ),
+        "{contents}"
+    );
+    assert_eq!(
+        sha256_file(&pdf),
+        pdf_before,
+        "sidecar-free sync must not mutate PDF bytes"
+    );
+    let base_line = contents
+        .lines()
+        .find(|line| line.starts_with("highlights_marker_base: "))
+        .expect("marker base line");
+    assert!(
+        !base_line.contains("created"),
+        "created must stay out of the marker base snapshot:\n{contents}"
+    );
+    assert!(
+        !contents.contains("highlights_marker_fields"),
+        "created must not require a marker-fields opt-in:\n{contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-04 09:00:00")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("repeat bob highlights sync at a later clock");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("note_action: none")
+            && stdout(&output).contains("writes: none"),
+        "repeat sync must stay quiet without a PDF-write opt-in:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read repeat-synced ref note"),
+        contents,
+        "repeat sync at a later clock must preserve the original timestamp"
+    );
+}
+
+#[test]
+fn highlights_ref_sync_preserves_authored_created_and_rejects_marker_created() {
+    let temp = TempDir::new("bob-cli-highlights-ref-created-authored");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/authored-created.pdf");
+    let note = vault.join("ref/authored-created.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: ready\n- parent: obsidian\n- title: Authored Created\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-03 15:42:18")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("create ref note");
+
+    assert_success(&output);
+    let generated = fs::read_to_string(&note).expect("read generated ref note");
+    assert!(
+        generated.contains("created: 2026-10-03T15:42:18-0400\n"),
+        "{generated}"
+    );
+
+    // Author an older timestamp, then change the marker title: the update
+    // must preserve the authored timestamp instead of the current clock.
+    write_file(
+        &note,
+        &generated.replace(
+            "created: 2026-10-03T15:42:18-0400\n",
+            "created: 2020-01-02T03:04:05-0500\n",
+        ),
+    );
+    set_pdf_marker_contents(
+        &pdf,
+        "- status: ready\n- parent: obsidian\n- title: Authored Created Revised\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-04 09:00:00")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("sync marker title change");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read updated ref note");
+    assert!(
+        contents.contains("title: \"Authored Created Revised\"\n"),
+        "{contents}"
+    );
+    assert!(
+        contents.contains("created: 2020-01-02T03:04:05-0500\n"),
+        "authored timestamp must survive marker sync:\n{contents}"
+    );
+    assert!(
+        !contents.contains("created: 2026-10-04"),
+        "sync must not stamp a fresh timestamp over the authored one:\n{contents}"
+    );
+
+    // An older managed note without the field gains none on sync.
+    write_file(
+        &note,
+        &contents.replace("created: 2020-01-02T03:04:05-0500\n", ""),
+    );
+    set_pdf_marker_contents(
+        &pdf,
+        "- status: ready\n- parent: obsidian\n- title: Authored Created Again\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-05 09:00:00")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("sync legacy note without created");
+
+    assert_success(&output);
+    let legacy_contents = fs::read_to_string(&note).expect("read legacy note");
+    assert!(
+        legacy_contents.contains("title: \"Authored Created Again\"\n"),
+        "{legacy_contents}"
+    );
+    assert!(
+        !legacy_contents.contains("created: "),
+        "sync must not invent created on older notes:\n{legacy_contents}"
+    );
+
+    // A marker that carries `created` fails before any note or PDF write.
+    set_pdf_marker_contents(
+        &pdf,
+        "- status: ready\n- parent: obsidian\n- created: 2026-10-06T09:00:00-0400\n",
+    );
+    let pdf_before = sha256_file(&pdf);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync marker with created");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "marker created should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output)
+            .contains("'created' records reference-note creation time"),
+        "expected created diagnostic:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note after failed sync"),
+        legacy_contents,
+        "failed marker sync must not write the note"
+    );
+    assert_eq!(
+        sha256_file(&pdf),
+        pdf_before,
+        "failed marker sync must not write the PDF"
+    );
+}
+
 fn set_pdf_marker_literal_contents(path: &Path, marker_contents: &str) {
     let mut doc = lopdf::Document::load(path)
         .unwrap_or_else(|error| panic!("load PDF {}: {error}", path.display()));

@@ -199,6 +199,11 @@ pub(super) struct PipelineMetadata {
     pub(super) highlights_sidecar: Option<MarkerValue>,
     pub(super) highlights_count: Option<MarkerValue>,
     pub(super) highlights_synced_at: Option<MarkerValue>,
+    /// New-note creation timestamp (`created` frontmatter value) generated
+    /// from the note-writing invocation's clock. `Some` only when planning a
+    /// note that does not exist yet; existing notes keep their authored
+    /// `created` line instead of a fresh timestamp.
+    pub(super) created: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -682,6 +687,12 @@ impl ParsedNote {
             let Some(key) = &entry.key else {
                 continue;
             };
+            // `created` is note-local provenance, never part of the synced
+            // projection: exclude it even when a stale
+            // `highlights_marker_fields` list still names it.
+            if key == FIELD_CREATED {
+                continue;
+            }
             if is_managed_frontmatter_field(key) {
                 continue;
             }
@@ -724,6 +735,10 @@ impl ParsedNote {
         );
         removed_keys.extend(old_marker_fields);
         removed_keys.extend(projection.keys().cloned());
+        // `created` is note-local provenance: keep the authored raw line on
+        // existing notes instead of treating it as managed output, even when
+        // a stale `highlights_marker_fields` list still names it.
+        removed_keys.remove(FIELD_CREATED);
 
         let mut lines = Vec::new();
         let mut rendered_command_managed_fields = false;
@@ -749,6 +764,17 @@ impl ParsedNote {
         }
 
         let marker_fields = unknown_synced_fields(projection);
+        // New notes carry exactly one generated `created` line. Existing
+        // notes keep their preserved authored raw line above and never
+        // receive a fresh timestamp here.
+        if let Some(created) = &metadata.created
+            && !self
+                .frontmatter
+                .iter()
+                .any(|entry| entry.key.as_deref() == Some(FIELD_CREATED))
+        {
+            lines.push(format!("{FIELD_CREATED}: {created}"));
+        }
         lines.push(format!(
             "{FIELD_SOURCE_PDF}: {}",
             MarkerValue::String(metadata.source_pdf.clone())

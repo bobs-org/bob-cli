@@ -372,6 +372,27 @@ without being renamed automatically to `id`. `captured` is the snapshot date
 (`YYYY-MM-DD`) of a web capture; like the other provenance fields it is
 omitted rather than written wrong.
 
+Every new reference note also records a note-local `created` field stamped
+from the writing invocation's clock (`BOB_NOW` overrides it for testing):
+
+```yaml
+created: 2026-10-03T15:42:18-0400
+```
+
+The datetime format is `YYYY-MM-DDTHH:mm:ss±ZZZZ` with seconds and a numeric
+timezone offset. The field is set once at creation — including sidecar-free
+notes and notes created after `xlib/` intake — and later syncs preserve the
+authored value verbatim. It never joins the synced projection, marker hash,
+base snapshot, or `highlights_marker_fields` (even a stale opt-in list naming
+it is ignored), and setting it never requires `--write-pdf` / `--write-pdfs`
+or modifies PDF bytes. It differs from `captured` (the `YYYY-MM-DD`
+web-capture snapshot date synced from the marker) and from
+`highlights_synced_at` (refreshed whenever sidecar highlights rerender).
+Notes created before this field existed gain none on sync; their historical
+creation times are not backfilled. A PDF marker containing `created` is
+rejected with a diagnostic explaining that it records reference-note creation
+time, before any note or PDF write.
+
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or
 explicitly listed in `highlights_marker_fields`.

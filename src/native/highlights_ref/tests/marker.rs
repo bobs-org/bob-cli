@@ -292,6 +292,109 @@ Body
 }
 
 #[test]
+fn marker_parser_rejects_created_key() {
+    let error = parse_marker(
+        "- status: wip\n- parent: obsidian\n- created: 2026-10-03T15:42:18-0400\n",
+    )
+    .expect_err("marker created should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("'created' records reference-note creation time"),
+        "{error}"
+    );
+}
+
+#[test]
+fn created_stays_note_local_despite_stale_marker_fields_opt_in() {
+    let note = parse_note(
+        "\
+---
+status: wip
+parent: \"[[obsidian]]\"
+created: 2026-10-03T15:42:18-0400
+highlights_marker_fields: [created]
+source_pdf: lib/example.pdf
+---
+
+Body
+",
+    );
+
+    let projection = note
+        .synced_projection_with_normalization()
+        .expect("extract frontmatter projection")
+        .projection;
+    assert!(
+        !projection.contains_key("created"),
+        "created must not join the synced projection"
+    );
+
+    let hash = projection_hash(&projection).expect("hash projection");
+    let rendered = note.render_with_projection(
+        &projection,
+        &hash,
+        &PipelineMetadata {
+            source_pdf: "lib/example.pdf".to_string(),
+            source_pdf_sha256: "abc123".to_string(),
+            ref_type: None,
+            highlights_sidecar: None,
+            highlights_count: None,
+            highlights_synced_at: None,
+            created: None,
+        },
+        &note.body,
+    );
+    assert_eq!(
+        rendered
+            .matches("created: 2026-10-03T15:42:18-0400\n")
+            .count(),
+        1,
+        "authored created line should be preserved exactly once:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("highlights_marker_fields: [created]"),
+        "stale created opt-in should not survive rerender:\n{rendered}"
+    );
+}
+
+#[test]
+fn new_note_render_emits_exactly_one_created_line() {
+    let note = ParsedNote::empty();
+    let mut projection = Projection::new();
+    projection
+        .insert("status".to_string(), MarkerValue::String("wip".to_string()));
+    projection.insert(
+        "parent".to_string(),
+        MarkerValue::String("[[obsidian]]".to_string()),
+    );
+    let hash = projection_hash(&projection).expect("hash projection");
+    let rendered = note.render_with_projection(
+        &projection,
+        &hash,
+        &PipelineMetadata {
+            source_pdf: "lib/example.pdf".to_string(),
+            source_pdf_sha256: "abc123".to_string(),
+            ref_type: None,
+            highlights_sidecar: None,
+            highlights_count: None,
+            highlights_synced_at: None,
+            created: Some("2026-10-03T15:42:18-0400".to_string()),
+        },
+        "# Example\n",
+    );
+    assert_eq!(
+        rendered.matches("\ncreated: ").count(),
+        1,
+        "new note should carry exactly one created line:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("created: 2026-10-03T15:42:18-0400\n"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn frontmatter_render_preserves_unmanaged_keys() {
     let note = parse_note(
         "\
@@ -322,6 +425,7 @@ Manual body.
             highlights_sidecar: None,
             highlights_count: None,
             highlights_synced_at: None,
+            created: None,
         },
         &note.body,
     );
