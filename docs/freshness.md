@@ -631,7 +631,9 @@ task stays due and Alt+Shift+F does not advance.
 1. Run `bob gkeep pull`.
 2. Use `]s` / Alt+Shift+F through NEW → PROJECTS → PENDING → NEXT →
    RETURNED → REFERENCES until the notice says **Commitments done**.
-   `[S` / `]S` jump to the first / last queue entries. NEW is never
+   `N]s` / `N[s` move N entries along that same queue and wrap with
+   the existing notice, while `[S` / `]S` stay the first and last
+   entries. NEW is never
    capped or skipped. In PROJECTS, replenish the empty project with
    Alt+Shift+F; stamping a project advances to the correct next entry
    with the block ID and `#hide` preserved. In REFERENCES, confirm
