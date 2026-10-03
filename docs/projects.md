@@ -514,8 +514,14 @@ The shared approved-decay action planner (`planFreshnessDecayCard` in
 refresh, and log-insertion planners above into one stable, previewed card
 model for keep-streak decisions. It is pure: every displayed date is rolled
 exactly once from an injected random source, the model is frozen, and approval
-persists the preview without re-rolling. The card interaction and guarded
-commit land separately; the planner never writes.
+persists the preview without re-rolling. The planner never writes; the card
+interaction and guarded commit landed with the decision-card phase
+(`FreshnessDecayCardModal` in bob-navigation-hotkeys 1.69.0, covered by
+`scripts/test-navigation-decision-card.cjs`). The press opens the card and
+writes nothing; every approval revalidates the task line, local day, decay
+config, and trigger eligibility, then reuses the previewed plan/date through
+the existing transactional writers (one undo step). Esc writes nothing and
+retains the anchor; stale inputs rebuild for a fresh choice.
 
 - **Not now (Enter).** P0 tasks enter at the first configured level in ladder
   order whose `min_days` exceeds the effective refresh interval (7 → P2,

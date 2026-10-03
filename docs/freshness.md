@@ -29,8 +29,14 @@ cite: Rust runs the read/reset/placement cases (it has no production
 increment API); the sole increment helper is JavaScript
 `api.freshness.keepLine`, which landed with the ledger-marks phase
 alongside the freshness namespace v5, folded pips, and count-truthful
-tooltips. The decision card lands in its own phase; until then marks
-show pips with counting-only wording and no leaf.
+tooltips. The decision card landed with the decision-card phase
+(bob-navigation-hotkeys 1.69.0, bob-ledger-tools 1.24.0): single
+Alt+F/Alt+Shift+F presses on exact, due, at-limit tasks open the
+consent card and write nothing, counted and Task Link sessions skip
+those targets without changing fresh/count, and marks show the leaf
+with `Alt+F to decide` only when the card capability is present, the
+rollout is active, and decay is on. Mixed-version sessions keep
+counting pips with counting-only wording and no leaf.
 
 ## 1. Definition
 
@@ -182,12 +188,14 @@ hard-coded P1–P4 table.
 **2026-10-19 in the vault's local calendar**, after the accepted
 trial (October 5–18). Before that day, agents count and show pips
 only: no cards, leaf, decision skip, or "next review asks" promise.
-That counting is the first usable milestone and is trial-neutral
-instrumentation: bob-navigation-hotkeys 1.68.0 routes single, counted,
-and Task Link Alt+F/Alt+Shift+F presses through exact pre-write
-matching into `keepLine` (counting only exact due-Ready
-ROTTEN/RETURNED targets, preserving every other streak), with `kept
-N×` tails on the Fresh notice and no interception or skipping.
+That counting was the first usable milestone and trial-neutral
+instrumentation. The decision card is live as of
+bob-navigation-hotkeys 1.69.0: a single Alt+F/Alt+Shift+F press on an
+exact, due, at-limit source task opens the consent card and writes
+nothing, while counted and Task Link sessions skip those targets
+(`N needs a decision`) without changing fresh/count. Below threshold
+they keep counting normally through exact pre-write matching into
+`keepLine`, with `kept N×` tails on the Fresh notice.
 This is one documented activation constant per language (Rust:
 `decay_active_from`), covered by the shared boundary vectors — it is
 rollout policy, not a new editable config knob. After that date a
@@ -203,7 +211,9 @@ bob-navigation-hotkeys) turns that flag into stable previewed decisions —
 P0 entry, a non-cancelling Not now, Less often steps, and dated
 review-decision entries with `· kept N×` tails — as specified in
 `docs/projects.md` ("Approved-decay decision planner"); the card interaction
-itself lands separately.
+itself (`FreshnessDecayCardModal` plus guarded commit adapters, batch
+skipping, the leaf, and the activation guard) landed with the
+decision-card phase.
 
 ## 3. Placement rule
 
