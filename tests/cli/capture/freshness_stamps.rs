@@ -66,6 +66,43 @@ fn capture_link_stamps_ready_and_blocked_to_next() {
 }
 
 #[test]
+fn capture_link_clears_keep_streak() {
+    // A capture rewrite stamps through the generic default, which
+    // clears `keeps`; no keep metadata leaks into the rewritten line
+    // or its clean description.
+    let body = "- [ ] #task Work [fresh:: 2026-07-01] [keeps:: 2] ^t\n";
+    let (_temp, vault, day_file) =
+        toggle_vault("bob-cli-fresh-link-keeps", body);
+    let target = vault.join("cash.md");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+t!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("link clears keeps");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&target).expect("target"),
+        "- [*] #task Work [fresh:: 2026-07-10] ^t\n",
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert!(
+        !json["task_line"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("[keeps::"),
+        "{json}"
+    );
+}
+
+#[test]
 fn capture_link_leaves_next_untouched_without_future_schedule() {
     for (symbol, arg) in [("*", "@cash+t!"), ("/", "@cash+t!")] {
         let body = format!("- [{symbol}] #task Work ^t\n");

@@ -23,7 +23,7 @@ use super::super::{
     task_status_hooks::task_metadata,
 };
 use super::{
-    placement::{read_freshness, stamp_fresh},
+    placement::{read_freshness, stamp_fresh_preserve_keeps},
     scan::{RowCtx, Snapshot},
     state::evaluate,
 };
@@ -278,7 +278,9 @@ fn stamp_change(
     date: NaiveDate,
     kind: SeedKind,
 ) -> Result<SeedChange, SeedError> {
-    let stamp = stamp_fresh(&row.task.original_markdown, date);
+    // Preserve mode: the seed stamps dates but must never reset an
+    // existing keep streak — the generic stamp default clears keeps.
+    let stamp = stamp_fresh_preserve_keeps(&row.task.original_markdown, date);
     if let Some(refused) = stamp.refused {
         return Err(SeedError::Refused {
             path: row.task.path.clone(),

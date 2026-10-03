@@ -80,7 +80,7 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 3);
+    assert_eq!(value["schema_version"], 4);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
     assert_eq!(value["config"]["pending_interval"], 1);
@@ -548,7 +548,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 3);
+    assert_eq!(value["schema_version"], 4);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -652,7 +652,7 @@ fn list_lane_rows_cover_pending_and_next() {
         - [*] #task Fresh next [fresh:: 2026-10-08]\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 3);
+    assert_eq!(value["schema_version"], 4);
     let counts = &value["counts"];
     assert_eq!(counts["pending_due"], 1);
     assert_eq!(counts["next_due"], 1);
@@ -821,6 +821,208 @@ fn list_budget_meter_uses_upkeep() {
     let human = stdout(&output);
     // Upkeep is 1 (the [x] stamp); the [*] stamp does not count.
     assert!(human.contains("✓ 1/15 today"), "upkeep meter:\n{human}");
+}
+
+fn keeps_vault(prefix: &str) -> TempDir {
+    let temp = TempDir::new(prefix);
+    let vault = temp.path().join("vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("a.md"),
+        "- [ ] #task At limit [fresh:: 2026-09-20] [keeps:: 3] [created:: 2026-09-01]\n\
+        - [ ] #task Below limit [fresh:: 2026-09-20] [keeps:: 1]\n\
+        - [ ] #task No streak [fresh:: 2026-09-20]\n\
+        - [ ] #task Never kept\n",
+    );
+    temp
+}
+
+fn keeps_list_json(temp: &TempDir, now: &str, extra: &[&str]) -> Value {
+    let mut command = bob_command();
+    command
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(temp))
+        .env("BOB_NOW", now)
+        .arg("-f")
+        .arg("json");
+    for arg in extra {
+        command.arg(arg);
+    }
+    let output = command.output().expect("run keeps list");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("keeps list JSON")
+}
+
+#[test]
+fn list_reports_keeps_and_decide_per_schema_4() {
+    // After activation (2026-10-19), the at-limit rotten row decides.
+    let temp = keeps_vault("bob-cli-freshness-keeps");
+    let value = keeps_list_json(&temp, "2026-10-20", &[]);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["schema_version"], 4);
+    assert_eq!(value["config"]["decay"]["enabled"], true);
+    assert_eq!(value["config"]["decay"]["keeps"], 3);
+    assert!(value["config"]["decay"]["enter"].is_null());
+    assert_eq!(value["config"]["decay"]["active_from"], "2026-10-19");
+    assert_eq!(value["config"]["decay"]["active"], true);
+
+    let queue = value["queue"].as_array().expect("queue array");
+    let at_limit = queue
+        .iter()
+        .find(|entry| entry["text"] == "At limit")
+        .expect("at-limit row");
+    assert_eq!(at_limit["tier"], "rotten");
+    assert_eq!(at_limit["keeps"], 3);
+    assert_eq!(at_limit["decide"], true);
+    let below = queue
+        .iter()
+        .find(|entry| entry["text"] == "Below limit")
+        .expect("below-limit row");
+    assert_eq!(below["keeps"], 1);
+    assert_eq!(below["decide"], false);
+    let plain = queue
+        .iter()
+        .find(|entry| entry["text"] == "No streak")
+        .expect("no-streak row");
+    assert_eq!(plain["keeps"], 0);
+    assert_eq!(plain["decide"], false);
+    assert_eq!(value["counts"]["decide"], 1);
+    assert_eq!(value["counts"]["walk"], 4);
+
+    // Human rows show `kept N×` and `· decide`; the header shows the
+    // active threshold.
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_NOW", "2026-10-20")
+        .output()
+        .expect("run keeps list human");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(human.contains("keeps 3"), "threshold header:\n{human}");
+    assert!(human.contains("kept 3×"), "kept row:\n{human}");
+    assert!(human.contains("decide"), "decide marker:\n{human}");
+}
+
+#[test]
+fn list_pre_activation_counts_but_never_decides() {
+    let temp = keeps_vault("bob-cli-freshness-keeps-trial");
+    let value = keeps_list_json(&temp, NOW, &[]);
+    assert_eq!(value["schema_version"], 4);
+    assert_eq!(value["config"]["decay"]["active"], false);
+    assert_eq!(value["counts"]["decide"], 0);
+    let queue = value["queue"].as_array().expect("queue array");
+    assert!(queue.iter().all(|entry| entry["decide"] == false));
+    // The streak still reads: counting works before activation.
+    let at_limit = queue
+        .iter()
+        .find(|entry| entry["text"] == "At limit")
+        .expect("at-limit row");
+    assert_eq!(at_limit["keeps"], 3);
+
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run trial list human");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("asks from 2026-10-19"),
+        "pre-activation header:\n{human}"
+    );
+    assert!(!human.contains("decide"), "no decision promise:\n{human}");
+}
+
+#[test]
+fn list_decay_off_and_zero_limit() {
+    let temp = keeps_vault("bob-cli-freshness-keeps-off");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "freshness:\n  decay: false\n");
+    let mut command = bob_command();
+    command
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-20")
+        .arg("-f")
+        .arg("json");
+    let output = command.output().expect("run with decay off");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("off JSON");
+    assert_eq!(value["config"]["decay"]["enabled"], false);
+    assert_eq!(value["counts"]["decide"], 0);
+
+    // A zero limit asks on every due Ready re-confirmation.
+    write_file(&config, "freshness:\n  decay:\n    keeps: 0\n");
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-20")
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run with zero keeps");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("zero JSON");
+    assert_eq!(value["config"]["decay"]["keeps"], 0);
+    let queue = value["queue"].as_array().expect("queue array");
+    let plain = queue
+        .iter()
+        .find(|entry| entry["text"] == "No streak")
+        .expect("no-streak row");
+    assert_eq!(plain["decide"], true);
+}
+
+#[test]
+fn list_invalid_decay_exits_2() {
+    let temp = keeps_vault("bob-cli-freshness-keeps-bad");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "freshness:\n  decay:\n    keeps: soon\n");
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run with invalid decay");
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn seed_preserves_existing_keeps() {
+    // A keep streak without a fresh stamp is still a seed candidate;
+    // the seed stamps the date but must never reset the streak.
+    let temp = TempDir::new("bob-cli-freshness-seed-keeps");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("a.md"), "- [ ] #task Kept before [keeps:: 2]\n");
+    let (output, value) = seed_json(&temp, &[]);
+    assert_success(&output);
+    assert_eq!(value["schema_version"], 4);
+    assert_eq!(value["stamped"]["ready"], 1);
+    let contents =
+        fs::read_to_string(vault.join("a.md")).expect("read seeded line");
+    assert!(
+        contents.contains("[keeps:: 2]"),
+        "seed must preserve keeps:\n{contents}"
+    );
+    assert!(
+        contents.contains("[fresh::"),
+        "seed must stamp:\n{contents}"
+    );
 }
 
 #[test]

@@ -14,6 +14,7 @@ use clap::{
 use serde_json::json;
 
 use super::super::{
+    config::freshness::{decay_active, decay_active_from},
     env as bob_env,
     style::{pad_right, Styler},
 };
@@ -33,7 +34,12 @@ const COMMAND_NAME: &str = "bob freshness";
 
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
-const SCHEMA_VERSION: u32 = 3;
+///
+/// Schema 4 adds the keep-streak contract: queue rows carry `keeps`
+/// and `decide`, counts carry `decide`, and `config` carries the
+/// normalized `decay` object. The seed envelope shares this constant;
+/// seed contents are otherwise unchanged.
+const SCHEMA_VERSION: u32 = 4;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -291,6 +297,10 @@ struct ListedRow {
     due_on: Option<String>,
     days_overdue: Option<i64>,
     scheduled: Option<String>,
+    /// The valid `[keeps:: N]` semantic count (0 when absent).
+    keeps: u32,
+    /// A choice is due for this row — not permission to act.
+    decide: bool,
 }
 
 struct ListReport {
@@ -300,6 +310,11 @@ struct ListReport {
     pending_interval: Option<u16>,
     next_interval: Option<u16>,
     budget: Option<u32>,
+    decay_enabled: bool,
+    decay_keeps: u16,
+    decay_enter: Option<String>,
+    decay_active: bool,
+    decay_active_from: String,
     counts: Counts,
     rows: Vec<ListedRow>,
     warnings: Vec<Warning>,
@@ -379,6 +394,8 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
                     .task
                     .scheduled
                     .map(|date| date.format("%Y-%m-%d").to_string()),
+                keeps: evaluated.keeps,
+                decide: evaluated.decide,
             });
         }
     }
@@ -420,6 +437,11 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         pending_interval: config.pending_interval,
         next_interval: config.next_interval,
         budget: config.rotten_daily_budget,
+        decay_enabled: config.decay.enabled,
+        decay_keeps: config.decay.keeps,
+        decay_enter: config.decay.enter.clone(),
+        decay_active: decay_active(today),
+        decay_active_from: decay_active_from().format("%Y-%m-%d").to_string(),
         counts,
         rows,
         warnings,
@@ -469,17 +491,36 @@ fn lane_meter(interval: Option<u16>) -> String {
     }
 }
 
+/// The keep-streak threshold segment of the human header: the
+/// threshold always shows; the off state and the pre-activation date
+/// say so explicitly instead of promising a decision.
+fn decay_meter(report: &ListReport) -> String {
+    if !report.decay_enabled {
+        format!("keeps {} · decay off", report.decay_keeps)
+    } else if !report.decay_active {
+        format!(
+            "keeps {} · asks from {}",
+            report.decay_keeps, report.decay_active_from
+        )
+    } else if report.decay_keeps == 0 {
+        "keeps 0 · asks every review".to_string()
+    } else {
+        format!("keeps {}", report.decay_keeps)
+    }
+}
+
 fn human_list(report: &ListReport, styler: &Styler) -> String {
     let mut output = String::new();
     let _ = writeln!(
         output,
-        "bob freshness {sep} {weekday} {date} {sep} every {interval}d {sep} pending {pending} {sep} next {next}",
+        "bob freshness {sep} {weekday} {date} {sep} every {interval}d {sep} pending {pending} {sep} next {next} {sep} {decay}",
         sep = styler.separator(),
         weekday = report.weekday,
         date = report.date,
         interval = report.interval,
         pending = lane_meter(report.pending_interval),
         next = lane_meter(report.next_interval),
+        decay = decay_meter(report),
     );
     output.push('\n');
     let _ = writeln!(
@@ -602,6 +643,15 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
             }
         }
     };
+    // CLI human rows show `kept N×` and `· decide` where true; the
+    // header carries the threshold, off state, or pre-activation date.
+    let mut detail = detail;
+    if row.keeps > 0 {
+        detail.push_str(&format!(" {sep} kept {}×", row.keeps));
+    }
+    if row.decide {
+        detail.push_str(&format!(" {sep} decide"));
+    }
     format!(
         "    {}  {}  {}\n",
         styler.cyan(&pad_right(&reference, 30)),
@@ -627,6 +677,13 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "pending_interval": lane_json(report.pending_interval),
             "next_interval": lane_json(report.next_interval),
             "rotten_daily_budget": report.budget,
+            "decay": {
+                "enabled": report.decay_enabled,
+                "keeps": report.decay_keeps,
+                "enter": report.decay_enter,
+                "active_from": report.decay_active_from,
+                "active": report.decay_active,
+            },
         },
         "counts": {
             "due": report.counts.due,
@@ -637,6 +694,7 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "pending_due": report.counts.pending_due,
             "next_due": report.counts.next_due,
             "walk": report.counts.walk,
+            "decide": report.counts.decide,
             "refreshed_today": report.counts.refreshed_today,
             "upkeep_today": report.counts.upkeep_today,
             "budget": report.counts.budget,
@@ -660,6 +718,8 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "due_on": row.due_on,
             "days_overdue": row.days_overdue,
             "scheduled": row.scheduled,
+            "keeps": row.keeps,
+            "decide": row.decide,
         })).collect::<Vec<_>>(),
         "warnings": report.warnings.iter().map(|warning| json!({
             "code": warning.code,

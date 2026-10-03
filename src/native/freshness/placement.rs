@@ -1,9 +1,13 @@
-//! Canonical placement for `[fresh:: YYYY-MM-DD]` and `[refresh:: N]`.
+//! Canonical placement for `[fresh:: YYYY-MM-DD]`, `[refresh:: N]`,
+//! and `[keeps:: N]`.
 //!
 //! This is the Rust half of the one-helper-per-language rule owned by
 //! `docs/freshness.md`. The JavaScript mirror is
-//! `api.freshness.stampLine` / `setRefreshLine` in bob-ledger-tools.
-//! Both sides run the placement conformance vectors in that doc verbatim.
+//! `api.freshness.stampLine` / `setRefreshLine` / `keepLine` in
+//! bob-ledger-tools. Both sides run the placement conformance vectors
+//! in that doc verbatim. Rust reads, clears, and reports `keeps`; it
+//! has no increment path — the sole increment helper is JavaScript
+//! `api.freshness.keepLine`.
 //!
 //! The vault uses Tasks' Dataview format, and both Rust parsers read
 //! fields from the end of the line and stop at the first key they do
@@ -73,6 +77,9 @@ pub(crate) struct FreshRead {
     pub(crate) fresh: Option<NaiveDate>,
     /// The first valid `[refresh:: N]` (1–365), if any.
     pub(crate) refresh: Option<u16>,
+    /// The first valid `[keeps:: N]` (1–999) as a semantic count.
+    /// Absence — or no valid value — means 0, and writers omit zero.
+    pub(crate) keeps: u32,
     /// Lint codes in first-seen order.
     pub(crate) lints: Vec<String>,
 }
@@ -80,17 +87,33 @@ pub(crate) struct FreshRead {
 /// Stamp `line` with `date`, keeping the first valid existing
 /// `[refresh:: N]` if there is one.
 ///
+/// Every generic human stamp clears `keeps`: the line is rewritten
+/// without any `keeps` field, even when `date` already equals today.
 /// Refusals (not a task, recurring, done/cancelled) return the line
 /// unchanged with a reason. A line already stamped with `date` in
-/// canonical position is byte-identical with `changed: false`.
+/// canonical position — and with no `keeps` to clear — is
+/// byte-identical with `changed: false`.
 pub(crate) fn stamp_fresh(line: &str, date: NaiveDate) -> Stamp {
-    stamp_inner(line, date, RefreshEdit::Keep)
+    stamp_inner(line, date, RefreshEdit::Keep, KeepsEdit::Clear)
+}
+
+/// Stamp `line` with `date` while preserving the valid `keeps`
+/// semantic value.
+///
+/// This is the private preserve-mode primitive for the cutover seed
+/// only (`seed.rs::stamp_change`): the seed must never turn into a
+/// resetter when the default stamp clears keeps. The preserved count
+/// is canonicalized (first valid value, re-emitted in canonical
+/// position and order); absent or invalid stays omitted.
+pub(crate) fn stamp_fresh_preserve_keeps(line: &str, date: NaiveDate) -> Stamp {
+    stamp_inner(line, date, RefreshEdit::Keep, KeepsEdit::Preserve)
 }
 
 /// Set or clear `[refresh:: N]` and stamp with `date`.
 ///
 /// `Some(days)` must hold 1–365; out-of-range values clear the field
 /// instead of writing an invalid one. `None` removes the field.
+/// Like every generic stamp, this clears `keeps`.
 // P12 vector helper: only the conformance tests exercise refresh edits.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn set_refresh(
@@ -103,7 +126,7 @@ pub(crate) fn set_refresh(
         Some(_) => RefreshEdit::Clear,
         None => RefreshEdit::Clear,
     };
-    stamp_inner(line, date, edit)
+    stamp_inner(line, date, edit, KeepsEdit::Clear)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -116,10 +139,19 @@ enum RefreshEdit {
     Clear,
 }
 
+/// What a stamp does with `keeps`: generic stamps clear it;
+/// only the seed preserve-mode keeps the valid semantic value.
+#[derive(Debug, Clone, Copy)]
+enum KeepsEdit {
+    Clear,
+    Preserve,
+}
+
 fn stamp_inner(
     line: &str,
     date: NaiveDate,
     refresh_edit: RefreshEdit,
+    keeps_edit: KeepsEdit,
 ) -> Stamp {
     let Some(status) = task_status(line) else {
         return Stamp {
@@ -148,9 +180,14 @@ fn stamp_inner(
         RefreshEdit::Set(days) => Some(days),
         RefreshEdit::Clear => None,
     };
+    let kept_keeps = match keeps_edit {
+        KeepsEdit::Clear => None,
+        KeepsEdit::Preserve => first_valid_keeps(line),
+    };
 
     let date_text = format_calendar_date(date);
-    let output = rebuild_without_fields(line, &date_text, kept_refresh);
+    let output =
+        rebuild_without_fields(line, &date_text, kept_refresh, kept_keeps);
     let changed = output != line;
     Stamp {
         line: output,
@@ -159,20 +196,25 @@ fn stamp_inner(
     }
 }
 
-/// Read the `fresh` / `refresh` fields on `line`.
+/// Read the `fresh` / `refresh` / `keeps` fields on `line`.
 ///
 /// - Malformed `fresh` values report `fresh_malformed`.
 /// - `fresh` dates after `today` report `fresh_future` and are treated
 ///   as none.
 /// - More than one `fresh` field reports `fresh_duplicate`; the latest
 ///   valid date wins.
-/// - A `fresh` / `refresh` field inside the Tasks suffix reports
-///   `fresh_misplaced`; the next stamp repairs it.
+/// - A `fresh` / `refresh` / `keeps` field inside the Tasks suffix
+///   reports `fresh_misplaced`; the next stamp repairs it.
 /// - An invalid `[refresh:: N]` reports `refresh_invalid` and falls
 ///   through.
+/// - `keeps` is a decimal integer 1–999; absence — or no valid value
+///   — means 0 and writers omit zero. The first valid value wins; an
+///   invalid value reports `keeps_invalid`, and more than one `keeps`
+///   field reports `keeps_duplicate`.
 pub(crate) fn read_freshness(line: &str, today: NaiveDate) -> FreshRead {
     let fresh_fields = inline_fields(line, "fresh");
     let refresh_fields = inline_fields(line, "refresh");
+    let keeps_fields = inline_fields(line, "keeps");
     let mut lints = Vec::new();
 
     let mut best: Option<NaiveDate> = None;
@@ -216,6 +258,27 @@ pub(crate) fn read_freshness(line: &str, today: NaiveDate) -> FreshRead {
         push_lint(&mut lints, "refresh_invalid");
     }
 
+    let mut keeps = None;
+    let mut keeps_invalid_seen = false;
+    for field in &keeps_fields {
+        match parse_keeps_value(&field.value) {
+            Some(count) => {
+                if keeps.is_none() {
+                    keeps = Some(count);
+                }
+            }
+            None => {
+                keeps_invalid_seen = true;
+            }
+        }
+    }
+    if keeps_invalid_seen {
+        push_lint(&mut lints, "keeps_invalid");
+    }
+    if keeps_fields.len() > 1 {
+        push_lint(&mut lints, "keeps_duplicate");
+    }
+
     if has_misplaced_field(line) {
         push_lint(&mut lints, "fresh_misplaced");
     }
@@ -223,6 +286,7 @@ pub(crate) fn read_freshness(line: &str, today: NaiveDate) -> FreshRead {
     FreshRead {
         fresh: best,
         refresh,
+        keeps: keeps.unwrap_or(0),
         lints,
     }
 }
@@ -231,8 +295,10 @@ pub(crate) fn read_freshness(line: &str, today: NaiveDate) -> FreshRead {
 ///
 /// The suffix starts at the leftmost Tasks element (a Tasks-key field,
 /// a trailing tag, or `^id`) of the run scanned from the end of the
-/// line. `fresh` / `refresh` fields extend the run but are not part of
-/// the suffix. Returns `trimmed_len` when there is no suffix.
+/// line. `fresh` / `refresh` / `keeps` fields extend the run but are
+/// not part of the suffix. `keeps` is a run-extending non-Tasks key:
+/// it is never added to the Tasks key registry. Returns `trimmed_len`
+/// when there is no suffix.
 pub(crate) fn tasks_suffix_start(line: &str) -> usize {
     suffix_start_inner(line).unwrap_or_else(|| line.trim_end().len())
 }
@@ -270,7 +336,7 @@ fn suffix_start_inner(line: &str) -> Option<usize> {
             continue;
         }
         // A trailing inline field continues the run. Tasks keys are
-        // suffix elements; fresh/refresh only extend the run.
+        // suffix elements; fresh/refresh/keeps only extend the run.
         let Some((field_start, key)) = trailing_field_key(trimmed) else {
             break;
         };
@@ -283,7 +349,7 @@ fn suffix_start_inner(line: &str) -> Option<usize> {
             cursor = trim_end_to(&line[..cursor], cursor);
             continue;
         }
-        if key == "fresh" || key == "refresh" {
+        if key == "fresh" || key == "refresh" || key == "keeps" {
             cursor = field_start;
             cursor = trim_end_to(&line[..cursor], cursor);
             continue;
@@ -294,12 +360,16 @@ fn suffix_start_inner(line: &str) -> Option<usize> {
     leftmost
 }
 
-/// Rebuild `line` with `fresh:: date_text` (and `refresh` when kept)
-/// immediately before the Tasks suffix.
+/// Rebuild `line` with `fresh:: date_text` (plus `refresh` and
+/// `keeps` when kept) immediately before the Tasks suffix.
+///
+/// Output order is `fresh`, optional `refresh`, optional `keeps`,
+/// then the existing Tasks suffix, tags, and block ID.
 fn rebuild_without_fields(
     line: &str,
     date_text: &str,
     kept_refresh: Option<u16>,
+    kept_keeps: Option<u32>,
 ) -> String {
     let suffix_start = tasks_suffix_start(line);
     let trimmed_len = line.trim_end().len();
@@ -324,6 +394,11 @@ fn rebuild_without_fields(
         output.push_str(&days.to_string());
         output.push(']');
     }
+    if let Some(count) = kept_keeps {
+        output.push_str(" [keeps:: ");
+        output.push_str(&count.to_string());
+        output.push(']');
+    }
     if !suffix.is_empty() {
         output.push(' ');
         output.push_str(suffix);
@@ -331,14 +406,17 @@ fn rebuild_without_fields(
     output
 }
 
-/// Remove every `fresh` and `refresh` field from `text`, collapsing
-/// the whitespace each removal leaves to a single space.
+/// Remove every `fresh`, `refresh`, and `keeps` field from `text`,
+/// collapsing the whitespace each removal leaves to a single space.
 fn remove_fields(text: &str) -> String {
     let mut ranges = Vec::new();
     for field in inline_fields(text, "fresh") {
         ranges.push((field.start, field.end));
     }
     for field in inline_fields(text, "refresh") {
+        ranges.push((field.start, field.end));
+    }
+    for field in inline_fields(text, "keeps") {
         ranges.push((field.start, field.end));
     }
     if ranges.is_empty() {
@@ -455,6 +533,29 @@ fn first_valid_refresh(line: &str) -> Option<u16> {
         .find_map(|field| parse_refresh_value(&field.value))
 }
 
+fn first_valid_keeps(line: &str) -> Option<u32> {
+    inline_fields(line, "keeps")
+        .iter()
+        .find_map(|field| parse_keeps_value(&field.value))
+}
+
+/// A `[keeps:: N]` value: a decimal integer 1–999, nothing else.
+/// Absence means 0 and writers omit zero; increment saturates at 999
+/// on the JavaScript side (Rust has no increment path).
+fn parse_keeps_value(value: &str) -> Option<u32> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || !trimmed.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let number: i64 = trimmed.parse().ok()?;
+    if (1..=999).contains(&number) {
+        Some(number as u32)
+    } else {
+        None
+    }
+}
+
 /// A `[refresh:: N]` value: an integer 1–365, nothing else.
 fn parse_refresh_value(value: &str) -> Option<u16> {
     let trimmed = value.trim();
@@ -470,8 +571,8 @@ fn parse_refresh_value(value: &str) -> Option<u16> {
     }
 }
 
-/// Whether any `fresh` / `refresh` field sits at or after the suffix
-/// start (inside the Tasks suffix run).
+/// Whether any `fresh` / `refresh` / `keeps` field sits at or after
+/// the suffix start (inside the Tasks suffix run).
 fn has_misplaced_field(line: &str) -> bool {
     let start = tasks_suffix_start(line);
     let trimmed_len = line.trim_end().len();
@@ -481,6 +582,7 @@ fn has_misplaced_field(line: &str) -> bool {
     inline_fields(line, "fresh")
         .iter()
         .chain(inline_fields(line, "refresh").iter())
+        .chain(inline_fields(line, "keeps").iter())
         .any(|field| field.start >= start)
 }
 

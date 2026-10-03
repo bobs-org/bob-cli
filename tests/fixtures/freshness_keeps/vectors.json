@@ -1,0 +1,563 @@
+{
+ "active_from": "2026-10-19",
+ "boundary": [
+  {
+   "active": false,
+   "date": "2026-10-18",
+   "id": "B1-day-before",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "active": true,
+   "date": "2026-10-19",
+   "id": "B2-activation-day",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "active": true,
+   "date": "2026-10-20",
+   "id": "B3-day-after",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  }
+ ],
+ "config": [
+  {
+   "decay": {
+    "enabled": true,
+    "enter": null,
+    "keeps": 3
+   },
+   "id": "C1-absent",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "properties: []\n"
+  },
+  {
+   "decay": {
+    "enabled": true,
+    "enter": null,
+    "keeps": 3
+   },
+   "id": "C2-null",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n"
+  },
+  {
+   "decay": {
+    "enabled": true,
+    "enter": null,
+    "keeps": 3
+   },
+   "id": "C3-true",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay: true\n"
+  },
+  {
+   "decay": {
+    "enabled": false,
+    "enter": null,
+    "keeps": 3
+   },
+   "id": "C4-false",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay: false\n"
+  },
+  {
+   "decay": {
+    "enabled": true,
+    "enter": null,
+    "keeps": 3
+   },
+   "id": "C5-empty-map",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay: {}\n"
+  },
+  {
+   "decay": {
+    "enabled": true,
+    "enter": null,
+    "keeps": 0
+   },
+   "id": "C6-zero",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    keeps: 0\n"
+  },
+  {
+   "decay": {
+    "enabled": true,
+    "enter": "P1",
+    "keeps": 2
+   },
+   "id": "C7-fixed-entry",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    keeps: 2\n    enter: P1\n"
+  },
+  {
+   "error": true,
+   "id": "C8-negative",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    keeps: -1\n"
+  },
+  {
+   "error": true,
+   "id": "C9-fractional",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    keeps: 2.5\n"
+  },
+  {
+   "error": true,
+   "id": "C10-above-range",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    keeps: 1000\n"
+  },
+  {
+   "error": true,
+   "id": "C11-scalar",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay: soon\n"
+  },
+  {
+   "error": true,
+   "id": "C12-enter-empty",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    enter: ''\n"
+  },
+  {
+   "error": true,
+   "id": "C13-enter-number",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    enter: 2\n"
+  }
+ ],
+ "decide": [
+  {
+   "config": "C1-absent",
+   "date": "2026-10-08",
+   "decide": false,
+   "id": "D1-pre-activation",
+   "keeps": 3,
+   "lane": "ready",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "rotten",
+   "why": "count and show pips only before 2026-10-19"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": true,
+   "id": "D2-at-limit",
+   "keeps": 3,
+   "lane": "ready",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "rotten",
+   "why": "keeps >= limit on a due Ready task after activation"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D3-below-limit",
+   "keeps": 2,
+   "lane": "ready",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "rotten",
+   "why": "below the limit: stamp, no card"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": true,
+   "id": "D4-returned",
+   "keeps": 5,
+   "lane": "ready",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "returned",
+   "why": "returned counts as due"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D5-new-never",
+   "keeps": 0,
+   "lane": "ready",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "new",
+   "why": "NEW never decides, even with keeps: 0"
+  },
+  {
+   "config": "C6-zero",
+   "date": "2026-10-20",
+   "decide": true,
+   "id": "D6-zero-limit",
+   "keeps": 0,
+   "lane": "ready",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "rotten",
+   "why": "keeps: 0 asks on every due Ready re-confirmation"
+  },
+  {
+   "config": "C4-false",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D7-off",
+   "keeps": 9,
+   "lane": "ready",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "rotten",
+   "why": "decay: false counts and displays but never asks"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D8-lane",
+   "keeps": 9,
+   "lane": "next",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "next",
+   "why": "lane rows never decide"
+  }
+ ],
+ "doc": "docs/freshness.md",
+ "notes": "Keep-streak parity vectors. Rust runs the read/reset/placement cases and has no production increment API; the sole increment helper is JS api.freshness.keepLine. Vectors tagged js-only need the ledger-tools namespace v5 (a later phase). today is the shared worked example date D.",
+ "placement": [
+  {
+   "changed": false,
+   "expected_keeps": 0,
+   "expected_lints": [],
+   "id": "K1-absent",
+   "input": "- [ ] #task Buy milk [fresh:: 2026-10-01]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_changed": true,
+   "expected_line": "- [ ] #task Rename queue input [fresh:: 2026-10-08] [keeps:: 2]",
+   "id": "K2-first-valid-canonical",
+   "input": "- [ ] #task Rename queue input [fresh:: 2026-10-01] [keeps:: 2]",
+   "mode": "preserve",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_changed": true,
+   "expected_line": "- [ ] #task Rename queue input [fresh:: 2026-10-08] [refresh:: 14] [keeps:: 2] [created:: 2026-09-10] [priority:: low]",
+   "id": "K3-refresh-keeps-order",
+   "input": "- [ ] #task Rename queue input [keeps:: 2] [refresh:: 14] [fresh:: 2026-10-01] [created:: 2026-09-10] [priority:: low]",
+   "mode": "preserve",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_changed": false,
+   "expected_line": "- [ ] #task Buy milk [fresh:: 2026-10-08] [keeps:: 2]",
+   "id": "K4-same-day-preserve-noop",
+   "input": "- [ ] #task Buy milk [fresh:: 2026-10-08] [keeps:: 2]",
+   "mode": "preserve",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_changed": true,
+   "expected_line": "- [ ] #task Buy milk [fresh:: 2026-10-08]",
+   "id": "K5-generic-stamp-clears",
+   "input": "- [ ] #task Buy milk [fresh:: 2026-10-08] [keeps:: 2]",
+   "mode": "stamp",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_changed": true,
+   "expected_line": "- [ ] #task Buy milk [fresh:: 2026-10-08] [refresh:: 30]",
+   "id": "K6-set-refresh-clears",
+   "input": "- [ ] #task Buy milk [fresh:: 2026-10-01] [refresh:: 14] [keeps:: 2]",
+   "mode": "set_refresh",
+   "refresh": 30,
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_changed": true,
+   "expected_line": "- [ ] #task Buy milk [fresh:: 2026-10-08] [created:: 2026-09-29]",
+   "id": "K7-stale-stamp-clears",
+   "input": "- [ ] #task Buy milk [fresh:: 2026-10-01] [keeps:: 1] [created:: 2026-09-29]",
+   "mode": "stamp",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 2,
+   "expected_lints": [
+    "fresh_misplaced"
+   ],
+   "id": "K8-misplaced-keeps",
+   "input": "- [ ] #task Buy milk [created:: 2026-09-29] [keeps:: 2]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_changed": true,
+   "expected_line": "- [ ] #task Buy milk [fresh:: 2026-10-08] [keeps:: 2] [created:: 2026-09-29]",
+   "id": "K8b-misplaced-keeps-repaired",
+   "input": "- [ ] #task Buy milk [created:: 2026-09-29] [keeps:: 2]",
+   "mode": "preserve",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 2,
+   "expected_lints": [
+    "keeps_duplicate"
+   ],
+   "id": "K9-duplicate-first-valid",
+   "input": "- [ ] #task A [keeps:: 2] B [keeps:: 5]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 0,
+   "expected_lints": [
+    "keeps_invalid"
+   ],
+   "id": "K9b-zero",
+   "input": "- [ ] #task A [keeps:: 0]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 0,
+   "expected_lints": [
+    "keeps_invalid"
+   ],
+   "id": "K9c-negative",
+   "input": "- [ ] #task A [keeps:: -1]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 0,
+   "expected_lints": [
+    "keeps_invalid"
+   ],
+   "id": "K9d-fractional",
+   "input": "- [ ] #task A [keeps:: 2.5]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 0,
+   "expected_lints": [
+    "keeps_invalid"
+   ],
+   "id": "K9e-above-range",
+   "input": "- [ ] #task A [keeps:: 1000]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 0,
+   "expected_lints": [
+    "keeps_invalid"
+   ],
+   "id": "K9f-malformed",
+   "input": "- [ ] #task A [keeps:: soon]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 3,
+   "expected_lints": [
+    "keeps_invalid",
+    "keeps_duplicate"
+   ],
+   "id": "K9g-invalid-then-valid",
+   "input": "- [ ] #task A [keeps:: soon] [keeps:: 3]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 999,
+   "expected_lints": [],
+   "id": "K10-saturation-ceiling",
+   "input": "- [ ] #task A [fresh:: 2026-10-01] [keeps:: 999]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "why": "increment saturates at 999 on the JS side; readers accept 999"
+  },
+  {
+   "expected_keeps": 0,
+   "expected_lints": [],
+   "id": "K10b-new-no-keeps",
+   "input": "- [ ] #task New capture [created:: 2026-09-30]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_refused": "closed",
+   "id": "K11-closed-refusal",
+   "input": "- [x] #task Old [keeps:: 2] [completion:: 2026-10-01]",
+   "mode": "stamp",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "why": "close preserves the streak on the closed line; no stamp"
+  },
+  {
+   "expected_refused": "recurring",
+   "id": "K11b-recurring-refusal",
+   "input": "- [ ] #task Water plants [repeat:: every week] [keeps:: 2]",
+   "mode": "stamp",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "expected_keeps": 0,
+   "expected_lints": [],
+   "id": "K13-exact-keys",
+   "input": "- [ ] #task A [keep:: 2] [Keep:: 2] [keepsx:: 2]",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "why": "key match is exact and case-sensitive"
+  },
+  {
+   "expected_keeps": 2,
+   "expected_lints": [],
+   "id": "K13b-paren-form",
+   "input": "- [ ] #task Call mom (keeps:: 2)",
+   "mode": "read",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "why": "readers accept bracket or paren field syntax"
+  }
+ ],
+ "schema": 4,
+ "today": "2026-10-08",
+ "version": 1
+}

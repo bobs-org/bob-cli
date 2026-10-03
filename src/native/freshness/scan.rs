@@ -323,12 +323,18 @@ pub(crate) fn lint_message(code: &str) -> String {
                 .to_string()
         }
         "fresh_misplaced" => {
-            "fresh or refresh sits inside the Tasks suffix; the next stamp repairs it"
+            "fresh, refresh, or keeps sits inside the Tasks suffix; the next stamp repairs it"
                 .to_string()
         }
         "refresh_invalid" => {
             "refresh is not 1-365 days; falling through to the next level"
                 .to_string()
+        }
+        "keeps_invalid" => {
+            "keeps is not a decimal integer 1-999; ignored".to_string()
+        }
+        "keeps_duplicate" => {
+            "more than one keeps field; the first valid one wins".to_string()
         }
         "task_refresh_invalid" => {
             "note task_refresh is not 1-365 days; falling through to config"

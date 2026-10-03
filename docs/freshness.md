@@ -21,6 +21,16 @@ JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
 api v3, freshness namespace v4). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
+The keep-streak contract (`keeps`, `decay`, schema 4) is specified
+here and implemented in Rust in the contract-rust phase. Its
+machine-readable parity vectors live in
+`tests/fixtures/freshness_keeps/vectors.json`, which both languages
+cite: Rust runs the read/reset/placement cases (it has no production
+increment API); the sole increment helper is JavaScript
+`api.freshness.keepLine`, which lands with the ledger-marks phase
+alongside the freshness namespace v5, folded pips, tooltips, and the
+decision card.
+
 ## 1. Definition
 
 - **Task freshness** (aka **freshness**) is the local calendar date a
@@ -44,11 +54,13 @@ as NEW until a human confirms it.
 | ------------------------------ | ---------------------------------------------- | ---------------------------------------- |
 | `[fresh:: YYYY-MM-DD]`         | task line, before the trailing Tasks suffix    | optional; absence means "never confirmed" |
 | `[refresh:: N]`                | task line, immediately after `fresh`           | optional integer days, 1–365             |
+| `[keeps:: N]`                  | task line, immediately after `refresh`         | optional streak of due-Ready keeps, 1–999; absence means 0 (§2a) |
 | `task_refresh: N`              | frontmatter of the note containing the task    | optional integer days, 1–365             |
 | `freshness.interval`           | `~/.config/bob/config.yml`                     | integer days, 1–365, default 7           |
 | `freshness.pending_interval`   | `~/.config/bob/config.yml`                     | integer days, 1–365, or `false`; default 1 |
 | `freshness.next_interval`      | `~/.config/bob/config.yml`                     | integer days, 1–365, or `false`; default 1 |
 | `freshness.rotten_daily_budget` | `~/.config/bob/config.yml`                    | optional integer ≥ 1, default off        |
+| `freshness.decay`              | `~/.config/bob/config.yml`                     | keep-streak policy: mapping, `true`, `false`, or null (§2a) |
 
 **Interval precedence.** `interval(t)` for a lane task in a walked
 lane is that lane's interval (`pending_interval` for `[/]` with source
@@ -88,11 +100,107 @@ unavailable, ledger-tools uses the defaults above and marks them
 within the existing 60-second tick. `bob freshness` on desktop still
 exits 2 for an invalid `freshness:` block.
 
+## 2a. Keep streaks and approved-decay policy
+
+**Storage.** `[keeps:: N]` is a streak of due-Ready bare keeps: how
+many times in a row a due Ready task was confirmed without any other
+change. It is a decimal integer 1–999; absence means 0 and writers
+omit zero. Increment saturates at 999 and never wraps. Readers
+accept existing bracket or paren field syntax, select the first
+valid value, and emit `keeps_invalid` and `keeps_duplicate` as
+appropriate; if none is valid, they report 0. `fresh_misplaced` also
+covers `keeps` inside the Tasks suffix. A successful keep
+canonicalizes and repairs malformed/duplicate placement. Generic
+stamps remove all `keeps` fields. An uncounted keep preserves the
+valid semantic value while canonicalizing it. Do not introduce a
+second lifetime counter or alias.
+
+Canonical form:
+
+```markdown
+- [ ] #task Rename queue input [fresh:: 2026-10-08] [refresh:: 14] [keeps:: 2]
+      [created:: 2026-09-12] [priority:: medium] ^rq
+```
+
+Output order is `fresh`, optional `refresh`, optional `keeps`, then
+the existing Tasks suffix, tags, and block ID. `keeps` extends the
+suffix scan as a run-extending **non-Tasks** key; it is never added
+to the Tasks key registry. Both Rust parsers see the same Tasks
+fields before and after writes. Task body, child blocks, quote
+prefixes, CRLF, and final-newline state follow the existing writer
+rules. No metadata leaks into clean task descriptions or capture
+previews.
+
+**Counting, clearing, and storage.** The full event table (which
+gestures increment, which preserve, which clear; pre-write
+eligibility with `entry.path === path`, `entry.line`, the raw line,
+`lane === 'ready'`, and `tier in {'rotten','returned'}`; the sole
+increment helper `api.freshness.keepLine(line, dateText, { counted })`
+with its valid-prior-`fresh < today` guard; Rust reads/clears/reports
+with no increment path; the seed preserve-mode exception) is owned by
+the plan and the parity vectors until the gesture phases land it in
+the JavaScript consumers. What Rust guarantees today:
+
+- every generic human stamp (`stamp_fresh`, `set_refresh`,
+  including same-day stamps) clears `keeps`;
+- refusals (not a task, recurring, closed) write nothing, so the
+  streak stays on the closed line;
+- automation, hooks, randomize, and the seed neither increment nor
+  reset — `seed.rs::stamp_change` stamps through the private
+  preserve-mode primitive, so the cutover never silently resets a
+  streak;
+- capture's existing `stamp_fresh` consumers clear `keeps` through
+  the same default.
+
+No backfill: seeded dates, captured dates, and old `fresh` stamps are
+not evidence of keeps. Git sync may lose an increment during conflict
+recovery; this scalar is not an exact global event counter. Cache
+uncertainty under-counts. Hand editing remains unobserved.
+
+**Configuration.**
+
+```yaml
+freshness:
+  decay:
+    keeps: 3
+    # enter: P2
+```
+
+`decay` absent, null, `true`, or `{}` means enabled with 3 keeps.
+`false` keeps counting/display but never asks or skips. `keeps`
+accepts an integer 0–999; 0 asks on every due Ready re-confirmation,
+never NEW. `enter` is an optional nonempty configured priority
+label; absent/null uses interval-aware entry. Invalid scalar types,
+fractional/negative/out-of-range values, and malformed blocks follow
+the current freshness config failure contract: Rust exit 2; plugin
+defaults with `invalid` diagnostics. Priority config validity is
+resolved against the existing priority loader, not a second
+hard-coded P1–P4 table.
+
+**Trial protection.** The keep-streak decision machinery activates on
+**2026-10-19 in the vault's local calendar**, after the accepted
+trial (October 5–18). Before that day, agents count and show pips
+only: no cards, leaf, decision skip, or "next review asks" promise.
+This is one documented activation constant per language (Rust:
+`decay_active_from`), covered by the shared boundary vectors — it is
+rollout policy, not a new editable config knob. After that date a
+card still requires an explicit gesture, never a timer write. If
+implementation finds the documented trial was extended, the boundary
+moves to the day after its recorded end consistently before release.
+
+**Read-time decision flag.** `decide = active && enabled && lane
+ready && tier rotten/returned && keeps >= limit`. The annotation
+means a choice is due, not permission to execute an action.
+
 ## 3. Placement rule
 
 The Rust helper is `stamp_fresh` / `set_refresh`; the JavaScript one
-is `api.freshness.stampLine` / `setRefreshLine` in bob-ledger-tools.
-One helper per language, pinned by the shared vectors below.
+is `api.freshness.stampLine` / `setRefreshLine` in bob-ledger-tools
+(`keepLine` is the sole increment helper and lands with the
+ledger-marks phase). One helper per language, pinned by the shared
+vectors below. Rust reads, clears, and reports `keeps`; the seed's
+private preserve-mode primitive is the only Rust path that keeps a
+streak while stamping.
 
 1. **Scope.** The helpers handle Tasks' Dataview format only, which is
    the vault's format. `bob freshness` refuses to run when the vault's
@@ -108,24 +216,26 @@ One helper per language, pinned by the shared vectors below.
        (`priority start created scheduled due completion cancelled
        repeat onCompletion id dependsOn`), whatever its value,
        following `trailing_inline_field`'s grammar;
-     - a `fresh` or `refresh` field;
+     - a `fresh`, `refresh`, or `keeps` field;
      - a trailing tag (the `HASH_TAG_AT_END` grammar).
    - Never scan past the start of the task body. If the body begins
      with the global filter token `#task`, never scan past the end of
      that token.
 
    The **Tasks suffix** starts at the leftmost Tasks element of that
-   run (a Tasks-key field, a tag, or `^id`). `fresh` / `refresh`
-   fields at the run's left edge are not part of it.
+   run (a Tasks-key field, a tag, or `^id`). `fresh` / `refresh` /
+   `keeps` fields at the run's left edge are not part of it.
 3. **Canonical output.**
-   - Remove every `fresh` and `refresh` field on the line. Each
-     removal also collapses the whitespace it leaves to a single
+   - Remove every `fresh`, `refresh`, and `keeps` field on the line.
+     Each removal also collapses the whitespace it leaves to a single
      space.
    - Rebuild as `head.trim_end() + " " + "[fresh:: D]" + ("
-     [refresh:: N]" if a refresh value is kept) + (" " + suffix if
-     there is a suffix)`.
+     [refresh:: N]" if a refresh value is kept) + (" [keeps:: K]" if
+     a keeps value is kept) + (" " + suffix if there is a suffix)`.
    - The kept refresh value is the first valid existing one;
-     `set_refresh` replaces or removes it.
+     `set_refresh` replaces or removes it. Generic stamps keep no
+     `keeps` value (they clear the streak); the seed preserve-mode
+     keeps the first valid existing one and omits zero.
    - The suffix bytes themselves are never changed.
 4. **No churn.** If the canonical output equals the input byte-for-byte
    (the line is already stamped today and canonical), report `changed:
@@ -260,9 +370,11 @@ Line numbers are 1-based in JSON and docs. Tasks' `lineNumber` is
 0-based, so convert it.
 
 **Lints:** `fresh_malformed`, `fresh_future`, `fresh_duplicate`,
-`fresh_misplaced` (a `fresh`/`refresh` inside the Tasks suffix; the
-next stamp repairs it), `refresh_invalid` (per task) and
-`task_refresh_invalid` (per note),
+`fresh_misplaced` (a `fresh`/`refresh`/`keeps` inside the Tasks
+suffix; the next stamp repairs it), `refresh_invalid` (per task),
+`keeps_invalid` (a `keeps` value that is not a decimal integer 1–999;
+ignored) and `keeps_duplicate` (more than one `keeps` field; the
+first valid one wins), and `task_refresh_invalid` (per note),
 `freshness_stale_daily_budget_deprecated` (once per loaded config
 when the removed `stale_daily_budget` key is present; see above).
 `today_link_unresolved` passes through unchanged from the Today
@@ -343,7 +455,7 @@ Running `bob freshness` with no subcommand runs `list`.
 vault). Human output is colored only on a TTY:
 
 ```text
-bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d
+bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3 · asks from 2026-10-19
 
   REVIEW 66 due · 1 new · 10 pending · 15 next · 14 returned · 26 rotten · ✓ 12 today
 
@@ -366,6 +478,13 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d
 - Human vocabulary says "returned"; the machine `state` stays
   `resurfaced`.
 - A disabled lane shows `pending off` in the header.
+- The header always shows the keep threshold: `keeps 3` once active
+  and enabled, `keeps 3 · decay off` with decay off, `keeps 3 · asks
+  from 2026-10-19` before activation, and `keeps 0 · asks every
+  review` for a zero threshold. Only active capabilities promise
+  `next review asks`.
+- Human rows show `kept N×` when the streak is nonzero and
+  `· decide` where the read-time choice is due.
 - Each tier heading carries its count and is omitted when empty.
 - The dim divider appears only when rows exist on both sides.
 - Lane rows overdue by `n ≥ 1` days read `{n}d overdue`.
@@ -383,17 +502,23 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The JSON contract is `schema_version: 3` with `ok`, `date`,
+The JSON contract is `schema_version: 4` with `ok`, `date`,
 `config` (`interval`, `pending_interval` / `next_interval` as a number
-or `false`, `rotten_daily_budget`), `counts` (`due`, `new`,
+or `false`, `rotten_daily_budget`, plus normalized `decay` with
+`enabled`, `keeps`, `enter` (label or null), and read-only
+`active_from` / `active` rollout metadata), `counts` (`due`, `new`,
 `resurfaced`, `rotten`, `fresh`, `pending_due`, `next_due`, `walk`,
-`refreshed_today`, `upkeep_today`, `budget`, `budget_met`), `queue`
-(each with `rank`, `tier` (`new` | `pending` | `next` | `returned` |
-`rotten`), `lane` (`ready` | `pending` | `next`), `state`, `bucket`
-(`"new"`, `"rotten"`, or null — lane rows carry `state: null` and
-`bucket: null`), `path`, `line`, `block_id`, `status_symbol`, `text`,
-`created`, `fresh`, `interval`, `interval_source`, `due_on`,
-`days_overdue`), and `warnings` (`code`, `path`, `line`, `message`).
+`decide`, `refreshed_today`, `upkeep_today`, `budget`, `budget_met`;
+counts always cover the whole vault regardless of `--limit`),
+`queue` (each with `rank`, `tier` (`new` | `pending` | `next` |
+`returned` | `rotten`), `lane` (`ready` | `pending` | `next`),
+`state`, `bucket` (`"new"`, `"rotten"`, or null — lane rows carry
+`state: null` and `bucket: null`), `path`, `line`, `block_id`,
+`status_symbol`, `text`, `created`, `fresh`, `interval`,
+`interval_source`, `due_on`, `days_overdue`, `keeps`, `decide`), and
+`warnings` (`code`, `path`, `line`, `message`). `decide` means a
+choice is due, not permission to execute an action. No new CLI
+subcommands or options.
 
 `seed` options: `-d/--dry-run`, `-F/--force`, `-f/--format
 human|json`. Ready tasks without a valid `fresh` are grouped by note
@@ -410,11 +535,11 @@ whole run with no writes when any changed line parses differently
 under either Rust parser, re-reads each file just before writing and
 refuses when one changed, and writes through a temp file plus rename.
 A same-day rerun finds nothing to stamp and reports zeros. The JSON
-contract is `schema_version: 2` with `ok`, `date`, `dry_run`,
+contract is `schema_version: 4` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
-`out_of_scope`), `files`, and `warnings`. The shared constant also
-moves the `seed` envelope to 3, with seed content unchanged.
+`out_of_scope`), `files`, and `warnings`. The shared schema constant
+also moves the `seed` envelope to 4, with seed content unchanged.
 
 Exit codes: 0 on success; 1 for I/O errors and seed refusals; 2 for
 an invalid `freshness:` block or a non-Dataview task format.
@@ -573,6 +698,66 @@ The bob-ledger-tools JavaScript tests use these verbatim.
 - **B1.** 20 lane stamps plus 5 Ready stamps today, budget 15 →
   `upkeep_today` 5, `refreshed_today` 25, `budget_met: false`. Adding a
   Blocked `[?]` and an `[x]` stamped today → `upkeep_today` 7.
+
+## 10a. Keep-streak conformance vectors (K1–K13)
+
+D = `2026-10-08`. The machine-readable form of every vector below —
+plus the `C` config, `D` decide, and `B` boundary vectors — is
+`tests/fixtures/freshness_keeps/vectors.json`, which both languages
+cite. Rust runs the read/reset/placement cases and has no production
+increment API; the increment cases run on the JavaScript side once
+`api.freshness.keepLine` lands.
+
+- **K1 absent:** no `keeps` → `keeps 0`, no lints.
+- **K2 first valid:** `[fresh:: 2026-10-01] [keeps:: 2]` preserved
+  (seed mode) →
+  `- [ ] #task Rename queue input [fresh:: 2026-10-08] [keeps:: 2]`.
+- **K3 refresh/keeps order:** `[keeps:: 2] [refresh:: 14]
+  [fresh:: 2026-10-01]` on a line with a Tasks suffix canonicalizes
+  to `fresh`, `refresh`, `keeps`, then the suffix.
+- **K4 same-day preservation:** a canonical `[fresh:: 2026-10-08]
+  [keeps:: 2]` line stamped in preserve mode is byte-identical
+  (`changed: false`).
+- **K5 generic stamp clears:** the same line stamped generically
+  loses `keeps` (`changed: true`), even same-day.
+- **K6 set-refresh clears:** `set_refresh(…, 30)` on a line with
+  `refresh` and `keeps` writes `[fresh:: D] [refresh:: 30]` with no
+  `keeps`.
+- **K7 stale stamp clears:** `[fresh:: 2026-10-01] [keeps:: 1]`
+  stamped generically → `[fresh:: 2026-10-08]`, no `keeps`.
+- **K8 misplaced:** `[created::…] [keeps:: 2]` reads `keeps 2` with
+  `fresh_misplaced`; the next stamp repairs it to canonical order.
+- **K9 duplicates and invalid values:** two `keeps` fields →
+  `keeps_duplicate`, first valid wins; `0`, negative, fractional,
+  `1000`, and non-numeric values → `keeps_invalid` and report 0; an
+  invalid value beside a valid one lints `keeps_invalid` and keeps
+  the first valid value.
+- **K10 ceiling and NEW:** `[keeps:: 999]` reads 999 (increments
+  saturate at 999 on the JS side); a never-confirmed task reads
+  `keeps 0`.
+- **K11 refusals preserve:** done/cancelled and recurring lines are
+  refused unchanged — the streak stays on the closed line, and there
+  is no write.
+- **K12 parser invariance:** for every vector, the Tasks fields both
+  Rust parsers extract are identical before and after, exactly as §9
+  requires for `fresh`/`refresh`.
+- **K13 exact keys:** similarly named keys (`keep`, `Keep`,
+  `keepsx`) are not `keeps`; the key match is exact and
+  case-sensitive. Readers accept bracket and paren field syntax.
+
+Config vectors C1–C13 pin `decay` normalization (absent, null,
+`true`, `{}`, `false`, `keeps: 0`, fixed `enter`, and each invalid
+shape). Decide vectors D1–D8 pin `decide`: pre-activation silence,
+at-limit and below-limit Ready rows, RETURNED coverage, NEW never,
+`keeps: 0` asking on every due Ready re-confirmation, `decay: false`
+never asking, and lane rows never deciding. Boundary vectors B1–B3
+pin the 2026-10-19 activation day from both sides. Schema 4 rows
+carry `keeps` and `decide`; counts carry `decide`; `config.decay`
+reports normalized `enabled`, `keeps`, `enter`, and read-only
+`active_from` / `active`. CLI human rows show `kept N×` and
+`· decide` where true; the header explains the threshold, the off
+state, or the pre-activation date. Counts cover the full queue
+regardless of `--limit`.
 
 ## 11. Display: the freshness mark
 

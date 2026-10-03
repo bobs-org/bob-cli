@@ -1,6 +1,49 @@
 use std::path::Path;
 
+use chrono::NaiveDate;
+
 use super::ConfigError;
+
+/// The day the keep-streak decision card may start asking, in the
+/// vault's local calendar (`docs/freshness.md`).
+///
+/// This is rollout policy, not an editable config knob: before this
+/// day agents count and show pips only — no cards, leaf, decision
+/// skip, or "next review asks" promise. There is one documented
+/// constant per language; the shared boundary vectors pin it.
+pub(crate) fn decay_active_from() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 10, 19).expect("valid activation date")
+}
+
+/// Whether the keep-streak decision machinery is active for `today`:
+/// `today` is on or after the activation date.
+pub(crate) fn decay_active(today: NaiveDate) -> bool {
+    today >= decay_active_from()
+}
+
+/// Normalized `freshness.decay` configuration (`docs/freshness.md`).
+///
+/// `decay` absent, null, `true`, or `{}` means enabled with 3 keeps.
+/// `false` keeps counting and display but never asks or skips.
+/// `keeps` accepts an integer 0–999 (0 asks on every due Ready
+/// re-confirmation, never NEW); `enter` is an optional nonempty
+/// configured priority label (absent/null uses interval-aware entry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DecayConfig {
+    pub(crate) enabled: bool,
+    pub(crate) keeps: u16,
+    pub(crate) enter: Option<String>,
+}
+
+impl Default for DecayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            keeps: 3,
+            enter: None,
+        }
+    }
+}
 
 /// Task freshness configuration (`freshness:` block).
 ///
@@ -22,6 +65,7 @@ pub(crate) struct FreshnessConfig {
     /// callers owe one `freshness_stale_daily_budget_deprecated`
     /// diagnostic for this loaded config.
     pub(crate) stale_budget_deprecated: bool,
+    pub(crate) decay: DecayConfig,
 }
 
 impl Default for FreshnessConfig {
@@ -33,6 +77,7 @@ impl Default for FreshnessConfig {
             rotten_daily_budget: None,
             interval_from_config: false,
             stale_budget_deprecated: false,
+            decay: DecayConfig::default(),
         }
     }
 }
@@ -160,6 +205,9 @@ fn parse_freshness_config(
         stale_budget_deprecated = true;
     }
 
+    let decay =
+        parse_decay_config(get("decay").as_ref(), &path_display.to_string())?;
+
     // Unknown keys are ignored, like every other config block.
     Ok(FreshnessConfig {
         interval,
@@ -168,7 +216,111 @@ fn parse_freshness_config(
         rotten_daily_budget: budget,
         interval_from_config,
         stale_budget_deprecated,
+        decay,
     })
+}
+
+/// Normalize the `freshness.decay` value: absent, null, `true`, or an
+/// empty mapping means enabled with 3 keeps; `false` disables asking
+/// while keeping counting and display; a mapping may set `keeps`
+/// (integer 0–999) and `enter` (a nonempty priority label).
+/// Anything else is a config error under the current freshness
+/// failure contract.
+fn parse_decay_config(
+    value: Option<&serde_yaml::Value>,
+    path_display: &str,
+) -> Result<DecayConfig, ConfigError> {
+    let key = "freshness.decay";
+    let Some(value) = value else {
+        return Ok(DecayConfig::default());
+    };
+    if value.is_null() {
+        return Ok(DecayConfig::default());
+    }
+    if let serde_yaml::Value::Bool(flag) = value {
+        if *flag {
+            return Ok(DecayConfig::default());
+        }
+        return Ok(DecayConfig {
+            enabled: false,
+            ..DecayConfig::default()
+        });
+    }
+    let serde_yaml::Value::Mapping(mapping) = value else {
+        return Err(ConfigError::Invalid(format!(
+            "{key} in {path_display} must be a mapping, true, false, or null; got {}",
+            render_scalar(value)
+        )));
+    };
+    let get = |name: &str| {
+        let lookup = serde_yaml::Value::String(name.to_string());
+        mapping.get(&lookup).cloned()
+    };
+    let mut keeps = DecayConfig::default().keeps;
+    if let Some(raw) = get("keeps")
+        && !raw.is_null()
+    {
+        keeps = parse_decay_keeps(&raw, path_display)?;
+    }
+    let mut enter = None;
+    if let Some(raw) = get("enter")
+        && !raw.is_null()
+    {
+        let serde_yaml::Value::String(label) = raw else {
+            return Err(ConfigError::Invalid(format!(
+                "{key}.enter in {path_display} must be a nonempty priority label or null; got {}",
+                render_scalar(&raw)
+            )));
+        };
+        if label.trim().is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "{key}.enter in {path_display} must be a nonempty priority label or null; got empty"
+            )));
+        }
+        enter = Some(label.trim().to_string());
+    }
+    // Unknown keys are ignored, like every other config block.
+    Ok(DecayConfig {
+        enabled: true,
+        keeps,
+        enter,
+    })
+}
+
+/// Parse `freshness.decay.keeps`: an integer 0–999. Fractional,
+/// negative, out-of-range, and non-numeric values are config errors.
+fn parse_decay_keeps(
+    value: &serde_yaml::Value,
+    path_display: &str,
+) -> Result<u16, ConfigError> {
+    let key = "freshness.decay.keeps";
+    let number = match value {
+        serde_yaml::Value::Number(number) => {
+            if let Some(int) = number.as_i64() {
+                int
+            } else if let Some(uint) = number.as_u64()
+                && let Ok(int) = i64::try_from(uint)
+            {
+                int
+            } else {
+                return Err(ConfigError::Invalid(format!(
+                    "{key} in {path_display} must be an integer 0-999; got {value:?}"
+                )));
+            }
+        }
+        _ => {
+            return Err(ConfigError::Invalid(format!(
+                "{key} in {path_display} must be an integer 0-999; got {}",
+                render_scalar(value)
+            )));
+        }
+    };
+    if !(0..=999).contains(&number) {
+        return Err(ConfigError::Invalid(format!(
+            "{key} in {path_display} must be an integer 0-999; got {number}"
+        )));
+    }
+    Ok(number as u16)
 }
 
 fn parse_interval(
@@ -363,6 +515,92 @@ mod tests {
         )
         .expect("null values give defaults");
         assert_eq!(config, FreshnessConfig::default());
+    }
+
+    #[test]
+    fn decay_defaults_when_absent_null_true_or_empty() {
+        for text in [
+            "properties: []\n",
+            "freshness:\n",
+            "freshness:\n  decay:\n",
+            "freshness:\n  decay: true\n",
+            "freshness:\n  decay: {}\n",
+            "freshness:\n  decay:\n    keeps:\n    enter:\n",
+            "freshness:\n  interval: 7\n  decay:\n    unknown_key: ignored\n",
+        ] {
+            let config = parse_freshness_config(text, Path::new("/config.yml"))
+                .expect("decay defaults");
+            assert_eq!(config.decay, DecayConfig::default(), "for {text:?}");
+            assert!(config.decay.enabled);
+            assert_eq!(config.decay.keeps, 3);
+            assert_eq!(config.decay.enter, None);
+        }
+    }
+
+    #[test]
+    fn decay_false_counts_but_never_asks() {
+        let config = parse_freshness_config(
+            "freshness:\n  decay: false\n",
+            Path::new("/config.yml"),
+        )
+        .expect("decay false parses");
+        assert!(!config.decay.enabled);
+        assert_eq!(config.decay.keeps, 3);
+        assert_eq!(config.decay.enter, None);
+    }
+
+    #[test]
+    fn decay_parses_zero_and_fixed_entry() {
+        let config = parse_freshness_config(
+            "freshness:\n  decay:\n    keeps: 0\n",
+            Path::new("/config.yml"),
+        )
+        .expect("keeps 0 parses");
+        assert!(config.decay.enabled);
+        assert_eq!(config.decay.keeps, 0);
+        let config = parse_freshness_config(
+            "freshness:\n  decay:\n    keeps: 2\n    enter: P1\n",
+            Path::new("/config.yml"),
+        )
+        .expect("fixed entry parses");
+        assert_eq!(config.decay.keeps, 2);
+        assert_eq!(config.decay.enter, Some("P1".to_string()));
+    }
+
+    #[test]
+    fn decay_activation_boundary_is_october_19() {
+        assert_eq!(
+            decay_active_from(),
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 19).expect("date")
+        );
+        let before =
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 18).expect("date");
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 19).expect("date");
+        assert!(!decay_active(before));
+        assert!(decay_active(day));
+    }
+
+    #[test]
+    fn rejects_invalid_decay_values() {
+        for text in [
+            "freshness:\n  decay:\n    keeps: -1\n",
+            "freshness:\n  decay:\n    keeps: 1000\n",
+            "freshness:\n  decay:\n    keeps: 2.5\n",
+            "freshness:\n  decay:\n    keeps: soon\n",
+            "freshness:\n  decay: soon\n",
+            "freshness:\n  decay: 3\n",
+            "freshness:\n  decay: [1, 2]\n",
+            "freshness:\n  decay:\n    enter: ''\n",
+            "freshness:\n  decay:\n    enter: '   '\n",
+            "freshness:\n  decay:\n    enter: 2\n",
+        ] {
+            let error = parse_freshness_config(text, Path::new("/config.yml"))
+                .expect_err("invalid decay must fail");
+            assert!(
+                matches!(error, ConfigError::Invalid(_)),
+                "expected invalid config for {text:?}, got {error:?}"
+            );
+        }
     }
 
     #[test]

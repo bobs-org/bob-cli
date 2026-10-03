@@ -7,7 +7,7 @@ use super::{
     bucket_for_state, counts, evaluate, queue, Counts, FreshState,
     FreshnessRow, IntervalSource, Lane, Tier,
 };
-use crate::native::config::freshness::FreshnessConfig;
+use crate::native::config::freshness::{DecayConfig, FreshnessConfig};
 
 fn today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 10, 8).expect("valid today")
@@ -29,6 +29,7 @@ fn config_with_interval(days: u16) -> FreshnessConfig {
         rotten_daily_budget: None,
         interval_from_config: true,
         stale_budget_deprecated: false,
+        decay: DecayConfig::default(),
     }
 }
 
@@ -40,6 +41,7 @@ fn config_with_budget(budget: u32) -> FreshnessConfig {
         rotten_daily_budget: Some(budget),
         interval_from_config: false,
         stale_budget_deprecated: false,
+        decay: DecayConfig::default(),
     }
 }
 
@@ -54,6 +56,7 @@ fn config_with_lanes(
         rotten_daily_budget: None,
         interval_from_config: false,
         stale_budget_deprecated: false,
+        decay: DecayConfig::default(),
     }
 }
 
@@ -725,6 +728,7 @@ fn b1_upkeep_counts_outside_the_lanes() {
         rotten_daily_budget: Some(15),
         interval_from_config: false,
         stale_budget_deprecated: false,
+        decay: DecayConfig::default(),
     };
     let report: Counts = counts(&rows, today(), &budget);
     assert_eq!(report.refreshed_today, 25);
@@ -737,4 +741,112 @@ fn b1_upkeep_counts_outside_the_lanes() {
     let report: Counts = counts(&more, today(), &budget);
     assert_eq!(report.refreshed_today, 27);
     assert_eq!(report.upkeep_today, 7);
+}
+
+/// A post-activation date: the trial ends 2026-10-18, so 2026-10-20
+/// is active (`docs/freshness.md` §2a).
+fn active_day() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 10, 20).expect("valid active day")
+}
+
+fn decay_config(keeps: u16, enabled: bool) -> FreshnessConfig {
+    FreshnessConfig {
+        interval: 7,
+        pending_interval: Some(1),
+        next_interval: Some(1),
+        rotten_daily_budget: None,
+        interval_from_config: false,
+        stale_budget_deprecated: false,
+        decay: DecayConfig {
+            enabled,
+            keeps,
+            enter: None,
+        },
+    }
+}
+
+fn kept_row(keeps: u32) -> FreshnessRow {
+    row(&format!(
+        "- [ ] #task Kept [fresh:: 2026-10-01] [keeps:: {keeps}]"
+    ))
+}
+
+/// D1: before activation there is no decision — count and show pips
+/// only — even at the limit.
+#[test]
+fn decide_silent_before_activation() {
+    let evaluated = evaluate(&kept_row(3), today(), &decay_config(3, true));
+    assert_eq!(evaluated.tier, Some(Tier::Rotten));
+    assert_eq!(evaluated.keeps, 3);
+    assert!(!evaluated.decide);
+}
+
+/// D2/D3: after activation a due Ready row at the limit decides;
+/// below it only stamps.
+#[test]
+fn decide_at_limit_but_not_below() {
+    let config = decay_config(3, true);
+    let at_limit = evaluate(&kept_row(3), active_day(), &config);
+    assert_eq!(at_limit.tier, Some(Tier::Rotten));
+    assert!(at_limit.decide);
+    let below = evaluate(&kept_row(2), active_day(), &config);
+    assert_eq!(below.tier, Some(Tier::Rotten));
+    assert!(!below.decide);
+    // The annotation is read-time only: the row still queues.
+    let queued = queue(&[kept_row(3), kept_row(2)], active_day(), &config);
+    assert_eq!(queued.len(), 2);
+    assert!(queued[0].decide);
+    assert!(!queued[1].decide);
+}
+
+/// D4/D5: RETURNED at the limit decides; NEW never does.
+#[test]
+fn decide_covers_returned_but_never_new() {
+    let config = decay_config(3, true);
+    let mut returned = row(
+        "- [ ] #task Week habits [fresh:: 2026-10-05] [scheduled:: 2026-10-07] [keeps:: 5]",
+    );
+    returned.scheduled = Some(date(2026, 10, 7));
+    let evaluated = evaluate(&returned, active_day(), &config);
+    assert_eq!(evaluated.tier, Some(Tier::Returned));
+    assert!(evaluated.decide);
+    let new = evaluate(
+        &row("- [ ] #task New capture [keeps:: 3]"),
+        active_day(),
+        &config,
+    );
+    assert_eq!(new.tier, Some(Tier::New));
+    assert!(!new.decide);
+}
+
+/// D6/D7/D8: a zero limit asks on every due Ready re-confirmation;
+/// `decay: false` never asks; lane rows never decide.
+#[test]
+fn decide_zero_off_and_lane_rows() {
+    let rotten = kept_row(0);
+    let zero = evaluate(&rotten, active_day(), &decay_config(0, true));
+    assert_eq!(zero.tier, Some(Tier::Rotten));
+    assert!(zero.decide);
+    let off = evaluate(&kept_row(9), active_day(), &decay_config(3, false));
+    assert_eq!(off.tier, Some(Tier::Rotten));
+    assert!(!off.decide);
+    let lane = evaluate(
+        &lane_row("c.md", 1, '*', Some("2026-09-20"), None),
+        active_day(),
+        &decay_config(3, true),
+    );
+    assert_eq!(lane.tier, Some(Tier::Next));
+    assert!(!lane.decide);
+}
+
+/// Counts carry `decide` over the full queue input.
+#[test]
+fn counts_carry_decide() {
+    let config = decay_config(3, true);
+    let report = counts(&[kept_row(3), kept_row(2)], active_day(), &config);
+    assert_eq!(report.walk, 2);
+    assert_eq!(report.decide, 1);
+    assert_eq!(report.rotten, 2);
+    let silent = counts(&[kept_row(3)], today(), &config);
+    assert_eq!(silent.decide, 0);
 }

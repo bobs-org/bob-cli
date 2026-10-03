@@ -7,7 +7,7 @@
 use chrono::NaiveDate;
 
 use super::placement::read_freshness;
-use crate::native::config::freshness::FreshnessConfig;
+use crate::native::config::freshness::{decay_active, FreshnessConfig};
 
 /// A task's freshness state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,7 +165,30 @@ pub(crate) struct Evaluated {
     pub(crate) interval_source: IntervalSource,
     pub(crate) due_on: Option<NaiveDate>,
     pub(crate) days_overdue: Option<i64>,
+    /// The valid `[keeps:: N]` semantic count (0 when absent).
+    pub(crate) keeps: u32,
+    /// A choice is due — not permission to execute an action:
+    /// `active && enabled && lane ready && tier rotten/returned &&
+    /// keeps >= limit`.
+    pub(crate) decide: bool,
     pub(crate) lints: Vec<String>,
+}
+
+/// Whether a decision is due for a Ready-lane row in `tier` with
+/// `keeps` counted keeps under `config` on `today`.
+pub(crate) fn decide_for(
+    lane: Option<Lane>,
+    tier: Option<Tier>,
+    keeps: u32,
+    today: NaiveDate,
+    config: &FreshnessConfig,
+) -> bool {
+    let due_tier = matches!(tier, Some(Tier::Rotten) | Some(Tier::Returned));
+    decay_active(today)
+        && config.decay.enabled
+        && lane == Some(Lane::Ready)
+        && due_tier
+        && keeps >= u32::from(config.decay.keeps)
 }
 
 /// Evaluate one row for `today` under `config`.
@@ -280,6 +303,11 @@ pub(crate) fn evaluate(
             None
         };
 
+    // A choice is due — never permission to act — for Ready due
+    // rows at or over the keep limit once the rollout is active.
+    let keeps = read.keeps;
+    let decide = decide_for(lane, tier, keeps, today, config);
+
     // Per-row dates: lane rows use the lane due date; Ready rows use
     // the state due date.
     if matches!(lane, Some(Lane::Pending) | Some(Lane::Next)) {
@@ -306,6 +334,8 @@ pub(crate) fn evaluate(
             interval_source,
             due_on,
             days_overdue,
+            keeps,
+            decide,
             lints,
         };
     }
@@ -320,6 +350,8 @@ pub(crate) fn evaluate(
             interval_source,
             due_on: None,
             days_overdue: None,
+            keeps,
+            decide,
             lints,
         },
         Some(FreshState::New) => Evaluated {
@@ -331,6 +363,8 @@ pub(crate) fn evaluate(
             interval_source,
             due_on: None,
             days_overdue: None,
+            keeps,
+            decide,
             lints,
         },
         Some(FreshState::Resurfaced) => {
@@ -347,6 +381,8 @@ pub(crate) fn evaluate(
                 interval_source,
                 due_on: Some(scheduled),
                 days_overdue: Some(days_overdue),
+                keeps,
+                decide,
                 lints,
             }
         }
@@ -365,6 +401,8 @@ pub(crate) fn evaluate(
                 interval_source,
                 due_on: Some(due),
                 days_overdue: Some(days_overdue),
+                keeps,
+                decide,
                 lints,
             }
         }
@@ -382,6 +420,8 @@ pub(crate) fn evaluate(
                 interval_source,
                 due_on: Some(due),
                 days_overdue: None,
+                keeps,
+                decide,
                 lints,
             }
         }
@@ -444,6 +484,10 @@ pub(crate) struct QueueEntry {
     pub(crate) days_overdue: Option<i64>,
     pub(crate) interval_days: u16,
     pub(crate) created: Option<NaiveDate>,
+    /// The valid `[keeps:: N]` semantic count (0 when absent).
+    pub(crate) keeps: u32,
+    /// A choice is due for this row — not permission to act.
+    pub(crate) decide: bool,
 }
 
 /// Compare `created` with missing dates always last, in both
@@ -490,6 +534,8 @@ pub(crate) fn queue(
             days_overdue: evaluated.days_overdue,
             interval_days: evaluated.interval_days,
             created: row.created,
+            keeps: evaluated.keeps,
+            decide: evaluated.decide,
         });
     }
 
@@ -547,6 +593,9 @@ pub(crate) struct Counts {
     pub(crate) next_due: u32,
     /// Full queue length, before any `--limit`.
     pub(crate) walk: u32,
+    /// Queue rows with a decision due (Ready rotten/returned at or
+    /// over the keep limit while the rollout is active and enabled).
+    pub(crate) decide: u32,
     /// Tasks of any status outside `_templates` / `_conflicts` whose
     /// `fresh` equals today.
     pub(crate) refreshed_today: u32,
@@ -574,6 +623,7 @@ pub(crate) fn counts(
     let mut pending_due = 0;
     let mut next_due = 0;
     let mut walk = 0;
+    let mut decide = 0;
     let mut refreshed_today = 0;
     let mut upkeep_today = 0;
 
@@ -585,6 +635,9 @@ pub(crate) fn counts(
             if row.status != '/' && row.status != '*' {
                 upkeep_today += 1;
             }
+        }
+        if evaluated.decide {
+            decide += 1;
         }
         match evaluated.tier {
             Some(Tier::New) => {
@@ -631,6 +684,7 @@ pub(crate) fn counts(
         pending_due,
         next_due,
         walk,
+        decide,
         refreshed_today,
         upkeep_today,
         budget,

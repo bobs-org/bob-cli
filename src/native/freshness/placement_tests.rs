@@ -5,7 +5,8 @@
 use chrono::NaiveDate;
 
 use super::{
-    read_freshness, set_refresh, stamp_fresh, tasks_suffix_start, Refusal,
+    read_freshness, set_refresh, stamp_fresh, stamp_fresh_preserve_keeps,
+    tasks_suffix_start, Refusal,
 };
 use crate::native::config::freshness::FreshnessConfig;
 
@@ -479,4 +480,244 @@ fn freshness_config_defaults_match_contract() {
     let config = FreshnessConfig::default();
     assert_eq!(config.interval(), 7);
     assert_eq!(config.rotten_daily_budget(), None);
+}
+
+/// K1: absence means 0 with no lints.
+#[test]
+fn keeps_absent_reads_zero() {
+    let read =
+        read_freshness("- [ ] #task Buy milk [fresh:: 2026-10-01]", day());
+    assert_eq!(read.keeps, 0);
+    assert!(read.lints.is_empty());
+}
+
+/// K2/K10: the first valid value wins; 999 is the ceiling.
+#[test]
+fn keeps_first_valid_wins_up_to_999() {
+    let read = read_freshness("- [ ] #task A [keeps:: 2] B [keeps:: 5]", day());
+    assert_eq!(read.keeps, 2);
+    assert!(read.lints.contains(&"keeps_duplicate".to_string()));
+    let read = read_freshness(
+        "- [ ] #task A [fresh:: 2026-10-01] [keeps:: 999]",
+        day(),
+    );
+    assert_eq!(read.keeps, 999);
+    assert!(read.lints.is_empty());
+}
+
+/// K9: zero, negative, fractional, out-of-range, and non-numeric
+/// values are invalid and report 0.
+#[test]
+fn keeps_invalid_values_report_zero() {
+    for value in ["0", "-1", "2.5", "1000", "soon", ""] {
+        let line = format!("- [ ] #task A [keeps:: {value}]");
+        let read = read_freshness(&line, day());
+        assert_eq!(read.keeps, 0, "value {value:?} must read 0");
+        assert!(
+            read.lints.contains(&"keeps_invalid".to_string()),
+            "value {value:?} must lint"
+        );
+    }
+    // An invalid value beside a valid one lints but keeps the first
+    // valid value.
+    let read =
+        read_freshness("- [ ] #task A [keeps:: soon] [keeps:: 3]", day());
+    assert_eq!(read.keeps, 3);
+    assert!(read.lints.contains(&"keeps_invalid".to_string()));
+    assert!(read.lints.contains(&"keeps_duplicate".to_string()));
+}
+
+/// K13: the key match is exact and case-sensitive; readers accept
+/// bracket and paren field syntax.
+#[test]
+fn keeps_key_match_is_exact_and_paren_reads() {
+    let read = read_freshness(
+        "- [ ] #task A [keep:: 2] [Keep:: 2] [keepsx:: 2]",
+        day(),
+    );
+    assert_eq!(read.keeps, 0);
+    assert!(read.lints.is_empty());
+    let read = read_freshness("- [ ] #task Call mom (keeps:: 2)", day());
+    assert_eq!(read.keeps, 2);
+    assert!(read.lints.is_empty());
+}
+
+/// K8: `keeps` inside the Tasks suffix lints `fresh_misplaced`, and
+/// the next stamp repairs it into canonical order.
+#[test]
+fn keeps_misplaced_lints_and_repairs() {
+    let input = "- [ ] #task Buy milk [created:: 2026-09-29] [keeps:: 2]";
+    let read = read_freshness(input, day());
+    assert_eq!(read.keeps, 2);
+    assert!(read.lints.contains(&"fresh_misplaced".to_string()));
+    let preserved = stamp_fresh_preserve_keeps(input, day());
+    assert_eq!(
+        preserved.line,
+        "- [ ] #task Buy milk [fresh:: 2026-10-08] [keeps:: 2] [created:: 2026-09-29]"
+    );
+    assert!(preserved.changed);
+}
+
+/// K3: canonical output order is `fresh`, `refresh`, `keeps`, then
+/// the Tasks suffix.
+#[test]
+fn keeps_canonical_order_after_refresh() {
+    let preserved = stamp_fresh_preserve_keeps(
+        "- [ ] #task Rename queue input [keeps:: 2] [refresh:: 14] [fresh:: 2026-10-01] [created:: 2026-09-10] [priority:: low]",
+        day(),
+    );
+    assert_eq!(
+        preserved.line,
+        "- [ ] #task Rename queue input [fresh:: 2026-10-08] [refresh:: 14] [keeps:: 2] [created:: 2026-09-10] [priority:: low]"
+    );
+    assert!(preserved.changed);
+}
+
+/// K4: a canonical same-day preserve is a byte-identical no-op.
+#[test]
+fn keeps_same_day_preserve_is_noop() {
+    let line = "- [ ] #task Buy milk [fresh:: 2026-10-08] [keeps:: 2]";
+    let preserved = stamp_fresh_preserve_keeps(line, day());
+    assert_eq!(preserved.line, line);
+    assert!(!preserved.changed);
+}
+
+/// K5/K6/K7: every generic human stamp clears `keeps`, even when the
+/// stamp date already equals today.
+#[test]
+fn generic_stamps_clear_keeps_including_same_day() {
+    let stamped =
+        stamp("- [ ] #task Buy milk [fresh:: 2026-10-08] [keeps:: 2]");
+    assert_eq!(stamped.line, "- [ ] #task Buy milk [fresh:: 2026-10-08]");
+    assert!(stamped.changed);
+    let stamped = stamp("- [ ] #task Buy milk [fresh:: 2026-10-01] [keeps:: 1] [created::2026-09-29]");
+    assert_eq!(
+        stamped.line,
+        "- [ ] #task Buy milk [fresh:: 2026-10-08] [created::2026-09-29]"
+    );
+    let updated = set_refresh(
+        "- [ ] #task Buy milk [fresh:: 2026-10-01] [refresh:: 14] [keeps:: 2]",
+        Some(30),
+        day(),
+    );
+    assert_eq!(
+        updated.line,
+        "- [ ] #task Buy milk [fresh:: 2026-10-08] [refresh:: 30]"
+    );
+}
+
+/// K11: refusals write nothing, so the streak stays on the line.
+#[test]
+fn refusals_leave_keeps_untouched() {
+    for (input, refusal) in [
+        (
+            "- [x] #task Old [keeps:: 2] [completion:: 2026-10-01]",
+            Refusal::Closed,
+        ),
+        (
+            "- [ ] #task Water plants [repeat:: every week] [keeps:: 2]",
+            Refusal::Recurring,
+        ),
+    ] {
+        let stamped = stamp(input);
+        assert_eq!(stamped.line, input);
+        assert!(!stamped.changed);
+        assert_eq!(stamped.refused, Some(refusal));
+        assert_eq!(read_freshness(input, day()).keeps, 2);
+    }
+}
+
+/// The shared parity fixture drives the Rust read/reset/placement
+/// cases verbatim (`docs/freshness.md` §10a). Rust has no production
+/// increment API; `js`-only vectors are skipped here.
+#[test]
+fn keeps_fixture_vectors_match_rust() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freshness_keeps/vectors.json");
+    let text = std::fs::read_to_string(&path).expect("read keeps fixture");
+    let fixture: serde_json::Value =
+        serde_json::from_str(&text).expect("parse keeps fixture");
+    assert_eq!(fixture["schema"], 4);
+    let today = NaiveDate::parse_from_str(
+        fixture["today"].as_str().expect("fixture today"),
+        "%Y-%m-%d",
+    )
+    .expect("valid fixture today");
+    assert_eq!(today, day());
+    let vectors = fixture["placement"].as_array().expect("placement array");
+    assert!(!vectors.is_empty(), "fixture must carry placement vectors");
+    for vector in vectors {
+        let id = vector["id"].as_str().unwrap_or("?");
+        let runners: Vec<&str> = vector["runners"]
+            .as_array()
+            .expect("runners array")
+            .iter()
+            .map(|runner| runner.as_str().expect("runner string"))
+            .collect();
+        if !runners.contains(&"rust") {
+            continue;
+        }
+        let input = vector["input"].as_str().expect("input line");
+        match vector["mode"].as_str().expect("vector mode") {
+            "read" => {
+                let read = read_freshness(input, today);
+                assert_eq!(
+                    read.keeps,
+                    vector["expected_keeps"].as_u64().expect("keeps") as u32,
+                    "{id}: keeps"
+                );
+                let expected: Vec<String> = vector["expected_lints"]
+                    .as_array()
+                    .expect("lints array")
+                    .iter()
+                    .map(|lint| lint.as_str().expect("lint string").to_string())
+                    .collect();
+                assert_eq!(read.lints, expected, "{id}: lints");
+            }
+            "stamp" | "preserve" => {
+                let stamped = if vector["mode"] == "stamp" {
+                    stamp_fresh(input, today)
+                } else {
+                    stamp_fresh_preserve_keeps(input, today)
+                };
+                if let Some(refused) = vector
+                    .get("expected_refused")
+                    .and_then(|value| value.as_str())
+                {
+                    assert_eq!(
+                        stamped.refused.map(|refusal| refusal.as_str()),
+                        Some(refused),
+                        "{id}: refusal"
+                    );
+                    assert_eq!(stamped.line, input, "{id}: refused line");
+                } else {
+                    assert_eq!(
+                        stamped.line,
+                        vector["expected_line"].as_str().expect("line"),
+                        "{id}: line"
+                    );
+                    assert_eq!(
+                        stamped.changed,
+                        vector["expected_changed"].as_bool().expect("changed"),
+                        "{id}: changed"
+                    );
+                }
+            }
+            "set_refresh" => {
+                let days = vector["refresh"].as_u64().expect("refresh") as u16;
+                let updated = set_refresh(input, Some(days), today);
+                assert_eq!(
+                    updated.line,
+                    vector["expected_line"].as_str().expect("line"),
+                    "{id}: line"
+                );
+                assert_eq!(
+                    updated.changed,
+                    vector["expected_changed"].as_bool().expect("changed"),
+                    "{id}: changed"
+                );
+            }
+            mode => panic!("{id}: unknown fixture mode {mode:?}"),
+        }
+    }
 }
