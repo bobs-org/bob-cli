@@ -1,0 +1,175 @@
+use super::{
+    super::{
+        model::{Candidates, PickerScope, Replacement},
+        render::{candidate_lines, context_label},
+        shell::shell_completion,
+    },
+    day_file_guard, result_all,
+    task_links::task_link_fixture,
+    with_env, write_file,
+};
+use crate::native::capture_language::CompletionContext;
+use std::path::Path;
+
+fn parent_result(
+    root: &Path,
+    day_file: &Path,
+    raw: &str,
+    cursor: usize,
+    all_tasks: bool,
+) -> super::super::model::CaptureCompleteResult {
+    with_env("BOB_DAY_FILE", day_file, || {
+        with_env("BOB_NOW", "2026-09-30 09:02:00", || {
+            super::super::engine::build_result(root, raw, cursor, all_tasks)
+                .expect("build parent-task completion")
+        })
+    })
+}
+
+#[test]
+fn bare_plus_serves_vault_candidates_and_operator_hints() {
+    let _guard = day_file_guard();
+    let temp = super::TempDir::new("bob-cli-capture-complete-parent-task");
+    let day_file = task_link_fixture(temp.path());
+
+    let value = parent_result(temp.path(), &day_file, "+", 1, false);
+    assert_eq!(value.context, Some(CompletionContext::TaskParent));
+    assert_eq!(context_label(CompletionContext::TaskParent), "task_parent");
+    assert_eq!(value.replacement, Replacement { start: 0, end: 1 });
+    assert_eq!(value.query.as_deref(), Some(""));
+    let picker = value.picker.as_ref().expect("picker descriptor");
+    assert_eq!(picker.scope, PickerScope::Vault);
+    assert_eq!(picker.scope_token, "+");
+    assert_eq!(picker.note_target, None);
+    assert_eq!(picker.marker_range, Replacement { start: 0, end: 1 });
+    assert_eq!(picker.trigger_removal_range, picker.marker_range);
+    let action_keys: Vec<&str> = picker
+        .action_continuation_keys
+        .as_ref()
+        .expect("lone-plus action hints")
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        action_keys,
+        vec!["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "+"]
+    );
+
+    let Candidates::TaskParent(candidates) = &value.candidates else {
+        panic!("expected task_parent candidates");
+    };
+    let replacements: Vec<&str> = candidates
+        .iter()
+        .map(|candidate| candidate.replacement.as_str())
+        .collect();
+    assert_eq!(
+        replacements,
+        vec![
+            "@sase+deep-fix",
+            "@sase+outline",
+            "",
+            "",
+            "@bob+polish",
+            "",
+            "",
+            "@sase+blog",
+        ]
+    );
+    assert!(candidates.iter().all(|candidate| {
+        candidate.requires_block_id || !candidate.replacement.is_empty()
+    }));
+    let json = serde_json::to_value(&value).expect("serialize completion");
+    assert_eq!(json["context"], "task_parent");
+    assert_eq!(json["picker"]["kind"], "parent_task");
+    assert_eq!(json["picker"]["scope"], "vault");
+    assert!(json["picker"]["note_target"].is_null());
+    assert!(json["candidates"][0].get("pulls_forward").is_none());
+    assert_eq!(
+        json["candidates"][6]["block_id_suggestions"][0],
+        "fix-flaky-gkeep"
+    );
+
+    let rows = candidate_lines(&value.candidates, value.context);
+    assert_eq!(rows[0].0, "@sase+deep-fix");
+    assert!(rows[0].1.contains("Fix deep bug"));
+    assert!(rows[0].1.contains("BUGS"));
+    assert!(rows[6].0.starts_with("@sase+"));
+
+    // The literal lone plus remains available as a shell marker too, but
+    // shell extraction only emits identified rows and never assigns IDs.
+    let shell = with_env("BOB_DAY_FILE", &day_file, || {
+        with_env("BOB_NOW", "2026-09-30 09:02:00", || {
+            shell_completion(temp.path(), "+", 1).expect("shell result")
+        })
+    })
+    .expect("parent plus shell completion");
+    assert_eq!(shell.marker_start, 0);
+    assert!(shell.rows.iter().all(|row| !row.full.is_empty()));
+    assert!(shell.rows.iter().all(|row| !row.full.ends_with("+")));
+    assert!(shell.rows.iter().any(|row| row.full == "@sase+deep-fix"));
+}
+
+#[test]
+fn plus_query_ranks_candidates_and_scoped_descriptors_keep_exact_ranges() {
+    let _guard = day_file_guard();
+    let temp =
+        super::TempDir::new("bob-cli-capture-complete-parent-task-query");
+    let day_file = task_link_fixture(temp.path());
+    write_file(
+        &temp.path().join("cash.md"),
+        "---\ntype: [[area]]\n---\n- [ ] #task Buy oat milk ^buy-milk\n- [ ] #task No ID yet\n",
+    );
+
+    let raw = "Called the bank +bank";
+    let value = parent_result(temp.path(), &day_file, raw, raw.len(), false);
+    assert_eq!(value.context, Some(CompletionContext::TaskParent));
+    assert_eq!(value.query.as_deref(), Some("bank"));
+    assert_eq!(value.replacement, Replacement { start: 16, end: 21 });
+    let Candidates::TaskParent(candidates) = &value.candidates else {
+        panic!("expected task_parent candidates");
+    };
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].replacement, "");
+    assert!(candidates[0].requires_block_id);
+
+    // At replacement.start the query is empty, allowing the Mac client to
+    // refetch the complete local snapshot after opening the picker.
+    let full = parent_result(temp.path(), &day_file, raw, 16, false);
+    assert_eq!(full.query.as_deref(), Some(""));
+    assert_eq!(full.replacement, value.replacement);
+
+    let scoped = result_all(temp.path(), "@Cash+", 6);
+    assert_eq!(scoped.context, Some(CompletionContext::Task));
+    assert_eq!(scoped.query.as_deref(), Some(""));
+    let picker = scoped.picker.as_ref().expect("scoped picker");
+    assert_eq!(picker.scope, PickerScope::Note);
+    assert_eq!(picker.scope_token, "@cash+");
+    assert_eq!(picker.note_target.as_deref(), Some("cash.md"));
+    assert_eq!(picker.marker_range, Replacement { start: 0, end: 6 });
+    assert_eq!(
+        picker.trigger_removal_range,
+        Replacement { start: 5, end: 6 }
+    );
+    let Candidates::Task(tasks) = &scoped.candidates else {
+        panic!("expected scoped task candidates");
+    };
+    let idless = tasks
+        .iter()
+        .find(|task| task.requires_block_id)
+        .expect("all-tasks ID-less row");
+    assert!(idless
+        .block_id_suggestions
+        .as_ref()
+        .is_some_and(|suggestions| !suggestions.is_empty()));
+
+    let global = result_all(temp.path(), "@@Cash+", 7);
+    assert_eq!(global.context, Some(CompletionContext::Task));
+    let picker = global.picker.as_ref().expect("global scoped picker");
+    assert_eq!(picker.scope_token, "@@cash+");
+    assert_eq!(picker.note_target.as_deref(), Some("cash.md"));
+    assert_eq!(picker.marker_range, Replacement { start: 0, end: 7 });
+    assert_eq!(
+        picker.trigger_removal_range,
+        Replacement { start: 6, end: 7 }
+    );
+}

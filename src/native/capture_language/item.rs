@@ -131,6 +131,15 @@ pub(super) fn parse_capture_item<'a>(
     )? {
         return Ok(outcome);
     }
+    // The lone whole-item `+` remains its existing five-minute adjustment.
+    // Every other eligible bare-plus selector requires an explicit task
+    // choice before capture, so it cannot fall through as inbox prose.
+    if let Some(selector) = parent_task_selector_tokens(item)
+        .into_iter()
+        .find(|selector| !selector.dual_use_adjustment)
+    {
+        return Err(parent_task_picker_error(selector.token.text));
+    }
     if let Some(outcome) = parse_pomodoro_adjust_item(
         item,
         parent_line,

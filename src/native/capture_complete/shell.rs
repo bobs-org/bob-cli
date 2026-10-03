@@ -4,7 +4,7 @@ use super::{
     candidates::{
         active_task_candidates, link_candidates, route_candidates,
         section_candidates, task_candidates, task_link_candidates,
-        task_section_candidates, TaskSearch,
+        task_parent_candidates, task_section_candidates, TaskSearch,
     },
     model::Candidates,
     pomodoros::{pomodoro_name_candidates, pomodoro_start_name_candidates},
@@ -341,6 +341,27 @@ pub(crate) fn shell_completion(
                     full,
                     description: item.text.clone(),
                     group: "active tasks".to_string(),
+                });
+            }
+        }
+        CompletionContext::TaskParent => {
+            let (candidates, _) = task_parent_candidates(bob_dir, "");
+            let Candidates::TaskParent(items) = candidates else {
+                return Ok(None);
+            };
+            for item in items {
+                if item.requires_block_id || item.replacement.is_empty() {
+                    continue;
+                }
+                let full = format!("{marker_prefix}{}", item.replacement);
+                if full.is_empty() {
+                    continue;
+                }
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&full),
+                    full,
+                    description: item.text.clone(),
+                    group: "parent tasks".to_string(),
                 });
             }
         }

@@ -4,11 +4,12 @@ use super::{
     candidates::{
         active_task_candidates, dependency_candidates, link_candidates,
         route_candidates, section_candidates, task_candidates,
-        task_link_candidates, task_section_candidates, TaskSearch,
+        task_link_candidates, task_parent_candidates, task_section_candidates,
+        TaskSearch,
     },
     model::{
-        Candidates, CaptureCompleteResult, CompleteError, Replacement,
-        SCHEMA_VERSION,
+        Candidates, CaptureCompleteResult, CompleteError, PickerDescriptor,
+        PickerKind, PickerScope, Replacement, SCHEMA_VERSION,
     },
     pomodoros::{pomodoro_name_candidates, pomodoro_start_name_candidates},
 };
@@ -72,6 +73,7 @@ pub(super) fn build_result(
             | CompletionContext::TaskSection
             | CompletionContext::ActiveTask
             | CompletionContext::TaskLink
+            | CompletionContext::TaskParent
             | CompletionContext::TaskDependency => {
                 unreachable!("link field context")
             }
@@ -91,6 +93,7 @@ pub(super) fn build_result(
             warnings: index.warnings(),
             query: None,
             owner: None,
+            picker: None,
         });
     }
 
@@ -159,6 +162,7 @@ pub(super) fn build_result(
             warnings,
             query: None,
             owner: None,
+            picker: None,
         });
     }
 
@@ -212,6 +216,9 @@ pub(super) fn build_result(
         CompletionContext::TaskLink => {
             task_link_candidates(bob_dir, &field.query)
         }
+        CompletionContext::TaskParent => {
+            task_parent_candidates(bob_dir, &field.query)
+        }
         CompletionContext::TaskDependency => {
             // Vault-wide prerequisite scan: the lexical owner of the
             // modifier under the cursor plus every complete `&note:id`
@@ -245,19 +252,28 @@ pub(super) fn build_result(
         }
     };
 
-    // The `task_dependency` picker never parses quoted note components
-    // itself: Bob serves the decoded query plus the lexical owner of the
-    // modifier under the cursor. Every other context leaves both absent.
-    let (query, owner) =
-        if matches!(field.context, CompletionContext::TaskDependency) {
-            (
-                Some(field.query.clone()),
+    // Bob owns the search query for dependency, scoped task, and parent-task
+    // pickers. Dependency queries are decoded here so clients never parse a
+    // quoted note component; only that context also carries its owner.
+    let (query, owner) = if matches!(
+        field.context,
+        CompletionContext::TaskDependency
+            | CompletionContext::Task
+            | CompletionContext::TaskParent
+    ) {
+        (
+            Some(field.query.clone()),
+            if field.context == CompletionContext::TaskDependency {
                 capture_language::editor_item_at(raw_text, cursor)
-                    .and_then(|item| item.dependency_target),
-            )
-        } else {
-            (None, None)
-        };
+                    .and_then(|item| item.dependency_target)
+            } else {
+                None
+            },
+        )
+    } else {
+        (None, None)
+    };
+    let picker = picker_descriptor(raw_text, &field);
 
     Ok(CaptureCompleteResult {
         ok: true,
@@ -273,5 +289,94 @@ pub(super) fn build_result(
         warnings,
         query,
         owner,
+        picker,
     })
+}
+
+fn picker_descriptor(
+    raw_text: &str,
+    field: &capture_language::CompletionField,
+) -> Option<PickerDescriptor> {
+    match field.context {
+        CompletionContext::TaskParent => {
+            let marker_range = Replacement {
+                start: field.replacement.0,
+                end: field.replacement.1,
+            };
+            let selector =
+                raw_text.get(marker_range.start..marker_range.end)?;
+            let action_continuation_keys = if selector == "+"
+                && capture_language::editor_item_at(
+                    raw_text,
+                    field.replacement.1,
+                )
+                .is_some_and(|item| {
+                    item.line_start == item.line_end
+                        && raw_text
+                            .get(item.start..item.end)
+                            .is_some_and(|text| text.trim() == "+")
+                }) {
+                Some(
+                    (0..=9)
+                        .map(|digit| digit.to_string())
+                        .chain(std::iter::once("+".to_string()))
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            Some(PickerDescriptor {
+                kind: PickerKind::ParentTask,
+                scope: PickerScope::Vault,
+                scope_token: "+".to_string(),
+                note_target: None,
+                marker_range,
+                trigger_removal_range: marker_range,
+                action_continuation_keys,
+            })
+        }
+        CompletionContext::Task => {
+            let route = field.route.as_deref()?;
+            let line = capture_language::split_physical_lines(raw_text)
+                .into_iter()
+                .find(|line| {
+                    field.replacement.0 >= line.start
+                        && field.replacement.0 <= line.end
+                })?;
+            let token = capture_language::tokenize_line_with_spans(&line)
+                .into_iter()
+                .find(|token| {
+                    token.start <= field.replacement.0
+                        && token.end >= field.replacement.1
+                })?;
+            let plus = token.text.find('+')?;
+            let plus_start = token.start + plus;
+            if plus_start >= field.replacement.0 {
+                return None;
+            }
+            let prefix = if token.text.starts_with("@@") {
+                "@@"
+            } else {
+                "@"
+            };
+            let scope_token = format!("{prefix}{route}+");
+            let marker_range = Replacement {
+                start: token.start,
+                end: field.replacement.1,
+            };
+            Some(PickerDescriptor {
+                kind: PickerKind::ParentTask,
+                scope: PickerScope::Note,
+                scope_token,
+                note_target: Some(capture::route_label(route)),
+                marker_range,
+                trigger_removal_range: Replacement {
+                    start: plus_start,
+                    end: field.replacement.1,
+                },
+                action_continuation_keys: None,
+            })
+        }
+        _ => None,
+    }
 }

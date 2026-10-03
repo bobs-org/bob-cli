@@ -1910,3 +1910,45 @@ fn task_link_claim_is_equivalent_across_execution_editor_and_completion() {
         );
     }
 }
+
+#[test]
+fn plus_parent_picker_is_incomplete_but_keeps_the_lone_adjustment() {
+    for raw in [
+        "+bank",
+        "Call bank +",
+        "Call bank +bank",
+        "Parent\n- note +",
+    ] {
+        let parsed = editor(raw);
+        assert_eq!(parsed.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parsed.needs, vec![Need::TaskParent], "{raw}");
+        assert!(parsed.body.is_empty(), "{raw}");
+        assert!(
+            execute(raw)
+                .expect_err("unresolved task selector must refuse capture")
+                .contains("needs a task selection"),
+            "{raw}"
+        );
+    }
+
+    let lone_plus = editor("+");
+    assert_eq!(lone_plus.mode, EditorMode::PomodoroAdjust);
+    assert!(lone_plus.needs.is_empty());
+    assert!(matches!(
+        execute("+").expect("valid +5m adjustment").kind,
+        CaptureKind::PomodoroAdjust { .. }
+    ));
+}
+
+#[test]
+fn plus_parent_picker_does_not_claim_operators_or_work_log_text() {
+    for raw in ["+2", "+0", "+2oops", "+-", "+-3", "++", "++3", "+2 =x"] {
+        let parsed = editor(raw);
+        assert_ne!(parsed.needs, vec![Need::TaskParent], "{raw}");
+        assert_ne!(parsed.mode, EditorMode::Incomplete, "{raw}");
+    }
+
+    let log = "=x\n- 1 worked on the task +";
+    let parsed = editor(log);
+    assert_ne!(parsed.needs, vec![Need::TaskParent]);
+}

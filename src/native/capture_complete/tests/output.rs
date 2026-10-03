@@ -203,6 +203,7 @@ fn json_shape_is_stable() {
         warnings: Vec::new(),
         query: None,
         owner: None,
+        picker: None,
     })
     .expect("pomodoro json");
 
@@ -243,6 +244,7 @@ fn json_shape_is_stable() {
         warnings: Vec::new(),
         query: None,
         owner: None,
+        picker: None,
     })
     .expect("json");
 
@@ -289,6 +291,7 @@ fn human_output_is_plain_without_color() {
             warnings: Vec::new(),
             query: None,
             owner: None,
+            picker: None,
         },
         &styler,
     );

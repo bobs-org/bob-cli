@@ -156,6 +156,26 @@ fn routes_complete_at_end_of_text_word() {
 }
 
 #[test]
+fn bare_plus_shell_completion_returns_only_identified_parent_markers() {
+    let fixture = fixture();
+    let output = complete(&fixture, &["bob", "capture", "+"]);
+    assert_success(&output);
+    let values = values(&output);
+    assert!(values.contains(&"@cash+buy-milk".to_string()), "{values:?}");
+    assert!(values.contains(&"@cash+fix-sink".to_string()), "{values:?}");
+    assert!(values.contains(&"@dev+ship-it".to_string()), "{values:?}");
+    assert!(
+        values.iter().all(|value| !value.ends_with("+")),
+        "{values:?}"
+    );
+    assert!(
+        !stdout(&output).contains("No ID yet"),
+        "shell completion must omit ID-less task rows: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn partial_route_returns_full_set_for_shell_filtering() {
     let fixture = fixture();
     let output = complete(&fixture, &["bob", "capture", "fix", "it", "@ca"]);

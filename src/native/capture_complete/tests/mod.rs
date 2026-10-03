@@ -10,6 +10,7 @@ use super::{engine::build_result, model::CaptureCompleteResult};
 
 mod active_tasks;
 mod output;
+mod parent_tasks;
 mod pomodoros;
 mod routes_tasks;
 mod task_links;

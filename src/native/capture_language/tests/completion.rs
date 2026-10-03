@@ -791,3 +791,71 @@ fn task_link_query_completes_the_sigil_inclusive_token() {
     let parented = ":dee\n- x";
     assert_eq!(field(parented, parented.len()), None);
 }
+
+#[test]
+fn parent_task_plus_completes_the_terminal_token_with_utf8_byte_ranges() {
+    let bare = field("+", 1).expect("bare parent-task selector");
+    assert_eq!(bare.context, CompletionContext::TaskParent);
+    assert_eq!(bare.query, "");
+    assert_eq!(bare.replacement, (0, 1));
+
+    let typed = field("Call bank +bank", 15).expect("typed selector");
+    assert_eq!(typed.context, CompletionContext::TaskParent);
+    assert_eq!(typed.query, "bank");
+    assert_eq!(typed.replacement, (10, 15));
+
+    let emoji = "🚀 Call bank +bank";
+    let typed = field(emoji, emoji.len()).expect("emoji selector");
+    assert_eq!(typed.query, "bank");
+    assert_eq!(typed.replacement, (15, 20));
+
+    let crlf = "First\r\n\r\n- note +bank";
+    let typed = field(crlf, crlf.len()).expect("CRLF child selector");
+    assert_eq!(typed.context, CompletionContext::TaskParent);
+    assert_eq!(typed.query, "bank");
+    assert_eq!(typed.replacement, (crlf.len() - 5, crlf.len()));
+}
+
+#[test]
+fn parent_task_plus_is_shared_across_parent_and_authored_lines() {
+    for raw in ["+bank", "Call bank +bank", "Parent\n- note +bank"] {
+        let completion = field(raw, raw.len()).expect(raw);
+        assert_eq!(completion.context, CompletionContext::TaskParent, "{raw}");
+        assert_eq!(completion.query, "bank", "{raw}");
+    }
+
+    let later_item = "Parent\n\n+bank";
+    let completion = field(later_item, later_item.len()).expect("later item");
+    assert_eq!(
+        completion.replacement,
+        (later_item.len() - 5, later_item.len())
+    );
+}
+
+#[test]
+fn parent_task_plus_preserves_operator_and_protected_text_boundaries() {
+    for raw in [
+        "+2",
+        "+0",
+        "+2oops",
+        "+-",
+        "+-3",
+        "++",
+        "++3",
+        "+2 =x",
+        "C++",
+        "a+b",
+        "\\+bank",
+        "https://example.test/+",
+        "@route^id+",
+        "@@route +",
+        "[[note| +]]",
+        "```\n\n+\n\n```",
+        "=x\n- 1 work +",
+    ] {
+        assert!(
+            field(raw, raw.len()).is_none(),
+            "unexpected picker for {raw:?}"
+        );
+    }
+}

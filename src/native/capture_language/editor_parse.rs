@@ -14,7 +14,7 @@ use super::tokens::*;
 /// Remap one physical line's own tokenizer output into the original
 /// multi-line text's byte offsets, so every span an editor receives always
 /// indexes the raw text the user is looking at.
-pub(super) fn tokenize_line_with_spans<'a>(
+pub(crate) fn tokenize_line_with_spans<'a>(
     line: &RawLine<'a>,
 ) -> Vec<Token<'a>> {
     tokenize_with_spans(line.text)
@@ -660,6 +660,50 @@ pub(super) fn parse_editor_task_link_item<'a>(
     })
 }
 
+/// A terminal-plus task selector is unresolved editor input. Like the
+/// leading-colon picker, it is never previewed or submitted as an ordinary
+/// task; the explicit selection writes a scoped `@route+block-id` marker.
+/// The exact lone parent-line `+` remains the existing Pomodoro adjustment.
+pub(super) fn parse_editor_parent_task_item<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<EditorItemOutcome<'a>> {
+    let selector = parent_task_selector_tokens(item)
+        .into_iter()
+        .find(|selector| !selector.dual_use_adjustment)?;
+    let token = selector.token;
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: String::new(),
+            mode: EditorMode::Incomplete,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: vec![Need::TaskParent],
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            dependency_target: None,
+            spans: vec![Span {
+                start: token.start,
+                end: token.end,
+                kind: SpanKind::InteractivePlaceholder,
+            }],
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    })
+}
+
 pub(super) fn parse_editor_item<'a>(
     item: &CaptureItem<'a>,
 ) -> EditorItemOutcome<'a> {
@@ -668,6 +712,9 @@ pub(super) fn parse_editor_item<'a>(
     }
     if let Some(close) = parse_editor_close_item(item) {
         return attach_operator_dependency_rejection(close, item);
+    }
+    if let Some(parent_task) = parse_editor_parent_task_item(item) {
+        return attach_operator_dependency_rejection(parent_task, item);
     }
     if let Some(adjustment) = parse_editor_adjust_item(item) {
         return attach_operator_dependency_rejection(adjustment, item);

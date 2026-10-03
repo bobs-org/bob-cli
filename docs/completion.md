@@ -412,15 +412,17 @@ another thin client of that service (see `docs/capture.md`
   suggestions instead (for example `@dev:fix`, grouped `new task ID`)
   and never an ID `capture-complete` lists as used.
 - **Action items offer nothing**, exactly as in `capture-complete`:
-  closes (`=x…`, `=*`, `=!`), starts (`=`, `=<X>`), `+N` / `-N`
+  closes (`=x…`, `=*`, `=!`), starts (`=`, `=<X>`), numeric `+N` / `-N`
   adjustments and `++N` / `--N` shifts, and Work Log text on or below
-  the `=x` line.
+  the `=x` line. The exact lone `+` remains an action; capture completion
+  separately opens the parent-task picker, while shell completion offers
+  only identified `@route+block-id` values in the `parent tasks` group.
 - **Presentation.** Values are full marker texts such as
   `@dev:remote-power`. Descriptions come from the row: task text, route
   kind, `new block ID`, or Pomodoro time and name. Groups are human
   words: `inbox` / `areas` / `projects`, `sections in dev`,
-  `tasks in dev`, `new task ID`, `task sections`, `open Pomodoros`,
-  `active tasks`. A value ending in `:` `+` `#` `=` `^` is `nospace`;
+  `tasks in dev`, `parent tasks`, `new task ID`, `task sections`,
+  `open Pomodoros`, `active tasks`. A value ending in `:` `+` `#` `=` `^` is `nospace`;
   a complete marker gets a space. A quoted word carrying its own prefix
   (for example `fix it @dev:`) is served with `!prefix 7`, counted in
   Unicode scalar values.

@@ -379,6 +379,15 @@ pub(super) fn task_link_picker_at_error(token: &str, query: &str) -> String {
     )
 }
 
+/// A terminal-plus selector is an editor-only task search gesture. It
+/// cannot be captured until the user accepts a candidate, which supplies
+/// the canonical `@route+block-id` parent marker.
+pub(super) fn parent_task_picker_error(token: &str) -> String {
+    format!(
+        "`{token}` needs a task selection; choose a task to append to before capture"
+    )
+}
+
 pub(super) const POMODORO_ADJUST_ZERO_ERROR: &str = "Pomodoro adjustment magnitude must be positive; `+0` and `-0` adjust nothing (for example `+5` extends by 25 minutes)";
 
 pub(super) const POMODORO_ADJUST_OVERFLOW_ERROR: &str =

@@ -1,6 +1,7 @@
 //! Route, caret, and selector parsers.
 
 use super::close_selection::*;
+use super::draft::*;
 use super::editor_parse::*;
 use super::item::*;
 use super::markers::*;
@@ -200,6 +201,100 @@ pub(super) fn task_link_query_token<'a>(
         return None;
     };
     token.text.starts_with(':').then_some(*token)
+}
+
+/// One eligible bare-plus task selector on an item's parent line or an
+/// authored child line. The token is the exact `+query` span; offsets are
+/// draft-global UTF-8 bytes. A lone `+` on a one-line parent item is also a
+/// valid Pomodoro adjustment and is marked for the caller to preserve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ParentTaskSelectorToken<'a> {
+    pub(super) token: Token<'a>,
+    pub(super) line_index: usize,
+    pub(super) dual_use_adjustment: bool,
+}
+
+/// Shared lexical claim for bare-plus task selectors. A selector is the
+/// final whitespace-delimited token on the parent line, or on an eligible
+/// authored child line. Numeric and double-plus tokens remain Pomodoro
+/// operators; protected Markdown, global declarations, and Work Log text
+/// are excluded by the shared capture/link paths.
+pub(super) fn parent_task_selector_tokens<'a>(
+    item: &CaptureItem<'a>,
+) -> Vec<ParentTaskSelectorToken<'a>> {
+    let mut selectors = Vec::new();
+    for (line_index, item_line) in item.lines.iter().enumerate() {
+        let line = item_line.raw;
+        let scan_line = if line_index == 0 {
+            line
+        } else {
+            let AuthoredLineClass::Item(authored) =
+                classify_authored_line(line)
+            else {
+                continue;
+            };
+            if authored.depth == AuthoredDepth::Nested
+                && !item.lines[1..line_index].iter().any(|previous| {
+                    matches!(
+                        classify_authored_line(previous.raw),
+                        AuthoredLineClass::Item(found)
+                            if found.depth == AuthoredDepth::First
+                    )
+                })
+            {
+                continue;
+            }
+            RawLine {
+                text: authored.body,
+                start: authored.body_start,
+                end: line.end,
+            }
+        };
+
+        let whole_line_tokens = tokenize_line_with_spans(&line);
+        // A global declaration is a separate grammar. Do not reinterpret
+        // any plus-looking terminal token on a declaration line.
+        if whole_line_tokens
+            .iter()
+            .any(|token| token.text.starts_with("@@"))
+        {
+            continue;
+        }
+
+        let tokens = tokenize_line_with_spans(&scan_line);
+        let Some(token) = tokens.last().copied() else {
+            continue;
+        };
+        let Some(query) = token.text.strip_prefix('+') else {
+            continue;
+        };
+        // Operator runs and numeric prefixes still belong to the
+        // adjustment/shift grammar. A typed query such as `+bank` is a
+        // picker seed; `+-` remains ordinary prose like other mixed runs.
+        if query.starts_with('+')
+            || query.starts_with('-')
+            || query
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| byte.is_ascii_digit())
+            || crate::native::capture_links::is_protected_markup_range(
+                item.source,
+                token.start,
+                token.end,
+            )
+        {
+            continue;
+        }
+
+        let dual_use_adjustment =
+            line_index == 0 && item.lines.len() == 1 && line.text.trim() == "+";
+        selectors.push(ParentTaskSelectorToken {
+            token,
+            line_index,
+            dual_use_adjustment,
+        });
+    }
+    selectors
 }
 
 /// Return whether one already-whitespace-free selector component is typeable

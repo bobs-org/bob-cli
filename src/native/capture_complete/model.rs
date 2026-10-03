@@ -53,6 +53,8 @@ pub(super) struct TaskCandidate {
     pub(super) block_id: Option<String>,
     pub(super) route: String,
     pub(super) requires_block_id: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_id_suggestions: Option<Vec<String>>,
     pub(super) status_symbol: char,
     pub(super) status_name: String,
     pub(super) status_type: &'static str,
@@ -153,6 +155,59 @@ pub(super) struct TaskLinkCandidate {
     pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
 }
 
+/// One `task_parent` picker candidate: a linkable open task in the capture
+/// target catalog, with a parent-task `@route+id` replacement. ID-less
+/// candidates have no replacement and must go through Add block ID first.
+/// Colon-only schedule pull-forward metadata is intentionally absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskParentCandidate {
+    pub(super) replacement: String,
+    #[serde(rename = "ref")]
+    pub(super) task_ref: String,
+    pub(super) route: String,
+    pub(super) note_kind: CaptureTargetKind,
+    pub(super) block_id: Option<String>,
+    pub(super) requires_block_id: bool,
+    pub(super) block_id_suggestions: Vec<String>,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) status_type: &'static str,
+    pub(super) text: String,
+    pub(super) section: Option<String>,
+    pub(super) depth: usize,
+    pub(super) line: usize,
+    pub(super) group: capture_link_tasks::LinkTaskGroup,
+    pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PickerKind {
+    ParentTask,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PickerScope {
+    Note,
+    Vault,
+}
+
+/// Additive server-authored picker lifecycle metadata for parent-task
+/// completion. All ranges are half-open UTF-8 byte offsets into `TEXT`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PickerDescriptor {
+    pub(super) kind: PickerKind,
+    pub(super) scope: PickerScope,
+    pub(super) scope_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) note_target: Option<String>,
+    pub(super) marker_range: Replacement,
+    pub(super) trigger_removal_range: Replacement,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) action_continuation_keys: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct ActiveTaskCandidate {
     pub(super) replacement: String,
@@ -212,6 +267,7 @@ pub(super) enum Candidates {
     PomodoroName(Vec<PomodoroNameCandidate>),
     ActiveTask(Vec<ActiveTaskCandidate>),
     TaskLink(Vec<TaskLinkCandidate>),
+    TaskParent(Vec<TaskParentCandidate>),
     Dependency(Vec<DependencyCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
@@ -228,6 +284,7 @@ impl Candidates {
             Self::PomodoroName(items) => items.len(),
             Self::ActiveTask(items) => items.len(),
             Self::TaskLink(items) => items.len(),
+            Self::TaskParent(items) => items.len(),
             Self::Dependency(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
@@ -248,10 +305,10 @@ pub(super) struct CaptureCompleteResult {
     pub(super) block_id: Option<capture_block_ids::BlockIdField>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
-    /// Decoded `task_dependency` query (sigil stripped, one opening quote
-    /// stripped, `\"`/`\\` resolved), so the app never parses quoted note
-    /// components itself. Set only for that context; omitted elsewhere so
-    /// every older payload stays byte-identical.
+    /// Search text for `task_dependency`, scoped `task`, and bare-plus
+    /// `task_parent` completion. Dependency queries have their sigil,
+    /// opening quote, and escapes decoded so clients never parse a quoted
+    /// note component. Omitted from other contexts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) query: Option<String>,
     /// Lexical owner of the `task_dependency` modifier under the cursor
@@ -260,6 +317,10 @@ pub(super) struct CaptureCompleteResult {
     /// context; resolution-grade eligibility lands in later phases.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) owner: Option<LanguageDependencyTarget>,
+    /// Parent-task picker scope and editing ranges; omitted from every
+    /// other completion context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) picker: Option<PickerDescriptor>,
 }
 
 impl CaptureCompleteResult {
@@ -278,6 +339,7 @@ impl CaptureCompleteResult {
             warnings: Vec::new(),
             query: None,
             owner: None,
+            picker: None,
         }
     }
 }

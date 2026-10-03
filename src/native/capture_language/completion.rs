@@ -28,6 +28,9 @@ pub(crate) enum CompletionContext {
     TaskSection,
     ActiveTask,
     TaskLink,
+    /// A bare-plus task search across the capture-target catalog. Accept
+    /// inserts a complete `@route+block-id` parent marker.
+    TaskParent,
     /// An `&` prerequisite modifier: vault-wide task search whose accept
     /// inserts a Bob-authored `&note:block-id` replacement. The candidate
     /// scan lands in the discovery phase; the lexical field (query plus the
@@ -400,6 +403,14 @@ pub(crate) fn completion_field_at(
     if let Some(field) = pomodoro_start_name_field(item, cursor) {
         return Some(field);
     }
+    // Bare-plus task search is checked before the adjustment early return:
+    // a literal `+` is both the existing +5m action and a task-picker
+    // gesture, while numeric/double-plus operator tokens remain actions.
+    if let Some(field) =
+        parent_task_completion_field_at(item, line_index, cursor)
+    {
+        return Some(field);
+    }
     // A whole-item `+[N]`/`-[N]` adjustment, `++[N]`/`--[N]` shift,
     // `=x` close, or `=`/`=<X>` start is an action, never a routed
     // capture: it requests no route or task completion candidates. The
@@ -505,6 +516,37 @@ pub(crate) fn completion_field_at(
             && resolved.needs == [Need::PomodoroName]);
 
     marker_field_at_cursor(&token, cursor, sub_bullet_is_toggle)
+}
+
+/// Build the vault-wide parent-task field for the shared terminal-plus
+/// classifier. Its replacement owns the complete `+query` token so a
+/// candidate can replace the gesture with `@route+block-id`.
+fn parent_task_completion_field_at(
+    item: &CaptureItem<'_>,
+    line_index: usize,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let selector =
+        parent_task_selector_tokens(item)
+            .into_iter()
+            .find(|selector| {
+                selector.line_index == line_index
+                    && cursor >= selector.token.start
+                    && cursor <= selector.token.end
+            })?;
+    let relative = cursor - selector.token.start;
+    let query = if relative <= 1 {
+        String::new()
+    } else {
+        selector.token.text.get(1..relative)?.to_string()
+    };
+    Some(CompletionField {
+        context: CompletionContext::TaskParent,
+        route: None,
+        block_id: None,
+        query,
+        replacement: (selector.token.start, selector.token.end),
+    })
 }
 
 /// Trailing ` :id` / ` ^id` completion on a first-level project-note child.

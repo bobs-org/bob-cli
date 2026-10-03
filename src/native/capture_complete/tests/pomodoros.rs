@@ -718,6 +718,7 @@ fn pomodoro_creation_json_omits_ref_and_keeps_schema_version() {
         warnings: Vec::new(),
         query: None,
         owner: None,
+        picker: None,
     })
     .expect("creation json");
 

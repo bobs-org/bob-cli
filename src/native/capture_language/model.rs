@@ -505,6 +505,9 @@ pub(crate) struct ItemLine<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CaptureItem<'a> {
+    /// Complete source draft, retained so lexical claims can consult
+    /// Markdown protection across physical and blank-separated lines.
+    pub(crate) source: &'a str,
     pub(crate) index: usize,
     pub(crate) start: usize,
     pub(crate) end: usize,

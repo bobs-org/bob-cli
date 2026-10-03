@@ -39,14 +39,12 @@ pub(crate) use self::close_log::PositionalLogError;
 pub(crate) use self::completion::completion_field_at;
 pub(crate) use self::completion::project_task_block_id_detail;
 pub(crate) use self::completion::CompletionContext;
-#[cfg(test)]
 pub(crate) use self::completion::CompletionField;
 pub(crate) use self::draft::parse_capture_draft_with_clip_control;
 #[cfg(test)]
 pub(crate) use self::draft::parse_capture_text_with_clip_control;
 #[cfg(test)]
 pub(crate) use self::draft::split_capture_draft;
-#[cfg(test)]
 pub(crate) use self::draft::split_physical_lines;
 pub(crate) use self::editor_model::DependencyEntry;
 pub(crate) use self::editor_model::DependencyTarget;
@@ -63,6 +61,7 @@ pub(crate) use self::editor_model::Span;
 pub(crate) use self::editor_model::SpanKind;
 pub(crate) use self::editor_parse::editor_item_at;
 pub(crate) use self::editor_parse::parse_for_editor;
+pub(crate) use self::editor_parse::tokenize_line_with_spans;
 pub(crate) use self::editor_pomodoro::cursor_in_close_log_text;
 pub(crate) use self::line::missing_text_error;
 pub(crate) use self::line::normalize_task_text;

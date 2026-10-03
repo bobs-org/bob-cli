@@ -90,7 +90,8 @@ with one same-directory temporary file rename. The JSON success shape \
 additionally carries the exact `note_path` (in --note-path mode) and the \
 backend-formatted `dependency_replacement` (`&note:id`, quoted when the \
 locator needs it) so the app can resume the picker without losing \
-quoting or case. Dry-run plans the same \
+quoting or case, plus `parent_replacement` (`@route+block-id`) in routable \
+`--route` mode. Dry-run plans the same \
 mutation and returns the same success shape without writing. Stale, \
 ambiguous, terminal, already-identified, duplicate, missing, unreadable, \
 or read-only-snapshot tasks fail \
@@ -323,6 +324,10 @@ struct CaptureTaskIdResult {
     /// needs it) so the app resumes the picker without losing
     /// quoting or case.
     dependency_replacement: String,
+    /// Backend-formatted parent-task marker, present only when `--route`
+    /// identifies a routable note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_replacement: Option<String>,
     line: usize,
     #[serde(rename = "ref")]
     task_ref: String,
@@ -504,6 +509,9 @@ fn plan_assignment(
         &target_path,
         &request.block_id,
     );
+    let parent_replacement = route
+        .as_deref()
+        .map(|route| format!("@{route}+{}", request.block_id));
     Ok(AssignmentPlan {
         target,
         original,
@@ -520,6 +528,7 @@ fn plan_assignment(
             },
             block_id: request.block_id.clone(),
             dependency_replacement,
+            parent_replacement,
             line: assigned.line,
             task_ref: assigned.task_ref.clone(),
             task: assigned,
@@ -1000,6 +1009,7 @@ mod tests {
             note_path: None,
             block_id: "report-id".to_string(),
             dependency_replacement: "&file:report-id".to_string(),
+            parent_replacement: Some("@file+report-id".to_string()),
             line: 2,
             task_ref: "2:abcd1234".to_string(),
             task: AssignedTask {

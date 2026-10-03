@@ -176,6 +176,25 @@ pub(crate) fn wikilink_spans(raw: &str) -> Vec<Span> {
         .collect()
 }
 
+/// Whether a draft-global UTF-8 byte range is inside inline/fenced code or
+/// any wikilink syntax. Capture selectors use this to keep marker-like text
+/// literal in protected Markdown.
+pub(crate) fn is_protected_markup_range(
+    raw: &str,
+    start: usize,
+    end: usize,
+) -> bool {
+    if start > end || end > raw.len() {
+        return false;
+    }
+    let code = code_ranges(raw);
+    code.iter()
+        .any(|(code_start, code_end)| *code_start < end && start < *code_end)
+        || scan_links(raw, &code)
+            .iter()
+            .any(|link| link.start < end && start < link.end)
+}
+
 pub(crate) fn completion_field_at(
     raw: &str,
     cursor: usize,

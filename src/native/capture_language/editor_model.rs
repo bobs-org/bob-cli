@@ -200,6 +200,8 @@ pub(crate) enum Need {
     TaskSection,
     ActiveTask,
     TaskLink,
+    /// A bare-plus parent-task selector has not been accepted yet.
+    TaskParent,
     PomodoroCloseTask,
     PomodoroCloseLogText,
     PomodoroStartTask,
@@ -221,6 +223,7 @@ impl Need {
             Self::TaskSection => "task_section",
             Self::ActiveTask => "active_task",
             Self::TaskLink => "task_link",
+            Self::TaskParent => "task_parent",
             Self::PomodoroCloseTask => "pomodoro_close_task",
             Self::PomodoroCloseLogText => "pomodoro_close_log_text",
             Self::PomodoroStartTask => "pomodoro_start_task",

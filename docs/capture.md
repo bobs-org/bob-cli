@@ -71,6 +71,8 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); `=<X>` starts the resolved session atomically |
 | `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks |
 | `:<query>` | Incomplete: pick any open task to link (`capture-parse` needs `task_link`); accepting inserts `@route:block-id`, and execution never captures it |
+| `+query` or terminal prose `+` | Incomplete: choose a parent task (`capture-parse` needs `task_parent`); accepting inserts `@route+block-id`, and execution never captures the unresolved selector |
+| lone `+` | Opens the same task picker in an editor; Escape leaves the valid +5m Pomodoro adjustment unchanged |
 | `&note:block-id` | Prerequisite task link: the captured (or explicitly selected) task depends on `note.md`'s `^block-id` task; nested notes use `&projects/foo:bar`, notes with spaces use `&"Shopping List":bar` |
 | `&`, `&query`, `&note:` | Incomplete: the prerequisite picker is still open (`capture-parse` needs `task_dependency`); execution refuses with a teaching error |
 | `&note:block-id` with no other text | Incomplete: a prerequisite is selected but no dependent is named (`capture-parse` needs `dependency_target`); execution never creates an ampersand-named task |
@@ -848,6 +850,36 @@ using the candidate's `route` and `ref`, then capture the link with an
 optional `=` as usual. Linking retires a single future
 `[scheduled::YYYY-MM-DD]` exactly like a typed link; candidates flag that
 with `pulls_forward: true` and the `scheduled` date.
+
+### Choosing a parent task with `+`
+
+Type `+` at the start of an otherwise empty item, or after a space at the end
+of a capture line, to search the same task catalog as the `:` picker. Typing
+letters before the picker response arrives seeds the search, so `+bank` finds
+matching tasks. A terminal `+` in prose such as `Call the bank +` appends the
+selected task marker to that line; a leading `+` in a fresh item produces the
+marker by itself. The selector is unresolved input: `bob capture` refuses it
+until an editor replaces the token with an identified `@route+block-id` marker.
+
+The picker searches open Ready, Blocked, Next, and In Progress tasks in the
+routable inbox, area notes, and non-terminal project notes. It uses the full
+capture-target catalog across notes; it does not search arbitrary nested or
+unroutable notes, or closed tasks. Results keep the `:` picker order and
+ranking, including ID-less tasks. An ID-less row has no insertable replacement;
+accepting it explicitly opens the stale-safe Add block ID flow. After a
+successful `capture-task-id --route` assignment Bob returns a
+`parent_replacement` such as `@sase+fix-flaky-gkeep` for the editor to insert.
+Choosing an identified row only prepares the draft: a body-bearing marker
+appends a note under the task, while a solo marker keeps the existing Ensure
+Next behavior.
+
+The exact lone `+` is dual-use. Editors offer the task picker and show the
+Escape hint to extend the running Pomodoro by five minutes. Escape preserves
+the draft, so submitting `+` still performs that existing adjustment. Numeric
+adjustments (`+N`), double-plus shifts (`++N`), and numeric near misses remain
+Pomodoro operators. A prose-terminal `+` is always a task selector. Shell
+completion lists only identified `@route+block-id` rows and never assigns an
+ID or writes the vault.
 
 ### Adding prerequisites with '&'
 
@@ -2917,6 +2949,16 @@ token, sigil included. Multi-token (`: dee`), multi-line, and non-leading
 out of completion gating, and typing `=x` with nothing running surfaces the
 `no running Pomodoro` diagnostic both in the CLI and in the Mac preview.
 
+Bare-plus parent-task selectors report `incomplete` with
+`needs: ["task_parent"]` and an `interactive_placeholder` over the full
+`+query` token. This applies to a leading `+query`, prose-terminal `+query`,
+and an eligible authored child line such as `- note +`. The exact lone `+`
+stays `pomodoro_adjust` so the established five-minute action remains valid.
+The editor completion endpoint still offers its dual-use parent picker for
+that lone token. `bob capture` refuses unresolved plus selectors with a task
+selection error; an accepted `@route+block-id` marker uses the existing
+append/Ensure Next capture behavior.
+
 ## `bob capture-parse`
 
 ```bash
@@ -3137,7 +3179,7 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `pomodoro_close_task`, `pomodoro_start_task`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_parent`, `pomodoro_close_task`, `pomodoro_start_task`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` with no body text reports mode
 `incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode
@@ -3521,6 +3563,15 @@ link, and `query` is the token text between the sigil and the cursor (empty
 at or just after the sigil). For example `bob capture-complete -c 1 -- ':'`
 lists the whole vault, and `-c 4 -- ':dee'` narrows to the matching rows with
 `replacement` `{0, 4}`.
+The analogous parent-task picker accepts a terminal `+query` on an item's
+parent line or an eligible authored child line. It uses context `task_parent`,
+strips `+` from the top-level `query`, and replaces the full selector token.
+It lists linkable open tasks across the vault, including ID-less tasks whose
+empty `replacement` must not be inserted; those rows include block-ID
+suggestions for the Add block ID action. A lone `+` keeps its Pomodoro
+adjustment meaning in parsing but completion returns this picker with
+`action_continuation_keys` (`0`–`9` and `+`). Scoped `@route+id` completion
+continues to use context `task` and replace only the ID.
 `@route:` (`pomodoro_block_id`) completion now carries the `block_id` object
 and link-only filtering above; an empty-query marker-only `@route:` still
 lists that note's linkable tasks in document order. An empty block-ID component (`@route+#`) returns a successful empty
@@ -3570,8 +3621,22 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `task`,
-`task_section`, `active_task`, `task_link`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
-active. `task_block_id` covers `@route^prefix` once the route resolves;
+`task_section`, `active_task`, `task_link`, `task_parent`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+active. `task_parent` covers a terminal `+query`, strips the sigil from its
+additive top-level `query`, and replaces the whole selector. `task` covers
+scoped `@route+id` with only the ID span replaced and the typed ID query.
+`query` is present only for `task_parent`, `task`, and `task_dependency`; it
+contains the selector text after its sigil (and a decoded locator for a
+dependency query). Both parent-task contexts include an
+additive `picker` descriptor: `kind` is `parent_task`; `scope` is `vault`
+with `scope_token: "+"` for the bare selector, or `note` with the canonical
+`@route+` / `@@route+` scope token for scoped selection. `note_target` is
+present only for note scope. `marker_range` covers the selector (or the
+scoped marker through its ID), and `trigger_removal_range` covers the full
+bare selector or only the `+` through the scoped ID. All offsets are
+half-open UTF-8 byte ranges. Only the exact lone `+` includes
+`action_continuation_keys` (`0` through `9`, then `+`). The descriptor is
+omitted from all other contexts. `task_block_id` covers `@route^prefix` once the route resolves;
 `candidates` is always `[]`. `project_task_block_id` covers a cursor inside a
 trailing ` :` / ` ^` task ID token on a first-level bullet of a project-note
 item with a resolved route and block ID, from just after the sigil to the
@@ -3659,8 +3724,14 @@ Pomodoro (`Planned` when unnamed), `In Progress`, `Next`, or the note
 label, plus `· needs ID (^suggestion)` on ID-less rows and
 `· scheduled YYYY-MM-DD` whenever the task carries a scheduled date. Missing-ID tasks, which appear only when
 `--all-tasks` is set in the `task` context, have `block_id: null`,
-`requires_block_id: true`, and an empty placeholder `replacement` that the
-updated client must never insert. A wikilink note candidate has `path`, `name`, optional `alias`,
+`requires_block_id: true`, `block_id_suggestions` (up to 3 deterministic IDs),
+and an empty placeholder `replacement` that the updated client must never
+insert. A `task_parent` candidate has the same task metadata plus `note_kind`,
+`group`, and nullable `pomodoro`, but no `scheduled` or `pulls_forward` fields;
+identified rows use `@route+block-id` replacements, while ID-less rows have
+an empty replacement, `requires_block_id: true`, and suggested IDs. Human
+rows begin with `@route+block-id` or `@route+…` and describe missing IDs. A
+wikilink note candidate has `path`, `name`, optional `alias`,
 and `match_kind`; heading and block candidates add `heading`/`level` or
 `block_id`/optional `preview` metadata. Link-index warnings, when present, are
 reported in a bounded top-level `warnings` array without logging draft text. A
@@ -3780,7 +3851,7 @@ bob capture-task-id (--route NAME | --note-path PATH) --task-ref REF --block-id 
 
 Assigns a user-authored Obsidian block ID to one open task in a Bob note.
 This is the only write needed to turn a missing-ID `capture-complete --all-tasks`,
-`task_link`, or `task_dependency` candidate into an identified task. The command validates
+`task_link`, `task_parent`, or `task_dependency` candidate into an identified task. The command validates
 `--route` (or `--note-path`) and `--block-id` with Bob's shared grammar (`A-Z`, `a-z`, `0-9`, and `-` for the
 ID; routes also allow `_`), resolves `--task-ref` with the same stale-safe
 `<line>:<digest>` recovery as `bob capture --task-ref`, and then confirms the
@@ -3805,7 +3876,9 @@ JSON success is a single versioned object with `ok`, `schema_version` `1`,
 mode), `relative_target`, the backend-formatted `dependency_replacement`
 (`&note:id`, quoted when the locator needs it), the canonical `block_id`,
 the updated one-based `line`, the updated `ref`, and a `task` object with
-the same picker metadata as `capture-tasks` after the assignment. JSON
+the same picker metadata as `capture-tasks` after the assignment. In `--route`
+mode it also returns `parent_replacement` (`@route+block-id`) for resuming a
+parent-task picker; this field is omitted in `--note-path` mode. JSON
 failure is `{"ok": false, "error": "..."}` and is write-free, as are stale,
 ambiguous, terminal, already-identified, duplicate, missing, unreadable-note,
 and read-only-snapshot errors.

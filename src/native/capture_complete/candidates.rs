@@ -4,12 +4,13 @@ use super::{
     model::{
         ActiveTaskCandidate, ActiveTaskPomodoroCandidate, Candidates,
         CompleteError, DependencyCandidate, RouteCandidate, SectionCandidate,
-        TaskCandidate, TaskLinkCandidate, TaskSectionCandidate,
+        TaskCandidate, TaskLinkCandidate, TaskParentCandidate,
+        TaskSectionCandidate,
     },
     support::rank,
 };
 use crate::native::{
-    capture, capture_active_tasks, capture_dependency_tasks,
+    capture, capture_active_tasks, capture_block_ids, capture_dependency_tasks,
     capture_language::{DependencyTarget, DependencyTargetKind},
     capture_link_tasks, capture_targets, capture_task_sections, capture_tasks,
     note_tasks::{self, BlockIdLookup},
@@ -83,6 +84,11 @@ pub(super) fn task_candidates(
     let contents = read_target(bob_dir, route)?;
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(&contents, &settings);
+    let used_ids: Vec<String> =
+        capture_block_ids::collect_used(&contents, &settings)
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
     let ranked =
         rank_open_tasks(scan.open_tasks(), query, include_missing, search);
 
@@ -97,6 +103,16 @@ pub(super) fn task_candidates(
                     block_id: task.block_id.clone(),
                     route: route.to_string(),
                     requires_block_id,
+                    block_id_suggestions: if requires_block_id {
+                        let suggestions = capture_block_ids::suggest_ids(
+                            &task.description,
+                            '^',
+                            &used_ids,
+                        );
+                        (!suggestions.is_empty()).then_some(suggestions)
+                    } else {
+                        None
+                    },
                     status_symbol: task.status_symbol,
                     status_name: task.status_name.clone(),
                     status_type: capture_tasks::status_type_label(
@@ -155,6 +171,7 @@ pub(super) fn link_candidates(
                 block_id: Some(block_id),
                 route: route.to_string(),
                 requires_block_id: false,
+                block_id_suggestions: None,
                 status_symbol: task.status_symbol,
                 status_name: task.status_name.clone(),
                 status_type: capture_tasks::status_type_label(task.status_type),
@@ -415,6 +432,52 @@ pub(super) fn task_link_candidates(
         })
         .collect();
     (Candidates::TaskLink(candidates), discovered.warnings)
+}
+
+/// `task_parent` candidates for a bare-plus selector. Reuses the colon
+/// picker discovery and stable ranking, but emits the parent-task `+`
+/// spelling and omits link-only pull-forward metadata.
+pub(super) fn task_parent_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_link_tasks::discover(bob_dir);
+    let candidates = capture_link_tasks::rank(&discovered.tasks, query)
+        .into_iter()
+        .map(|task| {
+            let replacement = task
+                .block_id
+                .as_ref()
+                .map(|block_id| format!("@{}+{block_id}", task.route))
+                .unwrap_or_default();
+            TaskParentCandidate {
+                replacement,
+                task_ref: task.task_ref.clone(),
+                route: task.route.clone(),
+                note_kind: task.note_kind,
+                block_id: task.block_id.clone(),
+                requires_block_id: task.block_id.is_none(),
+                block_id_suggestions: task.block_id_suggestions.clone(),
+                status_symbol: task.status_symbol,
+                status_name: task.status_name.clone(),
+                status_type: task.status_type,
+                text: task.text.clone(),
+                section: task.section.clone(),
+                depth: task.depth,
+                line: task.line,
+                group: task.group,
+                pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
+                    ActiveTaskPomodoroCandidate {
+                        line: pomodoro.line,
+                        name: pomodoro.name.clone(),
+                        time_range: pomodoro.time_range.clone(),
+                        is_current: pomodoro.is_current,
+                    }
+                }),
+            }
+        })
+        .collect();
+    (Candidates::TaskParent(candidates), discovered.warnings)
 }
 
 /// `task_dependency` candidates for an `&` token: every task in the

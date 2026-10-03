@@ -141,7 +141,17 @@ not be inserted, expose a nullable block_id, carry the route and stale-safe \
 ref, and set requires_block_id. Task search matches block ID, description, \
 section, and status name or symbol; identified tasks stay ahead of \
 unidentified tasks, and prefix matches precede substring matches inside \
-each group. A solo leading '^' token completes active tasks instead: the \
+each group. A terminal bare `+query` on an item parent line or eligible \
+authored child line uses the `task_parent` context: it searches all linkable \
+open tasks across the vault, returns the stripped query and a server-authored \
+picker descriptor, and replaces the whole selector. ID-less rows carry \
+`requires_block_id` plus suggested IDs and an empty replacement, so clients \
+must offer Add block ID rather than insert the row. A lone `+` is the \
+intentional dual-use case: completion opens this picker and its descriptor \
+returns the action continuation keys `0` through `9` and `+`, allowing an \
+editor to preserve the Pomodoro adjustment. Scoped `@route+id` and \
+`@@route+id` keep the `task` context, with picker scope and removal ranges \
+identifying the note-local parent marker. A solo leading '^' token completes active tasks instead: the \
 `route:block-id` part offers In Progress and Next tasks with block IDs, \
 ordered by today's open-Pomodoro Task Links (queued first, then In \
 Progress, then Next), and accepting a row inserts the full \
@@ -174,7 +184,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_link, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_link, task_parent, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())

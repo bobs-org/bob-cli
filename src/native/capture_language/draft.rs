@@ -90,7 +90,7 @@ pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
 
     CaptureDraft {
         declarations,
-        items: split_items_from_item_lines(&item_lines),
+        items: split_items_from_item_lines(&item_lines, raw),
     }
 }
 
@@ -99,20 +99,21 @@ pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
 /// operator; see [`push_capture_item`].
 pub(super) fn split_items_from_item_lines<'a>(
     lines: &[ItemLine<'a>],
+    source: &'a str,
 ) -> Vec<CaptureItem<'a>> {
     let mut items = Vec::new();
     let mut current: Vec<ItemLine<'_>> = Vec::new();
 
     for line in lines.iter().copied() {
         if line.raw.text.trim().is_empty() {
-            push_capture_item(&mut items, &mut current);
+            push_capture_item(&mut items, &mut current, source);
             continue;
         }
 
         current.push(line);
     }
 
-    push_capture_item(&mut items, &mut current);
+    push_capture_item(&mut items, &mut current, source);
     items
 }
 
@@ -239,6 +240,7 @@ pub(crate) fn split_inline_close_tokens(
 pub(super) fn push_capture_item<'a>(
     items: &mut Vec<CaptureItem<'a>>,
     current: &mut Vec<ItemLine<'a>>,
+    source: &'a str,
 ) {
     let Some(first) = current.first().copied() else {
         return;
@@ -268,6 +270,7 @@ pub(super) fn push_capture_item<'a>(
                     None => (token.end, first.line_number),
                 };
                 items.push(CaptureItem {
+                    source,
                     index: items.len(),
                     start: token.start,
                     end,
@@ -277,6 +280,7 @@ pub(super) fn push_capture_item<'a>(
                 });
             } else {
                 items.push(CaptureItem {
+                    source,
                     index: items.len(),
                     start: token.start,
                     end: token.end,
@@ -305,6 +309,7 @@ pub(super) fn push_capture_item<'a>(
         if lead_before.is_empty() && trail.is_empty() {
             let last = current.last().copied().expect("nonempty item");
             items.push(CaptureItem {
+                source,
                 index: items.len(),
                 start: first.raw.start,
                 end: last.raw.end,
@@ -326,6 +331,7 @@ pub(super) fn push_capture_item<'a>(
                 line_number: first.line_number,
             };
             items.push(CaptureItem {
+                source,
                 index: items.len(),
                 start: token.start,
                 end: token.end,
@@ -355,6 +361,7 @@ pub(super) fn push_capture_item<'a>(
                 None => (entry_last.end, first.line_number),
             };
             items.push(CaptureItem {
+                source,
                 index: items.len(),
                 start: owner.start,
                 end,
@@ -373,6 +380,7 @@ pub(super) fn push_capture_item<'a>(
                 line_number: first.line_number,
             };
             items.push(CaptureItem {
+                source,
                 index: items.len(),
                 start: token.start,
                 end: token.end,
@@ -386,6 +394,7 @@ pub(super) fn push_capture_item<'a>(
     }
     let last = current.last().copied().expect("nonempty item");
     items.push(CaptureItem {
+        source,
         index: items.len(),
         start: first.raw.start,
         end: last.raw.end,
