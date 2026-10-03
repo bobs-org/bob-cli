@@ -703,6 +703,11 @@ reference lifecycle task so Obsidian task views can tell it apart from ordinary
 annotation-derived follow-up tasks. It is additive: legacy generated lines
 without `#ref` are still recognized.
 
+The same `^ref` line doubles as the reference's freshness tracker: an
+unstamped Ready reference starts in NEW regardless of import age, then
+follows ordinary freshness (see [`docs/freshness.md`](freshness.md) §4,
+"Tracking review"). Sync never auto-confirms it.
+
 | Checkbox | Obsidian Tasks status | Reference `status` | Meaning |
 | --- | --- | --- | --- |
 | `[ ]` | Todo | `ready` | In the reading queue, not started |

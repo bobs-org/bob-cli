@@ -620,6 +620,9 @@ mod tests {
             note_refresh_raw: None,
             is_daily_note: false,
             is_today: false,
+            project_ready_count: 0,
+            project_scheduled: None,
+            project_schedule_invalid: false,
         }
     }
 
@@ -703,6 +706,7 @@ mod tests {
             ready: Vec::new(),
             pending: Vec::new(),
             next: Vec::new(),
+            trackers: Vec::new(),
             open: Vec::new(),
             all: Vec::new(),
             today_warnings: Vec::new(),

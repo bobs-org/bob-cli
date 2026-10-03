@@ -80,7 +80,7 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 4);
+    assert_eq!(value["schema_version"], 5);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
     assert_eq!(value["config"]["pending_interval"], 1);
@@ -548,7 +548,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 4);
+    assert_eq!(value["schema_version"], 5);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -652,7 +652,7 @@ fn list_lane_rows_cover_pending_and_next() {
         - [*] #task Fresh next [fresh:: 2026-10-08]\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 4);
+    assert_eq!(value["schema_version"], 5);
     let counts = &value["counts"];
     assert_eq!(counts["pending_due"], 1);
     assert_eq!(counts["next_due"], 1);
@@ -855,12 +855,12 @@ fn keeps_list_json(temp: &TempDir, now: &str, extra: &[&str]) -> Value {
 }
 
 #[test]
-fn list_reports_keeps_and_decide_per_schema_4() {
+fn list_reports_keeps_and_decide_per_schema_5() {
     // After activation (2026-10-19), the at-limit rotten row decides.
     let temp = keeps_vault("bob-cli-freshness-keeps");
     let value = keeps_list_json(&temp, "2026-10-20", &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 4);
+    assert_eq!(value["schema_version"], 5);
     assert_eq!(value["config"]["decay"]["enabled"], true);
     assert_eq!(value["config"]["decay"]["keeps"], 3);
     assert!(value["config"]["decay"]["enter"].is_null());
@@ -910,7 +910,7 @@ fn list_reports_keeps_and_decide_per_schema_4() {
 fn list_pre_activation_counts_but_never_decides() {
     let temp = keeps_vault("bob-cli-freshness-keeps-trial");
     let value = keeps_list_json(&temp, NOW, &[]);
-    assert_eq!(value["schema_version"], 4);
+    assert_eq!(value["schema_version"], 5);
     assert_eq!(value["config"]["decay"]["active"], false);
     assert_eq!(value["counts"]["decide"], 0);
     let queue = value["queue"].as_array().expect("queue array");
@@ -1011,7 +1011,7 @@ fn seed_preserves_existing_keeps() {
     write_file(&vault.join("a.md"), "- [ ] #task Kept before [keeps:: 2]\n");
     let (output, value) = seed_json(&temp, &[]);
     assert_success(&output);
-    assert_eq!(value["schema_version"], 4);
+    assert_eq!(value["schema_version"], 5);
     assert_eq!(value["stamped"]["ready"], 1);
     let contents =
         fs::read_to_string(vault.join("a.md")).expect("read seeded line");
@@ -1047,5 +1047,71 @@ fn seed_invariance_abort_lists_the_line() {
     assert!(
         !a_contents.contains("[fresh::"),
         "invariance abort must not write:\n{a_contents}"
+    );
+}
+
+#[test]
+fn list_walks_projects_after_new_with_decoupled_counts() {
+    let temp = TempDir::new("bob-cli-freshness-trackers");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("p.md"), "- [ ] #task Empty project ^prj\n");
+    write_file(
+        &vault.join("h.md"),
+        "- [ ] #task Hidden project #hide ^prj\n",
+    );
+    write_file(
+        &vault.join("full.md"),
+        "- [ ] #task Full project ^prj\n- [ ] #task Real work\n",
+    );
+    write_file(&vault.join("r.md"), "- [ ] #task Read me #hide ^ref\n");
+    write_file(
+        &vault.join("fut.md"),
+        "---\nscheduled: 2026-10-20\n---\n- [ ] #task Future project ^prj\n",
+    );
+    write_file(
+        &vault.join("bad.md"),
+        "---\nscheduled: someday\n---\n- [ ] #task Broken project ^prj\n",
+    );
+    let (_, value) = list_json(&temp, &[]);
+    assert_eq!(value["schema_version"], 5);
+    let tiers: Vec<&str> = value["queue"]
+        .as_array()
+        .expect("queue array")
+        .iter()
+        .map(|row| row["tier"].as_str().expect("tier string"))
+        .collect();
+    // The populated note's own Ready task still reviews as NEW while its
+    // `^prj` stays suppressed.
+    assert_eq!(tiers, vec!["new", "new", "projects", "projects"]);
+    let keys: Vec<String> = value["queue"]
+        .as_array()
+        .expect("queue array")
+        .iter()
+        .map(|row| {
+            format!(
+                "{}:{}",
+                row["path"].as_str().unwrap_or("?"),
+                row["line"].as_u64().unwrap_or(0)
+            )
+        })
+        .collect();
+    assert_eq!(keys, vec!["full.md:2", "r.md:1", "h.md:1", "p.md:1"]);
+    let counts = &value["counts"];
+    assert_eq!(counts["new"], 4);
+    assert_eq!(counts["due"], 4);
+    assert_eq!(counts["projects_due"], 2);
+    assert_eq!(counts["by_tier"]["new"], 2);
+    assert_eq!(counts["by_tier"]["projects"], 2);
+    assert_eq!(counts["walk"], 4);
+    let codes: Vec<&str> = value["warnings"]
+        .as_array()
+        .expect("warnings array")
+        .iter()
+        .filter_map(|warning| warning["code"].as_str())
+        .collect();
+    assert!(
+        codes.contains(&"project_scheduled_invalid"),
+        "malformed project schedule warns: {codes:?}"
     );
 }

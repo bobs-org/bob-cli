@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 
 use super::{
     bucket_for_state, counts, evaluate, queue, Counts, FreshState,
-    FreshnessRow, IntervalSource, Lane, Tier,
+    FreshnessRow, IntervalSource, Lane, Tier, TrackerKind,
 };
 use crate::native::config::freshness::{DecayConfig, FreshnessConfig};
 
@@ -74,6 +74,10 @@ fn row(line: &str) -> FreshnessRow {
         created: None,
         raw_line: line.to_string(),
         note_refresh_raw: None,
+        tracker: None,
+        project_ready_count: 0,
+        project_scheduled: None,
+        project_schedule_invalid: false,
     }
 }
 
@@ -347,6 +351,10 @@ fn stamped_row(
         created: None,
         raw_line: format!("- [{status}] #task Counted [fresh:: {fresh}]"),
         note_refresh_raw: None,
+        tracker: None,
+        project_ready_count: 0,
+        project_scheduled: None,
+        project_schedule_invalid: false,
     }
 }
 
@@ -466,6 +474,10 @@ fn lane_row(
         created,
         raw_line,
         note_refresh_raw: None,
+        tracker: None,
+        project_ready_count: 0,
+        project_scheduled: None,
+        project_schedule_invalid: false,
     }
 }
 
@@ -837,6 +849,76 @@ fn decide_zero_off_and_lane_rows() {
     );
     assert_eq!(lane.tier, Some(Tier::Next));
     assert!(!lane.decide);
+}
+
+/// Project/reference tracking review: empty `^prj` walks in
+/// PROJECTS (never NEW), populated notes suppress it, hidden `^ref`
+/// starts NEW, lane `^prj` keeps its lane with the Ready cadence, and
+/// counts decouple states from the six-key tier histogram.
+#[test]
+fn tracking_projects_tier_and_counts() {
+    let config = default_config();
+    let mut empty_prj = row("- [ ] #task Project ^prj");
+    empty_prj.tracker = Some(TrackerKind::Prj);
+    empty_prj.project_ready_count = 0;
+    let evaluated = evaluate(&empty_prj, today(), &config);
+    assert_eq!(evaluated.state, Some(FreshState::New));
+    assert_eq!(evaluated.tier, Some(Tier::Projects));
+
+    // A stamp today removes it from the queue (fresh, no tier).
+    let mut stamped = row("- [ ] #task Project [fresh:: 2026-10-08] ^prj");
+    stamped.tracker = Some(TrackerKind::Prj);
+    stamped.project_ready_count = 0;
+    let evaluated = evaluate(&stamped, today(), &config);
+    assert_eq!(evaluated.state, Some(FreshState::Fresh));
+    assert_eq!(evaluated.tier, None);
+
+    // A counted Ready task suppresses the reminder immediately.
+    let mut populated = row("- [ ] #task Project ^prj");
+    populated.tracker = Some(TrackerKind::Prj);
+    populated.project_ready_count = 1;
+    let evaluated = evaluate(&populated, today(), &config);
+    assert_eq!(evaluated.state, None);
+    assert_eq!(evaluated.tier, None);
+
+    // An eligible hidden reference starts NEW (hide bypassed).
+    let mut hidden_ref = row("- [ ] #task Read #hide ^ref");
+    hidden_ref.tracker = Some(TrackerKind::Ref);
+    let evaluated = evaluate(&hidden_ref, today(), &config);
+    assert_eq!(evaluated.state, Some(FreshState::New));
+    assert_eq!(evaluated.tier, Some(Tier::New));
+
+    // An ordinary hidden task stays out.
+    let mut hidden = row("- [ ] #task Read #hide");
+    hidden.lane_visible = false;
+    let evaluated = evaluate(&hidden, today(), &config);
+    assert_eq!(evaluated.state, None);
+    assert_eq!(evaluated.tier, None);
+
+    // A lane `^prj` keeps its lane with the Ready-chain interval.
+    let mut lane_prj = lane_row("p.md", 2, '/', None, None);
+    lane_prj.tracker = Some(TrackerKind::Prj);
+    lane_prj.project_ready_count = 0;
+    lane_prj.raw_line = "- [/] #task Project ^prj".to_string();
+    let evaluated = evaluate(&lane_prj, today(), &config);
+    assert_eq!(evaluated.lane, Some(Lane::Pending));
+    assert_eq!(evaluated.state, None);
+    assert_eq!(evaluated.tier, Some(Tier::Projects));
+    assert_eq!(evaluated.interval_days, 7);
+    assert_eq!(evaluated.interval_source, IntervalSource::Default);
+
+    // Counts: states decouple from tiers; walk sums the histogram.
+    let report = counts(&[empty_prj, hidden_ref, lane_prj], today(), &config);
+    assert_eq!(report.new, 2);
+    assert_eq!(report.due, 2);
+    assert_eq!(report.projects_due, 2);
+    assert_eq!(report.by_tier.new, 1);
+    assert_eq!(report.by_tier.projects, 2);
+    assert_eq!(
+        report.walk,
+        report.by_tier.sum(),
+        "walk sums the tier histogram"
+    );
 }
 
 /// Counts carry `decide` over the full queue input.

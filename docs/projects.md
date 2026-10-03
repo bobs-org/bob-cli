@@ -91,6 +91,12 @@ task views can tell it apart from ordinary follow-up tasks; it is additive, and
 legacy lines without `#prj` are still recognized. Multiple `^prj` tasks or a
 `^prj` line that is not a valid `#task` checkbox are per-file errors.
 
+The same `^prj` line doubles as the project's freshness tracker: while its
+own note holds no counted Ready tasks, the morning review reminds Bryan to
+replenish it on the normal Ready interval chain (see
+[`docs/freshness.md`](freshness.md) §4, "Tracking review"). Sync's
+hide rule is broader than the freshness predicate and unchanged.
+
 Task statuses follow the Tasks plugin convention:
 
 ```text

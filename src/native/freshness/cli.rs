@@ -35,11 +35,14 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
-/// Schema 4 adds the keep-streak contract: queue rows carry `keeps`
-/// and `decide`, counts carry `decide`, and `config` carries the
-/// normalized `decay` object. The seed envelope shares this constant;
-/// seed contents are otherwise unchanged.
-const SCHEMA_VERSION: u32 = 4;
+/// Schema 5 adds project/reference tracking review: the `projects`
+/// walk tier, `projects_due` and the six-key `by_tier` histogram in
+/// counts (with `walk = sum(by_tier)`), and decoupled state totals
+/// (`due = new + resurfaced + rotten` over Ready states, including
+/// eligible Ready trackers). Schema 4 added the keep-streak contract.
+/// The seed envelope shares this constant; seed contents are
+/// otherwise unchanged.
+const SCHEMA_VERSION: u32 = 5;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -107,8 +110,8 @@ pub(crate) fn build_cli() -> ClapCommand {
         .about("Walk the tiered freshness review queue and seed the cutover")
         .long_about(
             "Walk the tiered freshness review queue: list the tasks due \
-            for review in tier order NEW → PENDING → NEXT → RETURNED → \
-            ROTTEN and stamp the one-time cutover seed.\n\n\
+            for review in tier order NEW → PROJECTS → PENDING → NEXT → \
+            RETURNED → ROTTEN and stamp the one-time cutover seed.\n\n\
             The list subcommand is read-only: it evaluates every visible, \
             non-recurring Ready, Pending, and Next task at read time — \
             never stored — and shows the tiered walk queue with counts. \
@@ -142,11 +145,11 @@ fn list_command_inner() -> ClapCommand {
         .about("List the tiered freshness review queue")
         .long_about(
             "List the tiered freshness review queue: every task with a \
-            walk tier, ordered NEW → PENDING → NEXT → RETURNED → ROTTEN \
-            with each tier's comparator, with whole-vault counts. The \
-            command is read-only. Counts always cover the whole vault; \
-            --limit truncates the queue rows only. See docs/freshness.md \
-            for the full definition.",
+            walk tier, ordered NEW → PROJECTS → PENDING → NEXT → \
+            RETURNED → ROTTEN with each tier's comparator, with \
+            whole-vault counts. The command is read-only. Counts always \
+            cover the whole vault; --limit truncates the queue rows \
+            only. See docs/freshness.md for the full definition.",
         )
         .after_help(
             "Examples:\n  bob freshness list\n  bob freshness list -f json\n  bob freshness list -b ~/bob --limit 10\n\nEnvironment:\n  BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n  BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  BOB_DIR                   Bob vault root when --bob-dir is omitted\n  BOB_NOW                   Local datetime override for review date selection\n  NO_COLOR                  Disable colored output",
@@ -329,12 +332,21 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         snapshot.ready.iter().all(|row| !row.task.is_blocked),
         "READY_QUERY rows must never be blocked"
     );
+    // The review input is ready ∪ pending ∪ next plus hidden
+    // tracker candidates (freshness-specific visibility, hide
+    // allowed). Ordinary hidden tasks never enter here.
     let combined: Vec<(&RowCtx, super::state::FreshnessRow)> = snapshot
         .ready
         .iter()
         .chain(snapshot.pending.iter())
         .chain(snapshot.next.iter())
         .map(|row| (row, row.freshness_row(true)))
+        .chain(
+            snapshot
+                .trackers
+                .iter()
+                .map(|row| (row, row.freshness_row(true))),
+        )
         .collect();
 
     let queue_entries = queue(
@@ -406,10 +418,11 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         .chain(snapshot.pending.iter())
         .chain(snapshot.next.iter())
         .map(|row| row.freshness_row(true))
+        .chain(snapshot.trackers.iter().map(|row| row.freshness_row(true)))
         .collect();
     let mut counts = counts(&combined_eval_rows, today, config);
-    // Tier counts need ready ∪ pending ∪ next rows; the meters need
-    // every status (S15, B1).
+    // Tier counts need ready ∪ pending ∪ next plus hidden tracker
+    // rows; the meters need every status (S15, B1).
     counts.refreshed_today = refreshed_today(&snapshot.all, today);
     counts.upkeep_today = upkeep_today(&snapshot.all, today);
     counts.budget_met = config
@@ -525,10 +538,11 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
     output.push('\n');
     let _ = writeln!(
         output,
-        "  REVIEW {walk} due {sep} {new} new {sep} {pending} pending {sep} {next} next {sep} {returned} returned {sep} {rotten} rotten {sep} {today}",
+        "  REVIEW {walk} due {sep} {new} new {sep} {projects} projects {sep} {pending} pending {sep} {next} next {sep} {returned} returned {sep} {rotten} rotten {sep} {today}",
         walk = report.counts.walk,
         sep = styler.separator(),
         new = report.counts.new,
+        projects = report.counts.projects_due,
         pending = report.counts.pending_due,
         next = report.counts.next_due,
         returned = report.counts.resurfaced,
@@ -536,8 +550,9 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
         today = today_meter(report),
     );
 
-    let tiers: [(&str, &str); 5] = [
+    let tiers: [(&str, &str); 6] = [
         ("new", "NEW"),
+        ("projects", "PROJECTS"),
         ("pending", "PENDING"),
         ("next", "NEXT"),
         ("returned", "RETURNED"),
@@ -606,6 +621,30 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
         "new" => match &row.created {
             Some(created) => format!("created {created}"),
             None => "never confirmed".to_string(),
+        },
+        "projects" => match &row.fresh {
+            None => match &row.created {
+                Some(created) => {
+                    format!(
+                        "no Ready tasks in this project {sep} never confirmed {sep} created {created}"
+                    )
+                }
+                None => "no Ready tasks in this project · never confirmed"
+                    .to_string(),
+            },
+            Some(fresh) => {
+                let lead = match row.days_overdue {
+                    Some(0) => "due today".to_string(),
+                    Some(days) => format!("{days}d overdue"),
+                    None => match &row.due_on {
+                        Some(due) => format!("due {due}"),
+                        None => "due".to_string(),
+                    },
+                };
+                format!(
+                    "no Ready tasks in this project {sep} {lead} {sep} fresh {fresh}{every}"
+                )
+            }
         },
         "pending" | "next" => match &row.fresh {
             None => match &row.created {
@@ -693,6 +732,15 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "fresh": report.counts.fresh,
             "pending_due": report.counts.pending_due,
             "next_due": report.counts.next_due,
+            "projects_due": report.counts.projects_due,
+            "by_tier": {
+                "new": report.counts.by_tier.new,
+                "projects": report.counts.by_tier.projects,
+                "pending": report.counts.by_tier.pending,
+                "next": report.counts.by_tier.next,
+                "returned": report.counts.by_tier.returned,
+                "rotten": report.counts.by_tier.rotten,
+            },
             "walk": report.counts.walk,
             "decide": report.counts.decide,
             "refreshed_today": report.counts.refreshed_today,
