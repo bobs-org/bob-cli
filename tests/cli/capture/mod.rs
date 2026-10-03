@@ -7,6 +7,7 @@ mod clip;
 mod complete_block_id;
 mod complete_dependency;
 mod complete_editor;
+mod complete_parent_task;
 mod complete_query;
 mod complete_task_link;
 mod ensure_next;

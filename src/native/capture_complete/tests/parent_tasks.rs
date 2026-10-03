@@ -173,3 +173,155 @@ fn plus_query_ranks_candidates_and_scoped_descriptors_keep_exact_ranges() {
         Replacement { start: 6, end: 7 }
     );
 }
+
+#[test]
+fn vault_catalog_excludes_non_capture_and_terminal_notes() {
+    let _guard = day_file_guard();
+    let temp = super::TempDir::new("bob-cli-capture-complete-parent-catalog");
+    let day_file = task_link_fixture(temp.path());
+
+    let value = parent_result(temp.path(), &day_file, "+", 1, false);
+    let Candidates::TaskParent(candidates) = &value.candidates else {
+        panic!("expected task_parent candidates");
+    };
+    let routes: Vec<&str> = candidates
+        .iter()
+        .map(|candidate| candidate.route.as_str())
+        .collect();
+    assert!(
+        !routes
+            .iter()
+            .any(|route| *route == "archive" || *route == "scratch"),
+        "vault-wide plus must not advertise notes outside the capture catalog: {routes:?}"
+    );
+    assert!(!candidates.iter().any(|candidate| {
+        candidate.text.contains("Leftover")
+            || candidate.text.contains("Loose end")
+    }));
+}
+
+#[test]
+fn leading_plus_query_refetch_keeps_token_range_and_full_catalog() {
+    let _guard = day_file_guard();
+    let temp = super::TempDir::new("bob-cli-capture-complete-parent-refetch");
+    let day_file = task_link_fixture(temp.path());
+
+    let filtered = parent_result(temp.path(), &day_file, "+bank", 5, false);
+    assert_eq!(filtered.context, Some(CompletionContext::TaskParent));
+    assert_eq!(filtered.query.as_deref(), Some("bank"));
+    assert_eq!(filtered.replacement, Replacement { start: 0, end: 5 });
+    let Candidates::TaskParent(filtered_rows) = &filtered.candidates else {
+        panic!("expected filtered task_parent candidates");
+    };
+    assert_eq!(filtered_rows.len(), 1);
+    assert_eq!(filtered_rows[0].text, "Call the bank");
+
+    let full = parent_result(temp.path(), &day_file, "+bank", 0, false);
+    assert_eq!(full.query.as_deref(), Some(""));
+    assert_eq!(full.replacement, filtered.replacement);
+    assert_eq!(
+        full.picker.as_ref().unwrap().marker_range,
+        filtered.replacement
+    );
+    let Candidates::TaskParent(full_rows) = &full.candidates else {
+        panic!("expected full task_parent snapshot");
+    };
+    assert!(
+        full_rows.len() > filtered_rows.len(),
+        "refetch at replacement.start must restore the unfiltered catalog"
+    );
+}
+
+#[test]
+fn scoped_missing_and_empty_notes_keep_picker_and_empty_catalog() {
+    let _guard = day_file_guard();
+    let temp = super::TempDir::new("bob-cli-capture-complete-parent-empty");
+    let _day_file = task_link_fixture(temp.path());
+    write_file(&temp.path().join("empty.md"), "---\ntype: [[area]]\n---\n");
+
+    let missing = result_all(temp.path(), "@ghost+", 7);
+    assert_eq!(missing.context, Some(CompletionContext::Task));
+    let picker = missing.picker.as_ref().expect("missing-note picker");
+    assert_eq!(picker.scope, PickerScope::Note);
+    assert_eq!(picker.note_target.as_deref(), Some("ghost.md"));
+    let Candidates::Task(missing_rows) = &missing.candidates else {
+        panic!("expected scoped task candidates");
+    };
+    assert!(missing_rows.is_empty(), "{missing_rows:?}");
+
+    let empty = result_all(temp.path(), "@empty+", 7);
+    assert_eq!(empty.context, Some(CompletionContext::Task));
+    assert_eq!(
+        empty.picker.as_ref().unwrap().note_target.as_deref(),
+        Some("empty.md")
+    );
+    let Candidates::Task(empty_rows) = &empty.candidates else {
+        panic!("expected scoped task candidates");
+    };
+    assert!(empty_rows.is_empty(), "{empty_rows:?}");
+}
+
+#[test]
+fn unicode_duplicates_and_queued_pomodoros_stay_in_catalog() {
+    let _guard = day_file_guard();
+    let temp = super::TempDir::new("bob-cli-capture-complete-parent-unicode");
+    let day_file = task_link_fixture(temp.path());
+    write_file(
+        &temp.path().join("cash.md"),
+        "---\ntype: [[area]]\n---\n\
+         - [*] #task Finish Google Exit Packet! ^goog-exit\n\
+         - [ ] #task Review notes ^cash-review\n\
+         - [ ] #task Café 日本語 ^cafe\n\
+         - [ ] #task A very long task that should stay searchable in the plus picker even when the title wraps past the panel width\n",
+    );
+    write_file(
+        &temp.path().join("sase.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n\
+         - [*] #task Review notes ^sase-review\n\
+         - [*] #task Fix deep bug ^deep-fix\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n\
+         - [ ] () — BUGS\n\t- [[sase#^deep-fix]]\n\
+         - [ ] () — ADMIN\n\t- [[cash#^goog-exit]]\n",
+    );
+
+    let vault = parent_result(temp.path(), &day_file, "+", 1, false);
+    let Candidates::TaskParent(rows) = &vault.candidates else {
+        panic!("expected task_parent candidates");
+    };
+    let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+    assert_eq!(
+        texts.iter().filter(|text| **text == "Review notes").count(),
+        2,
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|text| text.contains("Café 日本語")));
+    assert!(texts
+        .iter()
+        .any(|text| text.starts_with("A very long task")));
+    let queued: Vec<&str> = rows
+        .iter()
+        .filter(|row| {
+            row.group
+                == crate::native::capture_link_tasks::LinkTaskGroup::Queued
+        })
+        .map(|row| row.replacement.as_str())
+        .collect();
+    assert!(queued.contains(&"@sase+deep-fix"), "{queued:?}");
+    assert!(queued.contains(&"@cash+goog-exit"), "{queued:?}");
+
+    let cafe = parent_result(
+        temp.path(),
+        &day_file,
+        "+日本語",
+        "+日本語".len(),
+        false,
+    );
+    let Candidates::TaskParent(cafe_rows) = &cafe.candidates else {
+        panic!("expected unicode query matches");
+    };
+    assert_eq!(cafe_rows.len(), 1);
+    assert_eq!(cafe_rows[0].replacement, "@cash+cafe");
+}
