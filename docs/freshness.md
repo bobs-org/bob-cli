@@ -544,7 +544,7 @@ today on a canonical line is a no-op.
 | bob-navigation-hotkeys | Alt+F and Alt+Shift+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P priority, scheduled, Depends on, delete-property (Ctrl+D), lane and new refresh rows in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
 | task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task | closing (done or cancelled), Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
-| `bob capture`          | `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close) and the `=x` rows that set `[/]` | new tasks on any route, `=x` complete, unlink, start rows, sub-bullets |
+| `bob capture`          | `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `=x` rows that set `[/]`, and an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status) | new tasks on any route (including new tasks with `&` prerequisites), `=x` complete, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an unchanged repeat `&` |
 | Automation             | — | hooks, `projects sync`, `randomize`, `gkeep pull`, `highlights`, `move-done-tasks`, `nightly`, `vault-sync`, `capture-task-id` |
 | `bob freshness seed`   | the one-time cutover (a documented exception) | — |
 | Hand editing           | — | not monitored; edit, then press Alt+F |
@@ -718,7 +718,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 | Surface | Phase |
 | ------- | ----- |
 | `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 5: `list` walks NEW → PROJECTS → PENDING → NEXT → RETURNED → ROTTEN with lane intervals and the Ready-chain project exception) |
-| `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`; capture never stamps trackers) |
+| `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; capture never stamps trackers) |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v5 with the `trackerReview` capability) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS tier walk with `trackerReview` capability and legacy v3/v4 fallback) |
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
