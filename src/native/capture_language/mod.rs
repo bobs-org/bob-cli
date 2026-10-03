@@ -16,6 +16,7 @@
 mod close_log;
 mod close_selection;
 mod completion;
+mod dependencies;
 mod draft;
 mod editor_classify;
 mod editor_model;
@@ -47,6 +48,9 @@ pub(crate) use self::draft::parse_capture_text_with_clip_control;
 pub(crate) use self::draft::split_capture_draft;
 #[cfg(test)]
 pub(crate) use self::draft::split_physical_lines;
+pub(crate) use self::editor_model::DependencyEntry;
+pub(crate) use self::editor_model::DependencyTarget;
+pub(crate) use self::editor_model::DependencyTargetKind;
 pub(crate) use self::editor_model::Diagnostic;
 pub(crate) use self::editor_model::EditorGlobalDestination;
 pub(crate) use self::editor_model::EditorItemParse;

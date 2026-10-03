@@ -201,6 +201,8 @@ fn json_shape_is_stable() {
         candidates: Candidates::PomodoroName(vec![pomodoro_name]),
         block_id: None,
         warnings: Vec::new(),
+        query: None,
+        owner: None,
     })
     .expect("pomodoro json");
 
@@ -239,6 +241,8 @@ fn json_shape_is_stable() {
         }]),
         block_id: None,
         warnings: Vec::new(),
+        query: None,
+        owner: None,
     })
     .expect("json");
 
@@ -283,6 +287,8 @@ fn human_output_is_plain_without_color() {
             }]),
             block_id: None,
             warnings: Vec::new(),
+            query: None,
+            owner: None,
         },
         &styler,
     );

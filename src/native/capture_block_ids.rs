@@ -296,9 +296,10 @@ fn marker_token_range(
 }
 
 /// `link` exactly when Bob's own whole-item parse would classify the item as
-/// `pomodoro_link` once a valid ID fills the part. Substitutes a placeholder
-/// ID into the replacement range and re-runs the editor parser so intent can
-/// never drift from capture semantics.
+/// `pomodoro_link` -- or as a `task_dependency` update to an existing task
+/// (the `&... @route:<id>` colon alias) -- once a valid ID fills the part.
+/// Substitutes a placeholder ID into the replacement range and re-runs the
+/// editor parser so intent can never drift from capture semantics.
 fn detect_colon_intent(
     raw_text: &str,
     cursor: usize,
@@ -324,6 +325,13 @@ fn detect_colon_intent(
         .is_some_and(|item| {
             (item.mode == super::capture_language::EditorMode::PomodoroLink
                 && item.diagnostics.is_empty())
+                || (item.mode
+                    == super::capture_language::EditorMode::TaskDependency
+                    && item.dependency_target.as_ref().is_some_and(|target| {
+                        target.kind
+                            == super::capture_language::DependencyTargetKind::ExistingTask
+                    })
+                    && item.diagnostics.is_empty())
                 || (item.mode
                     == super::capture_language::EditorMode::Incomplete
                     && item.needs

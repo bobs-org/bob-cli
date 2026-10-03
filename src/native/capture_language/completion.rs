@@ -1,5 +1,6 @@
 //! Cursor completion for capture markers.
 
+use super::dependencies::*;
 use super::draft::*;
 use super::editor_classify::*;
 use super::editor_model::*;
@@ -27,6 +28,11 @@ pub(crate) enum CompletionContext {
     TaskSection,
     ActiveTask,
     TaskLink,
+    /// An `&` prerequisite modifier: vault-wide task search whose accept
+    /// inserts a Bob-authored `&note:block-id` replacement. The candidate
+    /// scan lands in the discovery phase; the lexical field (query plus the
+    /// exact sigil-inclusive replacement range) is contract.
+    TaskDependency,
     WikilinkNote,
     WikilinkHeading,
     WikilinkBlock,
@@ -99,6 +105,67 @@ pub(super) fn task_link_completion_field_at(
         block_id: None,
         query,
         replacement: (token.start, token.end),
+    })
+}
+
+/// Complete an `&` prerequisite modifier: the cursor inside a directive
+/// complete or partial modifier (leading or trailing run, outside
+/// protected spans) yields the `task_dependency` context. The query is the
+/// text after the sigil up to the cursor (one opening quote stripped,
+/// `\"`/`\\` decoded); the replacement covers exactly the whole modifier
+/// including its sigil and quoted note, so accepting rewrites the query
+/// into Bob's canonical `&note:block-id` form and refetching at
+/// `replacement.start` returns the unfiltered snapshot. Literal mid-line
+/// ampersands, `\&` escapes, and malformed modifiers yield nothing.
+pub(super) fn dependency_completion_field_at(
+    line: &RawLine<'_>,
+    cursor: usize,
+    parent: bool,
+) -> Option<CompletionField> {
+    if cursor < line.start || cursor > line.end {
+        return None;
+    }
+    let scanned = scan_line_dependencies(line.text, line.start);
+    let target = scanned.iter().find(|scan| {
+        !matches!(
+            scan,
+            ScannedDependency::Escaped { .. } | ScannedDependency::Invalid(_)
+        ) && scan.start() <= cursor
+            && cursor <= scan.end()
+    })?;
+    // The modifier must be directive (a marker-run member), not literal
+    // mid-line prose that merely looks like one.
+    let tokens = tokenize_line_with_spans(line);
+    let (_, found) =
+        extract_line_dependencies(tokens, line.text, line.start, parent, true);
+    let directive = found
+        .entries
+        .iter()
+        .any(|entry| entry.start <= cursor && cursor <= entry.end)
+        || found
+            .partials
+            .iter()
+            .any(|(start, end)| *start <= cursor && cursor <= *end);
+    if !directive {
+        return None;
+    }
+    let (start, end) = (target.start(), target.end());
+    // A cursor just before the sigil refetches the full list with an empty
+    // query; slicing past the sigil would invert the range, so spell that
+    // case directly (mirroring the `:` picker contract).
+    let typed = if cursor == start {
+        String::new()
+    } else {
+        let slice =
+            line.text.get(start + 1 - line.start..cursor - line.start)?;
+        decode_dependency_query(slice)
+    };
+    Some(CompletionField {
+        context: CompletionContext::TaskDependency,
+        route: None,
+        block_id: None,
+        query: typed,
+        replacement: (start, end),
     })
 }
 
@@ -396,8 +463,29 @@ pub(crate) fn completion_field_at(
         }
     };
 
+    // A cursor inside an `&note:block-id` modifier (complete or still
+    // typed) completes vault-wide prerequisite tasks instead of offering
+    // `@` route completion. This runs before marker completion so the
+    // modifier's own range wins over any neighboring marker.
+    if let Some(field) =
+        dependency_completion_field_at(&scan_line, cursor, leading)
+    {
+        return Some(field);
+    }
+
     let mut tokens = tokenize_line_with_spans(&scan_line);
     take_global_declarations(&mut tokens);
+    // Leading/trailing `&...` modifiers are not marker candidates: strip
+    // them with the shared extractor (before terminal markers, exactly
+    // like the editor parse) so an interleaved marker still completes.
+    let (stripped, _) = extract_line_dependencies(
+        tokens,
+        scan_line.text,
+        scan_line.start,
+        leading,
+        true,
+    );
+    tokens = stripped;
     extract_terminal_markers(&mut tokens, true);
 
     let index = completion_marker_index(&tokens, leading)?;
@@ -490,7 +578,12 @@ fn project_task_token_at<'a>(
         end: line.end,
     };
     let child_tokens = tokenize_line_with_spans(&child_line);
-    let child_parse = parse_editor_line(child_tokens, false);
+    let child_parse = parse_editor_line(
+        child_tokens,
+        child_line.text,
+        child_line.start,
+        false,
+    );
     let token = child_parse.body_tokens.last()?;
     // The lexer decides what counts as a trailing task-ID token; prose
     // (`:)`, `10:30`) yields nothing.
@@ -579,7 +672,12 @@ pub(crate) fn project_task_block_id_detail(
             end: child.raw.end,
         };
         let child_tokens = tokenize_line_with_spans(&child_line);
-        let child_parse = parse_editor_line(child_tokens, false);
+        let child_parse = parse_editor_line(
+            child_tokens,
+            child_line.text,
+            child_line.start,
+            false,
+        );
         if let ChildTaskOutcome::Accept { id, stripped, .. } = pass.check_child(
             &child_parse.body,
             authored.depth,
@@ -608,7 +706,12 @@ pub(crate) fn project_task_block_id_detail(
         end: current.raw.end,
     };
     let current_tokens = tokenize_line_with_spans(&current_line);
-    let current_parse = parse_editor_line(current_tokens, false);
+    let current_parse = parse_editor_line(
+        current_tokens,
+        current_line.text,
+        current_line.start,
+        false,
+    );
     let stripped = strip_task_id_suffix(&current_parse.body);
     Some(ProjectTaskBlockIdDetail {
         stem: info.stem,
@@ -644,7 +747,9 @@ pub(super) fn has_previous_first_level_authored_item(
             return false;
         }
         let tokens = tokenize_with_spans(&normalized);
-        !parse_editor_line(tokens, false).body.is_empty()
+        !parse_editor_line(tokens, &normalized, 0, false)
+            .body
+            .is_empty()
     })
 }
 

@@ -42,6 +42,9 @@ pub(crate) enum SpanKind {
     Schedule,
     Priority,
     Clipboard,
+    DependencySigil,
+    DependencyNote,
+    DependencyBlockId,
     InteractivePlaceholder,
     WikilinkDelimiter,
     WikilinkTarget,
@@ -89,6 +92,9 @@ impl SpanKind {
             Self::Schedule => "schedule",
             Self::Priority => "priority",
             Self::Clipboard => "clipboard",
+            Self::DependencySigil => "dependency_sigil",
+            Self::DependencyNote => "dependency_note",
+            Self::DependencyBlockId => "dependency_block_id",
             Self::InteractivePlaceholder => "interactive_placeholder",
             Self::WikilinkDelimiter => "wikilink_delimiter",
             Self::WikilinkTarget => "wikilink_target",
@@ -154,6 +160,9 @@ pub(crate) enum EditorMode {
     PomodoroClose,
     /// Whole-item `=`/`=<X>` start.
     PomodoroStart,
+    /// A dependency-only action: prerequisites for an explicitly selected
+    /// existing task, with no new task.
+    TaskDependency,
     Incomplete,
 }
 
@@ -173,6 +182,7 @@ impl EditorMode {
             Self::PomodoroLink => "pomodoro_link",
             Self::PomodoroClose => "pomodoro_close",
             Self::PomodoroStart => "pomodoro_start",
+            Self::TaskDependency => "task_dependency",
             Self::Incomplete => "incomplete",
         }
     }
@@ -193,6 +203,10 @@ pub(crate) enum Need {
     PomodoroCloseTask,
     PomodoroCloseLogText,
     PomodoroStartTask,
+    /// A prerequisite picker is still open: an `&` modifier is partial.
+    TaskDependency,
+    /// No dependent was named: add task text or `@note+task-id`.
+    DependencyTarget,
 }
 
 impl Need {
@@ -210,8 +224,58 @@ impl Need {
             Self::PomodoroCloseTask => "pomodoro_close_task",
             Self::PomodoroCloseLogText => "pomodoro_close_log_text",
             Self::PomodoroStartTask => "pomodoro_start_task",
+            Self::TaskDependency => "task_dependency",
+            Self::DependencyTarget => "dependency_target",
         }
     }
+}
+
+/// One complete `&note:block-id` modifier on an item, in source order.
+/// Additive schema-version-1 data: the discovery and writer phases add
+/// resolution results without changing these lexical fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DependencyEntry {
+    /// Exact typed text, sigil included.
+    pub(crate) raw: String,
+    /// Vault-relative note identity (quotes removed, escapes decoded).
+    pub(crate) note: String,
+    /// Prerequisite block ID.
+    pub(crate) block_id: String,
+    /// Whether the note was a `"quoted component"`.
+    pub(crate) quoted: bool,
+    /// Whole-modifier range, sigil included.
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+/// Which task owns an item's dependency modifiers: a task this capture
+/// creates (`new_task`) or an explicitly selected existing task
+/// (`existing_task`). Absent when no dependent is named yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DependencyTarget {
+    pub(crate) kind: DependencyTargetKind,
+    /// Resolved route for the dependent, when one is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) route: Option<String>,
+    /// Existing dependent's block ID, when one is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) block_id: Option<String>,
+    /// Whether the owner came from an inherited `@@route+id` declaration
+    /// rather than an explicit item marker. Omitted when false.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(crate) inherited: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Ownership vocabulary for [`DependencyTarget`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DependencyTargetKind {
+    NewTask,
+    ExistingTask,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,6 +303,11 @@ pub(crate) struct EditorParse {
     /// whole item carries one. `None` for every older input, so
     /// version-tolerant readers see no change. Purely lexical.
     pub(crate) pomodoro_close: Option<PomodoroCloseSpec>,
+    /// Complete `&note:block-id` modifiers on the first item, in source
+    /// order. Empty for every older input.
+    pub(crate) dependencies: Vec<DependencyEntry>,
+    /// Ownership of the first item's modifiers, when a dependent is named.
+    pub(crate) dependency_target: Option<DependencyTarget>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Normalized authored-child bodies plus semantic depth for every other
@@ -279,6 +348,10 @@ pub(crate) struct EditorItemParse {
     pub(crate) pomodoro_adjust: Option<PomodoroAdjustSpec>,
     pub(crate) pomodoro_shift: Option<PomodoroShiftSpec>,
     pub(crate) pomodoro_close: Option<PomodoroCloseSpec>,
+    /// Complete `&note:block-id` modifiers on this item, in source order.
+    pub(crate) dependencies: Vec<DependencyEntry>,
+    /// Ownership of this item's modifiers, when a dependent is named.
+    pub(crate) dependency_target: Option<DependencyTarget>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,

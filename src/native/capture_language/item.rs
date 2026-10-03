@@ -2,6 +2,7 @@
 
 use super::close_log::*;
 use super::close_selection::*;
+use super::dependencies::*;
 use super::draft::*;
 use super::editor_parse::*;
 use super::line::*;
@@ -37,6 +38,15 @@ pub(super) fn parse_capture_item<'a>(
     let parent_normalized = normalize_task_text(parent_line.raw.text);
     if parent_normalized.is_empty() {
         return Err(missing_text_error());
+    }
+    // Recognized `&note:block-id` dependency modifiers are never
+    // executable in the contract phase: they fail closed with an explicit
+    // temporary error before any other item parser, so the whole batch
+    // rolls back instead of capturing without the prerequisites.
+    let item_dependencies = scan_item_dependencies(item, parse_clip_markers);
+    if !item_dependencies.is_empty() {
+        let raw = item_dependencies.first_raw().unwrap_or("&...");
+        return Err(unsupported_dependency_error(raw));
     }
     // A `:` picker query is never executable: it rejects with a teaching
     // error before any other item parser, so the whole batch rolls back.

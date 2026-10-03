@@ -71,7 +71,8 @@ pub(super) fn build_result(
             | CompletionContext::Task
             | CompletionContext::TaskSection
             | CompletionContext::ActiveTask
-            | CompletionContext::TaskLink => {
+            | CompletionContext::TaskLink
+            | CompletionContext::TaskDependency => {
                 unreachable!("link field context")
             }
         };
@@ -88,6 +89,8 @@ pub(super) fn build_result(
             candidates,
             block_id: None,
             warnings: index.warnings(),
+            query: None,
+            owner: None,
         });
     }
 
@@ -154,6 +157,8 @@ pub(super) fn build_result(
             candidates,
             block_id: Some(block_field),
             warnings,
+            query: None,
+            owner: None,
         });
     }
 
@@ -207,12 +212,33 @@ pub(super) fn build_result(
         CompletionContext::TaskLink => {
             task_link_candidates(bob_dir, &field.query)
         }
+        CompletionContext::TaskDependency => {
+            // Contract phase: the lexical field (context, query, and the
+            // exact sigil-inclusive replacement range) is frozen, but the
+            // vault-wide prerequisite scan lands in the discovery phase,
+            // so every candidate list is empty until then.
+            (Candidates::Dependency(Vec::new()), Vec::new())
+        }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock => {
             unreachable!("marker field context")
         }
     };
+
+    // The `task_dependency` picker never parses quoted note components
+    // itself: Bob serves the decoded query plus the lexical owner of the
+    // modifier under the cursor. Every other context leaves both absent.
+    let (query, owner) =
+        if matches!(field.context, CompletionContext::TaskDependency) {
+            (
+                Some(field.query.clone()),
+                capture_language::editor_item_at(raw_text, cursor)
+                    .and_then(|item| item.dependency_target),
+            )
+        } else {
+            (None, None)
+        };
 
     Ok(CaptureCompleteResult {
         ok: true,
@@ -226,5 +252,7 @@ pub(super) fn build_result(
         candidates,
         block_id: None,
         warnings,
+        query,
+        owner,
     })
 }

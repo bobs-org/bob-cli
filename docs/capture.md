@@ -25,6 +25,7 @@ workflow guide.
   - [Starting the session atomically](#starting-the-session-atomically)
   - [Linking and starting existing tasks](#linking-and-starting-existing-tasks)
   - [Picking any open task with ':'](#picking-any-open-task-with-)
+  - [Adding prerequisites with '&'](#adding-prerequisites-with-)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
   - [Starting a named Pomodoro](#starting-a-named-pomodoro)
@@ -70,6 +71,9 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); `=<X>` starts the resolved session atomically |
 | `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks |
 | `:<query>` | Incomplete: pick any open task to link (`capture-parse` needs `task_link`); accepting inserts `@route:block-id`, and execution never captures it |
+| `&note:block-id` | Prerequisite task link: the captured (or explicitly selected) task depends on `note.md`'s `^block-id` task; nested notes use `&projects/foo:bar`, notes with spaces use `&"Shopping List":bar` |
+| `&`, `&query`, `&note:` | Incomplete: the prerequisite picker is still open (`capture-parse` needs `task_dependency`); execution refuses with a teaching error |
+| `&note:block-id` with no other text | Incomplete: a prerequisite is selected but no dependent is named (`capture-parse` needs `dependency_target`); execution never creates an ampersand-named task |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends by 25 minutes, `-` shortens by 5 minutes; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15 minutes later, `--` moves 5 minutes earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
@@ -844,6 +848,129 @@ using the candidate's `route` and `ref`, then capture the link with an
 optional `=` as usual. Linking retires a single future
 `[scheduled::YYYY-MM-DD]` exactly like a typed link; candidates flag that
 with `pulls_forward: true` and the `scheduled` date.
+
+### Adding prerequisites with '&'
+
+`&note:block-id` means "the task I am capturing or explicitly targeting
+depends on the task at `note.md` / `^block-id`". It adds a plain task
+dependency link (normally `[[note#^block-id]]`) to the dependent's managed
+`⛓️ **DEPENDS ON:**` child line (see `docs/task-dependencies.md`). The note
+is a vault-relative identity, not a capture destination: simple root notes
+use `&foo:bar`, nested notes use `&projects/foo:bar`, and notes with
+whitespace or reserved punctuation use a quoted component such as
+`&"Shopping List":bar` (inside quotes only `\"` and `\\` are escapes; case
+and Unicode are preserved). Block IDs keep Bob's existing rules. The note
+component is extensionless, like current routes; an explicit relative path
+resolves first, otherwise a unique basename. Absolute paths, empty
+components, and `.`/`..` are rejected.
+
+Modifiers sit at the leading or trailing marker positions of the parent
+line, interleaving with destination, schedule, priority, and clipboard
+markers in either order, or close an authored child line (a child holding
+only modifiers contributes no empty bullet). An explicit `@route+task-id`
+selects the existing parent even with child-bullet text; a bare solo
+`@route:task-id` alongside modifiers is a narrow alias for the same owner.
+Without `&`, both spellings keep their existing link/toggle meanings.
+
+| Draft item | Reading |
+| --- | --- |
+| `Buy Groceries! &foo:bar` | New inbox task depending on `foo.md#^bar` (`task` + `new_task` target) |
+| `Buy Groceries! @home &foo:bar &cash:budget` | New `home.md` task with two prerequisites, in typed order |
+| `&foo:bar @body+excercise` | Add the dependency to existing `body.md#^excercise` (`task_dependency`, no new task) |
+| `&foo:bar @body:excercise` | Same owner via the narrow colon alias (only when bare: no `#name`, `=…`, or `!`) |
+| `Waiting for approval @body+excercise &foo:bar` | Keep the sub-bullet prose, add the dependency to its explicit parent |
+| `&foo:bar` | Incomplete: needs `dependency_target` ("add task text or `@note+task-id`") |
+| `&`, `Buy Groceries! &fo`, `Buy Groceries! &foo:` | Incomplete: needs `task_dependency` (the picker stays open) |
+| `Research & Development`, `R&D research` | Literal text: mid-word and between-words `&` is never a directive |
+| `Buy Groceries! \&foo:bar` | Literal task text `Buy Groceries! &foo:bar` (only the `\` is consumed) |
+| `&foo:bar` inside `[[…]]` or `` `…` `` | Literal text: wikilinks and code are never scanned |
+
+`capture-parse` reports each modifier in per-item `dependencies` (`raw`,
+decoded `note` and `block_id`, sigil-inclusive `range`) with
+`dependency_sigil`, `dependency_note`, and `dependency_block_id` spans, plus
+`dependency_target` (`new_task` or `existing_task` ownership). A complete
+dependency-only action reports mode `task_dependency`; new-task and
+sub-bullet captures keep their mode and gain the modifier fields. Frozen
+v1 examples (schema version 1, additive fields only):
+
+```json
+// bob capture-parse -f json -- 'Buy Groceries! @home &foo:bar &cash:budget'
+{
+  "body": "Buy Groceries!",
+  "mode": "task",
+  "route": "home",
+  "needs": [],
+  "dependencies": [
+    {
+      "raw": "&foo:bar",
+      "note": "foo",
+      "block_id": "bar",
+      "quoted": false,
+      "range": { "start": 21, "end": 29 }
+    },
+    {
+      "raw": "&cash:budget",
+      "note": "cash",
+      "block_id": "budget",
+      "quoted": false,
+      "range": { "start": 30, "end": 42 }
+    }
+  ],
+  "dependency_target": { "kind": "new_task", "route": "home" }
+}
+```
+
+```json
+// bob capture-parse -f json -- '&foo:bar @body+excercise'
+{
+  "body": "",
+  "mode": "task_dependency",
+  "route": "body",
+  "block_id": "excercise",
+  "needs": [],
+  "dependencies": [
+    {
+      "raw": "&foo:bar",
+      "note": "foo",
+      "block_id": "bar",
+      "quoted": false,
+      "range": { "start": 0, "end": 8 }
+    }
+  ],
+  "dependency_target": {
+    "kind": "existing_task",
+    "route": "body",
+    "block_id": "excercise"
+  }
+}
+```
+
+`capture-complete` serves context `task_dependency` with a replacement range
+covering exactly the active modifier (sigil and quoted note included), the
+decoded `query`, the lexical `owner`, and the candidate list (empty until
+the discovery phase populates the vault-wide scan):
+
+```json
+// bob capture-complete -b VAULT -c 19 -f json -- 'Buy Groceries! &foo'
+{
+  "cursor": 19,
+  "replacement": { "start": 15, "end": 19 },
+  "context": "task_dependency",
+  "candidates": [],
+  "query": "foo",
+  "owner": { "kind": "new_task" }
+}
+```
+
+Contract status: parsing, spans, needs, completion ranges, and the
+candidate wire shape are frozen above. `bob capture` recognizes the
+modifiers but refuses them with an explicit unsupported-action error until
+the writer phase executes them — a draft with prerequisites never captures
+without them. Section bullets, project/note constructions, Pomodoro ledger
+links, and session operators reject the modifiers with a targeted
+diagnostic, as do suffixed (`#name`, `=…`) or `!`-toggled dependency-only
+owners. ID-less and guarded candidates, the Add block ID flow, final
+previews, and status effects land in the discovery and writer phases.
 
 ### Plan budget and strict mode
 

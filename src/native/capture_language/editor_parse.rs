@@ -1,5 +1,6 @@
 //! Core editor line, global, and item parsing.
 
+use super::dependencies::*;
 use super::draft::*;
 use super::editor_classify::*;
 use super::editor_model::*;
@@ -41,6 +42,8 @@ pub(super) struct LineEditorParse<'a> {
     pub(super) terminal_spans: Vec<Span>,
     pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) has_destination_marker: bool,
+    /// Dependency modifiers stripped from this line's marker runs.
+    pub(super) dependencies: LineDependencies,
 }
 
 /// Resolve one line's already offset-tagged tokens exactly like
@@ -49,14 +52,25 @@ pub(super) struct LineEditorParse<'a> {
 /// set for the parent line.
 pub(super) fn parse_editor_line<'a>(
     mut tokens: Vec<Token<'a>>,
+    line_text: &str,
+    line_base: usize,
     leading: bool,
 ) -> LineEditorParse<'a> {
     let declarations = take_global_declarations(&mut tokens);
+    // Dependency modifiers interleave with destination and
+    // schedule/priority/clipboard markers in either order, so they leave
+    // the token stream before terminal-marker extraction and marker
+    // selection see it. The remaining tokens resolve exactly like a draft
+    // without them.
+    let (stripped, dependencies) =
+        extract_line_dependencies(tokens, line_text, line_base, leading, true);
+    tokens = stripped;
     let (_, marker_spans) = extract_terminal_markers(&mut tokens, true);
-    let terminal_spans: Vec<Span> = marker_spans
+    let mut terminal_spans: Vec<Span> = marker_spans
         .into_iter()
         .map(|(kind, start, end)| Span { start, end, kind })
         .collect();
+    terminal_spans.extend(dependencies.spans.iter().copied());
 
     let mut diagnostics = Vec::new();
     if let Some(diagnostic) = legacy_bullet_marker_diagnostic(&tokens) {
@@ -84,9 +98,16 @@ pub(super) fn parse_editor_line<'a>(
         .filter(|(index, _)| Some(*index) != marker_index)
         .map(|(_, token)| *token)
         .collect();
+    // A consumed `\&` escape leaves its visible `&...` in task text.
     let body = body_tokens
         .iter()
-        .map(|token| token.text)
+        .map(|token| {
+            unescape_dependency_text(
+                token.text,
+                token.start,
+                &dependencies.escapes,
+            )
+        })
         .collect::<Vec<_>>()
         .join(" ");
 
@@ -108,6 +129,7 @@ pub(super) fn parse_editor_line<'a>(
         terminal_spans,
         diagnostics,
         has_destination_marker,
+        dependencies,
     }
 }
 
@@ -283,6 +305,8 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: None,
+            dependencies: Vec::new(),
+            dependency_target: None,
             spans,
             diagnostics: global_diagnostics,
             sub_bullets: Vec::new(),
@@ -301,6 +325,8 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
     let pomodoro_adjust = first.pomodoro_adjust.clone();
     let pomodoro_shift = first.pomodoro_shift.clone();
     let pomodoro_close = first.pomodoro_close.clone();
+    let dependencies = first.dependencies.clone();
+    let dependency_target = first.dependency_target.clone();
     let sub_bullets = first.sub_bullets.clone();
     let mut spans = global_spans;
     spans.extend(items.iter().flat_map(|item| item.spans.iter().copied()));
@@ -323,6 +349,8 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         pomodoro_adjust,
         pomodoro_shift,
         pomodoro_close,
+        dependencies,
+        dependency_target,
         spans,
         diagnostics,
         sub_bullets,
@@ -394,11 +422,53 @@ pub(super) fn inherit_editor_global_destination(
     if item.has_local_destination {
         return;
     }
+    // Dependency needs survive inheritance: the modifiers are item-local
+    // even when their dependent comes from the declaration.
+    let had_task_dependency_need = item.needs.contains(&Need::TaskDependency);
+    let had_target_need = item.needs.contains(&Need::DependencyTarget);
     item.mode = global.mode;
     item.route = global.route.clone();
     item.section = None;
     item.block_id = global.block_id.clone();
     item.needs = global.needs.clone();
+    if item.dependencies.is_empty()
+        && !had_task_dependency_need
+        && !had_target_need
+    {
+        return;
+    }
+    if had_task_dependency_need && !item.needs.contains(&Need::TaskDependency) {
+        item.needs.push(Need::TaskDependency);
+    }
+    if let Some(block_id) = global.block_id.clone() {
+        // `@@route+id` selects the inherited existing parent: the item's
+        // modifiers apply to it.
+        item.dependency_target = Some(DependencyTarget {
+            kind: DependencyTargetKind::ExistingTask,
+            route: global.route.clone(),
+            block_id: Some(block_id),
+            inherited: true,
+        });
+        item.needs.retain(|need| *need != Need::DependencyTarget);
+        if item.body.is_empty() {
+            item.mode = EditorMode::TaskDependency;
+        }
+    } else if let Some(target) = item.dependency_target.as_mut() {
+        // A bare `@@route` routes a new dependent without naming a parent.
+        if target.kind == DependencyTargetKind::NewTask
+            && target.route.is_none()
+        {
+            target.route = global.route.clone();
+        }
+    } else if had_target_need {
+        // Still ownerless: a bare route never names the dependent.
+        if item.body.is_empty() {
+            item.mode = EditorMode::Incomplete;
+        }
+        if !item.needs.contains(&Need::DependencyTarget) {
+            item.needs.push(Need::DependencyTarget);
+        }
+    }
 }
 
 pub(super) struct EditorItemOutcome<'a> {
@@ -418,6 +488,134 @@ pub(super) fn rekind_sub_bullet_spans(spans: &mut [Span]) {
             other => other,
         };
     }
+}
+
+/// Build an `existing_task` dependency target when the item resolved an
+/// explicit existing-task owner. `None` (no target) when the route or
+/// block ID is still unknown.
+fn existing_dependency_target(
+    route: &Option<String>,
+    block_id: &Option<String>,
+) -> Option<DependencyTarget> {
+    match (route, block_id) {
+        (Some(route), Some(block_id)) => Some(DependencyTarget {
+            kind: DependencyTargetKind::ExistingTask,
+            route: Some(route.clone()),
+            block_id: Some(block_id.clone()),
+            inherited: false,
+        }),
+        _ => None,
+    }
+}
+
+/// Anticipate the narrow colon alias while its `@route:` owner is still
+/// being typed: a known route with no block ID yet, on a bare colon-link
+/// marker, will resolve to an existing task once the ID lands.
+fn pending_colon_dependency_target(
+    route: &Option<String>,
+    marker_text: Option<&str>,
+) -> Option<DependencyTarget> {
+    let marker = marker_text?;
+    if !marker.starts_with('@')
+        || !marker.contains(':')
+        || marker.contains('+')
+        || marker.contains('#')
+        || marker.contains('=')
+        || marker.contains('!')
+    {
+        return None;
+    }
+    Some(DependencyTarget {
+        kind: DependencyTargetKind::ExistingTask,
+        route: route.clone(),
+        block_id: None,
+        inherited: false,
+    })
+}
+
+fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
+    match mode {
+        EditorMode::Bullet => "section-bullet",
+        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote => {
+            "project-note"
+        }
+        EditorMode::PomodoroNote => "Pomodoro-note",
+        EditorMode::PomodoroAdjust | EditorMode::PomodoroShift => {
+            "Pomodoro session-operator"
+        }
+        EditorMode::PomodoroClose => "Pomodoro-close",
+        EditorMode::PomodoroStart => "Pomodoro-start",
+        _ => "Pomodoro-ledger-link",
+    }
+}
+
+fn dependency_unsupported_target_diagnostic(
+    mode: EditorMode,
+    range: Option<(usize, usize)>,
+) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Error,
+        code: "dependency_unsupported_target",
+        message: format!(
+            "task dependencies need a task owner: '&note:block-id' cannot \
+             attach to a {} capture (add task text or '@note+task-id' for \
+             the dependent)",
+            dependency_owner_mode_word(mode)
+        ),
+        range,
+    }
+}
+
+fn invalid_dependency_target_diagnostic(
+    marker_text: &str,
+    range: Option<(usize, usize)>,
+) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Error,
+        code: "invalid_dependency_target",
+        message: format!(
+            "dependency-only '{marker_text}' must be bare: it mixes a \
+             Pomodoro action with '&note:block-id' (capture them as \
+             separate blank-line items)"
+        ),
+        range,
+    }
+}
+
+/// Attach a dependency rejection to an operator item (Pomodoro close,
+/// start, adjustment, or shift) that claimed the draft before the generic
+/// marker pass could: the modifiers are listed, malformed ones diagnosed,
+/// and the combination refused with a targeted diagnostic.
+pub(super) fn attach_operator_dependency_rejection<'a>(
+    mut outcome: EditorItemOutcome<'a>,
+    item: &CaptureItem<'a>,
+) -> EditorItemOutcome<'a> {
+    let found = scan_item_dependencies(item, true);
+    if found.is_empty() {
+        return outcome;
+    }
+    outcome.item.dependencies = found.dependency_entries();
+    for invalid in &found.invalid {
+        outcome.item.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "invalid_dependency",
+            message: invalid.message.clone(),
+            range: Some((invalid.start, invalid.end)),
+        });
+    }
+    outcome
+        .item
+        .diagnostics
+        .push(dependency_unsupported_target_diagnostic(
+            outcome.item.mode,
+            None,
+        ));
+    if found.has_partial()
+        && !outcome.item.needs.contains(&Need::TaskDependency)
+    {
+        outcome.item.needs.push(Need::TaskDependency);
+    }
+    outcome
 }
 
 /// A `:` task-link picker query: a single-line, single-token item starting
@@ -446,6 +644,8 @@ pub(super) fn parse_editor_task_link_item<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: None,
+            dependencies: Vec::new(),
+            dependency_target: None,
             spans: vec![Span {
                 start: token.start,
                 end: token.end,
@@ -467,10 +667,10 @@ pub(super) fn parse_editor_item<'a>(
         return task_link;
     }
     if let Some(close) = parse_editor_close_item(item) {
-        return close;
+        return attach_operator_dependency_rejection(close, item);
     }
     if let Some(adjustment) = parse_editor_adjust_item(item) {
-        return adjustment;
+        return attach_operator_dependency_rejection(adjustment, item);
     }
     let mut spans: Vec<Span> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -482,7 +682,12 @@ pub(super) fn parse_editor_item<'a>(
     let parent_item_line = item.lines.first().expect("nonempty item");
     let parent_line = parent_item_line.raw;
     let parent_tokens = tokenize_line_with_spans(&parent_line);
-    let parent_parse = parse_editor_line(parent_tokens, true);
+    let parent_parse = parse_editor_line(
+        parent_tokens,
+        parent_line.text,
+        parent_line.start,
+        true,
+    );
     declarations.extend(global_declarations_from_tokens(
         parent_parse.declarations,
         parent_item_line.line_number,
@@ -490,6 +695,12 @@ pub(super) fn parse_editor_item<'a>(
     seen.absorb_terminal_spans(&parent_parse.terminal_spans, &mut diagnostics);
     spans.extend(parent_parse.terminal_spans);
     diagnostics.extend(parent_parse.diagnostics);
+
+    // Every `&note:block-id` modifier on this item, across its parent and
+    // authored-child lines. Ownership (`dependency_target`), incomplete
+    // needs, and mode rejections resolve once the item's marker is known.
+    let mut item_dependencies = ItemDependencySet::default();
+    item_dependencies.absorb(&parent_parse.dependencies);
 
     let caret = classify_caret_item(item, parent_line);
 
@@ -584,7 +795,13 @@ pub(super) fn parse_editor_item<'a>(
             end: raw.end,
         };
         let child_tokens = tokenize_line_with_spans(&child_line);
-        let child_parse = parse_editor_line(child_tokens, false);
+        let child_parse = parse_editor_line(
+            child_tokens,
+            child_line.text,
+            child_line.start,
+            false,
+        );
+        item_dependencies.absorb(&child_parse.dependencies);
         declarations.extend(global_declarations_from_tokens(
             child_parse.declarations,
             line_number,
@@ -624,12 +841,17 @@ pub(super) fn parse_editor_item<'a>(
         }
 
         if child_parse.body.is_empty() {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                code: "empty_child_after_markers",
-                message: empty_child_after_markers_error(line_number),
-                range: Some((raw.start, raw.end)),
-            });
+            // A child holding only dependency modifiers contributes no
+            // empty bullet: its prerequisites belong to the item's
+            // dependent. Any other emptied child stays an error.
+            if child_parse.dependencies.stripped_tokens == 0 {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "empty_child_after_markers",
+                    message: empty_child_after_markers_error(line_number),
+                    range: Some((raw.start, raw.end)),
+                });
+            }
         } else {
             child_task_tokens.push(child_parse.body_tokens.last().copied());
             child_task_lines.push(line_number);
@@ -910,6 +1132,7 @@ pub(super) fn parse_editor_item<'a>(
     // `pomodoro_link` with an `invalid_pomodoro_link` diagnostic. The `^`
     // token replaces any ordinary marker the generic pass resolved, and a
     // `@@` declaration never applies to the item.
+    let has_caret_item = caret.is_some();
     if let Some(caret) = caret {
         local_destination_markers.clear();
         local_destination_marker = None;
@@ -1242,6 +1465,120 @@ pub(super) fn parse_editor_item<'a>(
         }
     }
 
+    // Dependency ownership (`dependency_target`), incomplete needs, and
+    // mode-specific rejections. An explicit `@route+id` selects the
+    // existing parent even with child-bullet text; a bare solo
+    // `@route:id` alongside modifiers is the narrow colon alias for the
+    // same; anything else with a dependent resolves to a new task (or an
+    // ownerless incomplete), while section bullets, note constructions,
+    // ledger links, and session operators reject the modifiers.
+    let mut dependency_target: Option<DependencyTarget> = None;
+    if !item_dependencies.is_empty() {
+        for invalid in &item_dependencies.invalid {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_dependency",
+                message: invalid.message.clone(),
+                range: Some((invalid.start, invalid.end)),
+            });
+        }
+        let parent_marker = parent_parse.marker.as_ref();
+        let aliased = mode == EditorMode::PomodoroLink
+            && !has_caret_item
+            && parent_marker.is_some_and(|marker| {
+                marker.mode == EditorMode::PomodoroTask
+                    && marker.section.is_none()
+                    && marker.pomodoro_start.is_none()
+                    && marker.pomodoro_close.is_none()
+            })
+            && body.is_empty()
+            && sub_bullets.is_empty();
+        if has_caret_item {
+            diagnostics
+                .push(dependency_unsupported_target_diagnostic(mode, None));
+        } else if has_explicit_toggle {
+            diagnostics.push(invalid_dependency_target_diagnostic(
+                local_destination_marker.as_deref().unwrap_or("@route+id"),
+                spans.iter().find_map(|span| {
+                    (span.kind == SpanKind::TaskToggleExplicitToggle)
+                        .then_some((span.start, span.end))
+                }),
+            ));
+        } else if mode == EditorMode::TaskToggle
+            && parent_marker.is_some_and(|marker| {
+                matches!(marker.mode, EditorMode::SubBullet)
+            })
+            && let Some(target) = existing_dependency_target(&route, &block_id)
+        {
+            mode = EditorMode::TaskDependency;
+            if let Some(index) = own_local_destination_marker_index {
+                local_destination_markers[index].mode =
+                    EditorMode::TaskDependency;
+            }
+            dependency_target = Some(target);
+        } else if aliased
+            && let Some(target) = existing_dependency_target(&route, &block_id)
+        {
+            mode = EditorMode::TaskDependency;
+            if let Some(index) = own_local_destination_marker_index {
+                local_destination_markers[index].mode =
+                    EditorMode::TaskDependency;
+            }
+            dependency_target = Some(target);
+        } else if mode == EditorMode::PomodoroLink {
+            diagnostics.push(invalid_dependency_target_diagnostic(
+                local_destination_marker.as_deref().unwrap_or("@route:id"),
+                local_destination_markers
+                    .first()
+                    .map(|marker| (marker.start, marker.end)),
+            ));
+        } else if mode == EditorMode::SubBullet
+            && let Some(target) = existing_dependency_target(&route, &block_id)
+        {
+            dependency_target = Some(target);
+        } else if mode == EditorMode::Incomplete
+            && body.is_empty()
+            && block_id.is_none()
+            && let Some(pending) = pending_colon_dependency_target(
+                &route,
+                parent_parse.marker_text.as_deref(),
+            )
+        {
+            dependency_target = Some(pending);
+        } else if matches!(mode, EditorMode::Task | EditorMode::PomodoroTask) {
+            if body.is_empty() && !has_local_destination {
+                mode = EditorMode::Incomplete;
+            } else {
+                dependency_target = Some(DependencyTarget {
+                    kind: DependencyTargetKind::NewTask,
+                    route: route.clone(),
+                    block_id: block_id.clone(),
+                    inherited: false,
+                });
+            }
+        } else if mode != EditorMode::Incomplete {
+            diagnostics
+                .push(dependency_unsupported_target_diagnostic(mode, None));
+        }
+        if item_dependencies.has_partial()
+            && !needs.contains(&Need::TaskDependency)
+        {
+            needs.push(Need::TaskDependency);
+        }
+        if dependency_target.is_none()
+            && !matches!(
+                mode,
+                EditorMode::Task
+                    | EditorMode::PomodoroTask
+                    | EditorMode::SubBullet
+                    | EditorMode::TaskDependency
+            )
+            && !needs.contains(&Need::DependencyTarget)
+        {
+            needs.push(Need::DependencyTarget);
+        }
+    }
+
     if let Some(local_marker) = local_destination_marker.as_deref() {
         for declaration in &declarations {
             diagnostics.push(Diagnostic {
@@ -1290,6 +1627,8 @@ pub(super) fn parse_editor_item<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close,
+            dependencies: item_dependencies.dependency_entries(),
+            dependency_target,
             spans,
             diagnostics,
             sub_bullets,

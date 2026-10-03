@@ -2,7 +2,9 @@ use serde::Serialize;
 
 use crate::native::{
     capture_block_ids,
-    capture_language::CompletionContext,
+    capture_language::{
+        CompletionContext, DependencyTarget as LanguageDependencyTarget,
+    },
     capture_link_tasks,
     capture_links::{
         WikilinkBlockCandidate, WikilinkHeadingCandidate, WikilinkNoteCandidate,
@@ -80,6 +82,42 @@ pub(super) struct ActiveTaskPomodoroCandidate {
     pub(super) name: Option<String>,
     pub(super) time_range: Option<String>,
     pub(super) is_current: bool,
+}
+
+/// One `task_dependency` (`&` picker) candidate: any task in the
+/// vault-wide catalog the discovery phase scans. The JSON keys match the
+/// picker contract: `replacement` is the Bob-authored `&note:block-id`
+/// (or quoted `&"Note":block-id`) an accept inserts -- empty for ID-less
+/// or guarded rows, which clients must never insert directly but resolve
+/// through the explicit Add block ID flow instead. `note_path` is the
+/// exact vault-relative path including extension (never the lowercased
+/// display route); `locator` is the short human display form;
+/// `already_dependency` marks prerequisites already on the dependent's
+/// line (accepting one is a harmless no-op); `disabled_reason` explains a
+/// guarded row. The contract phase freezes this shape with an empty list;
+/// the discovery phase populates it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DependencyCandidate {
+    pub(super) replacement: String,
+    #[serde(rename = "ref")]
+    pub(super) task_ref: String,
+    pub(super) note_path: String,
+    pub(super) locator: String,
+    pub(super) group: String,
+    pub(super) block_id: Option<String>,
+    pub(super) requires_block_id: bool,
+    pub(super) block_id_suggestions: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) already_dependency: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disabled_reason: Option<String>,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) status_type: &'static str,
+    pub(super) text: String,
+    pub(super) section: Option<String>,
+    pub(super) depth: usize,
+    pub(super) line: usize,
 }
 
 /// One `task_link` (`:` picker) candidate: any linkable open task in a
@@ -171,6 +209,7 @@ pub(super) enum Candidates {
     PomodoroName(Vec<PomodoroNameCandidate>),
     ActiveTask(Vec<ActiveTaskCandidate>),
     TaskLink(Vec<TaskLinkCandidate>),
+    Dependency(Vec<DependencyCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
@@ -186,6 +225,7 @@ impl Candidates {
             Self::PomodoroName(items) => items.len(),
             Self::ActiveTask(items) => items.len(),
             Self::TaskLink(items) => items.len(),
+            Self::Dependency(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
@@ -205,6 +245,18 @@ pub(super) struct CaptureCompleteResult {
     pub(super) block_id: Option<capture_block_ids::BlockIdField>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
+    /// Decoded `task_dependency` query (sigil stripped, one opening quote
+    /// stripped, `\"`/`\\` resolved), so the app never parses quoted note
+    /// components itself. Set only for that context; omitted elsewhere so
+    /// every older payload stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) query: Option<String>,
+    /// Lexical owner of the `task_dependency` modifier under the cursor
+    /// (the capture-parse `dependency_target` for the cursor's item), so
+    /// the app never derives the dependent itself. Set only for that
+    /// context; resolution-grade eligibility lands in later phases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) owner: Option<LanguageDependencyTarget>,
 }
 
 impl CaptureCompleteResult {
@@ -221,6 +273,8 @@ impl CaptureCompleteResult {
             candidates: Candidates::Route(Vec::new()),
             block_id: None,
             warnings: Vec::new(),
+            query: None,
+            owner: None,
         }
     }
 }

@@ -716,6 +716,8 @@ fn pomodoro_creation_json_omits_ref_and_keeps_schema_version() {
         candidates: Candidates::PomodoroName(vec![creation]),
         block_id: None,
         warnings: Vec::new(),
+        query: None,
+        owner: None,
     })
     .expect("creation json");
 

@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::model::{
-    Candidates, CaptureCompleteResult, CompleteError, OutputFormat,
-    PomodoroNameCandidate, TaskLinkCandidate,
+    Candidates, CaptureCompleteResult, CompleteError, DependencyCandidate,
+    OutputFormat, PomodoroNameCandidate, TaskLinkCandidate,
 };
 use super::COMMAND_NAME;
 use crate::native::{
@@ -45,6 +45,9 @@ pub(super) fn print_human_success_with_styler(
     if let Some(block_id) = &result.block_id {
         println!();
         println!("  {}", styler.dim(&block_id_summary(block_id)));
+    }
+    if let Some(query) = &result.query {
+        println!("  {}  {:?}", styler.dim("query"), query);
     }
 
     if result.candidates.len() == 0 {
@@ -150,6 +153,32 @@ pub(super) fn task_link_line(item: &TaskLinkCandidate) -> (String, String) {
     (label, detail)
 }
 
+/// One human line for a `task_dependency` candidate: the insertable
+/// replacement (or a needs-ID marker for rows the Add block ID flow must
+/// resolve first) plus task text, locator, and any guard reason.
+pub(super) fn dependency_line(item: &DependencyCandidate) -> (String, String) {
+    let mut detail =
+        format!("[{}] {}  · {}", item.status_symbol, item.text, item.locator);
+    if let Some(reason) = item.disabled_reason.as_deref() {
+        detail.push_str(&format!("  · {reason}"));
+    } else if item.requires_block_id {
+        match item.block_id_suggestions.first() {
+            Some(suggestion) => {
+                detail.push_str(&format!(" · needs ID (^{suggestion})"))
+            }
+            None => detail.push_str(" · needs ID"),
+        }
+    } else if item.already_dependency {
+        detail.push_str(" · already added");
+    }
+    let label = if item.replacement.is_empty() {
+        "…".to_string()
+    } else {
+        item.replacement.clone()
+    };
+    (label, detail)
+}
+
 pub(super) fn candidate_lines(
     candidates: &Candidates,
     context: Option<CompletionContext>,
@@ -216,6 +245,9 @@ pub(super) fn candidate_lines(
             .collect(),
         Candidates::TaskLink(items) => {
             items.iter().map(task_link_line).collect()
+        }
+        Candidates::Dependency(items) => {
+            items.iter().map(dependency_line).collect()
         }
         Candidates::PomodoroName(items) => items
             .iter()
@@ -339,6 +371,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::TaskSection => "task_section",
         CompletionContext::ActiveTask => "active_task",
         CompletionContext::TaskLink => "task_link",
+        CompletionContext::TaskDependency => "task_dependency",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",
         CompletionContext::WikilinkBlock => "wikilink_block",

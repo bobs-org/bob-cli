@@ -274,6 +274,10 @@ pub(crate) fn shell_completion(
                 });
             }
         }
+        CompletionContext::TaskDependency => {
+            // Contract phase: the vault-wide prerequisite scan lands in
+            // the discovery phase, so the shell offers no rows yet.
+        }
         CompletionContext::TaskLink => {
             let (candidates, _) = task_link_candidates(bob_dir, "");
             let Candidates::TaskLink(items) = candidates else {

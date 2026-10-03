@@ -13,10 +13,10 @@ use serde_json::json;
 
 use super::{
     capture_language::{
-        self, AuthoredSubBullet, Diagnostic, EditorGlobalDestination,
-        EditorItemParse, EditorMode, Need, PomodoroAdjustSpec,
-        PomodoroCloseSpec, PomodoroShiftSpec, PomodoroStartSpec, ProjectTaskId,
-        Severity, Span,
+        self, AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
+        EditorGlobalDestination, EditorItemParse, EditorMode, Need,
+        PomodoroAdjustSpec, PomodoroCloseSpec, PomodoroShiftSpec,
+        PomodoroStartSpec, ProjectTaskId, Severity, Span,
     },
     capture_links,
     style::Styler,
@@ -246,7 +246,25 @@ recognized as the first token of an item's first line. A single-token, \
 single-line item starting with ':' is a task-picker query: it reports mode \
 'incomplete' needing `task_link` with one `interactive_placeholder` span \
 over the whole token (sigil included) and no diagnostics, and it is never \
-captured. The retired \
+captured. An `&note:block-id` modifier names a prerequisite task link \
+(`&projects/foo:bar`; quote notes with spaces: `&\"Shopping List\":bar`): \
+one or more modifiers lead or trail the parent line (interleaving with \
+destination, schedule, priority, and clipboard markers in either order) or \
+close an authored child line, and each adds a per-item `dependencies` entry \
+(`raw`, decoded `note` and `block_id`, plus its sigil-inclusive `range`) \
+with `dependency_sigil`, `dependency_note`, and `dependency_block_id` \
+spans. Body text keeps its established mode and gains a `dependency_target` \
+(`new_task` for a task this capture would create); a bare `&note:block-id` \
+with an explicit `@note+task-id` (or the narrow bare `@note:id` colon \
+alias) reports mode 'task_dependency' with an `existing_task` target. An \
+ownerless `&note:block-id` reports mode 'incomplete' needing \
+`dependency_target`, and a partial `&`, `&query`, or `&note:` needs \
+`task_dependency` with a placeholder span over the typed query. A mid-line \
+`&` between prose words (`Research & Development`, `R&D`), an `&` inside \
+`[[wikilinks]]` or `` `code` ``, and `\\&` (which leaves a visible `&...` in \
+task text) stay literal. Dependency writes land in a later phase: until \
+then `bob capture` refuses recognized modifiers with an explicit \
+unsupported-action error instead of capturing without them. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \
 'pomodoro_note' with no route, section, or block ID and an empty 'needs' list; \
@@ -268,7 +286,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x1~2'\n  bob capture-parse -f json -- '=x0!2'\n  printf '=x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf '=x\\n- 1\\n' | bob capture-parse -f json\n  printf '=x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- '=x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, task_link, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task",
+            "Examples:\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x1~2'\n  bob capture-parse -f json -- '=x0!2'\n  printf '=x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf '=x\\n- 1\\n' | bob capture-parse -f json\n  printf '=x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- '=x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, task_dependency, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, task_link, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, dependency_target",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -411,6 +429,27 @@ struct CaptureParseResult {
     /// current ledger times.
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_close: Option<PomodoroCloseSpec>,
+    /// Complete `&note:block-id` modifiers on the first item, in source
+    /// order: each carries its raw text, decoded note and block ID, and
+    /// its sigil-inclusive range. Omitted when the draft names none, so
+    /// schema version 1 is unchanged for older inputs.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    dependencies: Vec<ParseDependency>,
+    /// Ownership of the first item's modifiers (`new_task` for a task
+    /// this capture would create, `existing_task` for an explicitly
+    /// selected dependent). Omitted when no dependent is named.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dependency_target: Option<DependencyTarget>,
+}
+
+/// One complete `&note:block-id` modifier with its sigil-inclusive range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ParseDependency {
+    raw: String,
+    note: String,
+    block_id: String,
+    quoted: bool,
+    range: SourceRange,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -449,6 +488,10 @@ struct CaptureParseItem {
     pomodoro_shift: Option<PomodoroShiftSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_close: Option<PomodoroCloseSpec>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    dependencies: Vec<ParseDependency>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dependency_target: Option<DependencyTarget>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -490,8 +533,26 @@ impl CaptureParseResult {
             pomodoro_adjust: parse.pomodoro_adjust,
             pomodoro_shift: parse.pomodoro_shift,
             pomodoro_close: parse.pomodoro_close,
+            dependencies: parse_dependencies(&parse.dependencies),
+            dependency_target: parse.dependency_target,
         }
     }
+}
+
+fn parse_dependencies(entries: &[DependencyEntry]) -> Vec<ParseDependency> {
+    entries
+        .iter()
+        .map(|entry| ParseDependency {
+            raw: entry.raw.clone(),
+            note: entry.note.clone(),
+            block_id: entry.block_id.clone(),
+            quoted: entry.quoted,
+            range: SourceRange {
+                start: entry.start,
+                end: entry.end,
+            },
+        })
+        .collect()
 }
 
 fn global_destination_parse(
@@ -537,6 +598,8 @@ fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
             pomodoro_adjust: item.pomodoro_adjust.clone(),
             pomodoro_shift: item.pomodoro_shift.clone(),
             pomodoro_close: item.pomodoro_close.clone(),
+            dependencies: parse_dependencies(&item.dependencies),
+            dependency_target: item.dependency_target.clone(),
         })
         .collect()
 }
@@ -547,6 +610,29 @@ fn sub_bullet_bodies(sub_bullets: &[AuthoredSubBullet]) -> Vec<String> {
 
 fn sub_bullet_depths(sub_bullets: &[AuthoredSubBullet]) -> Vec<u8> {
     sub_bullets.iter().map(|item| item.depth.level()).collect()
+}
+
+fn format_dependency_target(target: &DependencyTarget) -> String {
+    let mut summary = match target.kind {
+        super::capture_language::DependencyTargetKind::NewTask => {
+            "new task".to_string()
+        }
+        super::capture_language::DependencyTargetKind::ExistingTask => {
+            "existing task".to_string()
+        }
+    };
+    if let Some(route) = target.route.as_deref() {
+        summary.push_str(" @");
+        summary.push_str(route);
+        if let Some(block_id) = target.block_id.as_deref() {
+            summary.push('+');
+            summary.push_str(block_id);
+        }
+    }
+    if target.inherited {
+        summary.push_str(" (inherited)");
+    }
+    summary
 }
 
 fn sub_bullet_task_ids(
@@ -651,6 +737,22 @@ fn print_human_success_with_styler(
             .collect::<Vec<_>>()
             .join(", ");
         print_field(styler, "needs", &needs);
+    }
+    if !result.dependencies.is_empty() {
+        let dependencies = result
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.raw.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        print_field(styler, "dependencies", &dependencies);
+    }
+    if let Some(target) = result.dependency_target.as_ref() {
+        print_field(
+            styler,
+            "dependency target",
+            &format_dependency_target(target),
+        );
     }
 
     if !result.sub_bullets.is_empty() {
