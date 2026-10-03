@@ -275,14 +275,78 @@ fn projects_sync_shows_sole_prj_task_when_schedule_is_due() {
     assert_success(&output);
     assert!(
         stdout(&output)
-            .contains("removed #hide from sole ^prj  scheduled 2026-07-11")
+            .contains("removed #hide from ^prj  no non-hidden open tasks")
             && stdout(&output).contains("0 task schedules updated"),
-        "unexpected due output:\n{}",
+        "due sole ^prj must surface through the normal rule:\n{}",
         format_output(&output)
     );
     assert_eq!(
         fs::read_to_string(project).unwrap(),
         "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n"
+    );
+
+    // A second run changes nothing.
+    let again = bob_command()
+        .args(["projects", "sync", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-07-11")
+        .output()
+        .expect("rerun sync is a no-op");
+    assert_success(&again);
+    assert!(
+        stdout(&again).contains("0 ^prj edited"),
+        "second run must be a no-op:\n{}",
+        format_output(&again)
+    );
+}
+
+#[test]
+fn projects_sync_surfaces_due_scheduled_project_with_only_closed_tasks() {
+    // The `sase_sites` shape: past frontmatter date, hidden `^prj`,
+    // only closed tasks besides it.
+    let temp = TempDir::new("bob-cli-projects-scheduled-sites");
+    let vault = temp.path().join("vault");
+    let project = vault.join("Sites.md");
+    let original = "---\ntype: [[project]]\nscheduled: 2026-08-08\n---\n- [ ] #task Ship #hide ^prj\n- [x] #task Done\n";
+    write_file(&project, original);
+
+    let preview = bob_command()
+        .args(["projects", "sync", "--dry-run", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-10-03")
+        .output()
+        .expect("preview due scheduled project");
+    assert_success(&preview);
+    assert_eq!(fs::read_to_string(&project).unwrap(), original);
+    assert!(
+        stdout(&preview).contains("would remove #hide from ^prj"),
+        "dry run must surface the ^prj:\n{}",
+        format_output(&preview)
+    );
+
+    let applied = bob_command()
+        .args(["projects", "sync", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-10-03")
+        .output()
+        .expect("apply due scheduled surfacing");
+    assert_success(&applied);
+    assert_eq!(
+        fs::read_to_string(&project).unwrap(),
+        "---\ntype: [[project]]\nscheduled: 2026-08-08\n---\n- [ ] #task Ship ^prj\n- [x] #task Done\n"
+    );
+
+    let again = bob_command()
+        .args(["projects", "sync", "--bob-dir"])
+        .arg(&vault)
+        .env("BOB_NOW", "2026-10-03")
+        .output()
+        .expect("rerun sync is a no-op");
+    assert_success(&again);
+    assert!(
+        stdout(&again).contains("0 ^prj edited"),
+        "second run must change nothing:\n{}",
+        format_output(&again)
     );
 }
 

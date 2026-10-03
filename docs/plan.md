@@ -141,11 +141,11 @@ task-line field, or a file-path filter.
 
 The daily lane review in [`docs/freshness.md`](freshness.md) §4 walks
 Pending and Next tasks once a day on their lane interval, with the
-PROJECTS tier between NEW and PENDING for empty-project `^prj`
-reminders on their tracker cadence (`project_interval` when set,
-otherwise the Ready chain; a disabled lane walk never disables
-them). Reference rows in the lanes follow the reference cadence
-when set.
+PROJECTS tier between NEW and PENDING for visible `^prj` reminders
+and the REFERENCES tier just before ROTTEN for due `^ref` rows, each
+on its tracker cadence (`project_interval` / `reference_interval`
+when set, otherwise the Ready chain; a disabled lane walk never
+disables either tier).
 
 **NEXT** is every `[*]` task and **PENDING** every `[/]` task that
 the dash's defaults show: not done, not dependency-blocked, not

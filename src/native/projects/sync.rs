@@ -511,14 +511,14 @@ pub(super) fn plan_project_sync_at(
         effective_status = target.as_project_status();
     }
 
+    // Effective post-reconcile unhidden count for the surfacing rule
+    // below. When a schedule policy applies, an open ordinary task that
+    // is hidden now but will be unhidden this run counts as unhidden.
+    let mut effective_unhidden = project.open_unhidden_count;
     if !effective_status.is_terminal()
         && let Some(scheduled) = &project.scheduled
     {
-        let policy = TaskSchedulePolicy::for_schedule(
-            scheduled.date,
-            today,
-            project.task_lines.len(),
-        );
+        let policy = TaskSchedulePolicy::for_schedule(scheduled.date, today);
         let scheduled_task_count = project
             .task_lines
             .iter()
@@ -534,6 +534,16 @@ pub(super) fn plan_project_sync_at(
             .iter()
             .copied()
             .any(|task| policy.prj_hide_needs_change(task));
+        effective_unhidden = project
+            .task_lines
+            .iter()
+            .filter(|task| {
+                task.is_open_task
+                    && !task.is_prj
+                    && (task.hide_tag_count == 0
+                        || policy.ordinary_hide_needs_removal(**task))
+            })
+            .count();
         for task in project
             .task_lines
             .iter()
@@ -568,15 +578,14 @@ pub(super) fn plan_project_sync_at(
         let has_open_subprojects = subproject_children
             .iter()
             .any(|child| child.state.is_open());
-        let should_surface =
-            project.open_unhidden_count == 0 && !has_open_subprojects;
-        if project.scheduled.is_none() {
+        let should_surface = effective_unhidden == 0 && !has_open_subprojects;
+        if project.scheduled.as_ref().is_none_or(|s| s.date <= today) {
             if should_surface {
                 if project.prj_task.hidden {
                     plan.changes.push(ProjectChange::RemoveHideTag);
                 }
             } else if !project.prj_task.hidden {
-                let reason = if project.open_unhidden_count > 0 {
+                let reason = if effective_unhidden > 0 {
                     AddHideReason::NonHiddenOpenTasks
                 } else {
                     AddHideReason::OpenSubprojects

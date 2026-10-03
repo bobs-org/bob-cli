@@ -388,13 +388,20 @@ fn projects_sync_reconciles_future_subproject_markers_at_date_boundary() {
         ) && out.contains(
             "removed 🗓️ [[FutureClosed]] from ^prj  sub-project no longer scheduled in future"
         ) && out.contains(
-            "5 projects - 0 status updated - 2 ^prj edited - 0 task schedules updated - 0 warnings"
+            "FutureOpen  removed #hide from ^prj  no non-hidden open tasks or open sub-projects"
+        ) && out.contains(
+            "5 projects - 0 status updated - 3 ^prj edited - 0 task schedules updated - 0 warnings"
         ),
         "unexpected boundary output:\n{out}"
     );
     assert_eq!(
         fs::read_to_string(vault.join("Parent.md")).expect("read parent"),
         "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish parent #hide ^prj\n\t- 🧩 **Sub-projects:** [[FutureOpen]] • [[Today]] • [[Unscheduled]] • ~~[[FutureClosed]]~~ ✅\n\t- user-owned context\n"
+    );
+    // A today-scheduled empty project surfaces through the normal rule.
+    assert_eq!(
+        fs::read_to_string(vault.join("FutureOpen.md")).expect("read child"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\nscheduled: 2026-07-11\n---\n- [ ] #task Finish future ^prj\n"
     );
 
     let output = bob_command()

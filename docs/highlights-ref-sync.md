@@ -704,8 +704,8 @@ annotation-derived follow-up tasks. It is additive: legacy generated lines
 without `#ref` are still recognized.
 
 The same `^ref` line doubles as the reference's freshness tracker: an
-unstamped Ready reference starts in NEW regardless of import age, then
-follows its tracker cadence (`reference_interval` when set, otherwise
+unstamped reference walks in REFERENCES, not NEW, on the reference
+cadence in any lane (`reference_interval` when set, otherwise
 ordinary freshness; see [`docs/freshness.md`](freshness.md) §4,
 "Tracking review"). Sync never auto-confirms it.
 

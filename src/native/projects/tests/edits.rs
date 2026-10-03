@@ -313,7 +313,6 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
             policy: TaskSchedulePolicy::for_schedule(
                 NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
                 today,
-                2,
             ),
             scheduled_task_count: 1,
             removed_hide_count: 0,
@@ -321,6 +320,9 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
         }]
     );
 
+    // Today/past schedules follow the normal surfacing rule: the
+    // closed-task hide is reconciled and the `^prj` surfaces through
+    // the ordinary remove event.
     for due_today in [
         NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
         NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
@@ -331,20 +333,23 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
         );
         assert_eq!(
             plan_project_sync_at(&due, &[], due_today).changes,
-            vec![ProjectChange::ReconcileTaskSchedules {
-                scheduled: "2026-07-11".to_string(),
-                policy: TaskSchedulePolicy::for_schedule(
-                    NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
-                    due_today,
-                    2,
-                ),
-                scheduled_task_count: 0,
-                removed_hide_count: 1,
-                prj_hide_changed: false,
-            }]
+            vec![
+                ProjectChange::ReconcileTaskSchedules {
+                    scheduled: "2026-07-11".to_string(),
+                    policy: TaskSchedulePolicy::for_schedule(
+                        NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                        due_today,
+                    ),
+                    scheduled_task_count: 0,
+                    removed_hide_count: 1,
+                    prj_hide_changed: false,
+                },
+                ProjectChange::RemoveHideTag,
+            ]
         );
     }
 
+    // The old sole-`^prj` special case unhides through the normal rule.
     let sole_prj = parse_clean_project(
         "Sole.md",
         "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n",
@@ -356,17 +361,116 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
             NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
         )
         .changes,
-        vec![ProjectChange::ReconcileTaskSchedules {
-            scheduled: "2026-07-11".to_string(),
-            policy: TaskSchedulePolicy::for_schedule(
-                NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
-                1,
-            ),
-            scheduled_task_count: 0,
-            removed_hide_count: 0,
-            prj_hide_changed: true,
+        vec![ProjectChange::RemoveHideTag]
+    );
+}
+
+#[test]
+fn due_scheduled_projects_follow_the_normal_surfacing_rule() {
+    // The `sase_sites` shape: past date, hidden `^prj`, only closed
+    // tasks → the `^prj` surfaces.
+    for today in [
+        NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 8, 8).unwrap(),
+    ] {
+        let sites = parse_clean_project(
+            "Sites.md",
+            "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n- [x] #task Done\n",
+        );
+        assert!(
+            plan_project_sync_at(&sites, &[], today)
+                .changes
+                .contains(&ProjectChange::RemoveHideTag),
+            "past/today schedule with only closed tasks must surface"
+        );
+    }
+
+    // Future dates still force exactly one `#hide` and skip surfacing.
+    let future = parse_clean_project(
+        "Future.md",
+        "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n",
+    );
+    let plan = plan_project_sync_at(
+        &future,
+        &[],
+        NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+    );
+    assert!(
+        plan.changes.iter().any(|change| matches!(
+            change,
+            ProjectChange::ReconcileTaskSchedules {
+                prj_hide_changed: true,
+                ..
+            }
+        )),
+        "future schedule must force #hide, got {plan:?}"
+    );
+    assert!(
+        !plan.changes.iter().any(|change| matches!(
+            change,
+            ProjectChange::RemoveHideTag | ProjectChange::AddHideTag { .. }
+        )),
+        "future schedule must not run surfacing, got {plan:?}"
+    );
+
+    // Past date with an unhidden open task: a visible `^prj` gains
+    // `#hide`; a hidden one keeps it.
+    let busy_visible = parse_clean_project(
+        "Busy.md",
+        "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n- [ ] #task Work\n",
+    );
+    assert_eq!(
+        plan_project_sync_at(
+            &busy_visible,
+            &[],
+            NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+        )
+        .changes
+        .iter()
+        .filter(|change| matches!(
+            change,
+            ProjectChange::AddHideTag { .. } | ProjectChange::RemoveHideTag
+        ))
+        .collect::<Vec<_>>(),
+        vec![&ProjectChange::AddHideTag {
+            reason: AddHideReason::NonHiddenOpenTasks,
         }]
+    );
+
+    // Past date where the only open task is hidden but reconcile
+    // strips its `#hide`: the `^prj` stays hidden.
+    let recovering = parse_clean_project(
+        "Recovering.md",
+        "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n- [ ] #task Work #hide\n",
+    );
+    let recovering_plan = plan_project_sync_at(
+        &recovering,
+        &[],
+        NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+    );
+    assert!(
+        !recovering_plan.changes.iter().any(|change| matches!(
+            change,
+            ProjectChange::RemoveHideTag | ProjectChange::AddHideTag { .. }
+        )),
+        "newly unhidden ordinary task must keep ^prj hidden, got {recovering_plan:?}"
+    );
+
+    // Past date with an open sub-project stays hidden.
+    let parent = parse_clean_project(
+        "Parent.md",
+        "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship parent #hide ^prj\n",
+    );
+    assert!(
+        plan_project_sync_at(
+            &parent,
+            &[open_subproject("Child")],
+            NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+        )
+        .changes
+        .iter()
+        .all(|change| !matches!(change, ProjectChange::RemoveHideTag)),
+        "open sub-project must keep ^prj hidden"
     );
 }
 
@@ -411,7 +515,6 @@ fn task_schedule_edits_cover_contract_and_preserve_markdown() {
                 policy: TaskSchedulePolicy::for_schedule(
                     NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
                     NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
-                    10,
                 ),
                 scheduled_task_count: 2,
                 removed_hide_count: 8,
@@ -435,7 +538,6 @@ fn task_schedule_edits_cover_contract_and_preserve_markdown() {
                 policy: TaskSchedulePolicy::for_schedule(
                     NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
                     NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
-                    10,
                 ),
                 scheduled_task_count: 0,
                 removed_hide_count: 0,
@@ -445,22 +547,11 @@ fn task_schedule_edits_cover_contract_and_preserve_markdown() {
         future
     );
 
+    // A due-dated sole `^prj` unhides through the normal surfacing
+    // rule now, not through schedule reconciliation.
     let sole_prj = "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide ^prj\n";
     assert_eq!(
-        apply_changes(
-            sole_prj,
-            &[ProjectChange::ReconcileTaskSchedules {
-                scheduled: "2026-07-11".to_string(),
-                policy: TaskSchedulePolicy::for_schedule(
-                    NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
-                    NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
-                    1,
-                ),
-                scheduled_task_count: 0,
-                removed_hide_count: 0,
-                prj_hide_changed: true,
-            }],
-        ),
+        apply_changes(sole_prj, &[ProjectChange::RemoveHideTag]),
         "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n"
     );
 }

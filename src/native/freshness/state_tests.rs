@@ -72,7 +72,6 @@ fn row(line: &str) -> FreshnessRow {
         line: 1,
         status: ' ',
         is_todo: true,
-        is_open: true,
         recurring: false,
         lane_visible: true,
         is_daily_note: false,
@@ -82,9 +81,6 @@ fn row(line: &str) -> FreshnessRow {
         raw_line: line.to_string(),
         note_refresh_raw: None,
         tracker: None,
-        project_open_count: 0,
-        project_scheduled: None,
-        project_schedule_invalid: false,
     }
 }
 
@@ -350,7 +346,6 @@ fn stamped_row(
         line,
         status,
         is_todo,
-        is_open: true,
         recurring: false,
         lane_visible: is_todo,
         is_daily_note: false,
@@ -360,9 +355,6 @@ fn stamped_row(
         raw_line: format!("- [{status}] #task Counted [fresh:: {fresh}]"),
         note_refresh_raw: None,
         tracker: None,
-        project_open_count: 0,
-        project_scheduled: None,
-        project_schedule_invalid: false,
     }
 }
 
@@ -474,7 +466,6 @@ fn lane_row(
         line,
         status,
         is_todo,
-        is_open: true,
         recurring: false,
         lane_visible: true,
         is_daily_note: false,
@@ -484,9 +475,6 @@ fn lane_row(
         raw_line,
         note_refresh_raw: None,
         tracker: None,
-        project_open_count: 0,
-        project_scheduled: None,
-        project_schedule_invalid: false,
     }
 }
 
@@ -864,16 +852,16 @@ fn decide_zero_off_and_lane_rows() {
     assert!(!lane.decide);
 }
 
-/// Project/reference tracking review: empty `^prj` walks in
-/// PROJECTS (never NEW), populated notes suppress it, hidden `^ref`
-/// starts NEW, lane `^prj` keeps its lane with the Ready cadence, and
-/// counts decouple states from the six-key tier histogram.
+/// Tracker review: a visible `^prj` walks in PROJECTS (never NEW)
+/// with no occupancy or schedule gate, a hidden `^prj` is out of
+/// scope, a hidden `^ref` walks in REFERENCES with its Ready state
+/// intact, lane trackers keep their lane with null state, and counts
+/// decouple states from the seven-key tier histogram.
 #[test]
 fn tracking_projects_tier_and_counts() {
     let config = default_config();
     let mut empty_prj = row("- [ ] #task Project ^prj");
     empty_prj.tracker = Some(TrackerKind::Prj);
-    empty_prj.project_open_count = 0;
     let evaluated = evaluate(&empty_prj, today(), &config);
     assert_eq!(evaluated.state, Some(FreshState::New));
     assert_eq!(evaluated.tier, Some(Tier::Projects));
@@ -881,25 +869,28 @@ fn tracking_projects_tier_and_counts() {
     // A stamp today removes it from the queue (fresh, no tier).
     let mut stamped = row("- [ ] #task Project [fresh:: 2026-10-08] ^prj");
     stamped.tracker = Some(TrackerKind::Prj);
-    stamped.project_open_count = 0;
     let evaluated = evaluate(&stamped, today(), &config);
     assert_eq!(evaluated.state, Some(FreshState::Fresh));
     assert_eq!(evaluated.tier, None);
 
-    // A counted Ready task suppresses the reminder immediately.
-    let mut populated = row("- [ ] #task Project ^prj");
-    populated.tracker = Some(TrackerKind::Prj);
-    populated.project_open_count = 1;
-    let evaluated = evaluate(&populated, today(), &config);
+    // A hidden `^prj` is out of scope: sync owns the tag, so there is
+    // no hide exemption and no lint.
+    let mut hidden_prj = row("- [ ] #task Project #hide ^prj");
+    hidden_prj.tracker = Some(TrackerKind::Prj);
+    hidden_prj.lane_visible = false;
+    let evaluated = evaluate(&hidden_prj, today(), &config);
     assert_eq!(evaluated.state, None);
     assert_eq!(evaluated.tier, None);
+    assert!(evaluated.lints.is_empty());
 
-    // An eligible hidden reference starts NEW (hide bypassed).
+    // An eligible hidden reference walks in REFERENCES (hide
+    // bypassed) with its Ready NEW state and bucket intact.
     let mut hidden_ref = row("- [ ] #task Read #hide ^ref");
     hidden_ref.tracker = Some(TrackerKind::Ref);
     let evaluated = evaluate(&hidden_ref, today(), &config);
     assert_eq!(evaluated.state, Some(FreshState::New));
-    assert_eq!(evaluated.tier, Some(Tier::New));
+    assert_eq!(evaluated.tier, Some(Tier::References));
+    assert_eq!(bucket_for_state(evaluated.state), Some("new"));
 
     // An ordinary hidden task stays out.
     let mut hidden = row("- [ ] #task Read #hide");
@@ -911,7 +902,6 @@ fn tracking_projects_tier_and_counts() {
     // A lane `^prj` keeps its lane with the Ready-chain interval.
     let mut lane_prj = lane_row("p.md", 2, '/', None, None);
     lane_prj.tracker = Some(TrackerKind::Prj);
-    lane_prj.project_open_count = 0;
     lane_prj.raw_line = "- [/] #task Project ^prj".to_string();
     let evaluated = evaluate(&lane_prj, today(), &config);
     assert_eq!(evaluated.lane, Some(Lane::Pending));
@@ -925,8 +915,10 @@ fn tracking_projects_tier_and_counts() {
     assert_eq!(report.new, 2);
     assert_eq!(report.due, 2);
     assert_eq!(report.projects_due, 2);
-    assert_eq!(report.by_tier.new, 1);
+    assert_eq!(report.references_due, 1);
+    assert_eq!(report.by_tier.new, 0);
     assert_eq!(report.by_tier.projects, 2);
+    assert_eq!(report.by_tier.references, 1);
     assert_eq!(
         report.walk,
         report.by_tier.sum(),
@@ -974,7 +966,6 @@ fn tracker_intervals_override_for_matching_type() {
         row("- [ ] #task Project [fresh:: 2026-10-07] [refresh:: 30] ^prj");
     prj.tracker = Some(TrackerKind::Prj);
     prj.note_refresh_raw = Some("14".to_string());
-    prj.project_open_count = 0;
     let evaluated = evaluate(&prj, today(), &config);
     assert_eq!(evaluated.interval_days, 1);
     assert_eq!(evaluated.interval_source, IntervalSource::Project);
@@ -989,13 +980,15 @@ fn tracker_intervals_override_for_matching_type() {
     assert_eq!(evaluated.interval_source, IntervalSource::Reference);
     assert_eq!(evaluated.state, Some(FreshState::Fresh));
 
-    // `^ref` stamped 3 days ago is rotten with accurate due metadata.
+    // `^ref` stamped 3 days ago is rotten with accurate due metadata,
+    // walking in REFERENCES with its Ready state intact.
     let mut rotten_ref = row("- [ ] #task Read [fresh:: 2026-10-05] ^ref");
     rotten_ref.tracker = Some(TrackerKind::Ref);
     let evaluated = evaluate(&rotten_ref, today(), &config);
     assert_eq!(evaluated.interval_days, 3);
     assert_eq!(evaluated.interval_source, IntervalSource::Reference);
     assert_eq!(evaluated.state, Some(FreshState::Rotten));
+    assert_eq!(evaluated.tier, Some(Tier::References));
     assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
     assert_eq!(evaluated.days_overdue, Some(0));
 
@@ -1012,14 +1005,14 @@ fn tracker_intervals_override_for_matching_type() {
     assert_eq!(evaluated.interval_source, IntervalSource::Task);
 }
 
-/// Reference lane rows use the reference cadence with their actual
-/// lane and null state; a disabled lane stays unwalked; projects
-/// always walk in PROJECTS even with the lane off.
+/// Reference lane rows use the reference cadence with a REFERENCES
+/// tier, their actual lane, and null state; a disabled lane still
+/// reviews references, matching projects.
 #[test]
 fn tracker_lane_precedence_and_disabled_lanes() {
     let config = config_with_trackers(Some(1), Some(3));
     // `^ref` in Pending uses the 3-day reference cadence, not the
-    // 1-day lane interval, and keeps its Pending tier with null state.
+    // 1-day lane interval, and walks in REFERENCES with null state.
     let mut pending_ref = lane_row("r.md", 1, '/', Some("2026-10-05"), None);
     pending_ref.tracker = Some(TrackerKind::Ref);
     pending_ref.raw_line =
@@ -1027,26 +1020,31 @@ fn tracker_lane_precedence_and_disabled_lanes() {
     let evaluated = evaluate(&pending_ref, today(), &config);
     assert_eq!(evaluated.lane, Some(Lane::Pending));
     assert_eq!(evaluated.state, None);
-    assert_eq!(evaluated.tier, Some(Tier::Pending));
+    assert_eq!(evaluated.tier, Some(Tier::References));
     assert_eq!(evaluated.interval_days, 3);
     assert_eq!(evaluated.interval_source, IntervalSource::Reference);
     assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
 
-    // Same lane disabled: no tier, but the effective cadence is still
-    // the reference interval with no due date.
+    // Same lane disabled: references still walk, like projects.
     let mut disabled = config_with_trackers(None, Some(3));
     disabled.pending_interval = None;
     let evaluated = evaluate(&pending_ref, today(), &disabled);
-    assert_eq!(evaluated.tier, None);
+    assert_eq!(evaluated.lane, Some(Lane::Pending));
+    assert_eq!(evaluated.state, None);
+    assert_eq!(evaluated.tier, Some(Tier::References));
     assert_eq!(evaluated.interval_days, 3);
     assert_eq!(evaluated.interval_source, IntervalSource::Reference);
-    assert_eq!(evaluated.due_on, None);
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+
+    // Ordinary lane rows stay unwalked with the lane off.
+    let ordinary = lane_row("o.md", 1, '/', Some("2026-10-05"), None);
+    let evaluated = evaluate(&ordinary, today(), &disabled);
+    assert_eq!(evaluated.tier, None);
 
     // `^prj` in Pending walks PROJECTS with the project cadence even
     // when the lane is disabled.
     let mut lane_prj = lane_row("p.md", 2, '/', Some("2026-10-06"), None);
     lane_prj.tracker = Some(TrackerKind::Prj);
-    lane_prj.project_open_count = 0;
     lane_prj.raw_line =
         "- [/] #task Project [fresh:: 2026-10-06] ^prj".to_string();
     let mut lane_off = config_with_trackers(Some(1), Some(3));
@@ -1058,52 +1056,117 @@ fn tracker_lane_precedence_and_disabled_lanes() {
     assert_eq!(evaluated.interval_source, IntervalSource::Project);
 }
 
-/// Project occupancy counts every open status and ignores lane
-/// visibility, while terminal rows and `^prj` rows never count.
+/// Lane `^ref` rows without a configured `reference_interval` use
+/// the Ready chain, never the lane interval.
 #[test]
-fn project_occupancy_counts_open_statuses() {
-    use super::{is_open_project_row, is_open_status_type, project_open_count};
-    assert!(is_open_status_type("TODO"));
-    assert!(is_open_status_type("IN_PROGRESS"));
-    assert!(is_open_status_type("ON_HOLD"));
-    assert!(!is_open_status_type("DONE"));
-    assert!(!is_open_status_type("CANCELLED"));
-    assert!(!is_open_status_type("NON_TASK"));
-    assert!(!is_open_status_type("EMPTY"));
-    assert!(is_open_project_row(true, None));
-    assert!(is_open_project_row(true, Some("ref")));
-    assert!(!is_open_project_row(true, Some("prj")));
-    assert!(!is_open_project_row(false, None));
+fn lane_reference_uses_ready_chain_without_configured_cadence() {
+    // Pending lane interval is 1: stamped yesterday is due for an
+    // ordinary task, but a `^ref` without `reference_interval` runs
+    // the 7-day Ready chain and stays fresh.
+    let mut pending_ref = lane_row("r.md", 1, '/', Some("2026-10-07"), None);
+    pending_ref.tracker = Some(TrackerKind::Ref);
+    pending_ref.raw_line =
+        "- [/] #task Read [fresh:: 2026-10-07] ^ref".to_string();
+    let evaluated = evaluate(&pending_ref, today(), &default_config());
+    assert_eq!(evaluated.interval_days, 7);
+    assert_eq!(evaluated.interval_source, IntervalSource::Default);
+    assert_eq!(evaluated.tier, None);
 
-    // Any open row suppresses, whatever its lane or visibility.
-    for (status, is_todo, is_open) in [
-        (' ', true, true),
-        ('/', false, true),
-        ('*', false, true),
-        ('?', false, true),
-    ] {
-        let mut prj = row("- [ ] #task Project ^prj");
-        prj.tracker = Some(TrackerKind::Prj);
-        prj.status = status;
-        prj.is_todo = is_todo;
-        prj.is_open = is_open;
-        prj.project_open_count = 1;
-        let evaluated = evaluate(&prj, today(), &default_config());
-        assert_eq!(evaluated.tier, None, "status {status} suppresses");
-    }
+    // Stamped 7 days ago, the Ready chain is due.
+    let mut due_ref = lane_row("r.md", 2, '/', Some("2026-10-01"), None);
+    due_ref.tracker = Some(TrackerKind::Ref);
+    due_ref.raw_line = "- [/] #task Read [fresh:: 2026-10-01] ^ref".to_string();
+    let evaluated = evaluate(&due_ref, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::References));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+}
 
-    // The pure helper counts open rows by residence, excluding `^prj`.
-    let mut open_task = row("- [ ] #task Work");
-    open_task.path = "p.md".to_string();
-    open_task.is_open = true;
-    let mut done_task = row("- [x] #task Done");
-    done_task.path = "p.md".to_string();
-    done_task.is_open = false;
-    let mut other_file = row("- [ ] #task Elsewhere");
-    other_file.path = "q.md".to_string();
-    other_file.is_open = true;
-    assert_eq!(
-        project_open_count(&[open_task, done_task, other_file], "p.md"),
-        1
+/// A 7-day reference cadence: stamped 6 days ago is not due, stamped
+/// 7 days ago is due today.
+#[test]
+fn reference_interval_boundary() {
+    let config = config_with_trackers(None, Some(7));
+    let mut fresh_ref = row("- [ ] #task Read [fresh:: 2026-10-02] ^ref");
+    fresh_ref.tracker = Some(TrackerKind::Ref);
+    let evaluated = evaluate(&fresh_ref, today(), &config);
+    assert_eq!(evaluated.state, Some(FreshState::Fresh));
+    assert_eq!(evaluated.tier, None);
+
+    let mut due_ref = row("- [ ] #task Read [fresh:: 2026-10-01] ^ref");
+    due_ref.tracker = Some(TrackerKind::Ref);
+    let evaluated = evaluate(&due_ref, today(), &config);
+    assert_eq!(evaluated.state, Some(FreshState::Rotten));
+    assert_eq!(evaluated.tier, Some(Tier::References));
+    assert_eq!(evaluated.days_overdue, Some(0));
+}
+
+/// A RESURFACED Ready `^ref` walks in REFERENCES and never decides,
+/// even at the keep limit after activation.
+#[test]
+fn resurfaced_reference_walks_references_without_decide() {
+    let mut config = decay_config(3, true);
+    config.reference_interval = Some(7);
+    let mut resurfaced = row(
+        "- [ ] #task Read [fresh:: 2026-10-05] [scheduled:: 2026-10-07] [keeps:: 5] ^ref",
     );
+    resurfaced.tracker = Some(TrackerKind::Ref);
+    resurfaced.scheduled = Some(date(2026, 10, 7));
+    let evaluated = evaluate(&resurfaced, active_day(), &config);
+    assert_eq!(evaluated.state, Some(FreshState::Resurfaced));
+    assert_eq!(evaluated.tier, Some(Tier::References));
+    assert!(!evaluated.decide);
+}
+
+/// Seven-tier queue order with stable ties: NEW → PROJECTS →
+/// PENDING → NEXT → RETURNED → REFERENCES → ROTTEN, and the walk
+/// sums the histogram with a `references_due` count.
+#[test]
+fn seven_tier_order_with_references() {
+    let mut config = default_config();
+    config.reference_interval = Some(7);
+    let new = ready_row("g.md", 1, None, None);
+    let mut prj = ready_row("f.md", 1, None, None);
+    prj.tracker = Some(TrackerKind::Prj);
+    prj.raw_line = "- [ ] #task Project ^prj".to_string();
+    let pending = lane_row("e.md", 1, '/', Some("2026-10-07"), None);
+    let next = lane_row("d.md", 1, '*', Some("2026-10-07"), None);
+    let mut returned = ready_row("c.md", 1, Some("2026-10-05"), None);
+    returned.scheduled = Some(date(2026, 10, 7));
+    let mut reference = ready_row("b.md", 1, Some("2026-10-01"), None);
+    reference.tracker = Some(TrackerKind::Ref);
+    reference.raw_line =
+        "- [ ] #task Read [fresh:: 2026-10-01] ^ref".to_string();
+    let rotten = ready_row("a.md", 1, Some("2026-09-20"), None);
+    let rows =
+        vec![rotten, reference, returned, next, pending, prj, new.clone()];
+    let ordered = queue(&rows, today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![
+            ("g.md".to_string(), 1),
+            ("f.md".to_string(), 1),
+            ("e.md".to_string(), 1),
+            ("d.md".to_string(), 1),
+            ("c.md".to_string(), 1),
+            ("b.md".to_string(), 1),
+            ("a.md".to_string(), 1),
+        ]
+    );
+    assert_eq!(
+        queue_tiers(&ordered),
+        vec![
+            "new",
+            "projects",
+            "pending",
+            "next",
+            "returned",
+            "references",
+            "rotten"
+        ]
+    );
+    let report = counts(&rows, today(), &config);
+    assert_eq!(report.walk, report.by_tier.sum());
+    assert_eq!(report.walk, 7);
+    assert_eq!(report.references_due, 1);
+    assert_eq!(report.by_tier.references, 1);
 }

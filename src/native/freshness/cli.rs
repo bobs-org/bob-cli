@@ -35,17 +35,21 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
-/// Schema 6 adds the tracker cadence contract: `project_interval`
-/// and `reference_interval` in `config` (number or null, null means
-/// inherit) plus the `project` and `reference` interval sources.
-/// Schema 5 added project/reference tracking review: the `projects`
-/// walk tier, `projects_due` and the six-key `by_tier` histogram in
-/// counts (with `walk = sum(by_tier)`), and decoupled state totals
-/// (`due = new + resurfaced + rotten` over Ready states, including
-/// eligible Ready trackers). Schema 4 added the keep-streak contract.
-/// The seed envelope shares this constant; seed contents are
-/// otherwise unchanged.
-const SCHEMA_VERSION: u32 = 6;
+/// Schema 7 adds the `references` walk tier (between `returned` and
+/// `rotten`), the seven-key `by_tier` histogram, `references_due` in
+/// counts, and the `^prj` hide gate: visible `^prj` rows are reviewed
+/// on sync's `#hide` alone, so the `project_scheduled_invalid` lint
+/// is gone. Schema 6 adds the tracker cadence contract:
+/// `project_interval` and `reference_interval` in `config` (number or
+/// null, null means inherit) plus the `project` and `reference`
+/// interval sources. Schema 5 added project/reference tracking
+/// review: the `projects` walk tier, `projects_due` and the six-key
+/// `by_tier` histogram in counts (with `walk = sum(by_tier)`), and
+/// decoupled state totals (`due = new + resurfaced + rotten` over
+/// Ready states, including eligible Ready trackers). Schema 4 added
+/// the keep-streak contract. The seed envelope shares this constant;
+/// seed contents are otherwise unchanged.
+const SCHEMA_VERSION: u32 = 7;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -114,7 +118,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .long_about(
             "Walk the tiered freshness review queue: list the tasks due \
             for review in tier order NEW → PROJECTS → PENDING → NEXT → \
-            RETURNED → ROTTEN and stamp the one-time cutover seed.\n\n\
+            RETURNED → REFERENCES → ROTTEN and stamp the one-time cutover seed.\n\n\
             The list subcommand is read-only: it evaluates every visible, \
             non-recurring Ready, Pending, and Next task at read time — \
             never stored — and shows the tiered walk queue with counts. \
@@ -149,7 +153,7 @@ fn list_command_inner() -> ClapCommand {
         .long_about(
             "List the tiered freshness review queue: every task with a \
             walk tier, ordered NEW → PROJECTS → PENDING → NEXT → \
-            RETURNED → ROTTEN with each tier's comparator, with \
+            RETURNED → REFERENCES → ROTTEN with each tier's comparator, with \
             whole-vault counts. The command is read-only. Counts always \
             cover the whole vault; --limit truncates the queue rows \
             only. See docs/freshness.md for the full definition.",
@@ -545,24 +549,26 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
     output.push('\n');
     let _ = writeln!(
         output,
-        "  REVIEW {walk} due {sep} {new} new {sep} {projects} projects {sep} {pending} pending {sep} {next} next {sep} {returned} returned {sep} {rotten} rotten {sep} {today}",
+        "  REVIEW {walk} due {sep} {new} new {sep} {projects} projects {sep} {pending} pending {sep} {next} next {sep} {returned} returned {sep} {references} references {sep} {rotten} rotten {sep} {today}",
         walk = report.counts.walk,
         sep = styler.separator(),
-        new = report.counts.new,
-        projects = report.counts.projects_due,
-        pending = report.counts.pending_due,
-        next = report.counts.next_due,
-        returned = report.counts.resurfaced,
-        rotten = report.counts.rotten,
+        new = report.counts.by_tier.new,
+        projects = report.counts.by_tier.projects,
+        pending = report.counts.by_tier.pending,
+        next = report.counts.by_tier.next,
+        returned = report.counts.by_tier.returned,
+        references = report.counts.by_tier.references,
+        rotten = report.counts.by_tier.rotten,
         today = today_meter(report),
     );
 
-    let tiers: [(&str, &str); 6] = [
+    let tiers: [(&str, &str); 7] = [
         ("new", "NEW"),
         ("projects", "PROJECTS"),
         ("pending", "PENDING"),
         ("next", "NEXT"),
         ("returned", "RETURNED"),
+        ("references", "REFERENCES"),
         ("rotten", "ROTTEN"),
     ];
     let mut commitment_rows = 0;
@@ -633,11 +639,10 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
             None => match &row.created {
                 Some(created) => {
                     format!(
-                        "No open tasks in this project {sep} never confirmed {sep} created {created}"
+                        "Empty project {sep} never confirmed {sep} created {created}"
                     )
                 }
-                None => "No open tasks in this project · never confirmed"
-                    .to_string(),
+                None => "Empty project · never confirmed".to_string(),
             },
             Some(fresh) => {
                 let lead = match row.days_overdue {
@@ -648,9 +653,28 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
                         None => "due".to_string(),
                     },
                 };
-                format!(
-                    "No open tasks in this project {sep} {lead} {sep} fresh {fresh}{every}"
-                )
+                format!("Empty project {sep} {lead} {sep} fresh {fresh}{every}")
+            }
+        },
+        "references" => match &row.fresh {
+            None => match &row.created {
+                Some(created) => {
+                    format!(
+                        "Reference {sep} never confirmed {sep} created {created}{every}"
+                    )
+                }
+                None => format!("Reference {sep} never confirmed{every}"),
+            },
+            Some(fresh) => {
+                let lead = match row.days_overdue {
+                    Some(0) => "due today".to_string(),
+                    Some(days) => format!("{days}d overdue"),
+                    None => match &row.due_on {
+                        Some(due) => format!("due {due}"),
+                        None => "due".to_string(),
+                    },
+                };
+                format!("Reference {sep} {lead} {sep} fresh {fresh}{every}")
             }
         },
         "pending" | "next" => match &row.fresh {
@@ -749,12 +773,14 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "pending_due": report.counts.pending_due,
             "next_due": report.counts.next_due,
             "projects_due": report.counts.projects_due,
+            "references_due": report.counts.references_due,
             "by_tier": {
                 "new": report.counts.by_tier.new,
                 "projects": report.counts.by_tier.projects,
                 "pending": report.counts.by_tier.pending,
                 "next": report.counts.by_tier.next,
                 "returned": report.counts.by_tier.returned,
+                "references": report.counts.by_tier.references,
                 "rotten": report.counts.by_tier.rotten,
             },
             "walk": report.counts.walk,

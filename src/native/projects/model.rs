@@ -77,6 +77,7 @@ pub(super) struct ProjectTaskLine {
     pub(super) mark: char,
     pub(super) hide_tag_count: usize,
     pub(super) is_prj: bool,
+    pub(super) is_open_task: bool,
     pub(super) scheduled_field_count: usize,
     pub(super) scheduled_date: Option<NaiveDate>,
 }
@@ -89,16 +90,12 @@ pub(super) struct TaskSchedulePolicy {
 }
 
 impl TaskSchedulePolicy {
-    pub(super) fn for_schedule(
-        scheduled: NaiveDate,
-        today: NaiveDate,
-        task_count: usize,
-    ) -> Self {
+    pub(super) fn for_schedule(scheduled: NaiveDate, today: NaiveDate) -> Self {
         let future = scheduled > today;
         Self {
             scheduled,
             future,
-            include_prj: future || task_count == 1,
+            include_prj: future,
         }
     }
 
@@ -106,11 +103,7 @@ impl TaskSchedulePolicy {
         if !task.is_prj || !self.include_prj {
             return false;
         }
-        if self.future {
-            task.hide_tag_count != 1
-        } else {
-            task.hide_tag_count > 0
-        }
+        task.hide_tag_count != 1
     }
 
     pub(super) fn ordinary_schedule_needs_change(

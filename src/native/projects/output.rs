@@ -165,24 +165,13 @@ impl SyncEvent {
                     ));
                 }
                 if *prj_hide_changed {
-                    let verb = if *future {
-                        if dry_run {
-                            "would normalize"
-                        } else {
-                            "normalized"
-                        }
-                    } else if dry_run {
-                        "would remove"
+                    let verb = if dry_run {
+                        "would normalize"
                     } else {
-                        "removed"
-                    };
-                    let detail = if *future {
-                        "#hide on ^prj"
-                    } else {
-                        "#hide from sole ^prj"
+                        "normalized"
                     };
                     lines.push(format!(
-                        "  {prefix} {project_name}  {verb} {detail}  scheduled {scheduled}"
+                        "  {prefix} {project_name}  {verb} #hide on ^prj  scheduled {scheduled}"
                     ));
                 }
                 lines.join("\n")

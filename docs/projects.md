@@ -91,12 +91,12 @@ task views can tell it apart from ordinary follow-up tasks; it is additive, and
 legacy lines without `#prj` are still recognized. Multiple `^prj` tasks or a
 `^prj` line that is not a valid `#task` checkbox are per-file errors.
 
-The same `^prj` line doubles as the project's freshness tracker: while its
-own note holds no open tasks, the morning review reminds Bryan to
-replenish it on its tracker cadence (`project_interval` when set,
+The same `^prj` line doubles as the project's freshness tracker: while
+sync leaves it visible (no `#hide`), the morning review reminds Bryan
+to replenish it on its tracker cadence (`project_interval` when set,
 otherwise the normal Ready interval chain; see
-[`docs/freshness.md`](freshness.md) §4, "Tracking review"). Sync's
-hide rule is broader than the freshness predicate and unchanged.
+[`docs/freshness.md`](freshness.md) §4, "Tracking review"). Review is
+gated by sync's `#hide`, not a separate predicate.
 
 Task statuses follow the Tasks plugin convention:
 
@@ -123,23 +123,24 @@ Task statuses follow the Tasks plugin convention:
   `dash.md`'s Tasks section.
 - Active projects with non-hidden open tasks or open sub-projects get
   `#hide` added back to their open `^prj` task immediately before `^prj`.
-- A valid `scheduled: P` frontmatter date overrides both preceding `^prj`
-  surfacing rules. Every ordinary task with an open marker (`[ ]`, `[*]`,
-  `[/]`, or `[?]`) receives `[scheduled:: P]`, unless its one existing
-  square-bracket or parenthesized `scheduled` field is a valid date equal to or
-  later than `P`. Missing, malformed, and earlier values are written in the
-  canonical square-bracket form. Emoji Tasks dates such as `⏳ 2026-08-01`
-  are not inline Dataview fields and are not considered.
+- A valid `scheduled: P` frontmatter date overrides surfacing only when
+  it is in the future. Every ordinary task with an open marker (`[ ]`,
+  `[*]`, `[/]`, or `[?]`) receives `[scheduled:: P]`, unless its one
+  existing square-bracket or parenthesized `scheduled` field is a valid
+  date equal to or later than `P`. Missing, malformed, and earlier
+  values are written in the canonical square-bracket form. Emoji Tasks
+  dates such as `⏳ 2026-08-01` are not inline Dataview fields and are
+  not considered. On a today/past date — or with no `scheduled` at all
+  — the normal surfacing rule below applies.
 - Ordinary tasks lose all whole-token `#hide` tags at every checkbox status;
   near-matches such as `#hidden` and `#hideaway` remain. An ordinary task with
   multiple `scheduled` fields is left completely unchanged and reported as a
   non-fatal warning. Done, canceled, and unknown/custom-status tasks otherwise
   receive no schedule field.
 - The `^prj` lifecycle task never receives an inline schedule. A future
-  project date forces exactly one `#hide` on it. On or after the date, its
-  `#hide` state stays unchanged unless it is the note's only Markdown task, in
-  which case `#hide` is removed. `#hide` therefore remains the lifecycle
-  surfacing mechanism for `^prj`, not for scheduled ordinary tasks.
+  project date forces exactly one `#hide` on it. `#hide` therefore
+  remains the lifecycle surfacing mechanism for `^prj`, not for
+  scheduled ordinary tasks.
 - Schedule propagation applies only to non-terminal projects. It preserves
   list markers, indentation, descriptions, other inline fields, trailing block
   IDs, CRLF line endings, and unrelated tags. Frontmatter, fenced examples,
@@ -156,7 +157,7 @@ For a valid project date `P`, the ordinary-task contract is:
 | Open, multiple `scheduled` fields | Leave the line unchanged; warn |
 | Done, canceled, or unknown/custom | Remove `#hide` only |
 | `^prj`, `P` in the future | Force exactly one `#hide`; never add an inline schedule |
-| `^prj`, `P` due/past | Keep `#hide`, except remove it when `^prj` is the note's only task |
+| `^prj`, `P` due/past | Normal surfacing rule (rows above): remove `#hide` when there are no unhidden open tasks and no open sub-projects, add it back otherwise |
 - Active projects with open `^prj` tasks get one generated Sub-projects line
   nested directly under `^prj`, such as
   `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`.

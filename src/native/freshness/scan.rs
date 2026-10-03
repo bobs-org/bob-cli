@@ -41,28 +41,21 @@ pub(crate) struct RowCtx {
     pub(crate) note_refresh_raw: Option<String>,
     pub(crate) is_daily_note: bool,
     pub(crate) is_today: bool,
-    /// Own-note open-task count for `^prj` rows; 0 otherwise.
-    pub(crate) project_open_count: u32,
-    /// Valid frontmatter `scheduled` on the tracker's own note.
-    pub(crate) project_scheduled: Option<NaiveDate>,
-    /// The own note carries a malformed `scheduled`.
-    pub(crate) project_schedule_invalid: bool,
 }
 
 impl RowCtx {
     /// Build the evaluator input. `lane_visible` is the NEXT/PENDING
     /// lane predicate: rows from [`dataview::READY_QUERY`] already
     /// carry it from the engine, so callers pass `true` there. For
-    /// exact `^prj`/`^ref` trackers callers pass the
-    /// freshness-specific visibility (hide allowed); every other
-    /// exclusion still applies.
+    /// exact `^ref` trackers callers pass the freshness-specific
+    /// visibility (hide allowed); every other exclusion still
+    /// applies. Exact `^prj` rows use the ordinary predicate.
     pub(crate) fn freshness_row(&self, lane_visible: bool) -> FreshnessRow {
         FreshnessRow {
             path: self.task.path.clone(),
             line: self.task.line,
             status: self.task.status_symbol.chars().next().unwrap_or(' '),
             is_todo: self.task.status_type == "TODO",
-            is_open: super::state::is_open_status_type(&self.task.status_type),
             recurring: self.task.is_recurring,
             lane_visible,
             is_daily_note: self.is_daily_note,
@@ -74,9 +67,6 @@ impl RowCtx {
             tracker: super::state::TrackerKind::from_block_id(
                 self.task.block_id.as_deref(),
             ),
-            project_open_count: self.project_open_count,
-            project_scheduled: self.project_scheduled,
-            project_schedule_invalid: self.project_schedule_invalid,
         }
     }
 }
@@ -104,10 +94,11 @@ pub(crate) struct Snapshot {
     /// Rows matching [`dataview::NEXT_QUERY`]: the `[*]` lane,
     /// lane-visible by construction.
     pub(crate) next: Vec<RowCtx>,
-    /// Hidden exact `^prj`/`^ref` candidates from the all-task scan:
+    /// Hidden exact `^ref` candidates from the all-task scan:
     /// freshness-specific visibility (hide allowed) with every other
     /// exclusion still applied, excluding rows already in a lane
-    /// query. Ordinary hidden tasks never land here.
+    /// query. Ordinary hidden tasks — and hidden `^prj` rows — never
+    /// land here.
     pub(crate) trackers: Vec<RowCtx>,
     /// Rows matching [`dataview::OPEN_QUERY`]: the seed universe.
     pub(crate) open: Vec<RowCtx>,
@@ -211,9 +202,6 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
             is_daily_note: canonical_daily_date(Path::new(&task.path))
                 .is_some(),
             is_today: is_today_task(task, &today_blocks, &today_lines),
-            project_open_count: 0,
-            project_scheduled: None,
-            project_schedule_invalid: false,
         })
     };
 
@@ -241,65 +229,11 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
         all.push(context(task)?);
     }
 
-    // Per-path open-task totals, built once from the unfiltered
-    // task inventory (`all`): every open status by Tasks status type,
-    // excluding every exact `^prj` row. Includes hidden, recurring,
-    // future-scheduled, Today-linked, fresh, NEW, RETURNED, and
-    // ROTTEN tasks; an open `^ref` counts. Never rolls up children,
-    // embeds, backlinks, or parents. One pass, then O(1) lookups.
-    let mut open_counts: HashMap<String, u32> = HashMap::new();
-    for row in &all {
-        if !super::state::is_open_status_type(&row.task.status_type) {
-            continue;
-        }
-        if super::state::is_open_project_row(true, row.task.block_id.as_deref())
-        {
-            *open_counts.entry(row.task.path.clone()).or_default() += 1;
-        }
-    }
-    // Own-note frontmatter schedule context, cached once per file.
-    let mut schedule_cache: HashMap<String, (Option<NaiveDate>, bool)> =
-        HashMap::new();
-    let mut schedule_for = |path: &str| -> (Option<NaiveDate>, bool) {
-        if let Some(cached) = schedule_cache.get(path) {
-            return *cached;
-        }
-        let contents = file_contents.get(path).cloned().unwrap_or_default();
-        let parsed = parse_project_scheduled(&contents);
-        schedule_cache.insert(path.to_string(), parsed);
-        parsed
-    };
-    let mut fill_project_context = |row: &mut RowCtx| {
-        let is_prj = row.task.block_id.as_deref() == Some("prj");
-        if !is_prj {
-            row.project_open_count = 0;
-            row.project_scheduled = None;
-            row.project_schedule_invalid = false;
-            return;
-        }
-        row.project_open_count =
-            open_counts.get(&row.task.path).copied().unwrap_or(0);
-        let (scheduled, invalid) = schedule_for(&row.task.path);
-        row.project_scheduled = scheduled;
-        row.project_schedule_invalid = invalid;
-    };
-    for row in &mut ready {
-        fill_project_context(row);
-    }
-    for row in &mut pending {
-        fill_project_context(row);
-    }
-    for row in &mut next {
-        fill_project_context(row);
-    }
-    for row in &mut all {
-        fill_project_context(row);
-    }
-
-    // Hidden tracker candidates: exact `^prj`/`^ref` rows from the
-    // all-task scan that pass every scope exclusion except `#hide`,
-    // and are not already in a lane query. Ordinary hidden tasks stay
-    // out. Deduplicate by (path, line) when combining.
+    // Hidden tracker candidates: exact `^ref` rows from the all-task
+    // scan that pass every scope exclusion except `#hide`, and are not
+    // already in a lane query. Ordinary hidden tasks — and hidden
+    // `^prj` rows, which sync gates — stay out. Deduplicate by (path,
+    // line) when combining.
     let mut lane_keys: std::collections::BTreeSet<(String, u32)> =
         std::collections::BTreeSet::new();
     for row in ready.iter().chain(pending.iter()).chain(next.iter()) {
@@ -307,8 +241,7 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
     }
     let mut trackers = Vec::new();
     for row in &all {
-        let block_id = row.task.block_id.as_deref();
-        if block_id != Some("prj") && block_id != Some("ref") {
+        if row.task.block_id.as_deref() != Some("ref") {
             continue;
         }
         let key = (row.task.path.clone(), row.task.line);
@@ -376,10 +309,10 @@ pub(crate) fn upkeep_today(rows: &[RowCtx], today: NaiveDate) -> u32 {
     count
 }
 
-/// Freshness-specific visibility for an exact `^prj`/`^ref`
-/// candidate from the all-task scan: every scope exclusion still
-/// applies except the conventional `#hide` tag. Ordinary hidden tasks
-/// never reach here (callers filter by exact tracker identity first).
+/// Freshness-specific visibility for an exact `^ref` candidate from
+/// the all-task scan: every scope exclusion still applies except the
+/// conventional `#hide` tag. Ordinary hidden tasks never reach here
+/// (callers filter by exact tracker identity first).
 fn tracker_candidate_visible(row: &RowCtx, today: NaiveDate) -> bool {
     use super::state::lane_for_row;
     let status = row.task.status_symbol.chars().next().unwrap_or(' ');
@@ -401,85 +334,11 @@ fn tracker_candidate_visible(row: &RowCtx, today: NaiveDate) -> bool {
     {
         return false;
     }
-    // Future inline scheduling suppresses review; the project
-    // frontmatter gate is applied by the evaluator.
+    // Future inline scheduling suppresses review.
     if row.task.scheduled.is_some_and(|date| date > today) {
         return false;
     }
     true
-}
-
-/// Parse an own-note frontmatter `scheduled` for `^prj` review gating,
-/// reusing the project schedule shape (exact `YYYY-MM-DD`). Returns
-/// `(date, invalid)`: `invalid` is true when the note carries a
-/// `scheduled` key that is missing, duplicated, or malformed, which
-/// suppresses the tracker until fixed.
-fn parse_project_scheduled(contents: &str) -> (Option<NaiveDate>, bool) {
-    // Local frontmatter scan (mirrors the project schedule shape):
-    // lines between the opening `---` and the closing `---`.
-    let mut lines = contents.lines();
-    let first = lines.next().unwrap_or("");
-    if first.trim_end_matches('\r') != "---" {
-        return (None, false);
-    }
-    let mut fm_lines = Vec::new();
-    for line in lines {
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        if line == "---" {
-            break;
-        }
-        fm_lines.push(line);
-    }
-    // If we never saw a closing fence, there is no frontmatter.
-    // (A body `---` later still ends the scan above; an absent fence
-    // leaves every line collected, but `scheduled` keys in the body
-    // are indented task fields, not `scheduled:` at column 0 —
-    // still, require the fence by re-scanning strictly.)
-    let has_fence = contents
-        .lines()
-        .skip(1)
-        .any(|line| line.strip_suffix('\r').unwrap_or(line) == "---");
-    if !has_fence {
-        return (None, false);
-    }
-    let fields: Vec<&str> = fm_lines
-        .iter()
-        .filter_map(|line| {
-            let rest = line.strip_prefix("scheduled")?;
-            rest.strip_prefix(':')
-        })
-        .collect();
-    if fields.is_empty() {
-        return (None, false);
-    }
-    if fields.len() > 1 {
-        return (None, true);
-    }
-    let raw = trim_yaml_scalar(fields[0]);
-    if !is_exact_project_date_shape(raw) {
-        return (None, true);
-    }
-    match NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
-        Ok(date) => (Some(date), false),
-        Err(_) => (None, true),
-    }
-}
-
-fn trim_yaml_scalar(raw: &str) -> &str {
-    let trimmed = raw.trim().trim_matches(['"', '\'']).trim();
-    // Strip a trailing YAML comment.
-    match trimmed.find(" #") {
-        Some(index) => trimmed[..index].trim_end(),
-        None => trimmed,
-    }
-}
-
-fn is_exact_project_date_shape(value: &str) -> bool {
-    value.len() == 10
-        && value.bytes().enumerate().all(|(index, byte)| match index {
-            4 | 7 => byte == b'-',
-            _ => byte.is_ascii_digit(),
-        })
 }
 
 /// Bucket and confirmation date for one Ready-lane row, sharing
@@ -548,10 +407,6 @@ pub(crate) fn lint_message(code: &str) -> String {
         }
         "task_refresh_invalid" => {
             "note task_refresh is not 1-365 days; falling through to config"
-                .to_string()
-        }
-        "project_scheduled_invalid" => {
-            "project scheduled is not a valid YYYY-MM-DD date; review suppressed until fixed"
                 .to_string()
         }
         "freshness_stale_daily_budget_deprecated" => {

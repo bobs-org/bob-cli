@@ -620,9 +620,6 @@ mod tests {
             note_refresh_raw: None,
             is_daily_note: false,
             is_today: false,
-            project_open_count: 0,
-            project_scheduled: None,
-            project_schedule_invalid: false,
         }
     }
 

@@ -150,6 +150,7 @@ pub(super) fn parse_project(
             mark: task.mark,
             hide_tag_count: tag_spans(task.text, HIDE_TAG).len(),
             is_prj: is_valid_prj_task_line(line, task),
+            is_open_task: contains_task_tag(task.text) && task.status.is_open(),
             scheduled_field_count: scheduled_fields.len(),
             scheduled_date,
         });
