@@ -35,14 +35,17 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
-/// Schema 5 adds project/reference tracking review: the `projects`
+/// Schema 6 adds the tracker cadence contract: `project_interval`
+/// and `reference_interval` in `config` (number or null, null means
+/// inherit) plus the `project` and `reference` interval sources.
+/// Schema 5 added project/reference tracking review: the `projects`
 /// walk tier, `projects_due` and the six-key `by_tier` histogram in
 /// counts (with `walk = sum(by_tier)`), and decoupled state totals
 /// (`due = new + resurfaced + rotten` over Ready states, including
 /// eligible Ready trackers). Schema 4 added the keep-streak contract.
 /// The seed envelope shares this constant; seed contents are
 /// otherwise unchanged.
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = 6;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -312,6 +315,8 @@ struct ListReport {
     interval: u16,
     pending_interval: Option<u16>,
     next_interval: Option<u16>,
+    project_interval: Option<u16>,
+    reference_interval: Option<u16>,
     budget: Option<u32>,
     decay_enabled: bool,
     decay_keeps: u16,
@@ -449,6 +454,8 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         interval: config.interval,
         pending_interval: config.pending_interval,
         next_interval: config.next_interval,
+        project_interval: config.project_interval,
+        reference_interval: config.reference_interval,
         budget: config.rotten_daily_budget,
         decay_enabled: config.decay.enabled,
         decay_keeps: config.decay.keeps,
@@ -626,10 +633,10 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
             None => match &row.created {
                 Some(created) => {
                     format!(
-                        "no Ready tasks in this project {sep} never confirmed {sep} created {created}"
+                        "No open tasks in this project {sep} never confirmed {sep} created {created}"
                     )
                 }
-                None => "no Ready tasks in this project · never confirmed"
+                None => "No open tasks in this project · never confirmed"
                     .to_string(),
             },
             Some(fresh) => {
@@ -642,7 +649,7 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
                     },
                 };
                 format!(
-                    "no Ready tasks in this project {sep} {lead} {sep} fresh {fresh}{every}"
+                    "No open tasks in this project {sep} {lead} {sep} fresh {fresh}{every}"
                 )
             }
         },
@@ -706,6 +713,13 @@ fn lane_json(interval: Option<u16>) -> serde_json::Value {
     }
 }
 
+fn tracker_json(interval: Option<u16>) -> serde_json::Value {
+    match interval {
+        Some(days) => json!(days),
+        None => json!(null),
+    }
+}
+
 fn json_list(report: &ListReport) -> serde_json::Value {
     json!({
         "ok": true,
@@ -715,6 +729,8 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "interval": report.interval,
             "pending_interval": lane_json(report.pending_interval),
             "next_interval": lane_json(report.next_interval),
+            "project_interval": tracker_json(report.project_interval),
+            "reference_interval": tracker_json(report.reference_interval),
             "rotten_daily_budget": report.budget,
             "decay": {
                 "enabled": report.decay_enabled,

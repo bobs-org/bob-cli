@@ -80,7 +80,7 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 6);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
     assert_eq!(value["config"]["pending_interval"], 1);
@@ -548,7 +548,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 6);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -652,7 +652,7 @@ fn list_lane_rows_cover_pending_and_next() {
         - [*] #task Fresh next [fresh:: 2026-10-08]\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 6);
     let counts = &value["counts"];
     assert_eq!(counts["pending_due"], 1);
     assert_eq!(counts["next_due"], 1);
@@ -860,7 +860,7 @@ fn list_reports_keeps_and_decide_per_schema_5() {
     let temp = keeps_vault("bob-cli-freshness-keeps");
     let value = keeps_list_json(&temp, "2026-10-20", &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 6);
     assert_eq!(value["config"]["decay"]["enabled"], true);
     assert_eq!(value["config"]["decay"]["keeps"], 3);
     assert!(value["config"]["decay"]["enter"].is_null());
@@ -910,7 +910,7 @@ fn list_reports_keeps_and_decide_per_schema_5() {
 fn list_pre_activation_counts_but_never_decides() {
     let temp = keeps_vault("bob-cli-freshness-keeps-trial");
     let value = keeps_list_json(&temp, NOW, &[]);
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 6);
     assert_eq!(value["config"]["decay"]["active"], false);
     assert_eq!(value["counts"]["decide"], 0);
     let queue = value["queue"].as_array().expect("queue array");
@@ -1011,7 +1011,7 @@ fn seed_preserves_existing_keeps() {
     write_file(&vault.join("a.md"), "- [ ] #task Kept before [keeps:: 2]\n");
     let (output, value) = seed_json(&temp, &[]);
     assert_success(&output);
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 6);
     assert_eq!(value["stamped"]["ready"], 1);
     let contents =
         fs::read_to_string(vault.join("a.md")).expect("read seeded line");
@@ -1051,6 +1051,107 @@ fn seed_invariance_abort_lists_the_line() {
 }
 
 #[test]
+fn list_tracker_intervals_and_open_occupancy() {
+    // A blocked task in the same note suppresses the project even
+    // though the READY query hides it: occupancy uses the unfiltered
+    // inventory, not the filtered lane query.
+    let temp = TempDir::new("bob-cli-freshness-tracker-corrections");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("p.md"), "- [ ] #task Empty project ^prj\n");
+    write_file(
+        &vault.join("blocked.md"),
+        "- [ ] #task Blocked project ^prj\n- [?] #task Waiting work\n",
+    );
+    write_file(
+        &vault.join("r.md"),
+        "- [ ] #task Read me [fresh:: 2026-10-05] ^ref\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "freshness:\n  project_interval: 1\n  reference_interval: 3\n",
+    );
+    let mut command = bob_command();
+    command
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .arg("-f")
+        .arg("json");
+    let output = command.output().expect("run tracker list");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("list JSON");
+    assert_eq!(value["schema_version"], 6);
+    assert_eq!(value["config"]["project_interval"], 1);
+    assert_eq!(value["config"]["reference_interval"], 3);
+    // Only the empty project walks; the blocked note's tracker is
+    // suppressed by its open `[?]` row.
+    let tiers: Vec<String> = value["queue"]
+        .as_array()
+        .expect("queue array")
+        .iter()
+        .map(|row| {
+            format!(
+                "{}:{}:{}",
+                row["path"].as_str().unwrap_or("?"),
+                row["line"].as_u64().unwrap_or(0),
+                row["tier"].as_str().unwrap_or("?")
+            )
+        })
+        .collect();
+    assert!(
+        tiers.iter().any(|key| key == "p.md:1:projects"),
+        "empty project must walk in PROJECTS:\n{value}"
+    );
+    assert!(
+        !tiers.iter().any(|key| key.starts_with("blocked.md:")),
+        "blocked project must stay suppressed:\n{value}"
+    );
+    // The reference uses the 3-day cadence: stamped 2026-10-05, due
+    // 2026-10-08, source `reference`.
+    let reference = value["queue"]
+        .as_array()
+        .expect("queue array")
+        .iter()
+        .find(|row| row["path"] == "r.md")
+        .expect("reference row");
+    assert_eq!(reference["interval_source"], "reference");
+    assert_eq!(reference["interval"], 3);
+    assert_eq!(reference["due_on"], "2026-10-08");
+    // The project uses the 1-day cadence with source `project`.
+    let project = value["queue"]
+        .as_array()
+        .expect("queue array")
+        .iter()
+        .find(|row| row["path"] == "p.md")
+        .expect("project row");
+    assert_eq!(project["interval_source"], "project");
+    assert_eq!(project["interval"], 1);
+}
+
+#[test]
+fn list_invalid_tracker_intervals_exit_2() {
+    let temp = freshness_vault("bob-cli-freshness-tracker-bad");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "freshness:\n  project_interval: false\n");
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", NOW)
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run with invalid tracker interval");
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
 fn list_walks_projects_after_new_with_decoupled_counts() {
     let temp = TempDir::new("bob-cli-freshness-trackers");
     let vault = vault_dir(&temp);
@@ -1074,7 +1175,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         "---\nscheduled: someday\n---\n- [ ] #task Broken project ^prj\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 6);
     let tiers: Vec<&str> = value["queue"]
         .as_array()
         .expect("queue array")

@@ -66,19 +66,28 @@ as NEW until a human confirms it.
 | `freshness.interval`           | `~/.config/bob/config.yml`                     | integer days, 1–365, default 7           |
 | `freshness.pending_interval`   | `~/.config/bob/config.yml`                     | integer days, 1–365, or `false`; default 1 |
 | `freshness.next_interval`      | `~/.config/bob/config.yml`                     | integer days, 1–365, or `false`; default 1 |
+| `freshness.project_interval`   | `~/.config/bob/config.yml`                     | optional integer days, 1–365; absent/null inherits |
+| `freshness.reference_interval` | `~/.config/bob/config.yml`                     | optional integer days, 1–365; absent/null inherits |
 | `freshness.rotten_daily_budget` | `~/.config/bob/config.yml`                    | optional integer ≥ 1, default off        |
 | `freshness.decay`              | `~/.config/bob/config.yml`                     | keep-streak policy: mapping, `true`, `false`, or null (§2a) |
 
-**Interval precedence.** `interval(t)` for a lane task in a walked
-lane is that lane's interval (`pending_interval` for `[/]` with source
-`pending`, `next_interval` for `[*]` with source `next`), overriding
-the whole Ready chain below. Otherwise `interval(t)` is the task's
-`refresh`, then the containing note's `task_refresh`, then
-`freshness.interval`, then 7. The note override applies by residence
-(the note that contains the task), not through `parent` links.
+**Interval precedence.** A configured `project_interval` overrides
+every other level for `^prj` rows (source `project`); a configured
+`reference_interval` overrides every other level for `^ref` rows
+(source `reference`) — task `refresh`, note `task_refresh`, global
+`interval`, and the lane interval alike. Otherwise `interval(t)` for
+a lane task in a walked lane is that lane's interval
+(`pending_interval` for `[/]` with source `pending`,
+`next_interval` for `[*]` with source `next`), overriding the whole
+Ready chain below. Otherwise `interval(t)` is the task's `refresh`,
+then the containing note's `task_refresh`, then `freshness.interval`,
+then 7. The note override applies by residence (the note that
+contains the task), not through `parent` links.
 `pending_interval: false` / `next_interval: false` turns that lane's
-walk off; an absent or null value means the default 1, matching how
-`interval:` already treats null.
+walk off — including reference review in that lane, but never
+PROJECTS; an absent or null lane value means the default 1, matching
+how `interval:` already treats null. Absent/null tracker keys inherit
+the previous cadence exactly.
 
 **Invalid values.**
 
@@ -98,14 +107,24 @@ freshness:
   interval: 7 # Ready backlog review cadence
   pending_interval: 1 # [/] lane daily review; false = not walked
   next_interval: 1 # [*] lane daily review; false = not walked
+  # project_interval: 1 # ^prj review cadence; absent/null inherits
+  # reference_interval: 3 # ^ref review cadence; absent/null inherits
   # rotten_daily_budget: 15 # counts upkeep outside the lanes; never hides tasks
 ```
+
+Booleans (including `false`), zero, negatives, values above 365,
+fractional numbers, strings, and containers are config errors for the
+tracker keys; `bob freshness` exits 2 while ledger-tools uses the
+complete default config and flags it invalid. Other config loaders
+still ignore a malformed freshness block.
 
 **Mobile config caveat.** On mobile, when the config file is
 unavailable, ledger-tools uses the defaults above and marks them
 `invalid` rather than failing; a config edit on desktop is visible
 within the existing 60-second tick. `bob freshness` on desktop still
-exits 2 for an invalid `freshness:` block.
+exits 2 for an invalid `freshness:` block. The mobile/missing-file
+fallback carries neither tracker override and cannot see Bryan's
+desktop settings.
 
 ## 2a. Keep streaks and approved-decay policy
 
@@ -320,15 +339,23 @@ walk_scope(t) = lane(t) ≠ none ∧ lane-visible ∧ ¬recurring ∧ ¬canonica
                 trackers use the freshness-specific visibility above)
 lane_interval = freshness.pending_interval (pending) | freshness.next_interval (next);
                 default 1; false = that lane is not walked
-interval(t)   = lane task with a walked lane (except ^prj): lane_interval, source "pending" | "next"
+interval(t)   = ^prj with project_interval: project_interval, source "project"
+                | ^ref with reference_interval: reference_interval, source "reference"
+                | lane task with a walked lane (except ^prj): lane_interval, source "pending" | "next"
                 otherwise unchanged: task refresh → note task_refresh → freshness.interval → 7
-                (^prj in any lane always uses the Ready chain, so the weekly project
-                reminder never becomes a daily lane review; the line picker shows it too)
+                (^prj in any lane always uses the Ready chain when no
+                project_interval is set, so the weekly project reminder
+                never becomes a daily lane review; the line picker shows
+                it too. A set tracker interval wins over all of it,
+                including task/note/global/lane levels)
 lane_due(t)   = walked lane ∧ (no fresh(t) ∨ today ≥ fresh(t) + lane_interval)
-                (^prj lane rows use the Ready chain instead; a disabled lane walk
-                does not disable the project reminder)
+                (^ref lane rows use the effective reference interval;
+                ^prj lane rows use the Ready chain (or project_interval)
+                instead; a disabled lane walk disables reference review
+                but never the project reminder)
 due_on(t)     = lane row: fresh(t) + lane_interval, or none when never stamped
-                (^prj lane row: Ready-chain due date instead)
+                (^ref lane row: effective reference due date;
+                ^prj lane row: Ready-chain (or project_interval) due date)
                 RESURFACED: scheduled(t); ROTTEN/FRESH: fresh(t) + interval(t); NEW: none
 due(t)        = in_scope(t) ∧ state(t) ≠ FRESH
 tier(t)       = new       if lane ready ∧ state NEW (ordinary tasks and ^ref)
@@ -411,7 +438,7 @@ Bucket conformance: S1 maps to `new`; S3, S4, and S11 map to
 null.
 
 **Tracking review (projects and references).** The freshness walk
-also reminds Bryan to replenish projects with no Ready tasks and to
+also reminds Bryan to replenish projects with no open tasks and to
 review unfinished reading references, in one consistent contract on
 both sides including the `]s` / Alt+Shift+F walk: NEW → PROJECTS →
 PENDING → NEXT → RETURNED → ROTTEN.
@@ -442,40 +469,57 @@ PENDING → NEXT → RETURNED → ROTTEN.
   never disables an exact anchor, and no task is created for a note
   missing its tracker. Creation, import, and sync never
   auto-confirm; existing confirmation dates are preserved.
-- `project_ready_count(path)` is the whole Ready lane in that path
-  (the existing per-note count: visible TODO tasks physically
-  resident there, excluding recurring tasks and every `^prj` row —
-  including NEW/RETURNED/ROTTEN/fresh and Today-linked rows,
-  ignoring `ready_cap`, counting no Next/Pending rows, never rolling
-  up children/embeds/backlinks/parents; custom TODO symbols count).
+- `project_open_count(path)` is the whole open-task inventory in
+  that path: every open status by Tasks status type physically
+  resident there (Ready, dependency-blocked or `[?]`, Pending `[/]`,
+  Next `[*]`, custom open types), excluding DONE, CANCELLED,
+  NON_TASK, and every exact `^prj` row. It includes hidden,
+  recurring, future-scheduled, Today-linked, fresh, NEW, RETURNED,
+  and ROTTEN tasks; an open `^ref` counts. It is distinct from the
+  per-note Ready-cap count (which still counts only the visible
+  Ready lane). Never rolls up children/embeds/backlinks/parents and
+  never deduplicates across files.
   A populated note leaves its `^prj` with null state/bucket/tier; an
-  empty one reviews on the normal Ready interval chain (`refresh` →
+  empty one reviews on its tracker cadence (`project_interval` when
+  set, otherwise the normal Ready interval chain `refresh` →
   `task_refresh` → `freshness.interval` → 7), due in PROJECTS even
   when its state is NEW or RESURFACED. A `[*]`/`[/]` tracker keeps
-  its lane (with null state) and the Ready cadence in PROJECTS; a
-  disabled lane walk never disables it. Adding a counted Ready task
-  suppresses review immediately and removing the last one restores
-  it, both without writing a stamp. A parent with only open
-  subprojects still reminds when its own lane is empty.
+  its lane (with null state) and the Ready cadence (or
+  `project_interval`) in PROJECTS; a disabled lane walk never
+  disables it. Adding any open task suppresses review immediately
+  and removing the last one restores it, both without writing a
+  stamp; hiding, scheduling, blocking, or changing an open task's
+  lane never empties the note. A parent with only open subprojects
+  in other files still reminds when its own file is empty.
 - An unstamped Ready `^ref` is NEW regardless of `created` or PDF
-  import age, then follows ordinary freshness (day 7 rotten by
-  default, with the usual overrides and resurfacing); in
-  Next/Pending it follows that lane like any other task.
+  import age, then follows its tracker cadence (`reference_interval`
+  when set, otherwise ordinary freshness: day 7 rotten by default,
+  with the usual overrides and resurfacing); in Next/Pending it
+  follows that lane like any other task, or the reference cadence
+  when set, keeping its actual lane with null state/bucket.
 
 PR/RF conformance (fixed local dates; default interval 7, plus
-config 10, note 14, task 3 for precedence with no second tracker
-interval): empty unstamped projects (hidden or not) land in
-PROJECTS once, never NEW; stamps today/6-days-ago suppress while
-7-days-ago and older surface with accurate due metadata; each of
-NEW/fresh/RETURNED/ROTTEN Ready tasks suppresses even with
-`ready_cap: off`; recurring/hidden/blocked/Next/Pending/closed/
-future-scheduled work and open child projects never fill the lane;
-custom TODO counts in its own path only; the visible `^prj` never
-self-suppresses; transitions both directions reuse the old stamp
-with no evaluation write; frontmatter schedules gate then resurface
-(or diagnose when malformed); lane trackers keep the Ready chain;
-old-but-unstamped references are NEW; Today/recurring/daily/
-template/conflict/blocked/future rows stay excluded;
+config 10, note 14, task 3 for precedence, plus project 1 and
+reference 3 for tracker precedence): empty unstamped projects
+(hidden or not) land in PROJECTS once, never NEW; stamps today/6-days-ago
+suppress while 7-days-ago and older surface with accurate due
+metadata (1-day project and 3-day reference cadences when set); each
+of Ready, Blocked, dependency-blocked, Pending, Next, custom open,
+hidden, recurring, future-scheduled, Today, fresh, NEW, RETURNED,
+and ROTTEN rows suppresses — only terminal/non-task rows, the
+tracker itself, plain links/embeds, and other-file children leave
+the note empty; hiding, deferring, blocking, or lane-changing the
+last open task never empties it; completing/cancelling/moving it
+restores eligibility with no stamp write; custom TODO counts in its
+own path only; the visible `^prj` never self-suppresses; transitions
+both directions reuse the old stamp with no evaluation write;
+frontmatter schedules gate then resurface (or diagnose when
+malformed); lane trackers keep the Ready chain (or the tracker
+cadence when set); disabled lanes still disable reference review
+but never PROJECTS; absent tracker keys preserve the prior chain
+and ordinary tasks ignore both keys; old-but-unstamped references
+are NEW; Today/recurring/daily/ template/conflict/blocked/future
+rows stay excluded from review scope (but still occupy projects);
 tag-only/near-match/embedded links never qualify; the six-tier
 order holds with stable ties and `walk = sum(by_tier)`; counts,
 JSON, human output, status bar, `limit=1`, and the upkeep budget
@@ -484,15 +528,18 @@ commitment completion; hidden trackers join full review while the
 visible pool, lane, and capacity counts stay unchanged; PROJECTS
 never decays.
 
-**Machine vocabulary (schema 5).** Human output, help, and docs
+**Machine vocabulary (schema 6).** Human output, help, and docs
 say `rotten`, and so does the machine contract since the vocab-rotten
 migration published JSON schema 2: `state: "rotten"`,
 `counts.rotten`, and `freshness.rotten_daily_budget`. Each JSON queue
 row still carries the `bucket` field (`"new"`, `"rotten"`, or null).
-Schema 5 adds the `projects` walk tier with `counts.projects_due`
-and the six-key `counts.by_tier` histogram (`walk` sums it), and
-decouples state totals from tier totals as above; the shared seed
-envelope version advances with it, seed behavior unchanged.
+Schema 6 adds `config.project_interval` / `config.reference_interval`
+(number or null, null means inherit) and the `project` / `reference`
+interval sources. Schema 5 added the `projects` walk tier with
+`counts.projects_due` and the six-key `counts.by_tier` histogram
+(`walk` sums it), and decoupled state totals from tier totals as
+above; the shared seed envelope version advances with each, seed
+behavior unchanged.
 Likewise bob-ledger-tools uses the `"rotten"` state string under
 freshness namespace v5 (`api.freshness.version === 5` with the
 explicit `trackerReview` capability; top-level api stays v3).
@@ -622,8 +669,8 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3 
   NEW 1
     gkeep_inbox.md:14   Pick up our daughter    created 2026-09-30
   PROJECTS 2
-    home.md:10          Replenish home          no Ready tasks in this project · never confirmed · every 7d (default)
-    work.md:44          Staff the launch        no Ready tasks in this project · due today · fresh 2026-10-01 · every 7d (default)
+    home.md:10          Replenish home          No open tasks in this project · never confirmed · every 7d (default)
+    work.md:44          Staff the launch        No open tasks in this project · due today · fresh 2026-10-01 · every 7d (default)
   PENDING 10
     sase.md:40          Land the epic           never confirmed · created 2026-09-20
     work.md:12          Ship the report         due today · fresh 2026-10-07 · every 1d (pending)
@@ -665,11 +712,13 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The JSON contract is `schema_version: 5` with `ok`, `date`,
+The JSON contract is `schema_version: 6` with `ok`, `date`,
 `config` (`interval`, `pending_interval` / `next_interval` as a number
-or `false`, `rotten_daily_budget`, plus normalized `decay` with
-`enabled`, `keeps`, `enter` (label or null), and read-only
-`active_from` / `active` rollout metadata), `counts` (`due`, `new`,
+or `false`, `project_interval` / `reference_interval` as a number or
+null (null means inherit), `rotten_daily_budget`, plus normalized
+`decay` with `enabled`, `keeps`, `enter` (label or null), and
+read-only `active_from` / `active` rollout metadata),
+`counts` (`due`, `new`,
 `resurfaced`, `rotten`, `fresh`, `pending_due`, `next_due`,
 `projects_due`, `by_tier` (all six tier keys), `walk`
 (`= sum(by_tier)`), `decide`, `refreshed_today`, `upkeep_today`,
@@ -680,13 +729,15 @@ regardless of `--limit`), `queue` (each with `rank`, `tier` (`new` |
 `"rotten"`, or null — lane rows carry `state: null` and `bucket:
 null`, as do ineligible projects), `path`, `line`, `block_id`,
 `status_symbol`, `text`, `created`, `fresh`, `interval`,
-`interval_source`, `due_on`, `days_overdue`, `keeps`, `decide`), and
-`warnings` (`code`, `path`, `line`, `message`). `decide` means a
-choice is due, not permission to execute an action. No new CLI
-subcommands or options. Human section counts, the REVIEW summary,
-status-bar walk totals, per-tier ranks, and commitment-boundary
-logic use tier counts, not state counts; a NEW project counts once
-in PROJECTS, and `--limit` only truncates rows.
+`interval_source` (`task` | `note` | `config` | `default` |
+`pending` | `next` | `project` | `reference`), `due_on`,
+`days_overdue`, `keeps`, `decide`), and `warnings` (`code`, `path`,
+`line`, `message`). `decide` means a choice is due, not permission
+to execute an action. No new CLI subcommands or options. Human
+section counts, the REVIEW summary, status-bar walk totals, per-tier
+ranks, and commitment-boundary logic use tier counts, not state
+counts; a NEW project counts once in PROJECTS, and `--limit` only
+truncates rows.
 
 `seed` options: `-d/--dry-run`, `-F/--force`, `-f/--format
 human|json`. Ready tasks without a valid `fresh` are grouped by note
@@ -703,11 +754,11 @@ whole run with no writes when any changed line parses differently
 under either Rust parser, re-reads each file just before writing and
 refuses when one changed, and writes through a temp file plus rename.
 A same-day rerun finds nothing to stamp and reports zeros. The JSON
-contract is `schema_version: 5` with `ok`, `date`, `dry_run`,
+contract is `schema_version: 6` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
-also moves the `seed` envelope to 5, with seed content unchanged. Seed
+also moves the `seed` envelope to 6, with seed content unchanged. Seed
 candidate selection is unchanged, and list stays read-only.
 
 Exit codes: 0 on success; 1 for I/O errors and seed refusals; 2 for
@@ -987,14 +1038,15 @@ when it differs from today's year: `Tue, Dec 30, 2025`). Relative
 age: `today`, `yesterday`, or `N days ago`. `every …` reads `every N
 days` (or `every 1 day`), plus ` (this task)`, ` (this note)`, or
 ` (config)` for those sources and nothing for the default, plus
-` (pending lane)` / ` (next lane)` for the lane sources. Line 1:
+` (pending lane)` / ` (next lane)` for the lane sources and
+` (project)` / ` (reference)` for the tracker sources. Line 1:
 `Confirmed today` at age 0, otherwise `Confirmed {date} ·
 {relative}`. Line 2 is picked by resolution rather than tone: closed
 or out of scope → `Not in the review queue: {reason}`; a due lane
 row → `Daily {PENDING|NEXT} review due since {dueOn} · every …`; a
 lane row stamped today → `Next review {fresh+interval} · every …
-({pending|next} lane)`; a PROJECTS row → `No Ready tasks in this
-project` with its confirmation/due detail and effective Ready-chain
+({pending|next} lane)`; a PROJECTS row → `No open tasks in this
+project` with its confirmation/due detail and effective tracker
 interval (never a daily lane review or a generic hidden-task
 exemption); ROTTEN → `Due for review since {dueOn} ·
 every …`; RESURFACED → `Resurfaced {scheduled}: scheduled after it
@@ -1004,12 +1056,12 @@ review {fresh+interval} · every …`; unresolved with the lease over →
 only: `Alt+F to confirm` (lane rows add the lane keep/release/today
 keys per M9). Lane and PROJECTS rows with a tier get the `due` tone
 and lane rows stamped today get the `today` tone. A populated
-project reads as not due because it has Ready tasks. Lane tasks
+project reads as not due because the project has open tasks. Lane tasks
 outside the walk (Today, daily note, disabled lane, recurring) keep
 `resting` with the existing reasons. Reasons by status symbol: `*`
 Next, `/` In Progress, `?` Blocked, `x`/`X` Done, `-` Cancelled, any
 other non-space symbol `status [s]`; for `[ ]`, tracker project state
-first (`not due — project has Ready tasks`, invalid project
+first (`not due — project has open tasks`, invalid project
 schedule, future note schedule), then the first that applies:
 `linked today`, `in a daily note`, `recurring`, `in _templates or
 _conflicts`, `scheduled for {date}`, otherwise `hidden or

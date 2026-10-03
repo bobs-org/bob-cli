@@ -26,6 +26,8 @@ fn config_with_interval(days: u16) -> FreshnessConfig {
         interval: days,
         pending_interval: Some(1),
         next_interval: Some(1),
+        project_interval: None,
+        reference_interval: None,
         rotten_daily_budget: None,
         interval_from_config: true,
         stale_budget_deprecated: false,
@@ -38,6 +40,8 @@ fn config_with_budget(budget: u32) -> FreshnessConfig {
         interval: 7,
         pending_interval: Some(1),
         next_interval: Some(1),
+        project_interval: None,
+        reference_interval: None,
         rotten_daily_budget: Some(budget),
         interval_from_config: false,
         stale_budget_deprecated: false,
@@ -53,6 +57,8 @@ fn config_with_lanes(
         interval: 7,
         pending_interval: pending,
         next_interval: next,
+        project_interval: None,
+        reference_interval: None,
         rotten_daily_budget: None,
         interval_from_config: false,
         stale_budget_deprecated: false,
@@ -66,6 +72,7 @@ fn row(line: &str) -> FreshnessRow {
         line: 1,
         status: ' ',
         is_todo: true,
+        is_open: true,
         recurring: false,
         lane_visible: true,
         is_daily_note: false,
@@ -75,7 +82,7 @@ fn row(line: &str) -> FreshnessRow {
         raw_line: line.to_string(),
         note_refresh_raw: None,
         tracker: None,
-        project_ready_count: 0,
+        project_open_count: 0,
         project_scheduled: None,
         project_schedule_invalid: false,
     }
@@ -343,6 +350,7 @@ fn stamped_row(
         line,
         status,
         is_todo,
+        is_open: true,
         recurring: false,
         lane_visible: is_todo,
         is_daily_note: false,
@@ -352,7 +360,7 @@ fn stamped_row(
         raw_line: format!("- [{status}] #task Counted [fresh:: {fresh}]"),
         note_refresh_raw: None,
         tracker: None,
-        project_ready_count: 0,
+        project_open_count: 0,
         project_scheduled: None,
         project_schedule_invalid: false,
     }
@@ -466,6 +474,7 @@ fn lane_row(
         line,
         status,
         is_todo,
+        is_open: true,
         recurring: false,
         lane_visible: true,
         is_daily_note: false,
@@ -475,7 +484,7 @@ fn lane_row(
         raw_line,
         note_refresh_raw: None,
         tracker: None,
-        project_ready_count: 0,
+        project_open_count: 0,
         project_scheduled: None,
         project_schedule_invalid: false,
     }
@@ -737,6 +746,8 @@ fn b1_upkeep_counts_outside_the_lanes() {
         interval: 7,
         pending_interval: Some(1),
         next_interval: Some(1),
+        project_interval: None,
+        reference_interval: None,
         rotten_daily_budget: Some(15),
         interval_from_config: false,
         stale_budget_deprecated: false,
@@ -766,6 +777,8 @@ fn decay_config(keeps: u16, enabled: bool) -> FreshnessConfig {
         interval: 7,
         pending_interval: Some(1),
         next_interval: Some(1),
+        project_interval: None,
+        reference_interval: None,
         rotten_daily_budget: None,
         interval_from_config: false,
         stale_budget_deprecated: false,
@@ -860,7 +873,7 @@ fn tracking_projects_tier_and_counts() {
     let config = default_config();
     let mut empty_prj = row("- [ ] #task Project ^prj");
     empty_prj.tracker = Some(TrackerKind::Prj);
-    empty_prj.project_ready_count = 0;
+    empty_prj.project_open_count = 0;
     let evaluated = evaluate(&empty_prj, today(), &config);
     assert_eq!(evaluated.state, Some(FreshState::New));
     assert_eq!(evaluated.tier, Some(Tier::Projects));
@@ -868,7 +881,7 @@ fn tracking_projects_tier_and_counts() {
     // A stamp today removes it from the queue (fresh, no tier).
     let mut stamped = row("- [ ] #task Project [fresh:: 2026-10-08] ^prj");
     stamped.tracker = Some(TrackerKind::Prj);
-    stamped.project_ready_count = 0;
+    stamped.project_open_count = 0;
     let evaluated = evaluate(&stamped, today(), &config);
     assert_eq!(evaluated.state, Some(FreshState::Fresh));
     assert_eq!(evaluated.tier, None);
@@ -876,7 +889,7 @@ fn tracking_projects_tier_and_counts() {
     // A counted Ready task suppresses the reminder immediately.
     let mut populated = row("- [ ] #task Project ^prj");
     populated.tracker = Some(TrackerKind::Prj);
-    populated.project_ready_count = 1;
+    populated.project_open_count = 1;
     let evaluated = evaluate(&populated, today(), &config);
     assert_eq!(evaluated.state, None);
     assert_eq!(evaluated.tier, None);
@@ -898,7 +911,7 @@ fn tracking_projects_tier_and_counts() {
     // A lane `^prj` keeps its lane with the Ready-chain interval.
     let mut lane_prj = lane_row("p.md", 2, '/', None, None);
     lane_prj.tracker = Some(TrackerKind::Prj);
-    lane_prj.project_ready_count = 0;
+    lane_prj.project_open_count = 0;
     lane_prj.raw_line = "- [/] #task Project ^prj".to_string();
     let evaluated = evaluate(&lane_prj, today(), &config);
     assert_eq!(evaluated.lane, Some(Lane::Pending));
@@ -931,4 +944,166 @@ fn counts_carry_decide() {
     assert_eq!(report.rotten, 2);
     let silent = counts(&[kept_row(3)], today(), &config);
     assert_eq!(silent.decide, 0);
+}
+
+fn config_with_trackers(
+    project: Option<u16>,
+    reference: Option<u16>,
+) -> FreshnessConfig {
+    FreshnessConfig {
+        interval: 7,
+        pending_interval: Some(1),
+        next_interval: Some(1),
+        project_interval: project,
+        reference_interval: reference,
+        rotten_daily_budget: None,
+        interval_from_config: false,
+        stale_budget_deprecated: false,
+        decay: DecayConfig::default(),
+    }
+}
+
+/// Tracker cadences override every other level for that tracker type,
+/// while ordinary tasks and absent keys preserve the prior chain.
+#[test]
+fn tracker_intervals_override_for_matching_type() {
+    let config = config_with_trackers(Some(1), Some(3));
+    // `^prj` stamped yesterday is due today with the project cadence,
+    // even with task/note/global/lane values that would say otherwise.
+    let mut prj =
+        row("- [ ] #task Project [fresh:: 2026-10-07] [refresh:: 30] ^prj");
+    prj.tracker = Some(TrackerKind::Prj);
+    prj.note_refresh_raw = Some("14".to_string());
+    prj.project_open_count = 0;
+    let evaluated = evaluate(&prj, today(), &config);
+    assert_eq!(evaluated.interval_days, 1);
+    assert_eq!(evaluated.interval_source, IntervalSource::Project);
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+    assert_eq!(evaluated.tier, Some(Tier::Projects));
+
+    // `^ref` stamped 2 days ago is still fresh under a 3-day cadence.
+    let mut fresh_ref = row("- [ ] #task Read [fresh:: 2026-10-06] ^ref");
+    fresh_ref.tracker = Some(TrackerKind::Ref);
+    let evaluated = evaluate(&fresh_ref, today(), &config);
+    assert_eq!(evaluated.interval_days, 3);
+    assert_eq!(evaluated.interval_source, IntervalSource::Reference);
+    assert_eq!(evaluated.state, Some(FreshState::Fresh));
+
+    // `^ref` stamped 3 days ago is rotten with accurate due metadata.
+    let mut rotten_ref = row("- [ ] #task Read [fresh:: 2026-10-05] ^ref");
+    rotten_ref.tracker = Some(TrackerKind::Ref);
+    let evaluated = evaluate(&rotten_ref, today(), &config);
+    assert_eq!(evaluated.interval_days, 3);
+    assert_eq!(evaluated.interval_source, IntervalSource::Reference);
+    assert_eq!(evaluated.state, Some(FreshState::Rotten));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+    assert_eq!(evaluated.days_overdue, Some(0));
+
+    // Ordinary tasks ignore both tracker keys.
+    let ordinary = row("- [ ] #task Plain [fresh:: 2026-10-01]");
+    let evaluated = evaluate(&ordinary, today(), &config);
+    assert_eq!(evaluated.interval_days, 7);
+    assert_eq!(evaluated.interval_source, IntervalSource::Default);
+
+    // Absent keys preserve the prior chain exactly.
+    let inherit = default_config();
+    let evaluated = evaluate(&prj, today(), &inherit);
+    assert_eq!(evaluated.interval_days, 30);
+    assert_eq!(evaluated.interval_source, IntervalSource::Task);
+}
+
+/// Reference lane rows use the reference cadence with their actual
+/// lane and null state; a disabled lane stays unwalked; projects
+/// always walk in PROJECTS even with the lane off.
+#[test]
+fn tracker_lane_precedence_and_disabled_lanes() {
+    let config = config_with_trackers(Some(1), Some(3));
+    // `^ref` in Pending uses the 3-day reference cadence, not the
+    // 1-day lane interval, and keeps its Pending tier with null state.
+    let mut pending_ref = lane_row("r.md", 1, '/', Some("2026-10-05"), None);
+    pending_ref.tracker = Some(TrackerKind::Ref);
+    pending_ref.raw_line =
+        "- [/] #task Read [fresh:: 2026-10-05] ^ref".to_string();
+    let evaluated = evaluate(&pending_ref, today(), &config);
+    assert_eq!(evaluated.lane, Some(Lane::Pending));
+    assert_eq!(evaluated.state, None);
+    assert_eq!(evaluated.tier, Some(Tier::Pending));
+    assert_eq!(evaluated.interval_days, 3);
+    assert_eq!(evaluated.interval_source, IntervalSource::Reference);
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+
+    // Same lane disabled: no tier, but the effective cadence is still
+    // the reference interval with no due date.
+    let mut disabled = config_with_trackers(None, Some(3));
+    disabled.pending_interval = None;
+    let evaluated = evaluate(&pending_ref, today(), &disabled);
+    assert_eq!(evaluated.tier, None);
+    assert_eq!(evaluated.interval_days, 3);
+    assert_eq!(evaluated.interval_source, IntervalSource::Reference);
+    assert_eq!(evaluated.due_on, None);
+
+    // `^prj` in Pending walks PROJECTS with the project cadence even
+    // when the lane is disabled.
+    let mut lane_prj = lane_row("p.md", 2, '/', Some("2026-10-06"), None);
+    lane_prj.tracker = Some(TrackerKind::Prj);
+    lane_prj.project_open_count = 0;
+    lane_prj.raw_line =
+        "- [/] #task Project [fresh:: 2026-10-06] ^prj".to_string();
+    let mut lane_off = config_with_trackers(Some(1), Some(3));
+    lane_off.pending_interval = None;
+    let evaluated = evaluate(&lane_prj, today(), &lane_off);
+    assert_eq!(evaluated.lane, Some(Lane::Pending));
+    assert_eq!(evaluated.tier, Some(Tier::Projects));
+    assert_eq!(evaluated.interval_days, 1);
+    assert_eq!(evaluated.interval_source, IntervalSource::Project);
+}
+
+/// Project occupancy counts every open status and ignores lane
+/// visibility, while terminal rows and `^prj` rows never count.
+#[test]
+fn project_occupancy_counts_open_statuses() {
+    use super::{is_open_project_row, is_open_status_type, project_open_count};
+    assert!(is_open_status_type("TODO"));
+    assert!(is_open_status_type("IN_PROGRESS"));
+    assert!(is_open_status_type("ON_HOLD"));
+    assert!(!is_open_status_type("DONE"));
+    assert!(!is_open_status_type("CANCELLED"));
+    assert!(!is_open_status_type("NON_TASK"));
+    assert!(!is_open_status_type("EMPTY"));
+    assert!(is_open_project_row(true, None));
+    assert!(is_open_project_row(true, Some("ref")));
+    assert!(!is_open_project_row(true, Some("prj")));
+    assert!(!is_open_project_row(false, None));
+
+    // Any open row suppresses, whatever its lane or visibility.
+    for (status, is_todo, is_open) in [
+        (' ', true, true),
+        ('/', false, true),
+        ('*', false, true),
+        ('?', false, true),
+    ] {
+        let mut prj = row("- [ ] #task Project ^prj");
+        prj.tracker = Some(TrackerKind::Prj);
+        prj.status = status;
+        prj.is_todo = is_todo;
+        prj.is_open = is_open;
+        prj.project_open_count = 1;
+        let evaluated = evaluate(&prj, today(), &default_config());
+        assert_eq!(evaluated.tier, None, "status {status} suppresses");
+    }
+
+    // The pure helper counts open rows by residence, excluding `^prj`.
+    let mut open_task = row("- [ ] #task Work");
+    open_task.path = "p.md".to_string();
+    open_task.is_open = true;
+    let mut done_task = row("- [x] #task Done");
+    done_task.path = "p.md".to_string();
+    done_task.is_open = false;
+    let mut other_file = row("- [ ] #task Elsewhere");
+    other_file.path = "q.md".to_string();
+    other_file.is_open = true;
+    assert_eq!(
+        project_open_count(&[open_task, done_task, other_file], "p.md"),
+        1
+    );
 }

@@ -128,6 +128,8 @@ pub(crate) enum IntervalSource {
     Default,
     Pending,
     Next,
+    Project,
+    Reference,
 }
 
 impl IntervalSource {
@@ -139,6 +141,8 @@ impl IntervalSource {
             Self::Default => "default",
             Self::Pending => "pending",
             Self::Next => "next",
+            Self::Project => "project",
+            Self::Reference => "reference",
         }
     }
 }
@@ -166,8 +170,8 @@ pub(crate) fn lane_for_row(status: char, is_todo: bool) -> Option<Lane> {
 /// Tracking tasks (`tracker` is `Some`) bypass only the `#hide`
 /// exclusion: callers set `lane_visible` to the freshness-specific
 /// visibility (hide allowed for exact `^prj`/`^ref`), and every other
-/// exclusion still applies. `project_ready_count` is the own-note
-/// Ready-lane count for `^prj` rows (see `project_ready_count`);
+/// exclusion still applies. `project_open_count` is the own-note
+/// open-task count for `^prj` rows (see `project_open_count`);
 /// `project_scheduled` is the tracker's own note frontmatter
 /// `scheduled` date when valid, with `project_schedule_invalid` set
 /// when the note carries a malformed schedule (which suppresses the
@@ -179,6 +183,9 @@ pub(crate) struct FreshnessRow {
     pub(crate) line: u32,
     pub(crate) status: char,
     pub(crate) is_todo: bool,
+    /// Open according to the configured Tasks status type
+    /// (everything but DONE, CANCELLED, NON_TASK, EMPTY).
+    pub(crate) is_open: bool,
     pub(crate) recurring: bool,
     pub(crate) lane_visible: bool,
     pub(crate) is_daily_note: bool,
@@ -190,8 +197,8 @@ pub(crate) struct FreshnessRow {
     pub(crate) note_refresh_raw: Option<String>,
     /// Exact trailing `^prj` / `^ref` identity, if any.
     pub(crate) tracker: Option<TrackerKind>,
-    /// Whole-note Ready-lane count for `^prj` rows; ignored otherwise.
-    pub(crate) project_ready_count: u32,
+    /// Whole-note open-task count for `^prj` rows; ignored otherwise.
+    pub(crate) project_open_count: u32,
     /// Valid frontmatter `scheduled` on the tracker's own note.
     pub(crate) project_scheduled: Option<NaiveDate>,
     /// The own note carries a malformed `scheduled`: suppress review.
@@ -208,6 +215,7 @@ pub(crate) struct FreshnessRow {
 /// (including `off`), counts no Next/Pending rows, and never rolls up
 /// child projects, embeds, backlinks, or parent membership. Uses
 /// Tasks status types so custom TODO symbols behave like Ready.
+#[allow(dead_code)]
 pub(crate) fn is_counted_ready_row(
     is_recurring: bool,
     block_id: Option<&str>,
@@ -215,19 +223,48 @@ pub(crate) fn is_counted_ready_row(
     !is_recurring && block_id != Some("prj")
 }
 
-/// Count counted Ready rows resident in `path` over `READY_QUERY`
-/// rows. Scan builds the per-path map inline (it needs only counts,
-/// not rows); this helper documents the shared predicate use.
+/// Whether a Tasks status type string is open for project
+/// occupancy: everything but DONE, CANCELLED, NON_TASK, and EMPTY.
+/// Custom open types map to TODO upstream and count as open.
+pub(crate) fn is_open_status_type(status_type: &str) -> bool {
+    !matches!(status_type, "DONE" | "CANCELLED" | "NON_TASK" | "EMPTY")
+}
+
+/// Project occupancy predicate: an open task that is not an exact
+/// `^prj` row. Hidden, recurring, future-scheduled, Today-linked,
+/// fresh, NEW, RETURNED, and ROTTEN tasks all count; DONE,
+/// CANCELLED, NON_TASK, and every exact `^prj` row never do. An open
+/// `^ref` in the same file counts. Plain bullets, links, embeds,
+/// backlinks, and other-file children are never rows here.
+pub(crate) fn is_open_project_row(
+    is_open: bool,
+    block_id: Option<&str>,
+) -> bool {
+    is_open && block_id != Some("prj")
+}
+
+/// Count open tasks resident in `path` over the unfiltered task
+/// inventory. Scan builds the per-path map inline from `RichTask`
+/// rows (it needs only counts, not rows); this helper documents the
+/// shared predicate use over evaluator rows.
 #[allow(dead_code)]
-pub(crate) fn project_ready_count(
-    ready_rows: &[FreshnessRow],
+pub(crate) fn project_open_count(
+    open_rows: &[FreshnessRow],
     path: &str,
 ) -> u32 {
-    ready_rows
+    open_rows
         .iter()
         .filter(|row| row.path == path)
-        .filter(|row| row.is_todo && row.lane_visible && !row.recurring)
-        .filter(|row| row.tracker != Some(TrackerKind::Prj))
+        .filter(|row| {
+            is_open_project_row(
+                row.is_open,
+                match row.tracker {
+                    Some(TrackerKind::Prj) => Some("prj"),
+                    Some(TrackerKind::Ref) => Some("ref"),
+                    None => None,
+                },
+            )
+        })
         .count() as u32
 }
 
@@ -293,17 +330,38 @@ pub(crate) fn evaluate(
         Some(Lane::Next) => config.next_interval,
         _ => None,
     };
-    // Project trackers in a walked lane keep the Ready-chain cadence:
-    // the weekly project reminder must not become a daily lane review.
+    // Explicit tracker cadences override every other level for that
+    // tracker type (`docs/freshness.md` §2). Absent/null inherits the
+    // existing behavior below.
     let is_prj = row.tracker == Some(TrackerKind::Prj);
+    let is_ref = row.tracker == Some(TrackerKind::Ref);
+    let tracker_override: Option<(u16, IntervalSource)> = if is_prj {
+        config
+            .project_interval
+            .map(|days| (days, IntervalSource::Project))
+    } else if is_ref {
+        config
+            .reference_interval
+            .map(|days| (days, IntervalSource::Reference))
+    } else {
+        None
+    };
     let (ready_days, ready_source) =
         interval_for(read.refresh, note_interval, config);
-    let (interval_days, interval_source) = match (lane, lane_days, is_prj) {
-        (Some(Lane::Pending), Some(days), false) => {
-            (days, IntervalSource::Pending)
-        }
-        (Some(Lane::Next), Some(days), false) => (days, IntervalSource::Next),
-        _ => (ready_days, ready_source),
+    // Project trackers in a walked lane keep the Ready-chain cadence:
+    // the weekly project reminder must not become a daily lane review.
+    // A configured tracker interval wins over all of it.
+    let (interval_days, interval_source) = match tracker_override {
+        Some(explicit) => explicit,
+        None => match (lane, lane_days, is_prj) {
+            (Some(Lane::Pending), Some(days), false) => {
+                (days, IntervalSource::Pending)
+            }
+            (Some(Lane::Next), Some(days), false) => {
+                (days, IntervalSource::Next)
+            }
+            _ => (ready_days, ready_source),
+        },
     };
 
     let walk_scope = lane.is_some()
@@ -313,16 +371,31 @@ pub(crate) fn evaluate(
         && !row.is_today;
 
     // Lane due date for walked lanes: fresh + lane interval, or none
-    // when never stamped.
-    let lane_due_on: Option<NaiveDate> = match (lane, lane_days, read.fresh) {
-        (Some(Lane::Pending) | Some(Lane::Next), Some(days), Some(fresh)) => {
-            fresh
-                .checked_add_days(chrono::Days::new(u64::from(days)))
-                .or(Some(fresh))
+    // when never stamped. A configured `^ref` cadence uses the
+    // effective reference interval here, never the original lane
+    // variable; a disabled lane walk still disables the lane.
+    let effective_lane_days: Option<u16> = match (lane, lane_days) {
+        (Some(Lane::Pending) | Some(Lane::Next), Some(_))
+            if tracker_override.is_some_and(|(_, source)| {
+                source == IntervalSource::Reference
+            }) =>
+        {
+            tracker_override.map(|(days, _)| days)
         }
-        _ => None,
+        (_, days) => days,
     };
-    let lane_due = match (lane, lane_days) {
+    let lane_due_on: Option<NaiveDate> =
+        match (lane, effective_lane_days, read.fresh) {
+            (
+                Some(Lane::Pending) | Some(Lane::Next),
+                Some(days),
+                Some(fresh),
+            ) => fresh
+                .checked_add_days(chrono::Days::new(u64::from(days)))
+                .or(Some(fresh)),
+            _ => None,
+        };
+    let lane_due = match (lane, effective_lane_days) {
         (Some(Lane::Pending) | Some(Lane::Next), Some(days)) => {
             match read.fresh {
                 None => true,
@@ -368,14 +441,14 @@ pub(crate) fn evaluate(
     };
     // A populated note has no freshness state/bucket or walk tier.
     let prj_empty =
-        !is_prj || (in_scope && row.project_ready_count == 0 && project_gate);
+        !is_prj || (in_scope && row.project_open_count == 0 && project_gate);
     let prj_lane_eligible = is_prj
         && matches!(lane, Some(Lane::Pending) | Some(Lane::Next))
         && row.lane_visible
         && !row.recurring
         && !row.is_daily_note
         && !row.is_today
-        && row.project_ready_count == 0
+        && row.project_open_count == 0
         && project_gate;
 
     // Effective resurfacing schedule for project trackers: the legacy

@@ -41,8 +41,8 @@ pub(crate) struct RowCtx {
     pub(crate) note_refresh_raw: Option<String>,
     pub(crate) is_daily_note: bool,
     pub(crate) is_today: bool,
-    /// Own-note Ready-lane count for `^prj` rows; 0 otherwise.
-    pub(crate) project_ready_count: u32,
+    /// Own-note open-task count for `^prj` rows; 0 otherwise.
+    pub(crate) project_open_count: u32,
     /// Valid frontmatter `scheduled` on the tracker's own note.
     pub(crate) project_scheduled: Option<NaiveDate>,
     /// The own note carries a malformed `scheduled`.
@@ -62,6 +62,7 @@ impl RowCtx {
             line: self.task.line,
             status: self.task.status_symbol.chars().next().unwrap_or(' '),
             is_todo: self.task.status_type == "TODO",
+            is_open: super::state::is_open_status_type(&self.task.status_type),
             recurring: self.task.is_recurring,
             lane_visible,
             is_daily_note: self.is_daily_note,
@@ -73,7 +74,7 @@ impl RowCtx {
             tracker: super::state::TrackerKind::from_block_id(
                 self.task.block_id.as_deref(),
             ),
-            project_ready_count: self.project_ready_count,
+            project_open_count: self.project_open_count,
             project_scheduled: self.project_scheduled,
             project_schedule_invalid: self.project_schedule_invalid,
         }
@@ -210,7 +211,7 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
             is_daily_note: canonical_daily_date(Path::new(&task.path))
                 .is_some(),
             is_today: is_today_task(task, &today_blocks, &today_lines),
-            project_ready_count: 0,
+            project_open_count: 0,
             project_scheduled: None,
             project_schedule_invalid: false,
         })
@@ -240,20 +241,20 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
         all.push(context(task)?);
     }
 
-    // Per-path counted Ready-lane totals, built once from the
-    // unchanged READY snapshot: visible TODO rows excluding recurring
-    // tasks and every `^prj` row. Includes NEW/RETURNED/ROTTEN/fresh
-    // and Today-linked rows; ignores `ready_cap`; no child roll-up.
-    let mut ready_counts: HashMap<String, u32> = HashMap::new();
-    for row in &ready {
-        if row.task.status_type != "TODO" {
+    // Per-path open-task totals, built once from the unfiltered
+    // task inventory (`all`): every open status by Tasks status type,
+    // excluding every exact `^prj` row. Includes hidden, recurring,
+    // future-scheduled, Today-linked, fresh, NEW, RETURNED, and
+    // ROTTEN tasks; an open `^ref` counts. Never rolls up children,
+    // embeds, backlinks, or parents. One pass, then O(1) lookups.
+    let mut open_counts: HashMap<String, u32> = HashMap::new();
+    for row in &all {
+        if !super::state::is_open_status_type(&row.task.status_type) {
             continue;
         }
-        if super::state::is_counted_ready_row(
-            row.task.is_recurring,
-            row.task.block_id.as_deref(),
-        ) {
-            *ready_counts.entry(row.task.path.clone()).or_default() += 1;
+        if super::state::is_open_project_row(true, row.task.block_id.as_deref())
+        {
+            *open_counts.entry(row.task.path.clone()).or_default() += 1;
         }
     }
     // Own-note frontmatter schedule context, cached once per file.
@@ -271,13 +272,13 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
     let mut fill_project_context = |row: &mut RowCtx| {
         let is_prj = row.task.block_id.as_deref() == Some("prj");
         if !is_prj {
-            row.project_ready_count = 0;
+            row.project_open_count = 0;
             row.project_scheduled = None;
             row.project_schedule_invalid = false;
             return;
         }
-        row.project_ready_count =
-            ready_counts.get(&row.task.path).copied().unwrap_or(0);
+        row.project_open_count =
+            open_counts.get(&row.task.path).copied().unwrap_or(0);
         let (scheduled, invalid) = schedule_for(&row.task.path);
         row.project_scheduled = scheduled;
         row.project_schedule_invalid = invalid;
