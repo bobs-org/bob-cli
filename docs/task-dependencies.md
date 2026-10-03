@@ -343,11 +343,15 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
   prefilter. Ownership walks ancestors with line lookups; the note is
   never copied wholesale.
 - Reading rows follow the same owning-line rules as Live Preview: the
-  row's parent list hangs directly off a `#task` item, outside
-  blockquotes and Work Log entries, and the row parses as
-  `accept`/`empty` (never chips on DP16, DP19, DP20, or DP29). Chip
-  actions carry the section-derived 0-based line (contract §9) and stay
-  hidden when it cannot be derived uniquely.
+  row's Depends-On line is owned by a `#task` list item (its parent item
+  is the task, per DP30), outside blockquotes, and the row parses as
+  `accept`/`empty` (never chips on DP16, DP19, DP20, DP29, or DP31).
+- Each rendered list item maps by order to its own line: the k-th `li`
+  in the rendered section is the k-th list-item line in the section
+  range, with fenced lines skipped. Chip actions carry that order-mapped
+  0-based line (contract §9).
+- Actions stay hidden when the item and line counts disagree, or when the
+  mapped line is not the expected owned Depends-On line.
 - Data comes only from the in-memory Tasks memo.
 - `aria-label`s, visible focus, colour never the only signal, and
   reduced-motion support.

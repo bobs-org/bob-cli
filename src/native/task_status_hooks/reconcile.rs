@@ -1364,13 +1364,10 @@ impl ReconcileWorker<'_> {
         if adopted.is_empty() {
             if let Some(child_index) = empty_line {
                 // Nothing adoptable behind a label-only line: R9 deletes
-                // the line (DW5/DR16). With no legacy children the field
-                // goes with it, reported like any other unaccounted-field
-                // drop; legacy coverage keeps the field (R2).
-                if legacy.is_empty() {
-                    self.remove_label_only_line(view, child_index);
-                    return;
-                }
+                // the line (DW5/DR16), reported as `line_removed`.
+                // `plan_empty` already handled the no-legacy-children case
+                // (the field goes with the line there); legacy coverage
+                // here keeps the field (R2).
                 self.remove_line(view.file_index, child_index);
                 self.push_line_removed(view, child_index);
             }
