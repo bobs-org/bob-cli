@@ -11,6 +11,7 @@ pub(crate) enum Placement {
     Linked,
     Closed,
     Started,
+    Updated,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -296,8 +297,41 @@ pub(super) struct CaptureItemResult {
     pub(super) pomodoro_shift: Option<PomodoroShiftSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_close: Option<PomodoroCloseSummaryJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) dependency_update: Option<DependencyUpdateJson>,
     #[serde(skip)]
     pub(super) toggle_task_description: Option<String>,
+}
+
+/// Summary JSON for one item's dependency effects, reported as
+/// `dependency_update` on the capture result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DependencyUpdateJson {
+    pub(super) dependent_note: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) dependent_block_id: Option<String>,
+    pub(super) dependent_text: String,
+    pub(super) new_task: bool,
+    pub(super) added: usize,
+    pub(super) already_present: usize,
+    pub(super) open_prerequisites: usize,
+    pub(super) prerequisites: Vec<PrerequisiteJson>,
+    pub(super) dependent_status: char,
+    pub(super) dependent_status_name: String,
+    pub(super) status_changed: bool,
+}
+
+/// One prerequisite behind a `dependency_update` summary: its note,
+/// block ID, canonical link, and status with text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PrerequisiteJson {
+    pub(super) note: String,
+    pub(super) block_id: String,
+    pub(super) link: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) text: String,
+    pub(super) open: bool,
 }
 
 pub(super) fn print_success(
@@ -471,6 +505,18 @@ pub(super) fn print_human_item_success(
         );
         return;
     }
+    // A dependency-only action is never labeled a task creation or a
+    // Pomodoro link: it reports whose prerequisites changed.
+    if result.kind == "task_dependency" {
+        print_human_task_dependency_success(
+            result,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
     if let Some(adjust) = result.pomodoro_adjust.as_ref() {
         print_human_pomodoro_adjust_success(
             result,
@@ -535,6 +581,9 @@ pub(super) fn print_human_item_success(
         println!("  under {marker}{parent_text}{block_id}{parent_section}");
     }
     println!("  {}", styler.dim(&result.task_line));
+    if let Some(update) = result.dependency_update.as_ref() {
+        print_human_dependency_line(update, &styler);
+    }
     if result.kind == "pomodoro_task"
         && let Some(destination) = result.pomodoro_link_destination.as_ref()
     {
@@ -1057,6 +1106,66 @@ fn print_human_link_toggle_summary(
         _ => "stays Next",
     };
     println!("  linked {id} {destination} · {verdict}");
+}
+
+/// Human rendering for a dependency-only capture: whose prerequisites
+/// changed, never a task creation or Pomodoro link.
+pub(super) fn print_human_task_dependency_success(
+    result: &CaptureItemResult,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let Some(update) = result.dependency_update.as_ref() else {
+        println!("{prefix} updated  {ordinal}{target_label}");
+        println!("  {}", styler.dim(&result.task_line));
+        return;
+    };
+    let verb = if result.dry_run {
+        "would add dependency to"
+    } else {
+        "Add dependency to"
+    };
+    println!(
+        "{prefix} {verb} \"{}\"  {ordinal}{target_label}",
+        update.dependent_text
+    );
+    println!("  {}", styler.dim(&result.task_line));
+    print_human_dependency_line(update, styler);
+}
+
+/// One shared `⛓ depends on …` trailer for every capture carrying a
+/// `dependency_update`: added and already-present counts, the waiting
+/// count, and the resulting Blocked distinction.
+pub(super) fn print_human_dependency_line(
+    update: &DependencyUpdateJson,
+    styler: &Styler,
+) {
+    let links = update
+        .prerequisites
+        .iter()
+        .map(|prereq| prereq.link.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let head = if update.new_task {
+        "New task depends on"
+    } else if update.added == 0 {
+        "Already depends on"
+    } else {
+        "depends on"
+    };
+    let mut chips = vec![format!("{} added", update.added)];
+    if update.already_present > 0 {
+        chips.push(format!("{} already", update.already_present));
+    }
+    if update.open_prerequisites > 0 {
+        chips.push(format!("waiting on {}", update.open_prerequisites));
+    }
+    if update.dependent_status == '?' {
+        chips.push("Blocked until finished".to_string());
+    }
+    println!("  ⛓ {head} {links} ({})", styler.dim(&chips.join(" · ")),);
 }
 
 pub(super) fn print_human_task_toggle_success(

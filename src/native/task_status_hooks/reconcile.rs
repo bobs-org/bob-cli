@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 mod apply;
 mod fields;
 
-pub(super) use fields::{rebuild_child_line, set_task_fields};
+pub(crate) use fields::{
+    is_cancel_log_line, rebuild_child_line, set_task_fields,
+};
 
 /// Outcome of one reconciliation pass: content edits already applied
 /// to `files`, plus the report rows the sync result prints.

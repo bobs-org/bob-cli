@@ -16,6 +16,8 @@ use std::path::PathBuf;
 #[serde(rename_all = "snake_case")]
 pub(super) enum TaskBlockRole {
     SubBullet,
+    Dependency,
+    DependencyTarget,
 }
 
 /// One sub-bullet touch of a parent task. `line` is the 0-based parent
@@ -402,6 +404,12 @@ fn resolve_unmapped_before(
     let Some(found) =
         find_moved_task_line(wanted, orig_lines, orig_scan, final_line)
     else {
+        // An ID-less line with no pre-image is a task this batch
+        // created (dependency captures report new dependents without a
+        // user-authored ID): empty before, created after.
+        if block_id.is_none() {
+            return Some((Vec::new(), true));
+        }
         debug_assert!(false, "task block has no before match");
         return None;
     };

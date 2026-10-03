@@ -1301,6 +1301,8 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                     scheduled_offset: None,
                     priority_level: None,
                     sub_bullets: Vec::new(),
+                    dependencies: Vec::new(),
+                    dependency_target: None,
                 },
                 Vec::new(),
                 Some(marker_text),

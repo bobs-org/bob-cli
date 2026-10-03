@@ -23,6 +23,57 @@ pub(super) struct ParsedCaptureItemOutcome<'a> {
     pub(super) local_destination_marker: Option<String>,
 }
 
+/// Refuse dependency modifiers on Pomodoro operator items (close, start,
+/// adjustment, shift, caret link) before any other item parser: they have
+/// no unambiguous single task owner, so the whole batch rolls back
+/// instead of capturing without the prerequisites.
+fn reject_operator_dependencies(
+    item: &CaptureItem<'_>,
+    parent_line: &ItemLine<'_>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+) -> Result<(), String> {
+    // A claimed operator refuses even when its own shape is broken: the
+    // item is operator-shaped, so its own diagnostic would hide the
+    // refused dependency combination.
+    let claimed = |result: Result<
+        Option<ParsedCaptureItemOutcome<'_>>,
+        String,
+    >| { !matches!(result, Ok(None)) };
+    if claimed(parse_pomodoro_equals_item(
+        item,
+        parent_line,
+        forced_route,
+        forced_section,
+    )) || claimed(parse_pomodoro_adjust_item(
+        item,
+        parent_line,
+        forced_route,
+        forced_section,
+    )) || claimed(parse_pomodoro_link_item(
+        item,
+        parent_line,
+        forced_route,
+        forced_section,
+    )) {
+        return Err(operator_dependency_error());
+    }
+    // A leading `^` owner is never a dependency dependent either: caret
+    // markers resolve to the active task, not to `@note+task-id`.
+    if parent_line
+        .raw
+        .text
+        .split_whitespace()
+        .next()
+        .is_some_and(|first| first.starts_with('^'))
+    {
+        return Err(unsupported_target_dependency_error(
+            "Pomodoro-ledger-link",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn parse_capture_item<'a>(
     item: &CaptureItem<'a>,
     forced_route: Option<&str>,
@@ -39,14 +90,28 @@ pub(super) fn parse_capture_item<'a>(
     if parent_normalized.is_empty() {
         return Err(missing_text_error());
     }
-    // Recognized `&note:block-id` dependency modifiers are never
-    // executable in the contract phase: they fail closed with an explicit
-    // temporary error before any other item parser, so the whole batch
-    // rolls back instead of capturing without the prerequisites.
+    // `&note:block-id` dependency modifiers are staged for the writer:
+    // malformed or half-typed modifiers fail here, operator items fail
+    // with a targeted diagnostic, and complete modifiers strip from the
+    // marker runs below so the established pipeline resolves the
+    // remaining tokens unchanged. Ownership is decided once the finished
+    // item kind is known; ownerless items retry after `@@` inheritance in
+    // draft resolution.
     let item_dependencies = scan_item_dependencies(item, parse_clip_markers);
-    if !item_dependencies.is_empty() {
-        let raw = item_dependencies.first_raw().unwrap_or("&...");
-        return Err(unsupported_dependency_error(raw));
+    if let Some(invalid) = item_dependencies.invalid.first() {
+        return Err(invalid.message.clone());
+    }
+    if !item_dependencies.partials.is_empty() {
+        return Err(incomplete_dependency_error());
+    }
+    let has_dependencies = !item_dependencies.entries.is_empty();
+    if has_dependencies {
+        reject_operator_dependencies(
+            item,
+            parent_line,
+            forced_route,
+            forced_section,
+        )?;
     }
     // A `:` picker query is never executable: it rejects with a teaching
     // error before any other item parser, so the whole batch rolls back.
@@ -82,7 +147,21 @@ pub(super) fn parse_capture_item<'a>(
     )? {
         return Ok(outcome);
     }
+    // Dependency modifiers leave the token stream before terminal-marker
+    // extraction and route selection see it, exactly like the editor
+    // line pass: the remaining tokens resolve like a draft without them.
     let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
+    let (parent_tokens, parent_line_dependencies) = extract_line_dependencies(
+        parent_tokens,
+        parent_line.raw.text,
+        parent_line.raw.start,
+        true,
+        parse_clip_markers,
+    );
+    let parent_tokens = unescape_execution_tokens(
+        parent_tokens,
+        &parent_line_dependencies.escapes,
+    );
     let parent_outcome =
         resolve_line(parent_tokens, true, detect_route, parse_clip_markers)?;
     declarations.extend(global_declarations_from_tokens(
@@ -103,9 +182,16 @@ pub(super) fn parse_capture_item<'a>(
         parent_outcome.route.as_ref().map(|route| &route.token.kind),
         Some(CaptureKind::Pomodoro { .. })
     );
+    // An ownerless dependency item (`&foo:bar` with no local marker)
+    // defers its missing-dependent diagnostic until draft resolution
+    // retries after `@@` inheritance.
+    let defers_dependency_owner = has_dependencies
+        && parent_body_is_empty
+        && parent_outcome.route.is_none();
     if parent_body_is_empty
         && !parent_is_toggle_candidate
         && !parent_is_pomodoro_candidate
+        && !defers_dependency_owner
     {
         return Err(missing_text_error());
     }
@@ -134,6 +220,15 @@ pub(super) fn parse_capture_item<'a>(
             end: line.raw.end,
         };
         let tokens = tokenize_line_with_spans(&child_line);
+        let (tokens, child_line_dependencies) = extract_line_dependencies(
+            tokens,
+            child_line.text,
+            child_line.start,
+            false,
+            parse_clip_markers,
+        );
+        let tokens =
+            unescape_execution_tokens(tokens, &child_line_dependencies.escapes);
         let outcome =
             resolve_line(tokens, false, detect_route, parse_clip_markers)?;
         declarations.extend(global_declarations_from_tokens(
@@ -141,6 +236,11 @@ pub(super) fn parse_capture_item<'a>(
             line_number,
         ));
         if outcome.body.is_empty() {
+            // A child holding only dependency modifiers contributes no
+            // empty bullet; any other emptied child stays an error.
+            if child_line_dependencies.stripped_tokens > 0 {
+                continue;
+            }
             return Err(empty_child_after_markers_error(line_number));
         }
         aggregate.absorb(outcome.markers, outcome.route)?;
@@ -211,22 +311,35 @@ pub(super) fn parse_capture_item<'a>(
         else {
             return Err(missing_text_error());
         };
+        let link_kind = CaptureKind::PomodoroLink {
+            block_id,
+            pomodoro_name,
+            start,
+            close,
+            spelling: PomodoroLinkSpelling::At,
+        };
+        // The narrow `@route:id` colon alias selects the same existing
+        // dependent as `@route+id`; anything else on the link rejects.
+        let (dependencies, dependency_target) = execution_item_dependencies(
+            &item_dependencies,
+            &link_kind,
+            route.as_deref(),
+            true,
+            false,
+            marker_text.as_deref(),
+        )?;
         return Ok(parsed_capture_item_outcome(
             item,
             ParsedCaptureText {
                 body: String::new(),
                 clip: None,
                 route,
-                kind: CaptureKind::PomodoroLink {
-                    block_id,
-                    pomodoro_name,
-                    start,
-                    close,
-                    spelling: PomodoroLinkSpelling::At,
-                },
+                kind: link_kind,
                 scheduled_offset: None,
                 priority_level: None,
                 sub_bullets: Vec::new(),
+                dependencies,
+                dependency_target,
             },
             declarations,
             marker_text,
@@ -241,6 +354,9 @@ pub(super) fn parse_capture_item<'a>(
             return Err("--section must not be empty".to_string());
         }
         let route = normalize_forced_route(route)?;
+        if has_dependencies {
+            return Err(unsupported_target_dependency_error("section-bullet"));
+        }
         return Ok(parsed_capture_item_outcome(
             item,
             ParsedCaptureText {
@@ -254,6 +370,8 @@ pub(super) fn parse_capture_item<'a>(
                 scheduled_offset: aggregate.scheduled_offset,
                 priority_level: aggregate.priority_level,
                 sub_bullets,
+                dependencies: Vec::new(),
+                dependency_target: None,
             },
             declarations,
             aggregate
@@ -265,6 +383,24 @@ pub(super) fn parse_capture_item<'a>(
 
     if let Some(route) = forced_route {
         let route = normalize_forced_route(route)?;
+        // `--route` routes a new task with dependencies; it never turns
+        // an ownerless modifier into an existing-task update.
+        let (dependencies, dependency_target) = if has_dependencies {
+            if parent_outcome.body.is_empty() && sub_bullets.is_empty() {
+                return Err(ownerless_dependency_error());
+            }
+            (
+                execution_dependencies(&item_dependencies),
+                Some(ParsedDependencyTarget {
+                    kind: ParsedDependencyTargetKind::NewTask,
+                    route: Some(route.clone()),
+                    block_id: None,
+                    inherited: false,
+                }),
+            )
+        } else {
+            (Vec::new(), None)
+        };
         return Ok(parsed_capture_item_outcome(
             item,
             ParsedCaptureText {
@@ -275,6 +411,8 @@ pub(super) fn parse_capture_item<'a>(
                 scheduled_offset: aggregate.scheduled_offset,
                 priority_level: aggregate.priority_level,
                 sub_bullets,
+                dependencies,
+                dependency_target,
             },
             declarations,
             aggregate
@@ -292,6 +430,21 @@ pub(super) fn parse_capture_item<'a>(
         Some(line_route) => (line_route.token.route, line_route.token.kind),
         None => (None, CaptureKind::Task),
     };
+    // Schedule, priority, and clipboard markers stay task-creation
+    // modifiers: a dependency-only item carrying them mixes a second
+    // action into an existing-task update instead of failing silently.
+    let has_creation_modifiers = aggregate.clip.is_some()
+        || aggregate.scheduled_offset.is_some()
+        || aggregate.priority_level.is_some();
+    if has_dependencies
+        && parent_body_is_empty
+        && sub_bullets.is_empty()
+        && has_creation_modifiers
+    {
+        return Err(invalid_dependency_target_error(
+            local_destination_marker.as_deref().unwrap_or("@route+id"),
+        ));
+    }
     let kind = resolve_sub_bullet_kind(
         kind,
         parent_body_is_empty,
@@ -367,6 +520,14 @@ pub(super) fn parse_capture_item<'a>(
     {
         return Err(unused_project_note_pomodoro_error(name));
     }
+    let (dependencies, dependency_target) = execution_item_dependencies(
+        &item_dependencies,
+        &kind,
+        route.as_deref(),
+        parent_outcome.body.is_empty(),
+        has_creation_modifiers,
+        local_destination_marker.as_deref(),
+    )?;
     Ok(parsed_capture_item_outcome(
         item,
         ParsedCaptureText {
@@ -377,10 +538,73 @@ pub(super) fn parse_capture_item<'a>(
             scheduled_offset: aggregate.scheduled_offset,
             priority_level: aggregate.priority_level,
             sub_bullets,
+            dependencies,
+            dependency_target,
         },
         declarations,
         local_destination_marker,
     ))
+}
+
+/// Finish dependency ownership after `@@` inheritance: a locally owned
+/// new task keeps its target but adopts an inherited route, and an
+/// ownerless item retries against the inherited parent (or reports the
+/// ownerless diagnostic). `inherited` is true when a global destination
+/// was eligible to apply to this item.
+pub(super) fn finish_item_dependency_target(
+    parsed: &mut ParsedCaptureText,
+    inherited: bool,
+) -> Result<(), String> {
+    if parsed.dependencies.is_empty() {
+        return Ok(());
+    }
+    if let Some(target) = parsed.dependency_target.as_mut() {
+        if target.kind == ParsedDependencyTargetKind::NewTask
+            && !target.inherited
+            && target.route.is_none()
+            && let Some(route) = parsed.route.clone()
+        {
+            target.route = Some(route);
+            target.inherited = inherited;
+        }
+        return Ok(());
+    }
+    if let Some(target) = finish_inherited_dependency_target(
+        parsed.route.as_deref(),
+        &parsed.kind,
+        parsed.body.is_empty(),
+        false,
+        true,
+        inherited,
+    )? {
+        parsed.dependency_target = Some(target);
+        return Ok(());
+    }
+    Err(ownerless_dependency_error())
+}
+
+/// Complete modifiers plus ownership for an execution item: empty when
+/// the item carries none, otherwise the typed modifiers with the target
+/// resolved from the finished kind (or deferred for `@@` inheritance).
+pub(super) fn execution_item_dependencies(
+    found: &ItemDependencySet,
+    kind: &CaptureKind,
+    route: Option<&str>,
+    body_empty: bool,
+    has_creation_modifiers: bool,
+    local_marker_text: Option<&str>,
+) -> Result<(Vec<ParsedDependency>, Option<ParsedDependencyTarget>), String> {
+    if found.entries.is_empty() {
+        return Ok((Vec::new(), None));
+    }
+    let target = resolve_execution_ownership(
+        kind,
+        route,
+        body_empty,
+        has_creation_modifiers,
+        local_marker_text,
+    )?;
+    Ok((execution_dependencies(found), target))
 }
 
 /// Decide whether a resolved `@route+block-id[#name]` marker stays an
@@ -768,6 +992,8 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
             scheduled_offset: None,
             priority_level: None,
             sub_bullets: Vec::new(),
+            dependencies: Vec::new(),
+            dependency_target: None,
         },
         Vec::new(),
         None,
@@ -1020,6 +1246,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         scheduled_offset: None,
                         priority_level: None,
                         sub_bullets: Vec::new(),
+                        dependencies: Vec::new(),
+                        dependency_target: None,
                     },
                     Vec::new(),
                     None,
@@ -1094,6 +1322,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                                 scheduled_offset: None,
                                 priority_level: None,
                                 sub_bullets: Vec::new(),
+                                dependencies: Vec::new(),
+                                dependency_target: None,
                             },
                             Vec::new(),
                             None,
@@ -1232,6 +1462,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             scheduled_offset: None,
                             priority_level: None,
                             sub_bullets: Vec::new(),
+                            dependencies: Vec::new(),
+                            dependency_target: None,
                         },
                         Vec::new(),
                         None,
@@ -1345,6 +1577,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         scheduled_offset: None,
                         priority_level: None,
                         sub_bullets: Vec::new(),
+                        dependencies: Vec::new(),
+                        dependency_target: None,
                     },
                     Vec::new(),
                     None,
@@ -1423,6 +1657,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     scheduled_offset: None,
                     priority_level: None,
                     sub_bullets: Vec::new(),
+                    dependencies: Vec::new(),
+                    dependency_target: None,
                 },
                 Vec::new(),
                 None,

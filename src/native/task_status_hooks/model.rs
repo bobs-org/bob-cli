@@ -326,7 +326,7 @@ impl TaskStatusType {
         matches!(self, Self::Todo | Self::InProgress | Self::OnHold)
     }
 
-    pub(super) fn is_terminal(self) -> bool {
+    pub(crate) fn is_terminal(self) -> bool {
         matches!(self, Self::Done | Self::Cancelled | Self::NonTask)
     }
 }

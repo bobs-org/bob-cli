@@ -979,14 +979,21 @@ stay visible with their guard reason. Refetching at `replacement.start`
 returns the unfiltered snapshot.
 
 Contract status: parsing, spans, needs, completion ranges, the candidate
-wire shape, and the discovery scan are frozen above. `bob capture`
-recognizes the modifiers but refuses them with an explicit
-unsupported-action error until the writer phase executes them — a draft
-with prerequisites never captures without them. Section bullets,
-project/note constructions, Pomodoro ledger links, and session operators
-reject the modifiers with a targeted diagnostic, as do suffixed (`#name`,
-`=…`) or `!`-toggled dependency-only owners. Final previews and status
-effects land in the writer phase.
+wire shape, and the discovery scan are frozen above, and `bob capture`
+executes the modifiers through the staged batch writer: the dependent
+gains (or merges into) the managed `⛓️ **DEPENDS ON:**` child line plus
+the derived `[dependsOn:: …]` field, open prerequisites flip it to
+`[?]` Blocked, existing dependents are freshness-stamped, and repeats
+are idempotent (`0 added`). Multi-note batches plan every note before
+writing anything; a failed preimage check or write aborts the batch and
+rolls back notes already staged, and dry runs plan through the same
+planner without touching the vault. A draft with prerequisites never
+captures without them. Section bullets, project/note constructions,
+Pomodoro ledger links, and session operators reject the modifiers with
+a targeted diagnostic, as do suffixed (`#name`, `=…`) or `!`-toggled
+dependency-only owners; missing notes, missing block IDs,
+self-dependencies, and batch cycles fail with an actionable error and
+leave the vault intact.
 
 ### Plan budget and strict mode
 

@@ -272,6 +272,9 @@ pub(crate) use model::{TaskStatusDefinition, TaskStatusType, TasksSettings};
 pub(crate) use output::SyncError;
 pub(crate) use parse::{after_list_marker, markdown_files, task_metadata};
 pub(crate) use pomodoro::logical_lines;
+pub(crate) use reconcile::{
+    is_cancel_log_line, rebuild_child_line, set_task_fields,
+};
 pub(crate) use references::{
     leading_indentation_width, nearest_parent_list_item,
 };

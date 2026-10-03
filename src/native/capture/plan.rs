@@ -59,6 +59,7 @@ pub(super) fn plan_capture_batch(
     let mut block_tracker = PomodoroBlockTracker::new(day_relative);
     let task_settings = note_tasks::read_settings(&request.bob_dir);
     let mut task_tracker = TaskBlockTracker::new(task_settings);
+    let mut dependency_ctx = DependencyContext::new(&request.bob_dir, today);
 
     for parsed_item in parsed_items {
         let item_number = parsed_item.index + 1;
@@ -74,6 +75,7 @@ pub(super) fn plan_capture_batch(
             &mut planner,
             &mut clip_reservations,
             &mut warnings,
+            &mut dependency_ctx,
         )
         .map_err(|mut error| {
             error.message = format!(
@@ -123,8 +125,28 @@ pub(super) fn plan_capture_item(
     planner: &mut CaptureBatchPlanner,
     clip_reservations: &mut capture_clip::ClipReservations,
     warnings: &mut Vec<String>,
+    dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let mut parsed = parsed_item.parsed;
+    // A dependency-only capture updates an explicitly selected existing
+    // task: no new task, empty child, link toggle, or Pomodoro action.
+    // It never flows through the toggle/link planners below.
+    if let Some(target) = parsed.dependency_target.clone()
+        && target.kind == ParsedDependencyTargetKind::ExistingTask
+        && matches!(
+            parsed.kind,
+            CaptureKind::TaskToggle { .. } | CaptureKind::PomodoroLink { .. }
+        )
+    {
+        return plan_dependency_only_item(
+            request,
+            &parsed,
+            &target,
+            planner,
+            warnings,
+            dependency_ctx,
+        );
+    }
     if let CaptureKind::PomodoroClose { spec } = parsed.kind.clone() {
         return plan_pomodoro_close_item(
             request, parsed, spec, now, today, planner, warnings,
@@ -159,6 +181,30 @@ pub(super) fn plan_capture_item(
             target: target.clone(),
             section: None,
         };
+        // A forced sub-bullet parent owns the item's modifiers like an
+        // explicit marker does; a picker-ref target cannot.
+        if !parsed.dependencies.is_empty() {
+            match target {
+                SubBulletTarget::BlockId(block_id) => {
+                    let Some(route) = parsed.route.clone() else {
+                        return Err(CaptureError::usage(
+                            "task dependencies with --task need --route for the dependent note",
+                        ));
+                    };
+                    parsed.dependency_target = Some(ParsedDependencyTarget {
+                        kind: ParsedDependencyTargetKind::ExistingTask,
+                        route: Some(route),
+                        block_id: Some(block_id.clone()),
+                        inherited: false,
+                    });
+                }
+                SubBulletTarget::Ref { .. } => {
+                    return Err(CaptureError::usage(
+                        "task dependencies cannot attach to a --task-ref picker selection",
+                    ));
+                }
+            }
+        }
     }
     if let Some(title) = request.forced_task_section.as_ref() {
         match &mut parsed.kind {
@@ -263,6 +309,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
                 pomodoro_close: None,
+                dependency_update: None,
                 toggle_task_description: Some(toggle.task_description.clone()),
             },
             clip_plan: None,
@@ -364,6 +411,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
                 pomodoro_close: None,
+                dependency_update: None,
                 toggle_task_description: Some(link.task_description.clone()),
             },
             clip_plan: None,
@@ -564,9 +612,55 @@ pub(super) fn plan_capture_item(
             )
         })
     });
+    // Dependencies for a task this capture creates augment the block
+    // before insertion: the managed child leads the authored children,
+    // so duplicate bodies in one batch each land correctly.
+    let new_task_dependencies = match &parsed.dependency_target {
+        Some(target)
+            if target.kind == ParsedDependencyTargetKind::NewTask
+                && matches!(
+                    parsed.kind,
+                    CaptureKind::Task
+                        | CaptureKind::TaskWithBlockId { .. }
+                        | CaptureKind::Pomodoro { .. }
+                ) =>
+        {
+            let status = match &parsed.kind {
+                CaptureKind::Pomodoro { .. } => '*',
+                _ => scheduled.as_deref().map(|_| '?').unwrap_or(' '),
+            };
+            let (augmented, parts) = plan_new_task_dependencies(
+                dependency_ctx,
+                planner,
+                &request.bob_dir,
+                parsed.route.as_deref(),
+                target.block_id.as_deref(),
+                &capture_line,
+                status,
+                child_indent.as_deref(),
+                &parsed.dependencies,
+                warnings,
+            )?;
+            Some((augmented, parts))
+        }
+        Some(target) if target.kind == ParsedDependencyTargetKind::NewTask => {
+            return Err(CaptureError::io(
+                "dependency invariant failed: new-task target on a non-task capture",
+            ));
+        }
+        _ => None,
+    };
+    let (block_first_line, block_child_lines) = match &new_task_dependencies {
+        Some((augmented, _)) => {
+            let mut children = vec![augmented.dep_child.clone()];
+            children.extend(sub_bullet_lines.iter().cloned());
+            (augmented.task_line.clone(), children)
+        }
+        None => (capture_line.clone(), sub_bullet_lines.clone()),
+    };
     let capture_block = assemble_capture_block(
-        &capture_line,
-        (!sub_bullet_lines.is_empty()).then_some(sub_bullet_lines.as_slice()),
+        &block_first_line,
+        (!block_child_lines.is_empty()).then_some(block_child_lines.as_slice()),
         clip_plan.as_ref().map(|plan| plan.output.lines.as_slice()),
         schedule_log.as_ref().map(|log| log.lines.as_slice()),
     );
@@ -602,6 +696,12 @@ pub(super) fn plan_capture_item(
                 )
             })?;
             if let Some(close_spec) = close.clone() {
+                // The augmented block already carries the managed child;
+                // the close path only needs the summary parts.
+                let close_dependencies =
+                    new_task_dependencies.as_ref().map(|(augmented, parts)| {
+                        (augmented.task_line.clone(), parts.clone())
+                    });
                 return plan_pomodoro_close_task_item(
                     request,
                     parsed.clone(),
@@ -613,6 +713,7 @@ pub(super) fn plan_capture_item(
                     block_id,
                     &close_spec,
                     &capture_block,
+                    close_dependencies,
                 );
             }
             plan_capture_with_pomodoro_link(
@@ -646,6 +747,59 @@ pub(super) fn plan_capture_item(
     let special = note_plan.pomodoro.as_ref();
     let sub_bullet = note_plan.sub_bullet.as_ref();
     let pomodoro_note = note_plan.pomodoro_note.as_ref();
+    // Dependency effects report through `task_blocks` with the new
+    // `dependency` / `dependency_target` roles, and through the
+    // `dependency_update` preview detail.
+    let mut dependency_update: Option<DependencyUpdateJson> = None;
+    let mut dependency_block_refs: Vec<TaskBlockRef> = Vec::new();
+    match &parsed.dependency_target {
+        Some(target) if target.kind == ParsedDependencyTargetKind::NewTask => {
+            if let Some((augmented, parts)) = &new_task_dependencies {
+                if let Some(tracked) = locate_new_task_ref(
+                    planner,
+                    &request.bob_dir,
+                    parts,
+                    &augmented.task_line,
+                ) {
+                    dependency_block_refs.push(tracked);
+                }
+                dependency_block_refs.extend(parts.target_refs.clone());
+                dependency_update = Some(parts.summary.clone());
+            }
+        }
+        Some(target)
+            if target.kind == ParsedDependencyTargetKind::ExistingTask
+                && matches!(parsed.kind, CaptureKind::SubBullet { .. }) =>
+        {
+            let (route, block_id) = match target {
+                ParsedDependencyTarget {
+                    route: Some(route),
+                    block_id: Some(block_id),
+                    ..
+                } => (route.clone(), block_id.clone()),
+                _ => {
+                    return Err(CaptureError::io(
+                        "dependency invariant failed: existing-task target without route and block ID",
+                    ));
+                }
+            };
+            // Prose captures normally first; the modifiers belong to the
+            // explicit parent task, outside any child section.
+            let update = plan_existing_task_dependencies(
+                dependency_ctx,
+                planner,
+                &request.bob_dir,
+                &route,
+                &block_id,
+                &parsed.dependencies,
+                warnings,
+            )?;
+            dependency_block_refs.push(update.dependent_ref);
+            dependency_block_refs.extend(update.target_refs);
+            dependency_update = Some(update.summary);
+        }
+        _ => {}
+    }
     let task_block_refs = match &parsed.kind {
         CaptureKind::SubBullet { .. } => {
             if let Some(details) = note_plan.sub_bullet.as_ref() {
@@ -694,7 +848,7 @@ pub(super) fn plan_capture_item(
             relative_target: relative_target.to_string_lossy().into_owned(),
             target: target.display().to_string(),
             text: parsed.body,
-            task_line: capture_line,
+            task_line: block_first_line,
             kind: kind_label,
             created,
             scheduled,
@@ -765,11 +919,16 @@ pub(super) fn plan_capture_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: None,
+            dependency_update,
             toggle_task_description: None,
         },
         clip_plan,
         pomodoro_refs,
-        task_block_refs,
+        task_block_refs: {
+            let mut refs = task_block_refs;
+            refs.extend(dependency_block_refs);
+            refs
+        },
     })
 }
 

@@ -316,6 +316,52 @@ pub(crate) struct ParsedCaptureText {
     /// order, with their source marker and item-wide markers already removed.
     /// Empty when the item was an ordinary single-line capture.
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
+    /// Complete `&note:block-id` modifiers on this item, in typed order.
+    /// Empty for every input without dependency modifiers.
+    pub(crate) dependencies: Vec<ParsedDependency>,
+    /// Ownership of this item's modifiers: a task this capture creates
+    /// (`new_task`) or an explicitly selected existing task
+    /// (`existing_task`). `None` when the item carries no modifiers, or
+    /// when no dependent was named yet (draft resolution finishes it
+    /// after `@@` inheritance, or reports the ownerless diagnostic).
+    pub(crate) dependency_target: Option<ParsedDependencyTarget>,
+}
+
+/// One complete `&note:block-id` modifier on an execution item, in typed
+/// order. Mirrors the editor [`DependencyEntry`](super::editor_model::DependencyEntry)
+/// without spans: the writer resolves `note`/`block_id` against staged
+/// vault contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedDependency {
+    /// Exact typed text, sigil included.
+    pub(crate) raw: String,
+    /// Vault-relative note identity (quotes removed, escapes decoded).
+    pub(crate) note: String,
+    /// Prerequisite block ID.
+    pub(crate) block_id: String,
+    /// Whether the note was a `"quoted component"`.
+    pub(crate) quoted: bool,
+}
+
+/// Which task owns an execution item's dependency modifiers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedDependencyTarget {
+    pub(crate) kind: ParsedDependencyTargetKind,
+    /// Dependent's route, when one is known.
+    pub(crate) route: Option<String>,
+    /// Existing dependent's block ID. `None` for a task this capture
+    /// creates (its line is located by insertion, not by ID).
+    pub(crate) block_id: Option<String>,
+    /// Whether the owner came from an inherited `@@route+id`
+    /// declaration rather than an explicit item marker.
+    pub(crate) inherited: bool,
+}
+
+/// Ownership vocabulary for [`ParsedDependencyTarget`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParsedDependencyTargetKind {
+    NewTask,
+    ExistingTask,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -21,10 +21,10 @@ use super::{
     capture_language::{
         is_block_id, unused_project_note_pomodoro_error, AuthoredSubBullet,
         CaptureKind, ClipRequest, ParsedCaptureItem, ParsedCaptureText,
-        PomodoroAdjustSpec, PomodoroCloseSpec, PomodoroShiftSpec,
-        PomodoroStartSpec, SubBulletTarget, TaskSectionSelector,
-        TaskToggleIntent, POMODORO_CLOSE_INTERNAL_BULLETS_ERROR,
-        POMODORO_START_FORCED_ERROR,
+        ParsedDependencyTarget, ParsedDependencyTargetKind, PomodoroAdjustSpec,
+        PomodoroCloseSpec, PomodoroShiftSpec, PomodoroStartSpec,
+        SubBulletTarget, TaskSectionSelector, TaskToggleIntent,
+        POMODORO_CLOSE_INTERNAL_BULLETS_ERROR, POMODORO_START_FORCED_ERROR,
     },
     capture_pomodoro_close, capture_pomodoro_start, capture_pomodoros,
     capture_project_note, capture_schedule_log, capture_task_sections,
@@ -50,6 +50,7 @@ mod block_diff;
 mod budget;
 pub(crate) mod cli;
 mod commit;
+mod dependencies;
 mod ensure_next;
 mod output;
 mod plan;
@@ -73,6 +74,7 @@ use block_diff::*;
 use budget::*;
 use cli::*;
 use commit::*;
+use dependencies::*;
 use ensure_next::*;
 use output::*;
 use plan::*;

@@ -676,6 +676,7 @@ pub(super) fn plan_pomodoro_close_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: Some(summary),
+            dependency_update: None,
             toggle_task_description: None,
         },
         clip_plan: None,
@@ -1224,6 +1225,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: Some(summary),
+            dependency_update: None,
             toggle_task_description: Some(task_description),
         },
         clip_plan: None,
@@ -1244,6 +1246,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     block_id: &str,
     close_spec: &PomodoroCloseSpec,
     capture_block: &str,
+    close_dependencies: Option<(String, PlannedDependencyUpdateParts)>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let selection = selection_from_spec(close_spec);
     // Body-bearing `<text> @route:block-id=x`: today's `:` new-task capture
@@ -1462,10 +1465,27 @@ pub(super) fn plan_pomodoro_close_task_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: Some(summary),
+            dependency_update: close_dependencies
+                .as_ref()
+                .map(|(_, parts)| parts.summary.clone()),
             toggle_task_description: None,
         },
         clip_plan: None,
         pomodoro_refs,
-        task_block_refs: Vec::new(),
+        task_block_refs: match close_dependencies.as_ref() {
+            Some((task_line, parts)) => {
+                let mut refs = parts.target_refs.clone();
+                if let Some(tracked) = locate_new_task_ref(
+                    planner,
+                    &request.bob_dir,
+                    parts,
+                    task_line,
+                ) {
+                    refs.insert(0, tracked);
+                }
+                refs
+            }
+            None => Vec::new(),
+        },
     })
 }

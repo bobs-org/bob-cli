@@ -324,6 +324,7 @@ pub(super) fn plan_project_note_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: None,
+            dependency_update: None,
             toggle_task_description: None,
         },
         clip_plan: None,

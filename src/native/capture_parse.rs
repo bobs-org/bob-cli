@@ -262,9 +262,10 @@ ownerless `&note:block-id` reports mode 'incomplete' needing \
 `task_dependency` with a placeholder span over the typed query. A mid-line \
 `&` between prose words (`Research & Development`, `R&D`), an `&` inside \
 `[[wikilinks]]` or `` `code` ``, and `\\&` (which leaves a visible `&...` in \
-task text) stay literal. Dependency writes land in a later phase: until \
-then `bob capture` refuses recognized modifiers with an explicit \
-unsupported-action error instead of capturing without them. The retired \
+task text) stay literal. `bob capture` executes recognized modifiers \
+through the staged batch writer (managed `DEPENDS ON` line plus derived \
+field and status effects); a draft with prerequisites never captures \
+without them. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \
 'pomodoro_note' with no route, section, or block ID and an empty 'needs' list; \

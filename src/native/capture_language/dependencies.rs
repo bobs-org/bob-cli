@@ -19,7 +19,11 @@ use super::editor_parse::tokenize_line_with_spans;
 use super::markers::{
     parse_clip_token, parse_priority_token, parse_schedule_token,
 };
-use super::model::{CaptureItem, RawLine, Token};
+use super::model::{
+    CaptureItem, CaptureKind, ParsedDependency, ParsedDependencyTarget,
+    ParsedDependencyTargetKind, RawLine, SubBulletTarget, TaskToggleIntent,
+    Token,
+};
 
 /// One complete `&note:block-id` modifier with original-draft byte offsets.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -741,16 +745,6 @@ impl ItemDependencySet {
             })
             .collect()
     }
-
-    /// The first typed modifier's raw text, for fail-closed diagnostics.
-    pub(crate) fn first_raw(&self) -> Option<&str> {
-        let entry = self.entries.first().map(|entry| entry.raw.as_str());
-        if entry.is_some() {
-            return entry;
-        }
-        // A partial-only item still names its query.
-        self.invalid.first().map(|invalid| invalid.raw.as_str())
-    }
 }
 
 /// Scan one whole capture item (parent plus authored children) for
@@ -799,16 +793,256 @@ pub(crate) fn scan_item_dependencies(
     found
 }
 
-/// Temporary fail-closed execution error for recognized dependency input.
-/// Dependency writes land in a later phase; until then a draft that names
-/// prerequisites must refuse rather than silently capture without them.
-pub(crate) fn unsupported_dependency_error(raw: &str) -> String {
+/// Complete modifiers as execution [`ParsedDependency`] values, in typed
+/// order. The writer resolves each `note`/`block_id` against staged
+/// vault contents.
+pub(crate) fn execution_dependencies(
+    found: &ItemDependencySet,
+) -> Vec<ParsedDependency> {
+    found
+        .entries
+        .iter()
+        .map(|entry| ParsedDependency {
+            raw: entry.raw.clone(),
+            note: entry.note.clone(),
+            block_id: entry.block_id.clone(),
+            quoted: entry.quoted,
+        })
+        .collect()
+}
+
+/// Map stripped tokens through `\&` unescaping without moving their
+/// borrows: a token starting with a consumed escape drops its backslash
+/// and keeps the visible `&...` in task text. `escapes` are the absolute
+/// backslash ranges from the same line's extraction.
+pub(crate) fn unescape_execution_tokens<'a>(
+    tokens: Vec<Token<'a>>,
+    escapes: &[(usize, usize)],
+) -> Vec<Token<'a>> {
+    tokens
+        .into_iter()
+        .map(|token| {
+            let text = token.text;
+            if text.starts_with("\\&")
+                && escapes.contains(&(token.start, token.start + 1))
+                && let Some(unescaped) = text.strip_prefix('\\')
+            {
+                return Token {
+                    text: unescaped,
+                    start: token.start + 1,
+                    end: token.end,
+                };
+            }
+            token
+        })
+        .collect()
+}
+
+/// Error when at least one modifier is still being typed: an unresolved
+/// query cannot silently fall back to prose on submit.
+pub(crate) fn incomplete_dependency_error() -> String {
+    "prerequisite selection is incomplete: finish typing the \
+     `&note:block-id` modifier or remove it (the `&` picker needs a note \
+     and a block ID)"
+        .to_string()
+}
+
+/// Error for a Pomodoro operator item (close, start, adjustment, shift,
+/// or caret link) carrying dependency modifiers: operators have no
+/// unambiguous single task owner for the prerequisites.
+pub(crate) fn operator_dependency_error() -> String {
+    "task dependencies need a task owner: '&note:block-id' cannot attach \
+     to a Pomodoro operator capture (add task text or '@note+task-id' for \
+     the dependent)"
+        .to_string()
+}
+
+/// Error for a non-task capture shape (section bullet, project note,
+/// Pomodoro note, ledger link) carrying dependency modifiers.
+pub(crate) fn unsupported_target_dependency_error(mode_word: &str) -> String {
     format!(
-        "task dependency '{raw}' is recognized but not executable yet: \
-         dependency writes land in a later phase (see `bob capture-parse` \
-         for the parsed contract); remove the '&...' modifier to capture \
-         without it"
+        "task dependencies need a task owner: '&note:block-id' cannot \
+         attach to a {mode_word} capture (add task text or '@note+task-id' \
+         for the dependent)"
     )
+}
+
+/// Error for a dependency-only marker that smuggles a second action: a
+/// `!` toggle, `#name`, `=` suffix, or schedule/priority/clipboard
+/// modifier on an existing-task update.
+pub(crate) fn invalid_dependency_target_error(marker_text: &str) -> String {
+    format!(
+        "dependency-only '{marker_text}' must be bare: it mixes a Pomodoro \
+         action with '&note:block-id' (capture them as separate blank-line \
+         items)"
+    )
+}
+
+/// Error when modifiers name prerequisites but no dependent: add task
+/// text or an explicit existing parent.
+pub(crate) fn ownerless_dependency_error() -> String {
+    "task dependencies need a dependent: add task text or '@note+task-id' \
+     for the task that should depend on the '&note:block-id' \
+     prerequisite(s)"
+        .to_string()
+}
+
+/// Decide which task owns an execution item's modifiers once its finished
+/// kind is known, mirroring the editor ownership contract.
+///
+/// Returns `Ok(None)` when the item names no local owner: draft
+/// resolution retries after `@@` inheritance and reports the ownerless
+/// diagnostic when no inherited parent applies either.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_execution_ownership(
+    kind: &CaptureKind,
+    route: Option<&str>,
+    body_empty: bool,
+    has_creation_modifiers: bool,
+    local_marker_text: Option<&str>,
+) -> Result<Option<ParsedDependencyTarget>, String> {
+    match kind {
+        CaptureKind::TaskToggle {
+            block_id,
+            pomodoro_name,
+            intent,
+        } => {
+            let marker = local_marker_text.unwrap_or("@route+id");
+            if pomodoro_name.is_some()
+                || matches!(intent, TaskToggleIntent::Toggle)
+                || has_creation_modifiers
+            {
+                return Err(invalid_dependency_target_error(marker));
+            }
+            Ok(Some(ParsedDependencyTarget {
+                kind: ParsedDependencyTargetKind::ExistingTask,
+                route: route.map(str::to_string),
+                block_id: Some(block_id.clone()),
+                inherited: false,
+            }))
+        }
+        CaptureKind::PomodoroLink {
+            block_id,
+            pomodoro_name,
+            start,
+            close,
+            spelling,
+        } => {
+            // The narrow `@route:id` colon alias selects the same
+            // existing dependent as `@route+id`; any other link shape
+            // (caret spelling, `#name`, `=` suffix) cannot carry
+            // dependencies.
+            let bare =
+                matches!(spelling, super::model::PomodoroLinkSpelling::At)
+                    && pomodoro_name.is_none()
+                    && start.is_none()
+                    && close.is_none()
+                    && !has_creation_modifiers;
+            if !bare {
+                return Err(invalid_dependency_target_error(
+                    local_marker_text.unwrap_or("@route:id"),
+                ));
+            }
+            Ok(Some(ParsedDependencyTarget {
+                kind: ParsedDependencyTargetKind::ExistingTask,
+                route: route.map(str::to_string),
+                block_id: Some(block_id.clone()),
+                inherited: false,
+            }))
+        }
+        CaptureKind::SubBullet { target, .. } => match target {
+            SubBulletTarget::BlockId(block_id) => {
+                Ok(Some(ParsedDependencyTarget {
+                    kind: ParsedDependencyTargetKind::ExistingTask,
+                    route: route.map(str::to_string),
+                    block_id: Some(block_id.clone()),
+                    inherited: false,
+                }))
+            }
+            SubBulletTarget::Ref { .. } => {
+                Err("task dependencies cannot attach to a `--task-ref` picker \
+                 selection: use '@note+task-id' for the dependent"
+                    .to_string())
+            }
+        },
+        CaptureKind::Task
+        | CaptureKind::TaskWithBlockId { .. }
+        | CaptureKind::Pomodoro { .. } => {
+            if body_empty {
+                return Ok(None);
+            }
+            let block_id = match kind {
+                CaptureKind::TaskWithBlockId { block_id } => {
+                    Some(block_id.clone())
+                }
+                CaptureKind::Pomodoro { block_id, .. } => {
+                    Some(block_id.clone())
+                }
+                _ => None,
+            };
+            Ok(Some(ParsedDependencyTarget {
+                kind: ParsedDependencyTargetKind::NewTask,
+                route: route.map(str::to_string),
+                block_id,
+                inherited: false,
+            }))
+        }
+        CaptureKind::Bullet { .. } => {
+            Err(unsupported_target_dependency_error("section-bullet"))
+        }
+        CaptureKind::ProjectNote { .. } => {
+            Err(unsupported_target_dependency_error("project-note"))
+        }
+        CaptureKind::PomodoroNote => {
+            Err(unsupported_target_dependency_error("Pomodoro-note"))
+        }
+        CaptureKind::PomodoroAdjust { .. }
+        | CaptureKind::PomodoroShift { .. } => Err(
+            unsupported_target_dependency_error("Pomodoro session-operator"),
+        ),
+        CaptureKind::PomodoroClose { .. } => {
+            Err(unsupported_target_dependency_error("Pomodoro-close"))
+        }
+        CaptureKind::PomodoroStart { .. } => {
+            Err(unsupported_target_dependency_error("Pomodoro-start"))
+        }
+    }
+}
+
+/// Finish dependency ownership after `@@` inheritance (draft resolution
+/// calls this right after `inherit_global_destination`): an ownerless
+/// item with an inherited `@@route+id` parent applies its modifiers to
+/// that parent, an ownerless item with an inherited route still needs
+/// task text, and anything still ownerless reports the diagnostic.
+pub(crate) fn finish_inherited_dependency_target(
+    route: Option<&str>,
+    kind: &CaptureKind,
+    body_empty: bool,
+    has_target: bool,
+    has_dependencies: bool,
+    inherited: bool,
+) -> Result<Option<ParsedDependencyTarget>, String> {
+    if has_target || !has_dependencies || !inherited {
+        return Ok(None);
+    }
+    match kind {
+        CaptureKind::SubBullet {
+            target: SubBulletTarget::BlockId(block_id),
+            ..
+        } => Ok(Some(ParsedDependencyTarget {
+            kind: ParsedDependencyTargetKind::ExistingTask,
+            route: route.map(str::to_string),
+            block_id: Some(block_id.clone()),
+            inherited: true,
+        })),
+        CaptureKind::Task if !body_empty => Ok(Some(ParsedDependencyTarget {
+            kind: ParsedDependencyTargetKind::NewTask,
+            route: route.map(str::to_string),
+            block_id: None,
+            inherited: true,
+        })),
+        _ => Err(ownerless_dependency_error()),
+    }
 }
 
 #[cfg(test)]

@@ -1,11 +1,27 @@
 //! Dependency capture grammar contract (`&note:block-id`): lexical
-//! ownership, incomplete states, spans, and the additive JSON contract.
-//!
-//! These tests freeze the contract-phase wire format. Dependency writes
-//! land in a later phase; until then execution must fail closed.
+//! ownership, incomplete states, spans, the additive JSON contract, and
+//! the staged dependency writer (managed `DEPENDS ON` lines plus derived
+//! effects through the capture batch planner).
 
 use crate::support::*;
 use std::fs;
+
+const DEPENDENCY_NOW: &str = "2026-09-30 09:02:00";
+
+fn capture_with_now(
+    vault: &std::path::Path,
+    draft: &str,
+) -> std::process::Output {
+    bob_command()
+        .env("BOB_NOW", DEPENDENCY_NOW)
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture")
+}
 
 fn parse_json(draft: &str) -> serde_json::Value {
     let output = bob_command()
@@ -365,41 +381,172 @@ fn section_bullet_with_dependency_is_rejected() {
 }
 
 #[test]
-fn capture_refuses_dependencies_without_mutating() {
+fn capture_executes_new_task_dependencies() {
+    let temp = TempDir::new("bob-cli-capture-dependency-new");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("cash.md"),
+        "- [ ] #task Confirm grocery budget ^budget\n",
+    );
+    write_file(
+        &vault.join("mac_inbox.md"),
+        "## Tasks\n\n- [ ] #task Existing ^keep\n",
+    );
+
+    let output = capture_with_now(&vault, "Buy Groceries! &cash:budget");
+    assert_success(&output);
+    let inbox =
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
+    assert!(
+        inbox.contains("- [?] #task Buy Groceries!"),
+        "new dependent with an open prerequisite is Blocked:\n{inbox}"
+    );
+    assert!(
+        inbox.contains("[dependsOn:: cash__budget]"),
+        "new dependent carries the derived field:\n{inbox}"
+    );
+    assert!(
+        inbox.contains("\t- ⛓️ **DEPENDS ON:** [[cash#^budget]]"),
+        "new dependent carries the managed line:\n{inbox}"
+    );
+}
+
+#[test]
+fn capture_executes_dependency_only_updates_idempotently() {
+    let temp = TempDir::new("bob-cli-capture-dependency-only");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "- [ ] #task Confirm grocery budget ^budget\n",
+            "- [*] #task Plan meals ^meals\n",
+        ),
+    );
+    write_file(&vault.join("body.md"), "- [ ] #task Exercise ^excercise\n");
+
+    let first = capture_with_now(&vault, "&cash:budget @body+excercise");
+    assert_success(&first);
+    let after_first =
+        fs::read_to_string(vault.join("body.md")).expect("read body");
+    assert!(
+        after_first.contains("- [?] #task Exercise"),
+        "open prerequisite blocks the dependent:\n{after_first}"
+    );
+    assert!(
+        after_first.contains("[dependsOn:: cash__budget]"),
+        "dependency-only capture writes the derived field:\n{after_first}"
+    );
+    assert!(
+        after_first.contains("⛓️ **DEPENDS ON:** [[cash#^budget]]"),
+        "dependency-only capture writes the managed line:\n{after_first}"
+    );
+
+    // Repeating the same prerequisite is idempotent: the managed line
+    // and field keep one entry and the run still succeeds.
+    let repeat = capture_with_now(&vault, "&cash:budget @body+excercise");
+    assert_success(&repeat);
+    let after_repeat =
+        fs::read_to_string(vault.join("body.md")).expect("read body");
+    assert_eq!(
+        after_repeat.matches("cash#^budget").count(),
+        1,
+        "repeat adds no duplicate links:\n{after_repeat}"
+    );
+    assert!(
+        stdout(&repeat).contains("0 added"),
+        "repeat reports nothing added:\n{}",
+        format_output(&repeat)
+    );
+
+    // A second prerequisite appends: both links survive and the tally
+    // counts only the newly added one.
+    let second = capture_with_now(&vault, "&cash:meals @body+excercise");
+    assert_success(&second);
+    let after_second =
+        fs::read_to_string(vault.join("body.md")).expect("read body");
+    assert!(
+        after_second.contains("[[cash#^budget]]")
+            && after_second.contains("[[cash#^meals]]"),
+        "both prerequisites survive the append:\n{after_second}"
+    );
+    assert!(
+        after_second.contains("[dependsOn:: cash__budget, cash__meals]"),
+        "the field accumulates both ids:\n{after_second}"
+    );
+    assert!(
+        stdout(&second).contains("1 added"),
+        "append tallies only the new prerequisite:\n{}",
+        format_output(&second)
+    );
+
+    // Dry runs plan through the same planner without touching the vault.
+    let snapshot =
+        fs::read_to_string(vault.join("body.md")).expect("read body");
+    let dry = bob_command()
+        .env("BOB_NOW", DEPENDENCY_NOW)
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--")
+        .arg("&cash:budget @body+excercise")
+        .output()
+        .expect("run bob capture --dry-run");
+    assert_success(&dry);
+    assert_eq!(
+        fs::read_to_string(vault.join("body.md")).expect("read body"),
+        snapshot,
+        "dry runs leave the vault intact"
+    );
+}
+
+#[test]
+fn capture_dependency_failures_leave_the_vault_intact() {
     let temp = TempDir::new("bob-cli-capture-dependency-gate");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("cash.md"),
+        "- [ ] #task Confirm grocery budget ^budget\n",
+    );
     let before = "## Tasks\n\n- [ ] #task Existing ^keep\n";
     write_file(&vault.join("mac_inbox.md"), before);
+    write_file(&vault.join("body.md"), "- [ ] #task Exercise ^excercise\n");
 
+    // Missing prerequisite notes, missing targets, self-dependencies,
+    // and ownerless modifiers all refuse with an actionable error.
     for draft in [
         "Buy Groceries! &foo:bar",
         "&foo:bar @body+excercise",
-        "&foo:bar",
+        "&cash:nope @body+excercise",
+        "&body:excercise @body+excercise",
+        "&cash:budget",
     ] {
-        let output = bob_command()
-            .arg("capture")
-            .arg("-b")
-            .arg(&vault)
-            .arg("--")
-            .arg(draft)
-            .output()
-            .expect("run bob capture");
+        let output = capture_with_now(&vault, draft);
         assert!(
             !output.status.success(),
-            "draft {draft:?} must fail closed:\n{}",
+            "draft {draft:?} must fail:\n{}",
             format_output(&output)
         );
-        let error = stderr(&output);
         assert!(
-            error.contains("is recognized but not executable yet"),
-            "draft {draft:?} teaches the contract phase, got:\n{error}"
+            !stderr(&output).trim().is_empty(),
+            "draft {draft:?} explains the failure"
         );
     }
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
         before,
-        "failed dependency captures leave the vault intact"
+        "failed dependency captures leave the inbox intact"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("body.md")).expect("read body"),
+        "- [ ] #task Exercise ^excercise\n",
+        "failed dependency captures leave the dependent intact"
     );
     assert!(
         !vault.join("foo.md").exists(),

@@ -42,6 +42,12 @@ impl NoteIndex {
         }
     }
 
+    /// Every indexed vault-relative note path, for staged planners that
+    /// must union the on-disk index with batch-created notes.
+    pub(crate) fn relative_paths(&self) -> impl Iterator<Item = &Path> {
+        self.relative_paths.iter().map(PathBuf::as_path)
+    }
+
     pub(crate) fn resolve(
         &self,
         current_path: Option<&Path>,

@@ -558,7 +558,12 @@ pub(crate) fn parse_capture_text_with_clip_control(
     if forced_route.is_none()
         && let Some(global) = &global
     {
+        let inheritable = outcome.parsed.route.is_none()
+            && matches!(outcome.parsed.kind, CaptureKind::Task);
         inherit_global_destination(&mut outcome.parsed, global);
+        finish_item_dependency_target(&mut outcome.parsed, inheritable)?;
+    } else {
+        finish_item_dependency_target(&mut outcome.parsed, false)?;
     }
     Ok(outcome.parsed)
 }
@@ -606,24 +611,42 @@ pub(crate) fn parse_capture_draft_with_clip_control(
     let global = resolve_global_declaration_strict(&declarations)?;
     let warnings = capture_shadow_warnings(&item_outcomes);
 
-    let items = item_outcomes
-        .drain(..)
-        .map(|mut outcome| {
-            if forced_route.is_none()
-                && let Some(global) = &global
-            {
-                inherit_global_destination(&mut outcome.parsed, global);
-            }
-            ParsedCaptureItem {
-                index: outcome.index,
-                start: outcome.start,
-                end: outcome.end,
-                line_start: outcome.line_start,
-                line_end: outcome.line_end,
-                parsed: outcome.parsed,
-            }
-        })
-        .collect();
+    let mut items = Vec::with_capacity(item_outcomes.len());
+    for mut outcome in item_outcomes.drain(..) {
+        if forced_route.is_none()
+            && let Some(global) = &global
+        {
+            let inheritable = outcome.parsed.route.is_none()
+                && matches!(outcome.parsed.kind, CaptureKind::Task);
+            inherit_global_destination(&mut outcome.parsed, global);
+            finish_item_dependency_target(&mut outcome.parsed, inheritable)
+                .map_err(|message| {
+                    format!(
+                        "capture item {} starting on line {}: {message}",
+                        outcome.index + 1,
+                        outcome.line_start
+                    )
+                })?;
+        } else {
+            finish_item_dependency_target(&mut outcome.parsed, false).map_err(
+                |message| {
+                    format!(
+                        "capture item {} starting on line {}: {message}",
+                        outcome.index + 1,
+                        outcome.line_start
+                    )
+                },
+            )?;
+        }
+        items.push(ParsedCaptureItem {
+            index: outcome.index,
+            start: outcome.start,
+            end: outcome.end,
+            line_start: outcome.line_start,
+            line_end: outcome.line_end,
+            parsed: outcome.parsed,
+        });
+    }
 
     Ok(ParsedCaptureDraft {
         global,
